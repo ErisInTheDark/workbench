@@ -45,6 +45,9 @@ const caller = z.object({
 }).strict();
 export const WorkbenchServiceRequestSchema = z.discriminatedUnion("method", [
   z.object({ id, method: z.literal("service/status/read") }).strict(),
+  z.object({ id, method: z.literal("service/process/read") }).strict(),
+  z.object({ id, method: z.literal("service/daemon/stop"), instanceId: z.uuid() }).strict(),
+  z.object({ id, method: z.literal("service/stop"), instanceId: z.uuid() }).strict(),
   z.object({ id, method: z.literal("service/app/register"), registration: WorkbenchServiceRegistrationSchema }).strict(),
   z.object({ id, method: z.literal("service/daemon/wake"), retry: z.boolean().default(false) }).strict(),
   z.object({ id, method: z.literal("service/wake/enable"), enabled: z.boolean() }).strict(),
@@ -61,6 +64,10 @@ export const WorkbenchServiceRequestSchema = z.discriminatedUnion("method", [
 export const WorkbenchServiceResponseSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("snapshot"), snapshot: WorkbenchServiceSnapshotSchema }).strict(),
   z.object({ kind: z.literal("ok"), id }).strict(),
+  z.object({
+    kind: z.literal("process"), id, instanceId: z.uuid(),
+    logDirectory: z.string().min(1), logPrefix: z.literal("workbench-host"),
+  }).strict(),
   z.object({ kind: z.literal("network-result"), id, result: WorkbenchNetworkResultSchema }).strict(),
   z.object({ kind: z.literal("error"), id, message: z.string().max(512) }).strict(),
 ]);

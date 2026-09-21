@@ -63,11 +63,12 @@ export default class WorkbenchBootstrap {
 
   async run(args) {
     const managed = this.environment.WORKBENCH_THREAD_ID || this.environment.CODEX_THREAD_ID;
-    const humanCommand = args.length === 0 || (args.length === 1 && ["connect", "disconnect", "shortcut"].includes(args[0]));
+    const view = args.length === 2 && args[0] === "view" && ["daemon", "app"].includes(args[1]);
+    const humanCommand = view || args.length === 0 || (args.length === 1 && ["connect", "disconnect", "shortcut"].includes(args[0]));
     if (managed && humanCommand) throw new Error("Managed threads cannot install or launch Workbench services.");
     const linked = path.resolve(this.packageRoot, "..");
     if (await this.checkoutExists(linked)) {
-      return await this.commands.run("bash", [path.join(linked, "wb"), ...args]);
+      return await this.commands.run("bash", [path.join(linked, "wb"), ...args], { interactive: view });
     }
     const installed = await this.readInstallation();
     if (installed?.phase === "ready") {
@@ -138,7 +139,7 @@ export default class WorkbenchBootstrap {
 
   async delegate(root, args, humanCommand) {
     if (humanCommand) {
-      return await this.commands.run(process.execPath, [path.join(root, "package", "dispatch.mjs"), ...args]);
+      return await this.commands.run(process.execPath, [path.join(root, "package", "dispatch.mjs"), ...args], { interactive: args[0] === "view" });
     }
     return await this.commands.run("bash", [path.join(root, "wb"), ...args]);
   }

@@ -14,7 +14,7 @@
     "test:opencode": "node --disable-warning=ExperimentalWarning --import tsx test/run-opencode-test.mjs",
     "test:lifecycle": "node --disable-warning=ExperimentalWarning --import tsx test/run-lifecycle-test.mjs",
     "typecheck": "node scripts/typecheck.mjs",
-    "dev": "node --env-file-if-exists=./daemon/.env.local --import tsx ./daemon/host/connect.ts wake",
+    "dev": "node --env-file-if-exists=./daemon/.env.local --import tsx ./daemon/host/foreground.ts",
     "codex:types": "codex app-server generate-ts --experimental --out ./shared/codex/generated/app-server"
   },
   "devDependencies": {

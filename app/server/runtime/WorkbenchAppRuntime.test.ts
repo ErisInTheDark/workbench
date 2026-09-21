@@ -4,7 +4,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import { Socket } from "node:net";
 import path from "node:path";
@@ -26,6 +27,8 @@ import type { ReloadableNodeBuild } from "workbench-shared/reload/ReloadableNode
 
 const appDirectoryPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
+require("../WorkbenchAppProcess.ts");
 
 function localRequest(chunks: string[]) {
   const request = Readable.from(chunks) as import("node:http").IncomingMessage;
@@ -35,24 +38,6 @@ function localRequest(chunks: string[]) {
   request.headers = {};
   return request;
 }
-const nonServerSourcePaths = new Set([
-  "app/client/browser-entry.tsx",
-  "app/server/desktop.ts",
-  "app/client/WorkbenchBrowserApp.tsx",
-  "app/client/WorkbenchBrowserLogForwarder.ts",
-  "app/client/WorkbenchClient.ts",
-  "app/server/WorkbenchDesktopLauncher.ts",
-  "app/server/LinuxDesktopShortcut.ts",
-  "app/server/build.ts",
-]);
-
-function isNonServerSourcePath(sourcePath: string) {
-  return nonServerSourcePaths.has(sourcePath)
-    || sourcePath.startsWith("app/client/components/")
-    || sourcePath.startsWith("app/client/types/")
-    || sourcePath.startsWith("app/client/workbench/");
-}
-
 class TestResponse extends EventEmitter {
   body = "";
   statusCode = 0;
@@ -142,40 +127,18 @@ test("compiler replacement commits before its first build completes", async () =
   }
 });
 
-async function appProductionSourcePaths() {
-  const sourcePaths: string[] = [];
-  const visit = async (directoryPath: string, relativeDirectoryPath = ""): Promise<void> => {
-    for (const entry of await readdir(directoryPath, { withFileTypes: true })) {
-      if (["node_modules", "target", "gen"].includes(entry.name)) continue;
-      const relativePath = path.posix.join(relativeDirectoryPath, entry.name);
-      if (entry.isDirectory()) {
-        await visit(path.join(directoryPath, entry.name), relativePath);
-      } else if (/\.(?:ts|tsx)$/u.test(entry.name) && !entry.name.includes(".test.")) {
-        sourcePaths.push(`app/${relativePath}`);
-      }
-    }
-  };
-  await visit(appDirectoryPath);
-  return sourcePaths.sort();
-}
+test("stable process imports cannot be repaired by only replacing a reloadable node", () => {
+  const target = runtime();
+  assert.ok(target.getReloadScopesForPaths(["app/server/WorkbenchFrontendCompiler.ts"]).includes("client:process"));
+});
 
-test("assigns every app server source to a reloadable node or the explicit process shell", async () => {
+test("separates reloadable imports, stable process imports and external build inputs", () => {
   const target = runtime();
   const owners = (path: string) => target.getReloadScopesForPaths([path]).sort();
-  const sourcePaths = await appProductionSourcePaths();
-  const unownedServerSources = sourcePaths
-    .filter((sourcePath) => !isNonServerSourcePath(sourcePath))
-    .filter((sourcePath) => owners(sourcePath).length === 0);
-  assert.deepEqual(unownedServerSources, []);
-  assert.deepEqual(
-    sourcePaths.filter((sourcePath) => isNonServerSourcePath(sourcePath) && owners(sourcePath).length > 0),
-    [],
-  );
-
   assert.deepEqual(owners("app/server/state/WorkbenchAppStateRepository.ts"), ["client:database", "client:state"]);
   assert.deepEqual(owners("app/server/state/WorkbenchAppStateController.ts"), ["client:state"]);
   assert.deepEqual(owners("app/server/runtime/WorkbenchAppHttpRouter.ts"), ["client:http"]);
-  assert.deepEqual(owners("app/server/WorkbenchFrontendCompiler.ts"), ["client:compiler"]);
+  assert.deepEqual(owners("app/server/WorkbenchFrontendCompiler.ts"), ["client:compiler", "client:process"]);
   assert.deepEqual(owners("app/client/globals.css"), []);
   assert.deepEqual(owners("app/client/tailwind.css"), []);
   assert.deepEqual(owners("app/server/runtime/AppHttpNode.ts"), ["client:http", "client:topology"]);

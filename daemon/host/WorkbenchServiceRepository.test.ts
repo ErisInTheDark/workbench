@@ -47,4 +47,9 @@ test("restart intent wakes only its supervision session and failure requires ret
   repository.requestDaemon("session-a");
   assert.equal(repository.shouldResume("session-a"), true);
   assert.equal(repository.startupFailure, null);
+  repository.stopDaemon();
+  assert.equal(repository.shouldResume("session-a"), false);
+  assert.equal(repository.wakeEnabled, false);
+  repository.requestDaemon("session-a");
+  assert.equal(repository.shouldResume("session-a"), true);
 });

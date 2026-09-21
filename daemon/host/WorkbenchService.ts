@@ -29,6 +29,8 @@ export interface WorkbenchServiceOptions {
   session: string;
   warn(message: string): void;
   restart(fatal?: boolean): void;
+  stop?(): void;
+  writeLog?: ConstructorParameters<typeof WorkbenchDaemonHost>[0]["writeLog"];
 }
 
 export default class WorkbenchService {
@@ -48,6 +50,7 @@ export default class WorkbenchService {
   private lease: WorkbenchProcessLease | null = null;
   private ready = false;
   private closing: Promise<void> | null = null;
+  private starting: Promise<WorkbenchServiceEndpoint> | null = null;
   private readonly subscribers = new Set<() => void>();
 
   constructor(private readonly options: WorkbenchServiceOptions) {
@@ -58,8 +61,11 @@ export default class WorkbenchService {
     });
     this.daemon = new WorkbenchDaemonHost({
       projectRootPath: options.root,
+      writeLog: options.writeLog,
+      lifetime: this.abort.signal,
       environment: { ...process.env, WORKBENCH_DATA_ROOT: this.dataRoot, WORKBENCH_SERVICE_MANAGED: "1" },
       onFailure: async (error, beforeReady) => {
+        options.warn(`Daemon supervision failed: ${error.message.slice(0, 512)}`);
         if (beforeReady) await this.runtime.run("database", "record daemon startup failure", async database => database.failStartup(error.message));
         this.publish();
       },
@@ -105,24 +111,36 @@ export default class WorkbenchService {
   }
 
   async start() {
-    this.lease = await WorkbenchProcessLease.acquire(path.join(this.dataRoot, "service", "process-lease.sqlite3"));
-    if (!this.lease) throw new Error("Another Workbench host owns this installation.");
-    try {
-      const address = await this.server.start();
-      this.endpoint = { version: 1, instanceId: this.instanceId, pid: process.pid, origin: address.url, token: this.token };
-      await this.runtime.start();
-      await this.standalone.start();
-      this.ready = true;
-      await publishServiceEndpoint(this.endpointPath, this.endpoint);
-      if (this.runtime.get("database").shouldResume(this.options.session)) {
-        void this.daemonTarget(this.abort.signal, false).catch(error => this.report(error));
-      }
-      return this.endpoint;
-    } catch (error) {
+    if (this.starting || this.endpoint || this.closing) throw new Error("Host has already started or closed.");
+    const starting = this.startResources();
+    this.starting = starting;
+    try { return await starting; }
+    catch (error) {
       try { await this.close(); }
       catch (cleanup) { throw new AggregateError([error, cleanup], "Host startup and cleanup failed."); }
       throw error;
+    } finally { this.starting = null; }
+  }
+
+  private async startResources() {
+    this.lease = await WorkbenchProcessLease.acquire(path.join(this.dataRoot, "service", "process-lease.sqlite3"));
+    if (!this.lease) throw new Error("Another Workbench host owns this installation.");
+    this.abort.signal.throwIfAborted();
+    const address = await this.server.start();
+    this.abort.signal.throwIfAborted();
+    this.endpoint = { version: 1, instanceId: this.instanceId, pid: process.pid, origin: address.url, token: this.token };
+    await this.runtime.start();
+    this.abort.signal.throwIfAborted();
+    await this.standalone.start();
+    await this.standalone.refresh();
+    this.abort.signal.throwIfAborted();
+    this.ready = true;
+    await publishServiceEndpoint(this.endpointPath, this.endpoint);
+    this.abort.signal.throwIfAborted();
+    if (this.runtime.get("database").shouldResume(this.options.session)) {
+      void this.daemonTarget(this.abort.signal, false).catch(error => this.report(error));
     }
+    return this.endpoint;
   }
 
   identity(): WorkbenchDaemonIdentity {
@@ -157,6 +175,9 @@ export default class WorkbenchService {
         this.server.close({ force: true }),
         new Promise<void>((resolve, reject) => this.controls.close(error => error ? reject(error) : resolve())),
       ]);
+      // Cancel resource owners before waiting for startup, which may be awaiting them.
+      // Startup retains its error; a late lease is released below.
+      if (this.starting) await Promise.allSettled([this.starting]);
       const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
       try { if (this.endpoint) await removeServiceEndpoint(this.endpointPath, this.instanceId); }
       catch (error) { failures.push(error); }
@@ -169,13 +190,18 @@ export default class WorkbenchService {
 
   private async daemonTarget(signal: AbortSignal, remote: boolean) {
     signal.throwIfAborted();
+    if (this.daemon.snapshot().state === "stopped") {
+      throw new Error("The daemon was intentionally stopped. Launch the app or explicitly request daemon wake to start it again.");
+    }
     const existing = this.daemon.snapshot().endpoint ?? this.standalone.getSnapshot().endpoint;
     if (existing) return existing.origin;
     await this.runtime.run("database", "admit daemon wake", async database => {
+      if (this.daemon.snapshot().state === "stopped") throw new Error("The daemon was intentionally stopped.");
       if (remote && !database.wakeEnabled) throw new Error("Remote daemon wake is disabled.");
       if (database.startupFailure) throw new Error(database.startupFailure);
       database.requestDaemon(this.options.session);
     });
+    if (this.daemon.snapshot().state === "stopped") throw new Error("The daemon was intentionally stopped.");
     const ready = this.daemon.wake();
     // Caller cancellation never cancels the installation's shared startup.
     return new Promise<string>((resolve, reject) => {
@@ -195,8 +221,13 @@ export default class WorkbenchService {
   private attach(socket: WebSocket) {
     const session = this.sessions.open();
     const requests = new Map<string, AbortController>();
-    const send = (response: WorkbenchServiceResponse) => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(response), error => { if (error) { this.report(error); socket.terminate(); } });
+    const send = (response: WorkbenchServiceResponse, after?: () => void) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(response), error => {
+          if (error) { this.report(error); socket.terminate(); }
+          after?.();
+        });
+      } else after?.();
     };
     const changed = () => { if (this.ready) send({ kind: "snapshot", snapshot: this.snapshot() }); };
     this.subscribers.add(changed);
@@ -233,7 +264,13 @@ export default class WorkbenchService {
         }
         return this.execute(request, abort.signal);
       };
-      void run().then(response => { if (!abort.signal.aborted && request.method !== "service/reload") send(response); }, error => {
+      void run().then(response => {
+        if (request.method === "service/stop") {
+          // An admitted explicit stop survives viewer loss, but a live viewer
+          // receives its acknowledgement before host disposal closes sockets.
+          send(response, () => this.options.stop!());
+        } else if (!abort.signal.aborted && request.method !== "service/reload") send(response);
+      }, error => {
         if (!abort.signal.aborted) {
           this.report(error);
           send({ kind: "error", id: request.id, message: error instanceof Error ? error.message.slice(0, 512) : "Service request failed." });
@@ -245,7 +282,28 @@ export default class WorkbenchService {
   private async execute(request: WorkbenchServiceRequest, signal: AbortSignal): Promise<WorkbenchServiceResponse> {
     switch (request.method) {
       case "service/status/read": break;
+      case "service/process/read":
+        return { kind: "process", id: request.id, instanceId: this.instanceId,
+          logDirectory: path.join(this.options.root, ".workbench", "logs"), logPrefix: "workbench-host" };
+      case "service/daemon/stop":
+      case "service/stop":
+        if (request.instanceId !== this.instanceId) throw new Error("The viewed host was replaced. Attach again before stopping it.");
+        if (request.method === "service/stop" && !this.options.stop) throw new Error("Host shutdown is unavailable.");
+        if (this.standalone.getSnapshot().endpoint && !this.daemon.snapshot().endpoint
+          && this.daemon.snapshot().state !== "stopped") {
+          throw new Error("This host does not own the running daemon. Stop it from its foreground terminal.");
+        }
+        await this.runtime.run("database", "intentionally stop daemon", database => {
+          database.stopDaemon();
+          return this.daemon.stop("Daemon intentionally stopped by its local viewer.");
+        });
+        break;
       case "service/daemon/wake":
+        if (this.daemon.snapshot().state === "stopped") {
+          await this.runtime.run("database", "explicitly wake stopped daemon", async database => database.requestDaemon(this.options.session));
+          await this.daemon.wake();
+          break;
+        }
         if (request.retry && this.runtime.get("database").startupFailure) {
           await this.runtime.run("database", "retry daemon startup", async database => database.requestDaemon(this.options.session));
           this.options.restart();

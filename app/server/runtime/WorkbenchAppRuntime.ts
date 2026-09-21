@@ -123,10 +123,14 @@ export default class WorkbenchAppRuntime {
       },
       repositoryRootPath: options.repositoryRootPath,
     };
+    const require = createRequire(import.meta.url);
     const loader = createReloadableNodeModuleLoader<AppProcessContext, AppRuntimeObjects, never>(
-      createRequire(import.meta.url),
+      require,
       "./app-root-node.ts",
-      { repoRoot: options.repositoryRootPath },
+      {
+        repoRoot: options.repositoryRootPath,
+        processModule: require.cache[require.resolve("../WorkbenchAppProcess.ts")],
+      },
     );
     host = new ReloadableNodeHost(context, loader, {
       sourceExclusions: ["app/client/**"],
@@ -143,25 +147,8 @@ export default class WorkbenchAppRuntime {
           "app/package.json",
           "app/tsconfig.json",
           "app/server/index.ts",
-          "app/server/app-command-line.ts",
           "package.json",
-          "app/server/WorkbenchApp.ts",
-          "shared/process/WorkbenchProcessLease.ts",
-          "app/server/workbench-runtime-root.ts",
-          "app/server/WorkbenchAppProcessProtocol.ts",
-          "app/server/WorkbenchFrontendServer.ts",
-          "app/server/runtime/WorkbenchAppRuntime.ts",
-          "app/server/runtime/app-process-context.ts",
-          "shared/http/HttpServer.ts",
-          "shared/process/WorkbenchProcessLogger.ts",
-          "shared/workbench-data-root.ts",
           "shared/package.json",
-          "shared/reload/reloadable-node-loader.ts",
-          "shared/reload/ReloadableNode.ts",
-          "shared/reload/ReloadableNodeHost.ts",
-          "shared/reload/ReloadableNodeTransition.ts",
-          "shared/reload/workbench-reload.ts",
-          "shared/source-pattern-matcher.ts",
           "app/tray/**",
           "!app/tray/target/**",
         ].join("\n"),

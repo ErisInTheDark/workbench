@@ -57,6 +57,21 @@ test("delegates argumentful commands to the existing daemon shell", async (conte
   assert.equal(result.stderr, "");
 });
 
+test("views use the local human dispatcher without granting managed threads process control", async context => {
+  const fixture = await dispatcherFixture();
+  context.after(() => fs.rm(fixture.root, { force: true, recursive: true }));
+  for (const target of ["daemon", "app"]) {
+    const result = await execFileAsync("bash", [fixture.dispatcherPath, "view", target], {
+      cwd: fixture.root, env: { ...process.env, WORKBENCH_THREAD_ID: "", CODEX_THREAD_ID: "" },
+    });
+    assert.match(result.stdout, /^human\|/u);
+    const managed = await execFileAsync("bash", [fixture.dispatcherPath, "view", target], {
+      cwd: fixture.root, env: { ...process.env, WORKBENCH_THREAD_ID: "fixture-thread", CODEX_THREAD_ID: "" },
+    });
+    assert.match(managed.stdout, /^daemon\|/u);
+  }
+});
+
 test("keeps no-argument managed and hook calls on the daemon shell", async (context) => {
   const fixture = await dispatcherFixture();
   context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));

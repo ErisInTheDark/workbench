@@ -28,3 +28,13 @@ test("setup preserves process failures and does not run cancelled commands", asy
   }), { name: "AbortError" });
   await assert.rejects(command.run("workbench-nonexistent-command-for-test", []), /ENOENT/);
 });
+
+test("interactive handoff releases signal forwarding after child exit and startup failure", async () => {
+  const command = new SetupCommand();
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  const before = signals.map(signal => process.listenerCount(signal));
+  await command.run(process.execPath, ["-e", "process.exit(0)"], { interactive: true });
+  assert.deepEqual(signals.map(signal => process.listenerCount(signal)), before);
+  await assert.rejects(command.run("workbench-nonexistent-interactive-test", [], { interactive: true }), /ENOENT/u);
+  assert.deepEqual(signals.map(signal => process.listenerCount(signal)), before);
+});

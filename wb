@@ -21,6 +21,8 @@ elif [[ "${1:-}" == "__hook" && "${2:-}" == "apply-patch-claim" && "$#" -eq 2 ]]
   hook_mode=1
 elif [[ "$#" -eq 0 ]] || { [[ "$#" -eq 1 ]] && [[ "${1:-}" == "shortcut" || "${1:-}" == "connect" || "${1:-}" == "disconnect" ]]; }; then
   human_mode=1
+elif [[ "$#" -eq 2 && "${1:-}" == "view" && ( "${2:-}" == "daemon" || "${2:-}" == "app" ) ]]; then
+  human_mode=1
 fi
 
 if (( hook_mode == 1 )) || [[ -n "$thread_id" ]] || (( human_mode == 0 )); then

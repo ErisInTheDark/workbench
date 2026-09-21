@@ -44,7 +44,7 @@ export interface WorkbenchAppOptions {
   createRuntime(appPort: WorkbenchAppPortControl): WorkbenchAppRuntime;
   createServer(runtime: WorkbenchAppRuntime, port: number): WorkbenchAppServer;
   environmentPort?: number | null;
-  onAddressChange?: (address: HttpServerAddress) => void;
+  onAddressChange?: (address: HttpServerAddress) => void | Promise<void>;
   onDiagnostic?: (message: string) => void;
 }
 
@@ -69,7 +69,7 @@ export default class WorkbenchApp {
   private readonly createRuntime: (appPort: WorkbenchAppPortControl) => WorkbenchAppRuntime;
   private readonly createServer: (runtime: WorkbenchAppRuntime, port: number) => WorkbenchAppServer;
   private readonly environmentPort: number | null;
-  private readonly onAddressChange: (address: HttpServerAddress) => void;
+  private readonly onAddressChange: (address: HttpServerAddress) => void | Promise<void>;
   private readonly onDiagnostic: (message: string) => void;
   private address: HttpServerAddress | null = null;
   private closing = false;
@@ -218,7 +218,7 @@ export default class WorkbenchApp {
       });
       this.address = address;
       this.portSource = "setting";
-      this.onAddressChange(address);
+      await this.onAddressChange(address);
       await this.publishPort();
       return this.readPort();
     });

@@ -112,6 +112,7 @@ enum DesktopRecord {
         version: u8,
     },
     Restart { version: u8 },
+    Quit { version: u8 },
 }
 
 pub struct DesktopAppController {
@@ -346,9 +347,11 @@ impl DesktopAppController {
                 self.log_launcher("Workbench app requested a full native restart.");
                 self.request_restart();
             }
+            DesktopRecord::Quit { version: 1 } => self.request_quit(),
             DesktopRecord::AlreadyRunning { .. }
             | DesktopRecord::Ready { .. }
-            | DesktopRecord::Restart { .. } => {
+            | DesktopRecord::Restart { .. }
+            | DesktopRecord::Quit { .. } => {
                 self.log_launcher("Rejected unsupported app readiness record.");
             }
         }

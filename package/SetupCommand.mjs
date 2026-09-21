@@ -39,7 +39,7 @@ export default class SetupCommand {
     throw new Error(`Cannot locate ${command}'s executable or Node entry. Install ${command} and ensure it is on PATH.`);
   }
 
-  async run(command, args, { cwd, signal, onOutput, environment = {}, output = this.output, errorOutput = this.errorOutput } = {}) {
+  async run(command, args, { cwd, signal, onOutput, environment = {}, output = this.output, errorOutput = this.errorOutput, interactive = false } = {}) {
     signal?.throwIfAborted();
     const [executable, ...prefix] = await this.resolve(command);
     signal?.throwIfAborted();
@@ -48,10 +48,19 @@ export default class SetupCommand {
         cwd,
         env: { ...this.environment, ...environment },
         windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: interactive ? "inherit" : ["ignore", "pipe", "pipe"],
         signal,
       });
       let failure;
+      const relay = signal => { child.kill(signal); };
+      const interrupt = () => relay("SIGINT");
+      const terminate = () => relay("SIGTERM");
+      const hangup = () => relay("SIGHUP");
+      if (interactive) {
+        process.on("SIGINT", interrupt);
+        process.on("SIGTERM", terminate);
+        process.on("SIGHUP", hangup);
+      }
       child.on("error", error => { failure = error; });
       const forward = (stream, output) => {
         stream.on("data", bytes => {
@@ -62,9 +71,16 @@ export default class SetupCommand {
           }
         });
       };
-      forward(child.stdout, output);
-      forward(child.stderr, errorOutput);
+      if (!interactive) {
+        forward(child.stdout, output);
+        forward(child.stderr, errorOutput);
+      }
       child.once("close", (code, exitSignal) => {
+        if (interactive) {
+          process.off("SIGINT", interrupt);
+          process.off("SIGTERM", terminate);
+          process.off("SIGHUP", hangup);
+        }
         if (failure) reject(failure);
         else if (code === 0) resolve();
         else reject(Object.assign(new Error(`${command} failed with ${exitSignal ? `signal ${exitSignal}` : `status ${code ?? "unknown"}`}.`), { exitCode: code ?? 1 }));

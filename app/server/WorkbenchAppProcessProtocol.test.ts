@@ -25,7 +25,7 @@ test("announces structured loopback readiness", () => {
   );
 });
 
-test("requests one versioned native process restart", () => {
+test("encodes native lifecycle intents independently of human log output", () => {
   const output = new PassThrough();
   let written = "";
   output.on("data", (chunk) => {
@@ -37,9 +37,10 @@ test("requests one versioned native process restart", () => {
     output,
   });
   protocol.requestRestart();
+  protocol.requestQuit();
   assert.equal(
     written,
-    '\u001eWORKBENCH_DESKTOP_V1 {"type":"restart","version":1}\n',
+    '\u001eWORKBENCH_DESKTOP_V1 {"type":"restart","version":1}\n\u001eWORKBENCH_DESKTOP_V1 {"type":"quit","version":1}\n',
   );
 });
 

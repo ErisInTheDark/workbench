@@ -21,7 +21,8 @@ pub fn run() -> io::Result<()> {
         return Err(io::Error::other("Linux host supervision belongs to systemd."));
     }
     let args = env::args_os().skip(1).collect::<Vec<_>>();
-    if args.len() != 3 {
+    let foreground = args.len() == 4 && args[3] == "--foreground";
+    if args.len() != 3 && !foreground {
         return Err(io::Error::other("Expected checkout, Node executable and data root paths."));
     }
     let root = PathBuf::from(&args[0]);
@@ -35,6 +36,20 @@ pub fn run() -> io::Result<()> {
     let logs = Arc::new(Mutex::new(RotatingLogWriter::new(
         root.join(".workbench/logs"), "workbench-host", 1_000, 5,
     )?));
+    let (send, receive) = mpsc::channel();
+    if foreground {
+        let owner_events = send.clone();
+        thread::spawn(move || {
+            let mut input = io::stdin().lock();
+            let mut bytes = [0u8; 64];
+            while let Ok(count) = input.read(&mut bytes) {
+                if count == 0 { break; }
+            }
+            // Losing this pipe means the foreground owner has gone, not a daemon crash.
+            let _ = owner_events.send(Event::OwnerClosed);
+        });
+    }
+    let mut owner_closed = false;
     loop {
         let mut command = Command::new(&node);
         command.arg(root.join("daemon/host/launch-node.mjs"))
@@ -66,26 +81,34 @@ pub fn run() -> io::Result<()> {
             child.wait()?;
             return Err(error);
         }
-        let (send, receive) = mpsc::channel();
+        let child_pid = child.id();
         let stdout = child.stdout.take().ok_or_else(|| io::Error::other("Host stdout is missing."))?;
         let stderr = child.stderr.take().ok_or_else(|| io::Error::other("Host stderr is missing."))?;
         let readers = [
-            read_output(stdout, true, logs.clone(), send.clone()),
-            read_output(stderr, false, logs.clone(), send.clone()),
+            read_output(stdout, true, foreground, logs.clone(), send.clone()),
+            read_output(stderr, false, foreground, logs.clone(), send.clone()),
         ];
         let exit_send = send.clone();
         let waiter = thread::spawn(move || {
             // Receiver disappearance means this supervisor is already terminating.
             let _ = exit_send.send(Event::Exit(child.wait()));
         });
-        drop(send);
         let mut ready = false;
         let mut exited = None;
         let mut closed = 0;
         let mut failure = None;
         while closed < 2 || exited.is_none() {
             match receive.recv().map_err(io::Error::other)? {
-                Event::Ready => ready = true,
+                Event::Ready => {
+                    ready = true;
+                    if foreground {
+                        writeln!(io::stdout(), "\u{001e}WORKBENCH_HOST_V1 {{\"pid\":{child_pid}}}")?;
+                    }
+                },
+                Event::OwnerClosed => {
+                    owner_closed = true;
+                    job.terminate()?;
+                },
                 Event::Output(result) => {
                     closed += 1;
                     if let Err(error) = result {
@@ -107,6 +130,7 @@ pub fn run() -> io::Result<()> {
         drop(job);
         if let Some(error) = failure { return Err(error); }
         let status = exited.ok_or_else(|| io::Error::other("Host exit was not observed."))??;
+        if owner_closed { return Ok(()); }
         if !should_restart(ready, status.code()) {
             if status.success() { return Ok(()); }
             return Err(io::Error::other(format!("Host stopped with {status}.")));
@@ -122,6 +146,7 @@ fn should_restart(ready: bool, code: Option<i32>) -> bool {
 
 enum Event {
     Ready,
+    OwnerClosed,
     Output(io::Result<()>),
     Exit(io::Result<std::process::ExitStatus>),
 }
@@ -129,6 +154,7 @@ enum Event {
 fn read_output(
     mut stream: impl Read + Send + 'static,
     stdout: bool,
+    foreground: bool,
     logs: Arc<Mutex<RotatingLogWriter>>,
     events: mpsc::Sender<Event>,
 ) -> thread::JoinHandle<()> {
@@ -147,6 +173,7 @@ fn read_output(
                         } else {
                             logs.lock().map_err(|_| io::Error::other("Host log lock was poisoned."))?
                                 .write_child_line(&text)?;
+                            if foreground { writeln!(io::stdout(), "{text}")?; }
                         }
                         line.clear();
                     }
@@ -156,6 +183,7 @@ fn read_output(
             if !line.is_empty() {
                 logs.lock().map_err(|_| io::Error::other("Host log lock was poisoned."))?
                     .write_child_line(&String::from_utf8_lossy(&line))?;
+                if foreground { writeln!(io::stdout(), "{}", String::from_utf8_lossy(&line))?; }
             }
             Ok(())
         })();

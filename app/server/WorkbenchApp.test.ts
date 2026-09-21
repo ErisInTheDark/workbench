@@ -79,6 +79,7 @@ function fixture(options: {
   failRuntimeStart?: boolean;
   failWritePort?: boolean;
   firstMoveGate?: Promise<void>;
+  publishAddress?: () => Promise<void>;
   leaseAvailable?: boolean;
   savedPort?: number | null;
 } = {}) {
@@ -152,7 +153,10 @@ function fixture(options: {
       return server;
     },
     environmentPort: options.environmentPort,
-    onAddressChange: (nextAddress) => addressChanges.push(nextAddress),
+    onAddressChange: async nextAddress => {
+      addressChanges.push(nextAddress);
+      await options.publishAddress?.();
+    },
   });
   return {
     addressChanges,
@@ -167,6 +171,23 @@ function fixture(options: {
     get serverCreations() { return serverCreations; },
   };
 }
+
+test("port change completes only after its process endpoint has been published", async () => {
+  let entered!: () => void;
+  let release!: () => void;
+  const publishing = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const target = fixture({ publishAddress: async () => { entered(); await gate; } });
+  await target.app.start();
+  let completed = false;
+  const moving = target.appPortControl.update(44_010).then(() => { completed = true; });
+  await publishing;
+  assert.equal(completed, false);
+  release();
+  await moving;
+  assert.equal(completed, true);
+  await target.app.close();
+});
 
 test("does not construct a server when another app owns the launch lease", async () => {
   const target = fixture({ leaseAvailable: false });

@@ -9,8 +9,26 @@ import { promisify } from "node:util";
 import WorkbenchService from "./WorkbenchService.ts";
 import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient.ts";
 import { WorkbenchDaemonIdentitySchema } from "../../shared/http/workbench-daemon-discovery.ts";
+import WorkbenchProcessLease from "../../shared/process/WorkbenchProcessLease.ts";
 
 const exec = promisify(execFile);
+
+test("foreground owner loss during host startup releases a late singleton lease", async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "wb-service-start-close-"));
+  const dataRoot = path.join(root, "data");
+  const service = new WorkbenchService({
+    root, dataRoot, session: "cancelled-start",
+    warn: message => assert.fail(message), restart: () => assert.fail("Cancelled startup cannot restart."),
+  });
+  context.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
+  const starting = service.start();
+  const rejected = assert.rejects(starting);
+  await service.close();
+  await rejected;
+  const lease = await WorkbenchProcessLease.acquire(path.join(dataRoot, "service", "process-lease.sqlite3"));
+  assert.ok(lease);
+  await lease.dispose();
+});
 
 test("cold service reads and app detach preserve durable identity without waking a daemon", async context => {
   const root = await mkdtemp(path.join(os.tmpdir(), "wb-service-cold-"));
@@ -18,6 +36,8 @@ test("cold service reads and app detach preserve durable identity without waking
   const warnings: string[] = [];
   const services: WorkbenchService[] = [];
   const clients: WorkbenchServiceClient[] = [];
+  let stopped!: () => void;
+  const shutdownRequested = new Promise<void>(resolve => { stopped = resolve; });
   context.after(async () => {
     await Promise.all(clients.map(client => client.close()));
     await Promise.all(services.map(service => service.close()));
@@ -33,6 +53,7 @@ test("cold service reads and app detach preserve durable identity without waking
       root, dataRoot, session: "cold-fixture",
       warn: message => warnings.push(message),
       restart: () => assert.fail("Cold reads must not request a restart."),
+      stop: () => stopped(),
     });
     services.push(service);
     return { service, endpoint: await service.start() };
@@ -63,6 +84,15 @@ test("cold service reads and app detach preserve durable identity without waking
   });
   await client.request({ method: "service/status/read" });
   assert.equal(client.getSnapshot().snapshot?.identity.state, "sleeping");
+  const processInfo = await client.request({ method: "service/process/read" });
+  assert.equal(processInfo.kind, "process");
+  if (processInfo.kind !== "process") assert.fail("Missing process information.");
+  assert.equal(processInfo.instanceId, first.endpoint.instanceId);
+  await assert.rejects(client.request({
+    method: "service/stop", instanceId: "00000000-0000-4000-8000-000000000000",
+  }), /replaced/u);
+  assert.equal(warnings.length, 1);
+  warnings.length = 0;
   let sawPending = false;
   let finishReload!: () => void;
   const reloaded = new Promise<void>(resolve => { finishReload = resolve; });
@@ -77,6 +107,10 @@ test("cold service reads and app detach preserve durable identity without waking
   assert.equal(client.getSnapshot().snapshot?.reloadDirt?.error, null);
   assert.equal(client.getSnapshot().snapshot?.identity.daemonId, identity.daemonId);
   assert.equal(client.getSnapshot().snapshot?.identity.state, "sleeping");
+  await client.request({ method: "service/daemon/stop", instanceId: first.endpoint.instanceId });
+  assert.equal(first.service.identity().state, "sleeping");
+  await client.request({ method: "service/stop", instanceId: first.endpoint.instanceId });
+  await shutdownRequested;
   await client.close();
   assert.equal((await fetch(`${first.endpoint.origin}/_workbench-service/identity`)).status, 200);
   await first.service.close();

@@ -144,6 +144,13 @@ export default class WorkbenchServiceRepository {
     return this.startupFailure === null && this.query(selectRows(tables.intent))[0]?.session_id === session;
   }
 
+  stopDaemon() {
+    this.executeTransaction([
+      deleteRows(tables.intent, { id: "singleton" }),
+      deleteRows(tables.failure, { id: "singleton" }),
+    ]);
+  }
+
   failStartup(message: string) {
     this.executeTransaction([upsertRow(tables.failure, {
       id: "singleton", message: message.replace(/[\r\n]/gu, " ").slice(0, 512),

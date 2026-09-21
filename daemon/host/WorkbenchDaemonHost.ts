@@ -41,6 +41,7 @@ export interface WorkbenchDaemonHostOptions {
   environment?: NodeJS.ProcessEnv;
   healthClient?: Pick<WorkbenchDaemonHealthClient, "probe">;
   loggerFactory?: (logFilePath: string) => RunnerLog;
+  writeLog?: (value: string, error: boolean) => void;
   now?: () => number;
   projectRootPath: string;
   sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
@@ -48,6 +49,7 @@ export interface WorkbenchDaemonHostOptions {
   terminateChild?: (child: ChildProcess) => Promise<void>;
   onFailure?: (error: Error, beforeReady: boolean) => Promise<void> | void;
   requestRestart?: (fatal?: boolean) => void;
+  lifetime?: AbortSignal;
 }
 
 type DaemonLifecycle =
@@ -80,16 +82,17 @@ class RunnerLogFile implements RunnerLog {
   private readonly descriptor: number;
   private readonly logger: WorkbenchProcessLogger;
 
-  constructor(logFilePath: string) {
+  constructor(logFilePath: string, writeLog?: (value: string, error: boolean) => void) {
     this.descriptor = openSync(logFilePath, "a");
-    const write = (stream: NodeJS.WriteStream, value: string) => {
+    const write = (error: boolean, value: string) => {
       if (this.closed) throw new Error("Daemon host log is closed.");
-      stream.write(value);
+      if (writeLog) writeLog(value, error);
+      else (error ? process.stderr : process.stdout).write(value);
       writeSync(this.descriptor, value);
     };
     this.logger = new WorkbenchProcessLogger({
-      writeError: (value) => write(process.stderr, value),
-      writeOutput: (value) => write(process.stdout, value),
+      writeError: (value) => write(true, value),
+      writeOutput: (value) => write(false, value),
     });
   }
 
@@ -181,7 +184,7 @@ export default class WorkbenchDaemonHost {
   private readonly sleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
   private readonly spawnDaemon: (daemonDirectoryPath: string, environment: NodeJS.ProcessEnv) => ChildProcess;
   private readonly terminateChild: (child: ChildProcess) => Promise<void>;
-  private readonly stopAbort = new AbortController();
+  private stopAbort = new AbortController();
   private activeAbort: AbortController | null = null;
   private activeChild: ChildProcess | null = null;
   private retirement: Promise<void> | null = null;
@@ -189,6 +192,7 @@ export default class WorkbenchDaemonHost {
   private stopping = false;
   private lifecycle: DaemonLifecycle = { state: "sleeping" };
   private runTask: Promise<void> | null = null;
+  private stopTask: Promise<void> | null = null;
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly options: WorkbenchDaemonHostOptions) {
@@ -198,7 +202,7 @@ export default class WorkbenchDaemonHost {
     this.pauseSentinelPath = path.join(this.projectRootPath, ".workbench", "daemon-loop.pause");
     this.environment = options.environment ?? process.env;
     this.healthClient = options.healthClient ?? new WorkbenchDaemonHealthClient();
-    this.loggerFactory = options.loggerFactory ?? ((logFilePath) => new RunnerLogFile(logFilePath));
+    this.loggerFactory = options.loggerFactory ?? ((logFilePath) => new RunnerLogFile(logFilePath, options.writeLog));
     this.now = options.now ?? (() => performance.now());
     this.terminateChild = options.terminateChild ?? (child => killProcessTreeAsync(child.pid));
     this.sleep = options.sleep ?? abortableSleep;
@@ -225,9 +229,15 @@ export default class WorkbenchDaemonHost {
   }
 
   wake(): Promise<WorkbenchDaemonEndpoint> {
+    if (this.options.lifetime?.aborted) return Promise.reject(this.options.lifetime.reason);
+    if (this.stopTask) return this.stopTask.then(() => this.wake());
     if (this.lifecycle.state === "ready") return Promise.resolve(this.lifecycle.endpoint);
     if (this.lifecycle.state === "starting") return this.lifecycle.ready.promise;
-    if (this.stopping) return Promise.reject(new Error("Daemon host is stopping."));
+    if (this.lifecycle.state === "stopped") {
+      this.stopping = false;
+      this.stopAbort = new AbortController();
+      this.lifecycle = { state: "sleeping" };
+    }
     if (this.lifecycle.state === "failed") return Promise.reject(this.lifecycle.error);
     let resolve!: (endpoint: WorkbenchDaemonEndpoint) => void;
     let reject!: (error: Error) => void;
@@ -287,16 +297,26 @@ export default class WorkbenchDaemonHost {
     }
   }
 
-  async stop(reason = "Daemon host stopped.") {
-    if (this.stopping) return;
+  stop(reason = "Daemon host stopped."): Promise<void> {
+    if (this.stopTask) return this.stopTask;
+    if (this.stopping) return this.lifecycle.state === "failed"
+      ? Promise.reject(this.lifecycle.error) : Promise.resolve();
     this.stopping = true;
     if (this.lifecycle.state === "starting") this.lifecycle.ready.reject(new Error(reason));
     this.lifecycle = { state: "stopped" };
     this.publish();
     this.stopAbort.abort(new Error(reason));
     this.activeAbort?.abort(new Error(reason));
-    await this.retireChild();
-    if (this.runTask) await this.runTask;
+    const task = (async () => {
+      await this.retireChild();
+      if (this.runTask) await this.runTask;
+    })().catch(error => {
+      this.lifecycle = { state: "failed", error: error instanceof Error ? error : new Error(String(error)) };
+      this.publish();
+      throw error;
+    }).finally(() => { if (this.stopTask === task) this.stopTask = null; });
+    this.stopTask = task;
+    return task;
   }
 
   private async runChild(log: RunnerLog) {

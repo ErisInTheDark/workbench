@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchAppProcessProtocolOptions: desktop stdio protocol ports. Keywords: app, desktop, process, protocol.
- * - default WorkbenchAppProcessProtocol: announce app state, request native restart, and route one desktop Quit command. Keywords: app, lifecycle, stdio.
+ * - WorkbenchAppProcessProtocolOptions: desktop stdio protocol ports.
+ * - default WorkbenchAppProcessProtocol: announce app state and route native restart and Quit through one owner.
  */
 import type { Readable, Writable } from "node:stream";
 
@@ -68,6 +68,10 @@ export default class WorkbenchAppProcessProtocol {
     });
   }
 
+  requestQuit() {
+    this.writeRecord({ type: "quit", version: 1 });
+  }
+
   start() {
     if (this.started) throw new Error("Workbench desktop process protocol has already started.");
     this.started = true;
@@ -115,7 +119,7 @@ export default class WorkbenchAppProcessProtocol {
   }
 
   private writeRecord(record:
-    | { type: "alreadyRunning" | "restart"; version: 1 }
+    | { type: "alreadyRunning" | "restart" | "quit"; version: 1 }
     | { appOrigin: string; openBrowser: boolean; type: "ready"; version: 1 }) {
     this.output.write(`${RECORD_PREFIX}${JSON.stringify(record)}\n`);
   }

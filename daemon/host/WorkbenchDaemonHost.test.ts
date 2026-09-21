@@ -124,6 +124,46 @@ function fakeLog(lines: string[]) {
   };
 }
 
+test("an intentional stop retires the daemon without recovery and allows an explicit later wake", async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-wake-again-"));
+  const clock = new FakeClock();
+  const children: ChildProcess[] = [];
+  let spawned = event();
+  const lifetime = new AbortController();
+  const host = new WorkbenchDaemonHost({
+    lifetime: lifetime.signal,
+    projectRootPath: root, environment: {}, now: clock.now, sleep: clock.sleep,
+    loggerFactory: () => fakeLog([]),
+    spawnDaemon: () => {
+      const child = fakeChild();
+      children.push(child);
+      spawned.resolve();
+      return child;
+    },
+    terminateChild: async child => { child.emit("exit", 0, null); },
+    requestRestart: () => assert.fail("Intentional shutdown must not request recovery."),
+  });
+  context.after(async () => { await host.stop(); await rm(root, { recursive: true, force: true }); });
+  const first = host.wake();
+  await spawned.promise;
+  reportReady(children[0]);
+  await first;
+  await host.stop();
+  assert.equal(host.snapshot().state, "stopped");
+  spawned = event();
+  const second = host.wake();
+  // A rejected wake must fail this test rather than leave it waiting for a spawn.
+  await Promise.race([spawned.promise, second]);
+  assert.equal(children.length, 2);
+  reportReady(children[1]);
+  await second;
+  assert.equal(host.snapshot().state, "ready");
+  lifetime.abort(new Error("owner closed"));
+  await host.stop();
+  await assert.rejects(host.wake(), /owner closed/u);
+  assert.equal(children.length, 2);
+});
+
 test("unexpected supervision failure retires its owned child before rejecting", async context => {
   const root = await mkdtemp(path.join(os.tmpdir(), "workbench-wake-failure-"));
   const child = fakeChild();
@@ -143,6 +183,33 @@ test("unexpected supervision failure retires its owned child before rejecting", 
   await assert.rejects(host.run(), /watchdog wait failed/);
   assert.equal(retired, 1);
   assert.equal(host.snapshot().state, "failed");
+});
+
+test("failed retirement cannot be followed by spawning another daemon", async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-stop-failure-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const child = fakeChild();
+  const spawned = event();
+  const clock = new FakeClock();
+  let spawns = 0;
+  const host = new WorkbenchDaemonHost({
+    projectRootPath: root, environment: {}, now: clock.now, sleep: clock.sleep,
+    loggerFactory: () => fakeLog([]),
+    spawnDaemon: () => { spawns++; spawned.resolve(); return child; },
+    terminateChild: async () => {
+      child.emit("exit", 0, null);
+      throw new Error("retirement confirmation failed");
+    },
+  });
+  const waking = host.wake();
+  const running = host.run();
+  await spawned.promise;
+  reportReady(child);
+  await waking;
+  await assert.rejects(host.stop(), /retirement confirmation failed/u);
+  await running;
+  await assert.rejects(host.wake(), /retirement confirmation failed/u);
+  assert.equal(spawns, 1);
 });
 
 test("wake coalesces callers and resolves only after child-bound readiness", async context => {

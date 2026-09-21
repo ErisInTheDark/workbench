@@ -46,11 +46,13 @@ async function fixture(context, options = {}) {
 test("only human launch and connect may install, and refusal writes nothing", async context => {
   const f = await fixture(context, { prompt: { choose: async () => "Cancel" } });
   await assert.rejects(f.bootstrap.run(["shortcut"]), /not installed/i);
+  await assert.rejects(f.bootstrap.run(["view", "daemon"]), /not installed/i);
   await assert.rejects(f.bootstrap.run([]), { name: "AbortError" });
   assert.deepEqual(f.calls, []);
   assert.deepEqual(await fs.readdir(f.home), []);
   const managed = await fixture(context, { environment: { WORKBENCH_THREAD_ID: "managed" } });
   await assert.rejects(managed.bootstrap.run([]), /managed/i);
+  await assert.rejects(managed.bootstrap.run(["view", "app"]), /managed/i);
   assert.deepEqual(managed.calls, []);
 });
 
@@ -64,6 +66,11 @@ test("installation records the selected checkout and never clones it again", asy
   await f.bootstrap.run([]);
   assert.equal(f.calls.filter(call => call.command === "git").length, 0);
   assert.ok(f.calls.some(call => call.args.some(arg => arg.endsWith("dispatch.mjs"))));
+  f.calls.length = 0;
+  await f.bootstrap.run(["view", "daemon"]);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].config.interactive, true);
+  assert.deepEqual(f.calls[0].args.slice(-2), ["view", "daemon"]);
 });
 
 test("an unrelated destination is never overwritten", async context => {

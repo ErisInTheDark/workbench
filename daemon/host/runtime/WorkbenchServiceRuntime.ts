@@ -16,8 +16,12 @@ export default class WorkbenchServiceRuntime {
   private readonly host: ReloadableNodeHost<ServiceProcessContext, ServiceRuntimeObjects, never>;
 
   constructor(private readonly context: ServiceProcessContext) {
+    const require = createRequire(import.meta.url);
     this.host = new ReloadableNodeHost(context, createReloadableNodeModuleLoader(
-      createRequire(import.meta.url), "./service-root-node.ts", { repoRoot: context.root },
+      require, "./service-root-node.ts", {
+        repoRoot: context.root,
+        processModule: require.cache[require.resolve("../index.ts")],
+      },
     ), {
       requiredRegistrations: ["database", "network", "http", "dirt", "reload"],
       topologyScope: "host:database",
@@ -29,11 +33,7 @@ export default class WorkbenchServiceRuntime {
           access: "operator", destructive: true, safeAll: false,
         },
         sources: [
-          "daemon/host/WorkbenchService.ts", "daemon/host/WorkbenchServiceSessions.ts",
-          "daemon/host/WorkbenchDaemonHost.ts", "daemon/host/DaemonHealthWatchdog.ts", "daemon/host/WorkbenchDaemonHealthClient.ts",
-          "daemon/host/index.ts", "daemon/host/launch-node.mjs", "daemon/host/native/**", "daemon/host/package.json",
-          "daemon/host/runtime/WorkbenchServiceRuntime.ts", "daemon/host/runtime/service-*.ts",
-          "shared/http/HttpServer.ts", "shared/process/WorkbenchProcessLease.ts",
+          "daemon/host/launch-node.mjs", "daemon/host/native/**", "daemon/host/package.json",
         ].join("\n"),
       },
     });

@@ -8,7 +8,11 @@ Installed commands:
 - `wb connect`: enable cold remote wake and OS startup.
 - `wb disconnect`: disable future cold remote wake and startup, preserving active consumers and network grants.
 - `wb shortcut`: install a desktop/menu shortcut without launching or connecting.
-- `pnpm dev`: ensure the independent host and request the daemon.
+- `pnpm dev`: run host and daemon in the foreground with live output and terminal-owned shutdown. Refuse an existing host; use `wb view daemon` instead.
+- `wb view daemon`: attach to host/daemon logs without launching. Ctrl+C stops daemon and harnesses; another Ctrl+C stops the host.
+- `wb view app`: attach to tray/app logs. Ctrl+C invokes tray Quit, leaving the daemon alone.
+
+In either view, `q` or closing the terminal detaches without stopping anything. Non-interactive views only stream logs. Intentional daemon stop clears crash-restart intent and blocks incidental forwarding from waking it; launching the app or requesting explicit daemon wake starts it again. Process replacement is reported; reattach before controlling a replacement.
 
 Installation prompts for consent and location. The dim `/wb` suffix is not editable; an existing final `wb` or `workbench` directory suppresses it. Defaults are `%LOCALAPPDATA%\Programs\inthedark\wb` and `~/.local/lib/inthedark/wb`. Runtime data stays separate. `~/.workbench/installation.json` records installation progress and the selected repository.
 
@@ -17,6 +21,8 @@ Setup runs dependency installation, frontend compilation and global CLI installa
 # process ownership
 
 The host owns networking and the heavy daemon. The tray owns the app server, outside the host's crash unit. App exit leaves the host and daemon available. Windows uses a current-user scheduled task plus the committed native supervisor. Linux uses a user systemd service; unattended startup requires linger.
+
+Foreground development uses the same supervisor on Windows and a transient user systemd service on Linux. It does not register persistent startup. Its owner pipe ties shutdown to the launching terminal; detachable viewers never own that pipe.
 
 Service state lives in `service/service.sqlite3` beneath the existing Workbench data root. Initial network import uses a SQLite backup of app state, preserving the original app database and native key directory. Durable daemon UUIDs are not process-instance UUIDs.
 
@@ -30,7 +36,7 @@ Host scopes are `host:database`, `host:network`, `host:http` and `host:process`.
 
 Initial activation of these process-boundary changes needs full app and daemon/host replacement, performed by the user. Do not launch a second network identity alongside an older app-owned network process.
 
-Daemon and app logs remain under `.workbench/logs/`, with existing bounded rotation. Windows host diagnostics use `workbench-host` files there. Linux service startup failures are also visible through `systemctl --user status workbench-host` and `journalctl --user -u workbench-host`.
+Host/daemon and tray/app logs remain under `.workbench/logs/`, with bounded rotation, using `workbench-host` and `workbench-app` files. Views read bounded recent output and follow rotation. Linux bootstrap failures are also visible through `systemctl --user status workbench-host` and `journalctl --user -u workbench-host`.
 
 # developer validation
 
