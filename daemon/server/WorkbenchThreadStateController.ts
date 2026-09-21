@@ -796,7 +796,7 @@ export default class WorkbenchThreadStateController {
     const entry = slot.kind === "thread" ? state.entries.get(`${slot.harness}:${slot.threadId}`) : null;
     const draft = slot.kind === "draft" ? state.drafts.get(slot.draftId) : null;
     if (slot.kind === "thread" && (!entry || entry.entryKind === "draft")) return null;
-    if (slot.kind === "draft" && (!draft || draft.composerSettings.harness !== slot.harness)) return null;
+    if (slot.kind === "draft" && !draft) return null;
     let selection = slot.kind === "new-thread" ? state.newThreadProfile
       : draft ? state.draftStore.profileFromDraft(draft)
         : entry && entry.entryKind !== "draft" ? entry.profile
@@ -810,14 +810,15 @@ export default class WorkbenchThreadStateController {
     if (refresh && profileId) {
       if (!this.options.readComposerProfiles) throw new Error("The daemon composer profile catalogue is unavailable.");
       const profile = (await this.options.readComposerProfiles()).profiles.find((candidate) => candidate.id === profileId);
-      if (profile) {
+      if (profile && (slot.kind !== "thread" || profile.harness === slot.harness)) {
         selection = { kind: "profile", profileId, settings: copyComposerSettings(profile) };
       } else if (selection) {
+        // A deleted definition, or a linked thread definition whose provider drifted, previews the saved Custom snapshot.
         selection = { kind: "custom", settings: selection.settings };
       }
     }
     if (!selection || !selection.settings.model.trim()) return null;
-    if (slot.kind !== "new-thread" && selection.settings.harness !== slot.harness) {
+    if (slot.kind === "thread" && selection.settings.harness !== slot.harness) {
       throw new Error("The daemon composer profile harness does not match the thread.");
     }
     return WorkbenchComposerProfileSelectionSchema.parse(selection);
@@ -828,7 +829,7 @@ export default class WorkbenchThreadStateController {
       state.newThreadProfile = selection;
     } else if (slot.kind === "draft") {
       const draft = state.drafts.get(slot.draftId);
-      if (!draft || draft.composerSettings.harness !== slot.harness || (selection.kind === "profile" && selection.settings.harness !== slot.harness)) return false;
+      if (!draft) return false;
       const next = {
         ...draft, composerSettings: selection.settings,
         profileId: selection.kind === "profile" ? selection.profileId : null,

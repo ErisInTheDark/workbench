@@ -54,14 +54,17 @@ export default class ThreadProfileEditorController {
     this.agentGeneration++;
     this.publish({ agents: [], agentsLoading: false, agentsError: "" });
   }
-  async loadModels(load: () => Promise<WorkbenchModelOption[]>) {
+  async loadModels(load: () => Promise<WorkbenchModelOption[]>): Promise<WorkbenchModelOption[] | null> {
     const generation = ++this.modelGeneration;
     this.publish({ modelsLoading: true, modelsError: "" });
     try {
       const models = await load();
-      if (generation === this.modelGeneration) this.publish({ models, modelsLoading: false });
+      if (generation !== this.modelGeneration) return null;
+      this.publish({ models, modelsLoading: false });
+      return models;
     } catch (error) {
       if (generation === this.modelGeneration) this.publish({ modelsLoading: false, modelsError: error instanceof Error ? error.message : "Unable to load models." });
+      return null;
     }
   }
   async loadAgents(load: () => Promise<WorkbenchAgentOption[]>) {

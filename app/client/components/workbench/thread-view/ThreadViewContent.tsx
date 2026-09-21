@@ -4,7 +4,7 @@
  */
 "use client";
 import { useWorkbenchThread } from "../use-workbench-thread";
-import { defaultProviderKey, installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 
@@ -396,7 +396,7 @@ export default memo(function ThreadViewContent ({
     : activeThread;
   const canSelectHarness = Boolean(activeThread?.isDraft && activeProfileSlot
     && (installedProviderKeys.length > 1 || !installedProviderKeys.some(harness => harness === activeThread.harness))
-    && composerProfileController.getSelection(activeProfileSlot).kind === "custom");
+    && composerProfileController.getDisplaySelection(activeProfileSlot).kind === "custom");
   void composerProfileSnapshot;
   useEffect(() => {
     if (activeProfileSlot) void composerProfileController.loadSelection(activeProfileSlot);
@@ -840,6 +840,16 @@ export default memo(function ThreadViewContent ({
   const handleThreadSettingsChange = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
     onThreadSettingsChange(threadId, settings);
   }, [onThreadSettingsChange]);
+  // A draft's provider comes from its selection: move the draft document harness to match so
+  // dispatch and the account rate-limit row agree. The target identity does not move.
+  useEffect(() => {
+    if (!activeThread?.isDraft || !activeProfileSlot) return;
+    if (activeProfileSlot.kind !== "draft" && activeProfileSlot.kind !== "new-thread") return;
+    const resolvedHarness = resolvedActiveThread?.harness;
+    if (!resolvedHarness || resolvedHarness === activeThread.harness) return;
+    const settings = composerProfileController.resolveSettings(activeProfileSlot);
+    if (settings) handleThreadSettingsChange(activeThread.id, settings);
+  }, [activeProfileSlot, activeThread?.harness, activeThread?.id, activeThread?.isDraft, composerProfileController, handleThreadSettingsChange, resolvedActiveThread?.harness]);
 
   const syncCodeBlockWrapDomState = useCallback((nextValue: boolean) => {
     const root = threadViewRef.current;
@@ -917,17 +927,9 @@ export default memo(function ThreadViewContent ({
       if (settings) handleThreadSettingsChange(selectedThread.id, settings);
     });
   };
-  const handleComposerHarnessToggle = () => {
-    if (!activeThread?.isDraft) return;
-    const harnesses = installedProviderKeys;
-    const nextHarness = harnesses[(harnesses.findIndex(harness => harness === activeThread.harness) + 1) % harnesses.length] ?? defaultProviderKey;
-    handleComposerHarnessSelect(nextHarness);
-  };
   const composerStatus = activeThread ? (
     <ThreadRateLimits
-      canToggleHarness={canSelectHarness}
-      harness={activeThread.harness}
-      onHarnessToggle={handleComposerHarnessToggle}
+      harness={resolvedActiveThread?.harness ?? activeThread.harness}
       rateLimits={rateLimits}
       trailingContent={(
         <ThreadContextStatus
@@ -943,7 +945,6 @@ export default memo(function ThreadViewContent ({
       key={`${projectId}:${activeThread.id}`}
       composerSpellCheck={composerSpellCheck}
       onListModels={threads.listModels}
-      onHarnessToggle={handleComposerHarnessToggle}
       highlightSources={inlineMentionSources}
       onHarnessSelect={handleComposerHarnessSelect}
       onSendMessage={handleSendMessage}
@@ -971,10 +972,8 @@ export default memo(function ThreadViewContent ({
     >
       {isDraftThreadView ? (
         <ThreadRateLimits
-          canToggleHarness={canSelectHarness}
-          harness={activeThread.harness}
+          harness={resolvedActiveThread?.harness ?? activeThread.harness}
           leadingContent={draftLeadingContent}
-          onHarnessToggle={handleComposerHarnessToggle}
           rateLimits={rateLimits}
           trailingContent={<ThreadContextStatus onCompactThread={handleCompactThread} thread={activeThread} />}
         />

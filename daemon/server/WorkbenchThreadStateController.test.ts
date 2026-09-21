@@ -2104,7 +2104,7 @@ test("draft saves update defaults atomically without defaults rewriting other dr
   assert.equal((await reopened.readComposerProfileTarget(secondSlot))?.settings.model, "second");
 });
 
-test("Custom draft provider changes update defaults and reject writes addressed to the old provider", async () => {
+test("draft targets are provider-agnostic and adopt any addressed provider", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-draft-provider-"));
   const projectId = fixtureProjectIds.project;
   const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("11111111-1111-4111-8111-111111111111");
@@ -2117,14 +2117,21 @@ test("Custom draft provider changes update defaults and reject writes addressed 
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog, projectState: projectState(), publish() {},
     reconcileProject: async () => [], storageRoot: root,
+    readComposerProfiles: async () => ({ profiles: [{ id: "named", name: "Named", scope: { kind: "global" }, createdAt: 1, updatedAt: 1, agentPath: null, agentSource: null, harness: "opencode", model: "opencode-model", reasoningEffort: null, serviceTier: null }] }),
   });
   try {
     const oldSlot = { kind: "draft" as const, projectId, draftId, harness: "codex" as const };
     const next = { kind: "custom" as const, settings: { ...settings, harness: "copilot" as const, model: "copilot-model" } };
     assert.equal(await controller.setComposerProfileTarget(oldSlot, next), true);
+    // The draft target reads back the same provider no matter which harness addresses it.
+    assert.deepEqual(await controller.readComposerProfileTarget(oldSlot), next);
     assert.deepEqual(await controller.readComposerProfileTarget({ ...oldSlot, harness: "copilot" }), next);
-    assert.equal(await controller.setComposerProfileTarget(oldSlot, selection), false);
-    assert.deepEqual(await controller.readComposerProfileTarget({ kind: "new-thread", projectId }), next);
+    assert.deepEqual(await controller.readComposerProfileTarget({ ...oldSlot, harness: "opencode" }), next);
+    const profileSelection = { kind: "profile" as const, profileId: "named", settings: { ...settings, harness: "opencode" as const, model: "opencode-model" } };
+    assert.equal(await controller.setComposerProfileTarget({ ...oldSlot, harness: "copilot" }, profileSelection), true);
+    assert.deepEqual(await controller.readComposerProfileTarget(oldSlot), profileSelection);
+    assert.deepEqual(await controller.readComposerProfileTarget({ ...oldSlot, harness: "opencode" }), profileSelection);
+    assert.deepEqual(await controller.readComposerProfileTarget({ kind: "new-thread", projectId }), profileSelection);
     const entry = (await controller.getSnapshot(projectId)).entries.find(entry => entry.entryKind === "draft");
     assert.equal(entry?.entryKind === "draft" ? entry.draft.prompt : null, "Keep this");
   } finally {
@@ -3741,6 +3748,9 @@ test("restarted preview refreshes linked profiles, retains deleted snapshots and
   assert.deepEqual(await restarted.readComposerProfileTarget(slot), candidate);
   profiles = [];
   assert.deepEqual((await restarted.prepareComposerProfileTarget(slot)).selection, { kind: "custom", settings: selection.settings });
+  profiles = [{ ...selection.settings, id: "named", name: "Named", harness: "copilot", createdAt: 1, updatedAt: 1, scope: { kind: "global" } }];
+  assert.deepEqual((await restarted.prepareComposerProfileTarget(slot)).selection, { kind: "custom", settings: selection.settings });
+  profiles = [];
   await restarted.setComposerProfileTarget({ kind: "new-thread", projectId: fixtureProjectIds["project"] }, selection);
   const child: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> = {
     activityAt: 1, title: "Child", identity: { harness: "codex", threadId: fixtureThreadIds["child"] },
@@ -3759,7 +3769,8 @@ test("restarted preview refreshes linked profiles, retains deleted snapshots and
   await restarted.ensureProviderEntry(fixtureProjectIds["project"], pinnedRecord("child", "Provider child"));
   assert.equal((await restarted.prepareComposerProfileTarget(childSlot)).subagentName, "child");
   profiles = [{ ...profiles[0]!, harness: "copilot" }];
-  await assert.rejects(restarted.prepareComposerProfileTarget(childSlot), /harness does not match/u);
+  // The linked definition drifted providers; the child previews its saved Custom snapshot instead of throwing.
+  assert.deepEqual((await restarted.prepareComposerProfileTarget(childSlot)).selection, { kind: "custom", settings: selection.settings });
 });
 
 test("profile admission publishes only accepted candidates and orders later edits without blocking lifecycle writes", async (context) => {

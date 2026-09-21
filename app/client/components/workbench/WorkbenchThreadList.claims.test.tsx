@@ -50,7 +50,6 @@ const fixtureIdentityValues = {
 
 test("draft composer controls render project rotation immediately before harness rotation", () => {
   const markup = renderToStaticMarkup(createElement(ThreadRateLimits, {
-    canToggleHarness: true,
     harness: "codex",
     leadingContent: createElement("button", { type: "button" }, "Project alpha"),
     rateLimits: null,

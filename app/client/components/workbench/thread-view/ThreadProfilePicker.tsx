@@ -78,7 +78,7 @@ export default function ThreadProfilePicker({ agents, currentSettings, models, p
   const { controller, snapshot } = useWorkbenchComposerProfiles();
   const selection = controller.getSelection(slot);
   const selectedProfile = selection.kind === "profile" ? controller.getProfile(selection.profileId) : null;
-  const visible = controller.getVisibleProfiles(projectId, slot.kind === "draft" || slot.kind === "thread" ? slot.harness : null);
+  const visible = controller.getVisibleProfiles(projectId, slot.kind === "thread" ? slot.harness : null);
   const profiles = orderComposerProfiles(selectedProfile && !visible.some(({ id }) => id === selectedProfile.id) ? [selectedProfile, ...visible] : visible, "newest");
   const globals = profiles.filter(({ scope }) => scope.kind === "global");
   const projects = profiles.filter(({ scope }) => scope.kind === "project");

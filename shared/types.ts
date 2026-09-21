@@ -758,7 +758,7 @@ export interface WorkbenchComposerProfile extends WorkbenchComposerSettings {
   updatedAt: number;
 }
 
-export type WorkbenchComposerProfileChanges = Partial<Omit<WorkbenchComposerProfile, "id" | "harness" | "createdAt" | "updatedAt" | "lastUsedAt">>;
+export type WorkbenchComposerProfileChanges = Partial<Omit<WorkbenchComposerProfile, "id" | "createdAt" | "updatedAt" | "lastUsedAt">>;
 
 export type WorkbenchComposerProfileMutation =
   | { kind: "delete"; profileId: string }

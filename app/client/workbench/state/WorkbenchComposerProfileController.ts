@@ -40,7 +40,8 @@ function createProfileId() {
 
 function getSlotKey(slot: WorkbenchComposerProfileSlot) {
   if (slot.kind === "thread") return `thread:${slot.projectId}:${slot.harness}:${slot.threadId}`;
-  if (slot.kind === "draft") return `draft:${slot.projectId}:${slot.harness}:${slot.draftId}`;
+  // A draft is provider-agnostic: its provider comes from the selection, not the target identity.
+  if (slot.kind === "draft") return `draft:${slot.projectId}:${slot.draftId}`;
   return `${slot.kind}:${slot.projectId}`;
 }
 
@@ -136,7 +137,20 @@ export default class WorkbenchComposerProfileController {
       : selection;
   }
   getProfile(profileId: string) { return this.profiles.find((profile) => profile.id === profileId) ?? null; }
-  getSelectedProfile(slot: WorkbenchComposerProfileSlot) { const selection = this.getSelection(slot); return selection.kind === "profile" ? this.getProfile(selection.profileId) : null; }
+  getLinkedProfile(slot: WorkbenchComposerProfileSlot) {
+    const selection = this.selections[getSlotKey(slot)];
+    return selection?.kind === "profile" ? this.getProfile(selection.profileId) : null;
+  }
+  getDisplaySelection(slot: WorkbenchComposerProfileSlot): WorkbenchComposerProfileSelection {
+    const selection = this.getSelection(slot);
+    if (selection.kind !== "profile" || slot.kind !== "thread") return selection;
+    const linked = this.getProfile(selection.profileId);
+    // A materialized thread is locked to its own provider: a linked profile whose provider
+    // drifted previews the saved Custom snapshot, like a deleted definition. Drafts and the
+    // new-thread target are provider-mobile and keep the linked profile.
+    return linked && linked.harness === slot.harness ? selection : { kind: "custom", settings: selection.settings };
+  }
+  getSelectedProfile(slot: WorkbenchComposerProfileSlot) { const selection = this.getDisplaySelection(slot); return selection.kind === "profile" ? this.getProfile(selection.profileId) : null; }
   getVisibleProfiles(projectId: string | null, harness?: WorkbenchHarness | null) {
     return this.profiles.filter((profile) => (!harness || profile.harness === harness) && (profile.scope.kind === "global" || profile.scope.projectId === projectId));
   }
@@ -173,7 +187,7 @@ export default class WorkbenchComposerProfileController {
   async updateProfile(profileId: string, update: WorkbenchComposerProfileChanges) {
     const existing = this.getProfile(profileId);
     if (!existing) return null;
-    const normalized = normalizeComposerProfile({ ...existing, ...update, createdAt: existing.createdAt, harness: existing.harness, id: existing.id, updatedAt: Date.now() });
+    const normalized = normalizeComposerProfile({ ...existing, ...update, createdAt: existing.createdAt, id: existing.id, updatedAt: Date.now() });
     const profile = normalized ? { ...normalized, ...(existing.lastUsedAt != null ? { lastUsedAt: existing.lastUsedAt } : {}) } : null;
     if (!profile) return this.fail("Profile name and model are required.");
     if (profile.scope.kind === "global" && profile.agentSource === "project") return this.fail("Profiles using a project agent cannot be global.");
@@ -220,8 +234,8 @@ export default class WorkbenchComposerProfileController {
   }
   selectProfile(slot: WorkbenchComposerProfileSlot, profileId: string) {
     const profile = this.getProfile(profileId);
-    if (!profile
-      || ((slot.kind === "thread" || slot.kind === "draft") && profile.harness !== slot.harness)) return false;
+    // A materialized thread cannot change provider; a draft retargets to the profile's provider.
+    if (!profile || (slot.kind === "thread" && profile.harness !== slot.harness)) return false;
     void this.persistSelection(slot, { kind: "profile", profileId, settings: cloneSettings(profile) });
     return true;
   }
@@ -330,15 +344,13 @@ export default class WorkbenchComposerProfileController {
       await previous;
       if (this.targetPersistence !== persistence) throw new Error("Composer profile connection changed before the settings could be saved.");
       await persistence.write(slot, selection);
-      const destination = slot.kind === "draft" ? { ...slot, harness: selection.settings.harness } : slot;
-      const acknowledged = await persistence.read(destination);
+      const acknowledged = await persistence.read(slot);
       if (this.targetPersistence !== persistence) return false;
       if (!acknowledged) throw new Error("The daemon composer profile target is unavailable.");
       if (generation >= (this.stableSelections.get(key)?.generation ?? 0)) {
         this.stableSelections.set(key, { generation, selection: this.cloneTargetSelection(acknowledged) });
       }
       if (this.selectionGenerations.get(key) !== generation) return true;
-      if (getSlotKey(destination) !== key) this.installStableSelection(destination, acknowledged, false);
       this.installSelection(slot, acknowledged, false);
       this.error = "";
       this.publish();

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadComposerRibbon: flush profile triggers and direct Custom profile sliders.
+ * - default ThreadComposerRibbon: flush profile, provider and model triggers plus direct Custom profile sliders.
  */
 "use client";
 
@@ -22,14 +22,17 @@ export default function ThreadComposerRibbon({
   onAgentOpen,
   onFastModeToggle,
   onModelOpen,
+  onProviderOpen,
   onReasoningEffortChange,
   supportedReasoningEfforts,
   context,
   onContextChange,
   profileControl,
+  providerLabel = "",
   selectedProfileLabel = null,
   showsFastModeControl,
   showsProfileControl = true,
+  showsProviderControl = false,
   showsReasoningEffortControl,
 }: {
   agentLabel: string;
@@ -40,14 +43,17 @@ export default function ThreadComposerRibbon({
   onAgentOpen: (trigger: HTMLElement, ribbon: HTMLElement) => void;
   onFastModeToggle: () => void;
   onModelOpen: (trigger: HTMLElement, ribbon: HTMLElement) => void;
+  onProviderOpen?: (trigger: HTMLElement, ribbon: HTMLElement) => void;
   onReasoningEffortChange: (effort: string) => void;
   supportedReasoningEfforts: string[];
   context: { value: number; defaultTokens: number; maximumTokens: number } | null;
   onContextChange: (tokens: number) => void;
   profileControl?: ReactNode;
+  providerLabel?: string;
   selectedProfileLabel?: string | null;
   showsFastModeControl: boolean;
   showsProfileControl?: boolean;
+  showsProviderControl?: boolean;
   showsReasoningEffortControl: boolean;
 }) {
   const ribbon = useRef<HTMLDivElement>(null);
@@ -56,6 +62,17 @@ export default function ThreadComposerRibbon({
       {showsProfileControl && profileControl ? <>{profileControl}
       {!selectedProfileLabel ? <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" /> : null}</> : null}
       {!selectedProfileLabel ? <>
+      {showsProviderControl && onProviderOpen ? <>
+        <button
+          type="button"
+          className="enabled:cursor-pointer relative isolate min-w-0 truncate bg-transparent px-2.5 py-2 transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+          title={providerLabel}
+          onClick={(event) => { if (ribbon.current) onProviderOpen(event.currentTarget, ribbon.current); }}
+        >
+          {providerLabel}
+        </button>
+        <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
+      </> : null}
       <button
         type="button"
         className="enabled:cursor-pointer relative isolate min-w-0 truncate bg-transparent px-2.5 py-2 transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"

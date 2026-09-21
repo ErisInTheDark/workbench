@@ -296,7 +296,7 @@ test("materialization copies only compatible profile links to durable destinatio
   controller.dispose();
 });
 
-test("profile harness is immutable and project agents cannot be promoted globally", async () => {
+test("a stored profile can change provider and project agents cannot be promoted globally", async () => {
   const projectProfile = profile({
     agentPath: ".agents/agents/project.md",
     agentSource: "project",
@@ -304,8 +304,9 @@ test("profile harness is immutable and project agents cannot be promoted globall
   });
   const { controller } = await createController([projectProfile]);
 
-  const updated = await controller.updateProfile(projectProfile.id, { harness: "copilot" } as never);
-  assert.equal(updated?.harness, "codex");
+  const updated = await controller.updateProfile(projectProfile.id, { harness: "copilot", model: "copilot-model" });
+  assert.equal(updated?.harness, "copilot");
+  assert.equal(updated?.model, "copilot-model");
   const rejected = await controller.updateProfile(projectProfile.id, { scope: { kind: "global" } });
   assert.equal(rejected, null);
   assert.match(controller.getSnapshot().error, /project agent/i);
@@ -324,6 +325,20 @@ test("deleting a definition previews Custom without rewriting the saved snapshot
   assert.equal(selection.kind, "custom");
   assert.equal(controller.getSelectedProfile(slot), null);
   assert.deepEqual(selection.settings, CODEX_SETTINGS);
+  assert.deepEqual(await targets.read(slot), { kind: "profile", profileId: "profile-a", settings: CODEX_SETTINGS });
+  controller.dispose();
+});
+
+test("a provider-drifted linked profile previews its saved Custom snapshot", async () => {
+  const slot = { harness: "codex" as const, kind: "thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-a") };
+  const { controller, targets } = await createController([profile()]);
+  controller.selectProfile(slot, "profile-a");
+  await controller.waitForSelection(slot);
+
+  await controller.updateProfile("profile-a", { harness: "copilot", model: "copilot-model" });
+  assert.equal(controller.getSelectedProfile(slot), null);
+  assert.deepEqual(controller.getSelection(slot), { kind: "profile", profileId: "profile-a", settings: CODEX_SETTINGS });
+  assert.deepEqual(controller.resolveSettings(slot), CODEX_SETTINGS);
   assert.deepEqual(await targets.read(slot), { kind: "profile", profileId: "profile-a", settings: CODEX_SETTINGS });
   controller.dispose();
 });
@@ -387,7 +402,7 @@ test("profile resolution preserves the thread payload contract", async () => {
   controller.dispose();
 });
 
-test("draft profile slots remain UUID-isolated and harness-bound", async () => {
+test("draft profile slots stay UUID-isolated and provider-mobile", async () => {
   const { controller } = await createController([profile()]);
   const first = { draftId: fixtureIdentitySchemas.DraftIdSchema.parse("11111111-1111-4111-8111-111111111111"), harness: "codex" as const, kind: "draft" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") };
   const second = { ...first, draftId: fixtureIdentitySchemas.DraftIdSchema.parse("22222222-2222-4222-8222-222222222222") };
@@ -395,7 +410,21 @@ test("draft profile slots remain UUID-isolated and harness-bound", async () => {
   assert.equal(controller.selectProfile(first, "profile-a"), true);
   assert.deepEqual(controller.getSelection(first), { kind: "profile", profileId: "profile-a", settings: CODEX_SETTINGS });
   assert.deepEqual(controller.getSelection(second), { kind: "custom" });
-  assert.equal(controller.selectProfile({ ...first, harness: "opencode" }, "profile-a"), false);
+  // A draft is not provider-bound: selecting the profile at another provider retargets the draft.
+  assert.equal(controller.selectProfile({ ...first, harness: "opencode" }, "profile-a"), true);
+  assert.equal(controller.getSelectedProfile({ ...first, harness: "opencode" })?.id, "profile-a");
+  controller.dispose();
+});
+
+test("a draft adopts a drifted linked profile's provider instead of falling back", async () => {
+  const slot = { draftId: fixtureIdentitySchemas.DraftIdSchema.parse("33333333-3333-4333-8333-333333333333"), harness: "codex" as const, kind: "draft" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a") };
+  const { controller } = await createController([profile()]);
+  controller.selectProfile(slot, "profile-a");
+  await controller.waitForSelection(slot);
+
+  await controller.updateProfile("profile-a", { harness: "copilot", model: "copilot-model" });
+  assert.equal(controller.getSelectedProfile(slot)?.id, "profile-a");
+  assert.equal(controller.resolveSettings(slot)?.harness, "copilot");
   controller.dispose();
 });
 
@@ -558,12 +587,12 @@ test("target persistence failure restores acknowledged settings and exposes the 
   controller.dispose();
 });
 
-test("provider changes await capability loading and install the destination draft snapshot", async () => {
+test("provider changes await capability loading and install the draft snapshot", async () => {
   const controller = new WorkbenchComposerProfileController();
   const slot = { kind: "draft" as const, projectId: fixtureIdentityValues.ProjectId["project-a"], draftId: fixtureIdentityValues.DraftId["draft-a"], harness: "codex" as const };
   let saved: WorkbenchComposerProfileTargetSelection = { kind: "custom", settings: CODEX_SETTINGS };
   await controller.initializeTargetPersistence({
-    read: async (target) => target.kind === "draft" && target.harness === saved.settings.harness ? saved : null,
+    read: async (target) => target.kind === "draft" ? saved : null,
     write: async (_target, selection) => { saved = selection; },
   });
   await controller.loadSelection(slot);
@@ -586,7 +615,7 @@ test("provider changes await capability loading and install the destination draf
   assert.equal(await changing, true);
   await waiting;
   assert.deepEqual(controller.resolveSettings({ ...slot, harness: "opencode" }), {
-    harness: "opencode", model: "native/default", agentPath: null, agentSource: null, reasoningEffort: "high", serviceTier: null, contextWindowTokens: 200_000,
+    harness: "opencode", model: "native/default", agentPath: null, agentSource: null, reasoningEffort: "high", serviceTier: null,
   });
   controller.dispose();
 });

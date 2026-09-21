@@ -34,10 +34,10 @@ export default function ThreadProfileQuickPicker({
     if (ribbon) onEdit(trigger, ribbon);
   };
   const getItems = (): PressDragMenuItem[] => {
-    const selection = profiles.controller.getSelection(slot);
+    const selection = profiles.controller.getDisplaySelection(slot);
     const selected = profiles.controller.getSelectedProfile(slot);
     const visible = profiles.controller.getVisibleProfiles(slot.projectId,
-      slot.kind === "new-thread" ? null : slot.harness);
+      slot.kind === "thread" ? slot.harness : null);
     const available = selected && !visible.some(profile => profile.id === selected.id) ? [...visible, selected] : visible;
     const now = Date.now();
     return [

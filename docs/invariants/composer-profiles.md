@@ -3,3 +3,4 @@
 - Accepted draft edits/autosaves update project new-thread defaults. Defaults never overwrite existing drafts or configured threads.
 - Missing ordinary-thread settings may use same-harness project defaults; missing subagent snapshots may resolve their linked profile. Deleted definitions retain saved settings as Custom.
 - Failed admission preserves the applied snapshot, not a stale composer preview. Persistence failure after acceptance never permits resending.
+- Stored profiles can change provider; a materialized thread applies a linked profile only when providers match, otherwise it previews the saved Custom snapshot. Draft targets are provider-agnostic: their provider comes from the stored selection, not the target identity.

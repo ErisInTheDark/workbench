@@ -18,6 +18,7 @@ const ProfileChangesSchema = z.object({
   agentPath: z.string().nullable(),
   agentSource: z.enum(["library", "project"]).nullable(),
   description: z.string(),
+  harness: ProviderKeySchema,
   model: z.string().trim().min(1),
   name: z.string(),
   reasoningEffort: z.string().nullable(),
@@ -110,7 +111,7 @@ export function applyComposerProfileMutation(
     const existing = profiles[existingIndex];
     if (!existing) throw new Error("The composer profile does not exist.");
     const profile = normalizeComposerProfile({
-      ...existing, ...mutation.changes, id: existing.id, harness: existing.harness,
+      ...existing, ...mutation.changes, id: existing.id,
       createdAt: existing.createdAt, updatedAt: Date.now(),
     });
     if (!profile || (profile.scope.kind === "global" && profile.agentSource === "project")) {

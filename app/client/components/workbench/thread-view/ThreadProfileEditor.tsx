@@ -42,7 +42,7 @@ export function profileContextColour (fraction: number) {
 }
 
 export default function ThreadProfileEditor ({
-  anchor, trigger, controller, slot, fallbackSettings, onCustomChange, onRefreshModels, onRefreshAgents, onHarnessToggle, onHarnessSelect, canToggleHarness,
+  anchor, trigger, controller, slot, fallbackSettings, onCustomChange, onRefreshModels, onRefreshAgents, onHarnessSelect, canToggleHarness, onProfileHarnessSelect,
 }: {
   anchor: HTMLElement;
   trigger: HTMLElement;
@@ -50,11 +50,11 @@ export default function ThreadProfileEditor ({
   slot: WorkbenchComposerProfileSlot;
   fallbackSettings: WorkbenchComposerSettings;
   onCustomChange: (settings: WorkbenchComposerSettings) => void;
-  onRefreshModels: () => void;
+  onRefreshModels: (harness: WorkbenchComposerSettings["harness"]) => void;
   onRefreshAgents: () => void;
-  onHarnessToggle?: () => void;
   onHarnessSelect?: (harness: WorkbenchComposerSettings["harness"]) => void;
   canToggleHarness: boolean;
+  onProfileHarnessSelect?: (profileId: string, harness: WorkbenchComposerSettings["harness"]) => void;
 }) {
   const profiles = useWorkbenchComposerProfiles();
   const clientStateController = useWorkbenchClientStateController();
@@ -62,7 +62,7 @@ export default function ThreadProfileEditor ({
   const [favouriteError, setFavouriteError] = useState("");
   const sectionId = useId();
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
-  const profile = profiles.controller.getSelectedProfile(slot);
+  const profile = profiles.controller.getLinkedProfile(slot);
   const settings = profile ? copyComposerSettings(profile) : profiles.controller.resolveSettings(slot) ?? fallbackSettings;
   const unfavouritedModelIds = clientState.records.flatMap(record =>
     record.kind === "modelPreference" && record.harness === settings.harness && !record.favourite ? [record.modelId] : []);
@@ -119,7 +119,7 @@ export default function ThreadProfileEditor ({
     </section>;
   };
   const refresh = state.activeSection === "model"
-    ? { label: "Refresh models", loading: state.modelsLoading, run: onRefreshModels }
+    ? { label: "Refresh models", loading: state.modelsLoading, run: () => onRefreshModels(settings.harness) }
     : state.activeSection === "agent"
       ? { label: "Refresh agents", loading: state.agentsLoading, run: onRefreshAgents }
       : null;
@@ -148,11 +148,11 @@ export default function ThreadProfileEditor ({
         agents={state.agents} currentSettings={settings} models={state.models} projectId={slot.projectId} slot={slot}
       />)}
       {block("harness", "Provider", <ThreadHarnessControl harness={settings.harness} />, <div className="text-sm text-fg/muted">
-        {!profile && canToggleHarness && slot.kind !== "thread"
-          ? onHarnessSelect
+        {profile
+          ? <div className="grid gap-2">{installedProviderKeys.map((harness) => <WorkbenchOptionCard key={harness} density="tight" label={<ThreadHarnessControl harness={harness} />} isChecked={harness === settings.harness} onClick={() => { onProfileHarnessSelect?.(profile.id, harness); }} />)}</div>
+          : canToggleHarness && slot.kind !== "thread" && onHarnessSelect
             ? <div className="grid gap-2">{installedProviderKeys.map((harness) => <WorkbenchOptionCard key={harness} density="tight" label={<ThreadHarnessControl harness={harness} />} isChecked={harness === settings.harness} onClick={() => onHarnessSelect(harness)} />)}</div>
-            : <button type="button" className="rounded-md px-2 py-1 hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]" onClick={onHarnessToggle}>Change provider</button>
-          : <p className="m-0">The provider is fixed for this {profile ? "stored profile" : "thread"}.</p>}
+            : <p className="m-0">The provider is fixed for this thread.</p>}
       </div>)}
       {block("model", "Model", model?.displayName ?? settings.model, <>
         {!canSaveFavourites ? <p className="text-xs text-fg/muted">Reload the app database to enable saving model favourites.</p> : null}

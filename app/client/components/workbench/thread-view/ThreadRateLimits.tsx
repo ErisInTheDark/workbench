@@ -33,37 +33,24 @@ function RateLimitWindowText ({
 }
 
 export default function ThreadRateLimits ({
-  canToggleHarness = false,
   harness,
   leadingContent = null,
-  onHarnessToggle,
   rateLimits,
   showsHarnessControl = true,
   trailingContent = null,
 }: {
-  canToggleHarness?: boolean;
   harness: WorkbenchHarness;
   leadingContent?: ReactNode;
-  onHarnessToggle?: () => void;
   rateLimits: RateLimitSnapshot | null;
   showsHarnessControl?: boolean;
   trailingContent?: ReactNode;
 }) {
-  if (!leadingContent && !trailingContent && !canToggleHarness && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.tertiary && !rateLimits?.limitName) {
+  if (!leadingContent && !trailingContent && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.tertiary && !rateLimits?.limitName) {
     return null;
   }
 
-  const harnessControl = showsHarnessControl ? <ThreadHarnessControl canToggle={canToggleHarness} harness={harness} onToggle={onHarnessToggle} /> : null;
+  const harnessControl = showsHarnessControl ? <ThreadHarnessControl harness={harness} /> : null;
   const leadingControl = showsHarnessControl ? leadingContent : null;
-
-  if (canToggleHarness && !rateLimits?.primary && !rateLimits?.secondary && !rateLimits?.tertiary && !rateLimits?.limitName) {
-    return (
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-fg/muted">
-        <div className="flex items-center gap-3">{leadingControl}{harnessControl}</div>
-        {trailingContent}
-      </div>
-    );
-  }
 
   return (
     <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 text-[0.78em] leading-[1.6] text-fg/muted">
