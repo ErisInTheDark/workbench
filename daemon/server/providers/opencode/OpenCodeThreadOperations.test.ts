@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect OpenCode admission intent and complete canonical message pagination.
+ * No production exports. Tests protect OpenCode admission, accepted questionnaire history and canonical message pagination.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -9,9 +9,67 @@ import {
 import OpenCodeThreadOperations from "./OpenCodeThreadOperations";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
 import WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
-import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import { isWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
+import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
+import { createThreadStateTestDatabase } from "../../workbench-thread-state-test-database";
+import WorkbenchTranscriptRepository from "../../database/transcript/WorkbenchTranscriptRepository";
+import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
+
+test("accepted questionnaires persist once in their accepted turn and recording failures propagate", async () => {
+  const fixture = createThreadStateTestDatabase();
+  fixture.admitThread(testProjectIds.project, threadId, "opencode", nativeThreadId, "C:/repo");
+  const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
+  const adapter = new OpenCodeTranscriptAdapter({
+    ...fixture.identities,
+    transcript: { record: async observations => repository.settle(observations) },
+  });
+  try {
+    const project = { id: testProjectIds.project, rootPath: "C:/repo" };
+    const first = { id: "first", type: "user" as const, text: "work", time: { created: 1 } };
+    const admitted = await adapter.record(session, [first], project);
+    assert.ok(admitted.latestTurnId);
+    const entry: WorkbenchQuestionnaireHistoryEntryState = {
+      threadId: admitted.threadId, turnId: admitted.latestTurnId,
+      itemId: "accepted-question", requestKey: "workbench-mcp:question",
+      insertAfterItemId: null, insertAfterItemIndex: null, resolvedAt: 3,
+      request: {
+        id: "request", title: "direction", summary: "", submitLabel: "submit",
+        questions: [{ id: "direction", header: "direction", question: "which route?",
+          options: [{ label: "continue", description: "keep working" }], allowOther: true, isSecret: false }],
+      },
+      response: { answers: { direction: { answers: ["continue", "with this detail"] } } },
+    };
+    const newer = await adapter.record(session, [first,
+      { id: "newer", type: "user", text: "next", time: { created: 4 } }], project);
+    assert.notEqual(newer.latestTurnId, entry.turnId);
+    const owner = operations({}, adapter);
+    await owner.interactions.record(entry);
+    await owner.interactions.record(entry);
+    const reopened = projectWorkbenchTranscript(new WorkbenchTranscriptRepository(fixture.sqlite).read({
+      threadId: admitted.threadId, turnLimit: 2,
+    })!);
+    assert.ok(reopened.success);
+    const questions = reopened.data.turns.flatMap(turn => turn.items.flatMap(item =>
+      item.type === "questionnaire" ? [{ turnId: turn.id, item }] : []));
+    assert.equal(questions.length, 1);
+    assert.equal(questions[0]?.turnId, entry.turnId);
+    assert.deepEqual(questions[0]?.item.request, entry.request);
+    assert.deepEqual(questions[0]?.item.response, entry.response);
+    assert.equal(questions[0]?.item.resolvedAt, entry.resolvedAt);
+
+    const unavailable = new Error("transcript recording unavailable");
+    const failing = operations({}, new OpenCodeTranscriptAdapter({
+      ...fixture.identities,
+      transcript: { record: async () => { throw unavailable; } },
+    }));
+    await assert.rejects(failing.interactions.record(entry), error => error === unavailable);
+  } finally {
+    fixture.sqlite.close();
+  }
+});
 
 test("late child completion stays in its starting turn after a newer turn is admitted", async () => {
   let latest = turnId;

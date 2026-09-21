@@ -179,7 +179,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         context: { activatedSkillPaths: input.activatedSkillPaths },
       });
     },
-    record: async () => ({}),
+    record: async entry => {
+      await this.options.transcript.recordQuestionnaire(entry);
+      return {};
+    },
   };
 
   async create(input: Parameters<WorkbenchProviderThreads["create"]>[0]) {

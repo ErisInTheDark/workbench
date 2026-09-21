@@ -11,7 +11,7 @@ import type {
 import { z } from "zod";
 import {
   NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema,
-  type WorkbenchThreadId, WorkbenchThreadIdSchema, type WorkbenchTurnId, WorkbenchItemIdSchema,
+  type WorkbenchThreadId, WorkbenchThreadIdSchema, type WorkbenchTurnId, WorkbenchTurnIdSchema, WorkbenchItemIdSchema,
 } from "workbench-shared/workbench/identity";
 import {
   WorkbenchUserInputSchema, type WorkbenchUserInput,
@@ -21,6 +21,7 @@ import type {
   DynamicToolCallOutputContentItem, ThreadItem,
 } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
+import type { WorkbenchQuestionnaireHistoryEntryState } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type { WorkbenchTurnIdentityMetadata } from "../../database/thread-identity/workbench-thread-identity-types";
 import type WorkbenchTranscriptIdentityController from "../../WorkbenchTranscriptIdentityController";
@@ -300,6 +301,21 @@ export default class OpenCodeTranscriptAdapter {
       entry,
       publicItemId: WorkbenchItemIdSchema.parse(entry.itemId),
       observedAt: entry.resolvedAt ?? entry.attemptedAt,
+    }], { source: "workbench" });
+  }
+
+  async recordQuestionnaire(entry: WorkbenchQuestionnaireHistoryEntryState) {
+    await this.owners.transcript.record([{
+      kind: "questionnaire",
+      entry: {
+        ...entry,
+        itemId: entry.itemId ?? null,
+        insertAfterItemId: entry.insertAfterItemId ?? null,
+        insertAfterItemIndex: entry.insertAfterItemIndex ?? null,
+        threadId: WorkbenchThreadIdSchema.parse(entry.threadId),
+        turnId: WorkbenchTurnIdSchema.parse(entry.turnId),
+      },
+      observedAt: entry.resolvedAt,
     }], { source: "workbench" });
   }
 
