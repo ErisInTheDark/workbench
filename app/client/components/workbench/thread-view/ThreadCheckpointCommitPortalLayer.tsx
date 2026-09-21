@@ -2,6 +2,7 @@
  * Exports:
  * - ThreadCheckpointCommitSourceAnchor/ThreadCheckpointCommitTargetAnchor: mark transcript and terminal placement for one proposal.
  * - ThreadCheckpointCommitAnchorRegistry: notify proposal portals when independently rendered anchors mount or unmount.
+ * - moveThreadCheckpointCommitHost: relocate the existing proposal host without remounting its controller.
  * - default ThreadCheckpointCommitPortalLayer: keep one proposal controller mounted while moving its DOM host between anchors.
  */
 "use client";
@@ -70,6 +71,20 @@ export class ThreadCheckpointCommitAnchorRegistry {
 }
 
 const anchorRegistry = new ThreadCheckpointCommitAnchorRegistry();
+
+export function moveThreadCheckpointCommitHost(host: HTMLDivElement, destination: HTMLDivElement) {
+  if (host.parentNode === destination) return;
+  if (
+    typeof destination.moveBefore === "function"
+    && host.isConnected
+    && destination.isConnected
+    && host.ownerDocument === destination.ownerDocument
+  ) {
+    destination.moveBefore(host, null);
+  } else {
+    destination.insertBefore(host, null);
+  }
+}
 
 function anchorId(proposalId: string, placement: ThreadCheckpointCommitPlacement) {
   return `thread-checkpoint-proposal-${placement}-${encodeURIComponent(proposalId)}`;
@@ -147,17 +162,14 @@ function ThreadCheckpointCommitPortal({
         hoisted ? "target" : "source",
         parkingRef.current,
       );
-      if (destination && host.parentNode !== destination) {
-        if (host.isConnected) destination.moveBefore(host, null);
-        else destination.append(host);
-      }
+      if (destination) moveThreadCheckpointCommitHost(host, destination);
     };
     const unsubscribe = anchorRegistry.subscribe(proposalId, reconcile);
     reconcile();
     return () => {
       unsubscribe();
       const parking = parkingRef.current;
-      if (parking && host.isConnected && host.parentNode !== parking) parking.moveBefore(host, null);
+      if (parking && host.isConnected) moveThreadCheckpointCommitHost(host, parking);
     };
   }, [hoisted, host, proposalId]);
 
