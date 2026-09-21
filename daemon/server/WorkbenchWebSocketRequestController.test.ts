@@ -583,7 +583,7 @@ test("orders reload dirt observation across bootstrap, handoff, and disconnect",
   replacement.controller.dispose();
 });
 
-test("controller materialises the exact transcript window before subscribing and drops it on reload", async () => {
+test("controller subscribes to the exact saved window without native work and drops it on reload", async () => {
   const clock = new FakeClock();
   const events: string[] = [];
   const harnessRequests: JsonRpcRequest[] = [];
@@ -634,11 +634,8 @@ test("controller materialises the exact transcript window before subscribing and
       turnLimit: 4,
     },
   }]);
-  assert.deepEqual(events, ["materialise", "subscribe"]);
-  assert.deepEqual(harnessRequests.map(({ params }) => params), [{
-      threadId: "thread",
-      turnIds: ["turn-2", "turn-4"],
-  }]);
+  assert.deepEqual(events, ["subscribe"]);
+  assert.deepEqual(harnessRequests, []);
 
   const state = first.controller.detachForReload();
   assert.deepEqual(unsubscriptions, ["connection-1\0selected-thread"]);
@@ -653,7 +650,7 @@ test("controller materialises the exact transcript window before subscribing and
   replacement.controller.dispose();
 });
 
-test("controller orders an empty exact transcript window before subscribing", async () => {
+test("controller subscribes to an empty exact transcript window without native work", async () => {
   const clock = new FakeClock();
   const events: string[] = [];
   const harnessRequests: JsonRpcRequest[] = [];
@@ -680,12 +677,12 @@ test("controller orders an empty exact transcript window before subscribing", as
     },
   }), false);
 
-  assert.deepEqual(events, ["materialise", "subscribe"]);
-  assert.deepEqual(harnessRequests.map(({ params }) => params), [{ threadId: "thread", turnIds: [] }]);
+  assert.deepEqual(events, ["subscribe"]);
+  assert.deepEqual(harnessRequests, []);
   controller.dispose();
 });
 
-test("transcript materialisation failure rejects subscription without disturbing the source", async () => {
+test("provider materialisation failure cannot prevent a saved transcript subscription", async () => {
   const clock = new FakeClock();
   const sent: Array<Record<string, unknown>> = [];
   let subscriptions = 0;
@@ -712,30 +709,27 @@ test("transcript materialisation failure rejects subscription without disturbing
     },
   }), false);
 
-  assert.equal(subscriptions, 0);
-  assert.equal(
-    (sent.find((message) => message.id === 2)?.error as { message?: string } | undefined)?.message,
-    "historical window is missing",
-  );
+  assert.equal(subscriptions, 1);
+  assert.equal(sent.find(message => message.id === 2)?.error, undefined);
   controller.dispose();
 });
 
-test("a superseded transcript materialisation cannot install its stale subscription", async () => {
+test("a superseded saved transcript subscription cannot publish stale content", async () => {
   const clock = new FakeClock();
-  const releases: Array<(response: JsonRpcResponse) => void> = [];
-  const subscribedTurnIds: Array<readonly string[] | undefined> = [];
+  const publications: Array<(snapshot: WorkbenchTranscriptSnapshot) => void | Promise<void>> = [];
   const { controller } = createController({
     clock,
-    materialize: async () => { await new Promise<JsonRpcResponse>((resolve) => {
-      releases.push(resolve);
-    }); },
     transcript: {
       read: async () => { throw new Error("Unexpected transcript read."); },
-      subscribe: async ({ request }) => { subscribedTurnIds.push(request.turnIds); },
+      subscribe: async ({ publish }) => { publications.push(publish); },
       unsubscribe: () => undefined,
     },
   });
-  const client = createClient();
+  const sent: Array<{ method?: string }> = [];
+  const client = createClient((data, callback) => {
+    sent.push(JSON.parse(String(data)));
+    callback?.();
+  });
   const subscribe = (id: number, turnId: string) => controller.handleMessage(
     client,
     "connection-1",
@@ -750,19 +744,20 @@ test("a superseded transcript materialisation cannot install its stale subscript
     false,
   );
 
-  const stale = subscribe(1, "turn-1");
-  await new Promise<void>((resolve) => { setImmediate(resolve); });
-  const current = subscribe(2, "turn-2");
-  await new Promise<void>((resolve) => { setImmediate(resolve); });
-  assert.equal(releases.length, 2);
-
-  releases[0]?.({ id: 1, result: {} });
-  await stale;
-  assert.deepEqual(subscribedTurnIds, []);
-
-  releases[1]?.({ id: 2, result: {} });
-  await current;
-  assert.deepEqual(subscribedTurnIds, [["turn-2"]]);
+  await subscribe(1, "turn-1");
+  await subscribe(2, "turn-2");
+  const parsed = conformWorkbenchTranscriptSnapshot({
+    thread: {
+      id: "thread", project_id: "project", project_root: "/", title: "thread", archived: 0, pinned: 0, snoozed: 0,
+      transcript_content_version: 3, next_turn_index: 1, created_at: 1, updated_at: 2, activity_at: 2,
+    },
+    turns: [], loadedTurnIds: [], hasPreviousTurns: false, rows: {},
+  });
+  assert.ok(parsed.success);
+  await publications[0]!(parsed.data);
+  assert.equal(sent.filter(message => message.method === "workbench/transcript/updated").length, 0);
+  await publications[1]!(parsed.data);
+  assert.equal(sent.filter(message => message.method === "workbench/transcript/updated").length, 1);
   controller.dispose();
 });
 

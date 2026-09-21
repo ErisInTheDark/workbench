@@ -58,6 +58,7 @@ function fixture() {
     sendRequest: async (request: (typeof requests)[number]) => {
       requests.push(request);
       if (request.method === "thread/page/read") return { id: 1, result: await readPage(request.params.cursor ?? null) };
+      if (request.method === "thread/reconcile") return { id: 1, result: { turnIds: ["latest"], exhausted: false } };
       if (request.method === workbenchTranscriptOperations.subscribe.method && failSubscription) throw new Error("subscription unavailable");
       if (request.method === workbenchTranscriptOperations.subscribe.method) subscriptionId = request.params.subscriptionId!;
       return { id: 1, result: { subscribed: true, unsubscribed: true, reported: true } };
@@ -76,6 +77,20 @@ function fixture() {
     },
   };
 }
+
+test("standalone repairs a missing body through explicit reconciliation then rereads SQLite", async () => {
+  const f = fixture();
+  f.read = async () => {
+    const page = f.page("latest", null);
+    return f.requests.some(request => request.method === "thread/reconcile")
+      ? page : { ...page, thread: { ...page.thread, turns: [] }, recovery: { mode: "latest" } };
+  };
+  try {
+    await f.owner.refresh();
+    assert.deepEqual(f.owner.getSnapshot().thread?.turns.map(turn => turn.id), ["latest"]);
+    assert.equal(f.requests.filter(request => request.method === "thread/reconcile").length, 1);
+  } finally { f.owner.dispose(); }
+});
 
 test("standalone uses bounded pages and shared SQL text projection without provider polling", async () => {
   const f = fixture();
@@ -113,14 +128,18 @@ test("standalone uses bounded pages and shared SQL text projection without provi
     await f.owner.loadPrevious();
     await flush();
     assert.deepEqual(f.owner.getSnapshot().thread?.turns.map(turn => turn.id), ["older", "latest"]);
-    assert.deepEqual(f.requests.filter(request => request.method === "thread/page/read").map(request => request.params.cursor), [null, "latest"]);
+    assert.deepEqual(f.requests.filter(request => request.method === "thread/page/read").map(request => request.params.cursor), [null, null, "latest", "latest"]);
+    assert.equal(f.requests.filter(request => request.method === "thread/reconcile").length, 2);
   } finally {
     f.owner.dispose();
     assert.equal(f.closed, true);
   }
 });
 
-test("standalone discards disconnected pages and allows scoped failure retry", async () => {
+test("standalone discards disconnected pages and allows scoped failure retry", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, text =>
+    text.startsWith("Standalone transcript page recovery failed.") && text.includes("page unavailable"));
+  context.after(() => assert.equal(diagnostics.length, 1));
   const f = fixture();
   let release!: (page: WorkbenchThreadPageResult) => void;
   f.read = () => new Promise(resolve => { release = resolve; });

@@ -159,6 +159,7 @@ export interface DaemonTranscriptRegistration {
   dispose(): void;
   readonly failure: Error | null;
   readonly pendingRecoveryThreadIds: Promise<readonly string[]>;
+  readRecoveryGaps(threadId: import("workbench-shared/workbench/identity").WorkbenchThreadId): Promise<import("./database/transcript/WorkbenchTranscriptCaptureGapController").WorkbenchTranscriptCaptureGapEntry[]>;
   read(request: { threadId: string; beforeTurnIndex?: number; turnIds?: string[]; turnLimit: number }): Promise<WorkbenchTranscriptSnapshot | null>;
   readContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
   readMaterializedTurnIds(threadId: string, turnIds: readonly string[]): Promise<string[]>;
@@ -179,6 +180,7 @@ export interface DaemonTranscriptRegistration {
 
 export interface DaemonRuntimeObjects {
   transcriptReader: import("./WorkbenchTranscriptReader").default;
+  transcriptReconciliation: import("./WorkbenchTranscriptReconciliationController").default;
   voiceSettings: import("./voice/VoiceSettingsStore").default;
   voice: {
     controller: import("./voice/WorkbenchVoiceController").default;

@@ -11,6 +11,18 @@ import { evidenceTables } from "workbench-shared/workbench/database/schema/evide
 import WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
 import WorkbenchTranscriptCaptureGapController from "./WorkbenchTranscriptCaptureGapController.ts";
 
+test("a missing Workbench fact does not prevent selecting unrelated provider gaps", async () => {
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const database = {
+    query: async () => [
+      { id: "provider-gap", thread_id: threadId, turn_id: "provider-turn", state: "open", opened_at: 1, error_text: "missed provider item" },
+      { id: "local-gap", thread_id: threadId, turn_id: "local-turn", state: "unrecoverable", opened_at: 2, error_text: "missed local item" },
+    ],
+  } as unknown as WorkbenchDatabaseController;
+  const gaps = new WorkbenchTranscriptCaptureGapController({ database });
+  assert.deepEqual((await gaps.requireRecovery(threadId)).map(gap => gap.id), ["provider-gap"]);
+});
+
 test("gaps survive reopen and reconciliation closes only its observed failures", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-transcript-gaps-"));
   const options = { databasePath: join(directory, "workbench.sqlite3") };
@@ -46,9 +58,10 @@ test("gaps survive reopen and reconciliation closes only its observed failures",
     await capture();
     const beforeLocalFailure = await gaps.requireRecovery(threadId);
     await gaps.captureFailure({ threadId, turnId: null, recoverability: "unrecoverable", error: new Error("missed local fact") });
-    await assert.rejects(database.settleTranscript(beforeLocalFailure.map(entry => gaps.createRecoveryObservation(entry, null))), /not provider-recoverable/);
+    await database.settleTranscript(beforeLocalFailure.map(entry => gaps.createRecoveryObservation(entry, null)));
     assert.deepEqual(await gaps.pendingRecoveryThreadIds, []);
-    await assert.rejects(gaps.requireRecovery(threadId), /not provider-recoverable/);
+    assert.equal((await database.query(selectRows(evidenceTables.transcriptCaptureGaps, { where: { state: "unrecoverable" } }))).length, 1);
+    await assert.rejects(gaps.requireRecovery(threadId), /no entry/);
   } finally {
     await database.close();
     await rm(directory, { recursive: true, force: true });

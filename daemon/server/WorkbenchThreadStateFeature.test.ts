@@ -101,7 +101,9 @@ function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThrea
   interruptRetainingQuestionnaire?: (threadId: string, requestKey: string, interrupt: () => Promise<boolean>) => Promise<boolean>;
 }) {
   const operations = new CodexThreadOperations({
+    reconciliation: { reconcile: async () => { throw new Error("Unexpected recovery"); } },
     bridge: {
+      reconcileSqliteTranscriptWindow: async () => { throw new Error("Unexpected native recovery"); },
       canDeliverQuestionnaire: () => false,
       ensureInitialized: async () => {},
       handleServerRequest: request => options.harnesses.request("codex", request),

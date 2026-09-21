@@ -210,7 +210,7 @@ export default class CodexThreadWindowLoader {
     metadataThread: Thread,
     hydratedThread: Thread,
     hydration: WorkbenchThreadHydrationRequest,
-    options: { recoveryOnly?: boolean } = {},
+    options: { recoveryOnly?: boolean; reconcile?: boolean } = {},
   ) {
     if (hydration.mode === "legacyFull") return false;
     if (options.recoveryOnly && hydration.mode !== "latest") return false;
@@ -218,11 +218,11 @@ export default class CodexThreadWindowLoader {
       if (options.recoveryOnly) {
         return await this.recoverLatestWindow(store, metadataThread, hydratedThread);
       }
-      return await this.ensureLatestWindow(store, metadataThread, hydratedThread);
+      return await this.ensureLatestWindow(store, metadataThread, hydratedThread, options.reconcile);
     }
 
     const expectedId = expectedTurnId(hydratedThread, hydration);
-    if (hasTurn(hydratedThread, expectedId) || expectedId === null) {
+    if (!options.reconcile && (hasTurn(hydratedThread, expectedId) || expectedId === null)) {
       return false;
     }
 
@@ -234,8 +234,12 @@ export default class CodexThreadWindowLoader {
       throw new Error(`No Codex previous-turn cursor exists for ${hydration.beforeTurnId}.`);
     }
     if (cursor === null) {
+      if (expectedId === null) return false;
       throw new Error(`Codex history ended before expected turn ${expectedId}.`);
     }
+    const expectedNative = options.reconcile
+      ? (await this.requestTurns({ cursor, itemsView: "notLoaded", limit: 1, sortDirection: "desc", threadId: metadataThread.id })).data[0]?.id
+      : expectedId;
     const page = await this.requestTurns({
       cursor,
       itemsView: "full",
@@ -244,14 +248,60 @@ export default class CodexThreadWindowLoader {
       threadId: metadataThread.id,
     });
     const turn = page.data[0];
-    if (!turn || turn.id !== expectedId) {
+    if (!turn || turn.id !== expectedNative || turn.itemsView !== "full") {
       throw new Error(`Codex previous turn did not match expected turn ${expectedId}.`);
     }
     return createWindowLoad({
+      ...(options.reconcile ? {
+        catalog: {
+          turns: [turn, ...readHistory(hydratedThread).filter(entry => entry.turnId === hydration.beforeTurnId).map(entry => ({
+            id: entry.turnId, items: [], itemsView: "notLoaded" as const, error: null,
+            startedAt: entry.startedAt, completedAt: entry.completedAt, durationMs: entry.durationMs, status: entry.status,
+          }))],
+        },
+      } : {}),
       page: { previousCursor: page.nextCursor, turn },
       source: "provider",
       thread: metadataThread,
     });
+  }
+
+  async reconcileExact(store: CodexThreadWindowStore, thread: Thread, turnId: string) {
+    let cursor: string | null = null;
+    const visited = new Set<string>();
+    do {
+      const page = await this.requestTurns({
+        threadId: thread.id, itemsView: "notLoaded", limit: 100, sortDirection: "desc",
+        ...(cursor === null ? {} : { cursor }),
+      });
+      if (page.data.some(turn => turn.id === turnId)) {
+        for (let index = 0; index < page.data.length; index++) {
+          const single = await this.requestTurns({
+            threadId: thread.id, itemsView: "notLoaded", limit: 1, sortDirection: "desc",
+            ...(cursor === null ? {} : { cursor }),
+          });
+          if (single.data[0]?.id === turnId) {
+            const full = await this.requestTurns({
+              threadId: thread.id, itemsView: "full", limit: 1, sortDirection: "desc",
+              ...(cursor === null ? {} : { cursor }),
+            });
+            const turn = full.data[0];
+            if (turn?.id !== turnId || turn.itemsView !== "full") throw new Error("Codex exact recovery returned the wrong or incomplete turn.");
+            const recording = createWindowLoad({ thread, source: "provider", page: { turn, previousCursor: full.nextCursor } });
+            await store.recordWindow(recording.recording);
+            return recording;
+          }
+          cursor = single.nextCursor;
+          if (cursor === null || visited.has(cursor)) throw new Error("Codex exact recovery lost its paging boundary.");
+          visited.add(cursor);
+        }
+        throw new Error("Codex exact recovery omitted its metadata turn.");
+      }
+      cursor = page.nextCursor;
+      if (cursor !== null && visited.has(cursor)) throw new Error("Codex exact recovery repeated a cursor.");
+      if (cursor !== null) visited.add(cursor);
+    } while (cursor !== null);
+    throw new Error("Codex did not return the requested recorded turn.");
   }
 
   private async discoverPreviousCursor(store: CodexThreadWindowStore, thread: Thread, turnId: string) {
@@ -296,6 +346,7 @@ export default class CodexThreadWindowLoader {
     store: CodexThreadWindowStore,
     thread: Thread,
     hydratedThread: Thread,
+    reconcile = false,
   ) {
     const history = readHistory(hydratedThread);
     const storedLatestTurnId = history.at(-1)?.turnId ?? null;
@@ -338,7 +389,7 @@ export default class CodexThreadWindowLoader {
     const laggingRecovery = recoverLaggingLatestWindow(thread, hydratedThread, metadataLatestTurn);
     if (laggingRecovery) return laggingRecovery;
     if (
-      metadataLatestTurn.id === storedLatestTurnId
+      !reconcile && metadataLatestTurn.id === storedLatestTurnId
       && hydratedLatestTurn
       && metadataLatestTurn.status === hydratedLatestTurn.status
     ) {
@@ -359,6 +410,7 @@ export default class CodexThreadWindowLoader {
       }
       throw new Error(`Codex did not materialize latest turn ${metadataLatestTurn.id}.`);
     }
+    if (reconcile && latestTurn.itemsView !== "full") throw new Error("Codex latest recovery returned an incomplete turn.");
     if (storedTurnIds.has(latestTurn.id)) {
       if (latestTurn.id !== storedLatestTurnId) {
         console.warn("[workbench-transcript] Codex latest page overlaps earlier stored history; retaining omitted turns.");

@@ -51,7 +51,7 @@ import type WorkbenchThreadStateController from "./WorkbenchThreadStateControlle
 import type WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import type WorkbenchThreadActionController from "./WorkbenchThreadActionController";
-import { workbenchThreadActions } from "workbench-shared/workbench/thread/thread-actions";
+import { workbenchThreadActions, WorkbenchTranscriptRecoveryRequiredError, WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED } from "workbench-shared/workbench/thread/thread-actions";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { WorkbenchThreadHistoryPendingError, WORKBENCH_THREAD_HISTORY_PENDING } from "workbench-shared/workbench/provider/provider-thread";
 
@@ -445,6 +445,7 @@ export default class WorkbenchDaemonRequestController {
         id,
         error: {
           code: error instanceof InvalidParamsError ? -32602
+            : error instanceof WorkbenchTranscriptRecoveryRequiredError ? WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED
             : error instanceof WorkbenchThreadHistoryPendingError ? WORKBENCH_THREAD_HISTORY_PENDING : -32000,
           ...(error instanceof GitArcFailureException ? { data: { gitArcFailure: error.failure } } : {}),
           message: error instanceof Error ? error.message : "Daemon request failed.",

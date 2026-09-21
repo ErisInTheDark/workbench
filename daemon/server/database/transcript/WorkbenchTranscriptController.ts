@@ -102,7 +102,6 @@ function observedTurnId(
   observation: WorkbenchTranscriptObservation,
   turnId: string,
 ) {
-  if (observation.kind === "turn") return observation.turnId === turnId ? observation.turnId : null;
   if (observation.kind === "canonicalWindow") {
     return observation.materializedTurnIds.find(id => id === turnId) ?? null;
   }
@@ -152,6 +151,11 @@ export default class WorkbenchTranscriptController {
     return this.#captureGaps.pendingRecoveryThreadIds;
   }
 
+  readRecoveryGaps(threadId: WorkbenchThreadId) {
+    this.#assertActive();
+    return this.#captureGaps.readRecovery(threadId);
+  }
+
   async readContextUsage(threadId: string) {
     this.#assertActive();
     return await this.#database.readThreadContextUsage(threadId);
@@ -176,7 +180,7 @@ export default class WorkbenchTranscriptController {
     const identity = observationIdentity(observations);
     // Retire at activity ingress, not settlement: database work may finish after a newer patch starts.
     // Window/catalogue observations replay history and must not end an unseen current megapatch.
-    if (context.source !== "compatibility" && observations.some(observation => {
+    if (context.source !== "compatibility" && !context.recovery && observations.some(observation => {
       switch (observation.kind) {
         case "item":
         case "turn":
@@ -190,16 +194,17 @@ export default class WorkbenchTranscriptController {
           return false;
       }
     })) this.#live.acceptActivity(identity.threadId);
-    if (context.recoveryBoundary) {
+    if (context.recovery) {
       if (context.source !== "provider") {
         throw new Error("SQLite transcript recovery must use provider-owned observations.");
       }
-      const gaps = await this.#captureGaps.requireRecovery(identity.threadId);
+      const selected = context.recovery;
+      const gaps = (await this.#captureGaps.readRecovery(identity.threadId)).filter(gap =>
+        selected.gapIds.includes(gap.id) && (selected.scope === "thread" || (gap.turnId !== null
+          && observations.some(observation => observedTurnId(observation, gap.turnId!) !== null))));
       const recoveryObservations = [
         ...observations,
-        ...gaps.map(gap => this.#captureGaps.createRecoveryObservation(gap, gap.turnId
-          ? observations.map(observation => observedTurnId(observation, gap.turnId!)).find(turnId => turnId !== null) ?? null
-          : null)),
+        ...gaps.map(gap => this.#captureGaps.createRecoveryObservation(gap, gap.turnId)),
       ];
       let settlement: WorkbenchTranscriptSettlement;
       try {

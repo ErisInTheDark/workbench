@@ -59,6 +59,7 @@ import ThreadTextPresentationController, {
 } from "./thread/ThreadTextPresentationController";
 import { getWorkbenchThreadHarnessCandidates } from "workbench-shared/workbench/thread/thread-harness-candidates";
 import type { WorkbenchThreadPageResult as WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/thread-actions";
+import { WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED } from "workbench-shared/workbench/thread/thread-actions";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
 import { upsertWorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission";
@@ -710,7 +711,13 @@ function WorkbenchThreadClient(
           window.addEventListener("focus", listener);
           return () => window.removeEventListener("focus", listener);
         },
-        read: async (readOptions, beforeCommit, selectionBound) => {
+        reconcile: async readOptions => {
+          await daemon.threads.reconcile({
+            threadId, target: readOptions.cursor ? { mode: "previous", beforeTurnId: readOptions.cursor } : { mode: "latest" },
+            refresh: false,
+          });
+        },
+        read: async (readOptions, beforeCommit, selectionBound, recover) => {
           await beforeCommit();
           const observed = target.kind === "draft" ? null : threadObservations.getSnapshot(getThreadObservationKey(projectId, target))
             .observation?.entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === threadId);
@@ -721,7 +728,7 @@ function WorkbenchThreadClient(
           const outcome = await fetchThreadPayload(threadId, harness, readOptions, payload => selectedThreadProjectContext?.projectId === projectId && selectedThreadProjectContext.rootThreadId === threadId && selectedThreadProjectContext.isCurrent()
             ? (setCurrentThread(payload), state.currentThread)
             : upsertThreadDocument(payload, { emitChange: true }), {
-              selectionBound, beforeCommit, ownerIsCurrent: controller!.captureLifetime(),
+              selectionBound, beforeCommit, ownerIsCurrent: controller!.captureLifetime(), recover,
             });
           if (outcome.kind === "failure") throw new ThreadPayloadReadError(outcome.failure);
           return outcome.kind === "success" ? outcome.payload : null;
@@ -2098,12 +2105,34 @@ function WorkbenchThreadClient(
     threadId: string,
     harness: WorkbenchHarness,
     options: WorkbenchReadThreadOptions = {},
+    recover?: () => Promise<void>,
   ): Promise<WorkbenchThreadPageResponse> {
-    return daemon.threads.page({
+    const input = {
       threadId,
       cursor: options.cursor ?? null,
       ...(options.readScope ? { readScope: options.readScope } : {}),
+      recoveryAware: true,
+    };
+    const reconcile = recover ?? (async () => {
+      await daemon.threads.reconcile({
+        threadId, target: input.cursor ? { mode: "previous", beforeTurnId: input.cursor } : { mode: "latest" }, refresh: false,
+      });
     });
+    let page: WorkbenchThreadPageResponse;
+    try {
+      page = await daemon.threads.page(input);
+    } catch (error) {
+      if (!(error instanceof WorkbenchDaemonRequestError) || error.code !== WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED) throw error;
+      await reconcile();
+      page = await daemon.threads.page(input);
+      if (page.recovery) throw new Error("Requested transcript history is still unavailable after reconciliation.");
+      return page;
+    }
+    if (!page.recovery) return page;
+    await reconcile();
+    page = await daemon.threads.page(input);
+    if (page.recovery) throw new Error("Requested transcript history is still unavailable after reconciliation.");
+    return page;
   }
 
   function upsertPendingUserInputRequest(
@@ -2631,7 +2660,7 @@ function WorkbenchThreadClient(
     harness: WorkbenchHarness,
     options: WorkbenchReadThreadOptions = {},
     commit: (payload: ThreadPayload) => ThreadPayload | null = (payload) => payload,
-    { selectionBound = false, beforeCommit, ownerIsCurrent }: { selectionBound?: boolean; beforeCommit?: () => Promise<void>; ownerIsCurrent?: () => boolean } = {},
+    { selectionBound = false, beforeCommit, ownerIsCurrent, recover }: { selectionBound?: boolean; beforeCommit?: () => Promise<void>; ownerIsCurrent?: () => boolean; recover?: () => Promise<void> } = {},
   ): Promise<ThreadPayloadFetchOutcome> {
     const operationFence = captureThreadOperationFence(harness, threadId, { selectionBound, ownerIsCurrent });
     const cursor = options.cursor ?? null;
@@ -2653,7 +2682,7 @@ function WorkbenchThreadClient(
         ...options,
         cursor,
         ...(requestedCwd ? { cwd: requestedCwd } : {}),
-      });
+      }, recover);
 
       if (projectRootPaths.length && !isProjectThreadAtExpectedCwd(pageResponse.thread, projectRootPaths, options.cwd)) {
         const message = `That ${harness} thread doesn't belong to this project.`;

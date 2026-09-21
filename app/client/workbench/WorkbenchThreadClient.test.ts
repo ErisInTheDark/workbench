@@ -141,6 +141,8 @@ class FakeWebSocket {
         steerEntries: [],
         thread: wireThread(threadId),
       }));
+    } else if (request.method === "thread/reconcile") {
+      queueMicrotask(() => this.fail(request.id, "provider recovery unavailable in test"));
     } else if (request.method === "thread/resume") {
       const threadId = String(request.params?.threadId ?? "thread");
       queueMicrotask(() => this.respond(request.id, { model: "model", reasoningEffort: null, serviceTier: null, thread: wireThread(threadId) }));
@@ -1249,6 +1251,39 @@ test("foreign pinned draft admission sends and publishes accepted intent through
     publishAcceptedIntent: async (event) => { acceptedIntents.push(event); },
   });
 });
+
+test("missing SQL bodies reconcile once and are admitted only after the canonical reread", async () => withClient(async (client, socket) => {
+  let pages = 0;
+  FakeWebSocket.intercept = (target, request) => {
+    if (request.method === "thread/reconcile") {
+      queueMicrotask(() => target.respond(request.id, { turnIds: ["turn"], exhausted: false }));
+      return true;
+    }
+    if (request.method !== "thread/page/read") return false;
+    pages++;
+    const missing = pages === 1;
+    queueMicrotask(() => target.respond(request.id, {
+      thread: missing ? { ...wireThread("thread"), turns: [] } : wireThread("thread"),
+      recovery: missing ? { mode: "latest" } : null,
+      nextCursor: null, questionnaireEntries: [], steerEntries: [], browseResultEntries: [],
+    }));
+    return true;
+  };
+  const result = await client.readThread("thread", "codex", { cursor: null });
+  assert.ok(result?.turns.length);
+  assert.equal(pages, 2);
+  assert.equal(socket.requests.filter(request => request.method === "thread/reconcile").length, 1);
+}));
+
+test("a malformed page error never dispatches native reconciliation", async () => withClient(async (client, socket) => {
+  FakeWebSocket.intercept = (target, request) => {
+    if (request.method !== "thread/page/read") return false;
+    queueMicrotask(() => target.fail(request.id, "wrong canonical boundary"));
+    return true;
+  };
+  assert.equal(await client.readThread("thread", "codex", { cursor: "unowned" }), null);
+  assert.equal(socket.requests.filter(request => request.method === "thread/reconcile").length, 0);
+}));
 
 test("previous Codex pages preserve live state and merge only their scoped sidecars", async () => withClient(async (client, socket) => {
   const olderTimeline = [{ completedAt: 2, firstSeenAt: 1, itemId: "older-item", lastSeenAt: 2, startedAt: 1 }];

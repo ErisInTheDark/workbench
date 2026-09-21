@@ -9,15 +9,17 @@ import {
   workbenchThreadActions, type WorkbenchThreadActionMap, type WorkbenchThreadCreate,
   type WorkbenchThreadMessage, type WorkbenchThreadStop,
 } from "workbench-shared/workbench/thread/thread-actions";
-import { ThreadReferenceSchema, TurnReferenceSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { ThreadReferenceSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import type WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
+import type WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 
 export interface WorkbenchThreadActionOwners {
+  reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   transcripts: Pick<WorkbenchTranscriptReader, "readPage" | "history">;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   projects: Pick<WorkbenchProjectCatalogController, "resolveProjectById">;
@@ -42,24 +44,10 @@ export default class WorkbenchThreadActionController {
 
   async materialize(threadId: string, turnIds: string[], signal?: AbortSignal) {
     signal?.throwIfAborted();
-    const thread = await this.owners.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
-    signal?.throwIfAborted();
-    if (!thread) throw new Error("Transcript thread identity has not been admitted.");
-    const groups = new Map<WorkbenchHarness, string[]>();
     for (const turnId of turnIds) {
-      const turn = await this.owners.identities.resolveTurn({
-        threadId: thread.threadId, turnId: TurnReferenceSchema.parse(turnId),
-      });
-      signal?.throwIfAborted();
-      // Locally authored turns already have their facts in SQLite.
-      if (!turn?.native.nativeTurnId) continue;
-      const group = groups.get(turn.native.harness) ?? [];
-      group.push(turn.turnId);
-      groups.set(turn.native.harness, group);
-    }
-    for (const [harness, turns] of groups) {
-      signal?.throwIfAborted();
-      await this.provider(harness).threads.materialize(thread.threadId, turns, signal);
+      await this.owners.reconciliation.reconcile({
+        threadId, target: { mode: "exact", turnId }, refresh: false,
+      }, signal);
     }
   }
 
@@ -113,6 +101,9 @@ export default class WorkbenchThreadActionController {
     },
     "thread/page/read": async input => {
       return this.owners.transcripts.readPage(input);
+    },
+    "thread/reconcile": async input => {
+      return this.owners.reconciliation.reconcile(input);
     },
     "thread/title/set": async (input, connectionId) => {
       const target = await this.target(input.threadId);

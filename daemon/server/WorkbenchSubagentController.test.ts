@@ -69,7 +69,7 @@ async function exercise(route: Route, harness: WorkbenchHarness, rejectDelivery 
   const read = async (id: string) => thread(knownThread(id).threadId, route.endsWith("active"));
   const provider: Pick<WorkbenchProvider, "threads" | "interactions"> = {
     threads: {
-      read, readLatest: read, latestTurn: unused, admitTurn: unused,
+      reconcile: unused, read, readLatest: read, latestTurn: unused, admitTurn: unused,
       history: { materialize: unused },
       create: async input => {
         requests.push({ method: "create", params: input });

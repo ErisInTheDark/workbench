@@ -193,7 +193,6 @@ export default class WorkbenchWebSocketRequestController {
   private readonly identities: WorkbenchWebSocketRequestControllerOptions["identities"];
   private readonly threadStateIdentities: NativeThreadStateIdentityOwners | undefined;
   private readonly daemonRequests: NonNullable<WorkbenchWebSocketRequestControllerOptions["daemonRequests"]>;
-  private readonly threadActions: WorkbenchWebSocketRequestControllerOptions["threadActions"];
   private readonly now: NonNullable<WorkbenchWebSocketRequestControllerOptions["now"]>;
   private readonly pending = new Map<BridgeClient, Map<RequestId, PendingRequest>>();
   private readonly reload: WorkbenchWebSocketRequestControllerOptions["reload"];
@@ -228,7 +227,6 @@ export default class WorkbenchWebSocketRequestController {
     setTimeout: schedule = setTimeout,
     stats,
     threadState,
-    threadActions,
     transcript,
     writeLine = (line) => process.stdout.write(`${line}\n`),
   }: WorkbenchWebSocketRequestControllerOptions) {
@@ -236,7 +234,6 @@ export default class WorkbenchWebSocketRequestController {
     this.cancel = cancel;
     this.eventLog = new WorkbenchWebSocketEventLog({ clearTimeout: cancel, now, setTimeout: schedule, writeLine });
     this.daemonRequests = daemonRequests;
-    this.threadActions = threadActions;
     this.harnesses = harnesses;
     this.identities = identities;
     this.threadStateIdentities = identities ? {
@@ -623,7 +620,7 @@ export default class WorkbenchWebSocketRequestController {
     this.stream.resumeAfterFailedReload();
     for (const requests of this.pending.values()) for (const request of requests.values()) this.scheduleWarning(request);
     for (const subscription of this.transcriptSubscriptions.values()) {
-      void this.subscribeTranscript(subscription, false).catch((error: unknown) => {
+      void this.subscribeTranscript(subscription).catch((error: unknown) => {
         this.writeLine(`[transcript] restore subscription failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
       });
     }
@@ -692,18 +689,11 @@ export default class WorkbenchWebSocketRequestController {
     this.transcriptCapabilitiesAnnounced.add(client);
   }
 
-  private async subscribeTranscript(subscription: WorkbenchWebSocketTranscriptSubscriptionState, materialise = true) {
+  private async subscribeTranscript(subscription: WorkbenchWebSocketTranscriptSubscriptionState) {
     const signal = this.generation.signal;
     const key = this.transcriptSubscriptionKey(subscription.connectionId, subscription.subscriptionId);
     this.transcriptSubscriptions.set(key, subscription);
     try {
-      if (materialise && subscription.turnIds) {
-        if (!this.threadActions) throw new Error("Transcript materialisation is unavailable.");
-        signal.throwIfAborted();
-        await this.threadActions.materialize(subscription.threadId, subscription.turnIds, signal);
-        signal.throwIfAborted();
-        if (this.detached || this.transcriptSubscriptions.get(key) !== subscription) return;
-      }
       signal.throwIfAborted();
       await this.transcript.subscribe({
         id: key,

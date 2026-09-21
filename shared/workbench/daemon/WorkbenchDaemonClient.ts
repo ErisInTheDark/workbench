@@ -191,6 +191,7 @@ class WorkbenchDaemonClient {
     create: (params: WorkbenchDaemonParams<"thread/create">) => this.request("thread/create", params),
     read: (params: WorkbenchDaemonParams<"thread/metadata/read">) => this.request("thread/metadata/read", params),
     page: (params: WorkbenchDaemonParams<"thread/page/read">) => this.request("thread/page/read", params),
+    reconcile: (params: WorkbenchDaemonParams<"thread/reconcile">) => this.request("thread/reconcile", params),
     message: (params: WorkbenchDaemonParams<"thread/message/submit">) => this.request("thread/message/submit", params),
     title: (params: WorkbenchDaemonParams<"thread/title/set">) => this.request("thread/title/set", params),
     compact: (params: WorkbenchDaemonParams<"thread/compact">) => this.request("thread/compact", params),

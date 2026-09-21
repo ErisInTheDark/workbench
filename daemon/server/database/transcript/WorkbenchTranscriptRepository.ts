@@ -633,7 +633,7 @@ export default class WorkbenchTranscriptRepository {
         const source = identity?.sources.find(({ kind }) => kind === "stable")
           ?? identity?.sources.find(({ kind }) => kind === "provisional");
         return [withWorkbenchThreadItemIdentity(
-          { ...item, id: source?.reference ?? root.public_id },
+          { ...item, id: root.public_id },
           source?.kind === "provisional" ? "provisional" : "stable",
         )];
       });
@@ -652,7 +652,7 @@ export default class WorkbenchTranscriptRepository {
       };
       const reconciledItems = reconcileCompleteThreadItems(
         currentProviderItems,
-        itemObservations.map(({ item }) => item),
+        itemObservations.map(({ item, publicItemId }) => ({ ...item, id: publicItemId! })),
         { mergeDuplicateItems: mergeThreadItem },
       ).map((entry) => ({
         ...entry,
@@ -975,8 +975,8 @@ export default class WorkbenchTranscriptRepository {
   ) {
     if (observation.kind === "providerCursor") {
       const turn = this.#one(selectRows(coreTables.threadTurns, { where: { id: observation.turnId } }));
-      if (!turn || turn.thread_id !== observation.threadId || turn.harness_id !== "codex") {
-        throw new Error("Codex pagination boundary requires its owning Codex turn.");
+      if (!turn || turn.thread_id !== observation.threadId || !turn.native_turn_id) {
+        throw new Error("Provider pagination boundary requires its owning native turn.");
       }
       this.#run(upsertRow(codexTranscriptTables.turnCursors, {
         turn_id: turn.id, previous_cursor: observation.previousCursor,
@@ -1203,9 +1203,6 @@ export default class WorkbenchTranscriptRepository {
     if (observation.kind === "captureGap") {
       this.#requiredThread(observation.threadId);
       if (observation.state === "reconciled") {
-        if (this.#one(selectRows(evidenceTables.transcriptCaptureGaps, {
-          where: { thread_id: observation.threadId, state: "unrecoverable" },
-        }))) throw new Error("SQLite transcript capture gap is not provider-recoverable.");
         const gap = this.#one(selectRows(evidenceTables.transcriptCaptureGaps, {
           where: { id: observation.gapId, thread_id: observation.threadId },
         }));

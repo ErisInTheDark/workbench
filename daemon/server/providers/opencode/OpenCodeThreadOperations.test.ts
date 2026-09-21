@@ -53,7 +53,9 @@ function operations(
     signal?: AbortSignal;
   } = {},
 ) {
-  return new OpenCodeThreadOperations({
+  const owner: OpenCodeThreadOperations = new OpenCodeThreadOperations({
+    reconciliation: { reconcile: (input, signal) => owner.reconcile({ ...input, gapIds: [] }, signal ?? new AbortController().signal) },
+    readProviderCursor: async () => undefined,
     acquire: async () => {
       const value = client as { session?: Record<string, unknown> };
       return {
@@ -117,6 +119,7 @@ function operations(
     } as never,
     signal: lifecycle.signal ?? new AbortController().signal,
   });
+  return owner;
 }
 
 test("admits a created session into thread state with its captured profile", async () => {
@@ -164,6 +167,8 @@ test("admits a created session into thread state with its captured profile", asy
 
 test("fails a public read when no OpenCode binding exists", async () => {
   const owner = new OpenCodeThreadOperations({
+    reconciliation: { reconcile: async () => { throw new Error("Unexpected recovery"); } },
+    readProviderCursor: async () => undefined,
     acquire: async () => ({}) as never,
     observe: async () => undefined,
     identities: { resolve: async () => null } as never,
@@ -192,7 +197,7 @@ test("fails a public read when no OpenCode binding exists", async () => {
   await assert.rejects(owner.read("missing"), /identity is unavailable/u);
 });
 
-test("materialises every canonical message page in ascending order", async () => {
+test("opening a 200-page session records only the latest complete turn", async () => {
   const requests: object[] = [];
   let recorded: string[] = [];
   const owner = operations({
@@ -200,9 +205,14 @@ test("materialises every canonical message page in ascending order", async () =>
     message: {
       list: async (input: { cursor?: string }) => {
         requests.push(input);
-        return input.cursor
-          ? { data: [{ id: "assistant", type: "assistant", agent: "agent", model: { id: "m", providerID: "p" }, content: [], time: { created: 2, completed: 3 } }], cursor: {} }
-          : { data: [{ id: "user", type: "user", text: "hello", time: { created: 1 } }], cursor: { next: "second" } };
+        const page = Number(input.cursor ?? 0);
+        return {
+          data: [
+            { id: `assistant-${page}`, type: "assistant", agent: "agent", model: { id: "m", providerID: "p" }, content: [], time: { created: 2, completed: 3 } },
+            { id: `user-${page}`, type: "user", text: "hello", time: { created: 1 } },
+          ],
+          cursor: page < 199 ? { next: String(page + 1) } : {},
+        };
       },
     },
   }, {
@@ -213,11 +223,8 @@ test("materialises every canonical message page in ascending order", async () =>
   });
 
   await owner.syncNative(nativeThreadId);
-  assert.deepEqual(requests, [
-    { sessionID: nativeThreadId, limit: 100, order: "asc" },
-    { sessionID: nativeThreadId, limit: 100, cursor: "second" },
-  ]);
-  assert.deepEqual(recorded, ["user", "assistant"]);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(recorded, ["user-0", "assistant-0"]);
 });
 
 test("provider-owned active execution submits a steer once with native steer delivery", async () => {

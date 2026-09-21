@@ -13,7 +13,7 @@ import type {
   ThreadPayload, WorkbenchPendingUserInputRequest,
 } from "workbench-shared/types";
 import type {
-  WorkbenchProviderThreadCreate, WorkbenchProviderThreadList, WorkbenchProviderThreads,
+  WorkbenchProviderThreadCreate, WorkbenchProviderThreadList, WorkbenchProviderThreads, WorkbenchProviderTranscriptReconcile,
 } from "workbench-shared/workbench/provider/provider-thread";
 import type { WorkbenchThreadMessage, WorkbenchThreadMessageResult } from "workbench-shared/workbench/thread/thread-actions";
 import { WorkbenchThreadMessageResultSchema } from "workbench-shared/workbench/thread/thread-actions";
@@ -31,9 +31,11 @@ import { createWorkbenchAgentMessageOutput } from "workbench-shared/workbench/th
 import type { WorkbenchProviderBrowse } from "workbench-shared/workbench/provider/provider-browse";
 import { WORKBENCH_TOOL_CONTEXT_METHOD, WorkbenchToolContextResponseSchema } from "workbench-shared/workbench/thread/thread-tool-output";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
+import type WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 
 export interface CodexThreadOperationOwners {
-  bridge: Pick<CodexStdioBridge, "canDeliverQuestionnaire" | "ensureInitialized" | "handleServerRequest">;
+  bridge: Pick<CodexStdioBridge, "canDeliverQuestionnaire" | "ensureInitialized" | "handleServerRequest" | "reconcileSqliteTranscriptWindow">;
+  reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   identities: NativeTranscriptIdentityOwners;
   resolveProject(cwd: string): Promise<{ id: ProjectId; rootPath: string }>;
   questionnaires?: Pick<WorkbenchQuestionnaireController, "canDeliver" | "deliver" | "interruptRetainingQuestionnaire">;
@@ -45,6 +47,11 @@ function record(value: unknown) {
 
 export default class CodexThreadOperations implements WorkbenchProviderThreads {
   constructor(private readonly owners: CodexThreadOperationOwners) {}
+
+  async reconcile(input: WorkbenchProviderTranscriptReconcile, signal: AbortSignal) {
+    signal.throwIfAborted();
+    return this.owners.bridge.reconcileSqliteTranscriptWindow(input, signal);
+  }
 
   private async nativeThreadId(threadId: string) {
     const mapped = await mapWorkbenchProviderRequest(this.owners.identities.threads, "codex", {
@@ -124,12 +131,9 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
   readonly history: WorkbenchProviderThreads["history"] = {
     materialize: async (threadId, turnId, signal) => {
       signal.throwIfAborted();
-      const { request } = await mapWorkbenchProviderRequest(this.owners.identities.threads, "codex", {
-        method: "workbench/thread-recall/materialize", params: { threadId, turnId },
-      });
-      signal.throwIfAborted();
-      this.result(await this.dispatch(request));
-      signal.throwIfAborted();
+      await this.owners.reconciliation.reconcile({
+        threadId, target: turnId ? { mode: "exact", turnId } : { mode: "latest" }, refresh: false,
+      }, signal);
     },
   };
 
@@ -431,25 +435,8 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
 
   async materialize(threadId: string, turnIds: string[], signal?: AbortSignal) {
     signal?.throwIfAborted();
-    const thread = await this.owners.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
-    signal?.throwIfAborted();
-    if (!thread) throw new Error("The transcript thread has no admitted identity.");
-    const groups = new Map<string, string[]>();
-    for (const reference of turnIds) {
-      const turn = await this.owners.identities.threads.resolveTurn({ threadId: thread.threadId, turnId: TurnReferenceSchema.parse(reference) });
-      signal?.throwIfAborted();
-      // WB-only turns already have their complete facts in SQLite.
-      if (!turn?.native.nativeTurnId) continue;
-      const group = groups.get(turn.native.nativeThreadId) ?? [];
-      group.push(turn.native.nativeTurnId);
-      groups.set(turn.native.nativeThreadId, group);
-    }
-    for (const [nativeThreadId, group] of groups) {
-      signal?.throwIfAborted();
-      this.result(await this.dispatch({
-        id: 0, method: "workbench/transcript/materialize",
-        params: { threadId: nativeThreadId, turnIds: group },
-      }));
-    }
+    for (const turnId of turnIds) await this.owners.reconciliation.reconcile({
+      threadId, target: { mode: "exact", turnId }, refresh: false,
+    }, signal);
   }
 }

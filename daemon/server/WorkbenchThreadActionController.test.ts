@@ -20,7 +20,7 @@ function fixture(providerWarning?: string) {
   let titleFailure = false;
   const provider: WorkbenchProvider = {
     threads: {
-      readLatest: unused, messageAgent: unused,
+      reconcile: unused, readLatest: unused, messageAgent: unused,
       latestTurn: unused, admitTurn: unused,
       history: { materialize: unused },
       create: unused, list: unused, read: unused,
@@ -36,6 +36,7 @@ function fixture(providerWarning?: string) {
     configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
   };
   const owners: WorkbenchThreadActionOwners = {
+    reconciliation: { reconcile: unused },
     transcripts: { readPage: unused, history: unused },
     providers: { get: key => { assert.equal(key, "codex"); return provider; } },
     projects: { resolveProjectById: unused },

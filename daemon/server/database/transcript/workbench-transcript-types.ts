@@ -239,7 +239,7 @@ export type NativeTranscriptAtomicObservation = WorkbenchTranscriptAtomicObserva
 export type NativeTranscriptObservation = WorkbenchTranscriptObservation<NativeThreadId, NativeTurnId>;
 
 export interface WorkbenchTranscriptRecordingContext {
-  recoveryBoundary?: boolean;
+  recovery?: { gapIds: readonly string[]; scope: "turns" | "thread" };
   source: "compatibility" | "provider" | "workbench";
 }
 

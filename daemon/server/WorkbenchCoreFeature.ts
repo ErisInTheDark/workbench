@@ -23,6 +23,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "threadState",
   "threadActions",
   "transcriptReader",
+  "transcriptReconciliation",
 ] as const satisfies readonly (keyof DaemonRuntimeObjects)[];
 
 interface WorkbenchCoreFeatureOptions {

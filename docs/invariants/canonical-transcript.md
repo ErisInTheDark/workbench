@@ -15,3 +15,4 @@
 - Rematching cannot replace the source operation or durable subsystem facts.
 - Provider omission is not transcript deletion. Remove an admitted item only from positive same-fact identity evidence, never because a reread omits it.
 - Reading admitted transcript history must not depend on provider refresh or recovery succeeding.
+- Reconcile provider observations separately from SQLite reads, one demanded turn at a time. Never sweep historical bodies on open or subscription; acknowledge only capture gaps covered by completed recovery.

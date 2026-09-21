@@ -32,6 +32,7 @@ test("canonical pages traverse mixed-provider turns without provider reads", asy
       phase: "commentary" as const, memoryCitation: null, delivery: null, questions: null },
   }])]);
   const reader = new WorkbenchTranscriptReader({
+    readProviderCursor: async (id, turnId) => repository.readProviderPreviousCursor(id, turnId),
     readSnapshot: async request => repository.read(request),
     readContext: async id => repository.readContext(id),
     readMaterializedTurns: async (id, ids) => repository.readMaterializedTurnIds(id, ids),
@@ -62,13 +63,22 @@ test("canonical pages traverse mixed-provider turns without provider reads", asy
       cursor = page.nextCursor;
     }
     assert.equal(cursor, null);
+    const unknown = await reader.readPage({ threadId, cursor: turns[0]!, recoveryAware: true });
+    assert.deepEqual(unknown.recovery, { mode: "previous", beforeTurnId: turns[0] });
+    repository.settle([{ kind: "providerCursor", threadId, turnId: turns[0]!, previousCursor: null }]);
+    const exhausted = await reader.readPage({ threadId, cursor: turns[0]!, recoveryAware: true });
+    assert.equal(exhausted.recovery, null);
+    assert.equal(exhausted.nextCursor, null);
+    assert.deepEqual(exhausted.thread.turns, []);
     await assert.rejects(reader.readPage({ threadId, cursor: "foreign" }), /boundary/iu);
     database.prepare("DELETE FROM thread_turn_materializations WHERE turn_id = ?").run(turns[2]);
     const bestAvailable = await reader.readPage({ threadId, cursor: null });
     assert.deepEqual(bestAvailable.thread.turns.map(turn => turn.id), [turns[1]]);
     assert.deepEqual(bestAvailable.thread.turnHistory.map(turn => turn.turnId), turns);
     database.prepare("DELETE FROM thread_turn_materializations WHERE turn_id = ?").run(turns[1]);
-    await assert.rejects(reader.readPage({ threadId, cursor: turns[2]! }), /materialis/iu);
+    const missing = await reader.readPage({ threadId, cursor: turns[2]!, recoveryAware: true });
+    assert.deepEqual(missing.thread.turns, []);
+    assert.deepEqual(missing.recovery, { mode: "previous", beforeTurnId: turns[2] });
   } finally {
     database.close();
   }

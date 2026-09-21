@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - recoverCodexSqliteTranscripts: repair marked recovery and active baselines independently of harness availability.
+ * - baselineActiveCodexTranscripts: restore demanded active windows after database replacement.
  * - default CodexBridgeNode: own reloadable Codex bridge code and questionnaire routing while preserving the parent app-server process.
  */
 import CodexStdioBridge from "./CodexStdioBridge";
@@ -20,7 +20,7 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
 import { applyServerCodexSandboxPolicy } from "./codex-sandbox-policy";
-import { NativeThreadIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
@@ -30,9 +30,7 @@ function record(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-export async function recoverCodexSqliteTranscripts(
-  bridge: Pick<CodexStdioBridge, "recoverSqliteTranscriptThread">,
-  transcript: Pick<DaemonRuntimeObjects["transcript"], "pendingRecoveryThreadIds">,
+export async function baselineActiveCodexTranscripts(
   reportFailure: (threadId: string | null, error: unknown) => void,
   activeBaseline?: {
     captureGap(threadId: string, error: unknown): Promise<Error>;
@@ -41,24 +39,8 @@ export async function recoverCodexSqliteTranscripts(
   },
   signal?: AbortSignal,
 ) {
-  const recoveryThreadIds = await transcript.pendingRecoveryThreadIds;
-  const attemptedThreadIds = new Set(recoveryThreadIds);
-  for (const threadId of recoveryThreadIds) {
-    if (signal?.aborted) return;
-    try {
-      await bridge.recoverSqliteTranscriptThread(threadId, signal);
-      if (signal?.aborted) return;
-      if ((await transcript.pendingRecoveryThreadIds).includes(threadId)) {
-        throw new Error(`SQLite transcript recovery did not settle thread ${threadId}.`);
-      }
-    } catch (error) {
-      if (signal?.aborted) return;
-      reportFailure(threadId, error);
-    }
-  }
   for (const threadId of new Set(activeBaseline?.threadIds ?? [])) {
     if (signal?.aborted) return;
-    if (attemptedThreadIds.has(threadId)) continue;
     try {
       await activeBaseline!.readThread(threadId, signal);
     } catch (error) {
@@ -98,7 +80,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const turnRecovery = build.get("codexRecovery");
     const requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry();
     let bridge!: CodexStdioBridge;
-    let recovery: { controller: AbortController; completion: Promise<void> } | null = null;
+    let recovery: Promise<void> | null = null;
     let generation = new AbortController();
     const persistence = new Set<Promise<unknown>>();
     const persist = async <T>(operation: () => Promise<T>) => {
@@ -116,25 +98,24 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     };
     const startRecovery = () => {
       if (recovery) return;
-      const controller = new AbortController();
-      const completion = (async () => {
-        await recoverCodexSqliteTranscripts(
-          bridge, transcript, reportRecoveryFailure,
+      const signal = generation.signal;
+      recovery = (async () => {
+        await baselineActiveCodexTranscripts(
+          reportRecoveryFailure,
           build.isReplacing("server:database") ? {
             captureGap: (threadId, error) => persist(() => transcript.captureProviderGap(threadId, error)),
-            readThread: (threadId, signal) => bridge.baselineSqliteTranscriptThread(threadId, signal),
+            readThread: async (threadId, signal) => {
+              await build.get("transcriptReconciliation").reconcile({
+                threadId, target: { mode: "latest" }, refresh: true,
+              }, signal);
+            },
             threadIds: bridge.activeSqliteTranscriptThreadIds,
           } : undefined,
-          controller.signal,
+          signal,
         );
       })().catch((error) => {
-        if (!controller.signal.aborted) reportRecoveryFailure(null, error);
+        if (!signal.aborted) reportRecoveryFailure(null, error);
       });
-      recovery = { controller, completion };
-    };
-    const stopRecovery = () => {
-      recovery?.controller.abort(new Error("Codex transcript recovery retired with its bridge."));
-      recovery = null;
     };
     const prepareTurnStart = async (
       request: JsonRpcRequest,
@@ -264,6 +245,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       questionnaires: new CodexQuestionnaireAdapter(questionnaires, threadIdentity),
       sqliteReader,
       readSqliteProviderCursor: (threadId, turnId) => build.get("database").readTranscriptProviderCursor!(threadId, turnId),
+      readSqliteRecoveryGapIds: async threadId => (await transcript.readRecoveryGaps(WorkbenchThreadIdSchema.parse(threadId))).map(gap => gap.id),
       readSqliteContextUsage: (threadId) => build.get("database").readThreadContextUsage(
         build.get("threadIdentity").workbenchIdForNative(
           build.get("threadIdentity").knownNativeBinding("codex", NativeThreadIdSchema.parse(threadId)),
@@ -279,6 +261,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       restartingAppServer,
     });
     const threadOperations = new CodexThreadOperations({
+      reconciliation: build.get("transcriptReconciliation"),
       questionnaires,
       bridge,
       identities: { threads: threadIdentity, items: build.get("transcriptIdentity") },
@@ -336,21 +319,23 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         const suspend = () => {
           health.dispose();
           generation.abort(new Error("Codex bridge node retired."));
-          stopRecovery();
+          return recovery;
         };
         return {
           waitForIdle: async () => {
-            suspend();
+            await suspend();
             await handoff.waitForIdle();
             await waitForPersistence();
           },
-          expire: () => { suspend(); handoff.expire(); },
+          expire: () => { void suspend(); handoff.expire(); },
           detach: async () => {
-            suspend();
+            await suspend();
             await waitForPersistence();
             return await handoff.detach();
           },
           resume: async () => {
+            await recovery;
+            recovery = null;
             generation = new AbortController();
             await handoff.resume();
             health.start({ armed: true });
@@ -363,7 +348,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         health.dispose();
         releaseLiveBoundary?.();
         generation.abort(new Error("Codex bridge node disposed."));
-        stopRecovery();
+        await recovery;
         bridge.expireForReload();
         await waitForPersistence();
         await bridge.retireAfterHandoff();
@@ -375,7 +360,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge", "codexThreadOperations", "codexNativeConfiguration"],
-  requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptReader", "codexRecovery", "providerObservations"],
+  requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptReader", "transcriptReconciliation", "codexRecovery", "providerObservations"],
   safeAll: true,
   scope: "server:codex",
   sources: [

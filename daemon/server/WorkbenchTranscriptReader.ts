@@ -8,7 +8,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import type { WorkbenchTranscriptReadRequest, WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { WorkbenchThreadPage, WorkbenchThreadPageResult } from "workbench-shared/workbench/thread/thread-actions";
-import { workbenchThreadActions } from "workbench-shared/workbench/thread/thread-actions";
+import { workbenchThreadActions, WorkbenchTranscriptRecoveryRequiredError } from "workbench-shared/workbench/thread/thread-actions";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
@@ -17,6 +17,7 @@ import { NativeThreadIdSchema, NativeTurnIdSchema, WorkbenchItemIdSchema, Workbe
 import type { WorkbenchTranscriptContextSnapshot, WorkbenchTranscriptObservation } from "./database/transcript/workbench-transcript-types";
 
 export interface WorkbenchTranscriptReaderOptions {
+  readProviderCursor?(threadId: string, turnId: string): Promise<string | null | undefined>;
   readSnapshot(request: WorkbenchTranscriptReadRequest): Promise<WorkbenchTranscriptSnapshot | null>;
   readContext(threadId: string): Promise<WorkbenchTranscriptContextSnapshot | null>;
   readMaterializedTurns(threadId: string, turnIds: readonly string[]): Promise<string[]>;
@@ -40,16 +41,19 @@ export default class WorkbenchTranscriptReader {
 
   async readPage(input: WorkbenchThreadPage): Promise<WorkbenchThreadPageResult> {
     const catalog = await this.catalog(input.threadId);
-    if (!catalog) throw new Error("Canonical SQLite transcript is unavailable.");
+    if (!catalog) throw new WorkbenchTranscriptRecoveryRequiredError("Canonical SQLite transcript requires explicit recovery.");
     const boundary = input.cursor === null ? null : catalog.turns.find(turn => turn.id === input.cursor);
     if (input.cursor !== null && !boundary) throw new Error("The requested page boundary does not belong to this canonical thread.");
     const candidates = boundary ? catalog.turns.filter(turn => turn.turn_index < boundary.turn_index) : catalog.turns;
     const materialized = new Set(await this.options.readMaterializedTurns(catalog.thread.id, candidates.map(turn => turn.id)));
     const selected = boundary ? candidates.at(-1) : candidates.findLast(turn => materialized.has(turn.id));
-    if ((selected && !materialized.has(selected.id)) || (!selected && candidates.length)) {
-      throw new Error("The requested canonical SQLite turn is not materialised; explicit transcript recovery is required.");
-    }
-    const snapshot = selected
+    const missing = Boolean((selected && !materialized.has(selected.id)) || (!selected && candidates.length));
+    const unknownPrevious = input.recoveryAware && boundary?.native_turn_id && !candidates.length
+      && this.options.readProviderCursor && await this.options.readProviderCursor(catalog.thread.id, boundary.id) !== null;
+    const recovery: WorkbenchThreadPageResult["recovery"] = missing || unknownPrevious
+      ? boundary ? { mode: "previous", beforeTurnId: boundary.id } : { mode: "latest" } : null;
+    if (missing && !input.recoveryAware) throw new WorkbenchTranscriptRecoveryRequiredError("The requested canonical SQLite turn is not materialised; explicit transcript recovery is required.");
+    const snapshot = selected && !missing
       ? await this.readSnapshot({ threadId: catalog.thread.id, turnIds: [selected.id], turnLimit: 1 })
       : catalog;
     if (!snapshot) throw new Error("The requested canonical SQLite turn is not materialised.");
@@ -58,7 +62,9 @@ export default class WorkbenchTranscriptReader {
     const saved = entry?.entryKind === "draft" ? null : entry;
     const settings = saved?.profile?.settings;
     const pageThread = { turns, workbenchTurnHistory: turnHistory };
-    const nextCursor = readWorkbenchThreadPageNextCursor(pageThread);
+    let nextCursor = readWorkbenchThreadPageNextCursor(pageThread);
+    if (input.recoveryAware && nextCursor === null && selected?.native_turn_id && this.options.readProviderCursor
+      && await this.options.readProviderCursor(catalog.thread.id, selected.id) !== null) nextCursor = selected.id;
     let usage: ThreadContextUsageSnapshot | null = null;
     try {
       usage = await this.options.readContextUsage(snapshot.thread.id);
@@ -66,7 +72,7 @@ export default class WorkbenchTranscriptReader {
       console.warn("[canonical-transcript] Unable to restore context usage; thread content remains available.");
     }
     return {
-      ...entries, nextCursor,
+      ...entries, nextCursor, ...(input.recoveryAware ? { recovery } : {}),
       thread: {
         id: WorkbenchThreadIdSchema.parse(snapshot.thread.id), isDraft: false, harness,
         name: saved?.title ?? snapshot.thread.title, preview: "",

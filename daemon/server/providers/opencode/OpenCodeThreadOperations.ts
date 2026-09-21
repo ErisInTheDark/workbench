@@ -8,9 +8,9 @@ import { randomUUID } from "node:crypto";
 import type { SessionInboxInfo, SessionInfo, SessionMessageInfo, SessionMessageUser } from "@opencode/client";
 import {
   NativeThreadIdSchema, ThreadReferenceSchema, WorkbenchItemIdSchema, WorkbenchThreadIdSchema,
-  type WorkbenchThreadId, type WorkbenchTurnId, WorkbenchTurnIdSchema,
+  type WorkbenchThreadId, type WorkbenchTurnId, WorkbenchTurnIdSchema, TurnReferenceSchema,
 } from "workbench-shared/workbench/identity";
-import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provider/provider-thread";
+import type { WorkbenchProviderThreads, WorkbenchProviderTranscriptReconcile } from "workbench-shared/workbench/provider/provider-thread";
 import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 import type { WorkbenchThreadMessageResult } from "workbench-shared/workbench/thread/thread-actions";
@@ -28,6 +28,8 @@ import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
 import type { WorkbenchProviderCaller, WorkbenchToolTranscript, WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
 import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
+import OpenCodeThreadWindowLoader from "./OpenCodeThreadWindowLoader";
+import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
 
 type OpenCodeSteerEntry = Omit<WorkbenchSteerHistoryEntry, "threadId" | "turnId"> & {
   threadId: WorkbenchThreadId;
@@ -61,6 +63,8 @@ export interface OpenCodeThreadOperationsOptions {
   transcript: OpenCodeTranscriptAdapter;
   reader: Pick<WorkbenchTranscriptReader, "readPage">;
   signal: AbortSignal;
+  reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
+  readProviderCursor(threadId: string, turnId: string): Promise<string | null | undefined>;
 }
 
 function modelRef(model: string) {
@@ -106,29 +110,6 @@ function openCodeFailure(operation: string, error: unknown) {
   return new Error(`OpenCode ${operation} failed (${tag}${details ? `, ${details}` : ""})${message ? `: ${message}` : "."}`);
 }
 
-async function listMessages(
-  client: WorkbenchOpenCodeClient,
-  sessionID: string,
-  signal?: AbortSignal,
-) {
-  const messages: SessionMessageInfo[] = [];
-  const cursors = new Set<string>();
-  let cursor: string | undefined;
-  do {
-    signal?.throwIfAborted();
-    const page = await client.message.list(
-      { sessionID, limit: 100, ...(cursor ? { cursor } : { order: "asc" }) },
-      { signal },
-    );
-    messages.push(...page.data);
-    const next = page.cursor.next ?? undefined;
-    if (next && cursors.has(next)) throw new Error("OpenCode message pagination repeated a cursor.");
-    if (next) cursors.add(next);
-    cursor = next;
-  } while (cursor);
-  return messages;
-}
-
 export default class OpenCodeThreadOperations implements WorkbenchProviderThreads {
   private readonly executionStates = new Map<string, "active" | "idle">();
   private readonly pendingPrompts = new Set<Promise<void>>();
@@ -142,9 +123,9 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   private readonly requestedInterruptions = new Set<string>();
 
   readonly history = {
-    materialize: async (threadId: string, _turnId: string | null, signal: AbortSignal) => {
+    materialize: async (threadId: string, turnId: string | null, signal: AbortSignal) => {
       signal.throwIfAborted();
-      await this.sync(threadId, signal);
+      await this.demand(threadId, turnId ? { mode: "exact", turnId } : { mode: "latest" }, false, signal);
     },
   };
 
@@ -215,7 +196,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     });
     const data = [];
     for (const session of response.data) {
-      const identity = await this.syncSession(session);
+      const identity = await this.syncSession(session, []);
       const page = await this.options.reader.readPage({ threadId: identity.threadId, cursor: null });
       if (page) data.push(page.thread);
     }
@@ -407,42 +388,75 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     await this.interruptSession(threadId, binding.nativeThreadId, WorkbenchTurnIdSchema.parse(turnId));
   }
 
-  async materialize(threadId: string, _turnIds: string[], signal?: AbortSignal) {
+  async materialize(threadId: string, turnIds: string[], signal?: AbortSignal) {
     signal?.throwIfAborted();
-    await this.sync(threadId, signal);
+    for (const turnId of turnIds) await this.demand(threadId, { mode: "exact", turnId }, false, signal);
+  }
+
+  private demand(threadId: string, target: WorkbenchProviderTranscriptReconcile["target"], refresh: boolean, signal = this.options.signal) {
+    signal.throwIfAborted();
+    return this.options.reconciliation.reconcile({ threadId, target, refresh }, signal);
+  }
+
+  async reconcile(input: WorkbenchProviderTranscriptReconcile, signal: AbortSignal) {
+    signal = AbortSignal.any([signal, this.options.signal]);
+    signal.throwIfAborted();
+    const { identity, binding } = await this.native(input.threadId);
+    const target = input.target;
+    const turn = target.mode === "latest" ? null : await this.options.identities.resolveTurn({
+      threadId: identity.threadId,
+      turnId: TurnReferenceSchema.parse(target.mode === "exact" ? target.turnId : target.beforeTurnId),
+    });
+    if (target.mode !== "latest" && (!turn?.native.nativeTurnId || turn.native.harness !== "opencode")) {
+      throw new Error("OpenCode recovery has no matching native turn.");
+    }
+    const native = turn?.native ?? binding;
+    const client = await this.options.acquire();
+    const nativeTarget = target.mode === "latest" ? target
+      : target.mode === "exact" ? { mode: "exact" as const, turnId: turn!.native.nativeTurnId! }
+        : { mode: "previous" as const, beforeTurnId: turn!.native.nativeTurnId! };
+    const cursor = target.mode === "previous"
+      ? await this.options.readProviderCursor(identity.threadId, turn!.turnId) : undefined;
+    try {
+      const [session, window] = await Promise.all([
+        client.session.get({ sessionID: native.nativeThreadId }, { signal }),
+        new OpenCodeThreadWindowLoader(client).load(native.nativeThreadId, nativeTarget, cursor, signal),
+      ]);
+      signal.throwIfAborted();
+      if (target.mode === "previous" && !window.messages.length) {
+        await this.options.transcript.recordCursor(identity.threadId, turn!.turnId, null);
+        return { turnIds: [], exhausted: true };
+      }
+      const successor = target.mode === "previous" ? {
+        kind: "turn" as const, threadId: identity.threadId, turnId: turn!.turnId,
+        nativeTurnId: turn!.native.nativeTurnId!, nativeThreadId: native.nativeThreadId,
+        nativeLocation: native.nativeLocation, harnessId: "opencode",
+        // Existing successor identity is only an ordering anchor, never re-recorded.
+        state: "completed" as const, createdAt: 0, startedAt: null, endedAt: null, durationMs: null,
+      } : undefined;
+      const recorded = await this.syncSession(session, window.messages, {
+        window: { ...window, latest: target.mode === "latest", gapIds: input.gapIds, successor },
+      });
+      return { turnIds: recorded.latestTurnId ? [recorded.latestTurnId] : [], exhausted: window.previousCursor === null };
+    } catch (error) {
+      if (signal.aborted) throw signal.reason;
+      throw openCodeFailure("turn reconciliation", error);
+    }
   }
 
   async sync(threadId: string, signal?: AbortSignal) {
-    const { binding } = await this.native(threadId);
-    signal?.throwIfAborted();
-    const client = await this.options.acquire();
-    let session: SessionInfo;
-    let messages: SessionMessageInfo[];
-    try {
-      [session, messages] = await Promise.all([
-        client.session.get({ sessionID: binding.nativeThreadId }, { signal }),
-        listMessages(client, binding.nativeThreadId, signal),
-      ]);
-    } catch (error) {
-      throw openCodeFailure("canonical sync", error);
-    }
-    return this.syncSession(session, messages);
+    const { identity } = await this.native(threadId);
+    const result = await this.demand(identity.threadId, { mode: "latest" }, true, signal);
+    const latestTurnId = result.turnIds.at(-1);
+    return { ...identity, latestTurnId: latestTurnId ? WorkbenchTurnIdSchema.parse(latestTurnId) : null, hasPendingSteers: this.pendingSteers.has(identity.threadId) };
   }
 
   async syncNative(nativeThreadId: string, signal?: AbortSignal) {
     const client = await this.options.acquire();
     signal?.throwIfAborted();
-    let session: SessionInfo;
-    let messages: SessionMessageInfo[];
-    try {
-      [session, messages] = await Promise.all([
-        client.session.get({ sessionID: nativeThreadId }, { signal }),
-        listMessages(client, nativeThreadId, signal),
-      ]);
-    } catch (error) {
-      throw openCodeFailure("canonical sync", error);
-    }
-    return this.syncSession(session, messages);
+    const session = await client.session.get({ sessionID: nativeThreadId }, { signal });
+    const identity = await this.syncSession(session, []);
+    return this.sync(identity.threadId, signal);
   }
 
   currentTurn(nativeThreadId: string) {
@@ -537,19 +551,25 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     this.pendingPrompts.add(tracked);
   }
 
-  private async syncSession(session: SessionInfo, suppliedMessages?: SessionMessageInfo[]) {
+  private async syncSession(
+    session: SessionInfo,
+    messages: SessionMessageInfo[],
+    options: Parameters<OpenCodeTranscriptAdapter["record"]>[3] = {},
+  ) {
     this.sessions.set(session.id, session);
     const resolution = await this.options.projects.resolveAgentEndpointProjectFromCwd(
       session.location.directory, { endpointName: "OpenCode provider history" },
     );
-    const messages = suppliedMessages ?? await listMessages(await this.options.acquire(), session.id);
+    const latest = options.window?.latest !== false;
     const result = await this.options.transcript.record(session, messages, {
       id: resolution.project.id,
       rootPath: resolution.project.rootPath,
     }, {
-      keepLatestTurnOpen: this.pendingSteerSessions.has(session.id),
-      settleUsage: true,
+      keepLatestTurnOpen: latest && this.pendingSteerSessions.has(session.id),
+      settleUsage: latest && Boolean(options.window),
+      ...options,
     });
+    if (!latest || !options.window) return { ...result, hasPendingSteers: this.pendingSteerSessions.has(session.id) };
     for (const clientMessageId of result.deliveredSteerClientMessageIds ?? []) {
       this.pendingSteers.get(result.threadId)?.delete(clientMessageId);
       this.deletePendingSteerSession(clientMessageId);

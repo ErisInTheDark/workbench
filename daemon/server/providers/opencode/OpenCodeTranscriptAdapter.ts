@@ -2,6 +2,7 @@
  * Exports:
  * - OpenCodeTranscriptOwners: shared identity and recorder ports used by the provider edge.
  * - openCodeToolContentItems: preserve provider tool content or its bounded structured failure.
+ * - isOpenCodeTurnRoot: distinguish a new user turn from an in-turn Workbench steer.
  * - default OpenCodeTranscriptAdapter: translate canonical OpenCode sessions/messages into ordered WB transcript facts.
  */
 import type {
@@ -21,6 +22,7 @@ import type {
 } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
+import type { WorkbenchTurnIdentityMetadata } from "../../database/thread-identity/workbench-thread-identity-types";
 import type WorkbenchTranscriptIdentityController from "../../WorkbenchTranscriptIdentityController";
 import type { WorkbenchTranscriptItemLifecycle } from "../../database/transcript/workbench-transcript-types";
 import type { WorkbenchTranscriptAtomicObservation } from "../../database/transcript/workbench-transcript-types";
@@ -75,6 +77,10 @@ function workbenchMetadata(message: SessionMessageInfo): WorkbenchMessageMetadat
   return parsed.success ? parsed.data : null;
 }
 
+export function isOpenCodeTurnRoot(message: SessionMessageInfo) {
+  return message.type === "user" && workbenchMetadata(message)?.delivery !== "steer";
+}
+
 function steerInput(inputs: readonly WorkbenchUserInput[]): WorkbenchSteerHistoryEntry["input"] {
   return inputs.map((input) => {
     if (input.type !== "text") return { ...input };
@@ -103,8 +109,7 @@ function tokenBreakdown(tokens: NonNullable<SessionMessageAssistant["tokens"]>) 
 function groupTurns(messages: readonly SessionMessageInfo[]) {
   const turns: MessageTurn[] = [];
   for (const message of messages) {
-    const isSteer = workbenchMetadata(message)?.delivery === "steer";
-    if ((message.type === "user" && !isSteer) || !turns.length) {
+    if (isOpenCodeTurnRoot(message) || !turns.length) {
       turns.push({ nativeTurnId: message.id, messages: [message] });
     } else {
       turns.at(-1)!.messages.push(message);
@@ -345,7 +350,11 @@ export default class OpenCodeTranscriptAdapter {
     session: SessionInfo,
     messages: readonly SessionMessageInfo[],
     project: { id: string; rootPath: string },
-    options: { keepLatestTurnOpen?: boolean; settleUsage?: boolean } = {},
+    options: {
+      keepLatestTurnOpen?: boolean;
+      settleUsage?: boolean;
+      window?: { previousCursor: string | null; gapIds: readonly string[]; latest: boolean; successor?: WorkbenchTurnIdentityMetadata };
+    } = {},
   ) {
     const nativeThreadId = NativeThreadIdSchema.parse(session.id);
     const nativeLocation = session.location.directory;
@@ -369,7 +378,7 @@ export default class OpenCodeTranscriptAdapter {
         && (options.keepLatestTurnOpen || latestSteerIndex > latestAssistantIndex);
       const completedAt = keepOpen
         ? null
-        : assistant?.time.completed ?? (index < groups.length - 1 ? last.time.created : null);
+        : assistant?.time.completed ?? (index < groups.length - 1 || options.window?.latest === false ? last.time.created : null);
       return {
         kind: "turn" as const,
         threadId: identity.threadId,
@@ -385,7 +394,9 @@ export default class OpenCodeTranscriptAdapter {
         durationMs: completedAt === null ? null : Math.max(0, completedAt - first.time.created),
       };
     });
-    const turns = await this.owners.threads.observeTurns(turnObservations);
+    const turns = (await this.owners.threads.observeTurns([
+      ...turnObservations, ...(options.window?.successor ? [options.window.successor] : []),
+    ])).slice(0, groups.length);
     for (const [index, turn] of turns.entries()) {
       const first = groups[index]!.messages[0]!;
       this.turnScopes.set(`${turn.threadId}:${turn.turnId}`, {
@@ -476,29 +487,9 @@ export default class OpenCodeTranscriptAdapter {
       activityAt: session.time.updated,
     }, ...groups.flatMap((group, index) => {
       const turn = turns[index]!;
-      const first = group.messages[0]!;
-      const last = group.messages.at(-1)!;
-      const assistant = [...group.messages].reverse().find(message => message.type === "assistant") as SessionMessageAssistant | undefined;
-      const latestSteerIndex = group.messages.findLastIndex(message => workbenchMetadata(message)?.delivery === "steer");
-      const latestAssistantIndex = group.messages.findLastIndex(message => message.type === "assistant");
-      const keepOpen = index === groups.length - 1
-        && (options.keepLatestTurnOpen || latestSteerIndex > latestAssistantIndex);
-      const completedAt = keepOpen
-        ? null
-        : assistant?.time.completed ?? (index < groups.length - 1 ? last.time.created : null);
       return [{
-        kind: "turn" as const,
-        threadId: identity.threadId,
+        ...turnObservations[index]!,
         turnId: turn.turnId,
-        nativeTurnId: NativeTurnIdSchema.parse(group.nativeTurnId),
-        nativeThreadId,
-        nativeLocation,
-        harnessId: "opencode",
-        state: completedAt === null ? "inProgress" as const : assistant?.error ? "failed" as const : "completed" as const,
-        createdAt: first.time.created,
-        startedAt: first.time.created,
-        endedAt: completedAt,
-        durationMs: completedAt === null ? null : Math.max(0, completedAt - first.time.created),
       }, ...publicTranslated[index]!.map((entry) => {
         if (entry.kind === "steer") {
           deliveredSteerClientMessageIds.push(entry.metadata.clientMessageId);
@@ -541,12 +532,35 @@ export default class OpenCodeTranscriptAdapter {
         };
       })];
     }), ...usageObservations];
-    await this.owners.transcript.record(observations as WorkbenchTranscriptAtomicObservation[], { source: "provider" });
+    const window = options.window;
+    // Admit chronological interaction slots before reconciling the provider-only body scope.
+    // Both passes settle atomically, preserving steers between their surrounding native items.
+    await this.owners.transcript.record(window ? [
+      ...observations as WorkbenchTranscriptAtomicObservation[],
+      {
+        kind: "providerTurnScope",
+        threadId: identity.threadId,
+        completeTurnIds: turns.map(turn => turn.turnId),
+        observations: observations.filter(observation =>
+          observation.kind === "thread" || observation.kind === "turn" || observation.kind === "item"),
+      },
+      ...(turns[0] ? [{
+        kind: "providerCursor" as const, threadId: identity.threadId, turnId: turns[0].turnId,
+        previousCursor: window.previousCursor,
+      }] : []),
+    ] : observations as WorkbenchTranscriptAtomicObservation[], {
+      source: "provider",
+      ...(window ? { recovery: { gapIds: window.gapIds, scope: "turns" as const } } : {}),
+    });
     return {
       ...identity,
       latestTurnId: turns.at(-1)?.turnId ?? null,
       latestTurnState: turnObservations.at(-1)?.state ?? null,
       deliveredSteerClientMessageIds,
     };
+  }
+
+  recordCursor(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, previousCursor: string | null) {
+    return this.owners.transcript.record([{ kind: "providerCursor", threadId, turnId, previousCursor }], { source: "provider" });
   }
 }

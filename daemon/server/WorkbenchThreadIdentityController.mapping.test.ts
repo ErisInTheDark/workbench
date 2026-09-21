@@ -372,9 +372,11 @@ test("cold native thread lookup admits exact metadata before public request rout
     } as Thread } };
   };
   const operations = new CodexThreadOperations({
+    reconciliation: { reconcile: async () => { throw new Error("Unexpected recovery"); } },
     identities: owners,
     resolveProject: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/repo" }),
     bridge: {
+      reconcileSqliteTranscriptWindow: async () => { throw new Error("Unexpected native recovery"); },
       canDeliverQuestionnaire: () => false,
       ensureInitialized: async () => {},
       handleServerRequest: request,

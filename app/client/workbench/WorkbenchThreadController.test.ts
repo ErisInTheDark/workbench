@@ -168,6 +168,54 @@ function gitArc(proposalId = "proposal") {
   };
 }
 
+test("opening reconciles saved history without discarding it when the provider is unavailable", async () => {
+  const f = fixture();
+  let reconciliations = 0;
+  Object.assign(f.ports, {
+    reconcile: async () => { reconciliations++; throw new Error("provider unavailable"); },
+  });
+  f.ports.read = async () => { f.publish(f.document); return f.document; };
+  const read = f.owner.read();
+  f.admit();
+  assert.equal(await read, f.document);
+  assert.equal(reconciliations, 1);
+  assert.equal(f.ports.readNative().document, f.document);
+  f.owner.dispose();
+});
+
+for (const retire of [false, true]) {
+  test(`saved history is readable during recovery and ${retire ? "retirement fences" : "completion triggers"} its reread`, async () => {
+    const f = fixture();
+    const entered = Promise.withResolvers<void>();
+    const recovery = Promise.withResolvers<void>();
+    let reads = 0;
+    f.ports.reconcile = async () => { entered.resolve(); await recovery.promise; };
+    f.ports.read = async () => {
+      reads++;
+      f.publish(f.document);
+      return f.document;
+    };
+    const release = f.owner.acquire("route");
+    const opening = f.owner.read();
+    f.admit();
+    try {
+      await entered.promise;
+      assert.equal(f.owner.getSnapshot().status, "ready");
+      assert.equal(f.owner.getSnapshot().document, f.document);
+      assert.equal(reads, 1);
+      if (retire) f.owner.dispose();
+      recovery.resolve();
+      assert.equal(await opening, retire ? null : f.document);
+      assert.equal(reads, retire ? 1 : 2);
+    } finally {
+      recovery.resolve();
+      await opening;
+      release();
+      f.owner.dispose();
+    }
+  });
+}
+
 test("summary consumers share admission without loading a transcript", () => {
   const f = fixture();
   const first = f.owner.acquire("summary");

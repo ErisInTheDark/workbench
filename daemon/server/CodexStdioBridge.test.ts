@@ -33,7 +33,7 @@ import type { CodexThreadWindowStore } from "./CodexThreadWindowLoader";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchTranscriptController from "./database/transcript/WorkbenchTranscriptController";
 import WorkbenchTranscriptCaptureGapController from "./database/transcript/WorkbenchTranscriptCaptureGapController";
-import type { WorkbenchTranscriptObservation } from "./database/transcript/workbench-transcript-types";
+import type { WorkbenchTranscriptObservation, WorkbenchTranscriptRecordingContext } from "./database/transcript/workbench-transcript-types";
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchTranscriptIdentityRepository from "./database/transcript/WorkbenchTranscriptIdentityRepository";
@@ -1806,7 +1806,8 @@ test("provider-live transcript bursts bypass durable recording until item settle
 test("only explicit SQLite recovery reads close the exact provider gap after settlement", async () => {
   const fixtureIdentities = await recordingIdentities();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-recovery-"));
-  const contexts: Array<{ recoveryBoundary?: boolean; source: string }> = [];
+  const contexts: WorkbenchTranscriptRecordingContext[] = [];
+  let gapIds = ["before-fetch"];
   const upstreamMessages: JsonRpcRequest[] = [];
   const sqliteStarted = deferred<void>();
   const releaseSqlite = deferred<void>();
@@ -1827,6 +1828,7 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
   bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
     appServer,
+    readSqliteRecoveryGapIds: async () => [...gapIds],
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification() {},
     recordSqliteTranscript: async (_observations, context) => {
@@ -1846,6 +1848,7 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
       requestSettled = true;
     });
     await sqliteStarted.promise;
+    gapIds = ["before-fetch", "during-fetch"];
     await Promise.resolve();
     assert.equal(requestSettled, false);
     releaseSqlite.resolve();
@@ -1863,7 +1866,7 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
     assert.deepEqual(contexts, [
       { source: "provider" },
       { source: "provider" },
-      { recoveryBoundary: true, source: "provider" },
+      { recovery: { gapIds: ["before-fetch"], scope: "thread" }, source: "provider" },
     ]);
   } finally {
     releaseSqlite.resolve();
@@ -2065,13 +2068,14 @@ test("paged recovery shares one worker across independent thread histories", asy
           }));
         } } as unknown as CodexAppServer, handleWorkbenchRequest: rejectWorkbenchRequest,
         identities, onNotification() {},
+        readSqliteRecoveryGapIds: async threadId => (await transcript.readRecoveryGaps(fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId))).map(gap => gap.id),
         resolveProjectFromCwd: async () => ({
           cwd: "C:/repo", project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
           root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
         }),
         recordSqliteTranscript: async (observations, context) => {
           const fullPage = observations.some((entry) => entry.kind === "providerTurnScope" && entry.completeTurnIds.length > 0);
-          if (context.recoveryBoundary) {
+          if (context.recovery) {
             assert.equal(pages, 2, "no gap closure before both full pages settle");
           } else if (fullPage) {
             pages++;
@@ -2192,6 +2196,53 @@ async function recordingFixture(nativeLocation = "C:/repo", existingTurn = false
     },
   };
 }
+
+test("demanded Codex reconciliation repairs same-status SQLite bodies without deleting omitted facts", async () => {
+  const sql = await recordingFixture();
+  const requests: JsonRpcRequest[] = [];
+  const contexts: WorkbenchTranscriptRecordingContext[] = [];
+  const message = (id: string, text: string): ThreadItem => ({
+    type: "agentMessage", id, text, phase: "commentary", memoryCitation: null, delivery: null, questions: null,
+  });
+  let items: ThreadItem[] = [message("retained", "saved")];
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  bridge = new CodexStdioBridge({
+    ...sql.ports,
+    appServer: { send(request: JsonRpcRequest) {
+      requests.push(request);
+      const thread = bridgeThread(items);
+      const result = request.method === "thread/read" ? { thread: { ...thread, turns: [] } }
+        : { data: thread.turns.map(turn => (request.params as { itemsView: string }).itemsView === "full"
+          ? turn : { ...turn, items: [], itemsView: "notLoaded" }), nextCursor: null };
+      queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result }));
+    } } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    recordSqliteTranscript: async (observations, context) => {
+      if (context) contexts.push(context);
+      await sql.ports.recordSqliteTranscript(observations);
+    },
+  });
+  try {
+    const input = { threadId: "thread", target: { mode: "latest" as const }, gapIds: ["prefetched"] };
+    const first = await bridge.reconcileSqliteTranscriptWindow(input, new AbortController().signal);
+    items = [message("missed", "recovered")];
+    const second = await bridge.reconcileSqliteTranscriptWindow(input, new AbortController().signal);
+    assert.deepEqual(second.turnIds, first.turnIds);
+    assert.equal(second.turnIds.length, 1);
+    const { projection } = sql.project();
+    assert.deepEqual(projection.turns[0]!.items.filter(item => item.type === "agentMessage").map(item => item.text), ["saved", "recovered"]);
+    assert.equal(requests.filter(request => request.method === "thread/turns/list"
+      && (request.params as { itemsView: string }).itemsView === "full").length, 2);
+    assert.ok(contexts.some(context => context.recovery?.gapIds.includes("prefetched")
+      && context.recovery.scope === "turns"));
+  } finally {
+    await bridge.disposeImmediately();
+    sql.ports.identities.items.dispose();
+    sql.ports.identities.threads.dispose();
+    sql.database.close();
+  }
+});
 
 for (const cold of [false, true]) {
   test(`stored-turn recovery preserves an interleaved questionnaire with ${cold ? "cold" : "warm"} identities`, async (context) => {

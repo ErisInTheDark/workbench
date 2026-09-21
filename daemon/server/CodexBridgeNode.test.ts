@@ -169,17 +169,19 @@ test("managed steering interrupts only the mapped WB thread wait before returnin
 });
 
 for (const scenario of [
-  { name: "initial", mode: "initial", replacesHarness: false },
-  { name: "bridge replacement", mode: "replacement", replacesHarness: false },
-  { name: "harness replacement", mode: "replacement", replacesHarness: true },
+  { name: "initial", mode: "initial", replacesHarness: false, replacesDatabase: false },
+  { name: "bridge replacement", mode: "replacement", replacesHarness: false, replacesDatabase: false },
+  { name: "harness replacement", mode: "replacement", replacesHarness: true, replacesDatabase: false },
+  { name: "database replacement", mode: "replacement", replacesHarness: false, replacesDatabase: true },
 ] as const) {
-  test(`${scenario.name} recovery runs without holding readiness and cancels on retirement`, async (t) => {
+  test(`${scenario.name} only baselines active turns after database replacement and retires recovery`, async (t) => {
     const entered = deferred();
     const release = deferred();
     const failures: object[] = [];
     t.mock.method(console, "error", (...args: object[]) => { failures.push(args); });
     let bridge!: CodexStdioBridge;
     let cancelled = false;
+    let recoveryCalls = 0;
     let readinessChecks = 0;
     const parent = {
       appServer: {
@@ -214,6 +216,14 @@ for (const scenario of [
         recover: async () => { throw new Error("Unexpected process recovery"); },
       }),
       transcript: { pendingRecoveryThreadIds: Promise.resolve(["thread"]) },
+      transcriptReconciliation: { reconcile: async (_input: object, signal?: AbortSignal) => {
+        recoveryCalls++;
+        entered.resolve();
+        signal?.addEventListener("abort", () => { cancelled = true; }, { once: true });
+        await release.promise;
+        signal?.throwIfAborted();
+        return { turnIds: [], exhausted: false };
+      } },
     } as unknown as DaemonRuntimeObjects;
     const instance = CodexBridgeNode.create({
       isShuttingDown: () => false,
@@ -224,16 +234,12 @@ for (const scenario of [
       run: () => { throw new Error("Unexpected graph operation in node fixture"); },
       getSourceState: () => { throw new Error("Unexpected source access in node fixture"); },
       handoffState: undefined,
-      isReplacing: (scope) => scope === "harness:codex" && scenario.replacesHarness,
+      isReplacing: (scope) => scope === "harness:codex" && scenario.replacesHarness
+        || scope === "server:database" && scenario.replacesDatabase,
       lease: { isCurrent: () => true }, mode: scenario.mode,
     });
     bridge = instance.registrations.codexBridge!;
-    bridge.recoverSqliteTranscriptThread = async (_id, signal?: AbortSignal) => {
-      entered.resolve();
-      signal?.addEventListener("abort", () => { cancelled = true; release.resolve(); }, { once: true });
-      await release.promise;
-      signal?.throwIfAborted();
-    };
+    t.mock.getter(bridge, "activeSqliteTranscriptThreadIds", () => ["active-thread"]);
     let activation: Promise<void> | undefined;
     try {
       await instance.start();
@@ -241,20 +247,25 @@ for (const scenario of [
       instance.afterCommit?.();
       if (scenario.mode === "initial") {
         await bridge.ensureInitialized({ method: "initialize", params: {} });
-      } else {
+      } else if (scenario.replacesDatabase) {
         let activated = false;
         activation = Promise.resolve().then(() => { activated = true; });
         await entered.promise;
         await Promise.resolve();
         assert.equal(activated, true, "provider recovery must not keep reload activation pending");
       }
-      await entered.promise;
+      if (scenario.replacesDatabase) await entered.promise;
+      else await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(recoveryCalls, scenario.replacesDatabase ? 1 : 0);
       assert.equal(readinessChecks, 1, "every bridge generation waits on parent-owned process readiness");
       const handoff = instance.beginHandoff!({ isReplacing: () => false });
       handoff.expire();
-      const retirement = handoff.detach();
-      await Promise.resolve();
-      assert.equal(cancelled, true, "retirement must cancel recovery before draining the bridge");
+      let detached = false;
+      const retirement = Promise.resolve(handoff.detach()).then(value => { detached = true; return value; });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(cancelled, scenario.replacesDatabase, "retirement cancels only demanded active recovery");
+      if (scenario.replacesDatabase) assert.equal(detached, false, "retirement must drain cancelled baseline work");
+      release.resolve();
       await retirement;
       await handoff.commit();
       assert.deepEqual(failures, [], "owned cancellation is not a recording failure");

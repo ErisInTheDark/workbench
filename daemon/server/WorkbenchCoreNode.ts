@@ -39,6 +39,7 @@ import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-r
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
+import WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import WorkbenchProjectFileController from "./WorkbenchProjectFileController";
@@ -69,7 +70,7 @@ function createWorkbenchCoreFeature(
   lease: ReloadableNodeLease,
   reloadDirt: WorkbenchReloadDirtController,
   database: DaemonDatabaseRegistration,
-  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage">,
+  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps">,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
   initialCatalog?: WorkbenchProjectStartup,
@@ -244,6 +245,7 @@ function createWorkbenchCoreFeature(
     state: threadState.controller,
   });
   const transcriptReader = new WorkbenchTranscriptReader({
+    readProviderCursor: (threadId, turnId) => database.readTranscriptProviderCursor!(threadId, turnId),
     readSnapshot: request => transcript.read(request),
     readContext: threadId => database.readTranscriptContext!(threadId),
     readMaterializedTurns: (threadId, turnIds) => transcript.readMaterializedTurnIds(threadId, turnIds),
@@ -255,13 +257,27 @@ function createWorkbenchCoreFeature(
       let harness = (entry && entry.entryKind !== "draft" ? entry.identity.harness : null) ?? provenance;
       if (!harness) {
         const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(thread.id) });
-        harness = identity?.bindings.at(-1)?.harness ?? null;
+        harness = identity?.bindings[0]?.harness ?? null;
       }
       if (!harness) throw new Error("Canonical transcript has no stored execution provenance.");
       return { entry, harness: WorkbenchHarnessSchema.parse(harness) };
     },
   });
+  const transcriptReconciliation = new WorkbenchTranscriptReconciliationController({
+    identities: threadIdentity,
+    transcripts: transcriptReader,
+    readGapIds: async threadId => (await transcript.readRecoveryGaps(WorkbenchThreadIdSchema.parse(threadId))).map(gap => gap.id),
+    recover: async (input, signal) => {
+      const key = installedProviderKeys.find(key => key === input.harness);
+      if (!key) throw new Error("Transcript provider is not installed.");
+      const provider = providers.get(key);
+      if (!provider.threads.reconcile) throw new Error("Transcript provider does not support reconciliation.");
+      return provider.threads.reconcile(input, signal);
+    },
+    warn: message => logThreadStateWarning(message),
+  });
   const threadActions = new WorkbenchThreadActionController({
+    reconciliation: transcriptReconciliation,
     transcripts: transcriptReader,
     providers, projects: projectCatalog, identities: threadIdentity,
     profiles: threadState, state: threadState.controller,
@@ -331,7 +347,7 @@ function createWorkbenchCoreFeature(
   });
   const registrations: Pick<DaemonRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, harnesses, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions, transcriptReader,
+    browseSessionCleanup, daemonRequests, gitArc, harnesses, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions, transcriptReader, transcriptReconciliation,
     providerObservations: {
       observe: async (harness, facts) => {
         if (!lease.isCurrent()) return null;
@@ -358,6 +374,8 @@ function createWorkbenchCoreFeature(
     },
     beginRuntimeDrain: () => { subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
+      reportPhase("transcript reconciliation disposal");
+      await transcriptReconciliation.dispose();
       reportPhase("working-tree disposal");
       await workingTree.dispose();
       reportPhase("browse session cleanup disposal");
@@ -436,6 +454,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/thread-identity-workbench-mapping.ts",
     "daemon/server/WorkbenchThreadActionController.ts",
     "daemon/server/WorkbenchTranscriptReader.ts",
+    "daemon/server/WorkbenchTranscriptReconciliationController.ts",
     "daemon/server/WorkbenchProjectCatalogController.ts",
     "daemon/server/WorkbenchProjectSnapshotController.ts",
     "daemon/server/WorkbenchSearchController.ts",

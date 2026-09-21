@@ -18,7 +18,7 @@ const unused = async (): Promise<never> => { throw new Error("Unexpected provide
 function providers(read: () => Promise<import("workbench-shared/workbench/provider/provider-account").WorkbenchAccountLimits> = unused) {
   const provider: WorkbenchProvider = {
     threads: {
-      readLatest: unused, messageAgent: unused,
+      reconcile: unused, readLatest: unused, messageAgent: unused,
       create: unused, list: unused, read: unused, submit: unused,
       rename: unused, compact: unused, interrupt: unused, materialize: unused, latestTurn: unused, admitTurn: unused,
       history: { materialize: unused },

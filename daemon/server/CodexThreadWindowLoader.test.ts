@@ -82,6 +82,25 @@ function response(result: unknown): JsonRpcResponse {
   return { id: 1, result };
 }
 
+test("latest reconciliation rejects a metadata-only response to its full-body request", async () => {
+  const loader = new CodexThreadWindowLoader(async () => response({ data: [turn("latest")], nextCursor: null }));
+  await assert.rejects(loader.ensureWindow({
+    readProviderPreviousCursor: async () => undefined,
+    recordWindow: async () => { throw new Error("Incomplete recovery must not settle"); },
+  }, thread(), withHistory([], [history("latest", "unloaded")]), { mode: "latest" }, { reconcile: true }), /incomplete/);
+});
+
+test("exact recovery validates the full-body identity before recording", async () => {
+  const loader = new CodexThreadWindowLoader(async request => response({
+    data: [(request.params as { itemsView: string }).itemsView === "full" ? turn("wrong", ["body"]) : turn("target")],
+    nextCursor: null,
+  }));
+  await assert.rejects(loader.reconcileExact({
+    readProviderPreviousCursor: async () => undefined,
+    recordWindow: async () => { throw new Error("Wrong recovery must not settle"); },
+  }, thread(), "target"), /wrong or incomplete/);
+});
+
 test("previous paging discovers an absent cursor using metadata and settles it before fetching the body", async () => {
   let settled = false;
   const loader = new CodexThreadWindowLoader(async request => {
@@ -191,6 +210,38 @@ function fakeStore(previousCursors: Record<string, string | null | undefined> = 
     },
   };
 }
+
+test("explicit reconciliation repairs a materialised latest turn whose status did not change", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const loader = new CodexThreadWindowLoader(async request => {
+    requests.push(request);
+    return response({
+      data: [(request.params as { itemsView: string }).itemsView === "full"
+        ? turn("latest", ["recorded", "previously-missed"]) : turn("latest")],
+      nextCursor: "older",
+    });
+  });
+  const options = { recoveryOnly: false, reconcile: true };
+  const result = await loader.ensureWindow(fakeStore().store, thread(),
+    withHistory([turn("latest", ["recorded"])], [history("latest", "loaded")]),
+    { mode: "latest" }, options);
+  assert.ok(result);
+  assert.deepEqual(result.recording.page?.turn.items.map(item => item.id), ["recorded", "previously-missed"]);
+  assert.equal(requests.filter(request => (request.params as { itemsView: string }).itemsView === "full").length, 1);
+});
+
+test("explicit reconciliation discovers a predecessor absent from the stored catalogue", async () => {
+  const loader = new CodexThreadWindowLoader(async request => {
+    assert.equal((request.params as { cursor: string }).cursor, "before-boundary");
+    return response({ data: [turn("missing", ["recovered"])], nextCursor: null });
+  });
+  const options = { recoveryOnly: false, reconcile: true };
+  const result = await loader.ensureWindow(fakeStore({ boundary: "before-boundary" }).store, thread(),
+    withHistory([turn("boundary", ["saved"])], [history("boundary", "loaded")]),
+    { mode: "previous", beforeTurnId: "boundary" }, options);
+  assert.ok(result);
+  assert.equal(result.recording.page?.turn.id, "missing");
+});
 
 test("unseen threads import every identity and materialize only the latest turn", async () => {
   const requests: JsonRpcRequest[] = [];

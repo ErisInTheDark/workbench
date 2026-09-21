@@ -10,6 +10,62 @@ import {
 import type { WorkbenchTranscriptItemSource } from "../../database/transcript/workbench-transcript-types";
 import type { WorkbenchTranscriptObservation } from "../../database/transcript/workbench-transcript-types";
 import OpenCodeTranscriptAdapter, { openCodeToolContentItems } from "./OpenCodeTranscriptAdapter";
+import { createThreadStateTestDatabase } from "../../workbench-thread-state-test-database";
+import WorkbenchTranscriptRepository from "../../database/transcript/WorkbenchTranscriptRepository";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+
+test("complete windows settle steers, usage and cursors in SQLite without historical usage regression", async () => {
+  const fixture = createThreadStateTestDatabase();
+  fixture.admitThread(testProjectIds.project, "wb-thread", "opencode", "session", "C:/repo");
+  const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
+  const adapter = new OpenCodeTranscriptAdapter({
+    ...fixture.identities,
+    transcript: { record: async observations => repository.settle(observations) },
+  });
+  const session = {
+    id: "session", projectID: "project", title: "Thread", cost: 0,
+    tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 10 }, location: { directory: "C:/repo" },
+  };
+  const project = { id: testProjectIds.project, rootPath: "C:/repo" };
+  const latest = await adapter.record(session, [
+    { id: "root", type: "user", text: "hello", time: { created: 5 } },
+    { id: "steer", type: "user", text: "continue", time: { created: 6 }, metadata: { workbench: {
+      version: 1, delivery: "steer", itemId: "00000000-0000-4000-8000-000000000020",
+      clientMessageId: "steer-request", input: [{ type: "text", text: "continue", text_elements: [] }],
+    } } },
+    { id: "answer", type: "assistant", agent: "agent", model: { id: "model", providerID: "provider" },
+      content: [{ type: "text", text: "answer" }], tokens: session.tokens, time: { created: 7, completed: 9 } },
+  ], project, { settleUsage: true, window: { previousCursor: "native-cursor", gapIds: [], latest: true } });
+  assert.ok(latest.latestTurnId);
+  const saved = repository.read({ threadId: latest.threadId, turnLimit: 1 })!;
+  const projected = projectWorkbenchTranscript(saved);
+  assert.ok(projected.success);
+  assert.deepEqual(projected.data.turns[0]!.items.map(item => item.type === "userMessage"
+    ? item.content.flatMap(input => input.type === "text" ? [input.text] : []).join("")
+    : item.type === "agentMessage" ? item.text : item.type), ["hello", "continue", "answer"]);
+  assert.equal(repository.readProviderPreviousCursor(latest.threadId, latest.latestTurnId), "native-cursor");
+  const usage = repository.readContextUsage(latest.threadId);
+  assert.ok(usage?.tokenUsage);
+  assert.equal(latest.deliveredSteerClientMessageIds[0], "steer-request");
+  const successor = saved.turns[0]!;
+  await adapter.record(session, [
+    { id: "old-root", type: "user", text: "older", time: { created: 1 } },
+    { id: "old-answer", type: "assistant", agent: "agent", model: { id: "old-model", providerID: "provider" },
+      content: [{ type: "text", text: "old answer" }], time: { created: 2, completed: 3 } },
+  ], project, { settleUsage: false, window: { previousCursor: null, gapIds: [], latest: false, successor: {
+    kind: "turn", threadId: latest.threadId, turnId: latest.latestTurnId,
+    nativeTurnId: NativeTurnIdSchema.parse(successor.native_turn_id),
+    nativeThreadId: NativeThreadIdSchema.parse(successor.native_thread_id), nativeLocation: successor.native_location,
+    harnessId: "opencode", state: "completed", createdAt: successor.created_at, startedAt: successor.started_at,
+    endedAt: successor.ended_at, durationMs: successor.duration_ms,
+  } } });
+  const both = repository.read({ threadId: latest.threadId, turnLimit: 2 })!;
+  assert.deepEqual(both.turns.map(turn => turn.native_turn_id), ["old-root", "root"]);
+  assert.deepEqual(repository.readContextUsage(latest.threadId), usage);
+  assert.deepEqual(both.rows.threadItemAssistantMessages.map(row => row.text).sort(), ["answer", "old answer"]);
+});
 
 test("child capture retains complete MCP evidence with Workbench provenance and stable identity", async () => {
   const recorded: WorkbenchTranscriptObservation[] = [];

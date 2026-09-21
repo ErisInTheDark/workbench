@@ -16,6 +16,7 @@ import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcrip
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { readWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import type { WorkbenchThreadReconcile } from "workbench-shared/workbench/thread/thread-actions";
 
 async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object>, options: {
   nativeQuestionnaireRequestKey?: string;
@@ -36,6 +37,7 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
   }]);
   const turnId = database.identities.threads.workbenchTurnIdForNative(native);
   const bridge = {
+    reconcileSqliteTranscriptWindow: async () => { throw new Error("Unexpected native recovery"); },
     ensureInitialized: async () => {},
     handleServerRequest: async (request: JsonRpcRequest) => ({ id: request.id ?? null, result: await handle(request) }),
     canDeliverQuestionnaire: (requestedThreadId: string, requestKey: string) => (
@@ -43,7 +45,12 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
       && requestKey === options.nativeQuestionnaireRequestKey
     ),
   };
+  const demands: WorkbenchThreadReconcile[] = [];
   const operations = new CodexThreadOperations({
+    reconciliation: { reconcile: async input => {
+      demands.push(input);
+      return { turnIds: [turnId], exhausted: false };
+    } },
     identities: database.identities,
     resolveProject: async () => ({ id: thread.projectId, rootPath: "C:/project" }),
     bridge,
@@ -53,7 +60,7 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
       interruptRetainingQuestionnaire: async () => false,
     },
   });
-  return { operations, threadId: thread.threadId, turnId };
+  return { operations, demands, threadId: thread.threadId, turnId };
 }
 
 for (const fails of [false, true]) {
@@ -180,15 +187,15 @@ test("latest content reads stay bounded and metadata polls remain item-free", as
   assert.deepEqual(requests[1].workbenchThreadHydration, { mode: "latest" });
 });
 
-test("materialisation sends native identifiers while compaction never starts a turn", async () => {
+test("materialisation retains canonical identity for reconciliation while compaction never starts a turn", async () => {
   const requests: JsonRpcRequest[] = [];
   const fixture = await threadFixture(async request => { requests.push(request); return {}; });
   await fixture.operations.materialize(fixture.threadId, [fixture.turnId]);
   await fixture.operations.compact(fixture.threadId);
   assert.deepEqual(requests.map(({ method, params }) => ({ method, params })), [
-    { method: "workbench/transcript/materialize", params: { threadId: "native-thread", turnIds: ["native-turn"] } },
     { method: "thread/compact/start", params: { threadId: "native-thread" } },
   ]);
+  assert.deepEqual(fixture.demands, [{ threadId: fixture.threadId, target: { mode: "exact", turnId: fixture.turnId }, refresh: false }]);
 });
 
 test("cancelled materialisation does not dispatch provider history work", async () => {
@@ -201,21 +208,23 @@ test("cancelled materialisation does not dispatch provider history work", async 
     /subscription replaced/,
   );
   assert.deepEqual(requests, []);
+  assert.deepEqual(fixture.demands, []);
 });
 
-test("recall materialises catalogue or exact native turn without dispatch after cancellation", async () => {
+test("recall demands latest or exact canonical turn without dispatch after cancellation", async () => {
   const requests: JsonRpcRequest[] = [];
   const fixture = await threadFixture(async request => { requests.push(request); return {}; });
   const cancellation = new AbortController();
   await fixture.operations.history.materialize(fixture.threadId, null, cancellation.signal);
   await fixture.operations.history.materialize(fixture.threadId, fixture.turnId, cancellation.signal);
-  assert.deepEqual(requests.map(({ method, params }) => ({ method, params })), [
-    { method: "workbench/thread-recall/materialize", params: { threadId: "native-thread", turnId: null } },
-    { method: "workbench/thread-recall/materialize", params: { threadId: "native-thread", turnId: "native-turn" } },
+  assert.deepEqual(fixture.demands, [
+    { threadId: fixture.threadId, target: { mode: "latest" }, refresh: false },
+    { threadId: fixture.threadId, target: { mode: "exact", turnId: fixture.turnId }, refresh: false },
   ]);
   cancellation.abort(new Error("recall cancelled"));
   await assert.rejects(fixture.operations.history.materialize(fixture.threadId, fixture.turnId, cancellation.signal), /recall cancelled/);
-  assert.equal(requests.length, 2);
+  assert.equal(fixture.demands.length, 2);
+  assert.deepEqual(requests, []);
 });
 
 test("questionnaire delivery derives liveness from native and Workbench wait owners", async () => {
@@ -304,6 +313,7 @@ for (const rejected of [false, true]) {
       onNotification() {},
     });
     const operations = new CodexThreadOperations({
+      reconciliation: { reconcile: async () => { throw new Error("Unexpected recovery"); } },
       bridge,
       identities: new Proxy({} as NativeTranscriptIdentityOwners, {
         get() { throw new Error("Model reads must not access thread identity."); },

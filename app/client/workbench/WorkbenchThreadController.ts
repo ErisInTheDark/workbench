@@ -51,7 +51,8 @@ export interface ThreadControllerPorts {
     rootId?: string;
     threadId: string;
   }) => Promise<GitCheckpointProposal>;
-  read: (options: WorkbenchReadThreadOptions, beforeCommit: () => Promise<void>, selectionBound: boolean) => Promise<ThreadPayload | null>;
+  read: (options: WorkbenchReadThreadOptions, beforeCommit: () => Promise<void>, selectionBound: boolean, recover?: () => Promise<void>) => Promise<ThreadPayload | null>;
+  reconcile?: (options: WorkbenchReadThreadOptions) => Promise<void>;
   releaseHistoricalTurns: (turnIds: readonly string[]) => ThreadPayload | null;
   readNative: () => Pick<ThreadControllerSnapshot, "document" | "pendingQuestionnaire" | "rateLimits">;
   subscribeNative: (listener: () => void) => () => void;
@@ -237,7 +238,25 @@ export default class WorkbenchThreadController {
     const release = retain ? this.acquire("summary") : () => {};
     if (!options.cursor) this.cancelRefresh();
     const generation = this.generation;
-    const task = this.ports.read(options, () => this.waitForAdmission(generation), selectionBound)
+    let recovery: Promise<void> | null = null;
+    const recover = () => recovery ??= this.ports.reconcile?.(options) ?? Promise.resolve();
+    const read = () => this.ports.read(options, () => this.waitForAdmission(generation), selectionBound, recover);
+    const task = read()
+      .then(async document => {
+        if (generation !== this.generation || this.disposed) return null;
+        this.reconcile();
+        if (!this.ports.reconcile || recovery || options.readScope === "subagentBackground" || this.target.kind === "draft") return document;
+        try {
+          await recover();
+          if (generation !== this.generation || this.disposed) return null;
+          return await read();
+        } catch (error) {
+          if (generation !== this.generation || this.disposed) return null;
+          if (!document) throw error;
+          this.fail(error, true);
+          return document;
+        }
+      })
       .then(document => {
         if (generation !== this.generation || this.disposed) return null;
         if (!document && !options.cursor && !this.ports.readNative().document && !this.snapshot.document) {

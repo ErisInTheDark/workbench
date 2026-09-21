@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 
 import type { DaemonProcessContext } from "./daemon-process-context";
-let recoverCodexSqliteTranscripts: typeof import("./CodexBridgeNode").recoverCodexSqliteTranscripts;
+let baselineActiveCodexTranscripts: typeof import("./CodexBridgeNode").baselineActiveCodexTranscripts;
 let WorkbenchDatabaseNode: typeof import("./WorkbenchDatabaseNode").default;
 let discoveryRoot: string;
 const previousProjectsRoot = process.env.WORKBENCH_PROJECTS_ROOT;
@@ -19,7 +19,7 @@ before(async () => {
   process.env.WORKBENCH_PROJECTS_ROOT = discoveryRoot;
   process.env.WORKBENCH_LIBRARY_ROOT = join(discoveryRoot, "library");
   ({ default: WorkbenchDatabaseNode } = await import("./WorkbenchDatabaseNode"));
-  ({ recoverCodexSqliteTranscripts } = await import("./CodexBridgeNode"));
+  ({ baselineActiveCodexTranscripts } = await import("./CodexBridgeNode"));
 });
 
 after(async () => {
@@ -104,58 +104,47 @@ test("database retirement still closes its worker when transcript disposal fails
   }
 });
 
-test("Codex recovery settles every provider gap independently of harness availability", async () => {
-  const pendingThreadIds = ["thread-a", "thread-b"];
+test("active Codex baselining visits each demanded thread once", async () => {
   const calls: string[] = [];
-  await recoverCodexSqliteTranscripts({
-    recoverSqliteTranscriptThread: async (threadId) => {
-      calls.push(`recover:${threadId}`);
-      assert.equal(pendingThreadIds.shift(), threadId);
-    },
-  }, {
-    get pendingRecoveryThreadIds() { return Promise.resolve([...pendingThreadIds]); },
-  }, (threadId) => {
+  await baselineActiveCodexTranscripts((threadId) => {
     calls.push(`failure:${threadId ?? "cutover"}`);
+  }, {
+    threadIds: ["thread-a", "thread-b", "thread-a"],
+    readThread: async threadId => { calls.push(`baseline:${threadId}`); },
+    captureGap: async () => { throw new Error("Unexpected baseline failure"); },
   });
   assert.deepEqual(calls, [
-    "recover:thread-a",
-    "recover:thread-b",
+    "baseline:thread-a",
+    "baseline:thread-b",
   ]);
 });
 
-test("Codex recovery reports a partial failure and continues repairing other threads", async () => {
-  const pendingThreadIds = ["thread-a", "thread-b"];
+test("active Codex baselining records a partial failure and continues other threads", async () => {
   const calls: string[] = [];
-  await recoverCodexSqliteTranscripts({
-    recoverSqliteTranscriptThread: async (threadId) => {
-      calls.push(`recover:${threadId}`);
-      if (threadId === "thread-a") throw new Error("provider read failed");
-      pendingThreadIds.splice(pendingThreadIds.indexOf(threadId), 1);
-    },
-  }, {
-    get pendingRecoveryThreadIds() { return Promise.resolve([...pendingThreadIds]); },
-  }, (threadId, error) => {
+  await baselineActiveCodexTranscripts((threadId, error) => {
     calls.push(`failure:${threadId}:${error instanceof Error ? error.message : String(error)}`);
+  }, {
+    threadIds: ["thread-a", "thread-b"],
+    readThread: async (threadId) => {
+      calls.push(`baseline:${threadId}`);
+      if (threadId === "thread-a") throw new Error("provider read failed");
+    },
+    captureGap: async (threadId, error) => {
+      calls.push(`gap:${threadId}`);
+      return error instanceof Error ? error : new Error(String(error));
+    },
   });
-  assert.deepEqual(pendingThreadIds, ["thread-a"]);
   assert.deepEqual(calls, [
-    "recover:thread-a",
+    "baseline:thread-a",
+    "gap:thread-a",
     "failure:thread-a:provider read failed",
-    "recover:thread-b",
+    "baseline:thread-b",
   ]);
 });
 
-test("database replacement baselines each exact active Codex thread after marked recovery", async () => {
-  const pendingThreadIds = ["recovery-thread"];
+test("database replacement baselines only its active Codex threads and preserves failures", async () => {
   const calls: string[] = [];
-  await recoverCodexSqliteTranscripts({
-    recoverSqliteTranscriptThread: async (threadId) => {
-      calls.push(`recover:${threadId}`);
-      pendingThreadIds.splice(pendingThreadIds.indexOf(threadId), 1);
-    },
-  }, {
-    get pendingRecoveryThreadIds() { return Promise.resolve([...pendingThreadIds]); },
-  }, (threadId, error) => {
+  await baselineActiveCodexTranscripts((threadId, error) => {
     calls.push(`failure:${threadId}:${error instanceof Error ? error.message : String(error)}`);
   }, {
     captureGap: async (threadId, error) => {
@@ -166,10 +155,9 @@ test("database replacement baselines each exact active Codex thread after marked
       calls.push(`baseline:${threadId}`);
       if (threadId === "failed-thread") throw new Error("provider baseline failed");
     },
-    threadIds: ["recovery-thread", "active-thread", "active-thread", "failed-thread"],
+    threadIds: ["active-thread", "active-thread", "failed-thread"],
   });
   assert.deepEqual(calls, [
-    "recover:recovery-thread",
     "baseline:active-thread",
     "baseline:failed-thread",
     "gap:failed-thread:provider baseline failed",

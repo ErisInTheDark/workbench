@@ -36,12 +36,8 @@ export default class WorkbenchTranscriptCaptureGapController {
   }
 
   async #pendingRecoveryThreadIds() {
-    const [pending, failed] = await Promise.all([
-      this.options.database.query(selectRows(evidenceTables.transcriptCaptureGaps, { where: { state: "open" } })),
-      this.options.database.query(selectRows(evidenceTables.transcriptCaptureGaps, { where: { state: "unrecoverable" } })),
-    ]);
-    const unrecoverable = new Set(failed.map(row => row.thread_id));
-    return [...new Set(pending.filter(row => !unrecoverable.has(row.thread_id))
+    const pending = await this.options.database.query(selectRows(evidenceTables.transcriptCaptureGaps, { where: { state: "open" } }));
+    return [...new Set(pending
       .map(row => WorkbenchThreadIdSchema.parse(row.thread_id)))].sort();
   }
 
@@ -72,19 +68,21 @@ export default class WorkbenchTranscriptCaptureGapController {
     }
   }
 
-  async requireRecovery(threadId: WorkbenchThreadId): Promise<WorkbenchTranscriptCaptureGapEntry[]> {
+  async readRecovery(threadId: WorkbenchThreadId): Promise<WorkbenchTranscriptCaptureGapEntry[]> {
     const rows = await this.options.database.query(selectRows(evidenceTables.transcriptCaptureGaps, {
       where: { thread_id: threadId },
     }));
-    if (rows.some(row => row.state === "unrecoverable")) {
-      throw new Error(`SQLite transcript capture gap for thread ${threadId} is not provider-recoverable.`);
-    }
     const pending = rows.filter(row => row.state === "open");
-    if (!pending.length) throw new Error(`SQLite transcript capture recovery has no entry for thread ${threadId}.`);
     return pending.map(row => ({
       id: row.id, threadId, turnId: row.turn_id === null ? null : WorkbenchTurnIdSchema.parse(row.turn_id),
       openedAt: row.opened_at, errorText: row.error_text ?? "",
     }));
+  }
+
+  async requireRecovery(threadId: WorkbenchThreadId) {
+    const entries = await this.readRecovery(threadId);
+    if (!entries.length) throw new Error(`SQLite transcript capture recovery has no entry for thread ${threadId}.`);
+    return entries;
   }
 
   createRecoveryObservation(entry: WorkbenchTranscriptCaptureGapEntry, turnId: WorkbenchTurnId | null): WorkbenchTranscriptCaptureGapObservation {

@@ -4,12 +4,14 @@
  * - WorkbenchProviderThreadCreate: resolved creation context supplied by the daemon.
  * - WorkbenchProviderThreadList: bounded provider discovery request.
  * - WorkbenchProviderThreads: WB-valued thread operations implemented at the provider edge.
+ * - WorkbenchProviderTranscriptReconcile: demanded window and pre-fetch capture-gap identities.
  */
 import type {
   ThreadPayload, WorkbenchComposerProfileTargetSelection,
 } from "../../types.ts";
 import type {
   WorkbenchThreadMessage, WorkbenchThreadMessageResult,
+  WorkbenchThreadReconciliationTarget, WorkbenchThreadReconcileResult,
 } from "../thread/thread-actions.ts";
 import type { WorkbenchMessageContext } from "./provider-input.ts";
 import type { Turn } from "../thread/workbench-thread-turn.ts";
@@ -32,7 +34,13 @@ export interface WorkbenchProviderThreadList {
   archived?: boolean;
   background?: boolean;
 }
+export interface WorkbenchProviderTranscriptReconcile {
+  threadId: string;
+  target: WorkbenchThreadReconciliationTarget;
+  gapIds: string[];
+}
 export interface WorkbenchProviderThreads {
+  reconcile(input: WorkbenchProviderTranscriptReconcile, signal: AbortSignal): Promise<WorkbenchThreadReconcileResult>;
   history: {
     materialize(threadId: string, turnId: string | null, signal: AbortSignal): Promise<void>;
   };

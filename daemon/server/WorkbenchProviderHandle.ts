@@ -40,6 +40,10 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
   };
 
   readonly threads: WorkbenchProvider["threads"] = {
+    reconcile: (input, signal) => this.run(providerRegistrations[this.key], provider => {
+      if (!provider.threads.reconcile) throw new Error("Provider reconciliation is unavailable until its bridge is reloaded.");
+      return provider.threads.reconcile(input, signal);
+    }, `${this.key}: threads.reconcile`),
     history: {
       materialize: (threadId, turnId, signal) => this.run(providerRegistrations[this.key], provider => provider.threads.history.materialize(threadId, turnId, signal), `${this.key}: threads.history.materialize`),
     },

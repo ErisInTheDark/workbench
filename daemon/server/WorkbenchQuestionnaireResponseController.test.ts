@@ -131,7 +131,7 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
   const provider: WorkbenchProvider = {
     configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
     threads: {
-      readLatest: unused, messageAgent: unused,
+      reconcile: unused, readLatest: unused, messageAgent: unused,
       latestTurn: unused, admitTurn: unused,
       history: { materialize: unused },
       create: unused, list: unused, read: unused, rename: unused,
@@ -222,7 +222,7 @@ test("admitted native turns settle questionnaire history under SQLite canonical 
       providers: { get: () => ({
         configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
         threads: {
-          readLatest: unused, messageAgent: unused,
+          reconcile: unused, readLatest: unused, messageAgent: unused,
           latestTurn: unused, admitTurn: unused,
           history: { materialize: unused },
           create: unused, list: unused, read: unused, rename: unused,

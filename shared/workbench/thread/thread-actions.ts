@@ -5,6 +5,10 @@
  * - WorkbenchThreadCreateSchema/WorkbenchThreadCreate: project/profile selection for creation.
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: existing WB thread selection.
  * - WorkbenchThreadPageSchema/WorkbenchThreadPage: opaque history continuation.
+ * - WorkbenchThreadReconciliationTargetSchema/WorkbenchThreadReconciliationTarget: demanded native recovery window.
+ * - WorkbenchThreadReconcileSchema/WorkbenchThreadReconcile: explicit canonical reconciliation intent.
+ * - WorkbenchThreadReconcileResultSchema/WorkbenchThreadReconcileResult: recorded recovery outcome, never native content.
+ * - WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED/WorkbenchTranscriptRecoveryRequiredError: a valid requested window needs explicit reconciliation.
  * - WorkbenchThreadStopSchema/WorkbenchThreadStop: shared stop versus snooze intent.
  * - WorkbenchThreadPayloadSchema: validate the public metadata envelope.
  * - WorkbenchThreadPageResult/WorkbenchThreadPageResultSchema: WB page and domain-history facts.
@@ -22,6 +26,8 @@ import { WorkbenchProviderGoalSchema, WorkbenchProviderGoalUpdateSchema } from "
 import { WorkbenchDurableQuestionnaireSchema, WorkbenchQuestionnaireHistoryEntrySchema } from "./thread-state.ts";
 
 const threadId = z.string().trim().min(1);
+export const WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED = -32011;
+export class WorkbenchTranscriptRecoveryRequiredError extends Error {}
 const turnEnvelope = z.object({
   id: z.string().min(1),
   status: z.enum(["completed", "interrupted", "failed", "inProgress"]),
@@ -31,6 +37,26 @@ const turn = z.custom<Turn>(value => turnEnvelope.safeParse(value).success);
 
 export const WorkbenchThreadTargetSchema = z.object({ threadId });
 export type WorkbenchThreadTarget = z.infer<typeof WorkbenchThreadTargetSchema>;
+export const WorkbenchThreadReconciliationTargetSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("latest") }),
+  z.object({ mode: z.literal("previous"), beforeTurnId: z.string().min(1) }),
+  z.object({ mode: z.literal("exact"), turnId: z.string().min(1) }),
+]);
+export type WorkbenchThreadReconciliationTarget = z.infer<typeof WorkbenchThreadReconciliationTargetSchema>;
+export const WorkbenchThreadReconcileSchema = WorkbenchThreadTargetSchema.extend({
+  target: WorkbenchThreadReconciliationTargetSchema,
+  refresh: z.boolean().default(false),
+}).transform(({ threadId, target, refresh }): WorkbenchThreadReconcile => ({ threadId, target, refresh }));
+export type WorkbenchThreadReconcile = {
+  threadId: string;
+  target: WorkbenchThreadReconciliationTarget;
+  refresh: boolean;
+};
+export const WorkbenchThreadReconcileResultSchema = z.object({
+  turnIds: z.array(z.string()),
+  exhausted: z.boolean().default(false),
+});
+export type WorkbenchThreadReconcileResult = z.infer<typeof WorkbenchThreadReconcileResultSchema>;
 const message = {
   threadId,
   clientMessageId: z.string().min(1),
@@ -59,6 +85,7 @@ export type WorkbenchThreadCreate = z.infer<typeof WorkbenchThreadCreateSchema>;
 export const WorkbenchThreadPageSchema = WorkbenchThreadTargetSchema.extend({
   cursor: z.string().min(1).nullable(),
   readScope: z.literal("subagentBackground").optional(),
+  recoveryAware: z.boolean().optional(),
 });
 export type WorkbenchThreadPage = z.infer<typeof WorkbenchThreadPageSchema>;
 export const WorkbenchThreadStopSchema = WorkbenchThreadTargetSchema.extend({
@@ -87,6 +114,7 @@ export interface WorkbenchThreadPageResult {
   steerEntries: WorkbenchSteerHistoryEntry[];
   browseResultEntries: WorkbenchBrowseResultEntry[];
   entryScope?: WorkbenchThreadContextEntryScope;
+  recovery?: WorkbenchThreadReconciliationTarget | null;
 }
 const pageEnvelope = z.object({
   thread: WorkbenchThreadPayloadSchema,
@@ -94,6 +122,7 @@ const pageEnvelope = z.object({
   questionnaireEntries: z.array(z.object({ threadId, turnId: z.string() }).passthrough()),
   steerEntries: z.array(z.object({ threadId, turnId: z.string() }).passthrough()),
   browseResultEntries: z.array(z.object({ threadId, turnId: z.string() }).passthrough()),
+  recovery: WorkbenchThreadReconciliationTargetSchema.nullable().default(null),
 }).passthrough();
 export const WorkbenchThreadPageResultSchema = z.custom<WorkbenchThreadPageResult>(
   value => pageEnvelope.safeParse(value).success,
@@ -134,6 +163,7 @@ export const workbenchThreadActions = {
   "thread/create": { params: WorkbenchThreadCreateSchema, result: WorkbenchThreadPayloadSchema },
   "thread/metadata/read": { params: WorkbenchThreadTargetSchema, result: WorkbenchThreadPayloadSchema },
   "thread/page/read": { params: WorkbenchThreadPageSchema, result: WorkbenchThreadPageResultSchema },
+  "thread/reconcile": { params: WorkbenchThreadReconcileSchema, result: WorkbenchThreadReconcileResultSchema },
   "thread/message/submit": { params: WorkbenchThreadMessageSchema, result: WorkbenchThreadMessageResultSchema },
   "thread/title/set": { params: WorkbenchThreadTargetSchema.extend({ title: z.string() }), result: ok },
   "thread/compact": { params: WorkbenchThreadTargetSchema, result: ok },

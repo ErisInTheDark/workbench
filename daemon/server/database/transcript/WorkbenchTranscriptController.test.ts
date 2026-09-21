@@ -17,6 +17,10 @@ import type {
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import type { TranscriptPatchUpdate, TranscriptStreamUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
+import { createThreadStateTestDatabase } from "../../workbench-thread-state-test-database";
+import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository";
+import { workbenchDatabaseTables } from "../workbench-database-schema";
+import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -74,6 +78,71 @@ function observationsFor(threadId: string): WorkbenchTranscriptAtomicObservation
     turnIndex: 0,
   }];
 }
+
+test("demanded recovery closes only prefetched complete-turn gaps after successful SQLite settlement", async () => {
+  const fixture = createThreadStateTestDatabase();
+  const threadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
+  fixture.admitThread(testProjectIds.project, threadId, "codex", "native-thread", "C:/project");
+  const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
+  const nativeTurn = observationsFor(threadId)[1]!;
+  assert.ok(nativeTurn.kind === "turn");
+  const { turnId } = await fixture.identities.threads.observeTurn({
+    ...nativeTurn, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread"),
+  });
+  const facts = observationsFor(threadId).map(observation => observation.kind === "turn"
+    ? { ...observation, turnId, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread") } : observation);
+  repository.settle(facts);
+  let failNext = false;
+  const database = {
+    failure: null,
+    start: async () => ({ tableNames: [], schemaVersion: 1 }),
+    readThreadContextUsage: async (id: string) => repository.readContextUsage(id),
+    readTranscript: async (request: Parameters<typeof repository.read>[0]) => repository.read(request),
+    settleTranscript: async (observations: readonly WorkbenchTranscriptObservation[]) => {
+      if (failNext) { failNext = false; throw new Error("settlement failed"); }
+      return repository.settle(observations);
+    },
+    query: async <Row extends WorkbenchDatabaseRow>(query: WorkbenchDatabaseQuery<Row>): Promise<Row[]> => {
+      const compiled = compileWorkbenchDatabaseStatement(workbenchDatabaseTables, query);
+      return fixture.sqlite.prepare(compiled.sql).all(...compiled.parameters) as Row[];
+    },
+  };
+  let id = 0;
+  const gaps = new WorkbenchTranscriptCaptureGapController({ database, randomId: () => `gap-${++id}` });
+  const owner = new WorkbenchTranscriptController(database, gaps);
+  try {
+    await gaps.captureFailure({ threadId, turnId, recoverability: "provider", error: new Error("before") });
+    await gaps.captureFailure({ threadId, turnId: null, recoverability: "provider", error: new Error("unknown scope") });
+    await gaps.captureFailure({ threadId, turnId, recoverability: "unrecoverable", error: new Error("local fact") });
+    const gapIds = (await owner.readRecoveryGaps(threadId)).map(gap => gap.id);
+    await gaps.captureFailure({ threadId, turnId, recoverability: "provider", error: new Error("during fetch") });
+    const context = { source: "provider" as const, recovery: { gapIds, scope: "turns" as const } };
+    const updates: TranscriptStreamUpdate[] = [];
+    await owner.subscribe({
+      id: "recovery-view", request: { threadId, turnLimit: 1 }, publish: () => {},
+      publishStream: update => updates.push(update),
+    });
+    const patch: TranscriptPatchUpdate = {
+      kind: "patch", threadId, turnId, itemId: "live-preview",
+      changes: [{ path: "file.ts", kind: { type: "add" }, diff: "+current" }],
+    };
+    owner.acceptLiveUpdate(patch);
+    await owner.record(facts, context);
+    assert.deepEqual(updates.filter(update => update.kind === "patch").at(-1), patch, "native replay must not retire a current live preview");
+    assert.equal((await owner.readRecoveryGaps(threadId)).length, 3, "turn metadata is not complete-body proof");
+    const complete: WorkbenchTranscriptObservation[] = [{
+      kind: "providerTurnScope", threadId, completeTurnIds: [turnId], observations: facts,
+    }];
+    failNext = true;
+    await assert.rejects(owner.record(complete, context), /settlement failed/);
+    assert.equal((await owner.readRecoveryGaps(threadId)).length, 4);
+    await owner.record(complete, context);
+    const pending = await owner.readRecoveryGaps(threadId);
+    assert.deepEqual(pending.map(gap => gap.errorText).sort(), ["during fetch", "settlement failed", "unknown scope"]);
+    const states = fixture.sqlite.prepare("SELECT state FROM transcript_capture_gaps WHERE state = 'unrecoverable'").all();
+    assert.equal(states.length, 1);
+  } finally { owner.dispose(); }
+});
 
 test("recording activity retires previews before persistence, but history and delayed settlement preserve newer accumulation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-preview-activity-"));
@@ -619,7 +688,10 @@ test("durable capture gaps do not block historical imports, subscriptions or liv
         observations: observationsFor("provider-thread"),
         threadId: fixtureIdentityValues.WorkbenchThreadId["provider-thread"],
       }],
-      { recoveryBoundary: true, source: "provider" },
+      { recovery: {
+        gapIds: (await recovered.readRecoveryGaps(fixtureIdentityValues.WorkbenchThreadId["provider-thread"])).map(gap => gap.id),
+        scope: "turns",
+      }, source: "provider" },
     );
     assert.deepEqual(await recovered.pendingRecoveryThreadIds, []);
 
