@@ -24,6 +24,20 @@ function steer(id: string, status: "pending" | "sent" | "failed" | "interrupted"
 }
 const rows = (items: ThreadItem[]) => buildRenderableBlocks(items).flatMap(block => getWorkedBlockRows(block));
 
+test("native file attempts share file sequences without merging identities or crossing narrative", () => {
+  const edit = (id: string): Extract<ThreadItem, { type: "dynamicToolCall" }> => ({
+    id, type: "dynamicToolCall", namespace: "opencode", tool: "edit",
+    arguments: { path: "same.ts" }, status: "inProgress", success: null, contentItems: null, durationMs: null,
+  });
+  const blocks = buildRenderableBlocks([
+    edit("first"), { ...edit("placeholder"), arguments: {} }, edit("second"),
+    user("boundary"), edit("hidden"), edit("third"),
+  ], { dynamicToolCallIds: new Set(["hidden"]) });
+  assert.deepEqual(blocks.map(block => block.kind === "item" ? block.item.id : block.items.map(item => item.id)),
+    [["first", "second"], "boundary", ["third"]]);
+  assert.equal(blocks[0]?.kind, "fileChangeSequence");
+});
+
 test("captured children compact only their exact execute wrapper without deleting its evidence", () => {
   const wrapper = (id: string): ThreadItem => ({ type: "dynamicToolCall", id, namespace: "opencode",
     tool: "execute", toolCallGroupId: id, arguments: { code: "opaque code" }, status: "failed",

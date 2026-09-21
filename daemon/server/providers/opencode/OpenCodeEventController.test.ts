@@ -87,6 +87,43 @@ test("native error metadata marks success events failed while retaining complete
   assert.equal(final.item.toolCallGroupId, "call");
 });
 
+test("write settlement replaces its live preview on the same canonical item for success and failure", async () => {
+  for (const outcome of ["session.tool.success", "session.tool.failed"] as const) {
+    const items: Parameters<OpenCodeTranscriptAdapter["recordItem"]>[0][] = [];
+    const previews: Parameters<OpenCodeTranscriptAdapter["previewToolPatch"]>[0][] = [];
+    const owner = new OpenCodeEventController({
+      observe: async () => undefined,
+      threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
+        syncNative: async () => ({ threadId }), latestTurn: async () => ({ id: turnId }) },
+      transcript: { appendText: () => undefined, recordTurnState: async () => undefined,
+        recordItem: async input => { items.push(input); return "canonical-write" as never; },
+        previewToolPatch: input => { previews.push(input); } },
+    });
+    const request = { sessionID: "session", requestID: "request" };
+    owner.acceptPatchPreview({ ...request, kind: "request" });
+    await owner.accept(event({ type: "session.tool.input.started", created: 1,
+      data: { sessionID: "session", id: "write", name: "write" } }));
+    owner.acceptPatchPreview({ ...request, kind: "preview", callID: "write", tool: "write",
+      files: [{ path: "new.ts", kind: { type: "add" }, additions: 5 }] });
+    const metadata = { files: [{ file: "new.ts", status: "added", patch: outcome === "session.tool.success" ? "+actual" : "" }] };
+    await owner.accept(event({ type: outcome, created: 2,
+      data: { sessionID: "session", id: "write", metadata, content: [],
+        ...(outcome === "session.tool.failed" ? { executed: true, error: { type: "tool", message: "denied" } } : {}) } }));
+    assert.equal(previews[0]?.itemId, "canonical-write");
+    const final = items.at(-1)!;
+    assert.deepEqual(final.source, items[0]?.source);
+    assert.ok(final.item.type === "dynamicToolCall");
+    assert.deepEqual(final.item.metadata, metadata);
+    assert.equal(final.item.patchPreview, undefined);
+    assert.equal(final.item.status, outcome === "session.tool.success" ? "completed" : "failed");
+    const count = previews.length;
+    owner.acceptPatchPreview({ ...request, kind: "preview", callID: "write", tool: "write",
+      files: [{ path: "stale.ts", kind: { type: "add" }, additions: 99 }] });
+    assert.equal(previews.length, count);
+    owner.dispose();
+  }
+});
+
 const executionLifecycle = {
   acceptExecutionEvent: () => true,
   completeExecution: async () => undefined,

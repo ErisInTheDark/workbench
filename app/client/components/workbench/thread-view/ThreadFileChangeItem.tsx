@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadFileChangeItem: render one or more adjacent fileChange items with per-file counts and expandable unified diffs.
+ * - default ThreadFileChangeItem: render adjacent native and canonical file operations with shared lifecycle rows.
  * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes.
  * - ThreadFileChangePreviewList: render non-disclosure file-change previews with established row presentation.
  * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts.
@@ -13,6 +13,8 @@ import type { ReactNode } from "react";
 
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { getOpenCodeFileChanges } from "../../../workbench/thread/thread-command-matchers";
 import type { FileChangeAnalysis } from "workbench-shared/workbench/thread/file-change-analysis";
 import {
   parseUnifiedDiff,
@@ -26,12 +28,26 @@ import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure"
 import { getThreadFileChangeMotionIdentity } from "./ThreadEntryMotionController";
 import { ThreadEntryMotion } from "./thread-scroll-viewport-context";
 import ThreadSummaryText from "./ThreadSummaryText";
+import ThreadDurationText from "./ThreadDurationText";
+import ThreadToolCallDetails from "./ThreadToolCallDetails";
+import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 
 type FileChangeItem = WorkbenchFileChangeItem;
+type NativeFileItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
+type FileOperationItem = FileChangeItem | NativeFileItem;
 type FileUpdateChange = FileChangeItem["changes"][number];
 
-export function getThreadFileChangeTotals(items: readonly FileChangeItem[]) {
+export function getThreadFileChangeTotals(items: readonly FileOperationItem[]) {
   return items.reduce((total, item) => {
+    if (item.type === "dynamicToolCall") {
+      if (item.status !== "completed" || item.success === false) return total;
+      for (const entry of getOpenCodeFileChanges(item)) {
+        const counts = parseFileChangeDiff(entry.change);
+        total.additions += counts.additions;
+        total.deletions += counts.deletions;
+      }
+      return total;
+    }
     for (const change of item.changes) {
       const counts = getFileChangeCounts(item, change);
       total.additions += counts.additions;
@@ -70,6 +86,7 @@ export interface ThreadFileChangeListChange {
   details?: ReactNode;
   danger?: boolean;
   detailsAvailable?: boolean;
+  showDiff?: boolean;
   presentationLabel?: string;
   sourceChangeIndex?: number;
   sourceItemId?: string;
@@ -159,7 +176,7 @@ function getFileChangePresentation (change: FileUpdateChange): FileChangePresent
   }
 }
 
-function getFileChangeLifecycleLabel(change: FileUpdateChange, item: FileChangeItem, analysis?: FileChangeAnalysis) {
+function getFileChangeLifecycleLabel(change: FileUpdateChange, item: Pick<FileChangeItem, "status" | "workbenchPolicy" | "workbenchFailureKind">, analysis?: FileChangeAnalysis) {
   const presentation = getFileChangePresentation(change);
   if (analysis) {
     switch (analysis.outcome) {
@@ -374,7 +391,7 @@ function ThreadFileChangeRows ({
   });
 
   return parsedChanges.map((change, index) => {
-    const key = `${change.sourceItemId}:change:${change.displayPath}:${change.movePathDisplay ?? ""}`;
+    const key = `${change.sourceItemId}:change:${change.sourceChangeIndex}:${change.displayPath}:${change.movePathDisplay ?? ""}`;
     const selection = changes[index].selection;
     const content = <ThreadFileChangeSummary parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />;
     const summary = selection ? <WorkbenchCheckbox
@@ -393,7 +410,7 @@ function ThreadFileChangeRows ({
             summary={summary}
             summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
           >
-            <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} />
+            {changes[index].showDiff !== false ? <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} /> : null}
             {changes[index].details}
           </ThreadDisclosure>
         ) : change.staticMarker ? (
@@ -468,6 +485,18 @@ function ThreadFileChangeOutcome ({ item }: { item: FileChangeItem }) {
   );
 }
 
+function NativeFileEvidence({ item }: { item: NativeFileItem }) {
+  return <>
+    {item.durationMs !== null ? <ThreadDurationText durationMs={item.durationMs} /> : null}
+    {item.status === "failed" || item.success === false
+      ? <p className="m-0 text-fg/muted">Attempted change. Applied counts are unavailable.</p> : null}
+    <ThreadToolCallDetails
+      invocation={formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool })}
+      output={formatToolCallOutput({ content: item.contentItems })}
+    />
+  </>;
+}
+
 export default function ThreadFileChangeItem ({
   animateEntries = false,
   items,
@@ -477,16 +506,46 @@ export default function ThreadFileChangeItem ({
   workspaceRoots,
 }: {
   animateEntries?: boolean;
-  items: FileChangeItem[];
+  items: FileOperationItem[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const hasRows = items.some((item) => item.changes.length || item.status !== "completed");
+  const hasRows = items.some((item) => item.type === "dynamicToolCall" || item.changes.length || item.status !== "completed");
+  if (items.length && items.every(item => item.type === "dynamicToolCall"
+    && item.status === "inProgress" && !getOpenCodeFileChanges(item).length)) return null;
   return (
     <div className="space-y-1.5 py-2">
-      {items.map((item) => (
+      {items.map((item) => {
+        const nativeChanges = item.type === "dynamicToolCall" ? getOpenCodeFileChanges(item) : [];
+        if (item.type === "dynamicToolCall" && item.status === "inProgress" && !nativeChanges.length) return null;
+        return item.type === "dynamicToolCall" ? (
+        <div className="space-y-0.5" key={item.id}>
+          <ThreadFileChangeRows
+            animateEntries={animateEntries}
+            changes={nativeChanges.map((entry, index) => ({
+              ...entry,
+              details: index === 0 ? <NativeFileEvidence item={item} /> : undefined,
+              detailsAvailable: item.status !== "inProgress" && (index === 0 || Boolean(entry.change.diff)),
+              showDiff: Boolean(entry.change.diff),
+              staticMarker: true,
+              presentationLabel: entry.presentationLabel ?? getFileChangeLifecycleLabel(entry.change, {
+                status: item.status === "failed" || item.success === false ? "failed"
+                  : item.status === "inProgress" ? "inProgress" : "completed",
+              }),
+            }))}
+            projectFilePaths={projectFilePaths} projectId={projectId}
+            projectRootPath={projectRootPath} workspaceRoots={workspaceRoots}
+          />
+          {!nativeChanges.length && item.status !== "inProgress" ? (
+            <ThreadDisclosure summary={<ThreadSummaryText text={item.status === "failed" || item.success === false
+              ? "Failed file operation" : "File operation completed"} />}>
+              <NativeFileEvidence item={item} />
+            </ThreadDisclosure>
+          ) : null}
+        </div>
+      ) : (
         <div className="space-y-0.5" key={item.id}>
           <ThreadFileChangeRows
             animateEntries={animateEntries}
@@ -513,7 +572,7 @@ export default function ThreadFileChangeItem ({
           ) : null}
           <ThreadFileChangeOutcome item={item} />
         </div>
-      ))}
+      ); })}
       {!hasRows ? (
         <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No changed files captured.</p>
       ) : null}

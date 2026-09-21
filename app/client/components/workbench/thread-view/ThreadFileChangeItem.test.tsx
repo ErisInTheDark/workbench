@@ -1,7 +1,7 @@
 /* No production exports. Tests protect live file-change count rows, terminal diff disclosure, unsuccessful outcomes, and adjacent item order. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
@@ -37,12 +37,35 @@ function changes(streaming = false): FileChangeItem["changes"] {
   ];
 }
 
-function render(items: FileChangeItem[]) {
+function render(items: ComponentProps<typeof ThreadFileChangeItem>["items"]) {
   return renderToStaticMarkup(createElement(ThreadFileChangeItem, {
     items,
     projectRootPath: "C:/workspace",
   }));
 }
+
+test("native creation changes from a live count row to one final disclosure and only completed work counts", () => {
+  const live = {
+    id: "write", type: "dynamicToolCall" as const, namespace: "opencode", tool: "write",
+    arguments: {}, status: "inProgress" as const, success: null, contentItems: null, durationMs: null,
+    patchPreview: [{ path: "new.ts", kind: { type: "add" as const }, additions: 3, deletions: 0 }],
+  };
+  const html = render([live]);
+  assert.match(html, /Creating/);
+  assert.match(html, />\+3</);
+  assert.doesNotMatch(html, /<details/);
+  const completed = { ...live, status: "completed" as const, success: true,
+    metadata: { files: [{ file: "new.ts", status: "added", patch: "@@ -0,0 +1,2 @@\n+first\n+second\n" }] } };
+  const final = render([completed]);
+  assert.equal((final.match(/<details\b/g) ?? []).length, 1);
+  assert.match(final, /Created/);
+  assert.match(final, />\+2</);
+  assert.doesNotMatch(final, />\+3</);
+  const failed = { ...completed, id: "failed", status: "failed" as const, success: false };
+  assert.match(render([failed]), /Failed to create/);
+  assert.doesNotMatch(render([failed]), />\+\d+</);
+  assert.deepEqual(getThreadFileChangeTotals([live, completed, failed]), { additions: 2, deletions: 0 });
+});
 
 test("in-progress file changes stream count summaries without exposing partial diffs", () => {
   const html = render([{ changes: changes(true), id: "live", status: "inProgress", type: "fileChange" }]);

@@ -10,7 +10,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { mergeThreadItem, normalizeThreadItems } from "workbench-shared/workbench/thread/thread-item-normalization";
 import { createWorkbenchAgentMessageOutput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
-import { getWorkbenchTranscriptAssetUrl } from "workbench-shared/workbench/workbench-connection";
+import { getWorkbenchTranscriptAssetUrl, workbenchDaemonConnection } from "workbench-shared/workbench/workbench-connection";
 import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
@@ -150,8 +150,18 @@ test("canonical projection removes a proposal source while its card is hoisted",
   assert.doesNotMatch(html, /data-thread-checkpoint-card=/u);
 });
 
-test("native incoming messages and screenshots render once per identity after provider echo reconciliation", () => {
+test("native incoming messages and screenshots render once per identity after provider echo reconciliation", async () => {
+  const originalEndpoint = process.env.WORKBENCH_CODEX_APP_SERVER_URL;
+  try {
+    process.env.WORKBENCH_CODEX_APP_SERVER_URL = "ws://transcript.test";
+    await workbenchDaemonConnection.resolve();
+  } finally {
+    if (originalEndpoint === undefined) delete process.env.WORKBENCH_CODEX_APP_SERVER_URL;
+    else process.env.WORKBENCH_CODEX_APP_SERVER_URL = originalEndpoint;
+  }
   const assetUrl = "/api/transcript-assets/codex/thread/screenshot.png";
+  const expectedUrl = getWorkbenchTranscriptAssetUrl(assetUrl);
+  assert.ok(expectedUrl);
   const message = { message: "check cancellation cleanup", senderName: "iris", senderThreadId: "child" };
   const incoming: ThreadItem = { ...createWorkbenchAgentMessageOutput(message), id: "incoming", type: "functionCallOutput" };
   const screenshot: WorkbenchToolOutput = {
@@ -170,7 +180,7 @@ test("native incoming messages and screenshots render once per identity after pr
     const html = renderItems(items, null, durableCount);
     assert.equal(html.split(message.message).length - 1, 1);
     const sources = [...html.matchAll(/<img\b[^>]*src="([^"]+)"/gu)].map(match => match[1]);
-    assert.deepEqual(sources, [getWorkbenchTranscriptAssetUrl(assetUrl)]);
+    assert.deepEqual(sources, [expectedUrl]);
     assert.equal(html.includes(recovery.output as string), false);
   }
 });

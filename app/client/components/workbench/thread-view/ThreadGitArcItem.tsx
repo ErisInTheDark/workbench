@@ -292,7 +292,7 @@ export default function ThreadGitArcItem ({
     ? updateSummaryGroups
     : inventory.some((entry) => entry.paths.length)
       ? inventory
-      : primarySummaryGroups.some((entry) => entry.paths.length)
+      : !showUpdateChanges && primarySummaryGroups.some((entry) => entry.paths.length)
         ? primarySummaryGroups
         : claimedSummaryGroups;
   const firstClaimSummaryGroup = claimSummaryGroups.find((entry) => entry.paths.length);
@@ -300,7 +300,12 @@ export default function ThreadGitArcItem ({
   const collapsedContent: ThreadGitArcCollapsedSummaryContent | null = moveMappings.length
     ? { kind: "moves", mappings: moveMappings }
     : operationSummaryRows.length
-      ? { changes: [...operationSummaryRows], kind: "files" }
+      ? {
+        changes: failedStartDrift
+          ? operationSummaryRows.map(row => ({ ...row, danger: true, presentationLabel: primaryPathLabel }))
+          : [...operationSummaryRows],
+        kind: "files",
+      }
       : firstClaimSummaryGroup
         ? {
           kind: "claims",

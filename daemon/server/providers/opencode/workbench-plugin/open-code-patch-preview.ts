@@ -13,10 +13,15 @@ export default class OpenCodePatchPreview {
   private received = 0;
   private changed = false;
   private current: ToolPatchPreviewFile | undefined;
+  private writeNew: boolean;
+  private writeBreaks = 0;
+  private writeLength = 0;
+  private writeEndsWithNewline = false;
 
-  constructor(private readonly tool: string) {
+  constructor(private readonly tool: string, writeIsNew = false) {
+    this.writeNew = writeIsNew;
     this.parser = new JSONParser({
-      paths: tool === "patch" ? ["$.patchText"] : ["$.path"],
+      paths: tool === "patch" ? ["$.patchText"] : tool === "write" ? ["$.path", "$.content"] : ["$.path"],
       keepStack: false,
       emitPartialTokens: true,
       emitPartialValues: true,
@@ -36,11 +41,42 @@ export default class OpenCodePatchPreview {
           this.line(this.pendingLine.replace(/\r$/u, ""));
           this.pendingLine = "";
         }
+      } else if (tool === "write" && key === "content") {
+        const suffix = value.slice(this.writeLength);
+        this.writeBreaks += suffix.split("\n").length - 1;
+        this.writeLength = value.length;
+        this.writeEndsWithNewline = value.endsWith("\n");
+        this.updateWrite();
       } else if (key === "path" && !partial && value && !this.files.length) {
         this.files.push({ path: value, kind: { type: "update", move_path: null } });
+        if (tool === "write") this.updateWrite();
         this.changed = true;
       }
     };
+  }
+
+  classifyWrite(isNew: boolean) {
+    this.writeNew = isNew;
+    this.updateWrite();
+    return this.snapshot();
+  }
+
+  private updateWrite() {
+    const file = this.files[0];
+    if (!file) return;
+    file.kind = this.writeNew ? { type: "add" } : { type: "update", move_path: null };
+    if (this.writeNew) {
+      file.additions = this.writeBreaks + (this.writeLength && !this.writeEndsWithNewline ? 1 : 0);
+      file.deletions = 0;
+    } else {
+      delete file.additions;
+      delete file.deletions;
+    }
+    this.changed = true;
+  }
+
+  private snapshot() {
+    return this.files.map(file => ({ ...file, kind: { ...file.kind } }));
   }
 
   append(text: string): ToolPatchPreviewFile[] | null {
@@ -49,7 +85,7 @@ export default class OpenCodePatchPreview {
     if (this.received > 8 * 1024 * 1024) throw new Error("File preview input exceeds observation capacity.");
     this.changed = false;
     this.parser.write(text);
-    return this.changed ? this.files.map(file => ({ ...file, kind: { ...file.kind } })) : null;
+    return this.changed ? this.snapshot() : null;
   }
 
   private line(line: string) {

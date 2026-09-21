@@ -15,7 +15,7 @@ interface RequestState {
   requestID: string;
   disabled: boolean;
   decoder: OpenCodeToolStream;
-  tools: Map<string, { tool: Preview["tool"]; parser: OpenCodePatchPreview }>;
+  tools: Map<string, { tool: Preview["tool"]; parser: OpenCodePatchPreview; writeClassified?: boolean }>;
   pending: Map<string, Preview>;
 }
 
@@ -26,6 +26,7 @@ export default class OpenCodePatchStreamController {
 
   constructor(private readonly options: {
     isManagedSession(sessionID: string): Promise<boolean>;
+    isNewWrite?(sessionID: string, file: string): Promise<boolean>;
     emit(observation: OpenCodePatchObservation): Promise<void>;
     warn(message: string): void;
   }) {}
@@ -164,7 +165,10 @@ export default class OpenCodePatchStreamController {
           }
           const call = tools.get(input.id);
           if (!call) return;
-          if (input.kind === "replace") call.parser = new OpenCodePatchPreview(call.tool);
+          if (input.kind === "replace") {
+            call.parser = new OpenCodePatchPreview(call.tool);
+            call.writeClassified = false;
+          }
           const files = call.parser.append(input.text);
           if (files || input.kind === "replace") pending.set(input.id, {
             kind: "preview", sessionID, requestID, callID: input.id, tool: call.tool, files: files ?? [],
@@ -181,8 +185,20 @@ export default class OpenCodePatchStreamController {
   }
 
   private async flush(state: RequestState) {
-    for (const preview of state.pending.values()) await this.options.emit(preview);
+    const pending = [...state.pending.values()];
     state.pending.clear();
+    for (const preview of pending) {
+      if (state.disabled || this.disposed) return;
+      const call = state.tools.get(preview.callID);
+      if (call?.tool === "write" && !call.writeClassified && preview.files[0] && this.options.isNewWrite) {
+        const parser = call.parser;
+        const isNew = await this.options.isNewWrite(state.sessionID, preview.files[0].path);
+        if (state.disabled || this.disposed || state.tools.get(preview.callID) !== call || call.parser !== parser) continue;
+        call.writeClassified = true;
+        preview.files = parser.classifyWrite(isNew);
+      }
+      if (!state.disabled && !this.disposed) await this.options.emit(preview);
+    }
   }
 
   private async disable(state: RequestState) {

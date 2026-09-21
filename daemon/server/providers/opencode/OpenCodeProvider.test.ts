@@ -5,7 +5,43 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import providerRegistrations from "workbench-shared/workbench/provider/provider-registrations";
-import { openCodeAccountLimits, openCodeModelOption } from "./OpenCodeProvider";
+import OpenCodeProvider, { openCodeAccountLimits, openCodeModelOption } from "./OpenCodeProvider";
+import type { CodexExecRequest } from "../../codex-exec-protocol";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+
+test("provider execution preserves configured sandbox policy and admitted boundaries", async () => {
+  const calls: CodexExecRequest[] = [];
+  const configurationReads: object[] = [];
+  const registrations = {
+    openCodeService: {},
+    openCodeThreadOperations: {},
+    codexExecutor: { execute: async (request: CodexExecRequest) => {
+      calls.push(request);
+      return { exitCode: 7, stdout: "", stderr: "failure" };
+    } },
+    codexThreadOperations: { requestNative: async (method: string, params: object) => {
+      assert.equal(method, "config/read");
+      configurationReads.push(params);
+      return { config: { windows: { sandbox: "elevated", sandbox_private_desktop: false },
+        shell_environment_policy: { inherit: "core" } } };
+    } },
+  };
+  const instance = await OpenCodeProvider.create({} as never, {
+    get: (key: keyof typeof registrations) => registrations[key],
+  } as never);
+  const result = await instance.registrations!.openCodeProvider!.tools!.execute!({
+    caller: { harness: "opencode", cwd: process.cwd(), threadId: WorkbenchThreadIdSchema.parse("native-owner") },
+    command: ["pwsh", "-Command", "exit 7"], cwd: process.cwd(),
+    permissions: { mode: "restricted", writableRoots: [process.cwd()], network: false },
+  }, new AbortController().signal);
+  assert.equal(result.exitCode, 7);
+  assert.equal(configurationReads.length, 1);
+  assert.equal(calls[0]?.windowsSandboxLevel, "elevated");
+  assert.equal(calls[0]?.windowsSandboxPrivateDesktop, false);
+  assert.equal(calls[0]?.envPolicy.inherit, "core");
+  assert.equal(calls[0]?.permissions.type, "managed");
+  assert.ok(calls[0]?.permissions.type === "managed" && calls[0].permissions.network === "restricted");
+});
 
 test("installs OpenCode under its graph provider registration", () => {
   assert.equal(providerRegistrations.opencode, "openCodeProvider");

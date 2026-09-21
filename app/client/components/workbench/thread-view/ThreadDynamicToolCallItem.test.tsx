@@ -4,12 +4,11 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createElement, type ComponentProps, type ReactElement } from "react";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
-import { ThreadFileChangeList } from "./ThreadFileChangeItem";
 import { WorkbenchClientStateContext } from "../workbench-client-state-context";
 import WorkbenchClientStateController from "../../../workbench/state/WorkbenchClientStateController";
 import { writeGlobalWorkbenchSetting, writeProjectWorkbenchSetting } from "../../../workbench/state/workbench-settings";
@@ -67,22 +66,19 @@ test("a completed native edit has one disclosure rather than a second copy of it
   assert.equal((html.match(/<details\b/g) ?? []).length, 1);
 });
 
-test("multi-file failure retains one complete raw evidence disclosure alongside every file", () => {
+test("multi-file failure exposes each attempted target without successful change counts", () => {
   const item: DynamicItem = {
     type: "dynamicToolCall", id: "patch", namespace: "opencode", tool: "patch",
     arguments: { patchText: "original patch input" }, status: "failed", success: false, durationMs: 1500,
     contentItems: [{ type: "inputText", text: "first file changed, second file denied" }],
     metadata: { files: ["src/a.ts", "src/b.ts"].map(file => ({ file, status: "modified", patch: "+new" })) },
   };
-  const view = ThreadDynamicToolCallItem({ item }) as ReactElement<ComponentProps<typeof ThreadFileChangeList>>;
-  const html = renderToStaticMarkup(view);
+  const html = renderToStaticMarkup(createElement(ThreadDynamicToolCallItem, { item }));
   assert.equal((html.match(/<details\b/g) ?? []).length, 2);
-  const evidence = view.props.changes.flatMap(change => change.details ? [change.details] : []);
-  assert.equal(evidence.length, 1);
-  const expanded = renderToStaticMarkup(createElement("div", null, ...evidence));
-  assert.match(expanded, /original patch input/);
-  assert.match(expanded, /first file changed, second file denied/);
-  assert.ok(view.props.changes.every(change => change.danger));
+  assert.match(html, /a\.ts/);
+  assert.match(html, /b\.ts/);
+  assert.equal((html.match(/Failed to edit/g) ?? []).length, 2);
+  assert.doesNotMatch(html, />\+\d+</);
 });
 
 test("unfinished native arguments show streamed targets but failed settlement cannot retain a generation preview", () => {

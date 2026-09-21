@@ -42,3 +42,14 @@ test("long unfinished patch strings grow counts without duplicating earlier targ
   assert.equal(second[0]?.additions, 8192);
   assert.equal(first[0]?.additions, 4096, "already published previews remain immutable");
 });
+
+test("new writes stream decoded line counts before the content closes", () => {
+  const parser = new OpenCodePatchPreview("write", true);
+  parser.append('{"path":"new.ts","content":"');
+  const first = parser.append('one\\r\\nsecond');
+  assert.deepEqual(first, [{ path: "new.ts", kind: { type: "add" }, additions: 2, deletions: 0 }]);
+  assert.equal(parser.append('\\n')?.[0]?.additions, 2);
+  assert.equal(parser.append('third')?.[0]?.additions, 3);
+  parser.append('"}');
+  assert.equal(first?.[0]?.additions, 2, "later chunks cannot mutate admitted snapshots");
+});

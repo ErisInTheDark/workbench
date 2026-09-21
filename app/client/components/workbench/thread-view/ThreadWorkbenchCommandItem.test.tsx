@@ -62,11 +62,10 @@ test("compact claim updates show actual changes rather than attempted or unchang
     assert.match(html, /added-evidence\.ts/u);
     assert.match(html, /removed-evidence\.ts/u);
     assert.doesNotMatch(html, /attempted-evidence\.ts/u);
-    assert.match(html, /40 claimed/u);
     const unchanged = renderSpecialized(makeItem(tool, { inherit: true, addPaths: ["attempted-evidence.ts"] },
       `arc ${action} active\nref ${"a".repeat(40)}\nclaimed-count 40\nunchanged\nend arc`));
     assert.doesNotMatch(unchanged, /attempted-evidence\.ts/u);
-    assert.match(unchanged, /40 claimed/u);
+    assert.match(unchanged.replace(/<[^>]*>/gu, ""), /40 claimed/u);
   }
 });
 
@@ -147,6 +146,7 @@ function renderSpecialized(
   item: McpItem,
   presentation: ThreadGitArcPresentation | null = null,
   store: WorkbenchThreadSidebarStore | null = null,
+  openDetails = true,
 ) {
   const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
   assert.equal(route?.kind, "specialized");
@@ -160,7 +160,7 @@ function renderSpecialized(
         createElement(
           ThreadGitArcPresentationContext.Provider,
           { value: presentation },
-          createElement(OpenedSpecialized, {
+          createElement(openDetails ? OpenedSpecialized : ThreadWorkbenchCommandItem, {
             item,
             relatedThreadsById: {},
             renderRecallRecord: () => null,
@@ -386,7 +386,15 @@ test("failed Git arc starts compose drift evidence into one named failure card",
     presentation,
     store,
   );
+  const closedHtml = renderSpecialized(
+    makeItem("git_arc_start", {}, formatGitArcFailureReceipt(failure), "failed"),
+    presentation,
+    store,
+    false,
+  );
 
+  assert.match(closedHtml, /Failed to claim drifted file.*drifted\.ts.*\+15.*-1/u);
+  assert.doesNotMatch(closedHtml, />Edited</u);
   assert.match(html, /Failed to start.*improve arc start card UX/u);
   assert.match(html, /Failed to claim drifted file.*drifted\.ts.*\+15.*-1/u);
   assert.doesNotMatch(html, />Edited</u);

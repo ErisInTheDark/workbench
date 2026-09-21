@@ -11,6 +11,7 @@ import type { Plugin } from "@opencode/plugin/promise/plugin";
 import type { ConnectionInfo } from "@opencode/client";
 import OpenCodeCompanionToolsController, { type CompanionToolClient } from "./OpenCodeCompanionToolsController";
 import OpenCodePatchStreamController from "./OpenCodePatchStreamController";
+import OpenCodeFileEvidenceController from "./OpenCodeFileEvidenceController";
 import {
   openCodeWorkbenchRpc,
   OpenCodeGoQuotaSchema,
@@ -174,8 +175,14 @@ export function createOpenCodeWorkbenchPlugin(
         throw new AggregateError([error, ...closed.flatMap(result => result.status === "rejected" ? [result.reason] : [])],
           "Workbench companion RPC registration failed.");
       });
+      const files = new OpenCodeFileEvidenceController({
+        isManagedSession,
+        resolveCwd: async sessionID => (await context.session.get({ sessionID })).location.directory,
+        warn: message => console.warn(`[workbench-opencode-files] ${message}`),
+      });
       const patches = new OpenCodePatchStreamController({
         isManagedSession,
+        isNewWrite: (sessionID, file) => files.isNewWrite(sessionID, file),
         emit: observation => rpc.events.emit("patchPreview", observation),
         warn: message => console.warn(`[workbench-opencode-preview] ${message}`),
       });
@@ -185,17 +192,17 @@ export function createOpenCodeWorkbenchPlugin(
           for await (const event of context.event.subscribe({ signal: previewLifetime.signal })) {
             if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed"
               || event.type === "session.execution.interrupted") {
-              await patches.settleSession(event.data.sessionID);
+              await Promise.all([patches.settleSession(event.data.sessionID), files.settleSession(event.data.sessionID)]);
             }
           }
           if (!previewLifetime.signal.aborted) {
             console.warn("[workbench-opencode-preview] Preview lifecycle subscription ended; previews disabled.");
-            await patches.dispose();
+            await Promise.all([patches.dispose(), files.dispose()]);
           }
         } catch {
           if (!previewLifetime.signal.aborted) {
             console.warn("[workbench-opencode-preview] Preview lifecycle subscription failed; previews disabled.");
-            await patches.dispose();
+            await Promise.all([patches.dispose(), files.dispose()]);
           }
         }
       })();
@@ -246,12 +253,13 @@ export function createOpenCodeWorkbenchPlugin(
           if (MANAGED_DISABLED_NATIVE_TOOLS.has(input.tool) && managed) {
             throw new Error(`Native OpenCode tool ${input.tool} is unavailable in a managed Workbench session.`);
           }
+          await files.before(input);
         }),
+        context.tool.hook("execute.after", input => files.after(input)),
       ]);
       const dispose = async () => {
         previewLifetime.abort();
-        await previewEvents;
-        await patches.dispose();
+        await Promise.all([previewEvents, patches.dispose(), files.dispose()]);
         const closed = await Promise.allSettled([
           ...registrations.flatMap(result => result.status === "fulfilled" ? [result.value.dispose()] : []),
         ]);

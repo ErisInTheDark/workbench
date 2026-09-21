@@ -60,3 +60,26 @@ test("historical WB calls use the shared matcher without inventing child results
   assert.deepEqual(display?.detailRows?.map(row => row.state), ["completed", "inProgress", "failed", "completed"]);
   assert.deepEqual(wrapper, before);
 });
+
+test("failed native edits retain attempted targets without applied counts", () => {
+  const failed = { ...item("edit", { path: "src/failed.ts", oldString: "old", newString: "new" }),
+    status: "failed" as const, success: false };
+  const changes = getOpenCodeFileChanges(failed);
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0]?.change.path, "src/failed.ts");
+  assert.equal(changes[0]?.danger, true);
+  assert.equal(changes[0]?.change.diff, "");
+});
+
+test("failed patch targets retain create, delete and move intent without parsing executable source", () => {
+  const patchText = "*** Begin Patch\n*** Add File: new.ts\n+new\n*** Delete File: old.ts\n*** Update File: from.ts\n*** Move to: to.ts\n@@\n-old\n+new\n*** End Patch";
+  const failed = { ...item("patch", { patchText }),
+    status: "failed" as const, success: false };
+  const entries = getOpenCodeFileChanges(failed);
+  assert.deepEqual(entries.map(entry => [entry.change.path, entry.change.kind]), [
+    ["new.ts", { type: "add" }], ["old.ts", { type: "delete" }],
+    ["from.ts", { type: "update", move_path: "to.ts" }],
+  ]);
+  assert.ok(entries.every(entry => entry.danger && entry.change.diff === ""));
+  assert.deepEqual(getOpenCodeFileChanges(item("execute", { code: patchText })), []);
+});

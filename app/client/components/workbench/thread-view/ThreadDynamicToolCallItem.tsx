@@ -27,8 +27,8 @@ import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadToolCallDetails from "./ThreadToolCallDetails";
-import { ThreadFileChangeList, ThreadFileChangePreviewList } from "./ThreadFileChangeItem";
-import { getOpenCodeToolDisplay, getOpenCodeFileChanges, getThreadCommandOutcomeDisplay } from "../../../workbench/thread/thread-command-matchers";
+import ThreadFileChangeItem from "./ThreadFileChangeItem";
+import { getOpenCodeToolDisplay, isOpenCodeFileOperation, getThreadCommandOutcomeDisplay } from "../../../workbench/thread/thread-command-matchers";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
@@ -425,13 +425,11 @@ function ThreadQuestionnaireToolCallItem ({
 function ThreadGenericDynamicToolCallItem ({
   item,
   hasCapturedChildren,
-  hasPatchPreview,
   projectFilePaths,
   projectId,
 }: {
   item: DynamicToolCallItem;
   hasCapturedChildren?: boolean;
-  hasPatchPreview?: boolean;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
 }) {
@@ -453,7 +451,6 @@ function ThreadGenericDynamicToolCallItem ({
       summary={(
         <>
           {hasCapturedChildren ? <ThreadSummaryText text="Code details" />
-            : hasPatchPreview ? <ThreadSummaryText text="Tool details" />
             : outcomeDisplay ? <ThreadCommandSummary display={outcomeDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
             : <span className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-[0.45rem]">
             <ThreadSummaryText text="Tool" />
@@ -506,38 +503,10 @@ export default function ThreadDynamicToolCallItem ({
     return <ThreadQuestionnaireToolCallItem answeredAt={answeredAt} inlineMentionSources={inlineMentionSources} item={item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
 
-  const finalChanges = item.status !== "inProgress" ? getOpenCodeFileChanges(item) : [];
-  if (finalChanges.length) {
-    return <ThreadFileChangeList changes={finalChanges.map((change, index) => ({
-      ...change,
-      ...(index === 0 ? { details: <>
-        {item.durationMs !== null ? <ThreadDurationText durationMs={item.durationMs} /> : null}
-        <ThreadToolCallDetails
-          invocation={formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool })}
-          output={formatToolCallOutput({ content: item.contentItems })}
-        />
-      </> } : {}),
-    }))} projectFilePaths={projectFilePaths} projectId={projectId}
+  if (isOpenCodeFileOperation(item)) {
+    return <ThreadFileChangeItem items={[item]} projectFilePaths={projectFilePaths} projectId={projectId}
       projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
-  return <>
-    {item.status === "inProgress" && item.patchPreview?.length ? <ThreadFileChangePreviewList
-      changes={item.patchPreview.map(file => ({
-        change: { path: file.path, kind: file.kind, diff: "" },
-        sourceItemId: item.id,
-        presentationLabel: file.kind.type === "add" ? "Creating"
-          : file.kind.type === "delete" ? "Deleting"
-          : file.kind.move_path ? "Moving" : "Editing",
-        summaryTotals: { additions: file.additions ?? 0, deletions: file.deletions ?? 0 },
-        detailsAvailable: false,
-      }))}
-      projectFilePaths={projectFilePaths}
-      projectId={projectId}
-      projectRootPath={projectRootPath}
-      workspaceRoots={workspaceRoots}
-    /> : null}
-    <ThreadGenericDynamicToolCallItem item={item} hasCapturedChildren={hasCapturedChildren}
-      hasPatchPreview={item.status === "inProgress" && Boolean(item.patchPreview?.length)}
-      projectFilePaths={projectFilePaths} projectId={projectId} />
-  </>;
+  return <ThreadGenericDynamicToolCallItem item={item} hasCapturedChildren={hasCapturedChildren}
+    projectFilePaths={projectFilePaths} projectId={projectId} />;
 }

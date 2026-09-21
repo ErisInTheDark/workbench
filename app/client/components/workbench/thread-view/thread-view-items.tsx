@@ -2502,7 +2502,7 @@ export function ThreadTranscriptItemsDetails ({
       count={group.length}
       durationMs={getThreadItemTimelineDurationMs(ids, renderItemTimeline)}
       fileTotals={getThreadFileChangeTotals(group.flatMap(entry => entry.kind === "block"
-        ? getRenderableBlockItems(entry.block).filter((item): item is Extract<ThreadItem, { type: "fileChange" }> => item.type === "fileChange")
+        ? getRenderableBlockItems(entry.block).filter((item): item is Extract<ThreadItem, { type: "fileChange" | "dynamicToolCall" }> => item.type === "fileChange" || item.type === "dynamicToolCall")
         : []))}
       initialInactive={ids.every(id => initialInactiveItemIds.has(id))}
       newestActivityAt={activity.some(time => time === null) ? null : Math.max(...activity as number[])}

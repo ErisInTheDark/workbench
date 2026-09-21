@@ -21,6 +21,7 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import {
   getThreadCommandDisplay, getThreadCommandExecutionOutcome, getGitArcMatcherAction,
   getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem,
+  isOpenCodeFileOperation, getOpenCodeFileChanges,
   isBrowseCommandMatcherClaim, isThreadContextMatcherClaim,
   isWorkbenchTaskStatusMatcherClaim, isWorkbenchTaskTitleSetMatcherClaim,
   parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand, parseWorkbenchThreadRecallCommand,
@@ -37,7 +38,7 @@ export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcp
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 export type ThreadRenderableBlock =
   | { kind: "commandSequence"; items: CommandSequenceItem[] }
-  | { kind: "fileChangeSequence"; items: Extract<ThreadItem, { type: "fileChange" }>[] }
+  | { kind: "fileChangeSequence"; items: Extract<ThreadItem, { type: "fileChange" | "dynamicToolCall" }>[] }
   | { kind: "reasoningSequence"; items: Extract<ThreadItem, { type: "reasoning" }>[] }
   | { kind: "userMessageSequence"; items: UserMessageItem[]; state: WorkbenchInputState["status"] }
   | { kind: "webSearchSequence"; items: Extract<ThreadItem, { type: "webSearch" }>[] }
@@ -149,7 +150,9 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
       pending.items.push(visible);
       continue;
     }
-    if (item.type === "fileChange") {
+    if (item.type === "dynamicToolCall" && hidden.dynamicToolCallIds?.has(item.id)) { flush(); continue; }
+    if (item.type === "fileChange" || isOpenCodeFileOperation(item)) {
+      if (item.type === "dynamicToolCall" && item.status === "inProgress" && !getOpenCodeFileChanges(item).length) continue;
       if (pending?.kind !== "fileChangeSequence") { flush(); pending = { kind: "fileChangeSequence", items: [] }; }
       pending.items.push(item);
       continue;
@@ -161,7 +164,6 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
       pending.items.push(item);
       continue;
     }
-    if (item.type === "dynamicToolCall" && hidden.dynamicToolCallIds?.has(item.id)) { flush(); continue; }
     flush();
     blocks.push({ kind: "item", item, ...(item.type === "dynamicToolCall" && item.namespace === "opencode"
       && item.tool === "execute" && item.toolCallGroupId && capturedGroups.has(item.toolCallGroupId)
