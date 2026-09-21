@@ -88,7 +88,12 @@ export async function connectLifecycleOwnedCompanionTools(transport: CompanionTo
   }
   return {
     listTools: cursor => request("tools/list", cursor ? { cursor } : {}, value => ListToolsResultSchema.parse(value)),
-    callTool: input => request("tools/call", input, value => CallToolResultSchema.parse(value)),
+    // A progress token lets the daemon stream keepalive progress notifications, so an
+    // idle HTTP response stream is not reaped by the runtime before a long wait ends.
+    callTool: input => request("tools/call", {
+      ...input,
+      _meta: { ...input._meta, progressToken: input._meta?.progressToken ?? randomUUID() },
+    }, value => CallToolResultSchema.parse(value)),
     close: async () => {
       fail(new Error("Workbench companion MCP client closed."));
       try { await transport.terminateSession(); }

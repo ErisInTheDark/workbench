@@ -118,6 +118,37 @@ test("MCP requests remain pending until a response or lifecycle closure", async 
   await rejection;
 });
 
+test("companion tool calls request progress so long waits stay alive", async () => {
+  const sent: JSONRPCMessage[] = [];
+  let onmessage: ((message: JSONRPCMessage) => void) | undefined;
+  const client = await connectLifecycleOwnedCompanionTools({
+    close: async () => undefined,
+    send: async message => {
+      sent.push(message);
+      if ("method" in message && message.method === "initialize" && "id" in message) {
+        queueMicrotask(() => onmessage?.({ jsonrpc: "2.0", id: message.id, result: {
+          protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "test", version: "1" },
+        } }));
+      }
+    },
+    setProtocolVersion: () => undefined, start: async () => undefined, terminateSession: async () => undefined,
+    set onmessage(listener) { onmessage = listener; },
+  });
+  const calls = [
+    client.callTool({ name: "request_user_input", arguments: {} }),
+    client.callTool({ name: "request_user_input", arguments: {} }),
+  ];
+  await Promise.resolve();
+  const tokens = sent
+    .filter(message => "method" in message && message.method === "tools/call")
+    .map(frame => (frame as { params?: { _meta?: { progressToken?: unknown } } }).params?._meta?.progressToken);
+  assert.equal(tokens.length, 2);
+  assert.ok(tokens.every(token => typeof token === "string" && token.length > 0), "every call needs a progress token");
+  assert.equal(new Set(tokens).size, 2, "each call needs its own progress token");
+  await client.close();
+  await Promise.allSettled(calls);
+});
+
 test("a send failure and transport error reject the same owned request", async () => {
   let onmessage: ((message: JSONRPCMessage) => void) | undefined;
   let onerror: ((error: Error) => void) | undefined;
