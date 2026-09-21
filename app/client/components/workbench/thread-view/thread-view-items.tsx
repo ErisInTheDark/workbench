@@ -59,6 +59,7 @@ import {
   isBrowseCommandMatcherClaim,
   isGitCheckpointCompareMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
+  parseWorkbenchMessageCommand,
   parseWorkbenchSubagentCommand,
   parseBrowseSequenceCommandOutput,
   parseGitCheckpointCompareOutput,
@@ -108,10 +109,10 @@ import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadReasoningItem from "./ThreadReasoningItem";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
+import ThreadSentAgentMessageItem from "./ThreadAgentMessageItem";
 import ThreadIncomingAgentMessageItem from "./ThreadIncomingAgentMessageItem";
 import ThreadAgentScreenshotItem from "./ThreadAgentScreenshotItem";
 import ThreadToolOutputItem from "./ThreadToolOutputItem";
-import ThreadSubagentMessageItem from "./ThreadSubagentMessageItem";
 import ThreadSubagentTargetActionItem from "./ThreadSubagentTargetActionItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
 import ThreadStatusCommandItem from "./ThreadStatusCommandItem";
@@ -1336,6 +1337,7 @@ function ThreadCommandExecutionDetails ({
     () => getThreadCommandOutcomeDisplay(commandDisplay, commandOutcome),
     [commandDisplay, commandOutcome],
   );
+  const messageCommand = parseWorkbenchMessageCommand(commandDisplay.unwrappedCommand, item.commandActions);
   const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand, item.commandActions);
   const resolvedSubagentTargets = subagentCommand
     ? resolveWorkbenchSubagentCommandTargets(subagents, subagentCommand.targets)
@@ -1524,31 +1526,31 @@ function ThreadCommandExecutionDetails ({
       </ThreadSubagentCreateItem>
     );
   }
-  if (
-    subagentCommand?.action === "message"
-    && resolvedSubagentTargets.length === 1
-    && subagentCommand.message
-    && (item.status === "inProgress" || item.status === "completed")
-    && (item.exitCode === null || item.exitCode === 0)
-  ) {
-    const target = resolvedSubagentTargets[0]!;
-    const childThread = target.threadId ? relatedThreadsById[target.threadId] : undefined;
+  if (messageCommand && (item.status === "inProgress" || item.status === "completed") && (item.exitCode === null || item.exitCode === 0)) {
+    const descriptor = messageCommand.target.kind === "parent" || !messageCommand.target.value
+      ? null
+      : {
+        kind: messageCommand.target.kind === "name" ? "name" as const : "id" as const,
+        value: messageCommand.target.value,
+      };
+    const target = descriptor ? resolveWorkbenchSubagentCommandTargets(subagents, [descriptor])[0] ?? null : null;
+    const childThread = target?.threadId ? relatedThreadsById[target.threadId] : undefined;
     return (
-      <ThreadSubagentMessageItem
-        fallbackName={target.fallbackName}
-        subagent={target.subagent}
+      <ThreadSentAgentMessageItem
+        fallbackName={messageCommand.target.kind === "parent" ? "parent" : target?.fallbackName ?? messageCommand.target.value}
+        subagent={target?.subagent}
         thread={childThread}
       >
         <ThreadMarkdown
           inlineMentionSources={inlineMentionSources}
-          markdown={subagentCommand.message}
+          markdown={messageCommand.message}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
           threadCwdPath={item.cwd}
           workspaceRoots={workspaceRoots}
         />
-      </ThreadSubagentMessageItem>
+      </ThreadSentAgentMessageItem>
     );
   }
   if (
@@ -1995,7 +1997,7 @@ function ThreadCommandSequence ({
             outcome={getThreadCommandExecutionOutcome(segment.item.status, segment.item.exitCode) as "completed" | "inProgress"}
             status={segment.status}
           />
-        ) : segment.kind === "gitArc" || segment.kind === "subagent" ? (
+        ) : segment.kind === "gitArc" || segment.kind === "message" || segment.kind === "subagent" ? (
           <ThreadCommandExecutionDetails
             browseResultEntries={browseResultEntries}
             inlineMentionSources={inlineMentionSources}

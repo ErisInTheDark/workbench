@@ -38,7 +38,7 @@ interface WorkbenchAgentDirectPort {
   getReloadScopeCatalog?: () => readonly DaemonReloadScopeDescriptor[];
   readReloadDirtSnapshot?: () => WorkbenchReloadDirtSnapshot;
   executeReadOnly?: (harness: string, ...args: Parameters<WorkbenchProviderTools["executeReadOnly"]>) => ReturnType<WorkbenchProviderTools["executeReadOnly"]>;
-  requestSubagent?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
+  requestManagedThread?: (message: JsonRpcRequest) => Promise<JsonRpcResponse>;
   workbenchProjectRoot?: string;
 }
 
@@ -331,6 +331,9 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/api/subagents" && request.body) {
       return await this.dispatchSubagentRequest(request.body, signal);
     }
+    if (request.path === "/api/message" && request.body) {
+      return await this.dispatchMessageRequest(request.body, signal);
+    }
     if ((request.path === "/api/thread-status" || request.path === "/api/thread-title" || request.path === "/api/thread-resume") && request.body) {
       return await this.dispatchManagedThreadRequest(request.path, request.body, signal);
     }
@@ -394,9 +397,9 @@ export default class WorkbenchAgentCommandController {
   }
 
   private async dispatchManagedThreadRequest(pathname: string, body: Record<string, unknown>, signal: AbortSignal) {
-    if (!this.direct.requestSubagent) throw new Error("Direct managed-thread dispatch is not configured.");
+    if (!this.direct.requestManagedThread) throw new Error("Direct managed-thread dispatch is not configured.");
     if (signal.aborted) throw signal.reason;
-    const response = await this.direct.requestSubagent({
+    const response = await this.direct.requestManagedThread({
       id: 0,
       method: pathname === "/api/thread-status"
         ? "workbench/thread/status"
@@ -409,9 +412,21 @@ export default class WorkbenchAgentCommandController {
     return Response.json(response.result ?? {});
   }
 
+  private async dispatchMessageRequest(body: Record<string, unknown>, signal: AbortSignal) {
+    if (!this.direct.requestManagedThread) throw new Error("Direct managed-thread dispatch is not configured.");
+    if (signal.aborted) throw signal.reason;
+    const response = await this.direct.requestManagedThread({
+      id: 0,
+      method: "workbench/message",
+      params: body,
+    });
+    if (response.error) return Response.json({ error: response.error.message }, { status: 400 });
+    return Response.json(response.result ?? {});
+  }
+
   private async dispatchSubagentRequest(body: Record<string, unknown>, signal: AbortSignal) {
-    const requestSubagent = this.direct.requestSubagent;
-    if (!requestSubagent) {
+    const requestManagedThread = this.direct.requestManagedThread;
+    if (!requestManagedThread) {
       throw new Error("Direct subagent dispatch is not configured.");
     }
     if (signal.aborted) {
@@ -424,7 +439,7 @@ export default class WorkbenchAgentCommandController {
       if (!method) {
         return Response.json({ error: "Unsupported Workbench subagent action." }, { status: 400 });
       }
-      const response = await requestSubagent({ id: 0, method, params: body });
+      const response = await requestManagedThread({ id: 0, method, params: body });
       if (response.error) {
         return Response.json({ error: response.error.message }, { status: 400 });
       }
@@ -433,7 +448,7 @@ export default class WorkbenchAgentCommandController {
 
     const waitId = randomUUID();
     const cancel = () => {
-      void requestSubagent({
+      void requestManagedThread({
         id: 0,
         method: "workbench/subagent/waitCancel",
         params: { waitId },
@@ -441,7 +456,7 @@ export default class WorkbenchAgentCommandController {
     };
     signal.addEventListener("abort", cancel, { once: true });
     try {
-      const response = await requestSubagent({
+      const response = await requestManagedThread({
         id: 0,
         method: "workbench/subagent/wait",
         params: { ...body, waitId },

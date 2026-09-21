@@ -24,7 +24,7 @@ import {
   isOpenCodeFileOperation, getOpenCodeFileChanges,
   isBrowseCommandMatcherClaim, isThreadContextMatcherClaim,
   isWorkbenchTaskStatusMatcherClaim, isWorkbenchTaskTitleSetMatcherClaim,
-  parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand, parseWorkbenchThreadRecallCommand,
+  parseWorkbenchMessageCommand, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand, parseWorkbenchThreadRecallCommand,
   type CommandShell,
   type WorkbenchThreadRecallOperation,
 } from "../../../workbench/thread/thread-command-matchers";
@@ -188,6 +188,7 @@ export function isBrowseCommandItem({ item, ...context }: CommandContext & { ite
 export type CommandSequenceRenderSegment =
   | { items: CommandSequenceItem[]; kind: "commands" }
   | { action: NonNullable<ReturnType<typeof getGitArcMatcherAction>>; item: CommandItem; kind: "gitArc" }
+  | { item: CommandItem; kind: "message" }
   | { item: CommandItem; kind: "subagent" }
   | { item: CommandItem; kind: "threadContext"; operation: WorkbenchThreadRecallOperation }
   | { group: ThreadSubagentWaitRenderGroup<CommandItem>; kind: "subagentWait" }
@@ -224,6 +225,8 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
     }
     const gitArcAction = getGitArcMatcherAction(display.claimedBy);
     if (gitArcAction) { flushCommands(); flushWaits(); segments.push({ action: gitArcAction, kind: "gitArc", item }); continue; }
+    const message = parseWorkbenchMessageCommand(display.unwrappedCommand, item.commandActions);
+    if (message) { flushCommands(); flushWaits(); segments.push({ kind: "message", item }); continue; }
     const subagent = parseWorkbenchSubagentCommand(display.unwrappedCommand, item.commandActions);
     if (subagent?.action === "wait" && subagent.targets.length) {
       flushCommands();
@@ -253,7 +256,7 @@ export function getWorkedBlockRows(block: ThreadRenderableBlock, context: Comman
       if (route?.kind !== "specialized") return false;
       if (route.operation.kind === "gitArc") return route.operation.operation.action !== "propose";
       return route.operation.kind === "gitArcWait" || route.operation.kind === "threadRecall"
-        || (route.operation.kind === "subagent" && route.operation.operation.action !== "create" && route.operation.operation.action !== "message");
+        || (route.operation.kind === "subagent" && route.operation.operation.action !== "create");
     })());
     return [{ block, eligible }];
   }
@@ -281,7 +284,7 @@ export function getWorkedBlockRows(block: ThreadRenderableBlock, context: Comman
     return [{
       block: { kind: "commandSequence" as const, items: [segment.item] },
       eligible: (segment.kind === "gitArc" && segment.action !== "propose") || segment.kind === "threadContext"
-        || Boolean(subagent && subagent.action !== "create" && subagent.action !== "message"),
+        || Boolean(subagent && subagent.action !== "create"),
     }];
   });
 }

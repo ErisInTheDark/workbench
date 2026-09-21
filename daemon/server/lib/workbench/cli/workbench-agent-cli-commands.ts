@@ -87,7 +87,8 @@ const ROOT_HELP_COMMAND_ORDER = [
   "tokens", "tokens instructions", "tokens project",
   "transcript projects", "transcript threads", "transcript turns", "transcript search", "transcript read", "transcript show", "transcript stats",
   "stats claims",
-  "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop", "subagent message",
+  "message",
+  "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop",
   "task set", "task get", "task completed", "task blocked",
   "thread recall", "thread recall search", "thread recall expand",
   "git add", "git unstage", "git commit", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
@@ -96,6 +97,10 @@ const ROOT_HELP_COMMAND_ORDER = [
 ] as const;
 
 const HELP_GROUPS: readonly HelpGroupDefinition[] = [
+  {
+    commandOrder: ["message"],
+    key: "message", usage: "wb message (--thread <id> | --name <name> | --parent) --message <message>", words: ["message"],
+  },
   {
     key: "transcript", usage: "wb transcript <projects|threads|turns|search|read|show|stats> [options]", words: ["transcript"],
     commandOrder: ["transcript projects", "transcript threads", "transcript turns", "transcript search", "transcript read", "transcript show", "transcript stats"],
@@ -149,7 +154,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     key: "rg", usage: "wb rg -- <rg args>", words: ["rg"],
   },
   {
-    commandOrder: ["subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent message", "subagent stop"],
+    commandOrder: ["subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop"],
     footer: ["The current managed thread is always the parent.", "Run commands from the intended project working directory."].join("\n"),
     key: "subagent", usage: "wb subagent <command> [options]", words: ["subagent"],
   },

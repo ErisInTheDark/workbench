@@ -5,6 +5,7 @@
  */
 import * as project from "./lib/project";
 import * as threadBootstrap from "./lib/thread-bootstrap";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import { type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
@@ -52,6 +53,7 @@ import WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireRe
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
 import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
+import WorkbenchThreadMessageController from "./WorkbenchThreadMessageController";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
@@ -182,13 +184,14 @@ function createWorkbenchCoreFeature(
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git" }),
     transitions: worktreeGitTransitions,
   });
+  const provider = (harness: WorkbenchHarness) => {
+    const key = installedProviderKeys.find(key => key === harness);
+    if (!key) throw new Error(`Provider ${harness} is unavailable.`);
+    return providers.get(key);
+  };
   const subagents = new WorkbenchSubagentFeature({
     identities: threadIdentity,
-    provider: harness => {
-      const key = installedProviderKeys.find(key => key === harness);
-      if (!key) throw new Error(`Provider ${harness} is unavailable.`);
-      return providers.get(key);
-    },
+    provider,
     onRelationshipCommitted: (record) => requireThreadState().installSubagentRelationship(record),
     resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     profileStore,
@@ -202,6 +205,17 @@ function createWorkbenchCoreFeature(
         if ("error" in response) throw new Error(response.error.message);
       },
       subscribe: (listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void) => requireThreadState().controller.subscribe(listener),
+    },
+  });
+  const messages = new WorkbenchThreadMessageController({
+    identities: threadIdentity,
+    listSubagents: projectId => subagents.listRelationships(projectId),
+    provider,
+    resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
+    threadState: {
+      getEntry: async (projectId, harness, threadId) => (
+        await requireThreadState().controller.getThreadEntry(projectId, harness, threadId)
+      ),
     },
   });
   threadState = new WorkbenchThreadStateFeature({
@@ -347,7 +361,7 @@ function createWorkbenchCoreFeature(
   });
   const registrations: Pick<DaemonRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, harnesses, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions, transcriptReader, transcriptReconciliation,
+    browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions, transcriptReader, transcriptReconciliation,
     providerObservations: {
       observe: async (harness, facts) => {
         if (!lease.isCurrent()) return null;
@@ -373,7 +387,7 @@ function createWorkbenchCoreFeature(
         });
       }
     },
-    beginRuntimeDrain: () => { subagents.beginRuntimeDrain(); },
+    beginRuntimeDrain: () => { messages.beginRuntimeDrain(); subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
       reportPhase("transcript reconciliation disposal");
       await transcriptReconciliation.dispose();
@@ -383,6 +397,8 @@ function createWorkbenchCoreFeature(
       browseSessionCleanup.dispose();
       reportPhase("subagent disposal");
       await subagents.dispose();
+      reportPhase("thread-message disposal");
+      await messages.dispose();
       reportPhase("Git arc disposal");
       gitArc.dispose();
       reportPhase("stats disposal");
@@ -463,6 +479,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/WorkbenchSubagentFeature.ts",
     "daemon/server/WorkbenchSubagentController.ts",
     "daemon/server/WorkbenchSubagentStore.ts",
+    "daemon/server/WorkbenchThreadMessageController.ts",
     "daemon/server/WorkbenchThreadStateFeature.ts",
     "daemon/server/WorkbenchThreadStateController.ts",
     "daemon/server/WorkbenchThreadStateStore.ts",
@@ -478,5 +495,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/lib/workbench/instructions/**",
     "shared/workbench/thread/thread-display-order.ts",
     "shared/workbench/thread/thread-state.ts",
+    "shared/workbench/thread/thread-message.ts",
   ].join("\n"),
 });

@@ -50,6 +50,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       read: async (query) => await database.queryTranscript(query),
     });
     const questionnaires = build.get("questionnaires");
+    const messages = build.get("messages");
     const subagents = build.get("subagents");
     const threadState = build.get("threadState");
     const transcript = build.get("transcript");
@@ -136,9 +137,14 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executeReadOnly: async (harness, request, signal) => {
         return provider(harness).tools.executeReadOnly(request, signal);
       },
-      requestSubagent: async (request) => request.method?.startsWith("workbench/thread/")
+      requestManagedThread: async (request) => request.method?.startsWith("workbench/thread/")
         ? await threadState.handleManagedThreadRequest(request)
-        : await subagents.handleRequest(request),
+        : request.method === "workbench/message" || request.method === "workbench/subagent/message"
+          ? await messages.send(request.params).then(
+            () => ({ id: request.id ?? null, result: {} }),
+            error => ({ id: request.id ?? null, error: { code: -32000, message: error instanceof Error ? error.message : "Workbench message failed." } }),
+          )
+          : await subagents.handleRequest(request),
       workbenchProjectRoot: context.legacyMigrationProjectRoot,
     }, undefined, undefined, commandLogger);
     return {
@@ -152,7 +158,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["database", "gitArc", "harnesses", "projectCatalog", "questionnaires", "reloadDirt", "stats", "subagents", "threadGit", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["database", "gitArc", "harnesses", "messages", "projectCatalog", "questionnaires", "reloadDirt", "stats", "subagents", "threadGit", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
   safeAll: true,
   scope: "server:commands",
   sources: [

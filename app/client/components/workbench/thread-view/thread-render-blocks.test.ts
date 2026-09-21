@@ -134,15 +134,16 @@ test("proposal rows remain visible boundaries while other Git arc work stays col
   );
 });
 
-test("MCP task actions and outgoing subagent messages remain boundaries", () => {
+test("MCP task actions and outgoing thread messages remain boundaries", () => {
   const result = rows([
     command("before"),
     mcp("title", "task_set", { title: "new" }),
     mcp("status", "task_completed", {}),
+    mcp("global-message", "message", { threadId: "review-target", message: "hello" }),
     mcp("message", "subagent_message", { name: "luna", message: "hello" }),
     command("after"),
   ]);
-  assert.deepEqual(result.map(row => row.eligible), [true, false, false, false, true]);
+  assert.deepEqual(result.map(row => row.eligible), [true, false, false, false, false, true]);
 });
 
 test("conversation and unclassified interaction rows break work runs", () => {
@@ -165,6 +166,7 @@ test("native plan items are excluded from render blocks", () => {
 test("subagent creation and incoming native messages cannot enter worked groups", () => {
   const items: ThreadItem[] = [
     command("create-cli", 'wb subagent create --profile luna --name luna --title task --message hello'),
+    command("global-message-cli", 'wb message --thread review-target --message hello'),
     command("message-cli", 'wb subagent message --name luna --message hello'),
     mcp("create-mcp", "subagent_create", { profileId: "luna", name: "luna", title: "task", message: "hello" }),
     { id: "incoming", type: "functionCallOutput", namespace: "workbench", name: "agent_message", output: "incomplete message envelope" },

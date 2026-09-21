@@ -529,7 +529,7 @@ test("dispatches native subagent commands directly without waiting on Next fetch
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
-      requestSubagent: async (request) => {
+      requestManagedThread: async (request) => {
         receivedRequest = request;
         return { id: request.id ?? null, result: { profiles: [] } };
       },
@@ -558,13 +558,51 @@ test("dispatches native subagent commands directly without waiting on Next fetch
   }
 });
 
+test("dispatches global messages through the direct managed-thread transport", async () => {
+  let receivedRequest: { method?: string; params?: unknown } | null = null;
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      requestManagedThread: async (request) => {
+        receivedRequest = request;
+        return { id: request.id ?? null, result: {} };
+      },
+    },
+    async () => { throw new Error("unexpected internal fetch"); },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
+  );
+  const server = await startController(controller);
+  try {
+    const response = await fetch(`${server.origin}/daemon/agent-command`, {
+      body: subagentCommandBody(["message", "--thread", "review-target", "--message", "Review feedback."]),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(receivedRequest, {
+      id: 0,
+      method: "workbench/message",
+      params: {
+        callerThreadId: "parent-thread",
+        cwd: process.cwd(),
+        message: "Review feedback.",
+        threadId: "review-target",
+        workbenchOrigin: "http://127.0.0.1:4500",
+      },
+    });
+  } finally {
+    await server.close();
+  }
+});
+
 test("dispatches thread refresh through the direct managed-thread transport", async () => {
   let receivedRequest: { method?: string; params?: unknown } | null = null;
   const controller = new WorkbenchAgentCommandController(
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
-      requestSubagent: async (request) => {
+      requestManagedThread: async (request) => {
         receivedRequest = request;
         return { id: request.id ?? null, result: { accepted: true, threadId: "parent-thread", turnId: "turn-one" } };
       },
@@ -599,7 +637,7 @@ test("cancels the exact direct subagent waiter when the native caller disconnect
     "http://127.0.0.1:4500",
     {
       ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
-      requestSubagent: async (message) => {
+      requestManagedThread: async (message) => {
         const params = message.params && typeof message.params === "object" && !Array.isArray(message.params)
           ? message.params as Record<string, unknown>
           : {};

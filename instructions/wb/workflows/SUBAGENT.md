@@ -12,7 +12,12 @@ Your specific task or workflow may require you to get more information from or s
 <harness:opencode>
 - Sending a questionnaire to the parent thread (`tools.wb.request_user_input` through Workbench Long Wait)
 </harness:opencode>
-- Using `mcp__wbex__subagent_message` with `parent: true` to send a message directly to the parent thread
+<harness:codex>
+- Using `mcp__wbex__message` with `parent: true` to send a message directly to the parent thread
+</harness:codex>
+<harness:opencode>
+- Using `tools.wb.message` with `parent: true` to send a message directly to the parent thread
+</harness:opencode>
 
 Sending preference:
 1. Questionnaire, if more information is needed

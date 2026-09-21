@@ -12,6 +12,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "daemonRequests",
   "gitArc",
   "harnesses",
+  "messages",
   "modules",
   "projectCatalog",
   "projectSnapshot",

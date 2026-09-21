@@ -433,11 +433,16 @@ test("title and subagent MCP operations use their dedicated renderers", () => {
   assert.match(subagentHtml, /Lumi/u);
 });
 
-test("parent-directed MCP messages use the existing subagent message renderer", () => {
-  const html = renderSpecialized(makeItem("subagent_message", {
+test("global and legacy MCP messages use the shared agent message renderer", () => {
+  const parentHtml = renderSpecialized(makeItem("subagent_message", {
     message: "parent-facing progress",
     parent: true,
   }, ""));
+  const threadHtml = renderSpecialized(makeItem("message", {
+    message: "review feedback",
+    threadId: "review-target",
+  }, ""));
 
-  assert.match(html, /parent/u);
+  assert.match(parentHtml, /parent/u);
+  assert.match(threadHtml, /review-target/u);
 });

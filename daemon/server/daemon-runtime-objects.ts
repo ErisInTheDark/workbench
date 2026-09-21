@@ -228,6 +228,7 @@ export interface DaemonRuntimeObjects {
   questionnaires: WorkbenchQuestionnaireController;
   reloadController: WorkbenchDaemonReloadController;
   reloadDirt: WorkbenchReloadDirtController;
+  messages: import("./WorkbenchThreadMessageController").default;
   subagents: WorkbenchSubagentFeature;
   stats: WorkbenchStatsController;
   threadGit: WorkbenchThreadGitFeature;

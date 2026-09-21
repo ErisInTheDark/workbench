@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - WorkbenchSubagentCommand/WorkbenchSubagentCommandTarget/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, ordered id/name targets, and messages from wb commands.
+ * - WorkbenchMessageCommand/parseWorkbenchMessageCommand: parse canonical and legacy global thread messages.
+ * - WorkbenchSubagentCommand/WorkbenchSubagentCommandTarget/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, and ordered id/name targets.
  * - WorkbenchTaskTitleCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse task title actions and identify standalone title-set displays.
  * - WorkbenchTaskStatusCommand/parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse task completion actions and identify standalone successful displays.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, task, token, subagent, and reload commands.
@@ -11,7 +12,7 @@ import { CommandMatcher } from "./core";
 import type { CommandMatcherDefinition } from "./types";
 import { getWorkbenchCommandRendering } from "./workbench-command-rendering";
 
-export type WorkbenchSubagentCommandAction = "create" | "list" | "message" | "profiles" | "settle" | "stop" | "wait";
+export type WorkbenchSubagentCommandAction = "create" | "list" | "profiles" | "settle" | "stop" | "wait";
 
 export interface WorkbenchSubagentCommandTarget {
   kind: "id" | "name";
@@ -25,7 +26,11 @@ export interface WorkbenchSubagentCommand {
   profileId: string | null;
   targets: WorkbenchSubagentCommandTarget[];
   title: string | null;
-  toParent: boolean;
+}
+
+export interface WorkbenchMessageCommand {
+  message: string;
+  target: { kind: "name" | "parent" | "thread"; value: string | null };
 }
 
 export type WorkbenchTaskTitleCommand =
@@ -130,7 +135,7 @@ function readSubagentTargets(command: string) {
 
 function parseSingleWorkbenchSubagentCommand(command: string): WorkbenchSubagentCommand | null {
   const normalized = command.trim();
-  const actionMatch = normalized.match(/^wb(?:\.cmd)?\s+subagent\s+(list|profiles|create|wait|message|stop|settle)\b/iu);
+  const actionMatch = normalized.match(/^wb(?:\.cmd)?\s+subagent\s+(list|profiles|create|wait|stop|settle)\b/iu);
   if (!actionMatch) return null;
   const action = actionMatch[1].toLowerCase() as WorkbenchSubagentCommandAction;
   return {
@@ -138,11 +143,10 @@ function parseSingleWorkbenchSubagentCommand(command: string): WorkbenchSubagent
     message: readFlagValue(normalized, "message"),
     name: action === "create" ? readFlagValue(normalized, "name") : null,
     profileId: readFlagValue(normalized, "profile"),
-    targets: action === "message" || action === "settle" || action === "stop" || action === "wait"
+    targets: action === "settle" || action === "stop" || action === "wait"
       ? readSubagentTargets(normalized)
       : [],
     title: readFlagValue(normalized, "title"),
-    toParent: hasBooleanFlag(normalized, "parent"),
   };
 }
 
@@ -157,6 +161,37 @@ export function parseWorkbenchSubagentCommand(
     }
   }
   return parseSingleWorkbenchSubagentCommand(command);
+}
+
+function parseSingleWorkbenchMessageCommand(command: string): WorkbenchMessageCommand | null {
+  const normalized = command.trim();
+  const legacy = /^wb(?:\.cmd)?\s+subagent\s+message\b/iu.test(normalized);
+  if (!legacy && !/^wb(?:\.cmd)?\s+message\b/iu.test(normalized)) return null;
+  const message = readFlagValue(normalized, "message");
+  if (!message) return null;
+  const name = readFlagValue(normalized, "name");
+  const threadId = readFlagValue(normalized, legacy ? "id" : "thread");
+  const parent = hasBooleanFlag(normalized, "parent");
+  if ([Boolean(name), Boolean(threadId), parent].filter(Boolean).length !== 1) return null;
+  return {
+    message,
+    target: parent
+      ? { kind: "parent", value: null }
+      : name
+        ? { kind: "name", value: name }
+        : { kind: "thread", value: threadId },
+  };
+}
+
+export function parseWorkbenchMessageCommand(
+  command: string,
+  commandActions: readonly CommandAction[] = [],
+): WorkbenchMessageCommand | null {
+  for (const action of commandActions) {
+    const parsedAction = parseSingleWorkbenchMessageCommand(action.command);
+    if (parsedAction) return parsedAction;
+  }
+  return parseSingleWorkbenchMessageCommand(command);
 }
 
 function parseSingleWorkbenchTaskTitleCommand(command: string): WorkbenchTaskTitleCommand | null {
@@ -231,9 +266,6 @@ function renderSubagentCliFallback(command: WorkbenchSubagentCommand) {
   const countLabel = subagentCountLabel(command.targets.length);
   switch (command.action) {
     case "create": return semanticMatcherResult("Creating subagent", "Created subagent");
-    case "message": return command.toParent
-      ? semanticMatcherResult("Messaging parent", "Messaged parent")
-      : semanticMatcherResult("Messaging subagent", "Messaged subagent");
     case "settle": return semanticMatcherResult(`Settling ${countLabel}`, `Settled ${countLabel}`);
     case "stop": return semanticMatcherResult(`Stopping ${countLabel}`, `Stopped ${countLabel}`);
     case "wait": return semanticMatcherResult(`Waiting for ${countLabel}`, `Waited for ${countLabel}`);
@@ -328,6 +360,17 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     match: ({ stage, summaryParts }) => summaryParts.length || !/^wb(?:\.cmd)?\s+dirt(?:\s|$)/iu.test(stage.text.trim())
       ? null
       : hiddenCommandResult("Checking reload dirt", "Checked reload dirt"),
+  }),
+  CommandMatcher({
+    id: "workbench-cli.message",
+    match: ({ stage }) => {
+      const command = parseWorkbenchMessageCommand(stage.text);
+      if (!command) return null;
+      const target = command.target.kind === "parent" ? "parent"
+        : command.target.kind === "name" ? "subagent"
+          : "thread";
+      return semanticMatcherResult(`Messaging ${target}`, `Messaged ${target}`);
+    },
   }),
   CommandMatcher({
     id: "workbench-cli.subagent",

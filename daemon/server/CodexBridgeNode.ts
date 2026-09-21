@@ -185,7 +185,15 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     bridge = new CodexStdioBridge({
       appServer: parent.appServer,
       initialState: build.handoffState as CodexStdioBridgeReloadState | undefined,
-      handleWorkbenchRequest: request => build.run("subagents", feature => feature.handleRequest(request), `subagents: ${request.method}`),
+      handleWorkbenchRequest: request => request.method === "workbench/subagent/message"
+        ? build.run("messages", feature => feature.send(request.params).then(
+          () => ({ id: request.id ?? null, result: {} }),
+          error => ({
+            id: request.id ?? null,
+            error: { code: -32000, message: error instanceof Error ? error.message : "Workbench message failed." },
+          }),
+        ), `messages: ${request.method}`)
+        : build.run("subagents", feature => feature.handleRequest(request), `subagents: ${request.method}`),
       resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
       onNotification: (notification, facts, nativeNotification) => {
         turnRecovery.observeNotification("codex", nativeNotification);

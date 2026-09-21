@@ -129,39 +129,4 @@ const wait = targetCommand("wait", "Wait until any selected child needs attentio
 const stop = targetCommand("stop", "Stop one or more direct child threads.");
 const settle = targetCommand("settle", "Settle one or more completed or stopped direct children.");
 
-const message = defineWorkbenchAgentCommand({
-  description: "Message a direct child or parent, steering an active turn or starting an idle one.",
-  helpGroups: ["subagent"],
-  words: ["subagent", "message"],
-  usage: "wb subagent message (--id <id> | --name <name> | --parent) --message <message>",
-  inputSchema: z.object({
-    message: requiredText,
-    name: requiredText.optional(),
-    parent: z.boolean().optional(),
-    threadId: requiredText.optional(),
-  }).strict().superRefine(({ name, parent, threadId }, context) => {
-    if ([Boolean(name), Boolean(parent), Boolean(threadId)].filter(Boolean).length !== 1) {
-      context.addIssue({ code: "custom", message: "Exactly one of name, parent, or threadId is required." });
-    }
-  }),
-  parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--parent"], values: ["--id", "--name", "--message"] });
-    return {
-      message: flags.required("--message"),
-      name: flags.optional("--name") ?? undefined,
-      parent: flags.has("--parent") || undefined,
-      threadId: flags.optional("--id") ?? undefined,
-    };
-  },
-  buildRequest(input, { callerThreadId, cwd, workbenchOrigin }) {
-    return postWorkbenchAgentCommand("/api/subagents", {
-      action: "message", callerThreadId: requireCallerThreadId(callerThreadId), cwd, message: input.message,
-      ...(input.name ? { name: input.name } : {}),
-      ...(input.parent ? { parent: true } : {}),
-      ...(input.threadId ? { threadId: input.threadId } : {}),
-      ...(workbenchOrigin ? { workbenchOrigin } : {}),
-    });
-  },
-});
-
-export const WORKBENCH_SUBAGENT_COMMANDS = [list, profiles, create, wait, stop, settle, message] as const;
+export const WORKBENCH_SUBAGENT_COMMANDS = [list, profiles, create, wait, stop, settle] as const;

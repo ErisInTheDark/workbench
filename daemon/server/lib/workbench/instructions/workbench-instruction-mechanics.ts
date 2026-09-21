@@ -19,6 +19,7 @@ export async function listWorkbenchInstructionMechanics(
   if (context.managedThread || context.workbenchOrigin?.trim()) {
     available.add("browse");
     available.add("long-waits");
+    available.add("messages");
     available.add("subagents");
     try {
       const localCapabilities = await readLocalCapabilities();

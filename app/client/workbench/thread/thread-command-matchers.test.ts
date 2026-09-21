@@ -30,6 +30,7 @@ import {
   parseGitCheckpointDiffOutput,
   parseGitCheckpointProposalId,
   parseGitArcCommand,
+  parseWorkbenchMessageCommand,
   parseWorkbenchSubagentCommand,
   parseWorkbenchTaskStatusCommand,
   parseWorkbenchTaskTitleCommand,
@@ -113,6 +114,7 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     case "subagent_wait":
     case "subagent_stop":
     case "subagent_settle": return { names: ["Lumi"] };
+    case "message":
     case "subagent_message": return { message: "continue", parent: true };
     case "subagent_create": return { message: "inspect", name: "Lumi", profileId: "profile", title: "Inspect" };
     case "git_arc_mv": return { move: { confirm: false, kind: "regex", pattern: "^src", replacement: "test", roots: ["src"] } };
@@ -258,6 +260,7 @@ test("specialized typed wb MCP calls share CLI claims without duplicate summarie
     ["wb task blocked", "task_blocked", {}],
     ['wb task set --title "Render typed wb tools"', "task_set", { title: "Render typed wb tools" }],
     ["wb subagent wait --name Lumi --name Nova", "subagent_wait", { names: ["Lumi", "Nova"] }],
+    ['wb message --thread review-target --message "progress"', "message", { message: "progress", threadId: "review-target" }],
     ['wb subagent message --parent --message "progress"', "subagent_message", { message: "progress", parent: true }],
     ["wb git arc wait", "git_arc_wait", {}],
     ["wb git arc mv --regex ^src --replace test -- src", "git_arc_mv", { move: { confirm: false, kind: "regex", pattern: "^src", replacement: "test", roots: ["src"] } }],
@@ -541,7 +544,7 @@ test("typed ripgrep file listings expose their precise target path", () => {
   assert.equal(display.summaryStats.searchedFiles, 1);
 });
 
-test("Workbench subagent commands share one semantic parser", () => {
+test("Workbench message and subagent commands use distinct semantic parsers", () => {
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent wait --id child-thread"), {
     action: "wait",
     message: null,
@@ -549,16 +552,10 @@ test("Workbench subagent commands share one semantic parser", () => {
     profileId: null,
     targets: [{ kind: "id", value: "child-thread" }],
     title: null,
-    toParent: false,
   });
-  assert.deepEqual(parseWorkbenchSubagentCommand('wb.cmd subagent message --id "child thread" --message continue'), {
-    action: "message",
+  assert.deepEqual(parseWorkbenchMessageCommand('wb.cmd subagent message --id "child thread" --message continue'), {
     message: "continue",
-    name: null,
-    profileId: null,
-    targets: [{ kind: "id", value: "child thread" }],
-    title: null,
-    toParent: false,
+    target: { kind: "thread", value: "child thread" },
   });
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent stop --id='child-thread'"), {
     action: "stop",
@@ -567,7 +564,6 @@ test("Workbench subagent commands share one semantic parser", () => {
     profileId: null,
     targets: [{ kind: "id", value: "child-thread" }],
     title: null,
-    toParent: false,
   });
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent wait --id child-thread; Write-Output done"), {
     action: "wait",
@@ -576,16 +572,10 @@ test("Workbench subagent commands share one semantic parser", () => {
     profileId: null,
     targets: [{ kind: "id", value: "child-thread" }],
     title: null,
-    toParent: false,
   });
-  assert.deepEqual(parseWorkbenchSubagentCommand('wb subagent message --message "Use the safer `route`" --id child-thread'), {
-    action: "message",
+  assert.deepEqual(parseWorkbenchMessageCommand('wb subagent message --message "Use the safer `route`" --id child-thread'), {
     message: "Use the safer `route`",
-    name: null,
-    profileId: null,
-    targets: [{ kind: "id", value: "child-thread" }],
-    title: null,
-    toParent: false,
+    target: { kind: "thread", value: "child-thread" },
   });
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent profiles"), {
     action: "profiles",
@@ -594,17 +584,16 @@ test("Workbench subagent commands share one semantic parser", () => {
     profileId: null,
     targets: [],
     title: null,
-    toParent: false,
   });
-  assert.deepEqual(parseWorkbenchSubagentCommand('wb subagent message --parent --message "Progress note"'), {
-    action: "message",
+  assert.deepEqual(parseWorkbenchMessageCommand('wb subagent message --parent --message "Progress note"'), {
     message: "Progress note",
-    name: null,
-    profileId: null,
-    targets: [],
-    title: null,
-    toParent: true,
+    target: { kind: "parent", value: null },
   });
+  assert.deepEqual(parseWorkbenchMessageCommand('wb message --thread "review target" --message "Progress note"'), {
+    message: "Progress note",
+    target: { kind: "thread", value: "review target" },
+  });
+  assert.equal(parseWorkbenchSubagentCommand('wb subagent message --parent --message "Progress note"'), null);
   assert.equal(parseWorkbenchSubagentCommand("wb thread recall --thread child-thread"), null);
 
   const display = getThreadCommandDisplay({
@@ -629,7 +618,7 @@ test("Workbench subagent commands share one semantic parser", () => {
     cwd: PROJECT_ROOT,
     projectRootPath: PROJECT_ROOT,
   });
-  assert.equal(parentMessageDisplay.claimedBy, "workbench-cli.subagent");
+  assert.equal(parentMessageDisplay.claimedBy, "workbench-cli.message");
 
 });
 
@@ -647,7 +636,6 @@ test("Workbench subagent parser preserves ordered name and id targets", () => {
         { kind: "name", value: "Momo" },
       ],
       title: null,
-      toParent: false,
     },
   );
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent settle --name Hikari --id child-thread"), {
@@ -660,7 +648,6 @@ test("Workbench subagent parser preserves ordered name and id targets", () => {
       { kind: "id", value: "child-thread" },
     ],
     title: null,
-    toParent: false,
   });
 
 });
@@ -676,7 +663,6 @@ test("Workbench subagent parser preserves valid PowerShell here-string messages"
       profileId: "safety-profile",
       targets: [],
       title: "Audit instructions",
-      toParent: false,
     });
   }
 });
@@ -742,7 +728,6 @@ test("Workbench subagent create commands expose metadata through PowerShell wrap
     profileId: "safety-profile",
     targets: [],
     title: "Review bridge reloads",
-    toParent: false,
   });
   const wrappedCreateDisplay = getThreadCommandDisplay({
     command: `"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '${createCommand}'`,
@@ -767,7 +752,6 @@ test("Workbench subagent commands prefer clean semantic actions over escaped Pow
     profileId: "48444e25-57b2-474b-80de-f842bb511762",
     targets: [],
     title: "Book 1 chapters 60 through 84 note pass",
-    toParent: false,
   });
 });
 
@@ -779,7 +763,6 @@ test("Workbench subagent list gets dedicated metadata labels", () => {
     profileId: null,
     targets: [],
     title: null,
-    toParent: false,
   });
   const listDisplay = getThreadCommandDisplay({
     command: "wb subagent list",

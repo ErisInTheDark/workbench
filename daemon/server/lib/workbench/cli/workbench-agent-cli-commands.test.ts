@@ -1047,6 +1047,23 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
   });
   assert.equal(create.request.responseKind, "subagent-create");
 
+  const globalMessage = await parseWorkbenchAgentCliCommand([
+    "message", "--thread", "review-target", "--message", "Please fix the cancellation race.",
+  ], options);
+  assert.equal(globalMessage.kind, "request");
+  assert.deepEqual(globalMessage.request, {
+    body: {
+      callerThreadId: "parent-thread",
+      cwd: "C:/workspace",
+      message: "Please fix the cancellation race.",
+      threadId: "review-target",
+      workbenchOrigin: "http://localhost:3000",
+    },
+    method: "POST",
+    path: "/api/message",
+    responseKind: "native",
+  });
+
   const message = await parseWorkbenchAgentCliCommand([
     "subagent", "message", "--id", "child-thread", "--message", "Continue safely.",
   ], options);
@@ -1077,6 +1094,9 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
   ], options)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand([
     "subagent", "message", "--message", "Missing target.",
+  ], options)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand([
+    "message", "--thread", "target", "--parent", "--message", "Ambiguous.",
   ], options)).kind, "error");
 
   const wait = await parseWorkbenchAgentCliCommand([

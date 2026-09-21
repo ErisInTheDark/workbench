@@ -6,7 +6,6 @@
 import { randomUUID } from "node:crypto";
 
 import type {
-  ThreadPayload,
   WorkbenchHarness,
   WorkbenchPendingUserInputRequest,
   WorkbenchSubagentRelationship,
@@ -17,7 +16,6 @@ import {
   type AgentEndpointProjectResolution,
 } from "./lib/workbench/project/agent-endpoint-project";
 import {
-  createEmptySubagentQuestionnaireResponse,
   renderSubagentQuestionnaireOutput,
   renderSubagentTurnOutput,
   renderSubagentWaitResultOutput,
@@ -41,7 +39,7 @@ const POLL_INTERVAL_MS = 1_000;
 const PARENT_AGENT_NAME = "parent agent";
 type WorkbenchSubagentControllerStore = Pick<
   WorkbenchSubagentStore,
-  "getOwned" | "getOwnedMany" | "list" | "remove" | "replace" | "reserve"
+  "getOwnedMany" | "list" | "remove" | "replace" | "reserve"
 >;
 
 export interface WorkbenchSubagentControllerOptions {
@@ -75,10 +73,6 @@ function requiredThreadIds(record: Record<string, unknown>) {
   if (!threadIds.length || threadIds.some((threadId) => !threadId)) throw new Error("threadIds are required.");
   if (new Set(threadIds).size !== threadIds.length) throw new Error("threadIds must be unique.");
   return threadIds;
-}
-
-function currentTurn(thread: ThreadPayload) {
-  return thread.turns.at(-1) ?? null;
 }
 
 function delay(ms: number, signal: AbortSignal) {
@@ -174,7 +168,6 @@ export default class WorkbenchSubagentController {
         case "workbench/subagent/create": return { id, result: await this.create(params) };
         case "workbench/subagent/wait": return { id, result: await this.wait(params) };
         case "workbench/subagent/waitCancel": return { id, result: this.cancelWait(params) };
-        case "workbench/subagent/message": return { id, result: await this.message(params) };
         case "workbench/subagent/stop": return { id, result: await this.stop(params) };
         case "workbench/subagent/settle": return { id, result: await this.settle(params) };
         default: throw new Error(`Unsupported Workbench subagent method: ${message.method ?? "unknown"}`);
@@ -335,29 +328,6 @@ export default class WorkbenchSubagentController {
     return result;
   }
 
-  private async ownedRecord(params: Record<string, unknown>) {
-    const callerThreadId = this.readThreadId(params, "callerThreadId");
-    const cwd = requiredString(params, "cwd");
-    const project = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
-    const requestedName = typeof params.threadName === "string" ? params.threadName.trim() : typeof params.name === "string" ? params.name.trim() : "";
-    let threadId = typeof params.threadId === "string" && params.threadId.trim() ? this.readThreadId(params, "threadId") : null;
-    if (!threadId && requestedName) {
-      const relationships = await this.subagentStore.list({ parentThreadId: callerThreadId, projectId: project.project.id });
-      const matches = relationships.subagents.filter((record) => record.name.trim().toLocaleLowerCase() === requestedName.toLocaleLowerCase());
-      const unsettled = [] as WorkbenchSubagentRelationship[];
-      for (const record of matches) {
-        const entry = await this.threadState?.getEntry(project.project.id, record.harness, record.threadId);
-        if (!entry || entry.entryKind !== "subagent" || !entry.lifecycle.settled) unsettled.push(record);
-      }
-      if (unsettled.length !== 1) throw new Error(unsettled.length ? "That subagent name is ambiguous." : "That unsettled subagent name was not found.");
-      threadId = unsettled[0]!.threadId;
-    }
-    if (!threadId) throw new Error("threadId or threadName is required.");
-    const record = await this.subagentStore.getOwned(callerThreadId, project.project.id, threadId);
-    if (!record) throw new Error("That subagent is not owned by the current thread.");
-    return { caller: { callerThreadId: record.parentThreadId, cwd, project: project.project }, record };
-  }
-
   private async ownedRecords(params: Record<string, unknown>) {
     const callerThreadId = this.readThreadId(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");
@@ -506,62 +476,6 @@ export default class WorkbenchSubagentController {
     const waiter = this.waiters.get(waitId);
     waiter?.abort(new Error("Subagent wait cancelled."));
     return { cancelled: Boolean(waiter) };
-  }
-
-  private async message(params: Record<string, unknown>) {
-    if (params.parent === true) {
-      return await this.messageParent(params);
-    }
-    const { caller, record } = await this.ownedRecord(params);
-    await this.assertUnlocked(record.projectId, [record]);
-    const message = requiredString(params, "message");
-    const provider = this.provider(record.harness);
-    const thread = await provider.threads.readLatest(record.threadId);
-    const turn = currentTurn(thread);
-    const pending = await this.pendingQuestionnaire(record);
-    const input = {
-      cwd: record.cwd, threadId: record.threadId,
-      message: { message, senderName: PARENT_AGENT_NAME, senderThreadId: caller.callerThreadId },
-    };
-    if (turn?.status === "inProgress") {
-      await provider.threads.messageAgent(input);
-      if (pending) await provider.interactions!.respond({
-        requestKey: pending.requestKey, response: createEmptySubagentQuestionnaireResponse(pending.request), threadId: record.threadId, turnId: pending.turnId,
-        insertAfterItemId: null, insertAfterItemIndex: null,
-      });
-      return {};
-    }
-    await provider.threads.messageAgent({
-      ...input,
-      context: this.buildPromptContext(record.name, typeof params.workbenchOrigin === "string" ? params.workbenchOrigin : undefined),
-    });
-    return {};
-  }
-
-  private async messageParent(params: Record<string, unknown>) {
-    const callerThreadId = this.readThreadId(params, "callerThreadId");
-    const cwd = requiredString(params, "cwd");
-    const requestedProject = await this.resolveProjectFromCwd(cwd, { endpointName: "Workbench subagent" });
-    const relationships = await this.subagentStore.list({ projectId: requestedProject.project.id });
-    const relationship = relationships.subagents.find(({ threadId }) => threadId === callerThreadId) ?? null;
-    if (!relationship) {
-      throw new Error("The current thread is not a Workbench subagent with a direct parent in this project.");
-    }
-    const caller = await this.resolveCaller(params, { knownHarness: relationship.harness, requestedProject });
-    const parent = await this.resolveThreadHarness(
-      relationship.parentThreadId,
-      relationship.cwd,
-      caller.project,
-      "Workbench subagent parent",
-    );
-    await this.provider(parent.harness).threads.messageAgent({
-      cwd: parent.thread.cwd, threadId: parent.thread.id,
-      message: {
-        message: requiredString(params, "message"), senderName: relationship.name,
-        senderThreadId: relationship.threadId,
-      },
-    });
-    return {};
   }
 
   private async stop(params: Record<string, unknown>) {

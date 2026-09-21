@@ -8,7 +8,7 @@ test("installed managed capabilities do not depend on a native identity or calle
   for (const subagentName of [null, "Akari"]) {
     const promptContext = { managedThread: true, threadId: null, subagentName };
     const available = await listWorkbenchInstructionMechanics(promptContext);
-    for (const mechanic of ["browse", "long-waits", "subagents", "task-status", "thread-git", "thread-recall", "thread-refresh"]) {
+    for (const mechanic of ["browse", "long-waits", "messages", "subagents", "task-status", "thread-git", "thread-recall", "thread-refresh"]) {
       assert.equal(available.has(mechanic), true, mechanic);
     }
     assert.equal(available.has("task-title"), subagentName === null);

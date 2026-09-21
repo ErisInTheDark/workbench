@@ -145,17 +145,6 @@ class FakeProvider {
   };
 }
 
-function createPreReloadStoreSurface(store: WorkbenchSubagentStore) {
-  return {
-    getOwned: store.getOwned.bind(store),
-    getOwnedMany: store.getOwnedMany.bind(store),
-    list: store.list.bind(store),
-    remove: store.remove.bind(store),
-    replace: store.replace.bind(store),
-    reserve: store.reserve.bind(store),
-  };
-}
-
 function profile(): WorkbenchComposerProfile {
   return {
     agentPath: null,
@@ -194,7 +183,7 @@ function createProjectResolver(expectedCwd: string) {
   };
 }
 
-test("creates with the selected profile and delivers agent information before empty questionnaire resolution", async (context) => {
+test("creates with the selected profile and delivers attributed initial input", async (context) => {
   const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
@@ -245,22 +234,6 @@ test("creates with the selected profile and delivers agent information before em
   });
   assert.equal((listedAfterCreate.result as WorkbenchSubagentPage).subagents[0]?.activityStatus, "unknown");
 
-  const previousCalls = provider.calls.length;
-  const messaged = await controller.handleRequest({
-    id: 5,
-    method: "workbench/subagent/message",
-    params: { callerThreadId, cwd, message: "Take the safer route.", threadId: childThreadId },
-  });
-  assert.deepEqual(messaged, { id: 5, result: {} });
-  const lifecycleCalls = provider.calls.slice(previousCalls).filter(({ method }) => method === "messageAgent" || method === "respond");
-  assert.deepEqual(lifecycleCalls.map(({ method }) => method), ["messageAgent", "respond"]);
-  assert.deepEqual(incomingAgentMessage(lifecycleCalls[0]), {
-    message: "Take the safer route.",
-    senderName: "parent agent",
-    senderThreadId: callerThreadId,
-  });
-  assert.deepEqual(lifecycleCalls[1].params.response, { answers: { direction: { answers: [] } } });
-
   const stopped = await controller.handleRequest({
     id: 6,
     method: "workbench/subagent/stop",
@@ -291,126 +264,7 @@ test("creates with the selected profile and delivers agent information before em
   assert.equal(provider.calls.filter(({ method }) => method === "create").length, 1);
 });
 
-test("starts an idle direct parent through the pre-reload store surface", async (context) => {
-  const fixture = subagentFixture();
-  const { storageRoot, profileStore } = await profileFixture(context);
-  const cwd = process.cwd();
-  const provider = new FakeProvider(cwd);
-  const subagentStore = new WorkbenchSubagentStore(fixture.database);
-  const controller = new WorkbenchSubagentController({
-    identities: fixture.identities,
-    publicThreadId: fixture.publicThreadId,
-    provider: () => provider,
-    onRelationshipCommitted: async () => undefined,
-    resolveProjectFromCwd: createProjectResolver(cwd),
-    profileStore,
-    subagentStore: createPreReloadStoreSurface(subagentStore),
-  });
-
-  await controller.mutateProfile({ kind: "upsert", profile: profile() });
-  assert.deepEqual(await controller.handleRequest({
-    id: 2,
-    method: "workbench/subagent/create",
-    params: { callerThreadId, cwd, message: "Inspect the code.", name: "Mimi", profileId: profile().id, title: "Inspect code" },
-  }), { id: 2, result: { threadId: childThreadId } });
-
-  assert.deepEqual(await controller.handleRequest({
-    id: 3,
-    method: "workbench/subagent/message",
-    params: { callerThreadId: childThreadId, cwd, message: "The safe route is ready.", parent: true },
-  }), { id: 3, result: {} });
-  const parentTurnStart = provider.calls.find(({ method, params }) => method === "messageAgent" && params.threadId === callerThreadId);
-  assert(parentTurnStart);
-  assert.deepEqual(incomingAgentMessage(parentTurnStart), {
-    message: "The safe route is ready.",
-    senderName: "Mimi",
-    senderThreadId: childThreadId,
-  });
-  assert.equal(provider.calls.some(({ method }) => method === "respond"), false);
-});
-
-test("starts an idle child with attributed input after its stored definition is deleted", async (context) => {
-  const fixture = subagentFixture();
-  const { storageRoot, profileStore } = await profileFixture(context);
-  const cwd = process.cwd();
-  const provider = new FakeProvider(cwd, false, "completed", "completed");
-  const controller = new WorkbenchSubagentController({
-    identities: fixture.identities,
-    publicThreadId: fixture.publicThreadId,
-    provider: () => provider,
-    onRelationshipCommitted: async () => undefined,
-    resolveProjectFromCwd: createProjectResolver(cwd),
-    profileStore,
-    subagentStore: new WorkbenchSubagentStore(fixture.database),
-  });
-
-  await controller.mutateProfile({ kind: "upsert", profile: profile() });
-  assert.deepEqual(await controller.handleRequest({
-    id: 2,
-    method: "workbench/subagent/create",
-    params: { callerThreadId, cwd, message: "Inspect the code.", name: "Mimi", profileId: profile().id, title: "Inspect code" },
-  }), { id: 2, result: { threadId: childThreadId } });
-
-  await controller.mutateProfile({ kind: "delete", profileId: profile().id });
-  assert.deepEqual(await controller.handleRequest({
-    id: 3,
-    method: "workbench/subagent/message",
-    params: { callerThreadId, cwd, message: "Continue with the safe route.", threadId: childThreadId },
-  }), { id: 3, result: {} });
-  const childTurnStart = provider.calls.findLast(({ method, params }) => method === "messageAgent" && params.threadId === childThreadId);
-  assert(childTurnStart);
-  assert.deepEqual(incomingAgentMessage(childTurnStart), {
-    message: "Continue with the safe route.",
-    senderName: "parent agent",
-    senderThreadId: callerThreadId,
-  });
-});
-
-test("delivers information to an active direct parent and rejects callers without a relationship", async (context) => {
-  const fixture = subagentFixture();
-  const { storageRoot, profileStore } = await profileFixture(context);
-  const cwd = process.cwd();
-  const provider = new FakeProvider(cwd, false, "inProgress");
-  const controller = new WorkbenchSubagentController({
-    identities: fixture.identities,
-    publicThreadId: fixture.publicThreadId,
-    provider: () => provider,
-    onRelationshipCommitted: async () => undefined,
-    resolveProjectFromCwd: createProjectResolver(cwd),
-    profileStore,
-    subagentStore: new WorkbenchSubagentStore(fixture.database),
-  });
-
-  await controller.mutateProfile({ kind: "upsert", profile: profile() });
-  assert.deepEqual(await controller.handleRequest({
-    id: 2,
-    method: "workbench/subagent/create",
-    params: { callerThreadId, cwd, message: "Inspect the code.", name: "Mimi", profileId: profile().id, title: "Inspect code" },
-  }), { id: 2, result: { threadId: childThreadId } });
-
-  assert.deepEqual(await controller.handleRequest({
-    id: 3,
-    method: "workbench/subagent/message",
-    params: { callerThreadId: childThreadId, cwd, message: "Active parent note.", parent: true },
-  }), { id: 3, result: {} });
-  const parentOutput = provider.calls.find(({ method, params }) => method === "messageAgent" && params.threadId === callerThreadId);
-  assert(parentOutput);
-  assert.deepEqual(incomingAgentMessage(parentOutput), {
-    message: "Active parent note.",
-    senderName: "Mimi",
-    senderThreadId: childThreadId,
-  });
-  assert.equal(provider.calls.some(({ method }) => method === "respond"), false);
-
-  const denied = await controller.handleRequest({
-    id: 4,
-    method: "workbench/subagent/message",
-    params: { callerThreadId: "unrelated-thread", cwd, message: "Spoofed note.", parent: true },
-  });
-  assert.match(denied.error?.message ?? "", /not a Workbench subagent with a direct parent/u);
-});
-
-test("keeps relationship storage independent from lifecycle through create, message, and stop", async (context) => {
+test("keeps relationship storage independent from lifecycle through create and stop", async (context) => {
   const fixture = subagentFixture();
   const { storageRoot, profileStore } = await profileFixture(context);
   const cwd = process.cwd();
@@ -440,16 +294,11 @@ test("keeps relationship storage independent from lifecycle through create, mess
 
   assert.deepEqual(await controller.handleRequest({
     id: 4,
-    method: "workbench/subagent/message",
-    params: { callerThreadId, cwd, message: "Take the safer route.", threadId: childThreadId },
-  }), { id: 4, result: {} });
-  assert.deepEqual(await controller.handleRequest({
-    id: 5,
     method: "workbench/subagent/stop",
     params: { callerThreadId, cwd, threadId: childThreadId },
-  }), { id: 5, result: {} });
+  }), { id: 4, result: {} });
   const listedAfterStop = await controller.handleRequest({
-    id: 6,
+    id: 5,
     method: "workbench/subagent/list",
     params: { cwd, limit: 20, parentThreadId: callerThreadId },
   });

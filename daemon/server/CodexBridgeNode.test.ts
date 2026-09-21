@@ -97,6 +97,63 @@ test("canonical history does not initialise the native bridge", async (t) => {
   assert.deepEqual(failures, []);
 });
 
+test("legacy Codex subagent messages use the reloadable message owner", async () => {
+  const routed: string[] = [];
+  const parent = {
+    appServer: { send() {} },
+    deactivateBridge() {},
+  };
+  const registrations = {
+    codexAppServer: parent,
+    messages: {
+      send: async () => { routed.push("messages"); },
+    },
+    projectCatalog: {
+      resolveAgentEndpointProjectFromCwd: async () => ({
+        cwd: "C:/repo",
+        project: { id: testProjectIds.project },
+        root: { rootPath: "C:/repo" },
+      }),
+    },
+    subagents: {
+      handleRequest: async (request: JsonRpcRequest) => {
+        routed.push("subagents");
+        return { id: request.id ?? null, result: {} };
+      },
+    },
+    toolRevision: { revision: "catalogue" },
+  } as unknown as DaemonRuntimeObjects;
+  const instance = CodexBridgeNode.create({
+    isShuttingDown: () => false,
+    isHardReloadPending: () => false,
+    broadcastProviderNotification() {},
+  } as unknown as DaemonProcessContext, {
+    get: key => registrations[key],
+    run: async (key, operation) => await operation(registrations[key]),
+    getSourceState: () => { throw new Error("unexpected source read"); },
+    handoffState: undefined, isReplacing: () => false, lease: { isCurrent: () => true }, mode: "initial",
+  });
+  const bridge = instance.registrations.codexBridge!;
+  try {
+    const message = await bridge.handleBridgeRequest({
+      id: 1,
+      method: "workbench/subagent/message",
+      params: { callerThreadId: "reviewer", cwd: "C:/repo", message: "review feedback", threadId: "target" },
+    });
+    const list = await bridge.handleBridgeRequest({
+      id: 2,
+      method: "workbench/subagent/list",
+      params: { callerThreadId: "reviewer", cwd: "C:/repo" },
+    });
+    assert.equal(message?.error, undefined);
+    assert.equal(list?.error, undefined);
+    assert.deepEqual(routed, ["messages", "subagents"]);
+  } finally {
+    await instance.dispose();
+    await bridge.disposeImmediately();
+  }
+});
+
 test("managed steering interrupts only the mapped WB thread wait before returning", async () => {
   const fixture = createThreadStateTestDatabase();
   fixture.admitThread(testProjectIds.project, "saved-thread", "codex", "native-thread", "C:/repo");

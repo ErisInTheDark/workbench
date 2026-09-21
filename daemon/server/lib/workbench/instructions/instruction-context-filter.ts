@@ -48,6 +48,7 @@ const KNOWN_AVAILABLE_VALUES = new Set([
   "browse",
   "browse-raw",
   "long-waits",
+  "messages",
   "multi-root",
   "subagents",
   "thread-git",

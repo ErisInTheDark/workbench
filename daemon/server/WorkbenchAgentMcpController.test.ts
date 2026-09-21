@@ -356,6 +356,8 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(inventory.tools.some(({ name }) => name === "tokens"), true);
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_project"), true);
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_instructions"), false);
+    assert.equal(inventory.tools.some(({ name }) => name === "message"), true);
+    assert.equal(inventory.tools.some(({ name }) => name === "subagent_message"), true);
     assert.equal((await projectClient.listTools()).tools.some(({ name }) => name === "tokens_instructions"), true);
     assert.equal(inventory.tools.some(({ name }) => name.startsWith("transcript_")), false);
     assert.equal((await projectClient.listTools()).tools.some(({ name }) => name.startsWith("transcript_")), false);

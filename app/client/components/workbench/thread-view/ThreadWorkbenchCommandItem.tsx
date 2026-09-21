@@ -31,10 +31,10 @@ import {
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
+import ThreadAgentMessageItem from "./ThreadAgentMessageItem";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadStatusCommandItem from "./ThreadStatusCommandItem";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
-import ThreadSubagentMessageItem from "./ThreadSubagentMessageItem";
 import ThreadSubagentTargetActionItem from "./ThreadSubagentTargetActionItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
 import ThreadTitleCommandItem from "./ThreadTitleCommandItem";
@@ -216,6 +216,34 @@ export default function ThreadWorkbenchCommandItem({
       />
     );
   }
+  if (operation.kind === "message") {
+    const messageCommand = operation.operation;
+    if (!messageCommand.message || outcome === "failed") return null;
+    const target = messageCommand.target;
+    const resolved = target.kind === "parent" || !target.value
+      ? null
+      : resolveWorkbenchSubagentCommandTargets(subagents, [{
+        kind: target.kind === "name" ? "name" : "id",
+        value: target.value,
+      }])[0] ?? null;
+    return (
+      <ThreadAgentMessageItem
+        fallbackName={target.kind === "parent" ? "parent" : resolved?.fallbackName ?? target.value}
+        subagent={resolved?.subagent}
+        thread={resolved?.threadId ? relatedThreadsById[resolved.threadId] : undefined}
+      >
+        <ThreadMarkdown
+          inlineMentionSources={inlineMentionSources}
+          markdown={messageCommand.message}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          threadCwdPath={threadCwdPath}
+          workspaceRoots={workspaceRoots}
+        />
+      </ThreadAgentMessageItem>
+    );
+  }
   if (operation.kind !== "subagent") return null;
   const subagentCommand = operation.operation;
   const targets = resolveWorkbenchSubagentCommandTargets(subagents, subagentCommand.targets);
@@ -250,37 +278,6 @@ export default function ThreadWorkbenchCommandItem({
           workspaceRoots={workspaceRoots}
         />
       </ThreadSubagentCreateItem>
-    );
-  }
-  if (subagentCommand.action === "message" && subagentCommand.toParent && subagentCommand.message && outcome !== "failed") {
-    return (
-      <ThreadSubagentMessageItem fallbackName="parent">
-        <ThreadMarkdown
-          inlineMentionSources={inlineMentionSources}
-          markdown={subagentCommand.message}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          threadCwdPath={threadCwdPath}
-          workspaceRoots={workspaceRoots}
-        />
-      </ThreadSubagentMessageItem>
-    );
-  }
-  if (subagentCommand.action === "message" && targets.length === 1 && subagentCommand.message && outcome !== "failed") {
-    const target = targets[0]!;
-    return (
-      <ThreadSubagentMessageItem fallbackName={target.fallbackName} subagent={target.subagent} thread={target.threadId ? relatedThreadsById[target.threadId] : undefined}>
-        <ThreadMarkdown
-          inlineMentionSources={inlineMentionSources}
-          markdown={subagentCommand.message}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          threadCwdPath={threadCwdPath}
-          workspaceRoots={workspaceRoots}
-        />
-      </ThreadSubagentMessageItem>
     );
   }
   if ((subagentCommand.action === "settle" || subagentCommand.action === "stop") && targets.length && outcome !== "failed") {

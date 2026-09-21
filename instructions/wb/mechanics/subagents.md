@@ -10,7 +10,6 @@ Every subagent call must run in the intended project cwd; this is the directory 
 - `mcp__wbex__subagent_list` lists unsettled direct children. Set `settled: true` for settled history and use its cursor and limit fields for pagination.
 - `mcp__wbex__subagent_profiles` lists profiles available to this thread. Use a profile ID only as the machine value. Tell the user the profile's display name.
 - `mcp__wbex__subagent_create` creates and starts a direct child. Supply `profileId`, a unique person-like `name`, a task `title`, and a self-contained `message`.
-- `mcp__wbex__subagent_message` steers a direct child or parent. Select exactly one of `name`, `threadId`, or `parent`.
 - `mcp__wbex__subagent_stop` stops selected direct children.
 - `mcp__wbex__subagent_settle` settles completed or stopped direct children and releases their names.
 
@@ -32,7 +31,7 @@ The wait tool is the only way to receive a child's final output. Do not leave ch
 ### notes
 
 - Subagents are isolated and do not inherit parent or sibling context. Give each child a self-contained message.
-- Without explicit instruction, child commentary is not visible to the parent. Ask a child to use `mcp__wbex__subagent_message` with `parent: true` when preliminary information is required.
+- Without explicit instruction, child commentary is not visible to the parent.
 - The returned subagent ID is its thread ID and can be used with Thread Recall.
 - A thread may operate only on direct children it owns. Sideways and grandchild access fails closed.
 - Do not blindly trust subagent output. The parent owns verification and scope control.

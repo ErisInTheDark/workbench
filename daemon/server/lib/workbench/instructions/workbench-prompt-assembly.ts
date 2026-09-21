@@ -328,6 +328,7 @@ export async function buildWorkbenchThreadUtilityDeveloperInstructions(
     "browse",
     "git",
     "long-waits",
+    "messages",
     "subagents",
     "thread-recall",
     "thread-refresh",

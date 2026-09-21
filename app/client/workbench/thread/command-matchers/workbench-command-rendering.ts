@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchGitArcOperation: Git operation intent and scope deltas.
+ * - WorkbenchMessageOperation: global thread-message intent.
  * - WorkbenchSubagentOperation: subagent operation intent.
  * - WorkbenchCommandRendering: shared renderer result.
  * - isWorkbenchCommandPresentationName: recognise supported presentation names.
@@ -35,6 +36,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "tokens_instructions",
   "tokens_project",
   "request_user_input",
+  "message",
   "subagent_list",
   "subagent_profiles",
   "subagent_create",
@@ -100,18 +102,23 @@ export type WorkbenchGitArcOperation = {
 };
 
 export interface WorkbenchSubagentOperation {
-  action: "create" | "message" | "settle" | "stop" | "wait";
+  action: "create" | "settle" | "stop" | "wait";
   message: string | null;
   name: string | null;
   profileId: string | null;
   targets: Array<{ kind: "id" | "name"; value: string }>;
   title: string | null;
-  toParent: boolean;
+}
+
+export interface WorkbenchMessageOperation {
+  message: string | null;
+  target: { kind: "name" | "parent" | "thread"; value: string | null };
 }
 
 export type WorkbenchSpecializedOperation =
   | { kind: "gitArc"; operation: WorkbenchGitArcOperation }
   | { kind: "gitArcWait"; ref: string | null }
+  | { kind: "message"; operation: WorkbenchMessageOperation }
   | { kind: "subagent"; operation: WorkbenchSubagentOperation }
   | { kind: "threadRecall"; operation: WorkbenchThreadRecallOperation }
   | { kind: "threadStatus"; status: "blocked" | "completed" }
@@ -471,7 +478,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
 }
 
 function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: string]: JsonValue | undefined }): WorkbenchCommandRoute {
-  const action = name.slice("subagent_".length) as "create" | "list" | "message" | "profiles" | "settle" | "stop" | "wait";
+  const action = name.slice("subagent_".length) as "create" | "list" | "profiles" | "settle" | "stop" | "wait";
   const names = readStringArray(args.names);
   const threadIds = readStringArray(args.threadIds);
   const singleName = readString(args.name);
@@ -482,13 +489,11 @@ function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: st
     ...(singleName ? [{ kind: "name" as const, value: singleName }] : []),
     ...(singleThreadId ? [{ kind: "id" as const, value: singleThreadId }] : []),
   ];
-  const toParent = readBoolean(args.parent);
   if (
     action === "create"
     || action === "wait"
     || action === "stop"
     || action === "settle"
-    || (action === "message" && (targets.length || toParent))
   ) {
     return specialized("workbench-cli.subagent", {
       kind: "subagent",
@@ -499,18 +504,33 @@ function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: st
         profileId: readString(args.profileId),
         targets,
         title: readString(args.title),
-        toParent,
       },
     });
   }
-  const target = action === "list" ? "subagents"
-    : action === "message" ? "subagent"
-      : "subagent profiles";
+  const target = action === "list" ? "subagents" : "subagent profiles";
   return simple(
     "workbench-cli.subagent",
-    actionTarget(action === "message" ? "Messaging " : "Listing ", target),
-    actionTarget(action === "message" ? "Messaged " : "Listed ", target),
+    actionTarget("Listing ", target),
+    actionTarget("Listed ", target),
   );
+}
+
+function renderMessage(args: { [key: string]: JsonValue | undefined }): WorkbenchCommandRoute {
+  const name = readString(args.name);
+  const threadId = readString(args.threadId);
+  const parent = readBoolean(args.parent);
+  const target = parent
+    ? { kind: "parent" as const, value: null }
+    : name
+      ? { kind: "name" as const, value: name }
+      : { kind: "thread" as const, value: threadId };
+  if (!target.value && target.kind !== "parent") {
+    return simple("workbench-cli.message", "Messaging thread", "Messaged thread");
+  }
+  return specialized("workbench-cli.message", {
+    kind: "message",
+    operation: { message: readString(args.message), target },
+  });
 }
 
 export function getWorkbenchCommandRoute(
@@ -521,6 +541,7 @@ export function getWorkbenchCommandRoute(
   const args = asRecord(argumentsValue) ?? {};
   const gitArc = renderGitArc(name, args);
   if (gitArc) return gitArc;
+  if (name === "message" || name === "subagent_message") return renderMessage(args);
   if (name.startsWith("subagent_")) return renderSubagent(name, args);
   if (name.startsWith("browse_")) return renderBrowse(name, args);
   switch (name) {

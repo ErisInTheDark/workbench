@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadSubagentMessageItem: render a sent subagent steer as a relationship disclosure with a left-aligned user-style bubble. Keywords: workbench, thread, subagent, message, steer, user bubble.
+ * - default ThreadAgentMessageItem: render a sent cross-thread message as a relationship disclosure with a left-aligned user-style bubble.
  */
 "use client";
 
@@ -12,7 +12,7 @@ import ThreadAgentName from "./ThreadAgentName";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadSubagentUserMessage from "./ThreadSubagentUserMessage";
 
-export default function ThreadSubagentMessageItem ({
+export default function ThreadAgentMessageItem ({
   children,
   fallbackName,
   subagent,
