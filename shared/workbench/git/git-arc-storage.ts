@@ -33,6 +33,7 @@ export interface CheckpointMetadata {
   intentName?: string;
   priorProposalId?: string;
   registryLifecycle?: true;
+  restoredFromStash?: true;
   scopePaths: string[];
   version: 1 | 2 | 3;
 }

@@ -367,6 +367,12 @@ checkpointTest("clean release resolves its lifecycle and releases every claim", 
 checkpointTest("stash releases claims and conflict-safe unstash restores editable work without Git operation state", 9, async (bundle) => {
   const { root: repoRoot, state } = branchFixture(bundle, "stash");
   await write(repoRoot, "selected.txt", "stashed line\n");
+  const proposal = await controller.createProposal({
+    cwd: repoRoot,
+    description: "",
+    threadId: state.threadId,
+    title: "preserve stashed proposal",
+  });
 
   const stashed = await controller.stashArc({ cwd: repoRoot, threadId: state.threadId });
   assert.equal(stashed.phase, "stashed");
@@ -397,15 +403,37 @@ checkpointTest("stash releases claims and conflict-safe unstash restores editabl
   await write(repoRoot, "selected.txt", "current line\n");
   await git(repoRoot, ["add", "--", "selected.txt"]);
   await git(repoRoot, ["commit", "-m", "change selected while stashed"]);
+  const restoreHead = (await git(repoRoot, ["rev-parse", "HEAD"])).trim();
   const unstashed = await controller.unstashArc({ cwd: repoRoot, threadId: state.threadId });
 
   assert.equal(unstashed.phase, "active");
+  assert.notEqual(unstashed.checkpointCommit, stashed.checkpointCommit);
+  assert.equal((await git(repoRoot, ["rev-parse", `${unstashed.checkpointCommit}^`])).trim(), restoreHead);
   assert.deepEqual(unstashed.conflictedPaths, ["selected.txt"]);
   assert.match(await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8"), /<<<<<<<|=======|>>>>>>>/u);
   assert.equal((await git(repoRoot, ["write-tree"])).trim(), (await git(repoRoot, ["rev-parse", "HEAD^{tree}"])).trim());
   assert.equal(await git(repoRoot, ["ls-files", "--unmerged"]), "");
   await assert.rejects(git(repoRoot, ["rev-parse", "--verify", "MERGE_HEAD"]));
-  assert.equal((await controller.findLifecycleState({ cwd: repoRoot, threadId: state.threadId }))?.phase, "active");
+  const comparison = await controller.compare({ cwd: repoRoot, threadId: state.threadId });
+  assert.equal(comparison.changes.length, 1);
+  assert.match(comparison.changes[0]!.diff, /^ current line$/mu);
+  assert.doesNotMatch(comparison.changes[0]!.diff, /^-selected checkpoint$/mu);
+  const diff = await controller.diff({ cwd: repoRoot, threadId: state.threadId });
+  assert.match(diff.diff, /^ current line$/mu);
+  assert.doesNotMatch(diff.diff, /^-selected checkpoint$/mu);
+  const status = await controller.readStatus({ cwd: repoRoot, threadId: state.threadId });
+  assert.deepEqual(status.recovery.map(evidence => ({
+    commits: evidence.commits.map(commit => commit.subject),
+    kind: evidence.kind,
+    paths: evidence.paths,
+  })), [{
+    commits: ["change selected to binary while stashed", "change selected while stashed"],
+    kind: "restored",
+    paths: ["selected.txt"],
+  }]);
+  const lifecycle = await controller.findLifecycleState({ cwd: repoRoot, threadId: state.threadId });
+  assert.ok(lifecycle?.proposals.some(candidate => candidate.proposalId === proposal.proposalId));
+  assert.equal(lifecycle?.phase, "active");
   assert.equal(await controller.hasLiveClaimsAtRepoRoot({ cwd: repoRoot, threadId: state.threadId }), true);
 });
 

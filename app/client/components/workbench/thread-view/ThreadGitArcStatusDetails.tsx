@@ -53,15 +53,20 @@ export default function ThreadGitArcStatusDetails ({ output, projectFilePaths, p
       {group("Dirty claims", status.dirtyClaims, "dirty")}
       {group("Clean claims", status.cleanClaims, "clean")}
       {group("Unclaimed dirt", status.unclaimedDirt, "unclaimed")}
-      {status.recovery.map((lost, index) => (
+      {status.recovery.map((evidence, index) => (
         <section key={index}>
-          {group("Lost claims", lost.paths, "unclaimed")}
-          {lost.headMovement === "incompatible" ? <p className="text-danger">HEAD moved incompatibly since claim loss.</p> : null}
-          {lost.commits.length ? <ThreadGitArcCommitList commits={lost.commits.map(commit => ({ ...commit, paths: commit.changedPaths }))} {...context} /> : null}
-          {lost.omittedCommits ? <p className="text-fg/muted">{lost.omittedCommits} more intersecting commits</p> : null}
-          {lost.comparison.length ? <ThreadCheckpointCompareItem changes={lost.comparison.map(change => ({
+          {group(evidence.kind === "restored" ? "Restored claims" : "Lost claims", evidence.paths, "unclaimed")}
+          {evidence.headMovement === "incompatible" ? (
+            <p className="text-danger">HEAD moved incompatibly {evidence.kind === "restored" ? "before restore" : "since claim loss"}.</p>
+          ) : null}
+          {evidence.commits.length ? <ThreadGitArcCommitList commits={evidence.commits.map(commit => ({ ...commit, paths: commit.changedPaths }))} {...context} /> : null}
+          {evidence.omittedCommits ? <p className="text-fg/muted">{evidence.omittedCommits} more intersecting commits</p> : null}
+          {evidence.comparison.length ? <ThreadCheckpointCompareItem changes={evidence.comparison.map(change => ({
             ...change, status: change.kind === "add" ? "A" : change.kind === "delete" ? "D" : "U",
           }))} {...context} /> : null}
+          {evidence.kind === "restored" ? (
+            <p className="text-fg/muted">Arc restored: checkpoint rebased to current HEAD; inspect the restored diff and resolve any conflict markers before continuing.</p>
+          ) : null}
         </section>
       ))}
       {status.unavailableRecovery.length ? <p className="text-fg/muted">Claim-loss baseline unavailable for {status.unavailableRecovery.join(", ")}.</p> : null}

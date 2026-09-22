@@ -54,6 +54,19 @@ test("clean claim loss keeps paths without empty comparison noise", () => {
   assert.doesNotMatch(html, /No changes since claim loss|Status output could not be read/u);
 });
 
+test("restored status renders intersecting commits and rebaseline guidance", () => {
+  const output = [
+    "Restored claims: restored-evidence.ts",
+    `Intersecting commits before restore: ${"a".repeat(40)} interim-evidence`,
+    "Arc restored: checkpoint rebased to current HEAD; inspect the restored diff and resolve any conflict markers before continuing.",
+  ].join("\n");
+  const html = renderSpecialized(makeItem("git_arc_status", {}, output));
+  assert.match(html, /restored-evidence\.ts/u);
+  assert.match(html, /interim-evidence/u);
+  assert.match(html, /checkpoint rebased to current HEAD/u);
+  assert.doesNotMatch(html, /Status output could not be read/u);
+});
+
 test("compact claim updates show actual changes rather than attempted or unchanged paths", () => {
   for (const tool of ["git_arc_claims", "git_plan_claims", "git_plan_start"]) {
     const action = tool === "git_arc_claims" ? "claims" : tool === "git_plan_claims" ? "plan" : "start";

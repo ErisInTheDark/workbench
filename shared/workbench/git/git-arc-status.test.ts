@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatGitArcStatus, parseGitArcStatus, type GitArcStatus } from "./git-arc-status";
+import { formatGitArcStatus, GitArcStatusSchema, parseGitArcStatus, type GitArcStatus } from "./git-arc-status";
 
 const empty: GitArcStatus = {
   pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
@@ -30,6 +30,7 @@ test("status round-trips proposal identities and recovery counts without section
     pending: [{ proposalId: "pending", title: "commas, quotes \" and\nDirty claims: fake" }],
     accepted: [{ proposalId: "accepted", title: "words as words", commitSha: "a".repeat(40) }],
     recovery: [{
+      kind: "lost",
       paths: ["comma, file"], headMovement: "incompatible", commits: [{
         commit: "b".repeat(40), subject: "comma, subject", changedPaths: [],
       }], omittedCommits: 2,
@@ -48,6 +49,7 @@ test("clean claim loss omits empty comparison noise", () => {
   const input: GitArcStatus = {
     ...empty,
     recovery: [{
+      kind: "lost",
       paths: ["one.ts"], headMovement: "same", commits: [], comparison: [], omittedCommits: 0,
     }],
   };
@@ -70,4 +72,28 @@ test("stashed claims round trip with the user-alignment warning", () => {
     "Arc stashed: only continue working or unstash when you and the user are on the same page about resuming this work.",
   ].join("\n"));
   assert.deepEqual(parseGitArcStatus(output).data, input);
+});
+
+test("restored claims round trip with rebaseline evidence and guidance", () => {
+  const output = [
+    "Restored claims: src/a.ts",
+    `Intersecting commits before restore: ${"a".repeat(40)} "change, while stashed"`,
+    "Changes after restore:",
+    "comparison 1",
+    "U\t+4\t-1\tsrc/a.ts",
+    "total +4 -1 (5 changed lines)",
+    "Arc restored: checkpoint rebased to current HEAD; inspect the restored diff and resolve any conflict markers before continuing.",
+  ].join("\n");
+  const parsed = parseGitArcStatus(output);
+  assert.ok(parsed.success);
+  assert.deepEqual(parsed.data.recovery, [{
+    paths: ["src/a.ts"],
+    headMovement: "fast-forward",
+    commits: [{ commit: "a".repeat(40), subject: "change, while stashed", changedPaths: [] }],
+    comparison: [{ path: "src/a.ts", additions: 4, deletions: 1, kind: "update", binary: false }],
+    omittedCommits: 0,
+    kind: "restored",
+  }]);
+  assert.equal(formatGitArcStatus(GitArcStatusSchema.parse(parsed.data)), output);
+  assert.equal(parseGitArcStatus("Restored claims: src/a.ts").success, false);
 });

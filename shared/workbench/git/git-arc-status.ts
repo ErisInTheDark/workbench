@@ -27,6 +27,7 @@ const comparison = z.array(z.object({
   binary: z.boolean(), kind: z.enum(["add", "delete", "update"]),
 }).strict());
 const recovery = z.object({
+  kind: z.enum(["lost", "restored"]).default("lost"),
   paths: filePaths,
   headMovement: z.enum(["same", "fast-forward", "incompatible"]),
   commits: z.array(z.object({ commit: sha, subject: z.string(), changedPaths: filePaths }).strict()),
@@ -105,16 +106,24 @@ export function formatGitArcStatus(input: GitArcStatus, full: readonly GitArcSta
     lines.push(`Stashed claims: ${summarize(status.stashedClaims)}`);
     lines.push("Arc stashed: only continue working or unstash when you and the user are on the same page about resuming this work.");
   }
-  for (const lost of status.recovery) {
-    lines.push(`Lost claims: ${summarize(lost.paths)}`);
-    if (lost.headMovement === "incompatible") lines.push("HEAD since claim loss: incompatible");
-    if (lost.commits.length) {
-      lines.push(`Intersecting commits: ${lost.commits.map(c => `${c.commit} ${quote(c.subject)}`).join(", ")}`);
+  for (const evidence of status.recovery) {
+    const restored = evidence.kind === "restored";
+    lines.push(`${restored ? "Restored" : "Lost"} claims: ${summarize(evidence.paths)}`);
+    if (evidence.headMovement === "incompatible") {
+      lines.push(`${restored ? "HEAD before restore" : "HEAD since claim loss"}: incompatible`);
     }
-    if (lost.omittedCommits) lines.push(`More intersecting commits: ${lost.omittedCommits}`);
-    if (lost.comparison.length) {
-      lines.push("Changes since claim loss:");
-      lines.push(...formatGitArcDriftComparison(lost.comparison));
+    if (evidence.commits.length) {
+      lines.push(`${restored ? "Intersecting commits before restore" : "Intersecting commits"}: ${evidence.commits.map(c => `${c.commit} ${quote(c.subject)}`).join(", ")}`);
+    }
+    if (evidence.omittedCommits) {
+      lines.push(`${restored ? "More intersecting commits before restore" : "More intersecting commits"}: ${evidence.omittedCommits}`);
+    }
+    if (evidence.comparison.length) {
+      lines.push(`${restored ? "Changes after restore" : "Changes since claim loss"}:`);
+      lines.push(...formatGitArcDriftComparison(evidence.comparison));
+    }
+    if (restored) {
+      lines.push("Arc restored: checkpoint rebased to current HEAD; inspect the restored diff and resolve any conflict markers before continuing.");
     }
   }
   if (status.unavailableRecovery.length) lines.push(`Claim-loss baseline unavailable: ${status.unavailableRecovery.map(quote).join(", ")}`);
@@ -126,7 +135,7 @@ export function parseGitArcStatus(output: string) {
     const result: GitArcStatusPresentation = {
       pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
     };
-    let lost: GitArcStatusPresentation["recovery"][number] | undefined;
+    let evidence: GitArcStatusPresentation["recovery"][number] | undefined;
     const lines = output.trim() ? output.trim().split(/\r?\n/u) : [];
     const seen = new Set<string>();
     for (let index = 0; index < lines.length; index++) {
@@ -134,9 +143,13 @@ export function parseGitArcStatus(output: string) {
       const separator = line.indexOf(":");
       const label = separator < 0 ? line : line.slice(0, separator);
       const value = separator < 0 ? "" : line.slice(separator + 1).trimStart();
-      if (lost && !["HEAD since claim loss", "Intersecting commits", "More intersecting commits", "Changes since claim loss"].includes(label)) {
-        result.recovery.push(lost);
-        lost = undefined;
+      const evidenceLabels = evidence?.kind === "restored"
+        ? ["HEAD before restore", "Intersecting commits before restore", "More intersecting commits before restore", "Changes after restore", "Arc restored"]
+        : ["HEAD since claim loss", "Intersecting commits", "More intersecting commits", "Changes since claim loss"];
+      if (evidence && !evidenceLabels.includes(label)) {
+        if (evidence.kind === "restored") throw new Error("Missing restored guidance.");
+        result.recovery.push(evidence);
+        evidence = undefined;
       }
       if (["Proposals pending", "Proposals accepted", "Dirty claims", "Clean claims", "Stashed claims", "Unclaimed dirt", "Claim-loss baseline unavailable", "Arc stashed"].includes(label)) {
         if (seen.has(label)) throw new Error("Duplicate status group.");
@@ -161,30 +174,44 @@ export function parseGitArcStatus(output: string) {
           break;
         case "Unclaimed dirt": result.unclaimedDirt = parseSummary(value); break;
         case "Lost claims":
-          if (lost) throw new Error("Incomplete recovery group.");
-          lost = { paths: parseSummary(value), headMovement: "same", commits: [], comparison: [], omittedCommits: 0 };
+        case "Restored claims":
+          if (evidence) throw new Error("Incomplete recovery group.");
+          evidence = {
+            paths: parseSummary(value), headMovement: "same", commits: [], comparison: [], omittedCommits: 0,
+            kind: label === "Restored claims" ? "restored" : "lost",
+          };
           break;
         case "HEAD since claim loss":
-          if (!lost || value !== "incompatible") throw new Error("Invalid head movement.");
-          lost.headMovement = "incompatible";
+        case "HEAD before restore":
+          if (!evidence || value !== "incompatible"
+            || (label === "HEAD before restore") !== (evidence.kind === "restored")) throw new Error("Invalid head movement.");
+          evidence.headMovement = "incompatible";
           break;
         case "Intersecting commits":
-          if (!lost) throw new Error("Missing recovery group.");
-          lost.commits = splitList(value).map(entry => {
+        case "Intersecting commits before restore":
+          if (!evidence || (label === "Intersecting commits before restore") !== (evidence.kind === "restored")) {
+            throw new Error("Missing recovery group.");
+          }
+          evidence.commits = splitList(value).map(entry => {
             const at = entry.indexOf(" ");
             return { commit: entry.slice(0, at), subject: unquote(entry.slice(at + 1)), changedPaths: [] };
           });
-          if (lost.headMovement !== "incompatible") lost.headMovement = "fast-forward";
+          if (evidence.headMovement !== "incompatible") evidence.headMovement = "fast-forward";
           break;
         case "More intersecting commits":
-          if (!lost || !/^\d+$/u.test(value)) throw new Error("Invalid omitted count.");
-          lost.omittedCommits = Number(value);
+        case "More intersecting commits before restore":
+          if (!evidence || !/^\d+$/u.test(value)
+            || (label === "More intersecting commits before restore") !== (evidence.kind === "restored")) {
+            throw new Error("Invalid omitted count.");
+          }
+          evidence.omittedCommits = Number(value);
           break;
-        case "Changes since claim loss": {
-          if (!lost) throw new Error("Missing recovery group.");
+        case "Changes since claim loss":
+        case "Changes after restore": {
+          if (!evidence || (label === "Changes after restore") !== (evidence.kind === "restored")) {
+            throw new Error("Missing recovery group.");
+          }
           if (value === "none") {
-            result.recovery.push(lost);
-            lost = undefined;
             break;
           }
           if (value) throw new Error("Invalid recovery comparison.");
@@ -193,21 +220,28 @@ export function parseGitArcStatus(output: string) {
           for (let row = 0; row < Number(count[1]); row++) {
             const match = /^([ADU])\t\+(\d+)\t-(\d+)\t(.+?)(\tbinary)?$/u.exec(lines[++index] ?? "");
             if (!match) throw new Error("Invalid comparison row.");
-            lost.comparison.push({
+            evidence.comparison.push({
               kind: match[1] === "A" ? "add" : match[1] === "D" ? "delete" : "update",
               additions: Number(match[2]), deletions: Number(match[3]), path: unquote(match[4]!), binary: Boolean(match[5]),
             });
           }
-          if (lines[++index] !== formatGitArcDriftComparison(lost.comparison).at(-1)) throw new Error("Invalid comparison totals.");
-          result.recovery.push(lost);
-          lost = undefined;
+          if (lines[++index] !== formatGitArcDriftComparison(evidence.comparison).at(-1)) throw new Error("Invalid comparison totals.");
           break;
         }
+        case "Arc restored":
+          if (!evidence || evidence.kind !== "restored"
+            || value !== "checkpoint rebased to current HEAD; inspect the restored diff and resolve any conflict markers before continuing.") {
+            throw new Error("Invalid restored guidance.");
+          }
+          result.recovery.push(evidence);
+          evidence = undefined;
+          break;
         case "Claim-loss baseline unavailable": result.unavailableRecovery = splitList(value).map(unquote); break;
         default: throw new Error("Unrecognised status line.");
       }
     }
-    if (lost) result.recovery.push(lost);
+    if (evidence?.kind === "restored") throw new Error("Missing restored guidance.");
+    if (evidence) result.recovery.push(evidence);
     return presentationSchema.safeParse(result);
   } catch {
     return presentationSchema.safeParse(null);
