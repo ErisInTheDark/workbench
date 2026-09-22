@@ -2,7 +2,6 @@
  * Exports:
  * - appRoot: absolute Workbench server workspace.
  * - projectRoot: absolute Workbench repository root.
- * - projectsRoot: configured discovery root.
  * - normalizeRelativePath: normalise transport paths.
  * - safeResolve/safeResolveProjectPath: validate project-relative paths.
  * - isPathWithinRoot: check absolute path containment.
@@ -38,7 +37,6 @@ import {
 
 export const appRoot = process.cwd();
 export const projectRoot = path.resolve(appRoot, "..");
-export const projectsRoot = path.resolve(process.env.WORKBENCH_PROJECTS_ROOT?.trim() || path.dirname(projectRoot));
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
 const discoveryIgnoredNames = new Set([...ignoredNames, "dist", "build", "coverage"]);
 const reportedDuplicateProjectOrigins = new Set<ProjectIdentityKey>();
@@ -324,28 +322,28 @@ export interface ResolvedProject {
   roots: ResolvedProjectRoot[];
 }
 
-function createSingleProjectRoot(discoveryRootDir: string, canonicalRootDir: string): WorkbenchProjectRoot {
+function createSingleProjectRoot(discoveryRootDir: string, canonicalRootDir: string, discoveryFolder: string): WorkbenchProjectRoot {
   const name = path.basename(discoveryRootDir) || ".";
   return {
     id: normalizeWorkspaceRootId(name),
     isPrimary: true,
     name,
-    relativePath: normalizeRelativePath(path.relative(projectsRoot, discoveryRootDir)) || ".",
+    relativePath: normalizeRelativePath(path.relative(discoveryFolder, discoveryRootDir)) || ".",
     rootPath: normalizeRelativePath(canonicalRootDir),
   };
 }
 
-async function createProjectOption(rootDir: string): Promise<WorkbenchProjectOption> {
-  const relativePath = normalizeRelativePath(path.relative(projectsRoot, rootDir)) || ".";
-  const id = (normalizeProjectId(relativePath) || ".") as ProjectId;
+async function createProjectOption(rootDir: string, discoveryFolder: string, aliasPrefix: string): Promise<WorkbenchProjectOption> {
+  const relativePath = normalizeRelativePath(path.relative(discoveryFolder, rootDir)) || ".";
+  const id = (aliasPrefix ? `${aliasPrefix}/${normalizeProjectId(relativePath) || "."}` : normalizeProjectId(relativePath) || ".") as ProjectId;
   const canonicalRootDir = await resolveCanonicalPath(rootDir);
-  const root = createSingleProjectRoot(rootDir, canonicalRootDir);
+  const root = createSingleProjectRoot(rootDir, canonicalRootDir, discoveryFolder);
   return {
     id,
     kind: "git",
     lastCommitTimeMs: await getGitHeadActivityTimeMs(canonicalRootDir),
     name: path.basename(rootDir) || id,
-    relativePath: id,
+    relativePath,
     rootPath: normalizeRelativePath(canonicalRootDir),
     roots: [root],
   };
@@ -472,7 +470,7 @@ function getWorkspaceFolderName(folder: Record<string, unknown>, resolvedRoot: s
   return configuredName || path.basename(resolvedRoot) || "root";
 }
 
-async function createWorkspaceProjectOption(workspacePath: string): Promise<WorkbenchProjectOption | null> {
+async function createWorkspaceProjectOption(workspacePath: string, discoveryFolder: string, aliasPrefix: string): Promise<WorkbenchProjectOption | null> {
   const incomplete = () => {
     console.warn("[projects] workspace identity unavailable because a declared member is invalid or missing");
     return null;
@@ -527,7 +525,7 @@ async function createWorkspaceProjectOption(workspacePath: string): Promise<Work
       id,
       isPrimary: roots.length === 0,
       name,
-      relativePath: normalizeRelativePath(path.relative(projectsRoot, discoveryRoot)) || ".",
+      relativePath: normalizeRelativePath(path.relative(discoveryFolder, discoveryRoot)) || ".",
       rootPath: normalizeRelativePath(canonicalRoot),
     });
   }
@@ -536,8 +534,8 @@ async function createWorkspaceProjectOption(workspacePath: string): Promise<Work
     return null;
   }
 
-  const relativePath = normalizeRelativePath(path.relative(projectsRoot, workspacePath)) || path.basename(workspacePath);
-  const id = normalizeProjectId(relativePath) as ProjectId;
+  const relativePath = normalizeRelativePath(path.relative(discoveryFolder, workspacePath)) || path.basename(workspacePath);
+  const id = (aliasPrefix ? `${aliasPrefix}/${normalizeProjectId(relativePath)}` : normalizeProjectId(relativePath)) as ProjectId;
   const name = path.basename(workspacePath, WORKSPACE_FILE_EXTENSION);
 
   return {
@@ -545,14 +543,14 @@ async function createWorkspaceProjectOption(workspacePath: string): Promise<Work
     kind: "workspace",
     lastCommitTimeMs: latestCommitTimeMs,
     name,
-    relativePath: id,
+    relativePath,
     rootPath: roots[0].rootPath,
     roots,
     workspacePath: normalizeRelativePath(workspacePath),
   };
 }
 
-async function walkProjects(currentDir: string, projects: WorkbenchProjectOption[], signal?: AbortSignal) {
+async function walkProjects(currentDir: string, discoveryFolder: string, aliasPrefix: string, projects: WorkbenchProjectOption[], signal?: AbortSignal) {
   signal?.throwIfAborted();
   let entries;
   try {
@@ -569,14 +567,14 @@ async function walkProjects(currentDir: string, projects: WorkbenchProjectOption
     .sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" }));
 
   for (const entry of workspaceFiles) {
-    const workspaceProject = await createWorkspaceProjectOption(path.join(currentDir, entry.name));
+    const workspaceProject = await createWorkspaceProjectOption(path.join(currentDir, entry.name), discoveryFolder, aliasPrefix);
     if (workspaceProject) {
       projects.push(workspaceProject);
     } else complete = false;
   }
 
   if (await hasGitMarker(currentDir)) {
-    projects.push(await createProjectOption(currentDir));
+    projects.push(await createProjectOption(currentDir, discoveryFolder, aliasPrefix));
     return complete;
   }
 
@@ -595,7 +593,7 @@ async function walkProjects(currentDir: string, projects: WorkbenchProjectOption
   directories.sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" }));
 
   for (const entry of directories) {
-    if (!await walkProjects(path.join(currentDir, entry.name), projects, signal)) complete = false;
+    if (!await walkProjects(path.join(currentDir, entry.name), discoveryFolder, aliasPrefix, projects, signal)) complete = false;
   }
   return complete;
 }
@@ -629,14 +627,28 @@ function filterIndirectGitProjectDuplicates(
   });
 }
 
-async function discoverProjectOptions(signal?: AbortSignal) {
-  const projects: WorkbenchProjectOption[] = [];
+async function discoverProjectOptions(discoveryFolders: readonly string[], signal?: AbortSignal) {
+  const discoveredProjects: WorkbenchProjectOption[] = [];
+  const addresses: WorkbenchProjectOption[] = [];
   const libraryProject = await createWorkbenchLibraryProjectOption();
-  const complete = await walkProjects(projectsRoot, projects, signal);
-  const canonicalProjectsRoot = await resolveCanonicalPath(projectsRoot);
+  let complete = true;
+  for (const [index, discoveryFolder] of discoveryFolders.entries()) {
+    const projects: WorkbenchProjectOption[] = [];
+    const prefix = discoveryFolders.length > 1 ? `root-${index + 1}` : "";
+    if (!await walkProjects(discoveryFolder, discoveryFolder, prefix, projects, signal)) complete = false;
+    const canonicalFolder = await resolveCanonicalPath(discoveryFolder);
+    discoveredProjects.push(...filterIndirectGitProjectDuplicates(projects, canonicalFolder));
+    addresses.push(...projects);
+  }
   const normalizedLibraryRoot = normalizePathForComparison(workbenchLibraryRoot);
-  const discoveredProjects = filterIndirectGitProjectDuplicates(projects, canonicalProjectsRoot)
-    .filter((project) => normalizePathForComparison(project.rootPath) !== normalizedLibraryRoot)
+  const seenLocations = new Set<string>();
+  const uniqueProjects = discoveredProjects
+    .filter(project => {
+      const location = normalizePathForComparison(project.workspacePath ?? project.rootPath);
+      if (location === normalizedLibraryRoot || seenLocations.has(location)) return false;
+      seenLocations.add(location);
+      return true;
+    })
     .sort((left, right) => {
       const leftTime = left.lastCommitTimeMs ?? Number.NEGATIVE_INFINITY;
       const rightTime = right.lastCommitTimeMs ?? Number.NEGATIVE_INFINITY;
@@ -647,14 +659,14 @@ async function discoverProjectOptions(signal?: AbortSignal) {
       return left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" });
     });
   return {
-    data: [libraryProject, ...discoveredProjects],
-    addresses: [libraryProject, ...projects],
+    data: [libraryProject, ...uniqueProjects],
+    addresses: [libraryProject, ...addresses],
     complete,
   };
 }
 
-export async function discoverProjectIdentities(signal?: AbortSignal): Promise<WorkbenchProjectDiscovery> {
-  const { data: candidates, addresses, complete: walkedCompletely } = await discoverProjectOptions(signal);
+export async function discoverProjectIdentities(discoveryFolders: readonly string[], signal?: AbortSignal): Promise<WorkbenchProjectDiscovery> {
+  const { data: candidates, addresses, complete: walkedCompletely } = await discoverProjectOptions(discoveryFolders, signal);
   let complete = walkedCompletely;
   const roots = new Map(candidates.filter(project => project.kind !== "workbench-library")
     .flatMap(project => project.roots.map(root => [normalizePathForComparison(root.rootPath), root.rootPath] as const)));
@@ -686,7 +698,7 @@ export async function discoverProjectIdentities(signal?: AbortSignal): Promise<W
     for (const key of locations) classifications.get(key)!.excluded = true;
     if (reportedDuplicateProjectOrigins.has(projectId)) continue;
     reportedDuplicateProjectOrigins.add(projectId);
-    const paths = locations.map(key => normalizeRelativePath(path.relative(projectsRoot, roots.get(key)!))
+    const paths = locations.map(key => normalizeRelativePath(roots.get(key)!)
       .replace(/[\r\n\t]/gu, " ").slice(0, 300) || ".").sort();
     console.warn(`[projects] skipped checkouts sharing one origin: ${paths.slice(0, 10).join(", ")}${paths.length > 10 ? ` (+${paths.length - 10} more)` : ""}`);
   }
@@ -730,16 +742,14 @@ export async function discoverProjectIdentities(signal?: AbortSignal): Promise<W
     complete,
     excludedRootPaths: [...roots].filter(([key]) => !classifications.has(key) || classifications.get(key)!.excluded)
       .map(([, rootPath]) => rootPath),
-    rootPath: projectsRoot,
+    rootPath: discoveryFolders[0] ?? "",
+    discoveryRoots: [...discoveryFolders],
   };
 }
 
 function getDefaultProjectIdFromProjects(projects: readonly WorkbenchProjectOption[]) {
-  const currentProjectId = normalizeProjectId(path.relative(projectsRoot, projectRoot)) || ".";
-  const currentProjectOption = projects.find((project) => project.kind === "git" && (
-    project.id === currentProjectId
-    || normalizePathForComparison(project.rootPath) === normalizePathForComparison(projectRoot)
-  ));
+  const currentProjectOption = projects.find((project) => project.kind === "git"
+    && normalizePathForComparison(project.rootPath) === normalizePathForComparison(projectRoot));
   return currentProjectOption?.id ?? projects[0]?.id ?? "";
 }
 
@@ -805,11 +815,7 @@ export async function resolveDiscoveredProject(project: WorkbenchProjectOption):
     } satisfies ResolvedProject;
   }
 
-  const discoveryPath = path.resolve(projectsRoot, project.relativePath);
-  if (!isPathWithinRoot(discoveryPath, projectsRoot)) {
-    throw new Error("Project is outside the configured projects root.");
-  }
-
+  const discoveryPath = path.resolve(project.rootPath);
   const canonicalRoot = await resolveCanonicalPath(discoveryPath);
   if (project.kind !== "git" || !await hasGitMarker(canonicalRoot)) {
     throw new Error("Project is missing a .git marker.");
@@ -835,7 +841,7 @@ function toProjectSnapshotRoots(project: ResolvedProject): WorkbenchProjectRoot[
     id: root.id,
     isPrimary: index === 0,
     name: root.name,
-    relativePath: root.relativePath ?? (normalizeRelativePath(path.relative(projectsRoot, root.root)) || "."),
+    relativePath: root.relativePath ?? ".",
     rootPath: root.rootPath,
   }));
 }

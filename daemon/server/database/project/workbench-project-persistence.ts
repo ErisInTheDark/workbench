@@ -25,6 +25,7 @@ export interface WorkbenchProjectDiscovery {
   complete: boolean;
   excludedRootPaths: string[];
   rootPath: string;
+  discoveryRoots?: string[];
 }
 
 export interface WorkbenchProjectPreparation {
@@ -36,6 +37,7 @@ export interface WorkbenchProjectStartup {
   aliases: WorkbenchProjectAlias[];
   excludedRootPaths: string[];
   rootPath: string;
+  discoveryRoots?: string[];
 }
 
 export interface WorkbenchProjectCacheRecord {

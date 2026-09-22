@@ -80,9 +80,11 @@ function createWorkbenchCoreFeature(
   initialCatalog?: WorkbenchProjectStartup,
 ) {
   const modules = createModules();
+  const settings = new WorkbenchServerSettings(database);
   const projectCatalog = new WorkbenchProjectCatalogController({
-    initialProjects: initialCatalog ?? (() => database.readInitialProjectCatalog()),
+    initialProjects: initialCatalog,
     persistence: database,
+    settings,
   });
   const projectSnapshot = new WorkbenchProjectSnapshotController({
     observeProject: (projectId) => { void projectCatalog.observeProjectIcon(ProjectIdSchema.parse(projectId)); },
@@ -349,7 +351,7 @@ function createWorkbenchCoreFeature(
     projects: projectCatalog,
     questionnaireResponses,
     search,
-    settings: new WorkbenchServerSettings(database),
+    settings,
     stats,
     threadIdentity: { resolve: (input, options) => harnesses.resolveThreadIdentity(input, options) },
   });
@@ -437,7 +439,11 @@ function createWorkbenchCoreFeature(
     },
     registrations,
     start: async (reportPhase) => {
-      if (initialCatalog) return;
+      if (initialCatalog) {
+        reportPhase("validate retained project catalog");
+        await projectCatalog.ensureLoaded();
+        return;
+      }
       reportPhase("prepared project catalog");
       await projectCatalog.ensureLoaded();
       reportPhase("composer profile startup");

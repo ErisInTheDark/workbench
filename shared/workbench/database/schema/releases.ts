@@ -58,6 +58,7 @@ const databaseReleases = Object.freeze({
   callableToolEvidence: release(48, "1cfebace752cdd12d902dfb8b4dfdf58d342ed2b4e0853e374f75cf9447ab405"),
   stashedGitArcObservations: release(49, "427c25079c6da6b386b4bd9f0817ad9f27379801ea4141b49bd53f1e4ef3a746"),
   commandApprovals: release(50, "5ea74d8c5113604c342671eae5282d1e51c44aad26a5f63d407e80d96cf1ca27"),
+  projectDiscoveryRoots: release(51, "c5bcd7883dfbf164e28e4e5dc8ba451c44e11d69317cc9f6c64f3accda47778f"),
 });
 
 export default databaseReleases;

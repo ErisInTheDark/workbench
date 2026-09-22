@@ -2,11 +2,12 @@
  * Exports:
  * - DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS: safe defaults for local server capabilities.
  * - normalizeWorkbenchLocalCapabilitySettings: conform capability inputs at the owner boundary.
- * - default WorkbenchServerSettings: own serialised SQLite capability updates.
+ * - default WorkbenchServerSettings: own serialised SQLite capability and discovery-root updates.
  */
 import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
-import { selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
+import { deleteRows, insertRow, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
 import { localCapabilities } from "../database/schema/local-capability-schema";
+import { projectDiscoveryRoots } from "../database/schema/project-discovery-settings-schema";
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 
 export const DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS: WorkbenchLocalCapabilitySettings = {
@@ -32,6 +33,21 @@ export default class WorkbenchServerSettings {
   async readLocalCapabilities() {
     const [row] = await this.database.query(selectRows(localCapabilities, { where: { id: "global" } }));
     return { browseRawCommandsEnabled: row?.browse_raw_commands_enabled === 1 };
+  }
+
+  async readProjectDiscoveryRoots(): Promise<string[]> {
+    const rows = await this.database.query(selectRows(projectDiscoveryRoots, { orderBy: [{ column: "position" }] }));
+    return rows.map(row => row.path);
+  }
+
+  async replaceProjectDiscoveryRoots(roots: readonly string[]): Promise<void> {
+    await this.enqueueWrite(async () => {
+      const previous = await this.database.query(selectRows(projectDiscoveryRoots));
+      await this.database.executeTransaction([
+        ...previous.map(row => deleteRows(projectDiscoveryRoots, { position: row.position })),
+        ...roots.map((root, position) => insertRow(projectDiscoveryRoots, { path: root, position })),
+      ]);
+    });
   }
 
   async writeLocalCapabilities(settings: WorkbenchLocalCapabilitySettings) {

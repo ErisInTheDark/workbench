@@ -1,7 +1,6 @@
 /*
- * Keywords: project, sidebar, disclosure, status, activity.
  * Exports:
- * - default ProjectSidebar: render a flush project disclosure with thread-style cards, progressive activity groups, and live cross-project status summaries. Keywords: project, sidebar, disclosure, status, activity.
+ * - default ProjectSidebar: render project groups, status summaries, and Git-root setup access.
  */
 "use client";
 
@@ -19,12 +18,16 @@ import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButt
 
 export default function ProjectSidebar ({
   activeProjectId,
+  onConfigureGitRoots,
   onProjectLinkClick,
   projects,
+  showGitRootsSetup,
 }: {
   activeProjectId: string;
+  onConfigureGitRoots: () => void;
   onProjectLinkClick (event: MouseEvent<HTMLAnchorElement>, projectId: string): void;
   projects: readonly WorkbenchProjectOption[];
+  showGitRootsSetup: boolean;
 }) {
   const { preferences, setProjectTimeGroupCount } = useWorkbenchSidebarPreferences();
   const summaries = useWorkbenchProjectThreadSummaries();
@@ -73,6 +76,15 @@ export default function ProjectSidebar ({
               onProjectLinkClick={onProjectLinkClick}
             />
           ))}
+          {showGitRootsSetup ? (
+            <button
+              className="w-full rounded-lg px-2 py-1.5 text-left text-[0.78rem] font-medium text-accent transition hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
+              onClick={onConfigureGitRoots}
+              type="button"
+            >
+              Set Git roots
+            </button>
+          ) : null}
           {hasMoreTimeGroups ? (
             <button
               className="w-full rounded-lg px-2 py-1.5 text-left text-[0.78rem] font-medium text-fg/muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"

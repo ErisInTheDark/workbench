@@ -165,7 +165,8 @@ export function areExplorerSnapshotsEquivalent(left: ExplorerSnapshot | null, ri
     return false;
   }
 
-  return left.currentProjectId === right.currentProjectId
+  return left.configuredDiscoveryRootPath === right.configuredDiscoveryRootPath
+    && left.currentProjectId === right.currentProjectId
     && left.root === right.root
     && left.rootPath === right.rootPath
     && left.projectFileIndexId === right.projectFileIndexId
@@ -586,6 +587,22 @@ export async function WorkbenchClient(
     console.error(summary, detail);
     reportStatusMessage(`${summary} ${detail}`);
   };
+  const refreshProjectCatalogRoute = async (reapplyCurrentRoute: boolean) => {
+    const removedSelectedProject = await projectClient.refreshCatalog();
+    const route = navigation.getSnapshot().route;
+    const routeProjectId = route.projectId
+      ? workbenchBindings.clientStateController?.resolveProjectId(route.projectId) ?? route.projectId
+      : "";
+    const removedRouteProject = Boolean(routeProjectId)
+      && !projectClient.getSnapshot().projects.some(project => project.id === routeProjectId);
+    if (removedSelectedProject || removedRouteProject) {
+      await navigation.applyRoute(createHomeRoute());
+    } else if (reapplyCurrentRoute) {
+      await navigation.applyRoute(route);
+    }
+    emitExplorerStateChange();
+    return removedSelectedProject || removedRouteProject;
+  };
   const recoverConnection = async (continuity: WorkbenchConnectionContinuity) => {
     projectClient.resetObservation();
     if (continuity === "lost") {
@@ -593,10 +610,11 @@ export async function WorkbenchClient(
       threadClient.resetConnectionState();
     }
     await daemonRuntime.open();
-    await threadSidebarClient.reopen();
+    const wentHome = await refreshProjectCatalogRoute(false);
+    if (!wentHome) await threadSidebarClient.reopen();
     if (coordinatorLifecycle.isDisposed) return;
     threadClient.threadObservations.reset();
-    if (continuity === "lost") {
+    if (continuity === "lost" && !wentHome) {
       await navigation.applyRoute(navigation.getSnapshot().route);
     }
     await threadClient.recoverThreadControllers();
@@ -671,6 +689,7 @@ export async function WorkbenchClient(
     const threadSnapshot = threadClient.getSnapshot();
     return {
       root: projectSnapshot.root,
+      configuredDiscoveryRootPath: projectSnapshot.configuredDiscoveryRootPath,
       currentProjectId: projectSnapshot.currentProjectId,
       projects: projectSnapshot.projects,
       rootPath: projectSnapshot.rootPath,
@@ -1066,6 +1085,9 @@ export async function WorkbenchClient(
   const controls: MountedWorkbenchControls = {
     applyRoute,
     daemon,
+    refreshProjectCatalog: async () => {
+      await refreshProjectCatalogRoute(true);
+    },
     createFilePanelClient: (surfaces, filePanelOptions = {}) => {
       const panelLifecycle = new LifecycleScope();
       const client = WorkbenchFilePanelClient({
@@ -1184,6 +1206,11 @@ export async function WorkbenchClient(
     updateThreadStateWithAcceptance,
   };
 
+  coordinatorLifecycle.addUnsubscribe(daemonRuntime.subscribeServerReloadCompleted(() => {
+    void refreshProjectCatalogRoute(true).catch(error => {
+      reportConnectionRecoveryFailure("Unable to refresh projects after daemon reload.", error);
+    });
+  }));
   await daemonRuntime.open().catch((error: unknown) => {
     console.error(
       "Unable to observe Workbench daemon reload dirt.",

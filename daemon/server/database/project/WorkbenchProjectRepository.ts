@@ -234,7 +234,7 @@ export default class WorkbenchProjectRepository {
         checkedAt,
       });
       }
-      return { catalog, aliases: this.readAliases(), rootPath: discovery.rootPath, excludedRootPaths: [...excludedRootPaths] };
+      return { catalog, aliases: this.readAliases(), rootPath: discovery.rootPath, discoveryRoots: discovery.discoveryRoots, excludedRootPaths: [...excludedRootPaths] };
     })();
   }
 

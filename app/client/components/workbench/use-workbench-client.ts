@@ -56,6 +56,7 @@ import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/id
 
 const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   changes: {},
+  configuredDiscoveryRootPath: null,
   currentPath: "",
   currentProjectId: "",
   currentThreadId: "",

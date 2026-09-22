@@ -66,6 +66,111 @@ test("catalogue admission and reopening publish one owner across remote changes"
   } finally { database.close(); }
 });
 
+test("saving roots validates the whole list and replaces watchers without partial writes", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-discovery-roots-"));
+  const first = path.join(root, "first");
+  const second = path.join(root, "second");
+  await fs.mkdir(first);
+  await fs.mkdir(second);
+  let persisted: string[] = [];
+  let failWrite = false;
+  const watchers: FakeWatcher[] = [];
+  const scans: string[][] = [];
+  const controller = new WorkbenchProjectCatalogController({
+    settings: {
+      readProjectDiscoveryRoots: async () => persisted,
+      replaceProjectDiscoveryRoots: async roots => {
+        if (failWrite) throw new Error("database rejected replacement");
+        persisted = [...roots];
+      },
+    },
+    persistence: {
+      reconcileProjectCatalog: async discovery => reconciledProjects([]),
+      readProjectAliases: async () => [],
+      resolveProjectIdentity: async value => fixtureIdentitySchemas.ProjectIdSchema.parse(value),
+      settleProjectIcon: async () => true,
+    },
+    discoverProjectIdentities: async roots => {
+      scans.push([...roots]);
+      return discoveryForProjects([]);
+    },
+    createWatcher: (path, listener, recursive) => {
+      const watcher = new FakeWatcher(path, listener, recursive);
+      watchers.push(watcher);
+      return watcher;
+    },
+  });
+  try {
+    await controller.ensureLoaded();
+    assert.deepEqual(scans, [[]]);
+    const invalid = await controller.updateDiscoverySettings([first, path.join(root, "missing")]);
+    assert.deepEqual(invalid, { accepted: false, issues: [{ index: 1, reason: "missing" }] });
+    assert.deepEqual(persisted, []);
+    const saved = await controller.updateDiscoverySettings([first, second]);
+    assert.equal(saved.accepted, true);
+    assert.deepEqual(persisted, [first, second]);
+    assert.deepEqual(scans.at(-1), [first, second]);
+    assert.equal(watchers.filter(watcher => !watcher.closed).length, 2);
+    const duplicate = await controller.updateDiscoverySettings([first, first]);
+    assert.deepEqual(duplicate, { accepted: false, issues: [{ index: 1, reason: "duplicate" }] });
+    assert.deepEqual(persisted, [first, second]);
+    failWrite = true;
+    await assert.rejects(controller.updateDiscoverySettings([second]), /database rejected replacement/u);
+    assert.deepEqual(persisted, [first, second]);
+    assert.equal(watchers.filter(watcher => !watcher.closed).length, 2);
+    failWrite = false;
+    await controller.updateDiscoverySettings([]);
+    assert.deepEqual(persisted, []);
+    assert.ok(watchers.every(watcher => watcher.closed));
+    assert.deepEqual(scans.at(-1), []);
+  } finally {
+    await controller.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("saving an empty list fences an older in-flight project scan", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-discovery-fence-"));
+  const gate = deferred<WorkbenchProjectDiscovery>();
+  const oldProject = createProject("old", root);
+  let persisted = [root];
+  let scans = 0;
+  const controller = new WorkbenchProjectCatalogController({
+    settings: {
+      readProjectDiscoveryRoots: async () => persisted,
+      replaceProjectDiscoveryRoots: async roots => { persisted = [...roots]; },
+    },
+    persistence: {
+      reconcileProjectCatalog: async discovery => reconciledProjects(discovery.data.map(project => ({
+        project: { ...project, id: fixtureIdentitySchemas.ProjectIdSchema.parse(project.name), roots: project.roots.map(({ identityKey: _key, ...item }) => item) },
+        sourceKey: project.rootPath, checkedAt: null,
+      }))),
+      readProjectAliases: async () => [],
+      resolveProjectIdentity: async value => fixtureIdentitySchemas.ProjectIdSchema.parse(value),
+      settleProjectIcon: async () => true,
+    },
+    discoverProjectIdentities: async roots => {
+      scans += 1;
+      return roots.length ? await gate.promise : discoveryForProjects([]);
+    },
+    createWatcher: (folder, listener, recursive) => new FakeWatcher(folder, listener, recursive),
+  });
+  try {
+    const oldRead = controller.readCatalog();
+    const saving = controller.updateDiscoverySettings([]);
+    gate.resolve(discoveryForProjects([oldProject]));
+    await assert.rejects(oldRead);
+    assert.deepEqual(await saving, { accepted: true, paths: [] });
+    assert.deepEqual(controller.getCurrentSnapshot().data, []);
+    assert.deepEqual(persisted, []);
+    assert.equal(scans, 2);
+  } finally {
+    gate.resolve(discoveryForProjects([]));
+    await controller.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("prepared startup waits for parent readiness and warm replacement retains icon freshness without discovery", async () => {
   const project = createProject("local://C:/projects/ready", "C:/projects/ready");
   const initial = { catalog: [{ project, sourceKey: "ready", checkedAt: 100 }], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" };
@@ -238,6 +343,72 @@ test("invalidated structural discovery cannot reconcile stale roots into durable
     discovery.resolve(discoveryForProjects([]));
     await controller.dispose();
   }
+});
+
+test("first catalogue load retries a watcher-invalidated scan before publishing", async () => {
+  const firstScan = deferred<WorkbenchProjectDiscovery>();
+  const project = createProject("local://C:/projects/current", "C:/projects/current");
+  const current = discoveryForProjects([project]);
+  let scans = 0;
+  let reconciliations = 0;
+  const controller = new WorkbenchProjectCatalogController({
+    persistence: {
+      reconcileProjectCatalog: async () => {
+        reconciliations += 1;
+        return reconciledProjects([{ project, sourceKey: "current", checkedAt: null }]);
+      },
+      readProjectAliases: async () => [],
+      resolveProjectIdentity: async () => project.id,
+      settleProjectIcon: async () => true,
+    },
+    discoverProjectIdentities: async () => ++scans === 1 ? await firstScan.promise : current,
+  });
+  try {
+    const loading = controller.ensureLoaded();
+    controller.invalidate();
+    firstScan.resolve(discoveryForProjects([]));
+    await loading;
+    assert.equal(scans, 2);
+    assert.equal(reconciliations, 1);
+    assert.equal(controller.getCurrentSnapshot().data[0]?.rootPath, "C:/projects/current");
+  } finally {
+    firstScan.resolve(discoveryForProjects([]));
+    await controller.dispose();
+  }
+});
+
+test("reload rejects a prepared project outside the saved discovery roots", async () => {
+  const project = createProject("local://C:/projects/stale", "C:/projects/stale");
+  let scans = 0;
+  const controller = new WorkbenchProjectCatalogController({
+    initialProjects: {
+      catalog: [{ project, sourceKey: "stale", checkedAt: null }],
+      aliases: [],
+      discoveryRoots: [],
+      excludedRootPaths: [],
+      rootPath: "C:/projects",
+    },
+    settings: {
+      readProjectDiscoveryRoots: async () => [],
+      replaceProjectDiscoveryRoots: async () => undefined,
+    },
+    persistence: {
+      reconcileProjectCatalog: async () => reconciledProjects([]),
+      readProjectAliases: async () => [],
+      resolveProjectIdentity: async () => project.id,
+      settleProjectIcon: async () => true,
+    },
+    discoverProjectIdentities: async roots => {
+      scans += 1;
+      assert.deepEqual(roots, []);
+      return discoveryForProjects([]);
+    },
+  });
+  try {
+    await controller.ensureLoaded();
+    assert.equal(scans, 1);
+    assert.deepEqual(controller.getCurrentSnapshot().data, []);
+  } finally { await controller.dispose(); }
 });
 
 test("changed exclusion evidence retires cached CWD authority even when selectable projects stay the same", async () => {

@@ -6,12 +6,13 @@
 
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 
-import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
+import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import {
   createSettingsRoute,
   type WorkbenchSettingsScope,
 } from "workbench-shared/workbench/navigation/workbench-route";
+import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import {
   createDefaultProjectWorkbenchSettings,
   MAX_EDITOR_FONT_SIZE,
@@ -24,21 +25,21 @@ import {
   type WorkbenchGlobalSettings,
   type WorkbenchSettingKey,
 } from "../../workbench/state/workbench-settings";
-import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
-import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import CommandApprovalSettings from "./CommandApprovalSettings";
-import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
+import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import VoiceSettings from "./voice/VoiceSettings";
-import { ReloadIcon } from "./workbench-icons";
-import WorkbenchIconButton from "./WorkbenchIconButton";
-import WorkbenchOptionCards, { WorkbenchOptionCard } from "./WorkbenchOptionCards";
-import WorkbenchReactDevelopmentModeSetting from "./WorkbenchReactDevelopmentModeSetting";
-import WorkbenchStepSlider from "./WorkbenchStepSlider";
 import {
   useWorkbenchClientStateController,
   useWorkbenchClientStateSnapshot,
 } from "./workbench-client-state-context";
+import { ResetIcon } from "./workbench-icons";
 import { useWorkbenchDaemonClient } from "./WorkbenchDaemonClientContext";
+import WorkbenchIconButton from "./WorkbenchIconButton";
+import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
+import WorkbenchOptionCards, { WorkbenchOptionCard } from "./WorkbenchOptionCards";
+import WorkbenchProjectDiscoverySettings from "./WorkbenchProjectDiscoverySettings";
+import WorkbenchReactDevelopmentModeSetting from "./WorkbenchReactDevelopmentModeSetting";
+import WorkbenchStepSlider from "./WorkbenchStepSlider";
 
 const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "theme",
@@ -60,18 +61,20 @@ const EDITOR_FONT_SIZE_OPTIONS = [0.9, 1, 1.08, 1.18, 1.32, 1.48].map((value, in
   value,
 }));
 
-function clampEditorFontSize(value: number) {
+function clampEditorFontSize (value: number) {
   return Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, value));
 }
 
-export default function WorkbenchSettingsView({
+export default function WorkbenchSettingsView ({
   activeProjectId,
+  onGitRootsSaved,
   onError,
   onNavigate,
   projectLabel,
   scope,
 }: {
   activeProjectId: string;
+  onGitRootsSaved: () => Promise<void>;
   onError: (message: string) => void;
   onNavigate: (scope: WorkbenchSettingsScope) => void;
   projectLabel: string;
@@ -147,7 +150,7 @@ export default function WorkbenchSettingsView({
       });
   }, [daemon, localCapabilitySettings]);
 
-  const updateGlobalSetting = useCallback(<K extends WorkbenchSettingKey>(
+  const updateGlobalSetting = useCallback(<K extends WorkbenchSettingKey> (
     key: K,
     value: WorkbenchGlobalSettings[K],
   ) => {
@@ -158,7 +161,7 @@ export default function WorkbenchSettingsView({
       .catch((error: Error) => onError(error.message));
   }, [clientStateController, onError]);
 
-  const updateProjectSetting = useCallback(<K extends WorkbenchSettingKey>(
+  const updateProjectSetting = useCallback(<K extends WorkbenchSettingKey> (
     key: K,
     value: WorkbenchGlobalSettings[K],
   ) => {
@@ -293,7 +296,7 @@ export default function WorkbenchSettingsView({
               onClick={() => resetProjectSettingOverride(key)}
               disabled={unavailable}
             >
-              <ReloadIcon size={20} />
+              <ResetIcon size={20} />
             </WorkbenchIconButton>
           ) : null}
           {unavailable ? <p>Available after the app database is reloaded.</p> : null}
@@ -315,7 +318,7 @@ export default function WorkbenchSettingsView({
               title={`Reset ${definition.label} to global`}
               onClick={() => resetProjectSettingOverride(key)}
             >
-              <ReloadIcon size={20} />
+              <ResetIcon size={20} />
             </WorkbenchIconButton>
           ) : null}
         </div>
@@ -366,6 +369,7 @@ export default function WorkbenchSettingsView({
               <>
                 {SETTINGS_ORDER.map(renderGlobalSettingRow)}
                 <WorkbenchNetworkSettings />
+                <WorkbenchProjectDiscoverySettings onSaved={onGitRootsSaved} />
                 <VoiceSettings />
                 <WorkbenchReactDevelopmentModeSetting />
                 <section className="space-y-3 rounded-[0.85rem] py-1">

@@ -106,6 +106,48 @@ function createTransport() {
   return { calls, transport };
 }
 
+test("catalogue refresh clears a vanished selected project but preserves available projects", async () => {
+  const fetchHarness = installProjectsFetch([createProject("alpha")]);
+  const { transport } = createTransport();
+  const client = WorkbenchProjectClient({ transport });
+  try {
+    assert.equal(await client.selectProjectStrict("alpha"), true);
+    fetchHarness.restore();
+    const replacement = installProjectsFetch([createProject("beta")]);
+    try {
+      assert.equal(await client.refreshCatalog(), true);
+      assert.equal(client.getSnapshot().currentProjectId, "");
+      assert.deepEqual(client.getSnapshot().projects.map(project => project.id), ["beta"]);
+      assert.equal(await client.refreshCatalog(), false);
+    } finally { replacement.restore(); }
+  } finally {
+    client.dispose();
+    fetchHarness.restore();
+  }
+});
+
+test("catalogue snapshot distinguishes pending, empty, and configured discovery", async () => {
+  const { transport } = createTransport();
+  const client = WorkbenchProjectClient({ transport });
+  const empty = installProjectsPayloadFetch({ data: [], rootPath: "" });
+  try {
+    assert.equal(client.getSnapshot().configuredDiscoveryRootPath, null);
+    await client.refreshCatalog();
+    assert.equal(client.getSnapshot().configuredDiscoveryRootPath, "");
+    empty.restore();
+    const configured = installProjectsPayloadFetch({ data: [createProject("alpha")], rootPath: "C:/projects" });
+    try {
+      await client.refreshCatalog();
+      assert.equal(client.getSnapshot().configuredDiscoveryRootPath, "C:/projects");
+      assert.equal(await client.selectProjectStrict("alpha"), true);
+      assert.equal(client.getSnapshot().configuredDiscoveryRootPath, "C:/projects");
+    } finally { configured.restore(); }
+  } finally {
+    empty.restore();
+    client.dispose();
+  }
+});
+
 test("project selection loads only the catalog and waits for a pushed tree snapshot", async () => {
   const fetchHarness = installProjectsFetch([createProject("alpha")]);
   try {

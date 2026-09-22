@@ -63,6 +63,7 @@ const subagent = (threadId: string, lastActivityAt: number): WorkbenchSubagentSu
 
 const explorer = (): ExplorerSnapshot => ({
   changes: {},
+  configuredDiscoveryRootPath: "C:/repo",
   currentPath: "",
   currentProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   currentThreadId: "",
@@ -90,8 +91,13 @@ const sidebar = (): WorkbenchThreadSidebarSnapshot => ({
   entries: [], error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision: 1,
 });
 
-for (const order of ["stale-first", "winner-first", "leave-thread", "project-alias", "voice-events", "thread-state-refresh"] as const) {
-  test(`route completion never reopens the winning route: ${order}`, async () => {
+for (const order of ["stale-first", "winner-first", "leave-thread", "project-alias", "voice-events", "thread-state-refresh", "server-reload", "reconnect"] as const) {
+  const title = order === "server-reload"
+    ? "completed server reload clears a vanished selected project"
+    : order === "reconnect"
+      ? "reconnect clears a vanished project before reopening observations"
+      : `route completion never reopens the winning route: ${order}`;
+  test(title, async () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalWebSocket = globalThis.WebSocket;
@@ -113,6 +119,8 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
       metadata: { archived: false, pinned: false, snoozed: false },
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
     }));
+    let catalogueActive = true;
+    const vanishedProject = Promise.withResolvers<ExplorerSnapshot>();
     const sockets: EventTarget[] = [];
     class Socket extends EventTarget {
       static OPEN = 1;
@@ -130,6 +138,20 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
           case "initialize": result = {}; break;
           case "voice/configuration/read": result = { selection: null }; break;
           case "workbench/daemon/reload-dirt/read": result = { revision: 1, snapshot: { dirtyScopes: [], pendingScopes: [], error: null } }; break;
+          case "project/catalog/read":
+            result = catalogueActive
+              ? { data: [{ id: projectId, kind: "git", name: "repo", relativePath: "web/repo", rootPath, roots, lastCommitTimeMs: null }], rootPath }
+              : { data: [], rootPath: "" };
+            break;
+          case "workbench/thread-state/global/open":
+            result = {
+              catalog: { data: [], rootPath: "" },
+              homeThreadDisplayOrder: { displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder" },
+              pinnedThreadLayout: { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" },
+              projectSidebars: { projects: [] },
+              version: 7,
+            };
+            break;
           case "workbench/thread-state/open":
             result = {
               catalog: { data: [{ id: projectId, kind: "git", name: "repo", relativePath: "web/repo", rootPath, roots, lastCommitTimeMs: null }], rootPath,
@@ -190,7 +212,40 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
       threadTarget: { kind: "provider", threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse(id), harness: "codex" },
     });
     try {
-      client = await WorkbenchClient({ clientStateController, initialRoute: { ...createHomeRoute(), view: "invalid", error: "fixture start" } });
+      client = await WorkbenchClient({
+        clientStateController,
+        initialRoute: { ...createHomeRoute(), view: "invalid", error: "fixture start" },
+        onExplorerStateChange: snapshot => {
+          if (!catalogueActive && !snapshot.currentProjectId && snapshot.configuredDiscoveryRootPath === ""
+            && snapshot.threads.length === 0) {
+            vanishedProject.resolve(snapshot);
+          }
+        },
+      });
+      if (order === "server-reload" || order === "reconnect") {
+        const opened = await client.controls.applyRoute({ ...createHomeRoute(), projectId, view: "project" });
+        assert.equal(opened.ok, true);
+        catalogueActive = false;
+        if (order === "server-reload") {
+          const notify = (revision: number, pendingScopes: string[]) => {
+            for (const socket of sockets) socket.dispatchEvent(new MessageEvent("message", {
+              data: JSON.stringify({
+                method: "workbench/daemon/reload-dirt/updated",
+                params: { revision, snapshot: { dirtyScopes: [], error: null, pendingScopes } },
+              }),
+            }));
+          };
+          notify(2, ["server:core"]);
+          notify(3, []);
+        } else {
+          (sockets.at(-1) as Socket).close();
+          await client.controls.daemon.projects.catalog();
+        }
+        const snapshot = await vanishedProject.promise;
+        assert.equal(snapshot.currentProjectId, "");
+        assert.equal(snapshot.configuredDiscoveryRootPath, "");
+        return;
+      }
       if (order === "voice-events") {
         let recovered = 0;
         const sidebar = client.threadSidebar as ThreadSidebarClient;
@@ -604,6 +659,7 @@ test("activity timestamps and activity ordering do not invalidate the root explo
 test("semantic thread and subagent changes invalidate the root explorer snapshot", () => {
   const current = explorer();
   const changedSnapshots: ExplorerSnapshot[] = [
+    { ...current, configuredDiscoveryRootPath: "" },
     { ...current, threads: current.threads.slice(1) },
     { ...current, threads: current.threads.map((value, index) => index === 0 ? { ...value, preview: "renamed" } : value) },
     { ...current, threads: current.threads.map((value, index) => index === 0 ? { ...value, status: "idle" } : value) },

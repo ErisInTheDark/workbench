@@ -16,6 +16,19 @@ import WorkbenchThreadStateRelationalRepository from "./database/thread-state/Wo
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
+test("discovery settings RPC admits bounded lists and rejects malformed replacements", async () => {
+  const { controller } = createController();
+  assert.deepEqual((await controller.handle({
+    id: 1, method: "project/discovery-settings/read", params: {},
+  })).result, { paths: [] });
+  assert.deepEqual((await controller.handle({
+    id: 2, method: "project/discovery-settings/update", params: { paths: ["C:/one", "D:/two"] },
+  })).result, { accepted: true, paths: ["C:/one", "D:/two"] });
+  assert.ok((await controller.handle({
+    id: 3, method: "project/discovery-settings/update", params: { paths: [42] },
+  })).error);
+});
+
 test("command approval settings resolve canonical project ownership before listing or removal", async () => {
   const calls: Array<{ projectId: string; id?: string }> = [];
   const canonicalProjectId = "a6652caf-f7c1-4a2a-ab55-6b387a19ab05";
@@ -158,6 +171,8 @@ function createController(options: {
     },
     projects: {
       readCatalog: async () => ({ data: [], rootPath: "" }),
+      readDiscoverySettings: async () => ({ paths: [] }),
+      updateDiscoverySettings: async paths => ({ accepted: true, paths: [...paths] }),
       resolveProjectById: async (projectId) => {
         if (projectId === options.rejectProjectId) throw new Error("Unknown project.");
         return { id: projectId == null ? undefined : ProjectIdSchema.parse(options.canonicalProjectId ?? projectId), kind: "git", root: "", rootPath: "", roots: [] };

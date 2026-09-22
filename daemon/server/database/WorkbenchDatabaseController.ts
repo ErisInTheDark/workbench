@@ -162,7 +162,6 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
 
   readInitialProjectCatalog() {
     this.assertReady();
-    if (!this.#initialProjects) throw new WorkbenchDatabaseFailure("Database startup has no prepared project catalogue.");
     return this.#initialProjects;
   }
 

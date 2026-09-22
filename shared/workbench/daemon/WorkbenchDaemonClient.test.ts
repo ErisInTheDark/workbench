@@ -23,6 +23,17 @@ test("command approval responses reject malformed permissions without leaking th
   assert.ok(diagnostics.every(message => !message.includes("private-") && message.length < 1200));
 });
 
+test("discovery settings reject malformed daemon rows without leaking paths", async context => {
+  const diagnostics: string[] = [];
+  context.mock.method(console, "error", (message: string) => { diagnostics.push(message); });
+  const client = new WorkbenchDaemonClient({
+    request: async <TResponse>() => ({ paths: ["private", 42] }) as TResponse,
+  });
+  await assert.rejects(client.projectDiscoverySettings.read());
+  assert.equal(diagnostics.length, 1);
+  assert.ok(!diagnostics[0]!.includes("private"));
+});
+
 test("voice events reject malformed remote data without logging document contents", async context => {
   const diagnostics: string[] = [];
   context.mock.method(console, "error", (message: string) => { diagnostics.push(message); });

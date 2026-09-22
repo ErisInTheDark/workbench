@@ -16,6 +16,7 @@ import { VoiceConfigurationSchema, VoiceSessionEventSchema, type VoiceSessionEve
 import { WorkingTreeReadSchema, WorkingTreeDiffSchema, WorkingTreePreviewSchema, WorkingTreeResultSchema } from "../git/working-tree-contracts";
 import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provider-settings";
 import { CommandApprovalSnapshotSchema } from "../settings/command-approvals";
+import { ProjectDiscoverySettingsReadSchema, ProjectDiscoverySettingsResultSchema } from "../project/project-discovery-settings";
 import {
   GitArcStashResultSchema,
   GitCheckpointCompareResultSchema,
@@ -89,6 +90,8 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "sandbox-network/update": return WorkbenchSandboxNetworkSettingsResponseSchema;
     case "command-approvals/read":
     case "command-approvals/remove": return CommandApprovalSnapshotSchema;
+    case "project/discovery-settings/read": return ProjectDiscoverySettingsReadSchema;
+    case "project/discovery-settings/update": return ProjectDiscoverySettingsResultSchema;
     case "project/catalog/read": return WorkbenchProjectsPayloadSchema;
     case "thread/identity/resolve": return z.object({ data: WorkbenchThreadIdentityResolutionSchema.nullable() }).strict();
     case "project/file/read": return z.object({
@@ -259,6 +262,11 @@ class WorkbenchDaemonClient {
   readonly commandApprovals = {
     read: (params: WorkbenchDaemonParams<"command-approvals/read">) => this.request("command-approvals/read", params),
     remove: (params: WorkbenchDaemonParams<"command-approvals/remove">) => this.request("command-approvals/remove", params),
+  };
+
+  readonly projectDiscoverySettings = {
+    read: () => this.request("project/discovery-settings/read", {}),
+    update: (params: WorkbenchDaemonParams<"project/discovery-settings/update">) => this.request("project/discovery-settings/update", params),
   };
 
   readonly nativeFiles = {

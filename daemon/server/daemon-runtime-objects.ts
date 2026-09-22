@@ -116,7 +116,7 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
     "readSubagents" | "readOwnedSubagents" | "reserveSubagent" | "activateSubagent" | "removeSubagent">,
   WorkbenchThreadStateStoreDatabase,
   WorkbenchProjectPersistence {
-  readInitialProjectCatalog(): WorkbenchProjectStartup;
+  readInitialProjectCatalog(): WorkbenchProjectStartup | null;
   queryTranscript(request: import("./database/transcript/transcript-query-contract").TranscriptQuery): Promise<import("./database/transcript/transcript-query-contract").TranscriptQueryPage>;
   readThreadContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
   readTranscriptProviderCursor?(threadId: string, turnId: string): Promise<string | null | undefined>;

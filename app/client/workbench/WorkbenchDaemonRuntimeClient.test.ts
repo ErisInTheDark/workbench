@@ -22,8 +22,8 @@ function envelope(revision: number, scope: string) {
     revision,
     snapshot: {
       dirtyScopes: [{ description: scope, destructive: false, scope }],
-      error: null,
-      pendingScopes: [],
+      error: null as string | null,
+      pendingScopes: [] as string[],
     },
   };
 }
@@ -52,6 +52,35 @@ test("connection reset admits a lower revision from the replacement server", asy
   client.resetConnection();
   await client.open();
   assert.equal(client.getSnapshot().dirtyScopes[0]?.scope, "server:database");
+});
+
+test("only an ordered successful server reload completion notifies its owner", () => {
+  const client = new WorkbenchDaemonRuntimeClient({ request: async () => ({}) });
+  const completed: number[] = [];
+  const unsubscribe = client.subscribeServerReloadCompleted(() => completed.push(1));
+  const update = (revision: number, pendingScopes: string[], error: string | null = null) => {
+    const value = envelope(revision, "server:core");
+    value.snapshot.pendingScopes = pendingScopes;
+    value.snapshot.error = error;
+    client.acceptUpdate(value);
+  };
+  update(1, ["server:core"]);
+  update(0, []);
+  update(2, [], "reload failed");
+  update(3, ["client:compiler"]);
+  update(4, []);
+  update(5, ["server:database"]);
+  update(5, []);
+  client.resetConnection();
+  update(0, []);
+  assert.deepEqual(completed, []);
+  update(1, ["server:core"]);
+  update(2, []);
+  assert.deepEqual(completed, [1]);
+  unsubscribe();
+  update(3, ["server:core"]);
+  update(4, []);
+  assert.deepEqual(completed, [1]);
 });
 
 test("an old server enables legacy thread dirt without hiding unsupported reads", async () => {

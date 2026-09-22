@@ -81,6 +81,18 @@ async function checkStoredQueries(controller: WorkbenchDatabaseController) {
   await assert.rejects(controller.queryTranscript(TranscriptQuerySchema.parse({ action: "read", threads: ["missing-wb-id"] })), /Unknown Workbench thread/u);
 }
 
+test("fresh database is ready without a prepared project catalogue", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-empty-project-startup-"));
+  const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
+  try {
+    await controller.start();
+    assert.equal(controller.readInitialProjectCatalog(), null);
+  } finally {
+    await controller.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("worker migration waits for its owner to retain the rollback checkpoint", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-ack-"));
   captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));

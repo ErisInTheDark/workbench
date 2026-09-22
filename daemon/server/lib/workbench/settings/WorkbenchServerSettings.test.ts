@@ -28,3 +28,24 @@ test("capabilities default safely and serialised updates persist across worker r
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("discovery folders start empty and replace atomically in order across reopen", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-discovery-settings-"));
+  const options = { databasePath: path.join(root, "workbench.sqlite3") };
+  let database = new WorkbenchDatabaseController(options);
+  try {
+    let settings = new WorkbenchServerSettings(database);
+    assert.deepEqual(await settings.readProjectDiscoveryRoots(), []);
+    await settings.replaceProjectDiscoveryRoots(["C:/first", "D:/second"]);
+    assert.deepEqual(await settings.readProjectDiscoveryRoots(), ["C:/first", "D:/second"]);
+    await database.close();
+    database = new WorkbenchDatabaseController(options);
+    settings = new WorkbenchServerSettings(database);
+    assert.deepEqual(await settings.readProjectDiscoveryRoots(), ["C:/first", "D:/second"]);
+    await settings.replaceProjectDiscoveryRoots([]);
+    assert.deepEqual(await settings.readProjectDiscoveryRoots(), []);
+  } finally {
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

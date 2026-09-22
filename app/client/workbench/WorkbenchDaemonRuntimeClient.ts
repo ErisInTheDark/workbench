@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchDaemonRuntimeClientOptions: shared-socket request seam for browser reload runtime tests.
- * - default WorkbenchDaemonRuntimeClient: own ordered daemon reload dirt, mixed-version fallback, and user reload admission.
+ * - default WorkbenchDaemonRuntimeClient: own ordered reload dirt, server-completion signals, fallback, and reload admission.
  */
 import type {
   WorkbenchReloadDirtSnapshot,
@@ -32,6 +32,7 @@ export default class WorkbenchDaemonRuntimeClient {
   #dedicatedObservation = false;
   #disposed = false;
   readonly #listeners = new Set<() => void>();
+  readonly #serverReloadListeners = new Set<() => void>();
   readonly #request: WorkbenchDaemonRuntimeClientOptions["request"];
   #revision = -1;
   #snapshot: WorkbenchReloadDirtSnapshot = EMPTY;
@@ -45,6 +46,11 @@ export default class WorkbenchDaemonRuntimeClient {
   subscribe = (listener: () => void) => {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  };
+
+  subscribeServerReloadCompleted = (listener: () => void) => {
+    this.#serverReloadListeners.add(listener);
+    return () => this.#serverReloadListeners.delete(listener);
   };
 
   async open() {
@@ -100,6 +106,7 @@ export default class WorkbenchDaemonRuntimeClient {
   dispose() {
     this.#disposed = true;
     this.#listeners.clear();
+    this.#serverReloadListeners.clear();
   }
 
   private acceptEnvelope(value: unknown, message: string) {
@@ -110,13 +117,18 @@ export default class WorkbenchDaemonRuntimeClient {
       return false;
     }
     this.#dedicatedObservation = true;
-    if (parsed.data.revision < this.#revision) return true;
+    if (parsed.data.revision <= this.#revision) return true;
+    const completedServerReload = this.#revision >= 0
+      && this.#snapshot.pendingScopes.some(scope => scope.startsWith("server:"))
+      && parsed.data.snapshot.pendingScopes.length === 0
+      && parsed.data.snapshot.error === null;
     this.#revision = parsed.data.revision;
     this.#publish({
       dirtyScopes: parsed.data.snapshot.dirtyScopes,
       error: parsed.data.snapshot.error ?? null,
       pendingScopes: parsed.data.snapshot.pendingScopes,
     });
+    if (completedServerReload) for (const listener of this.#serverReloadListeners) listener();
     return true;
   }
 

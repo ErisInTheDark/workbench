@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchProjectState: owned project list, selected tree, and explorer persistence state for the workbench.
- * - WorkbenchProjectSnapshot: readonly projection of the project list and selected project state.
+ * - WorkbenchProjectSnapshot: readonly project list, discovery-root status, and selected project state.
  * - WorkbenchProjectListener: subscriber signature for project client state changes.
  * - WorkbenchProjectTransport: project mutation and refresh requests carried by the existing Workbench bridge.
  * - WorkbenchProjectClientOptions: injected project transport and error boundary.
@@ -34,6 +34,7 @@ export function cloneTreeNodes(nodes: TreeNode[]): TreeNode[] {
 
 export interface WorkbenchProjectState {
   changes: Record<string, ChangeSummary>;
+  configuredDiscoveryRootPath: string | null;
   currentProjectId: ProjectId | "";
   expandedDirectories: Set<string>;
   fileIndex: ProjectTreeFileIndexRecord;
@@ -49,6 +50,7 @@ export interface WorkbenchProjectState {
 
 export interface WorkbenchProjectSnapshot {
   changes: Record<string, ChangeSummary>;
+  configuredDiscoveryRootPath: string | null;
   currentProjectId: ProjectId | "";
   expandedDirectories: string[];
   isLoading: boolean;
@@ -79,6 +81,7 @@ interface WorkbenchProjectClient {
   selectInitialProject: () => Promise<void>;
   selectProjectStrict: (projectId: string) => Promise<boolean>;
   refreshProject: () => Promise<void>;
+  refreshCatalog: () => Promise<boolean>;
   resetObservation: () => void;
   subscribe: (listener: WorkbenchProjectListener) => () => void;
   toggleDirectory: (path: string) => boolean;
@@ -109,6 +112,7 @@ function readExpandedDirectories(controller: WorkbenchClientStateController | un
 function createInitialProjectState(controller: WorkbenchClientStateController | undefined): WorkbenchProjectState {
   return {
     changes: {},
+    configuredDiscoveryRootPath: null,
     currentProjectId: "",
     expandedDirectories: new Set(readExpandedDirectories(controller)),
     fileIndex: ProjectTreeFileIndex.empty,
@@ -162,6 +166,7 @@ function WorkbenchProjectClient({
   function buildSnapshot(): WorkbenchProjectSnapshot {
     return {
       changes: { ...state.changes },
+      configuredDiscoveryRootPath: state.configuredDiscoveryRootPath,
       currentProjectId: state.currentProjectId,
       expandedDirectories: Array.from(state.expandedDirectories).sort((left, right) => left.localeCompare(right)),
       isLoading: state.isLoading,
@@ -246,6 +251,7 @@ function WorkbenchProjectClient({
 
   function restoreProjectState(previous: WorkbenchProjectState, previousProjectRevision: number) {
     state.changes = { ...previous.changes };
+    state.configuredDiscoveryRootPath = previous.configuredDiscoveryRootPath;
     state.currentProjectId = previous.currentProjectId;
     state.expandedDirectories = new Set(previous.expandedDirectories);
     state.fileIndex = previous.fileIndex;
@@ -264,6 +270,7 @@ function WorkbenchProjectClient({
   function captureProjectState(): WorkbenchProjectState {
     return {
       changes: { ...state.changes },
+      configuredDiscoveryRootPath: state.configuredDiscoveryRootPath,
       currentProjectId: state.currentProjectId,
       expandedDirectories: new Set(state.expandedDirectories),
       fileIndex: state.fileIndex,
@@ -333,6 +340,8 @@ function WorkbenchProjectClient({
   }
 
   function applyCatalog(payload: WorkbenchProjectsPayload) {
+    const didDiscoveryRootChange = state.configuredDiscoveryRootPath !== payload.rootPath;
+    state.configuredDiscoveryRootPath = payload.rootPath;
     const didProjectsChange = !areDeeplyEqual(state.projects, payload.data);
     if (didProjectsChange) state.projects = payload.data.map((project) => ({ ...project, roots: project.roots.map((root) => ({ ...root })) }));
     const currentProject = state.projects.find((project) => project.id === state.currentProjectId);
@@ -345,8 +354,8 @@ function WorkbenchProjectClient({
       state.rootPath = currentProject.rootPath;
       state.roots = currentProject.roots.map((root) => ({ ...root }));
     }
-    if (didProjectsChange || didMetadataChange) markSnapshotDirty();
-    return didProjectsChange || didMetadataChange;
+    if (didDiscoveryRootChange || didProjectsChange || didMetadataChange) markSnapshotDirty();
+    return didDiscoveryRootChange || didProjectsChange || didMetadataChange;
   }
 
   async function installCatalog(payload: WorkbenchProjectsPayload) {
@@ -381,6 +390,16 @@ function WorkbenchProjectClient({
   async function refreshProjects() {
     const payload = await transport.readCatalog();
     return await installCatalog(payload);
+  }
+
+  async function refreshCatalog() {
+    const selected = state.currentProjectId;
+    await refreshProjects();
+    if (selected && !state.projects.some(project => project.id === state.currentProjectId)) {
+      enterNoProject();
+      return true;
+    }
+    return false;
   }
 
   async function refreshProject() {
@@ -460,7 +479,7 @@ function WorkbenchProjectClient({
       return true;
     }
 
-    const didMetadataChange = applyCatalog({ data: state.projects, rootPath: "" });
+    const didMetadataChange = applyCatalog({ data: state.projects, rootPath: state.configuredDiscoveryRootPath ?? "" });
     if (didRefreshProjectsChange || didMetadataChange) emit();
     return true;
   }
@@ -538,6 +557,7 @@ function WorkbenchProjectClient({
     selectInitialProject,
     selectProjectStrict,
     refreshProject,
+    refreshCatalog,
     resetObservation,
     subscribe,
     toggleDirectory,

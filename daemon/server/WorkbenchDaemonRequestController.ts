@@ -18,6 +18,7 @@ import {
 } from "workbench-shared/workbench/daemon/workbench-daemon-requests";
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import { CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
+import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
 import {
     GitArcStashResultSchema,
     GitCheckpointCompareResultSchema,
@@ -71,6 +72,7 @@ const METHODS = new Set([
   "browse/sessions/forget", "browse/sessions/read", "browse/sessions/stop",
   "sandbox-network/read", "sandbox-network/update",
   "command-approvals/read", "command-approvals/remove",
+  "project/discovery-settings/read", "project/discovery-settings/update",
   ...Object.keys(WORKBENCH_GIT_ARC_ACTION_BY_METHOD),
   "local-capabilities/read", "local-capabilities/update",
   "native/file/link-roots", "native/file/open", "native/file/reveal",
@@ -211,7 +213,7 @@ export default class WorkbenchDaemonRequestController {
     nativeFiles: Pick<WorkbenchNativeFileController, "linkRoots" | "open" | "reveal">;
     profiles: Pick<WorkbenchComposerProfileStore, "mutate" | "read">;
     profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
-    projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "resolveProjectById">;
+    projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "resolveProjectById" | "readDiscoverySettings" | "updateDiscoverySettings">;
     search: Pick<WorkbenchSearchController, "search">;
     stats: Pick<WorkbenchStatsController, "read" | "readDetailed" | "refreshRateLimits" | "startImport">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
@@ -242,6 +244,16 @@ export default class WorkbenchDaemonRequestController {
       }
       let result: object;
       switch (request.method) {
+        case "project/discovery-settings/read": {
+          result = await this.owners.projects.readDiscoverySettings();
+          break;
+        }
+        case "project/discovery-settings/update": {
+          const parsed = ProjectDiscoverySettingsUpdateSchema.safeParse(params);
+          if (!parsed.success) throw new InvalidParamsError("Invalid project discovery settings.");
+          result = await this.owners.projects.updateDiscoverySettings(parsed.data.paths);
+          break;
+        }
         case "git/working-tree/read": {
           if (!this.owners.workingTree) throw new Error("Working tree is unavailable.");
           const input = WorkingTreeReadRequestSchema.parse(params);

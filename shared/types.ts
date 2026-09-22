@@ -1074,6 +1074,7 @@ export interface ProjectSnapshot {
 }
 
 export interface ExplorerSnapshot {
+  configuredDiscoveryRootPath: string | null;
   currentProjectId: ProjectId | "";
   projects: WorkbenchProjectOption[];
   root: string;
@@ -1142,6 +1143,7 @@ export interface WorkbenchControls {
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   daemonRuntime: WorkbenchDaemonRuntimeStore;
   refreshRateLimits: () => Promise<void>;
+  refreshProjectCatalog: () => Promise<void>;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   moveThreadDraft: (sourceProjectId: ProjectId, destinationProjectId: ProjectId, draftId: DraftId) => Promise<void>;
   sendThreadMessage: (

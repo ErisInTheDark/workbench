@@ -111,14 +111,8 @@ export default ReloadableNode.define<
     } = loadDatabaseControllers();
     const databasePath = join(context.dataRootPath, "daemon", "workbench.sqlite3");
     const handoffState = build.handoffState as DatabaseReloadState | undefined;
-    const { discoverProjectIdentities } = require("./lib/project") as typeof import("./lib/project");
     const database = new DatabaseController({
       databasePath,
-      prepareProjects: async signal => {
-        const discovery = await discoverProjectIdentities(signal);
-        signal.throwIfAborted();
-        return { discovery };
-      },
       beforeMigration: handoffState ? (backupPath) => { handoffState.checkpointPath = backupPath; } : undefined,
     });
     if (handoffState) handoffState.releaseCandidate = () => database.abortPreparation();

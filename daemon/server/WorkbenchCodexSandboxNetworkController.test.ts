@@ -11,22 +11,18 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 let WorkbenchDatabaseNode: typeof import("./WorkbenchDatabaseNode").default;
 let CodexConfigurationNode: typeof import("./CodexConfigurationNode").default;
 let discoveryRoot: string;
-const previousProjectsRoot = process.env.WORKBENCH_PROJECTS_ROOT;
 const previousLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
 
 before(async () => {
   discoveryRoot = await mkdtemp(join(tmpdir(), "workbench-network-discovery-"));
   await mkdir(join(discoveryRoot, "project", ".git"), { recursive: true });
   await mkdir(join(discoveryRoot, "other", ".git"), { recursive: true });
-  process.env.WORKBENCH_PROJECTS_ROOT = discoveryRoot;
   process.env.WORKBENCH_LIBRARY_ROOT = join(discoveryRoot, "library");
   ({ default: WorkbenchDatabaseNode } = await import("./WorkbenchDatabaseNode"));
   ({ default: CodexConfigurationNode } = await import("./CodexConfigurationNode"));
 });
 
 after(async () => {
-  if (previousProjectsRoot === undefined) delete process.env.WORKBENCH_PROJECTS_ROOT;
-  else process.env.WORKBENCH_PROJECTS_ROOT = previousProjectsRoot;
   if (previousLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
   else process.env.WORKBENCH_LIBRARY_ROOT = previousLibraryRoot;
   if (discoveryRoot) await rm(discoveryRoot, { recursive: true, force: true });
@@ -70,7 +66,11 @@ test("Codex sandbox network settings persist global and project inheritance", as
   let configurationNode = createConfigurationNode(databaseNode.registrations.database!);
   try {
     await databaseNode.start();
-    const projects = databaseNode.registrations.database!.readInitialProjectCatalog().catalog;
+    assert.equal(databaseNode.registrations.database!.readInitialProjectCatalog(), null);
+    const { discoverProjectIdentities } = await import("./lib/project");
+    const projects = (await databaseNode.registrations.database!.reconcileProjectCatalog(
+      await discoverProjectIdentities([discoveryRoot]),
+    )).catalog;
     const projectId = projects.find(record => record.project.name === "project")?.project.id;
     const otherId = projects.find(record => record.project.name === "other")?.project.id;
     assert.ok(projectId && otherId);

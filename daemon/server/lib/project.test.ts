@@ -76,7 +76,7 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
   context.after(() => database.close());
   installWorkbenchDatabaseSchema(database);
   const repository = new WorkbenchProjectRepository(database);
-  const projects = repository.reconcile(await discoverProjectIdentities()).catalog.map(record => record.project);
+  const projects = repository.reconcile(await discoverProjectIdentities([configuredProjectsRoot])).catalog.map(record => record.project);
 
   const gitProject = projects.find((project) => project.kind === "git" && project.relativePath === "manyworld");
   assert.ok(gitProject);
@@ -115,7 +115,7 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
   assert.equal(agentProject.project.id, directProject.id);
   assert.equal(normalizePath(agentProject.project.rootPath), normalizePath(await fs.realpath(directProjectRoot)));
 
-  const identified = await discoverProjectIdentities();
+  const identified = await discoverProjectIdentities([configuredProjectsRoot]);
   assert.equal(identified.data.filter(project => project.kind === "git" && project.rootPath === directProject.rootPath).length, 1);
   assert.ok(identified.data.some(project => project.kind === "git" && project.rootPath === canonicalRootPath));
   const identifiedDirect = identified.data.find(project => project.kind === "git" && project.rootPath === directProject.rootPath)!;
@@ -124,12 +124,24 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
     alias: directProject.relativePath, identityKey: identifiedDirect.identityKey,
   });
 
+  const empty = await discoverProjectIdentities([]);
+  assert.deepEqual(empty.data.map(project => project.kind), ["workbench-library"]);
+  assert.deepEqual(empty.discoveryRoots, []);
+  const additionalFolder = path.join(temporaryRoot, "additional");
+  await fs.mkdir(additionalFolder);
+  await git("init", "--quiet", additionalFolder);
+  const combined = await discoverProjectIdentities([configuredProjectsRoot, additionalFolder]);
+  assert.equal(combined.data.filter(project => project.kind === "git"
+    && project.rootPath === normalizePath(additionalFolder)).length, 1);
+  assert.ok(combined.aliases.some(alias => alias.alias.startsWith("root-2/")));
+  assert.deepEqual(combined.discoveryRoots, [configuredProjectsRoot, additionalFolder]);
+
   await fs.writeFile(path.join(projectsRoot, "incomplete.code-workspace"), JSON.stringify({
     folders: [{ path: "manyworld" }, { path: "missing-member" }],
   }));
   const incompleteWarnings: string[] = [];
   const incompleteWarning = context.mock.method(console, "warn", (message: string) => incompleteWarnings.push(message));
-  const incomplete = await discoverProjectIdentities();
+  const incomplete = await discoverProjectIdentities([configuredProjectsRoot]);
   incompleteWarning.mock.restore();
   assert.ok(!incomplete.data.some(project => project.relativePath === "incomplete.code-workspace"),
     "a missing member must not give a workspace the identity of a smaller set");
@@ -143,12 +155,12 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
   await git("-C", cloneRoot, "config", "remote.origin.url", "git@example.test:stories/notekeeper.git");
   const warnings: string[] = [];
   const warning = context.mock.method(console, "warn", (message: string) => warnings.push(message));
-  const ambiguous = await discoverProjectIdentities();
+  const ambiguous = await discoverProjectIdentities([configuredProjectsRoot]);
   assert.ok(ambiguous.observedKeys.includes(identifiedDirect.identityKey));
   assert.equal(warnings.length, 1);
   assert.ok(!ambiguous.data.some(project => project.rootPath === directProject.rootPath || project.rootPath === normalizePath(cloneRoot)));
   assert.ok(ambiguous.data.some(project => project.rootPath === canonicalRootPath));
-  const repeatedAmbiguous = await discoverProjectIdentities();
+  const repeatedAmbiguous = await discoverProjectIdentities([configuredProjectsRoot]);
   assert.equal(warnings.length, 1);
   assert.ok(!repeatedAmbiguous.data.some(project => (
     project.rootPath === directProject.rootPath || project.rootPath === normalizePath(cloneRoot)
@@ -159,7 +171,7 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
   const linkedWorktree = path.join(canonicalProjectRoot, "linked-worktree");
   await git("-C", canonicalProjectRoot, "worktree", "add", "--quiet", "--detach", linkedWorktree);
   await fs.writeFile(path.join(projectsRoot, "linked.code-workspace"), JSON.stringify({ folders: [{ path: linkedWorktree }] }));
-  const withoutWorktrees = await discoverProjectIdentities();
+  const withoutWorktrees = await discoverProjectIdentities([configuredProjectsRoot]);
   assert.ok(!withoutWorktrees.data.some(project => project.relativePath === "linked.code-workspace"));
   assert.ok(withoutWorktrees.excludedRootPaths.includes(normalizePath(linkedWorktree)));
   await assert.rejects(

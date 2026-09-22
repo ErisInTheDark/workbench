@@ -2202,8 +2202,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   ) : null}
                   <ProjectSidebar
                     activeProjectId={activeProjectId}
+                    onConfigureGitRoots={() => navigateToRoute(createSettingsRoute("", "global"))}
                     onProjectLinkClick={selectProjectFromLink}
                     projects={explorer.projects}
+                    showGitRootsSetup={explorer.configuredDiscoveryRootPath === ""}
                   />
                   {activeProjectId && currentProject ? <WorkbenchCurrentProjectHeading project={currentProject} /> : null}
                   <WorkbenchGitSidebar active={showGitView} onNavigate={event => {
@@ -2511,6 +2513,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 {showSettingsView && !shouldRenderMainLayout ? (
                   <WorkbenchSettingsView
                     activeProjectId={activeProjectId}
+                    onGitRootsSaved={async () => { await controls?.refreshProjectCatalog(); }}
                     onError={setSelectionError}
                     onNavigate={(scope) => {
                       navigateToRoute(createSettingsRoute(activeProjectId, scope));

@@ -22,6 +22,7 @@ import WorkbenchAppStateRepository from "../../app/server/state/WorkbenchAppStat
 import WorkbenchNetworkRepository from "../../daemon/host/network/WorkbenchNetworkRepository";
 import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "../../shared/database/workbench-database-statements";
 import { serviceTableInventory } from "../../shared/state/workbench-service-schema";
+import { ProjectDiscoverySettingsResultSchema } from "../../shared/workbench/project/project-discovery-settings";
 
 test("forward database migration preserves data and the real app can use it", {
   skip: process.env.WORKBENCH_LIFECYCLE_TEST_FILE !== "test/scenarios/lifecycle.scenario.test.ts",
@@ -54,6 +55,12 @@ test("forward database migration preserves data and the real app can use it", {
     const capturedCounts = await isolateThreadStateMigrationSource(captured, runtime.root, t.signal);
 
     await runtime.start();
+    const emptyCatalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
+    assert.ok(!emptyCatalog.data.some(entry => path.resolve(entry.rootPath) === runtime.project),
+      "The migrated daemon must not adopt the old environment root");
+    const savedRoots = ProjectDiscoverySettingsResultSchema.parse(
+      await runtime.request("project/discovery-settings/update", { paths: [path.dirname(runtime.project)] }));
+    assert.deepEqual(savedRoots, { accepted: true, paths: [path.dirname(runtime.project)] });
     const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
     const project = catalog.data.find(entry => path.resolve(entry.rootPath) === runtime.project);
     assert.ok(project, "The migrated daemon must discover the isolated project");
