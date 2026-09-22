@@ -1,6 +1,6 @@
 ## Task orientation guidance
 
-1. Search (not read) `docs/GLOSSARY.md` for vague terminology the user gives that could have project meaning.
+1. Search (not read) `docs/GLOSSARY.md` for vague terminology the user gives that could have project meaning. Search the glossary for any potentially project-specific words or locations whenever they appear in new user messages.
 2. Before planning or editing project behaviour or architecture, read all files that seem relevant under `docs/invariants/`.
 3. If finding a term, invariant, or code takes more than one search, consider proposing a durable instruction or code improvement.
 4. Propose only succinct, truly durable and useful glossary terms and invariants; you needing them does not mean many agents will need them. Show exact proposed text prominently. Do not add headings or prose.
@@ -51,13 +51,14 @@ CRITICAL INSTRUCTION EDITING RULES:
 Run `wb test` and `pnpm typecheck` from the repository root.
 
 ### Allowed Validation
+do not apply timeouts for validation command runs! they own their own timeouts
 
 `pnpm typecheck`
 
 `wb test` tests full suite filtered by claims (run this first!)
 `wb test -- [<file>...]` tests only the specified files (useful for targeted retests)
 
-note: the following two scenario tests take a LONG time, and should be used for FINAL validation; do not set a timeout!
+note: the following two scenario tests take a LONG time, and should be used for FINAL validation
 `pnpm test:lifecycle` runs a clone of the full app, testing schema migration; do not use if you have not changed the db!
 `pnpm test:live` runs a clone of the full app, testing with a paid luna low codex turn; only use when the user asks for it!
 
