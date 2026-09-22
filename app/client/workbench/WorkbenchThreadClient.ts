@@ -745,7 +745,8 @@ function WorkbenchThreadClient(
             },
             readOptimisticInitials: thread => optimisticInputs.getInitialProjections(getThreadStateKey(thread.harness, thread.id)),
             transcripts: {
-              subscribe: (params, listener, streamListener) => transcripts.subscribe(params, listener, streamListener),
+              subscribe: (params, listener, streamListener, streamFailure) =>
+                transcripts.subscribe(params, listener, streamListener, streamFailure),
               unsubscribe: async params => {
                 // Closing this client closes the shared socket and releases all server subscriptions.
                 if (disposed) return;

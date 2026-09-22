@@ -243,6 +243,28 @@ test("explicit reconciliation discovers a predecessor absent from the stored cat
   assert.equal(result.recording.page?.turn.id, "missing");
 });
 
+test("previous reconciliation keeps a stored boundary in provider seconds", async () => {
+  const loader = new CodexThreadWindowLoader(async () => response({
+    data: [{ ...turn("older", ["recovered"]), startedAt: 1_790_113_600 }],
+    nextCursor: null,
+  }));
+  const boundary = {
+    ...history("boundary", "loaded"),
+    startedAt: 1_790_113_687_000,
+    completedAt: 1_790_113_848_000,
+    durationMs: 161_000,
+  };
+  const result = await loader.ensureWindow(fakeStore({ boundary: "before-boundary" }).store, thread(),
+    withHistory([turn("boundary", ["saved"])], [boundary]),
+    { mode: "previous", beforeTurnId: "boundary" }, { reconcile: true });
+  assert.ok(result);
+  assert.deepEqual(result.recording.catalog?.turns.map(({ startedAt, completedAt, durationMs }) =>
+    ({ startedAt, completedAt, durationMs })), [
+    { startedAt: 1_790_113_600, completedAt: 2, durationMs: 1_000 },
+    { startedAt: 1_790_113_687, completedAt: 1_790_113_848, durationMs: 161_000 },
+  ]);
+});
+
 test("unseen threads import every identity and materialize only the latest turn", async () => {
   const requests: JsonRpcRequest[] = [];
   const latest = turn("latest", ["latest-item"]);

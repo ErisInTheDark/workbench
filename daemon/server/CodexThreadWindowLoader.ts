@@ -256,7 +256,9 @@ export default class CodexThreadWindowLoader {
         catalog: {
           turns: [turn, ...readHistory(hydratedThread).filter(entry => entry.turnId === hydration.beforeTurnId).map(entry => ({
             id: entry.turnId, items: [], itemsView: "notLoaded" as const, error: null,
-            startedAt: entry.startedAt, completedAt: entry.completedAt, durationMs: entry.durationMs, status: entry.status,
+            startedAt: entry.startedAt === null ? null : entry.startedAt / 1_000,
+            completedAt: entry.completedAt === null ? null : entry.completedAt / 1_000,
+            durationMs: entry.durationMs, status: entry.status,
           }))],
         },
       } : {}),

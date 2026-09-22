@@ -15,6 +15,7 @@ import {
   type WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
 import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository.ts";
+import WorkbenchTranscriptTimestampRepair from "./transcript/WorkbenchTranscriptTimestampRepair.ts";
 import WorkbenchThreadIdentityRepository from "./thread-identity/WorkbenchThreadIdentityRepository.ts";
 import WorkbenchTranscriptIdentityRepository from "./transcript/WorkbenchTranscriptIdentityRepository.ts";
 import WorkbenchThreadStateRelationalRepository from "./thread-state/WorkbenchThreadStateRelationalRepository.ts";
@@ -561,6 +562,7 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
       await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, {
         beforeMigration: acknowledgeCheckpoint,
       });
+      await new WorkbenchTranscriptTimestampRepair(connection).run(acknowledgeCheckpoint);
       new WorkbenchThreadStateIntegrity(connection).verify();
       await new WorkbenchExternalStorageMigration(connection, path.dirname(request.databasePath)).run();
       if (request.projects) {

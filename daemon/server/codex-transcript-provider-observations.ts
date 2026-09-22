@@ -133,7 +133,11 @@ export function createCodexTurnTokenUsageObservationFromNotification(
 }
 
 function secondsToMilliseconds(value: number | null) {
-  return value === null ? null : Math.round(value * 1_000);
+  if (value === null) return null;
+  if (!Number.isFinite(value) || value < 0 || value > Date.UTC(2100, 0, 1) / 1_000) {
+    throw new Error("Invalid provider turn timestamp in seconds.");
+  }
+  return Math.round(value * 1_000);
 }
 
 function normalizeProviderTurn(turn: Turn): Turn {

@@ -1122,6 +1122,12 @@ export default memo(function ThreadViewContent ({
           {activeThread ? (
             usesSqlTranscript && renderActiveThread ? (
               activeTranscriptProjection ? (
+                <>
+                  {activeTranscriptSource?.status === "failed" ? (
+                    <div role="alert" className="mx-auto max-w-content px-5 py-3 text-sm text-danger md:px-6">
+                      {activeTranscriptSource.message}
+                    </div>
+                  ) : null}
                   <ThreadTranscriptProjection
                     canLoadPreviousTurn={canLoadPreviousTurn}
                     hiddenReasoningStep={null}
@@ -1141,6 +1147,7 @@ export default memo(function ThreadViewContent ({
                     subagents={subagents}
                     workspaceRoots={workspaceFileLinkRoots}
                   />
+                </>
               ) : (
                 transcriptSourceMessage ? (
                   <div className="flex min-h-48 items-center justify-center px-4 text-center text-sm text-fg/muted">

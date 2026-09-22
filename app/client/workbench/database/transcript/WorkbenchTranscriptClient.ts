@@ -1,7 +1,8 @@
 /*
- * WorkbenchTranscriptTransport: minimal unknown-data WebSocket boundary used by the transcript client. Keywords: transcript, websocket, transport.
- * WorkbenchTranscriptConformanceReport: bounded repair or rejection evidence without received values. Keywords: transcript, conformance, diagnostics.
- * default WorkbenchTranscriptClient: typed operation caller and conformed transcript subscription owner. Keywords: transcript, browser, client.
+ * Exports:
+ * - WorkbenchTranscriptTransport: WebSocket request and notification boundary.
+ * - WorkbenchTranscriptConformanceReport: bounded transcript conformance evidence.
+ * - default WorkbenchTranscriptClient: typed transcript operations and subscriptions.
  */
 import {
   conformWorkbenchTranscriptCapabilities,
@@ -52,7 +53,11 @@ export default class WorkbenchTranscriptClient {
   private protocolVersion: 1 | 2 | 3 | 4 | null = null;
   private readonly availabilityListeners = new Set<(available: boolean) => void>();
   private readonly listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
-  private readonly streamListeners = new Map<string, (update: TranscriptStreamUpdate) => void>();
+  private readonly streamListeners = new Map<string, {
+    failed: boolean;
+    onFailure?: (error: Error) => void;
+    onUpdate: (update: TranscriptStreamUpdate) => void;
+  }>();
   private readonly reportedConformanceSignatures = new Set<string>();
   private readonly reportConformance: NonNullable<WorkbenchTranscriptClientOptions["reportConformance"]>;
   private readonly stopDisconnect: () => void;
@@ -105,9 +110,11 @@ export default class WorkbenchTranscriptClient {
     params: WorkbenchTranscriptSubscribeParams,
     listener: (snapshot: WorkbenchTranscriptSnapshot | null) => void,
     streamListener?: (update: TranscriptStreamUpdate) => void,
+    streamFailure?: (error: Error) => void,
   ) {
     this.listeners.set(params.subscriptionId, listener);
-    if (streamListener) this.streamListeners.set(params.subscriptionId, streamListener);
+    const stream = streamListener ? { failed: false, onFailure: streamFailure, onUpdate: streamListener } : null;
+    if (stream) this.streamListeners.set(params.subscriptionId, stream);
     try {
       await this.request(workbenchTranscriptOperations.subscribe, {
         ...params, ...(streamListener && this.protocolVersion !== null && this.protocolVersion >= 4
@@ -118,7 +125,7 @@ export default class WorkbenchTranscriptClient {
       });
     } catch (error) {
       if (this.listeners.get(params.subscriptionId) === listener) this.listeners.delete(params.subscriptionId);
-      if (this.streamListeners.get(params.subscriptionId) === streamListener) this.streamListeners.delete(params.subscriptionId);
+      if (this.streamListeners.get(params.subscriptionId) === stream) this.streamListeners.delete(params.subscriptionId);
       throw error;
     }
   }
@@ -176,7 +183,22 @@ export default class WorkbenchTranscriptClient {
           issues: "data" in conformed ? [] : conformed.issues,
         });
       }
-      if (conformed.success) this.streamListeners.get(conformed.data.subscriptionId)?.(conformed.data.update);
+      if (!conformed.success) {
+        const params = notification.params;
+        if (params && typeof params === "object" && "subscriptionId" in params
+          && typeof params.subscriptionId === "string" && "update" in params
+          && params.update && typeof params.update === "object" && "kind" in params.update
+          && params.update.kind === "structure") {
+          const stream = this.streamListeners.get(params.subscriptionId);
+          if (stream && !stream.failed) {
+            stream.failed = true;
+            stream.onFailure?.(new Error("The SQLite transcript structure was rejected."));
+          }
+        }
+        return;
+      }
+      const stream = this.streamListeners.get(conformed.data.subscriptionId);
+      if (!stream?.failed) stream?.onUpdate(conformed.data.update);
       return;
     }
     if (notification.method !== workbenchTranscriptNotifications.updated.method) return;

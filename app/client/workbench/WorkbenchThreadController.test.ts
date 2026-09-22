@@ -595,7 +595,7 @@ test("SQLite failures remain source-local while common failures own the whole vi
   f.publish(f.document);
   const release = f.owner.acquire("view");
   f.admit();
-  f.publishTranscript({ status: "failed", threadId: "thread", message: "projection failed" });
+  f.publishTranscript({ status: "failed", threadId: "thread", message: "projection failed", projection: null });
   assert.equal(f.owner.getSnapshot().status, "ready");
   assert.equal(f.owner.getSnapshot().transcript.status, "failed");
   f.owner.fail(new Error("admission withdrawn"));

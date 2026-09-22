@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect operation-owned response conformance and notification admission. Keywords: transcript, browser, protocol.
+ * No production exports. Protect operation response conformance and notification admission.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -64,6 +64,46 @@ test("incremental subscriptions negotiate independently and reject malformed str
     disconnect();
     notify({ method: workbenchTranscriptNotifications.streamed.method, params: { subscriptionId: "live", update } });
     assert.equal(updates.length, 1);
+  } finally {
+    client.dispose();
+  }
+});
+
+test("a rejected structure fails only its subscription and suppresses dependent deltas", async () => {
+  let notify!: (notification: { method: string; params: unknown }) => void;
+  const updates: TranscriptStreamUpdate[] = [];
+  const failures: Error[] = [];
+  const reports: WorkbenchTranscriptConformanceReport[] = [];
+  const client = new WorkbenchTranscriptClient({
+    reportConformance: report => reports.push(report),
+    transport: {
+      onNotification: listener => { notify = listener; return () => {}; },
+      request: async () => ({ subscribed: true }),
+    },
+  });
+  try {
+    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 3 } });
+    await client.subscribe({ threadId: "thread", turnLimit: 1, subscriptionId: "bad" },
+      () => {}, update => updates.push(update), error => failures.push(error));
+    await client.subscribe({ threadId: "thread", turnLimit: 1, subscriptionId: "good" },
+      () => {}, update => updates.push(update));
+    assert.equal(reports.length, 0);
+    const text = { kind: "text", threadId: "thread", turnId: "turn", itemId: "item",
+      field: "reasoningSummary", index: 0, append: true, text: "live" };
+    const bad = {
+      subscriptionId: "bad", update: { kind: "structure", reset: true, snapshot: { ...emptySnapshot, turns: [{ started_at: 1_790_113_687_000_000_000 }] } },
+    };
+    notify({ method: workbenchTranscriptNotifications.streamed.method, params: bad });
+    assert.equal(reports.length, 1, "the structural payload must be rejected at the browser boundary");
+    assert.ok(reports[0]!.issues.length, "the structural payload must fail, not merely be repaired");
+    notify({ method: workbenchTranscriptNotifications.streamed.method, params: { subscriptionId: "bad", update: text } });
+    notify({ method: workbenchTranscriptNotifications.streamed.method, params: { subscriptionId: "good", update: text } });
+    assert.equal(failures.length, 1, "the rejected structural baseline must fail its subscription");
+    assert.equal(updates.length, 1, "the independent valid subscription must keep receiving updates");
+    await client.subscribe({ threadId: "thread", turnLimit: 1, subscriptionId: "replacement" },
+      () => {}, update => updates.push(update));
+    notify({ method: workbenchTranscriptNotifications.streamed.method, params: { subscriptionId: "replacement", update: text } });
+    assert.equal(updates.length, 2, "a fresh subscription must admit updates");
   } finally {
     client.dispose();
   }

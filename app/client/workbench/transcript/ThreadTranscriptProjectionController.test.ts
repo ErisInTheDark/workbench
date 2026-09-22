@@ -957,6 +957,52 @@ test("malformed SQL data becomes a source-local failure", async () => {
   controller.dispose();
 });
 
+test("a rejected stream retains accepted content and reports once until a fresh subscription", async () => {
+  const states: ThreadTranscriptProjectionState[] = [];
+  const errors: Error[] = [];
+  const subscriptions: Array<{
+    snapshot: (snapshot: WorkbenchTranscriptSnapshot | null) => void;
+    stream: (update: TranscriptStreamUpdate) => void;
+    fail: (error: Error) => void;
+  }> = [];
+  const controller = new ThreadTranscriptProjectionController({
+    available: true,
+    onStateChange: state => states.push(state),
+    onError: error => errors.push(error),
+    transcripts: {
+      subscribe: async (_params, snapshot, stream, fail) => {
+        subscriptions.push({ snapshot, stream: stream!, fail: fail! });
+      },
+      unsubscribe: async () => {},
+    },
+    turnLimit: 4,
+  });
+  try {
+    controller.select({ thread: thread("thread", ["turn-1"]) });
+    await flush();
+    subscriptions[0]!.snapshot(emptySnapshot("thread"));
+    const accepted = states.at(-1);
+    assert.ok(accepted?.status === "ready");
+    subscriptions[0]!.fail(new Error("bad structure"));
+    const failed = states.at(-1);
+    assert.ok(failed?.status === "failed");
+    assert.equal(failed.projection, accepted.projection);
+    subscriptions[0]!.stream({ kind: "text", threadId: "thread", turnId: "turn-1", itemId: "missing",
+      field: "agentMessageText", index: null, append: true, text: "ignored" });
+    assert.equal(errors.length, 1);
+    const pending = thread("thread", ["turn-1", "turn-2"]);
+    pending.turns[1] = withWorkbenchTurnAdmission(pending.turns[1]!, "connecting");
+    controller.select({ thread: pending });
+    assert.equal(states.at(-1)?.status, "failed");
+    controller.select({ thread: thread("thread", ["turn-1", "turn-2"]) });
+    await flush();
+    subscriptions[1]!.snapshot(emptySnapshot("thread"));
+    assert.equal(states.at(-1)?.status, "ready");
+  } finally {
+    await controller.dispose();
+  }
+});
+
 test("same-thread loaded-turn changes retain the previous SQL projection", async () => {
   const listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
   const publications: Array<string | null> = [];

@@ -26,7 +26,8 @@ function SqlThreadViewer({ threadId }: { threadId: string }) {
   }, [threadId]);
   const state = useSyncExternalStore(controller?.subscribe ?? emptySubscribe, controller?.getSnapshot ?? emptySnapshot, emptySnapshot);
   const source = state?.source;
-  const projection = source?.status === "ready" || source?.status === "loading" ? source.projection : null;
+  const projection = source?.status === "ready" || source?.status === "loading" || source?.status === "failed"
+    ? source.projection : null;
   const error = state?.error ?? (source?.status === "failed" ? source.message : null);
   return (
     <ThreadTextPresentationContext value={controller?.text ?? null}>

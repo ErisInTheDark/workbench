@@ -37,7 +37,7 @@ export type ThreadTranscriptProjectionState =
   | { status: "loading"; threadId: string; projection: WorkbenchTranscriptProjection | null }
   | { status: "ready"; threadId: string; projection: WorkbenchTranscriptProjection }
   | { status: "absent"; threadId: string }
-  | { status: "failed"; threadId: string; message: string };
+  | { status: "failed"; threadId: string; message: string; projection: WorkbenchTranscriptProjection | null };
 
 function isLocallyProjectedTurn(turn: Pick<WorkbenchAdmissionTurn, "id" | "workbenchAdmission">) {
   const admission = getWorkbenchTurnAdmission(turn);
@@ -125,6 +125,7 @@ export default class ThreadTranscriptProjectionController {
   #projection: { value: WorkbenchTranscriptProjection | null; generation: number } | null = null;
   #selection: ThreadTranscriptProjectionSelection | null = null;
   #streamLayout: TranscriptLayout | null = null;
+  #failureMessage: string | null = null;
   #streamItems = new Map<string, { turnId: string; item: WorkbenchProjectedTranscriptItem }>();
   #patchPreview: { turnId: string; item: Extract<WorkbenchProjectedTranscriptItem, { type: "fileChange" }> } | null = null;
   readonly #toolPatches = new Map<string, TranscriptToolPatchUpdate>();
@@ -372,6 +373,7 @@ export default class ThreadTranscriptProjectionController {
       const cause = error instanceof Error ? error : new Error(String(error));
       this.#onStateChange({
         message: "Unable to present the SQLite transcript.",
+        projection: null,
         status: "failed",
         threadId,
       });
@@ -379,11 +381,13 @@ export default class ThreadTranscriptProjectionController {
       return true;
     }
     if (!projection) return false;
-    this.#onStateChange({
-      projection,
-      status: this.#projection?.generation === this.#generation ? status : "loading",
-      threadId: projection.thread.id,
-    });
+    this.#onStateChange(this.#failureMessage
+      ? { message: this.#failureMessage, projection, status: "failed", threadId: projection.thread.id }
+      : {
+        projection,
+        status: this.#projection?.generation === this.#generation ? status : "loading",
+        threadId: projection.thread.id,
+      });
     return true;
   }
 
@@ -433,21 +437,23 @@ export default class ThreadTranscriptProjectionController {
     const result = projectWorkbenchTranscript(snapshot);
     if ("issues" in result) {
       if (generation !== this.#generation) return;
-      this.#projection = { value: null, generation };
+      this.#failureMessage = "SQLite transcript data could not be projected.";
       this.#onStateChange({
-        message: "SQLite transcript data could not be projected.",
+        message: this.#failureMessage,
+        projection: this.#projection?.value ?? null,
         status: "failed",
         threadId: snapshot.thread.id,
       });
       this.#onError(new Error("SQLite transcript data could not be projected."));
       return;
     }
+    this.#failureMessage = null;
     this.#projection = { value: result.data, generation };
     this.#publishProjection();
   }
 
   #receiveStream(generation: number, update: TranscriptStreamUpdate) {
-    if (this.#disposed || !this.#available || generation !== this.#generation) return;
+    if (this.#disposed || !this.#available || generation !== this.#generation || this.#failureMessage) return;
     this.#incremental = true;
     if (update.kind === "absent") {
       this.#receiveSnapshot(generation, null);
@@ -510,7 +516,7 @@ export default class ThreadTranscriptProjectionController {
     if (update.kind === "text") {
       const item = this.#streamItems.get(update.itemId)?.item;
       if (!item) {
-        this.#onError(new Error("SQLite text update arrived without its item baseline."));
+        this.#failStream(new Error("SQLite text update arrived without its item baseline."), generation);
         return;
       }
       const previous = readTranscriptText(item, update.field, update.index);
@@ -542,11 +548,13 @@ export default class ThreadTranscriptProjectionController {
       this.#projection = { value: projection, generation };
       this.#publishProjection();
     } catch (error) {
-      this.#onError(new Error("SQLite structural update could not be applied.", { cause: error }));
-      if (!this.#projection?.value) {
-        this.#onStateChange({ status: "failed", threadId, message: "Unable to present the SQLite transcript baseline." });
-      }
+      this.#failStream(new Error("SQLite structural update could not be applied.", { cause: error }), generation);
     }
+  }
+
+  #failStream(error: Error, generation: number) {
+    if (this.#failureMessage || this.#disposed || generation !== this.#generation) return;
+    this.#reportError(error, generation);
   }
 
   #reportError(error: unknown, generation = this.#generation) {
@@ -555,9 +563,10 @@ export default class ThreadTranscriptProjectionController {
     const threadId = this.#selection?.thread.id ?? "none";
     const turnIds = this.#selection?.thread.turns.map(({ id }) => id).join(",") || "none";
     if (generation === this.#generation && this.#selection) {
-      this.#projection = { value: null, generation };
+      this.#failureMessage = `Unable to load the SQLite transcript: ${cause.message}`.slice(0, 500);
       this.#onStateChange({
-        message: `Unable to load the SQLite transcript: ${cause.message}`.slice(0, 500),
+        message: this.#failureMessage,
+        projection: this.#projection?.value ?? null,
         status: "failed",
         threadId: this.#selection.thread.id,
       });
@@ -570,6 +579,7 @@ export default class ThreadTranscriptProjectionController {
 
   #replaceSubscription() {
     const generation = ++this.#generation;
+    this.#failureMessage = null;
     const selection = this.#selection;
     this.#lifecycle = this.#lifecycle
       .then(async () => {
@@ -593,7 +603,8 @@ export default class ThreadTranscriptProjectionController {
           turnIds: durableTurnIds(selection.thread.turns),
           turnLimit: this.#turnLimit,
         }, (snapshot) => this.#receiveSnapshot(generation, snapshot),
-        update => this.#receiveStream(generation, update));
+        update => this.#receiveStream(generation, update),
+        error => this.#failStream(error, generation));
         if (!this.#disposed && generation !== this.#generation) {
           if (this.#activeSubscriptionId === subscriptionId) this.#activeSubscriptionId = null;
           await this.#transcripts.unsubscribe({ subscriptionId });

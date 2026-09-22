@@ -211,6 +211,12 @@ test("one provider snapshot becomes direct ordered thread, turn, and item facts"
   assert.equal(observations[2]?.kind === "item" ? observations[2].timeline : null, undefined);
 });
 
+test("provider turn admission rejects an already-millisecond timestamp", () => {
+  const thread = providerThread();
+  thread.turns[0] = { ...thread.turns[0]!, startedAt: 1_790_113_687_000 };
+  assert.throws(() => createCodexTranscriptProviderThreadObservations(thread, context), /timestamp/i);
+});
+
 test("complete provider snapshots keep carried items with their first turn", () => {
   const thread = providerThread();
   const carried = thread.turns[0]!.items[0]!;
