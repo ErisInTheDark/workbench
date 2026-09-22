@@ -17,6 +17,7 @@ import {
     type WorkbenchQuestionnaireRespondRequest,
 } from "workbench-shared/workbench/daemon/workbench-daemon-requests";
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
+import { CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
 import {
     GitArcStashResultSchema,
     GitCheckpointCompareResultSchema,
@@ -69,6 +70,7 @@ const METHODS = new Set([
   "agents/list", "agents/read",
   "browse/sessions/forget", "browse/sessions/read", "browse/sessions/stop",
   "sandbox-network/read", "sandbox-network/update",
+  "command-approvals/read", "command-approvals/remove",
   ...Object.keys(WORKBENCH_GIT_ARC_ACTION_BY_METHOD),
   "local-capabilities/read", "local-capabilities/update",
   "native/file/link-roots", "native/file/open", "native/file/reveal",
@@ -199,6 +201,7 @@ export default class WorkbenchDaemonRequestController {
   private browse: WorkbenchBrowseSessionPort | null = null;
 
   constructor(private readonly owners: {
+    commandApprovals?: Pick<import("./WorkbenchCommandApprovalController").default, "list" | "remove">;
     providers?: Pick<WorkbenchProviderDispatcher, "get">;
     threadActions?: Pick<WorkbenchThreadActionController, "handle">;
     agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readSkills">;
@@ -283,6 +286,18 @@ export default class WorkbenchDaemonRequestController {
             projectId: identity.projectId,
             harness: identity.bindings[0]?.harness,
           }) : null };
+          break;
+        }
+        case "command-approvals/read":
+        case "command-approvals/remove": {
+          const { id: projectId } = await this.owners.projects.resolveProjectById(requiredString(params, "projectId"));
+          if (!this.owners.commandApprovals) throw new Error("Command approvals are unavailable.");
+          if (request.method === "command-approvals/remove") {
+            const parsed = CommandApprovalRemoveSchema.safeParse({ ...params, projectId });
+            if (!parsed.success) throw new InvalidParamsError("Invalid command approval removal.");
+            await this.owners.commandApprovals.remove(projectId, parsed.data.id);
+          }
+          result = { rules: await this.owners.commandApprovals.list(projectId) };
           break;
         }
         case "sandbox-network/read": {

@@ -8,24 +8,25 @@ import { captureTestOutput } from "../../../../test/capture-test-output.mts";
 import Database from "better-sqlite3";
 import { DATABASE_LOG_PREFIX } from "workbench-shared/database/database-log-format";
 import { ProjectIdentityKeySchema } from "workbench-shared/workbench/identity";
-import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchSearchRepository from "../search/WorkbenchSearchRepository";
 import WorkbenchProjectIdentityMigration from "./WorkbenchProjectIdentityMigration";
 import WorkbenchProjectRepository from "./WorkbenchProjectRepository";
 import type { WorkbenchProjectDiscovery } from "./workbench-project-persistence";
 
-const oldKey = "remote://example.test/old/repo";
-const newKey = "remote://example.test/new/repo";
+const oldKey = "3e909d14-071b-467d-877a-000000000001";
+const newKey = "3e909d14-071b-467d-877a-000000000002";
+const oldIdentityKey = "remote://example.test/old/repo";
+const newIdentityKey = "remote://example.test/new/repo";
 
 function fixture(databasePath = ":memory:") {
   const database = new Database(databasePath);
   database.pragma("foreign_keys = ON");
-  installWorkbenchDatabaseSchema(database, { targetVersion: databaseReleases.stableProjectPreparation.version });
+  installWorkbenchDatabaseSchema(database);
   database.prepare("INSERT INTO workbench_harnesses(id) VALUES ('codex')").run();
   for (const key of [oldKey, newKey]) {
     database.prepare(`INSERT INTO workbench_projects(id, identity_key, kind, name, relative_path, icon_source_key)
-      VALUES (?, ?, 'git', 'repo', 'repo', 'generation')`).run(key, key);
+      VALUES (?, ?, 'git', 'repo', 'repo', 'generation')`).run(key, key === oldKey ? oldIdentityKey : newIdentityKey);
     database.prepare(`INSERT INTO workbench_project_roots(project_id, root_id, root_index, name, relative_path, root_path)
       VALUES (?, 'root', 0, 'repo', 'repo', 'C:/repo')`).run(key);
   }
@@ -34,7 +35,7 @@ function fixture(databasePath = ":memory:") {
   database.exec(`INSERT INTO workbench_sidebar_layouts(id, owner_kind, revision) VALUES ('shadow-layout', 'project', 0)`);
   database.prepare(`INSERT INTO workbench_sidebar_project_layouts(layout_id, owner_kind, project_id)
     VALUES ('shadow-layout', 'project', ?)`).run(newKey);
-  const identityKey = ProjectIdentityKeySchema.parse(newKey);
+  const identityKey = ProjectIdentityKeySchema.parse(newIdentityKey);
   const discovery: WorkbenchProjectDiscovery = {
     complete: true, aliases: [], excludedRootPaths: [], rootPath: "C:/", observedKeys: [identityKey],
     data: [{
@@ -66,10 +67,9 @@ test("empty split recovery retains thread ownership, unions facts and keeps comp
     }
     const migration = new WorkbenchProjectIdentityMigration(database);
     await migration.run(discovery);
-    installWorkbenchDatabaseSchema(database);
     const repository = new WorkbenchProjectRepository(database);
     const owner = repository.requireStoredReference(oldKey);
-    assert.notEqual(owner, oldKey);
+    assert.equal(owner, oldKey);
     assert.equal(repository.requireStoredReference(newKey), owner);
     assert.deepEqual(database.prepare("SELECT id, project_id, title FROM workbench_threads").all(), [
       { id: "thread", project_id: owner, title: "retained title" },
@@ -105,9 +105,8 @@ test("independent state, conflicting receipts and incomplete discovery preserve 
         (id, folder_id, layout_id, owner_kind, section, title, folder_index)
         VALUES ('folder', 'folder', 'shadow-layout', 'project', 'settled', 'keep me', 0)`);
       if (conflict === "incomplete") discovery.complete = false;
-      if (conflict === "observed") discovery.observedKeys.push(ProjectIdentityKeySchema.parse(oldKey));
+      if (conflict === "observed") discovery.observedKeys.push(ProjectIdentityKeySchema.parse(oldIdentityKey));
       await new WorkbenchProjectIdentityMigration(database).run(discovery);
-      installWorkbenchDatabaseSchema(database);
       const repository = new WorkbenchProjectRepository(database);
       assert.notEqual(repository.requireStoredReference(oldKey), repository.requireStoredReference(newKey));
       assert.equal(database.prepare("SELECT count(*) FROM workbench_projects").pluck().get(), 2);
@@ -123,20 +122,20 @@ test("conflicting shadow receipts and independently owned current keys preserve 
   for (const conflict of ["shadows", "external-key"] as const) {
     const { database, discovery, receipt } = fixture();
     try {
-      const thirdKey = "remote://example.test/third/repo";
+      const thirdKey = "3e909d14-071b-467d-877a-000000000003";
+      const thirdIdentityKey = "remote://example.test/third/repo";
       database.prepare(`INSERT INTO workbench_projects(id, identity_key, kind, name, relative_path, icon_source_key)
-        VALUES (?, ?, 'git', 'repo', 'repo', 'generation')`).run(thirdKey, thirdKey);
+        VALUES (?, ?, 'git', 'repo', 'repo', 'generation')`).run(thirdKey, thirdIdentityKey);
       database.prepare(`INSERT INTO workbench_project_roots(project_id, root_id, root_index, name, relative_path, root_path)
         VALUES (?, 'root', 0, 'repo', 'repo', ?)`).run(thirdKey, conflict === "shadows" ? "C:/repo" : "C:/elsewhere");
       if (conflict === "shadows") {
         receipt(newKey, "shared", "completed", "a");
         receipt(thirdKey, "shared", "completed", "b");
       } else {
-        discovery.data[0]!.identityKey = ProjectIdentityKeySchema.parse(thirdKey);
-        discovery.observedKeys = [ProjectIdentityKeySchema.parse(thirdKey)];
+        discovery.data[0]!.identityKey = ProjectIdentityKeySchema.parse(thirdIdentityKey);
+        discovery.observedKeys = [ProjectIdentityKeySchema.parse(thirdIdentityKey)];
       }
       await new WorkbenchProjectIdentityMigration(database).run(discovery);
-      installWorkbenchDatabaseSchema(database);
       assert.equal(database.prepare("SELECT count(*) FROM workbench_projects").pluck().get(), 3);
       assert.equal(database.prepare("SELECT count(*) FROM git_claim_imports").pluck().get(), conflict === "shadows" ? 2 : 0);
       assert.deepEqual(database.pragma("foreign_key_check"), []);
@@ -164,18 +163,17 @@ test("state added while the backup is retained prevents destructive split consol
   }
 });
 
-test("conversion failure rolls back split consolidation and all owning references", async () => {
+test("reconciliation failure rolls back split consolidation and all owning references", async () => {
   const { database, discovery, receipt } = fixture();
   try {
     receipt(newKey, "unique", "completed");
-    database.exec(`CREATE TRIGGER reject_rekey BEFORE UPDATE OF id ON workbench_projects
-      BEGIN SELECT RAISE(ABORT, 'injected conversion failure'); END`);
+    database.exec(`CREATE TRIGGER reject_merge BEFORE DELETE ON workbench_projects
+      BEGIN SELECT RAISE(ABORT, 'injected reconciliation failure'); END`);
     const before = database.serialize();
-    await assert.rejects(new WorkbenchProjectIdentityMigration(database).run(discovery), /injected conversion failure/);
+    await assert.rejects(new WorkbenchProjectIdentityMigration(database).run(discovery), /injected reconciliation failure/);
     assert.deepEqual(database.serialize(), before);
-    database.exec("DROP TRIGGER reject_rekey");
+    database.exec("DROP TRIGGER reject_merge");
     await new WorkbenchProjectIdentityMigration(database).run(discovery);
-    installWorkbenchDatabaseSchema(database);
     assert.equal(database.prepare("SELECT count(*) FROM workbench_projects").pluck().get(), 1);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { database.close(); }

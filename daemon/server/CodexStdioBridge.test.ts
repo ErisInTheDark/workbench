@@ -149,6 +149,161 @@ async function rejectWorkbenchRequest(request: JsonRpcRequest) {
   return { id: request.id ?? null, error: { code: -32000, message: "Workbench request is not expected in this test." } };
 }
 
+test("command approvals save before accepting and require contextual confirmation for a saved match", async () => {
+  const sent: JsonRpcRequest[] = [];
+  const notifications: JsonRpcNotification[] = [];
+  const prefix = ["pnpm", "run", "typecheck"];
+  const rule = { id: "6ec53578-a9ef-44df-8f4b-bb62f2d8ae4a", projectId: fixtureIdentityValues.ProjectId.project, workdir: "c:/repo", prefix };
+  let saved = false;
+  let rejectSave = true;
+  const bridge = new CodexStdioBridge({
+    appServer: { send(message: JsonRpcRequest) {
+      sent.push(message);
+      if (message.method === "thread/read" || message.method === "thread/turns/list") {
+        queueMicrotask(() => void bridge.handleUpstreamMessage({
+          id: message.id,
+          result: message.method === "thread/read" ? { thread: bridgeThread() } : { data: bridgeThread().turns },
+        }));
+      }
+      if (message.id === "first" && (message as { result?: { decision: string } }).result?.decision === "accept") assert.equal(saved, true);
+    } } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification: notification => { notifications.push(notification); },
+    resolveProjectFromCwd: async cwd => ({
+      cwd, project: { id: rule.projectId, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+    commandApprovals: {
+      match: async (projectId, workdir, argv) => {
+        assert.equal(projectId, rule.projectId);
+        assert.equal(workdir.toLowerCase(), "c:/repo");
+        assert.deepEqual(argv.slice(0, 3), prefix);
+        return saved ? rule : null;
+      },
+      save: async (projectId, workdir, selected) => {
+        assert.equal(projectId, rule.projectId);
+        assert.equal(workdir.toLowerCase(), "c:/repo");
+        assert.deepEqual(selected, prefix);
+        if (rejectSave) throw new Error("permission store unavailable");
+        saved = true;
+        return rule;
+      },
+    },
+  });
+  const request = (id: string, reason: string, command = String.raw`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'pnpm run typecheck'`) => bridge.handleUpstreamMessage({
+    id, method: "item/commandExecution/requestApproval",
+    params: { kind: "command", threadId: "thread", turnId: "turn", itemId: id, startedAtMs: 1,
+      command, cwd: "C:/repo", reason },
+  });
+  try {
+    await request("first", "Run tests.");
+    await bridge.waitForIdle();
+    const requested = notifications.find(event => event.method === "questionnaire/requested")?.params as {
+      request: import("workbench-shared/types").WorkbenchUserInputRequest;
+    };
+    const always = requested.request.questions[0]!.options.find(option => option.label.includes("Always allow"));
+    assert.ok(always, "script prefix must be offered beside ordinary decisions");
+    assert.deepEqual(requested.request.approval?.command?.justification, "Run tests.");
+    const answer = () => bridge.handleBridgeRequest({
+      id: "answer", method: "questionnaire/respond",
+      params: { threadId: "thread", requestKey: "first", response: { answers: { decision: { answers: [always.label] } } } },
+    });
+    assert.ok((await answer())?.error);
+    assert.equal(sent.some(message => message.id === "first"), false);
+    rejectSave = false;
+    assert.equal((await answer())?.error, undefined);
+    assert.equal((sent.find(message => message.id === "first") as { result?: { decision: string } })?.result?.decision, "accept");
+    await request("missing-confirmation", "Run tests again.");
+    await bridge.waitForIdle();
+    const injection = sent.find(message => message.method === "thread/inject_items");
+    assert.ok(injection);
+    assert.equal(sent.some(message => message.id === "missing-confirmation"), false);
+    const items = (injection.params as { items: Array<{ output: string }> }).items;
+    assert.ok(items[0]!.output.includes(JSON.stringify(prefix)));
+    await bridge.handleUpstreamMessage({ id: injection.id, result: {} });
+    assert.equal((sent.find(message => message.id === "missing-confirmation") as { result?: { decision: string } })?.result?.decision, "decline");
+    await request("confirmed", "I confirm this command contains no additional shell code.");
+    await bridge.waitForIdle();
+    assert.equal((sent.find(message => message.id === "confirmed") as { result?: { decision: string } })?.result?.decision, "accept");
+    assert.equal(notifications.filter(event => event.method === "questionnaire/requested").length, 1);
+    await request("bundled", "I confirm this command contains no additional shell code.", "pnpm run test; whoami");
+    await bridge.waitForIdle();
+    assert.equal(sent.some(message => message.id === "bundled"), false);
+    assert.equal(notifications.filter(event => event.method === "questionnaire/requested").length, 2);
+    await request("cancelled-feedback", "Run again.");
+    await bridge.waitForIdle();
+    const cancelledInjection = sent.filter(message => message.method === "thread/inject_items").at(-1)!;
+    assert.notEqual(cancelledInjection.id, injection.id);
+    await bridge.handleUpstreamMessage({ method: "serverRequest/resolved", params: { threadId: "thread", requestId: "cancelled-feedback" } });
+    await bridge.handleUpstreamMessage({ id: cancelledInjection.id, result: {} });
+    assert.equal(sent.some(message => message.id === "cancelled-feedback"), false);
+  } finally { await bridge.disposeImmediately(); }
+});
+
+for (const outcome of ["reload", "failed", "resolved-before-delivery"] as const) {
+  test(`saved-command feedback settles ${outcome} without granting permission or retaining abandoned work`, async context => {
+    const diagnostics = captureTestOutput(context, process.stderr, text => text === "[codex-tool-context] injection rejected\n");
+    const sent: JsonRpcRequest[] = [];
+    let reads = 0;
+    const options: ConstructorParameters<typeof CodexStdioBridge>[0] = {
+      appServer: { send(message: JsonRpcRequest) {
+        sent.push(message);
+        if (message.method !== "thread/read" && message.method !== "thread/turns/list") return;
+        if (message.method === "thread/read") reads += 1;
+        const resolveBeforeDelivery = reads === 2 && message.method === "thread/read" && outcome === "resolved-before-delivery";
+        queueMicrotask(() => void (async () => {
+          if (resolveBeforeDelivery) await bridge.handleUpstreamMessage({
+            method: "serverRequest/resolved", params: { threadId: "thread", requestId: "approval" },
+          });
+          await bridge.handleUpstreamMessage({ id: message.id, result: message.method === "thread/read"
+            ? { thread: bridgeThread() } : { data: bridgeThread().turns } });
+        })());
+      } } as unknown as CodexAppServer,
+      handleWorkbenchRequest: rejectWorkbenchRequest,
+      onNotification: () => {},
+      resolveProjectFromCwd: async cwd => ({
+        cwd, project: { id: testProjectIds.project, kind: "git", root: cwd, rootPath: cwd, roots: [] },
+        root: { id: "root", name: "repo", root: cwd, rootPath: cwd },
+      }),
+      commandApprovals: {
+        match: async () => ({ id: "6ec53578-a9ef-44df-8f4b-bb62f2d8ae4a", projectId: testProjectIds.project,
+          workdir: "c:/repo", prefix: ["pnpm", "test"] }),
+        save: async () => { throw new Error("No user selected a new rule."); },
+      },
+    };
+    let bridge = new CodexStdioBridge(options);
+    try {
+      await bridge.handleUpstreamMessage({ id: "approval", method: "item/commandExecution/requestApproval",
+        params: { kind: "command", threadId: "thread", turnId: "turn", itemId: "command", startedAtMs: 1,
+          command: "pnpm test", cwd: "C:/repo", reason: "Run tests." } });
+      await bridge.waitForIdle();
+      const injection = sent.find(message => message.method === "thread/inject_items");
+      if (outcome === "resolved-before-delivery") {
+        assert.equal(injection, undefined);
+      } else {
+        assert.ok(injection);
+        assert.equal(sent.some(message => message.id === "approval"), false);
+        if (outcome === "reload") {
+          const initialState = await bridge.detachForReload();
+          await bridge.retireAfterHandoff();
+          bridge = new CodexStdioBridge({ ...options, initialState });
+          bridge.resumePendingToolContexts();
+        }
+        await bridge.handleUpstreamMessage(outcome === "failed"
+          ? { id: injection.id, error: { code: -32000, message: "injection rejected" } }
+          : { id: injection.id, result: {} });
+      }
+      await bridge.waitForIdle();
+      assert.deepEqual(sent.filter(message => message.id === "approval"), outcome === "resolved-before-delivery"
+        ? [] : [{ id: "approval", result: { decision: "decline" } }]);
+      const state = await bridge.detachForReload();
+      assert.equal(state.pendingResponses.size, 0);
+      assert.equal(state.pendingUserInputRequests.size, 0);
+      assert.equal(diagnostics.length, outcome === "failed" ? 1 : 0);
+    } finally { await bridge.disposeImmediately(); }
+  });
+}
+
 function bridgeThread(items: ThreadItem[] = []) {
   return {
     agentNickname: null,

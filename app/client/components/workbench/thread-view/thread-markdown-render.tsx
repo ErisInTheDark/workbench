@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - renderThreadMarkdown: render parsed markdown, inline content and interactive code headers.
+ * - renderThreadInlineMarkdown: render inline markdown without a block container.
  */
 
 import { Fragment, useState, type ReactNode } from "react";
@@ -244,7 +245,7 @@ function renderThreadInlineNodes (
   });
 }
 
-function renderThreadInlineMarkdown (
+export function renderThreadInlineMarkdown (
   markdown: string,
   options: MarkdownParseOptions,
   keyPrefix: string,

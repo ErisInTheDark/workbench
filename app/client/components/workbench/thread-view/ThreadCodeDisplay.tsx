@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default ThreadCodeDisplay: render thread code, unified diffs, and command output in one shared display. Keywords: workbench, thread, code, diff, command output.
- * - Local helpers: render unified-diff rows, plain text output rows, and expandable command headers. Keywords: diff rows, line numbers, command clamp, fade.
+ * - default ThreadCodeDisplay: render code, unified diffs and output with fixed or content-sized previews.
+ * - ThreadCommandHeader: render expandable command headers.
  */
 "use client";
 
@@ -237,7 +237,7 @@ export default function ThreadCodeDisplay (props: ThreadCodeDisplayProps) {
 
   if (props.preview && (content || props.header)) {
     return (
-      <ThreadPreviewFrame contentPadding="none" height={props.previewHeight ?? "24rem"}>
+      <ThreadPreviewFrame contentPadding="none" height={props.previewHeight ?? "24rem"} mode={props.previewHeight === "auto" ? "panel" : "scroll"}>
         <div className="max-w-full overflow-x-auto">
           {props.header}
           {content}

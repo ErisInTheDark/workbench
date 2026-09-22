@@ -26,6 +26,7 @@ import {
 } from "../../workbench/state/workbench-settings";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
+import CommandApprovalSettings from "./CommandApprovalSettings";
 import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
 import VoiceSettings from "./voice/VoiceSettings";
 import { ReloadIcon } from "./workbench-icons";
@@ -390,6 +391,7 @@ export default function WorkbenchSettingsView({
               <>
                 {SETTINGS_ORDER.map(renderProjectSettingRow)}
                 <SandboxNetworkSettings key={`project:${activeProjectId}`} projectId={activeProjectId} scope="project" />
+                <CommandApprovalSettings key={`command-approvals:${activeProjectId}`} projectId={activeProjectId} />
               </>
             )}
         </div>

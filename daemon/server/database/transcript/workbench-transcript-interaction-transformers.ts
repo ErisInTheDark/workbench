@@ -165,9 +165,11 @@ export function transformQuestionnaireEntry(
       item_id: itemId,
       command: command.command,
       cwd: command.cwd,
+      justification: command.justification ?? null,
+      network_target: command.networkTarget ?? null,
     }, {
       conflictColumns: ["item_id"],
-      updateColumns: ["command", "cwd"],
+      updateColumns: ["command", "cwd", "justification", "network_target"],
     }));
     for (const [actionIndex, action] of command.commandActions.entries()) {
       mutations.push(insertRow(interactionTables.threadApprovalCommandActions, {

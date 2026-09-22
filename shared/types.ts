@@ -936,6 +936,8 @@ export interface WorkbenchApprovalCommandContext {
   command: string;
   commandActions: CommandAction[];
   cwd: string;
+  justification?: string;
+  networkTarget?: string;
 }
 
 export interface WorkbenchUserInputApprovalContext {

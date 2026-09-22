@@ -15,6 +15,7 @@ import { z } from "zod";
 import { VoiceConfigurationSchema, VoiceSessionEventSchema, type VoiceSessionEvent } from "../voice/voice-session-contract";
 import { WorkingTreeReadSchema, WorkingTreeDiffSchema, WorkingTreePreviewSchema, WorkingTreeResultSchema } from "../git/working-tree-contracts";
 import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provider-settings";
+import { CommandApprovalSnapshotSchema } from "../settings/command-approvals";
 import {
   GitArcStashResultSchema,
   GitCheckpointCompareResultSchema,
@@ -86,6 +87,8 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "models/context/read": return z.object({ data: z.array(WorkbenchModelContextCapabilitySchema) }).strict();
     case "sandbox-network/read":
     case "sandbox-network/update": return WorkbenchSandboxNetworkSettingsResponseSchema;
+    case "command-approvals/read":
+    case "command-approvals/remove": return CommandApprovalSnapshotSchema;
     case "project/catalog/read": return WorkbenchProjectsPayloadSchema;
     case "thread/identity/resolve": return z.object({ data: WorkbenchThreadIdentityResolutionSchema.nullable() }).strict();
     case "project/file/read": return z.object({
@@ -251,6 +254,11 @@ class WorkbenchDaemonClient {
   readonly sandboxNetwork = {
     read: (params: WorkbenchDaemonParams<"sandbox-network/read">) => this.request("sandbox-network/read", params),
     update: (params: WorkbenchDaemonParams<"sandbox-network/update">) => this.request("sandbox-network/update", params),
+  };
+
+  readonly commandApprovals = {
+    read: (params: WorkbenchDaemonParams<"command-approvals/read">) => this.request("command-approvals/read", params),
+    remove: (params: WorkbenchDaemonParams<"command-approvals/remove">) => this.request("command-approvals/remove", params),
   };
 
   readonly nativeFiles = {

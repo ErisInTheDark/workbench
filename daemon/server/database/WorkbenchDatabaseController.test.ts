@@ -81,54 +81,6 @@ async function checkStoredQueries(controller: WorkbenchDatabaseController) {
   await assert.rejects(controller.queryTranscript(TranscriptQuerySchema.parse({ action: "read", threads: ["missing-wb-id"] })), /Unknown Workbench thread/u);
 }
 
-test("prepared project reconciliation precedes worker readiness and retains its pre-upgrade backup", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-project-startup-"));
-  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
-  const databasePath = join(directory, "workbench.sqlite3");
-  const old = new Database(databasePath);
-  installWorkbenchDatabaseSchema(old, { targetVersion: 33 });
-  old.close();
-  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("local://C:/prepared");
-  seedProviderCursor(databasePath, projectId);
-  const aliases = new Database(databasePath);
-  aliases.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES ('project', ?)").run(projectId);
-  aliases.close();
-  const project = {
-    identityKey: fixtureIdentitySchemas.ProjectIdentityKeySchema.parse(projectId), kind: "git" as const, name: "prepared", relativePath: "prepared",
-    rootPath: "C:/prepared", lastCommitTimeMs: null,
-    roots: [{ id: "root", name: "prepared", relativePath: "prepared", rootPath: "C:/prepared", isPrimary: true, identityKey: fixtureIdentitySchemas.ProjectIdentityKeySchema.parse(projectId) }],
-  };
-  let preparations = 0;
-  let checkpoint: string | undefined;
-  const controller = new WorkbenchDatabaseController({
-    databasePath,
-    beforeMigration: backupPath => { checkpoint = backupPath; },
-    prepareProjects: async () => {
-      preparations += 1;
-      return { discovery: { data: [project], aliases: [{ alias: "project", identityKey: project.identityKey }], excludedRootPaths: [], rootPath: "C:/", complete: true, observedKeys: [project.identityKey] } };
-    },
-  });
-  try {
-    await Promise.all([controller.start(), controller.start()]);
-    assert.equal(preparations, 1);
-    const owner = controller.readInitialProjectCatalog().catalog[0]!.project.id;
-    assert.notEqual(owner, projectId, "the old address must become an alias, not remain the durable owner");
-    assert.equal(await controller.resolveProjectIdentity("project"), owner);
-    assert.equal(await controller.resolveProjectIdentity(projectId), owner);
-    assert.ok(checkpoint);
-    const backup = new Database(checkpoint, { readonly: true, fileMustExist: true });
-    try {
-      assert.equal(backup.pragma("user_version", { simple: true }), 33);
-      assert.equal(backup.prepare("SELECT project_id FROM workbench_threads").pluck().get(), projectId);
-    } finally { backup.close(); }
-    assert.deepEqual((await controller.query(selectRows(coreTables.workbenchThreads))).map(row => row.project_id), [owner]);
-    await checkProviderCursor(controller);
-  } finally {
-    await controller.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
 test("worker migration waits for its owner to retain the rollback checkpoint", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-migration-ack-"));
   captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));

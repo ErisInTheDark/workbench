@@ -145,6 +145,8 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "browse/sessions/read": { params: WorkbenchBrowseSessionListRequest; result: WorkbenchBrowseSessionListResponse };
   "browse/sessions/stop": { params: BrowseSessionParams; result: WorkbenchBrowseSessionControlResponse };
   "sandbox-network/read": { params: { projectId: string }; result: import("../provider/provider-settings").WorkbenchSandboxNetworkSettingsResponse };
+  "command-approvals/read": { params: import("../settings/command-approvals").CommandApprovalRead; result: import("../settings/command-approvals").CommandApprovalSnapshot };
+  "command-approvals/remove": { params: import("../settings/command-approvals").CommandApprovalRemove; result: import("../settings/command-approvals").CommandApprovalSnapshot };
   "sandbox-network/update": { params: import("../provider/provider-settings").WorkbenchSandboxNetworkUpdate; result: import("../provider/provider-settings").WorkbenchSandboxNetworkSettingsResponse };
   "git/arc/compare": { params: GitArcParams<"compare">; result: GitCheckpointCompareResult };
   "git/arc/diff-artifact/read": { params: GitArcParams<"readDiffArtifact">; result: string };

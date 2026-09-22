@@ -432,6 +432,8 @@ function interactionItem(
             itemId,
           ),
           cwd: command.cwd,
+          ...(command.justification !== null ? { justification: command.justification } : {}),
+          ...(command.network_target !== null ? { networkTarget: command.network_target } : {}),
         },
       };
     })()

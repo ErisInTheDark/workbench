@@ -28,6 +28,7 @@
 import type Database from "better-sqlite3";
 
 import { codexSandboxNetworkSchemaHistory } from "../lib/workbench/database/schema/codex-sandbox-network-schema.ts";
+import { commandApprovalSchemaHistory } from "../lib/workbench/database/schema/command-approval-schema.ts";
 import { composerProfileSchemaHistory } from "../lib/workbench/database/schema/composer-profile-schema.ts";
 import { voiceSettingsSchemaHistory } from "../lib/workbench/database/schema/voice-settings-schema.ts";
 import { defineThreadDomainCoreSchema } from "workbench-shared/workbench/database/schema/core-schema";
@@ -92,6 +93,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       composerProfileSchemaHistory,
       voiceSettingsSchemaHistory,
       codexSandboxNetworkSchemaHistory,
+      commandApprovalSchemaHistory,
       codexTranscriptSchemaHistory,
       defineThreadDomainCoreSchema(schemaVersion).history,
       transcriptIdentitySchemaHistory,

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadCommandDetails: reveal the captured command and output inside a nested thread disclosure. Keywords: thread, command, output, disclosure.
+ * - default ThreadCommandDetails: reveal command and output in a nested disclosure with configurable preview height.
  */
 "use client";
 
@@ -10,9 +10,11 @@ import ThreadDisclosure from "./ThreadDisclosure";
 export default function ThreadCommandDetails ({
   command,
   output,
+  previewHeight = "16rem",
 }: {
   command: string;
   output?: string | null;
+  previewHeight?: string;
 }) {
   return (
     <ThreadDisclosure
@@ -25,7 +27,7 @@ export default function ThreadCommandDetails ({
         header={<ThreadCommandHeader command={command} surface="framed" />}
         output={output ?? undefined}
         preview
-        previewHeight="16rem"
+        previewHeight={previewHeight}
         variant="plain"
       />
     </ThreadDisclosure>

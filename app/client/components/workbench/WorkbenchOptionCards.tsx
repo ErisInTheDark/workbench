@@ -43,6 +43,7 @@ type WorkbenchOptionCardProps = {
   onClick?: () => void;
   presentation?: "card" | "compact-card" | "compact-inline";
   showMarker?: boolean;
+  wrapLabel?: boolean;
 };
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
@@ -67,6 +68,7 @@ export function WorkbenchOptionCard ({
   onClick,
   presentation = "card",
   showMarker = true,
+  wrapLabel = false,
 }: WorkbenchOptionCardProps) {
   const optionDescription = description.trim();
   const compactInline = presentation === "compact-inline";
@@ -112,11 +114,15 @@ export function WorkbenchOptionCard ({
       {optionMarker}
       <span className={joinClasses(
         compactPresentation ? "flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden" : "min-w-0",
+        compactPresentation && wrapLabel && "flex-wrap",
         selectedBackdropClassName,
       )}>
-        <span className={compactPresentation
-          ? "shrink-0 truncate text-[0.84em] font-medium leading-[1.4] text-text"
-          : "block text-[0.86em] font-medium leading-[1.5] text-text"}
+        <span className={joinClasses(
+          compactPresentation
+            ? "text-[0.84em] font-medium leading-[1.4] text-text"
+            : "block text-[0.86em] font-medium leading-[1.5] text-text",
+          compactPresentation && (wrapLabel ? "min-w-0 max-w-full whitespace-normal break-words" : "shrink-0 truncate"),
+        )}
         >
           {label}
         </span>

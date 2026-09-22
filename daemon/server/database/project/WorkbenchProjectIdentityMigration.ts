@@ -8,22 +8,14 @@ import { performance } from "node:perf_hooks";
 import { formatDatabaseLog } from "workbench-shared/database/database-log-format";
 import type Database from "better-sqlite3";
 import { z } from "zod";
-import { tableForeignKeys } from "workbench-shared/database/schema/schema-definition";
 import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 import type { ProjectSchemaRows } from "workbench-shared/workbench/database/schema/project-schema";
 import type { UsageSchemaRows } from "workbench-shared/workbench/database/schema/usage-schema";
 import { nativeLocationKey } from "../thread-identity/native-location-key.ts";
-import { workbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchSearchRepository from "../search/WorkbenchSearchRepository.ts";
 import type { WorkbenchProjectDiscovery } from "./workbench-project-persistence.ts";
 
 const uuid = z.string().uuid();
-const projectReferences = workbenchDatabaseSchema.currentTables.flatMap(table => tableForeignKeys(table)
-  .filter(key => key.target.table === "workbench_projects")
-  .map(key => {
-    if (key.columns.length !== 1 || key.target.columns[0] !== "id") throw new Error("Project conversion requires a single owning foreign key.");
-    return { table: table.name, column: key.columns[0]! };
-  }));
 const shadowTables = new Set([
   "workbench_project_roots", "workbench_project_aliases", "git_claim_thread_file_days",
   "git_claim_imports", "workbench_sidebar_project_layouts", "workbench_sidebar_pinned_imports",
@@ -31,6 +23,24 @@ const shadowTables = new Set([
 
 export default class WorkbenchProjectIdentityMigration {
   constructor(private readonly database: Database.Database) {}
+
+  private projectReferences() {
+    // Conversion runs before the final schema upgrade. Its references must
+    // describe the installed database, not tables introduced by later releases.
+    const references = this.database.prepare(`
+      SELECT schema.name AS table_name, fk."from" AS column_name,
+        fk."to" AS target_column, fk.seq
+      FROM sqlite_schema AS schema JOIN pragma_foreign_key_list(schema.name) AS fk
+      WHERE schema.type = 'table' AND fk."table" = 'workbench_projects'
+    `).all() as Array<{ table_name: string; column_name: string; target_column: string; seq: number }>;
+    return references.map(reference => {
+      if (reference.seq !== 0 || reference.target_column !== "id") throw new Error("Project conversion requires a single owning foreign key.");
+      if (![reference.table_name, reference.column_name].every(name => /^[A-Za-z_][A-Za-z_0-9]*$/u.test(name))) {
+        throw new Error("Project conversion encountered an unsupported schema identifier.");
+      }
+      return { table: reference.table_name, column: reference.column_name };
+    });
+  }
 
   async run(discovery?: WorkbenchProjectDiscovery, beforeConversion?: (backupPath: string) => Promise<void> | void) {
     const projects = this.database.prepare("SELECT * FROM workbench_projects").all() as ProjectSchemaRows["projects"][];
@@ -57,7 +67,7 @@ export default class WorkbenchProjectIdentityMigration {
         if (!this.database.prepare("SELECT 1 FROM workbench_projects WHERE id = ?").get(project.id)) continue;
         const id = randomUUID();
         search.rekeyProject(project.id, id);
-        for (const reference of projectReferences) {
+        for (const reference of this.projectReferences()) {
           if (reference.table === "workbench_search_documents") continue;
           this.database.prepare(`UPDATE "${reference.table}" SET "${reference.column}" = ? WHERE "${reference.column}" = ?`).run(id, project.id);
         }
@@ -81,7 +91,7 @@ export default class WorkbenchProjectIdentityMigration {
   }
 
   private hasIndependentState(id: string) {
-    for (const { table, column } of projectReferences) {
+    for (const { table, column } of this.projectReferences()) {
       if (!shadowTables.has(table) && this.database.prepare(`SELECT 1 FROM "${table}" WHERE "${column}" = ? LIMIT 1`).get(id)) return true;
     }
     return Boolean(this.database.prepare(`SELECT 1 FROM workbench_sidebar_project_layouts p

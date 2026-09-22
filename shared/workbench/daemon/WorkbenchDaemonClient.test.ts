@@ -10,6 +10,19 @@ import { GitArcFailureException } from "../git/git-arc-failures.ts";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./WorkbenchDaemonClient.ts";
 import { WorkbenchStatsResponseSchema } from "../stats/workbench-stats-contract.ts";
 
+test("command approval responses reject malformed permissions without leaking their values", async context => {
+  const diagnostics: string[] = [];
+  context.mock.method(console, "error", (message: string) => { diagnostics.push(message); });
+  const client = new WorkbenchDaemonClient({
+    request: async <TResponse>() => ({ rules: [{ id: "private-permission", prefix: ["private-script"] }] }) as TResponse,
+  });
+  const projectId = "a6652caf-f7c1-4a2a-ab55-6b387a19ab05";
+  await assert.rejects(client.commandApprovals.read({ projectId }));
+  await assert.rejects(client.commandApprovals.remove({ projectId, id: "6ec53578-a9ef-44df-8f4b-bb62f2d8ae4a" }));
+  assert.equal(diagnostics.length, 2);
+  assert.ok(diagnostics.every(message => !message.includes("private-") && message.length < 1200));
+});
+
 test("voice events reject malformed remote data without logging document contents", async context => {
   const diagnostics: string[] = [];
   context.mock.method(console, "error", (message: string) => { diagnostics.push(message); });

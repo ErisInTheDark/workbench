@@ -59,6 +59,9 @@ type CaptureGapControllerConstructor = new (
 ) => CaptureGapController;
 
 function loadDatabaseControllers() {
+  const CommandApprovalController = (
+    require("./WorkbenchCommandApprovalController") as { default: typeof import("./WorkbenchCommandApprovalController").default }
+  ).default;
   const TranscriptIdentityController = (
     require("./WorkbenchTranscriptIdentityController") as { default: TranscriptIdentityControllerConstructor }
   ).default;
@@ -74,7 +77,7 @@ function loadDatabaseControllers() {
   const CaptureGapController = (
     require("./database/transcript/WorkbenchTranscriptCaptureGapController") as { default: CaptureGapControllerConstructor }
   ).default;
-  return { CaptureGapController, DatabaseController, ThreadIdentityController, TranscriptIdentityController, TranscriptController };
+  return { CommandApprovalController, CaptureGapController, DatabaseController, ThreadIdentityController, TranscriptIdentityController, TranscriptController };
 }
 
 export default ReloadableNode.define<
@@ -99,6 +102,7 @@ export default ReloadableNode.define<
   children: [CodexConfigurationNode, CodexRecoveryNode, WorkbenchInstructionsNode, WorkbenchCodexInstructionNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
   create: (context, build) => {
     const {
+      CommandApprovalController,
       CaptureGapController,
       DatabaseController,
       ThreadIdentityController,
@@ -119,6 +123,7 @@ export default ReloadableNode.define<
     });
     if (handoffState) handoffState.releaseCandidate = () => database.abortPreparation();
     const threadIdentity = new ThreadIdentityController(database);
+    const commandApprovals = new CommandApprovalController(database);
     const transcriptIdentity = new TranscriptIdentityController(database);
     const captureGaps = new CaptureGapController({
       database,
@@ -172,7 +177,7 @@ export default ReloadableNode.define<
           commit: shutdown,
         };
       },
-      registrations: { database, threadIdentity, transcriptIdentity, transcript },
+      registrations: { database, commandApprovals, threadIdentity, transcriptIdentity, transcript },
       start: async (_reportPhase, signal) => {
         signal?.throwIfAborted();
         await mkdir(dirname(databasePath), { recursive: true });
@@ -188,12 +193,15 @@ export default ReloadableNode.define<
   },
   description: "Reload the mandatory SQLite worker and every direct database dependant.",
   lifecycle: "handoff",
-  provides: ["database", "threadIdentity", "transcriptIdentity", "transcript"],
+  provides: ["database", "commandApprovals", "threadIdentity", "transcriptIdentity", "transcript"],
   requires: [],
   safeAll: true,
   scope: "server:database",
   sources: [
     "daemon/server/WorkbenchDatabaseNode.ts",
+    "daemon/server/WorkbenchCommandApprovalController.ts",
+    "daemon/server/lib/workbench/command-approval-prefix.ts",
+    "daemon/server/lib/workbench/package-script-prefixes.ts",
     "daemon/server/WorkbenchThreadIdentityController.ts",
     "daemon/server/WorkbenchTranscriptIdentityController.ts",
     "shared/workbench/thread/workbench-thread-items.ts",

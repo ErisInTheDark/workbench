@@ -11,6 +11,7 @@ import type {
 } from "../../types.ts";
 import {
   getWorkbenchApprovalSupplementalSteerText,
+  hasWorkbenchApprovalDecisionSelection,
   WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER,
 } from "./thread-user-input-requests.ts";
 
@@ -62,4 +63,22 @@ test("approval responses without custom text do not create a supplemental steer"
     getWorkbenchApprovalSupplementalSteerText(approvalRequest, response(["Allow once"])),
     null,
   );
+});
+
+test("persistent approval choices must be offered and unambiguous, including note classification", () => {
+  const label = 'Always allow ["pnpm","test"] in C:/repo';
+  const request: WorkbenchUserInputRequest = {
+    ...approvalRequest,
+    questions: [{
+      ...approvalRequest.questions[0]!,
+      options: [...approvalRequest.questions[0]!.options, { label, description: "Remember this permission." }],
+    }],
+  };
+  assert.equal(hasWorkbenchApprovalDecisionSelection(request, response([label])), true);
+  assert.equal(hasWorkbenchApprovalDecisionSelection(approvalRequest, response([label])), false);
+  assert.equal(hasWorkbenchApprovalDecisionSelection(request, response([label, "Decline"])), false);
+  assert.deepEqual(WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER.read(
+    getWorkbenchApprovalSupplementalSteerText(request, response([label, "Only this directory."])) ?? "",
+  ), { attributes: { type: "accepted" }, body: "Only this directory." });
+  assert.equal(getWorkbenchApprovalSupplementalSteerText(request, response([label, "Decline", "Ambiguous."])), null);
 });

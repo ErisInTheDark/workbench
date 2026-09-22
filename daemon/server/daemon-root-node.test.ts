@@ -91,7 +91,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
     provides: nodes.get("server:database")!.provides,
   }, {
     lifecycle: "handoff",
-    provides: ["database", "threadIdentity", "transcriptIdentity", "transcript"],
+    provides: ["database", "commandApprovals", "threadIdentity", "transcriptIdentity", "transcript"],
   });
   assert.deepEqual({
     lifecycle: nodes.get("server:codex/instructions")!.lifecycle,

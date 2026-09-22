@@ -16,6 +16,25 @@ import WorkbenchThreadStateRelationalRepository from "./database/thread-state/Wo
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
+test("command approval settings resolve canonical project ownership before listing or removal", async () => {
+  const calls: Array<{ projectId: string; id?: string }> = [];
+  const canonicalProjectId = "a6652caf-f7c1-4a2a-ab55-6b387a19ab05";
+  const id = "6ec53578-a9ef-44df-8f4b-bb62f2d8ae4a";
+  const { controller } = createController({
+    canonicalProjectId, rejectProjectId: "missing",
+    commandApprovals: {
+      list: async projectId => { calls.push({ projectId }); return []; },
+      remove: async (projectId, id) => { calls.push({ projectId, id }); },
+    },
+  });
+  assert.deepEqual((await controller.handle({ id: 1, method: "command-approvals/read", params: { projectId: "alias" } })).result, { rules: [] });
+  assert.deepEqual((await controller.handle({ id: 2, method: "command-approvals/remove", params: { projectId: "alias", id } })).result, { rules: [] });
+  assert.deepEqual(calls, [{ projectId: canonicalProjectId }, { projectId: canonicalProjectId, id }, { projectId: canonicalProjectId }]);
+  assert.ok((await controller.handle({ id: 3, method: "command-approvals/remove", params: { projectId: "alias", id: "invalid" } })).error);
+  assert.ok((await controller.handle({ id: 4, method: "command-approvals/remove", params: { projectId: "missing", id } })).error);
+  assert.equal(calls.length, 3);
+});
+
 test("context capability bounds reject invalid target mutations without writing", async () => {
   const unused = async (): Promise<never> => { throw new Error("Profile validation must only read model context."); };
   const { controller, targetWrites } = createController({
@@ -53,6 +72,7 @@ function createController(options: {
   profileTargets?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profileTargets"];
   readDetailed?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["stats"]["readDetailed"];
   questionnaireResponses?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["questionnaireResponses"];
+  commandApprovals?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["commandApprovals"];
 } = {}) {
   let globalNetworkEnabled = false;
   const projectNetworkOverrides = new Map<string, boolean>();
@@ -73,6 +93,7 @@ function createController(options: {
     };
   };
   const controller = new WorkbenchDaemonRequestController({
+    commandApprovals: options.commandApprovals,
     providers: options.providers ?? { get: () => ({
       threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
       configuration: {

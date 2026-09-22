@@ -19,6 +19,7 @@ import {
   check,
   defineTable,
   enumText,
+  evolveTable,
   foreignKey,
   integer,
   jsonText,
@@ -30,7 +31,7 @@ import {
   type SelectRow,
   type TableDefinition,
 } from "../../../database/schema/schema-definition.ts";
-import { createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "../../../database/schema/schema-history.ts";
+import { addColumns, createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "../../../database/schema/schema-history.ts";
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
@@ -169,7 +170,20 @@ const threadApprovalCommandContextsV1 = defineTable("thread_approval_command_con
     onDelete: "CASCADE",
   })],
 }));
-const threadApprovalCommandContextsHistory = initialHistory(threadApprovalCommandContextsV1);
+const threadApprovalCommandContextsV2 = evolveTable(threadApprovalCommandContextsV1, {
+  add: { justification: text(), network_target: text() },
+});
+const threadApprovalCommandContextsHistory = defineTableHistory({
+  versions: [
+    tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadApprovalCommandContextsV1, migration: createTable(threadApprovalCommandContextsV1) }),
+    tableVersion({
+      schemaVersion: databaseReleases.commandApprovals.version,
+      table: threadApprovalCommandContextsV2,
+      migration: addColumns({ from: threadApprovalCommandContextsV1, to: threadApprovalCommandContextsV2, columns: ["justification", "network_target"] }),
+    }),
+  ],
+  current: threadApprovalCommandContextsV2,
+});
 export const threadApprovalCommandContexts = threadApprovalCommandContextsHistory.current;
 
 const threadApprovalCommandActionsV1 = defineTable("thread_approval_command_actions", {

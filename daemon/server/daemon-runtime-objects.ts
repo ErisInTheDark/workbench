@@ -50,6 +50,7 @@ import type CodexStdioBridge from "./CodexStdioBridge";
 import type { CodexStdioBridgeReloadState } from "./CodexStdioBridge";
 import type CodexLifecycleController from "./CodexLifecycleController";
 import type WorkbenchCodexSandboxNetworkController from "./WorkbenchCodexSandboxNetworkController";
+import type WorkbenchCommandApprovalController from "./WorkbenchCommandApprovalController";
 import type WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import type WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import type WorkbenchToolRevisionController from "./WorkbenchToolRevisionController";
@@ -216,6 +217,7 @@ export interface DaemonRuntimeObjects {
   codexSandboxNetwork: WorkbenchCodexSandboxNetworkController;
   codexInstructions: WorkbenchCodexInstructionAdapter;
   database: DaemonDatabaseRegistration;
+  commandApprovals: WorkbenchCommandApprovalController;
   daemonRequests: WorkbenchDaemonRequestController;
   threadActions: WorkbenchThreadActionController;
   gitArc: WorkbenchGitArcFeature;

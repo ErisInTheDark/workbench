@@ -61,9 +61,15 @@ export function hasWorkbenchApprovalDecisionSelection(
   request: WorkbenchUserInputRequest,
   response: WorkbenchUserInputResponse,
 ) {
-  return request.questions
-    .filter(isWorkbenchApprovalDecisionQuestion)
-    .some((question) => getAnswerValues(response, question.id).some(isWorkbenchApprovalOptionLabel));
+  return readOfferedApprovalDecision(request, response) !== null;
+}
+
+function readOfferedApprovalDecision(request: WorkbenchUserInputRequest, response: WorkbenchUserInputResponse) {
+  const selections = request.questions.filter(isWorkbenchApprovalDecisionQuestion).flatMap(question => {
+    const labels = new Set(question.options.map(option => option.label));
+    return getAnswerValues(response, question.id).filter(answer => labels.has(answer));
+  });
+  return selections.length === 1 ? selections[0]! : null;
 }
 
 export function getWorkbenchApprovalSupplementalSteerText(
@@ -76,12 +82,10 @@ export function getWorkbenchApprovalSupplementalSteerText(
 
   const customAnswers = request.questions.flatMap((question) => getCustomAnswerValues(question, response));
   if (!customAnswers.length) return null;
-  const decisionAnswers = request.questions
-    .filter(isWorkbenchApprovalDecisionQuestion)
-    .flatMap((question) => getAnswerValues(response, question.id));
-  const type = decisionAnswers.includes(WORKBENCH_APPROVAL_DECLINE_LABEL)
+  const decision = readOfferedApprovalDecision(request, response);
+  const type = decision === WORKBENCH_APPROVAL_DECLINE_LABEL
     ? "declined"
-    : decisionAnswers.some((answer) => WORKBENCH_APPROVAL_ACCEPT_LABELS.has(answer))
+    : decision !== null
       ? "accepted"
       : null;
   return type

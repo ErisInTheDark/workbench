@@ -1217,6 +1217,38 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
   }
 });
 
+test("command approval context survives transcript persistence with legacy absence preserved", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([threadObservation(), turnObservation("turn", 0)]);
+    const identities = new WorkbenchTranscriptIdentityRepository(database);
+    for (const extra of [{}, { justification: "Run the tests.", networkTarget: "https://registry.example" }]) {
+      const reference = `approval-${Object.keys(extra).length}`;
+      const identity = identities.admit({
+        threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+        sources: [{ turnId: fixtureIdentityValues.WorkbenchTurnId.turn, kind: "stable", reference }],
+      });
+      const command = { command: "pnpm test", commandActions: [], cwd: "C:/project", ...extra };
+      repository.settle([{
+        kind: "questionnaire", observedAt: 4, publicItemId: identity.itemId,
+        entry: {
+          threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId: fixtureIdentityValues.WorkbenchTurnId.turn,
+          itemId: reference, requestKey: reference, insertAfterItemId: null, insertAfterItemIndex: null, resolvedAt: 4,
+          request: { id: reference, title: "", summary: "", submitLabel: "", questions: [], approval: { command } },
+          response: { answers: {} },
+        },
+      }]);
+      const projected = projectWorkbenchTranscriptItems(repository.read({ threadId: "thread", turnLimit: 1 })!.rows);
+      assert.equal(projected.success, true);
+      if (!projected.success) throw new Error("Approval projection failed.");
+      const item = projected.data.find(({ item }) => item.id === identity.itemId)!.item;
+      assert.equal(item.type, "approval");
+      if (item.type !== "approval") throw new Error("Approval lost its kind.");
+      assert.deepEqual(item.request.approval?.command, command);
+    }
+  } finally { database.close(); }
+});
+
 test("interaction bodies reuse admitted identities and positions through steer settlement changes", () => {
   const { database, repository } = createRepository();
   try {

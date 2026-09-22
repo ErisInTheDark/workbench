@@ -23,7 +23,7 @@ import {
   getActivatedWorkbenchSkillPathsForTextValues,
   type InlineMentionHighlightSources,
 } from "../../../workbench/thread/inline-mention-highlights";
-import { getThreadCommandDisplay } from "../../../workbench/thread/thread-command-matchers";
+import { getThreadCommandDisplay, isBrowseCommandMatcherClaim } from "../../../workbench/thread/thread-command-matchers";
 import {
   hasWorkbenchApprovalDecisionSelection,
   isWorkbenchApprovalDecisionQuestion,
@@ -37,7 +37,8 @@ import ThreadLightboxImage from "./ThreadLightboxImage";
 import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import { formatQuestionDisplay, shouldUseCompactSingleQuestionDisplay } from "./thread-user-input-request-preview";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
-import { ThreadCommandSummary } from "./thread-view-primitives";
+import ThreadCommandDisplay from "./ThreadCommandDisplay";
+import { renderThreadInlineMarkdown } from "./thread-markdown-render";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
 
@@ -159,7 +160,7 @@ function ThreadUserInputRequestFrame({
   );
 }
 
-function ThreadApprovalCommandSummary ({
+function ThreadApprovalCommand ({
   knownSkills,
   projectRootPath,
   request,
@@ -184,19 +185,16 @@ function ThreadApprovalCommandSummary ({
       : null
   ), [commandContext, knownSkills, projectRootPath, workspaceRoots]);
 
-  if (!display || display.omitFromDisplay || display.summaryKind !== "matched") {
+  if (!display || !commandContext) {
     return null;
   }
 
   return (
-    <div className="rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--approval-summary-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] px-3 py-2.5">
-      <p className="m-0 text-[0.72em] font-semibold tracking-[0.08em] [color:color-mix(in_srgb,var(--text)_var(--muted-strength),var(--approval-summary-fg-bg))] uppercase">
-        Matched action
-      </p>
-      <p className="mt-1 mb-0 min-w-0 text-[0.92em] leading-[1.65] text-text">
-        <ThreadCommandSummary display={display} />
-      </p>
-    </div>
+    <>
+      <ThreadCommandDisplay command={commandContext.command} display={display} browse={isBrowseCommandMatcherClaim(display.claimedBy)} previewHeight="auto" />
+      {commandContext.justification ? <p className="m-0 whitespace-pre-wrap break-words text-[0.92em] leading-[1.65] text-text">{commandContext.justification}</p> : null}
+      {commandContext.networkTarget ? <p className="m-0 break-all text-[0.84em] text-fg/muted">Network target: {commandContext.networkTarget}</p> : null}
+    </>
   );
 }
 
@@ -229,8 +227,9 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
   const isReadOnlyMode = isHistoryMode || isPreviewMode;
   const compact = props.presentation === "compact";
   const useCompactSingleQuestionDisplay = shouldUseCompactSingleQuestionDisplay(request);
-  const requestTitle = getQuestionnaireTitle(request);
-  const requestSummary = useCompactSingleQuestionDisplay ? "" : request.summary.trim();
+  const isApproval = Boolean(request.approval) || request.questions.some(isWorkbenchApprovalDecisionQuestion);
+  const requestTitle = isApproval ? request.title : getQuestionnaireTitle(request);
+  const requestSummary = !isApproval && useCompactSingleQuestionDisplay ? "" : request.summary.trim();
   const historyProps = mode === "history" ? props : null;
   const previewProps = mode === "preview" ? props : null;
   const interactiveProps = isInteractiveMode ? props : null;
@@ -414,7 +413,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
           )}
         </div>
 
-        <ThreadApprovalCommandSummary
+        <ThreadApprovalCommand
           knownSkills={props.knownSkills}
           projectRootPath={props.projectRootPath}
           request={request}
@@ -447,7 +446,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
               && request.questions.length === 1
               && question.options.length === 0;
             const showQuestionHeader = request.questions.length !== 1;
-            const showQuestionText = Boolean(questionText)
+            const showQuestionText = request.approval?.command?.justification === undefined && Boolean(questionText)
               && (showQuestionHeader || questionText !== requestTitle.trim());
 
             return (
@@ -521,9 +520,10 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                               isChecked={isChecked}
                               isHistoryMode
                               isSingleChoice={isSingleChoice}
-                              label={option.label}
+                              label={isApproval ? renderThreadInlineMarkdown(option.label, {}, optionId) : option.label}
+                              wrapLabel={isApproval}
                               markerId={optionId}
-                              presentation={compact ? "compact-inline" : "card"}
+                              presentation={isApproval || compact ? "compact-inline" : "card"}
                             />
                           );
                         }
@@ -535,9 +535,10 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                             description={option.description}
                             isChecked={isChecked}
                             isSingleChoice={isSingleChoice}
-                            label={option.label}
+                            label={isApproval ? renderThreadInlineMarkdown(option.label, {}, optionId) : option.label}
+                            wrapLabel={isApproval}
                             markerId={optionId}
-                            presentation={compact ? "compact-inline" : "card"}
+                            presentation={isApproval || compact ? "compact-inline" : "card"}
                             onClick={() => {
                               const values = isChecked
                                 ? selectedQuestionValues.filter((value) => value !== option.label)

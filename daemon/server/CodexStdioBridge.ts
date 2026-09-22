@@ -7,6 +7,10 @@
 import type { CodexThreadContextReadResponse, CodexThreadPageResponse } from "workbench-shared/codex/thread-context";
 import { parseTranscriptAssetAddress } from "workbench-shared/workbench/transcript/transcript-asset-address";
 import { randomUUID } from "node:crypto";
+import type WorkbenchCommandApprovalController from "./WorkbenchCommandApprovalController";
+import { canonicalApprovalWorkdir, COMMAND_APPROVAL_CONFIRMATION, hasApprovalConfirmation, matchesApprovalPrefix, parseApprovalCommand } from "./lib/workbench/command-approval-prefix";
+import { getPackageScriptPrefix } from "./lib/workbench/package-script-prefixes";
+import { hasWorkbenchApprovalDecisionSelection } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
 import type { WorkbenchContextTrigger } from "workbench-shared/workbench/provider/provider-context";
 
@@ -125,11 +129,14 @@ type PendingResponse = {
     threadId: string;
     turnId: string;
     item: WorkbenchToolOutput;
-    patch?: { itemId: string; approvalId: number | string | null };
+    approvalId?: number | string | null;
+    approvalRequestKey?: string;
+    patch?: { itemId: string; approvalId?: number | string | null };
   };
 };
 
 export type CodexStdioBridgeOptions = {
+  commandApprovals?: Pick<WorkbenchCommandApprovalController, "match" | "save">;
   prepareInputContext?: (
     threadId: NativeThreadId,
     trigger: WorkbenchContextTrigger,
@@ -270,6 +277,12 @@ type PendingCodexQuestionnaire = PendingCodexUserInputRequestBase & {
 type PendingCodexCommandExecutionApproval = PendingCodexUserInputRequestBase & {
   kind: "commandExecutionApproval";
   params: CommandExecutionRequestApprovalParams;
+  approvalState?: "checking" | "feedback";
+  savedChoices?: {
+    projectId: import("workbench-shared/workbench/identity").ProjectId;
+    workdir: string;
+    candidates: Array<{ label: string; prefix: string[] }>;
+  };
 };
 
 type PendingCodexFileChangeApproval = PendingCodexUserInputRequestBase & {
@@ -622,7 +635,7 @@ function createApprovalRequest(
       question: createApprovalQuestionText(prompt, details),
     }],
     submitLabel: "Submit response",
-    summary: "Codex cannot continue until you respond to this request.",
+    summary: "",
     title,
   };
 }
@@ -631,10 +644,14 @@ function createCommandApprovalContext({
   command,
   commandActions,
   cwd,
+  justification,
+  networkTarget,
 }: {
   command: string | null | undefined;
   commandActions?: WorkbenchApprovalCommandContext["commandActions"] | null;
   cwd: string | null | undefined;
+  justification?: string | null;
+  networkTarget?: string | null;
 }): WorkbenchUserInputRequest["approval"] | undefined {
   const normalizedCommand = command?.trim();
   if (!normalizedCommand) {
@@ -646,6 +663,8 @@ function createCommandApprovalContext({
       command: normalizedCommand,
       commandActions: commandActions ?? [],
       cwd: cwd?.trim() ?? "",
+      justification: justification ?? "",
+      ...(networkTarget ? { networkTarget } : {}),
     },
   };
 }
@@ -665,8 +684,10 @@ function normalizeCommandExecutionApprovalRequest(
       command: params.command,
       commandActions: params.commandActions,
       cwd: params.cwd,
+      justification: params.reason,
+      networkTarget,
     }),
-    details: [
+    details: params.command?.trim() ? [] : [
       createApprovalDetail("Command", params.command ?? null),
       createApprovalDetail("Working directory", params.cwd ?? null),
       createApprovalDetail("Reason", params.reason ?? null),
@@ -735,8 +756,9 @@ function normalizeExecCommandApprovalRequest(
     approval: createCommandApprovalContext({
       command,
       cwd: params.cwd,
+      justification: params.reason,
     }),
-    details: [
+    details: command.trim() ? [] : [
       createApprovalDetail("Command", command),
       createApprovalDetail("Working directory", params.cwd),
       createApprovalDetail("Reason", params.reason),
@@ -872,10 +894,11 @@ export default class CodexStdioBridge {
   private readonly resolveProjectFromCwd: CodexStdioBridgeOptions["resolveProjectFromCwd"];
   private readonly handleWorkbenchRequest: CodexStdioBridgeOptions["handleWorkbenchRequest"];
   private readonly instructions: WorkbenchCodexInstructionPort;
+  private readonly commandApprovals: CodexStdioBridgeOptions["commandApprovals"];
   private readonly identities: CodexStdioBridgeOptions["identities"];
   private readonly onInitialized: () => void;
 
-  constructor({ appServer, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onAcceptedTurnSteer = () => undefined, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, prepareInputContext, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, transcriptAssets, sqliteReader, readSqliteProviderCursor, readSqliteRecoveryGapIds }: CodexStdioBridgeOptions) {
+  constructor({ commandApprovals, appServer, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onAcceptedTurnSteer = () => undefined, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, prepareInputContext, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, transcriptAssets, sqliteReader, readSqliteProviderCursor, readSqliteRecoveryGapIds }: CodexStdioBridgeOptions) {
     this.sqliteReader = sqliteReader;
     this.readSqliteProviderCursor = readSqliteProviderCursor;
     this.readSqliteRecoveryGapIds = readSqliteRecoveryGapIds;
@@ -900,6 +923,7 @@ export default class CodexStdioBridge {
     this.readSqliteTranscriptMaterializedTurnIds = readSqliteTranscriptMaterializedTurnIds;
     this.readSqliteContextUsage = readSqliteContextUsage;
     this.resolveProjectFromCwd = resolveProjectFromCwd;
+    this.commandApprovals = commandApprovals;
     this.handleWorkbenchRequest = handleWorkbenchRequest;
     this.instructions = instructions;
     this.identities = identities;
@@ -911,7 +935,10 @@ export default class CodexStdioBridge {
     this.pendingResponses = new Map([...initialState?.pendingResponses ?? []].map(([id, pending]) => [
       id,
       pending.toolContext
-        ? { ...pending, toolContext: structuredClone(pending.toolContext) }
+        ? { ...pending, toolContext: {
+          ...structuredClone(pending.toolContext),
+          approvalId: pending.toolContext.approvalId !== undefined ? pending.toolContext.approvalId : pending.toolContext.patch?.approvalId,
+        } }
         : pending,
     ]));
     this.retiringResponses = new Map(initialState?.retiringResponses ?? (restartingAppServer ? initialState?.pendingResponses : undefined));
@@ -1049,7 +1076,7 @@ export default class CodexStdioBridge {
     this.unmaterializedThreadIds.clear();
     for (const pending of this.pendingResponses.values()) {
       if (pending.toolContext) {
-        if (pending.toolContext.patch) pending.toolContext.patch.approvalId = null;
+        pending.toolContext.approvalId = null;
         void this.settleToolContext(pending, {
           id: pending.upstreamRequest.id ?? null, error: { code: -32000, message: reason },
         }).then(pending.resolve);
@@ -1559,6 +1586,10 @@ export default class CodexStdioBridge {
     void this.enqueueCommand(async () => {
       try {
         await this.prepareToolContext(pending);
+        if (this.pendingResponses.get(id) === pending && pending.toolContext?.approvalId === null && !pending.toolContext.sent) {
+          this.pendingResponses.delete(id);
+          pending.resolve({ id, error: { code: -32000, message: "The originating approval ended before feedback was delivered." } });
+        }
       } catch (error) {
         if (signal.aborted) return;
         if (this.pendingResponses.get(id) !== pending) return;
@@ -1573,6 +1604,9 @@ export default class CodexStdioBridge {
   }
 
   resumePendingToolContexts() {
+    for (const pending of this.pendingUserInputRequests.values()) {
+      if (pending.kind === "commandExecutionApproval" && pending.approvalState === "checking") this.prepareCommandApproval(pending);
+    }
     for (const [id, pending] of this.pendingResponses) {
       if (pending.toolContext?.sent === false) {
         this.prepareQueuedToolContext(id, pending);
@@ -1591,6 +1625,7 @@ export default class CodexStdioBridge {
     if (read.error) throw new Error(getJsonRpcErrorMessage(read) ?? "Could not read the originating thread.");
     const thread = asRecord(read.result)?.thread as Thread | undefined;
     if (!thread || thread.id !== threadId) throw new Error("Passive context could not read its originating thread.");
+    if (!patch && context.approvalId === null) return;
     if (patch) {
       const attempt = this.fileChanges.get(threadId, turnId, patch.itemId)?.item ?? {
         id: patch.itemId, type: "fileChange" as const, status: "failed" as const, changes: [],
@@ -1621,6 +1656,7 @@ export default class CodexStdioBridge {
       if (active?.id !== turnId) throw new Error("The originating turn is no longer active; passive context was not sent.");
     }
     if (this.pendingResponses.get(Number(pending.upstreamRequest.id)) !== pending) return;
+    if (!patch && context.approvalId === null) return;
     this.assertAcceptingWork();
     const { id, name, namespace, output } = context.item;
     pending.upstreamRequest = {
@@ -1722,11 +1758,13 @@ export default class CodexStdioBridge {
       }
       return { id: response.id, error: { code: -32000, message: detail } };
     } finally {
-      if (patch?.approvalId !== null && patch?.approvalId !== undefined) {
-        const approvalId = patch.approvalId;
-        patch.approvalId = null;
+      const context = pending.toolContext!;
+      if (context.approvalId !== null && context.approvalId !== undefined) {
+        const approvalId = context.approvalId;
+        context.approvalId = null;
         try {
           this.send({ id: approvalId, result: { decision: "decline" satisfies FileChangeApprovalDecision } });
+          if (context.approvalRequestKey) this.pendingUserInputRequests.delete(context.approvalRequestKey);
         } catch (failure) {
           logError("codex-patch-approval", sanitizeTranscriptErrorMessage(failure));
         }
@@ -2131,10 +2169,14 @@ export default class CodexStdioBridge {
           ?? asString(asRecord(asRecord(message.params)?.turn)?.id);
         if (turnId) this.transcriptActiveTurns.delete(turnId);
         const threadId = asString(asRecord(message.params)?.threadId);
+        for (const [key, pending] of this.pendingUserInputRequests) {
+          if (pending.kind === "commandExecutionApproval" && pending.approvalState
+            && pending.threadId === threadId && pending.turnId === turnId) this.pendingUserInputRequests.delete(key);
+        }
         for (const pending of this.pendingResponses.values()) {
           const context = pending.toolContext;
-          if (context?.threadId === threadId && context.turnId === turnId && context.patch) {
-            context.patch.approvalId = null;
+          if (context?.threadId === threadId && context.turnId === turnId && context.approvalId !== undefined) {
+            context.approvalId = null;
           }
         }
         this.fileChanges.clearTurnCursor(message.params);
@@ -2259,8 +2301,8 @@ export default class CodexStdioBridge {
     const requestKey = String(requestId);
     for (const pending of this.pendingResponses.values()) {
       const context = pending.toolContext;
-      if (context?.threadId === threadId && context.patch && String(context.patch.approvalId) === requestKey) {
-        context.patch.approvalId = null;
+      if (context?.threadId === threadId && String(context.approvalId) === requestKey) {
+        context.approvalId = null;
       }
     }
     const pendingRequest = this.pendingUserInputRequests.get(requestKey);
@@ -2427,7 +2469,7 @@ export default class CodexStdioBridge {
   ) {
     const requestKey = String(request.id);
     const normalizedRequest = normalizeCommandExecutionApprovalRequest(requestKey, request.params);
-    this.pendingUserInputRequests.set(requestKey, {
+    const pending: PendingCodexCommandExecutionApproval = {
       kind: "commandExecutionApproval",
       itemId: request.params.itemId,
       params: request.params,
@@ -2436,16 +2478,100 @@ export default class CodexStdioBridge {
       threadId: request.params.threadId,
       turnId: request.params.turnId,
       upstreamRequestId: request.id,
-    });
+    };
+    this.pendingUserInputRequests.set(requestKey, pending);
+    if (this.commandApprovals) {
+      pending.approvalState = "checking";
+      this.prepareCommandApproval(pending);
+      return;
+    }
+    this.showCommandApproval(pending);
+  }
+
+  private showCommandApproval(pending: PendingCodexCommandExecutionApproval) {
+    if (this.pendingUserInputRequests.get(pending.requestKey) !== pending) return;
+    delete pending.approvalState;
     this.publishNativeNotification({
       method: "questionnaire/requested",
       params: {
-        itemId: request.params.itemId,
-        request: normalizedRequest,
-        requestKey,
-        threadId: request.params.threadId,
-        turnId: request.params.turnId,
+        itemId: pending.itemId,
+        request: pending.request,
+        requestKey: pending.requestKey,
+        threadId: pending.threadId,
+        turnId: pending.turnId,
       },
+    });
+  }
+
+  private prepareCommandApproval(pending: PendingCodexCommandExecutionApproval) {
+    const signal = this.generation.signal;
+    const isPending = () => !signal.aborted && this.pendingUserInputRequests.get(pending.requestKey) === pending;
+    void this.enqueueCommand(async () => {
+      try {
+        const { params } = pending;
+        if (!this.commandApprovals || params.kind === "writeStdin" || params.additionalPermissions || params.networkApprovalContext
+          || (params.availableDecisions && !params.availableDecisions.includes("accept"))) return;
+        const argv = parseApprovalCommand(params.command ?? "");
+        const workdir = canonicalApprovalWorkdir(params.cwd ?? "");
+        if (!argv || !workdir) return;
+        const read = await this.dispatchManagedProviderRequest({
+          method: "thread/read", params: { threadId: pending.threadId, includeTurns: false },
+        }, signal);
+        if (!isPending()) return;
+        if (read.error) throw new Error(getJsonRpcErrorMessage(read) ?? "Could not read the approval's thread.");
+        const thread = asRecord(read.result)?.thread as Thread | undefined;
+        if (!thread || thread.id !== pending.threadId) throw new Error("Could not resolve the approval's originating thread.");
+        const resolution = await this.resolveProjectFromCwd(thread.cwd, { endpointName: "Command approval" });
+        if (!isPending() || !resolution) return;
+        const projectId = resolution.project.id;
+        const saved = await this.commandApprovals.match(projectId, workdir, argv);
+        if (!isPending()) return;
+        if (saved) {
+          if (hasApprovalConfirmation(params.reason)) {
+            this.send({ id: pending.upstreamRequestId, result: { decision: "accept" } });
+            this.pendingUserInputRequests.delete(pending.requestKey);
+          } else {
+            pending.approvalState = "feedback";
+            void this.queueToolContext({
+              threadId: pending.threadId, turnId: params.turnId,
+              approvalId: pending.upstreamRequestId, approvalRequestKey: pending.requestKey,
+              item: {
+                id: randomUUID(), type: "functionCallOutput", name: "command_approval", namespace: "workbench",
+                output: `The command prefix ${JSON.stringify(saved.prefix)} has previously been approved to run outside the sandbox in ${saved.workdir} for this thread's project, but you must explicitly state that you are not bundling additional shell code into the command. If true, resubmit with this exact sentence on its own line in justification: "${COMMAND_APPROVAL_CONFIRMATION}" Otherwise, separate the shell operations and request approval normally. This is an automatic Workbench check, not a user rejection.`,
+              },
+            }).catch(error => logError("codex-command-approval", sanitizeTranscriptErrorMessage(error)));
+          }
+          return;
+        }
+        const prefixes: string[][] = [];
+        for (const candidate of [params.proposedExecpolicyAmendment, getPackageScriptPrefix(argv)]) {
+          if (!candidate || !matchesApprovalPrefix(argv, candidate) || candidate.some(token => !token)) continue;
+          if (!prefixes.some(prefix => prefix.length === candidate.length && matchesApprovalPrefix(prefix, candidate))) prefixes.push([...candidate]);
+        }
+        const candidates = prefixes.map(prefix => ({
+          prefix,
+          label: `**Always allow** - \`${prefix.map(token => /\s/u.test(token) ? JSON.stringify(token) : token).join(" ")}\` command prefix`,
+        }));
+        pending.savedChoices = { projectId, workdir, candidates };
+        pending.request = {
+          ...pending.request,
+          questions: pending.request.questions.map(question => question.id !== APPROVAL_DECISION_QUESTION_ID ? question : {
+            ...question,
+            options: [...question.options.filter(option => option.label !== APPROVAL_DECLINE_LABEL), ...candidates.map(candidate => ({
+              label: candidate.label,
+              description: `Remember for this project in ${params.cwd}. Includes trailing arguments and future script contents; explicit single-command confirmation is required.`,
+            })), ...question.options.filter(option => option.label === APPROVAL_DECLINE_LABEL)],
+          }),
+        };
+      } catch (error) {
+        if (!isPending()) return;
+        logError("codex-command-approval", sanitizeTranscriptErrorMessage(error));
+        pending.request = { ...pending.request, summary: "Saved command approvals are unavailable. Review this request manually." };
+      } finally {
+        if (isPending() && pending.approvalState === "checking") this.showCommandApproval(pending);
+      }
+    }).catch(error => {
+      if (isPending()) logError("codex-command-approval", sanitizeTranscriptErrorMessage(error));
     });
   }
 
@@ -2457,7 +2583,8 @@ export default class CodexStdioBridge {
       void this.queueToolContext({
         threadId, turnId,
         item: { id: randomUUID(), type: "functionCallOutput", name: "patch_recovery", namespace: "workbench", output: "" },
-        patch: { itemId, approvalId: request.id },
+        approvalId: request.id,
+        patch: { itemId },
       });
       return;
     }
@@ -2569,7 +2696,9 @@ export default class CodexStdioBridge {
   private async listPendingQuestionnaires() {
     return {
       data: [
-        ...Array.from(this.pendingUserInputRequests.values(), (pendingRequest) => ({
+        ...Array.from(this.pendingUserInputRequests.values())
+          .filter(pending => pending.kind !== "commandExecutionApproval" || !pending.approvalState)
+          .map((pendingRequest) => ({
           itemId: pendingRequest.itemId,
           request: pendingRequest.request,
           requestKey: pendingRequest.requestKey,
@@ -2865,7 +2994,7 @@ export default class CodexStdioBridge {
       const response: JsonRpcResponse = { id, error: { code: -32000, message: reason } };
       if (pending.toolContext) {
         const toolContext = structuredClone(pending.toolContext);
-        if (toolContext.patch) toolContext.patch.approvalId = null;
+        toolContext.approvalId = null;
         pending.resolve(await this.settleToolContext({ ...pending, toolContext }, response));
       } else {
         pending.reject(new Error(reason));
@@ -3084,9 +3213,25 @@ export default class CodexStdioBridge {
     }
 
     if (pendingRequest.kind !== "questionnaire") {
-      const result = this.buildApprovalResponse(pendingRequest, resolvedResponse.response);
+      if (!hasWorkbenchApprovalDecisionSelection(pendingRequest.request, resolvedResponse.response)) {
+        throw new Error("Choose exactly one offered approval option.");
+      }
+      if (pendingRequest.kind === "commandExecutionApproval" && pendingRequest.approvalState) {
+        throw new Error("That command approval is not awaiting a user decision.");
+      }
+      const savedChoices = pendingRequest.kind === "commandExecutionApproval" ? pendingRequest.savedChoices : undefined;
+      const answers = resolvedResponse.response.answers[APPROVAL_DECISION_QUESTION_ID]?.answers ?? [];
+      const persistent = savedChoices?.candidates.find(candidate => answers.includes(candidate.label));
+      const result = persistent ? { decision: "accept" as const } : this.buildApprovalResponse(pendingRequest, resolvedResponse.response);
       await this.collectInputContext(NativeThreadIdSchema.parse(pendingRequest.threadId), "answer", this.generation.signal);
       if (this.pendingUserInputRequests.get(pendingRequest.requestKey) !== pendingRequest) throw new Error("That questionnaire is no longer pending.");
+      if (persistent && savedChoices) {
+        if (!this.commandApprovals) throw new Error("Saved command approvals are unavailable.");
+        await this.commandApprovals.save(savedChoices.projectId, savedChoices.workdir, persistent.prefix);
+        if (this.pendingUserInputRequests.get(pendingRequest.requestKey) !== pendingRequest || this.generation.signal.aborted) {
+          throw new Error("That questionnaire is no longer pending.");
+        }
+      }
       this.send({
         id: pendingRequest.upstreamRequestId,
         result,
