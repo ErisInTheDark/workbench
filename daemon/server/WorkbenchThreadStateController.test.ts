@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import WorkbenchThreadStateControllerOwner, { type WorkbenchThreadStateControllerOptions } from "./WorkbenchThreadStateController";
+import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
 import { getProjectQualifiedThreadDisplayKey, getThreadDisplayFolderKey, getThreadDisplayThreadKey } from "workbench-shared/workbench/thread/thread-display-layout";
@@ -3677,6 +3678,89 @@ test("thread folders persist across restart and reconcile members that leave the
   assert.deepEqual((await reopened.getSnapshot(fixtureProjectIds["project"])).displayOrder, {});
   await reopened.dispose();
   await fs.rm(root, { force: true, recursive: true });
+});
+
+test("a held questionnaire never leaves the thread in the automatic recovery state", async () => {
+  const question = {
+    itemId: "3d9b1f6a-2f2e-4a4e-9f2d-6b1c0f5a7c11",
+    requestKey: "held-question",
+    turnId: fixtureTurnIds["turn"],
+    request: {
+      id: "held-question",
+      title: "Choose",
+      summary: "",
+      submitLabel: "Submit",
+      questions: [{ id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false }],
+    },
+  };
+  const waiting: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: fixtureThreadIds["questionnaire"] },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: question.requestKey, settled: false, turnId: fixtureTurnIds["turn"] },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    pendingQuestionnaire: question,
+    title: "Waiting",
+  };
+  const settled: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: fixtureThreadIds["retained"] },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Settled",
+  };
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "held-questionnaire-recovery",
+    threadStateStore: new MemoryThreadStatePersistence(),
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async (_projectId, _signal, accept) => {
+      await accept("codex", [waiting, settled], { complete: true });
+      return [];
+    },
+  });
+  const recovery = new WorkbenchTurnRecoveryController(() => undefined);
+  const readEntry = async (threadId: typeof fixtureThreadIds["questionnaire"]) => {
+    const entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(
+      candidate => candidate.entryKind === "thread" && candidate.identity.threadId === threadId,
+    );
+    assert.ok(entry && entry.entryKind === "thread");
+    return entry;
+  };
+  const waitingRequestKey = (entry: Awaited<ReturnType<typeof readEntry>>) =>
+    entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput"
+      ? entry.lifecycle.requestKey : null;
+  try {
+    await controller.open("observer", fixtureProjectIds["project"]);
+    await controller.refresh(fixtureProjectIds["project"]);
+
+    // A provider failure walks an idle thread to needsAttention/noActiveTurn, the one state the
+    // shared recovery gate treats as resumable. A thread waiting on a question must not become it.
+    await controller.observeLifecycle("codex", fixtureThreadIds["questionnaire"], { kind: "providerSystemError" });
+    let entry = await readEntry(fixtureThreadIds["questionnaire"]);
+    assert.equal(waitingRequestKey(entry), question.requestKey);
+    assert.equal(recovery.shouldContinue(entry.lifecycle, false), false);
+
+    // A completed turn must not walk it there either, and the question stays answerable.
+    await controller.observeLifecycle("codex", fixtureThreadIds["questionnaire"], { kind: "turnCompleted", status: "completed", turnId: fixtureTurnIds["turn"] });
+    entry = await readEntry(fixtureThreadIds["questionnaire"]);
+    assert.equal(waitingRequestKey(entry), question.requestKey);
+    assert.equal(recovery.shouldContinue(entry.lifecycle, false), false);
+    assert.equal(entry.pendingQuestionnaire?.requestKey, question.requestKey);
+
+    // A question observed without an owning turn still asserts the waiting state.
+    const turnless = { ...question, itemId: "1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b", requestKey: "turnless-question", turnId: null };
+    await controller.observeLifecycle("codex", fixtureThreadIds["retained"], {
+      kind: "pendingInput", questionnaire: turnless, requestKey: turnless.requestKey, turnId: null,
+    });
+    const turnlessEntry = await readEntry(fixtureThreadIds["retained"]);
+    assert.equal(waitingRequestKey(turnlessEntry), turnless.requestKey);
+    assert.equal(recovery.shouldContinue(turnlessEntry.lifecycle, false), false);
+  } finally {
+    await controller.dispose();
+  }
 });
 
 test("profile-less threads use defaults and reads cannot overtake a failed profile save", async (context) => {

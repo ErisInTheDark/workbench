@@ -890,12 +890,19 @@ export default class WorkbenchThreadStateController {
       const ownedEvent = existing.entryKind === "subagent" && event.kind === "turnCompleted" && event.status === "completed"
         ? { kind: "agentStatus" as const, status: "completed" as const, turnId: event.turnId }
         : event;
+      const reducedLifecycle = reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
+      const heldQuestionnaire = this.heldQuestionnaire(existing, questionnaireMutation);
       const retainedQuestionnaire = existing.entryKind === "thread"
         && existing.lifecycle.kind === "needsAttention"
-        && existing.pendingQuestionnaire
-        && !isWorkbenchApprovalRequest(existing.pendingQuestionnaire.request)
+        && existing.lifecycle.reason === "pendingInput"
         && event.kind === "turnCompleted";
-      const lifecycle = retainedQuestionnaire ? existing.lifecycle : reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
+      // The lifecycle is the only input the shared recovery gate reads, so a thread that is
+      // waiting on a questionnaire must never be left in the state that gate treats as resumable,
+      // and a turn boundary must not end the wait.
+      const recoverableLifecycle = reducedLifecycle.kind === "needsAttention" && reducedLifecycle.reason === "noActiveTurn";
+      const lifecycle = heldQuestionnaire && (retainedQuestionnaire || recoverableLifecycle)
+        ? this.waitOnQuestionnaire(existing.lifecycle, heldQuestionnaire)
+        : reducedLifecycle;
       const shouldUnsnooze = existing.entryKind === "thread" && existing.metadata.snoozed && (
         event.kind === "acceptedIntent"
         || event.kind === "inputResolved"
@@ -967,6 +974,32 @@ export default class WorkbenchThreadStateController {
     });
     await this.reevaluateDependentSnoozes(projectId, key);
     return result;
+  }
+
+  private heldQuestionnaire(
+    existing: WorkbenchThreadStateEntry,
+    mutation: QuestionnaireStateMutation | undefined,
+  ): WorkbenchDurableQuestionnaire | null {
+    if (existing.entryKind !== "thread") return null;
+    const held = mutation?.kind === "set"
+      ? mutation.questionnaire
+      : mutation?.kind === "clear" && existing.pendingQuestionnaire?.requestKey === mutation.requestKey
+        ? null
+        : existing.pendingQuestionnaire ?? null;
+    return held && !isWorkbenchApprovalRequest(held.request) ? held : null;
+  }
+
+  private waitOnQuestionnaire(
+    current: WorkbenchThreadLifecycle,
+    questionnaire: WorkbenchDurableQuestionnaire,
+  ): WorkbenchThreadLifecycle {
+    if (current.kind === "needsAttention" && current.reason === "pendingInput"
+      && current.requestKey === questionnaire.requestKey) return current;
+    const turnId = getWorkbenchLifecycleTurnId(current) ?? questionnaire.turnId;
+    return {
+      kind: "needsAttention", reason: "pendingInput", requestKey: questionnaire.requestKey, settled: false,
+      ...(turnId ? { turnId } : {}),
+    };
   }
 
   findPendingSidebarQuestionnaire(harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) {
@@ -1178,9 +1211,12 @@ export default class WorkbenchThreadStateController {
       const existing = state.entries.get(key);
       if (!existing || existing.entryKind === "draft") return null;
       const shouldClear = mutation.kind === "clear" && existing.pendingQuestionnaire?.requestKey === mutation.requestKey;
+      const heldQuestionnaire = this.heldQuestionnaire(existing, mutation);
       const next = parseWorkbenchThreadStateEntry({
         ...existing,
         ...(mutation.kind === "set" ? { pendingQuestionnaire: mutation.questionnaire } : shouldClear ? { pendingQuestionnaire: null } : {}),
+        // Storing a question without an owning turn must still assert the wait that recovery reads.
+        ...(heldQuestionnaire ? { lifecycle: this.waitOnQuestionnaire(existing.lifecycle, heldQuestionnaire) } : {}),
       });
       if (next.entryKind === "draft" || areDeeplyEqual(existing, next)) return existing;
       state.entries.set(key, next);
