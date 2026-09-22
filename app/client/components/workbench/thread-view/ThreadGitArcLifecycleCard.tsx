@@ -15,9 +15,11 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import type { GitArcProposalStatus } from "workbench-shared/workbench/git/git-arc-storage";
 import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
+import { ResetIcon } from "../workbench-icons";
 import { ThreadCheckpointCommitTargetAnchor } from "./ThreadCheckpointCommitPortalLayer";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
+import GitArcIcon, { GitArcClaimIcon, GitArcUnclaimedIcon } from "./GitArcIcon";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
@@ -170,11 +172,15 @@ export default function ThreadGitArcLifecycleCard({
               contentClassName="mt-1 pl-1"
               summary={(
                 <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                  <span>{lifecyclePaths.length} {phase === "stashed" ? "stashed" : "claimed"} {lifecyclePaths.length === 1 ? "file" : "files"}</span>
+                  <span className="inline-flex items-center gap-1.5">
+                    {phase === "stashed" ? <GitArcIcon action="stash" size={14} /> : <GitArcClaimIcon size={14} />}
+                    {lifecyclePaths.length} {phase === "stashed" ? "stashed" : "claimed"} {lifecyclePaths.length === 1 ? "file" : "files"}
+                  </span>
                   <span className="inline-flex min-w-0 items-center justify-end gap-2" data-thread-summary-action="true">
                     {phase === "stashed" ? (
                       <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("unstash")}>
-                        {activeAction === "unstash" ? "Unstashing." : "Unstash files"}
+                        <GitArcIcon action="unstash" className="mr-1.5" size={14} />
+                        {activeAction === "unstash" ? "Unstashing." : "Unstash"}
                       </PrimaryButton>
                     ) : null}
                     {phase === "active" && changeState === "dirty" ? (
@@ -187,7 +193,8 @@ export default function ThreadGitArcLifecycleCard({
                           onClick={() => void runAction("restoreAndUnclaim")}
                           tone="danger"
                         >
-                          {activeAction === "restoreAndUnclaim" ? "Restoring & unclaiming…" : "Restore & unclaim"}
+                          <ResetIcon className="mr-1.5" size={14} />
+                          {activeAction === "restoreAndUnclaim" ? "Reverting & unclaiming…" : "Revert & unclaim"}
                         </PrimaryButton>
                       ) : (
                         <>
@@ -199,7 +206,8 @@ export default function ThreadGitArcLifecycleCard({
                             onClick={() => void runAction("restore")}
                             tone="danger"
                           >
-                            {activeAction === "restore" ? "Restoring…" : "Restore files"}
+                            <ResetIcon className="mr-1.5" size={14} />
+                            {activeAction === "restore" ? "Reverting…" : "Revert"}
                           </PrimaryButton>
                           <PrimaryButton
                             key="unclaim"
@@ -207,18 +215,21 @@ export default function ThreadGitArcLifecycleCard({
                             disabled={activeAction !== null}
                             onClick={() => void runAction("unclaim")}
                           >
-                            {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim files"}
+                            <GitArcUnclaimedIcon className="mr-1.5" size={14} />
+                            {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim"}
                           </PrimaryButton>
                         </>
                       )
                     ) : phase === "active" && changeState === "clean" ? (
                       <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("unclaim")}>
-                        {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim files"}
+                        <GitArcUnclaimedIcon className="mr-1.5" size={14} />
+                        {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim"}
                       </PrimaryButton>
                     ) : phase === "active" && changeState === "loading" ? <span className="text-[0.74em] text-fg/muted">Checking claimed files…</span> : null}
                     {phase === "active" ? (
                       <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("stash")}>
-                        {activeAction === "stash" ? "Stashing…" : "Stash files"}
+                        <GitArcIcon action="stash" className="mr-1.5" size={14} />
+                        {activeAction === "stash" ? "Stashing…" : "Stash"}
                       </PrimaryButton>
                     ) : null}
                   </span>

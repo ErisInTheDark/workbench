@@ -224,8 +224,8 @@ test("lifecycle footer swaps whole-arc stash and unstash actions", () => {
       updatedAt: "2026-09-22T00:00:00.000Z",
     },
   }));
-  assert.match(active, />Stash files</u);
-  assert.doesNotMatch(active, />Unstash files</u);
+  assert.match(active, />Stash</u);
+  assert.doesNotMatch(active, />Unstash</u);
 
   const stashed = renderToStaticMarkup(createElement(ThreadGitArcLifecycleCard, {
     ...common,
@@ -240,8 +240,8 @@ test("lifecycle footer swaps whole-arc stash and unstash actions", () => {
       updatedAt: "2026-09-22T00:00:00.000Z",
     },
   }));
-  assert.match(stashed, />Unstash files</u);
-  assert.doesNotMatch(stashed, />Stash files</u);
+  assert.match(stashed, />Unstash</u);
+  assert.doesNotMatch(stashed, />Stash</u);
 });
 
 test("proposal cards consume loaded validity from thread observation", () => {
