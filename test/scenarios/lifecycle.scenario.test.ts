@@ -71,16 +71,27 @@ test("real application survives reload expiry, migrated candidate failure, retry
   const appState = async () => (await http("/api/workbench-client-state")).json() as Promise<{ daemonRegistrationId: string }>;
   const verifyEndpoint = async () => {
     const endpoint = runtime.daemonEndpoint;
-    assert.deepEqual(await readDaemonEndpoint(endpointPath), endpoint);
-    const health = await fetch(`${endpoint.origin}/healthz`, { signal: t.signal });
-    assert.deepEqual(WorkbenchDaemonEndpointSchema.parse(await health.json()), endpoint);
-    // App listener readiness deliberately precedes asynchronous daemon verification.
-    // Request completion yields to that observer; the scenario signal bounds failure.
-    for (;;) {
-      const connection = WorkbenchDaemonConnectionSchema.parse(await (await http("/api/workbench-network?connection=1")).json());
-      if (connection.localPort === null) continue;
-      assert.equal(connection.localPort, Number(new URL(endpoint.origin).port));
-      break;
+    let lastPort: number | null | undefined;
+    try {
+      await runtime.phase("app discovery of the daemon endpoint", async signal => {
+        assert.deepEqual(await readDaemonEndpoint(endpointPath), endpoint);
+        const health = await fetch(`${endpoint.origin}/healthz`, { signal });
+        assert.deepEqual(WorkbenchDaemonEndpointSchema.parse(await health.json()), endpoint);
+        // Listener readiness precedes asynchronous daemon verification. Every
+        // request and its response body share this phase's readiness budget.
+        for (;;) {
+          signal.throwIfAborted();
+          const connection = WorkbenchDaemonConnectionSchema.parse(
+            await (await http("/api/workbench-network?connection=1", { signal })).json());
+          lastPort = connection.localPort;
+          if (lastPort === null) continue;
+          assert.equal(lastPort, Number(new URL(endpoint.origin).port));
+          return;
+        }
+      });
+    } catch (error) {
+      throw new Error(`Endpoint verification failed; last localPort: ${lastPort === undefined ? "not observed" : lastPort}; expected ${new URL(endpoint.origin).port}`,
+        { cause: error });
     }
   };
   const appDirt = async (signal?: AbortSignal) => (await (await http(runtimePath, { signal })).json() as { reloadDirt: WorkbenchReloadDirtSnapshot }).reloadDirt;
@@ -92,6 +103,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     assert.ok(!dirt.dirtyScopes.some(({ scope }) => scope.endsWith(":process")), "Reload must not manufacture process dirt");
   };
   const assets = async () => {
+    runtime.markPhase("verifying compiled assets");
     const html = await (await http("/")).text();
     const urls = [...html.matchAll(/(?:src|href)=["']([^"']+\.(?:js|css)(?:\?[^"']*)?)["']/gu)]
       .map((match) => match[1]);
@@ -103,6 +115,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     }
   };
   const reloadServer = async (scopes: string[], failure = false, all = false) => {
+    runtime.markPhase(`daemon reload ${scopes.join(", ")}${failure ? " (expected failure)" : ""}`);
     // Reading registers this connection for subsequent dirt notifications.
     await serverDirt();
     const offset = runtime.events.length;
@@ -121,6 +134,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     else clean(dirt);
   };
   const reloadApp = async (scopes: string[], failure = false) => {
+    runtime.markPhase(`app reload ${scopes.join(", ")}${failure ? " (expected failure)" : ""}`);
     const signal = AbortSignal.any([t.signal, AbortSignal.timeout(90_000)]);
     const offset = runtime.appOutput.length;
     const response = await http(runtimePath, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scopes }) });
@@ -135,7 +149,10 @@ test("real application survives reload expiry, migrated candidate failure, retry
     if (failure) assert.match(dirt.error ?? "", /Lifecycle injected activation failure/u);
     else clean(dirt);
   };
+  let failed = false;
+  let failure: unknown;
   try {
+    runtime.markPhase("capturing and verifying the database migration source");
     const captured = await captureThreadStateMigrationSource(
       path.join(resolveWorkbenchDataRoot(), "daemon", "workbench.sqlite3"),
       runtime.root,
@@ -146,6 +163,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     await fs.writeFile(retainedFile, retainedContents);
     let subscriptionIndex = 0;
     const verifyTranscript = async (nativeAvailable = true) => {
+      runtime.markPhase(`verifying durable transcript (native ${nativeAvailable ? "available" : "unavailable"})`);
       if (nativeAvailable) {
         const pending = await runtime.daemon.questionnaires.pending();
         assert.ok(Array.isArray(pending.data), "WB actions must reach the current provider definition after startup or replacement");
@@ -252,6 +270,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
     assert.ok(runtime.output.includes("[lifecycle] native-unavailable server:codex"),
       "Cold startup must exercise unavailable native readiness, not merely omit native work");
     const recoveredOffset = runtime.output.length;
+    runtime.markPhase("clearing the native fault and waiting for recovery");
     await writeLifecycleFault(runtime.project, {});
     await runtime.until(() => runtime.output.slice(recoveredOffset).includes("[codex-recovery] Recovered Codex after:"),
       AbortSignal.any([t.signal, AbortSignal.timeout(90_000)]));
@@ -320,6 +339,7 @@ test("real application survives reload expiry, migrated candidate failure, retry
       await writeLifecycleFault(runtime.project, {});
     }
     const previousInstance = runtime.daemonEndpoint.instanceId;
+    runtime.markPhase("graceful shutdown before cold reopening");
     assert.deepEqual(await runtime.stop(), { app: 0, daemon: 0 }, "Owners must complete shutdown successfully before reopen");
     assert.equal(await readDaemonEndpoint(endpointPath), null, "Shutdown must withdraw the retired endpoint");
     await runtime.start();
@@ -343,17 +363,26 @@ test("real application survives reload expiry, migrated candidate failure, retry
       assert.equal(reopened.prepare("SELECT count(*) FROM workbench_subagent_relationships").pluck().get(), capturedCounts.relationships);
       assert.ok(Number(reopened.prepare("SELECT count(*) FROM workbench_threads").pluck().get()) >= Number(capturedCounts.threads));
     } finally { reopened.close(); }
+    runtime.markPhase("graceful shutdown after cold reopening");
     assert.deepEqual(await runtime.stop(), { app: 0, daemon: 0 });
     console.log("cold reopening preserved durable state");
     await writeLifecycleFault(runtime.project, { fail: "client:http", initial: true });
+    runtime.markPhase("verifying failed app startup cleans up");
     await assert.rejects(runtime.startApp(), /Lifecycle injected activation failure/u);
     assert.equal(await runtime.waitForAppExit(), 1, "Failed startup must close its owners and exit without external killing");
     assert.equal((await serviceIdentity()).daemonId, initialService.daemonId, "App failure must leave the independent host available.");
     console.log("failed startup cleaned up its own resources; lifecycle checks passed");
   } catch (error) {
-    console.error("lifecycle failed", error, "\napp tail\n", runtime.appOutput.slice(-12000), "\ndaemon tail\n", runtime.output.slice(-12000));
+    failed = true;
+    failure = error;
+    runtime.markPhase("lifecycle failed; preserving diagnostics");
     throw error;
   } finally {
-    await runtime.close();
+    try {
+      await runtime.close({ preserveDiagnostics: failed });
+    } catch (cleanupError) {
+      if (failed) throw new AggregateError([failure, cleanupError], "Lifecycle scenario and cleanup both failed");
+      throw cleanupError;
+    }
   }
 });
