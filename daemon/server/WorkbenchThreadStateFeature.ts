@@ -4,7 +4,7 @@
  * - WorkbenchProviderLifecycleObservation: provider event plus its persisted lifecycle result.
  * - normalizeProviderSidebarEntry: normalize provider sidebar rows.
  * - normalizeSubagentProviderLifecycle: resolve subagent lifecycle defaults.
- * - default WorkbenchThreadStateFeature: own reconciliation, project observation, SQLite state, provider titles, thread-owned status commands, and provider notifications.
+ * - default WorkbenchThreadStateFeature: own reconciliation, project observation, SQLite state, workbench-owned titles, thread-owned status commands, and provider notifications.
  */
 import { normalizeThreadTitle } from "./lib/thread-bootstrap";
 import type { ThreadPayload, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship, WorkbenchThreadCreationProfile } from "workbench-shared/types";
@@ -12,6 +12,7 @@ import type { GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState 
 import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, WorkbenchGitArcLifecycleStateSchema, type WorkbenchDurableQuestionnaire, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
+import { currentThreadTitleName } from "workbench-shared/workbench/thread/thread-title-history";
 import type { HarnessKind, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
@@ -131,11 +132,8 @@ export function normalizeProviderSidebarEntry(harness: HarnessKind, value: unkno
     if (startedAt !== null && (latestTurnStartedAt === null || startedAt > latestTurnStartedAt)) latestTurnStartedAt = startedAt;
   }
   const orderAt = latestTurnStartedAt ?? normalizeOptionalTimestamp(record.recencyAt) ?? updatedAt;
-  const namedTitle = resolveWorkbenchThreadTitle({
-    fallback: "", id: threadId, name: typeof record.name === "string" ? record.name : null, preview: null,
-  });
+  // Provider rows are display labels only; explicit titles are workbench-owned.
   return {
-    ...(namedTitle ? { namedTitle } : {}),
     activityAt: updatedAt, entryKind: "thread", identity: { harness, threadId },
     lifecycle: active
       ? { agent: { agentStatus: "working", ...(turnId ? { turnId } : {}) }, kind: "working", reason: "acceptedIntent", settled: false }
@@ -233,7 +231,7 @@ export default class WorkbenchThreadStateFeature {
   }
 
   async observeProviderNotification(harness: HarnessKind, facts: WorkbenchProviderObservation) {
-    const { projectId, lifecycle: mapped, title, activity } = facts;
+    const { projectId, lifecycle: mapped, displayLabel, activity } = facts;
     let observation: WorkbenchProviderLifecycleObservation | null = null;
     if (mapped) {
       const lifecycle = projectId
@@ -242,9 +240,8 @@ export default class WorkbenchThreadStateFeature {
       observation = { ...mapped, lifecycle };
       if (mapped.event.kind !== "userInputDelivered") return observation;
     }
-    if (title) {
-      if (projectId) await this.controller.setTitle(projectId, harness, title.threadId, title.title);
-      else await this.controller.observeTitle(harness, title.threadId, title.title);
+    if (displayLabel) {
+      await this.controller.observeDisplayLabel(harness, displayLabel.threadId, displayLabel.label, projectId);
       return observation;
     }
     if (activity) await this.controller.observeActivity(harness, activity.threadId, activity.kind === "turnStarted" ? activity.startedAt : undefined, projectId);
@@ -325,19 +322,18 @@ export default class WorkbenchThreadStateFeature {
       if (!providerEntry || providerEntry.entryKind === "draft") throw new Error("The managed provider thread could not be normalized.");
       await this.controller.ensureProviderEntry(resolved.projectId, providerEntry);
       if (request.method === "workbench/thread/title") {
-        const providerTitle = resolveWorkbenchThreadTitle({
-          fallback: "",
-          id: resolved.thread.id,
-          name: resolved.thread.name,
-          preview: null,
-        });
+        // The explicit title is workbench state; provider rows only supply a display label.
+        const canonical = await this.controller.getCanonicalThreadEntry(resolved.projectId, resolved.thread.id);
+        const currentTitle = canonical && canonical.entryKind !== "draft"
+          ? currentThreadTitleName(canonical.titleHistory ?? []) ?? ""
+          : "";
         if (params.action === "get") {
           return {
             id,
             result: {
               harness: resolved.harness,
               threadId: resolved.thread.id,
-              title: providerTitle,
+              title: currentTitle,
             },
           };
         }
@@ -348,9 +344,9 @@ export default class WorkbenchThreadStateFeature {
           throw new Error("currentTitle must be exact non-empty text when supplied.");
         }
         const expectedCurrentTitle = typeof params.currentTitle === "string" ? params.currentTitle : null;
-        if (expectedCurrentTitle !== (providerTitle || null)) {
-          throw new Error(providerTitle
-            ? `Thread title mismatch. Current title: ${JSON.stringify(providerTitle)}. Retry with currentTitle set to this exact text.`
+        if (expectedCurrentTitle !== (currentTitle || null)) {
+          throw new Error(currentTitle
+            ? `Thread title mismatch. Current title: ${JSON.stringify(currentTitle)}. Retry with currentTitle set to this exact text.`
             : "Thread title mismatch. No current title is set. Retry without currentTitle.");
         }
         await this.setProviderThreadTitle(resolved.harness, resolved.thread.id, title, resolved.cwd);
@@ -581,7 +577,7 @@ export default class WorkbenchThreadStateFeature {
         directSubagentIndex: relationship.directSubagentIndex, entryKind: "subagent", identity: { harness, threadId: relationship.threadId },
         lifecycle, name: relationship.name,
         parentThreadId: relationship.parentThreadId, pinned: false, profileId: relationship.profileId, profileName: relationship.profileName,
-        projectId, title: relationship.title, namedTitle: relationship.title, updatedAt: relationship.updatedAt,
+        projectId, title: relationship.title, workbenchTitle: relationship.title, updatedAt: relationship.updatedAt,
       };
     })];
   }

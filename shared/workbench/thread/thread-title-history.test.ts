@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dismissThreadTitle, previousThreadTitles, recordThreadTitle } from "./thread-title-history";
+import { currentThreadTitleName, dismissThreadTitle, previousThreadTitles, recordThreadTitle } from "./thread-title-history";
 
 test("reusing a title updates its last use without losing older distinct titles", () => {
   let history = recordThreadTitle([], "", "alpha", 10);
@@ -37,4 +37,22 @@ test("first explicit observation does not import the outgoing display fallback",
   const history = recordThreadTitle([], "first message preview", "new", 10);
   assert.deepEqual(history, [{ title: "new", usedAt: 10 }]);
   assert.deepEqual(recordThreadTitle(history, "new", "", 20), history);
+});
+
+test("current thread title is the most recently recorded explicit name", () => {
+  assert.equal(currentThreadTitleName([]), null);
+  assert.equal(currentThreadTitleName([
+    { title: "older", usedAt: 10 },
+    { title: "newest", usedAt: 30 },
+    { title: "middle", usedAt: 20 },
+  ]), "newest");
+});
+
+test("the newest recorded title keeps a strictly higher use time under equal or backwards clocks", () => {
+  let history = recordThreadTitle([], "", "alpha", 10);
+  history = recordThreadTitle(history, "alpha", "zeta", 10);
+  assert.equal(currentThreadTitleName(history), "zeta");
+  assert.ok(history.find((entry) => entry.title === "zeta")!.usedAt > history.find((entry) => entry.title === "alpha")!.usedAt);
+  history = recordThreadTitle(history, "zeta", "beta", 5);
+  assert.equal(currentThreadTitleName(history), "beta");
 });

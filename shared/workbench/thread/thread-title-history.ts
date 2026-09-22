@@ -3,6 +3,7 @@
  * Exports:
  * - WorkbenchThreadTitleHistoryEntrySchema/WorkbenchThreadTitleHistoryEntry: one title's last observed use.
  * - recordThreadTitle: record an explicit name without importing the outgoing display label.
+ * - currentThreadTitleName: read the most recently recorded explicit title.
  * - dismissThreadTitle: remove a previous title without removing the current title.
  * - previousThreadTitles: project four previous titles in last-use order.
  */
@@ -20,12 +21,25 @@ export function recordThreadTitle(history: readonly WorkbenchThreadTitleHistoryE
   for (const entry of history) {
     if (!titles.has(entry.title) || titles.get(entry.title)!.usedAt < entry.usedAt) titles.set(entry.title, entry);
   }
-  if (title !== currentTitle || !titles.has(title)) titles.set(title, { title, usedAt: now });
+  if (title !== currentTitle || !titles.has(title)) {
+    // Keep the newest title strictly highest so persistence order stays deterministic under
+    // equal or backwards clocks, where a bare `usedAt` tie would resolve alphabetically.
+    const highestUsedAt = [...titles.values()].reduce((highest, entry) => Math.max(highest, entry.usedAt), now - 1);
+    titles.set(title, { title, usedAt: Math.max(now, highestUsedAt + 1) });
+  }
   return [...titles.values()].sort((left, right) => (
     right.usedAt - left.usedAt
     || Number(right.title === title) - Number(left.title === title)
     || (left.title < right.title ? -1 : left.title > right.title ? 1 : 0)
   ));
+}
+
+export function currentThreadTitleName(history: readonly WorkbenchThreadTitleHistoryEntry[]): string | null {
+  let latest: WorkbenchThreadTitleHistoryEntry | null = null;
+  for (const entry of history) {
+    if (!latest || entry.usedAt > latest.usedAt) latest = entry;
+  }
+  return latest?.title ?? null;
 }
 
 export function dismissThreadTitle(history: readonly WorkbenchThreadTitleHistoryEntry[], currentTitle: string, title: string): WorkbenchThreadTitleHistoryEntry[] {

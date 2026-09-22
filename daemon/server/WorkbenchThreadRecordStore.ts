@@ -4,7 +4,7 @@
  */
 
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { dismissThreadTitle, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
+import { currentThreadTitleName, dismissThreadTitle, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
 import {
   parseWorkbenchThreadStateEntry,
   type WorkbenchThreadStateEntry,
@@ -40,10 +40,12 @@ export default class WorkbenchThreadRecordStore {
   setTitle(key: string, title: string, usedAt: number) {
     const entry = this.entries.get(key);
     if (!entry || entry.entryKind === "draft") return null;
+    // The recorded title owns the mutation comparison; `entry.title` is only a display label.
+    const currentTitle = currentThreadTitleName(entry.titleHistory ?? []) ?? "";
     const next = parseWorkbenchThreadStateEntry({
       ...entry,
       title,
-      titleHistory: recordThreadTitle(entry.titleHistory ?? [], entry.title, title, usedAt),
+      titleHistory: recordThreadTitle(entry.titleHistory ?? [], currentTitle, title, usedAt),
     });
     if (next.entryKind === "draft") return null;
     const changed = !areDeeplyEqual(entry, next);
@@ -54,8 +56,10 @@ export default class WorkbenchThreadRecordStore {
   dismissTitle(key: string, title: string) {
     const entry = this.entries.get(key);
     if (!entry || entry.entryKind === "draft") return null;
-    if (title === entry.title) return { accepted: false, changed: false, next: entry };
-    const titleHistory = dismissThreadTitle(entry.titleHistory ?? [], entry.title, title);
+    // Protect the recorded current title, not a provider label that drifted into `entry.title`.
+    const currentTitle = currentThreadTitleName(entry.titleHistory ?? []) ?? "";
+    if (title === currentTitle) return { accepted: false, changed: false, next: entry };
+    const titleHistory = dismissThreadTitle(entry.titleHistory ?? [], currentTitle, title);
     const changed = !areDeeplyEqual(titleHistory, entry.titleHistory ?? []);
     const next = changed ? { ...entry, titleHistory } : entry;
     if (changed) this.entries.set(key, next);

@@ -428,7 +428,7 @@ test("thread-state retirement retains an already-issued document write", async (
   assert.equal(persistence.projects.has(fixtureIdentitySchemas.ProjectIdSchema.parse("project")), true);
 });
 
-test("first title observation is durable before a rename and keeps its timestamp after restart", async () => {
+test("first explicit title is durable before a rename and keeps its timestamp after restart", async () => {
   const persistence = new MemoryThreadStatePersistence();
   const identity = { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("existing-thread") };
   await persistence.writeProject("project", {
@@ -458,6 +458,8 @@ test("first title observation is durable before a rename and keeps its timestamp
     const observed = normalizeProviderSidebarEntry("codex", { id: identity.threadId, name: "existing title", updatedAt: 1 });
     assert.ok(observed && observed.entryKind !== "draft");
     await first.ensureProviderEntry(fixtureProjectIds["project"], observed);
+    assert.deepEqual((await persistence.readTitleHistories("project")).flatMap((row) => row.titles), []);
+    await first.setTitle(fixtureProjectIds["project"], "codex", identity.threadId, "existing title");
     assert.deepEqual(await persistence.readTitleHistories("project"), [{
       identity, titles: [{ title: "existing title", usedAt: 10 }],
     }]);
@@ -501,6 +503,7 @@ test("title history records user renames, ignores repeated observations, and sur
     const originalProvider = normalizeProviderSidebarEntry("codex", { id: provider.identity.threadId, name: provider.title, updatedAt: 1 });
     assert.ok(originalProvider && originalProvider.entryKind !== "draft");
     await controller.ensureProviderEntry(fixtureProjectIds["project"], originalProvider);
+    await controller.setTitle(fixtureProjectIds["project"], "codex", fixtureThreadIds["history-thread"], "original");
     now = 20;
     const renamed = await controller.handleRequest("viewer", {
       method: "workbench/thread-state/title/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: provider.identity, title: "renamed",
@@ -510,7 +513,7 @@ test("title history records user renames, ignores repeated observations, and sur
     const renamedEntry = (await snapshot()).entries[0]!;
     assert.deepEqual("previousTitles" in renamedEntry ? renamedEntry.previousTitles : undefined, [{ title: "original", usedAt: 10 }]);
     now = 30;
-    await controller.observeTitle("codex", fixtureThreadIds["history-thread"], "renamed");
+    await controller.observeDisplayLabel("codex", fixtureThreadIds["history-thread"], "renamed");
     const renamedProvider = normalizeProviderSidebarEntry("codex", { id: provider.identity.threadId, name: "renamed", updatedAt: 1 });
     assert.ok(renamedProvider && renamedProvider.entryKind !== "draft");
     await controller.ensureProviderEntry(fixtureProjectIds["project"], renamedProvider);
@@ -564,6 +567,14 @@ test("fallback displays never enter history through load, reconciliation, lifecy
     await first.ensureProviderEntry(fixtureProjectIds["project"], preview);
     await first.applyLifecycle(fixtureProjectIds["project"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(identity.threadId), { kind: "acceptedIntent", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") }, preview);
     assert.deepEqual((await persistence.readTitleHistories("project")).flatMap((row) => row.titles), []);
+    const named = normalizeProviderSidebarEntry("codex", { id: identity.threadId, name: "provider name", updatedAt: 3 });
+    assert.ok(named && named.entryKind !== "draft");
+    await first.ensureProviderEntry(fixtureProjectIds["project"], named);
+    assert.deepEqual((await persistence.readTitleHistories("project")).flatMap((row) => row.titles), []);
+    assert.equal(
+      (await first.getThreadEntry(fixtureProjectIds["project"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(identity.threadId)))?.title,
+      "provider name",
+    );
     await first.setTitle(fixtureProjectIds["project"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(identity.threadId), "actual name");
     assert.deepEqual((await persistence.readTitleHistories("project")).flatMap((row) => row.titles), [{ title: "actual name", usedAt: 10 }]);
   } finally {
@@ -579,6 +590,87 @@ test("fallback displays never enter history through load, reconciliation, lifecy
     ]);
   } finally {
     await restarted.dispose();
+  }
+});
+
+test("renaming to a drifted provider label still advances the recorded title", async () => {
+  let now = 10;
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "explicit-title-drift-rename",
+    now: () => now,
+    getProjectCatalog: () => ({ data: [], rootPath: "" }),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+  });
+  const identity = { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("drift-thread") };
+  const entry = async () => (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(
+    (candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === identity.threadId,
+  )!;
+  const providerEntry = (name: string) => {
+    const observed = normalizeProviderSidebarEntry("codex", { id: identity.threadId, name, updatedAt: 1 });
+    assert.ok(observed && observed.entryKind === "thread");
+    return observed;
+  };
+  try {
+    await controller.open("viewer", fixtureProjectIds["project"]);
+    await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry("A"));
+    await controller.setTitle(fixtureProjectIds["project"], "codex", identity.threadId, "A");
+    now = 20;
+    await controller.setTitle(fixtureProjectIds["project"], "codex", identity.threadId, "B");
+    now = 30;
+    // The provider reports the older explicit title back as a display label.
+    await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry("A"));
+    assert.equal((await entry()).title, "B");
+    now = 40;
+    await controller.setTitle(fixtureProjectIds["project"], "codex", identity.threadId, "A");
+    const renamed = await entry();
+    assert.equal(renamed.title, "A");
+    assert.deepEqual("previousTitles" in renamed ? renamed.previousTitles : undefined, [{ title: "B", usedAt: 20 }]);
+  } finally {
+    await controller.dispose();
+  }
+});
+
+test("dismissal protects the recorded title rather than a drifted provider label", async () => {
+  let now = 10;
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "explicit-title-drift-dismiss",
+    now: () => now,
+    getProjectCatalog: () => ({ data: [], rootPath: "" }),
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+  });
+  const identity = { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("drift-dismiss-thread") };
+  const entry = async () => (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(
+    (candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === identity.threadId,
+  )!;
+  const providerEntry = (name: string) => {
+    const observed = normalizeProviderSidebarEntry("codex", { id: identity.threadId, name, updatedAt: 1 });
+    assert.ok(observed && observed.entryKind === "thread");
+    return observed;
+  };
+  const dismiss = (title: string) => controller.handleRequest("viewer", {
+    method: "workbench/thread-state/title/dismiss", projectId: fixtureProjectIds["project"], identity, title,
+  });
+  try {
+    await controller.open("viewer", fixtureProjectIds["project"]);
+    await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry("A"));
+    await controller.setTitle(fixtureProjectIds["project"], "codex", identity.threadId, "A");
+    now = 20;
+    await controller.setTitle(fixtureProjectIds["project"], "codex", identity.threadId, "B");
+    now = 30;
+    await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry("A"));
+    const protectedCurrent = await dismiss("B");
+    assert.equal(protectedCurrent.error, undefined);
+    assert.equal((protectedCurrent.result as { accepted?: boolean } | undefined)?.accepted, false);
+    const driftedLabel = await dismiss("A");
+    assert.equal(driftedLabel.error, undefined);
+    assert.equal((driftedLabel.result as { accepted?: boolean } | undefined)?.accepted, true);
+    assert.equal((await entry()).title, "B");
+  } finally {
+    await controller.dispose();
   }
 });
 
@@ -1464,7 +1556,7 @@ test("managed wait state is projected live and never persisted", async () => {
   controller.setThreadWaitState("codex", "waiting-thread", ["subagent_wait"]);
   const waiting = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread");
   assert.equal(waiting?.entryKind === "thread" ? waiting.waitingFor : null, "subagents");
-  await controller.observeTitle("codex", fixtureThreadIds["waiting-thread"], "Still waiting");
+  await controller.observeDisplayLabel("codex", fixtureThreadIds["waiting-thread"], "Still waiting");
   const stored = await readProjectState<object>(root, "project");
   assert.equal(JSON.stringify(stored).includes("waitingFor"), false);
   controller.setThreadWaitState("codex", "waiting-thread", []);

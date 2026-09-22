@@ -459,7 +459,7 @@ test("continuation disposal and failed admission do not retry or lose failure st
   const completion = { sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" as const, lifecycle: unfinished };
   await owner.completeExecution(completion);
   assert.equal(records, 3);
-  assert.deepEqual(observations, [{ activity: null, title: null, lifecycle: { threadId, event: { kind: "recoveryFailed" } } }]);
+  assert.deepEqual(observations, [{ activity: null, displayLabel: null, lifecycle: { threadId, event: { kind: "recoveryFailed" } } }]);
   assert.equal(warnings.length, 1);
   assert.doesNotMatch(warnings.join(""), /PRIVATE/);
   signal.abort();

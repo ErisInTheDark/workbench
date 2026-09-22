@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchObservedThreadEntry: provider sidebar input with an optional explicit name, separate from display fallback.
+ * - WorkbenchObservedThreadEntry: sidebar input whose optional title is workbench-owned, never provider-supplied.
  * - WorkbenchThreadStateControllerOptions: catalogue, project-state, persistence and lifecycle ports.
  * - WorkbenchThreadReconciliationFailure: bounded provider reconciliation failure.
  * - WorkbenchThreadGitArcSnapshot: project Git arc projection.
@@ -17,7 +17,7 @@ import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, 
 import { DraftIdSchema, ProjectIdSchema, ThreadDisplayKeySchema, type DraftId, type ProjectId, type ProjectThreadDisplayKey, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
-import { recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
+import { currentThreadTitleName, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
 import {
   getWorkbenchHomeThreadKey,
   removeWorkbenchThreadFromProjectFolder,
@@ -107,7 +107,8 @@ import {
   type WorkbenchThreadSnoozeTarget,
 } from "./workbench-thread-state-record";
 
-export type WorkbenchObservedThreadEntry = WorkbenchThreadSidebarEntry & { namedTitle?: string };
+// workbenchTitle is recorded only for workbench-owned relationships; provider inputs stay display labels.
+export type WorkbenchObservedThreadEntry = WorkbenchThreadSidebarEntry & { workbenchTitle?: string };
 
 interface StoredThreadMetadata { archived: boolean; harness: WorkbenchHarness; lifecycle: WorkbenchThreadLifecycle; mcpGeneration?: string | null; orderAt?: number; pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null; pinned: boolean; questionnaireHistory?: WorkbenchQuestionnaireHistoryEntryState[]; snoozed: boolean; threadId: string; titleFallback?: string }
 type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
@@ -879,10 +880,10 @@ export default class WorkbenchThreadStateController {
       const beforePublication = new Map(state.entries);
       const wakeReadyBefore = areAllUnsnoozedThreadEntriesSettlementReady(this.naturallyOrderedEntries(state));
       if (!state.entries.has(key) && providerEntry?.entryKind === "thread" && entryKey(providerEntry) === key) {
-        const { namedTitle, ...sidebarEntry } = providerEntry;
+        const { workbenchTitle, ...sidebarEntry } = providerEntry;
         state.entries.set(key, parseWorkbenchThreadStateEntry({
           ...sidebarEntry, mcpGeneration: null, providerObserved: true,
-          titleHistory: recordThreadTitle([], "", namedTitle ?? "", this.now()),
+          titleHistory: recordThreadTitle([], "", workbenchTitle ?? "", this.now()),
         }));
       }
       const existing = state.entries.get(key);
@@ -943,7 +944,7 @@ export default class WorkbenchThreadStateController {
           : lifecycleEntry;
       const parsedNext = parseWorkbenchThreadStateEntry({
         ...next,
-        titleHistory: recordThreadTitle(existing.titleHistory ?? [], existing.title, providerEntry?.namedTitle ?? "", this.now()),
+        titleHistory: recordThreadTitle(existing.titleHistory ?? [], currentThreadTitleName(existing.titleHistory ?? []) ?? "", providerEntry?.workbenchTitle ?? "", this.now()),
       });
       if (parsedNext.entryKind === "draft") throw new Error("Lifecycle transitions cannot produce draft entries.");
       state.entries.set(key, parsedNext);
@@ -1263,10 +1264,23 @@ export default class WorkbenchThreadStateController {
     }
   }
 
-  async observeTitle(harness: WorkbenchHarness, threadId: WorkbenchThreadId, title: string) {
+  async observeDisplayLabel(harness: WorkbenchHarness, threadId: WorkbenchThreadId, label: string, selectedProjectId?: ProjectId) {
     const key = `${harness}:${threadId}`;
-    for (const [projectId, state] of this.projects) {
-      if (state.entries.has(key)) await this.setTitle(projectId, harness, threadId, title);
+    const projects = selectedProjectId
+      ? [[this.canonicalProjectId(selectedProjectId), await this.getProject(this.canonicalProjectId(selectedProjectId))] as const]
+      : [...this.projects];
+    for (const [projectId, state] of projects) {
+      if (!state.entries.has(key)) continue;
+      await this.enqueue(`${projectId}:thread:${key}`, async () => {
+        const entry = state.entries.get(key);
+        if (!entry || entry.entryKind === "draft" || entry.title === label) return;
+        // A recorded explicit title owns display, so a provider label can never cover it.
+        if (currentThreadTitleName(entry.titleHistory ?? [])) return;
+        const beforePublication = new Map(state.entries);
+        state.entries.set(key, parseWorkbenchThreadStateEntry({ ...entry, title: label }));
+        await this.persist(projectId, state, [key]);
+        this.publish(projectId, state, state.entries.get(key), beforePublication);
+      });
     }
   }
 
@@ -1878,15 +1892,16 @@ export default class WorkbenchThreadStateController {
     { complete }: { complete: boolean },
   ) {
     let changed = false;
-    const install = (key: string, entry: WorkbenchThreadStateEntry, namedTitle?: string) => {
+    const install = (key: string, entry: WorkbenchThreadStateEntry, workbenchTitle?: string) => {
       const existing = state.entries.get(key);
       if (entry.entryKind !== "draft") {
+        const existingHistory = existing && existing.entryKind !== "draft" ? existing.titleHistory ?? [] : [];
         entry = {
           ...entry,
           titleHistory: recordThreadTitle(
-            existing && existing.entryKind !== "draft" ? existing.titleHistory ?? [] : [],
-            existing?.title ?? "",
-            namedTitle ?? "",
+            existingHistory,
+            currentThreadTitleName(existingHistory) ?? "",
+            workbenchTitle ?? "",
             this.now(),
           ),
         };
@@ -1897,7 +1912,7 @@ export default class WorkbenchThreadStateController {
     };
     const providerKeys = new Set<string>();
     for (const candidate of entries) {
-      const { namedTitle, ...sidebarEntry } = candidate;
+      const { workbenchTitle, ...sidebarEntry } = candidate;
       const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(sidebarEntry);
       if (!parsed.success || parsed.data.entryKind === "draft" || parsed.data.identity.harness !== harness) continue;
       const key = entryKey(parsed.data);
@@ -1926,7 +1941,7 @@ export default class WorkbenchThreadStateController {
           settledAt: existing.settledAt,
           snoozedUntil: existing.snoozedUntil,
           ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
-        } : { ...providerEntry, mcpGeneration: null, providerObserved: true }), namedTitle);
+        } : { ...providerEntry, mcpGeneration: null, providerObserved: true }), workbenchTitle);
         continue;
       }
       const metadata = existing?.entryKind === "thread" && existing.metadata.archived
@@ -1949,7 +1964,7 @@ export default class WorkbenchThreadStateController {
         snoozedUntil: existing.snoozedUntil,
         ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
         title: providerEntry.title === "New thread" ? existing.title : providerEntry.title,
-      } : { ...providerEntry, mcpGeneration: null, providerObserved: true }), namedTitle);
+      } : { ...providerEntry, mcpGeneration: null, providerObserved: true }), workbenchTitle);
     }
     if (!complete) return changed;
     for (const [key, entry] of state.entries) {

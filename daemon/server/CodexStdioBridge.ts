@@ -878,7 +878,7 @@ export default class CodexStdioBridge {
     this.publishNativeNotification = notification => {
       const publication = providerObservations?.native(notification);
       onNotification(publication?.notification ?? notification, publication?.observation ?? {
-        lifecycle: null, activity: null, title: null,
+        lifecycle: null, activity: null, displayLabel: null,
       }, notification);
     };
     this.onInitialized = onInitialized;

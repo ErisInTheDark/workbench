@@ -581,6 +581,38 @@ test("accepted thread titles update only the matching canonical source name", as
   assert.equal(client.getSnapshot().currentThread?.name, selected.name);
 }));
 
+test("sidebar title changes reconcile the open thread document title", async () => withClient(async (client) => {
+  const original = activeThread("opencode", "thread");
+  client.selectThreadPayload(original);
+  const key = client.getSnapshot().threadDocuments.keysByThreadId[original.id];
+  assert.ok(key);
+  const entry = {
+    activityAt: 2,
+    entryKind: "thread" as const,
+    identity: { harness: "opencode" as const, threadId: original.id },
+    lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: false },
+    metadata: { archived: false as const, pinned: false, snoozed: false },
+    title: "Provider display label",
+  };
+  client.installThreadStateSources({
+    activeProjectSnapshot: {
+      entries: [entry], error: null, freshness: "fresh",
+      projectId: fixtureIdentityValues.ProjectId["project"], revision: 1,
+    },
+  });
+  assert.equal(client.getSnapshot().threadDocuments.documentsByKey[key]?.name, "Provider display label");
+
+  client.installThreadStateSources({
+    activeProjectSnapshot: {
+      entries: [{ ...entry, title: "Workbench title" }], error: null, freshness: "fresh",
+      projectId: fixtureIdentityValues.ProjectId["project"], revision: 2,
+    },
+  });
+  const document = client.getSnapshot().threadDocuments.documentsByKey[key];
+  assert.equal(document?.name, "Workbench title");
+  assert.equal(document?.preview, "Workbench title");
+}));
+
 test("selected active Codex steers settle at admission and canonical notification owns placement", async () => {
   const originalWindow = globalThis.window;
   const originalWebSocket = globalThis.WebSocket;

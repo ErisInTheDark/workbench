@@ -108,7 +108,7 @@ export default class OpenCodeEventController {
             threadId: identity.threadId,
             event: { kind: "acceptedIntent", turnId: WorkbenchTurnIdSchema.parse(turn.id) },
           },
-          title: null,
+          displayLabel: null,
         });
         this.broadcastThreadStatus(identity.threadId, { activeFlags: [], type: "active" });
         this.broadcastTurn("turn/started", identity.threadId, turn);
@@ -129,7 +129,7 @@ export default class OpenCodeEventController {
             threadId: active.threadId,
             event: { kind: "acceptedIntent", turnId: active.turnId },
           },
-          title: null,
+          displayLabel: null,
         });
         this.broadcastThreadStatus(active.threadId, { activeFlags: [], type: "active" });
         return;
@@ -300,7 +300,7 @@ export default class OpenCodeEventController {
               status,
             },
           },
-          title: null,
+          displayLabel: null,
         });
         this.broadcastTurn("turn/completed", identity.threadId, { ...turn, status });
         this.broadcastThreadStatus(identity.threadId, { type: "idle" });

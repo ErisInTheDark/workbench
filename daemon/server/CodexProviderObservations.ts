@@ -135,16 +135,16 @@ export default class CodexProviderObservations {
     const params = record(notification.params);
     const identity = typeof params?.threadId === "string"
       ? this.owners.threads.knownThread(ThreadReferenceSchema.parse(params.threadId)) : null;
-    const titleValue = typeof params?.threadName === "string" ? params.threadName : params?.name;
-    const title = notification.method === "thread/name/updated" && typeof titleValue === "string"
-      ? normalizeThreadTitle(titleValue) : null;
+    const labelValue = typeof params?.threadName === "string" ? params.threadName : params?.name;
+    const displayLabel = notification.method === "thread/name/updated" && typeof labelValue === "string"
+      ? normalizeThreadTitle(labelValue) : null;
     return {
       ...(notification.method === "account/rateLimits/updated"
         ? { accountLimits: WorkbenchRateLimitSnapshotSchema.parse(params?.rateLimits) } : {}),
       ...(identity ? { projectId: identity.projectId } : {}),
       lifecycle: mapProviderLifecycleNotification(notification, this.owners.threads),
       activity: mapProviderActivityNotification(notification, this.owners.threads),
-      title: identity && title ? { threadId: identity.threadId, title } : null,
+      displayLabel: identity && displayLabel ? { threadId: identity.threadId, label: displayLabel } : null,
     };
   }
 }

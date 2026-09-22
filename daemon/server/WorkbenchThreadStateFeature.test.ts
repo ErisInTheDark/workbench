@@ -275,7 +275,7 @@ test("manual questionnaire completion preserves its question and survives a late
     await h.feature.observeProviderNotification("codex", {
       lifecycle: { threadId: fixtureIdentityValues.WorkbenchThreadId.thread, event: {
         kind: "turnCompleted", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), status: "interrupted",
-      } }, activity: null, title: null,
+      } }, activity: null, displayLabel: null,
     });
     const entry = await h.read();
     assert.ok(entry && entry.entryKind === "thread");
@@ -292,7 +292,7 @@ test("completing an agent-blocked sidebar questionnaire fences late events from 
     await h.feature.observeProviderNotification("codex", {
       lifecycle: { threadId: fixtureIdentityValues.WorkbenchThreadId.thread, event: {
         kind: "turnCompleted", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), status: "interrupted",
-      } }, activity: null, title: null,
+      } }, activity: null, displayLabel: null,
     });
     assert.equal((await h.read())?.lifecycle.kind, "completed");
   } finally { await h.feature.dispose(); }
@@ -423,19 +423,17 @@ test("WB active flags retain working sidebar state", () => {
   assert.equal(entry.lifecycle.kind, "working");
 });
 
-test("provider sidebar normalization replaces identifier titles with first-message previews", () => {
+test("provider sidebar normalization keeps provider names as display labels only", () => {
   const id = "123e4567-e89b-42d3-a456-426614174000";
   const entry = normalizeProviderSidebarEntry("codex", { id, name: id, preview: "First request", status: { type: "idle" }, updatedAt: 1 });
   assert.equal(entry?.title, "First request");
-  assert.equal(entry && "namedTitle" in entry ? entry.namedTitle : undefined, undefined);
-});
-
-test("provider title observations distinguish real names from identical preview text", () => {
+  assert.equal(entry && "workbenchTitle" in entry ? entry.workbenchTitle : undefined, undefined);
   const named = normalizeProviderSidebarEntry("codex", { id: "thread", name: "First request", preview: "First request", updatedAt: 1 });
-  assert.equal(named && "namedTitle" in named ? named.namedTitle : undefined, "First request");
+  assert.equal(named?.title, "First request");
+  assert.equal(named && "workbenchTitle" in named ? named.workbenchTitle : undefined, undefined);
   for (const provider of [{}, { name: "New thread" }, { name: "thread" }, { preview: "First request" }]) {
-    const entry = normalizeProviderSidebarEntry("codex", { id: "thread", ...provider, updatedAt: 1 });
-    assert.equal(entry && "namedTitle" in entry ? entry.namedTitle : undefined, undefined);
+    const fallback = normalizeProviderSidebarEntry("codex", { id: "thread", ...provider, updatedAt: 1 });
+    assert.equal(fallback && "workbenchTitle" in fallback ? fallback.workbenchTitle : undefined, undefined);
   }
 });
 
@@ -509,7 +507,7 @@ test("provider notification observation returns the persisted lifecycle result",
   assert.deepEqual(await feature.observeProviderNotification("codex", {
     lifecycle: { threadId: fixtureIdentityValues.WorkbenchThreadId.thread, event: {
       kind: "turnCompleted", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), status: "completed",
-    } }, activity: null, title: null,
+    } }, activity: null, displayLabel: null,
   }), {
     event: { kind: "turnCompleted", status: "completed", turnId: "turn" },
     lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
@@ -1078,7 +1076,7 @@ test("deep provider pages serialize across projects while both newest pages star
   await fs.rm(storageRoot, { force: true, recursive: true });
 });
 
-test("managed title commands use the validated provider title as the mutation precondition", async () => {
+test("managed title commands use the workbench-recorded title as the mutation precondition", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-managed-title-"));
   const requests: Array<{ harness: string; method: string; params: unknown }> = [];
   let providerName: string | null = "Current task";
@@ -1124,30 +1122,50 @@ test("managed title commands use the validated provider title as the mutation pr
 
   assert.deepEqual(response, {
     id: 1,
-    result: { harness: "codex", threadId: "thread-one", title: "Current task" },
+    result: { harness: "codex", threadId: "thread-one", title: "" },
   });
   assert.deepEqual(requests[0], {
     harness: "codex",
     method: "thread/read",
     params: { includeTurns: false, threadId: "native:thread-one" },
   });
-  await waitFor(() => requests.length === 2, "Provider reconciliation did not run after the managed title read.");
-  assert.deepEqual(requests.slice(1).map(({ harness, method }) => ({ harness, method })), [
-    { harness: "codex", method: "thread/list" },
-  ]);
+  await waitFor(
+    () => requests.some(({ method }) => method === "thread/list"),
+    "Provider reconciliation did not run after the managed title read.",
+  );
 
   requests.length = 0;
-  const missingCurrentTitle = await feature.handleManagedThreadRequest({
+  const initiallyNamed = await feature.handleManagedThreadRequest({
     id: 2,
+    method: "workbench/thread/title",
+    params: { action: "set", callerThreadId: "thread-one", cwd: "C:/workspace", title: "Current task" },
+  });
+  assert.deepEqual(initiallyNamed, {
+    id: 2,
+    result: { harness: "codex", threadId: "thread-one", title: "Current task" },
+  });
+
+  const named = await feature.handleManagedThreadRequest({
+    id: 3,
+    method: "workbench/thread/title",
+    params: { action: "get", callerThreadId: "thread-one", cwd: "C:/workspace" },
+  });
+  assert.deepEqual(named, {
+    id: 3,
+    result: { harness: "codex", threadId: "thread-one", title: "Current task" },
+  });
+
+  const missingCurrentTitle = await feature.handleManagedThreadRequest({
+    id: 4,
     method: "workbench/thread/title",
     params: { action: "set", callerThreadId: "thread-one", cwd: "C:/workspace", title: "Narrow sidequest" },
   });
-  assert.equal(missingCurrentTitle.id, 2);
+  assert.equal(missingCurrentTitle.id, 4);
   assert.equal(missingCurrentTitle.error?.code, -32000);
   assert.match(missingCurrentTitle.error?.message ?? "", /Current title: "Current task"/u);
 
   const staleCurrentTitle = await feature.handleManagedThreadRequest({
-    id: 3,
+    id: 5,
     method: "workbench/thread/title",
     params: {
       action: "set",
@@ -1157,13 +1175,12 @@ test("managed title commands use the validated provider title as the mutation pr
       title: "Narrow sidequest",
     },
   });
-  assert.equal(staleCurrentTitle.id, 3);
+  assert.equal(staleCurrentTitle.id, 5);
   assert.equal(staleCurrentTitle.error?.code, -32000);
   assert.match(staleCurrentTitle.error?.message ?? "", /Current title: "Current task"/u);
-  assert.equal(requests.some(({ method }) => method === "thread/name/set"), false);
 
   const renamed = await feature.handleManagedThreadRequest({
-    id: 4,
+    id: 6,
     method: "workbench/thread/title",
     params: {
       action: "set",
@@ -1174,10 +1191,11 @@ test("managed title commands use the validated provider title as the mutation pr
     },
   });
   assert.deepEqual(renamed, {
-    id: 4,
+    id: 6,
     result: { harness: "codex", threadId: "thread-one", title: "New overarching task" },
   });
-  assert.equal(requests.filter(({ method }) => method === "thread/name/set").length, 1);
+  // Only the two accepted sets may rename the provider.
+  assert.equal(requests.filter(({ method }) => method === "thread/name/set").length, 2);
 
   const titleEntry = (await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).entries.find((entry) => (
     entry.entryKind !== "draft" && entry.identity.threadId === "thread-one"
@@ -1191,25 +1209,23 @@ test("managed title commands use the validated provider title as the mutation pr
 
   providerName = "New thread";
   providerPreview = "Initial request";
-  const initiallyUntitled = await feature.handleManagedThreadRequest({
-    id: 5,
+  const providerLabelCannotClear = await feature.handleManagedThreadRequest({
+    id: 7,
     method: "workbench/thread/title",
     params: { action: "get", callerThreadId: "thread-one", cwd: "C:/workspace" },
   });
-  assert.deepEqual(initiallyUntitled, {
-    id: 5,
-    result: { harness: "codex", threadId: "thread-one", title: "" },
+  assert.deepEqual(providerLabelCannotClear, {
+    id: 7,
+    result: { harness: "codex", threadId: "thread-one", title: "New overarching task" },
   });
 
-  const initiallyNamed = await feature.handleManagedThreadRequest({
-    id: 6,
+  const stillNamed = await feature.handleManagedThreadRequest({
+    id: 8,
     method: "workbench/thread/title",
-    params: { action: "set", callerThreadId: "thread-one", cwd: "C:/workspace", title: "First useful title" },
+    params: { action: "set", callerThreadId: "thread-one", cwd: "C:/workspace", title: "Second useful title" },
   });
-  assert.deepEqual(initiallyNamed, {
-    id: 6,
-    result: { harness: "codex", threadId: "thread-one", title: "First useful title" },
-  });
+  assert.equal(stillNamed.error?.code, -32000);
+  assert.match(stillNamed.error?.message ?? "", /Current title: "New overarching task"/u);
   assert.equal(requests.filter(({ method }) => method === "thread/name/set").length, 2);
   await feature.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });

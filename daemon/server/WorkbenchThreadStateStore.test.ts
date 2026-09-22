@@ -10,6 +10,7 @@ import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController"
 import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record";
 import type { WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
+import { currentThreadTitleName, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
 import { getProjectQualifiedThreadDisplayKey, getThreadDisplayDraftKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
@@ -68,6 +69,39 @@ test("consumer objects retain thread facts, title replacement and project isolat
     assert.deepEqual(await cold.readTitleHistories(fixtureIdentityValues.ProjectId["first"]), updated);
     await cold.writeChanges(fixtureIdentityValues.ProjectId["first"], { records: [{ ...first, title: "renamed", titleHistory: [] }] });
     assert.deepEqual(await cold.readTitleHistories(fixtureIdentityValues.ProjectId["first"]), []);
+  } finally {
+    await reopened?.close();
+    await database.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("same-tick title renames keep recency order across cold reopen", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-title-order-"));
+  const databasePath = join(directory, "workbench.sqlite3");
+  const database = new WorkbenchDatabaseController({ databasePath });
+  let reopened: WorkbenchDatabaseController | null = null;
+  try {
+    const [identity] = await database.observeThreadIdentities([{
+      native: { harness: "codex", nativeLocation: directory, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("title-order") },
+      projectId: fixtureIdentityValues.ProjectId.first, projectRoot: directory, title: "title-order", createdAt: 1, updatedAt: 1, activityAt: 1,
+    }]);
+    const record: WorkbenchThreadStateRecord = {
+      entryKind: "thread", identity: { harness: "codex", threadId: identity!.threadId }, title: "zeta",
+      activityAt: 1, metadata: { archived: false, pinned: false, snoozed: false },
+      lifecycle: { kind: "completed", reason: "userCompleted", settled: false },
+      gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, providerObserved: true, settledAt: null, snoozedUntil: null,
+    };
+    let history = recordThreadTitle([], "", "alpha", 10);
+    history = recordThreadTitle(history, "alpha", "zeta", 10);
+    const store = new WorkbenchThreadStateStore(database);
+    await store.writeProject(fixtureIdentityValues.ProjectId.first, { version: 4, records: [{ ...record, titleHistory: history }], drafts: [] });
+    await database.close();
+    reopened = new WorkbenchDatabaseController({ databasePath });
+    const cold = new WorkbenchThreadStateStore(reopened);
+    const titles = (await cold.readTitleHistories(fixtureIdentityValues.ProjectId.first))[0]?.titles ?? [];
+    assert.equal(currentThreadTitleName(titles), "zeta");
+    assert.deepEqual(titles.map((entry) => entry.title), ["zeta", "alpha"]);
   } finally {
     await reopened?.close();
     await database.close();

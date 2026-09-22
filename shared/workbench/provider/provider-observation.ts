@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchTranscriptNotification: compatible public transcript messages.
  * - WorkbenchProviderLifecycleEvent: admitted lifecycle facts consumed by shared state.
- * - WorkbenchProviderObservation: lifecycle, activity and title facts from one provider ingress.
+ * - WorkbenchProviderObservation: lifecycle, activity and display-label facts from one provider ingress.
  */
 import type { ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "../identity.ts";
 import type { ThreadPayload, WorkbenchUserInputRequest } from "../../types.ts";
@@ -54,5 +54,5 @@ export type WorkbenchProviderObservation = {
     | { kind: "activity"; threadId: WorkbenchThreadId }
     | { kind: "turnStarted"; startedAt: number | null; threadId: WorkbenchThreadId }
     | null;
-  title: { threadId: WorkbenchThreadId; title: string } | null;
+  displayLabel: { threadId: WorkbenchThreadId; label: string } | null;
 };

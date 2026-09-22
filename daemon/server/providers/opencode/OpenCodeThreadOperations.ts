@@ -595,7 +595,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       if (error === supersededContinuation) return;
       if (this.options.signal.aborted) return;
       console.warn(`[opencode] Unfinished-turn admission failed (${error instanceof Error ? error.name : "unknown error"}).`);
-      await this.options.observe({ activity: null, title: null,
+      await this.options.observe({ activity: null, displayLabel: null,
         lifecycle: { threadId, event: { kind: "recoveryFailed" } } });
     }
   }
@@ -651,7 +651,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
           threadId: resolvedOwner.threadId,
           event: { kind: "turnCompleted", turnId: resolvedOwner.turnId, status: "failed" },
         },
-        title: null,
+        displayLabel: null,
       });
     }).catch(error => {
       console.error(`[opencode] prompt failure reconciliation failed: ${

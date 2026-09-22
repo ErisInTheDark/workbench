@@ -11,7 +11,7 @@ import type { WorkbenchHarness } from "workbench-shared/types";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
-import { previousThreadTitles, WorkbenchThreadTitleHistoryEntrySchema, type WorkbenchThreadTitleHistoryEntry } from "workbench-shared/workbench/thread/thread-title-history";
+import { currentThreadTitleName, previousThreadTitles, WorkbenchThreadTitleHistoryEntrySchema, type WorkbenchThreadTitleHistoryEntry } from "workbench-shared/workbench/thread/thread-title-history";
 import {
   WorkbenchComposerProfileSelectionSchema,
   WorkbenchHarnessSchema,
@@ -212,8 +212,10 @@ export function projectWorkbenchThreadStateEntry(entry: WorkbenchThreadStateEntr
   // Provider omission cannot hide Workbench-owned top-level records.
   if (entry.entryKind === "subagent" && !entry.providerObserved) return null;
   const { titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, ...projected } = entry;
+  // The recorded explicit title owns display; the stored title is only the provider display label.
+  const displayTitle = currentThreadTitleName(titleHistory ?? []) ?? entry.title;
   return WorkbenchThreadSidebarEntrySchema.parse({
-    ...projected, ...(entry.profile ? { profile: entry.profile } : {}),
-    previousTitles: previousThreadTitles(titleHistory ?? [], entry.title),
+    ...projected, title: displayTitle, ...(entry.profile ? { profile: entry.profile } : {}),
+    previousTitles: previousThreadTitles(titleHistory ?? [], displayTitle),
   });
 }

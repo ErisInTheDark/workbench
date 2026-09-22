@@ -1293,6 +1293,14 @@ function WorkbenchThreadClient(
         updatedAt: activitySeconds,
       }];
     });
+    // The sidebar snapshot owns the live title, so keep any open document copy in step.
+    for (const entry of activeProjectSnapshot.entries) {
+      if (entry.entryKind !== "thread") continue;
+      const thread = { harness: entry.identity.harness, id: entry.identity.threadId };
+      const source = threadSources.get(getThreadSourceKey(thread));
+      if (!source || (source.name === entry.title && source.preview === entry.title)) continue;
+      updateThreadSourceFields(thread, { name: entry.title, preview: entry.title });
+    }
     state.threadsError = activeProjectSnapshot.error ?? "";
     state.hasLoadedThreads = activeProjectSnapshot.freshness !== "loading";
     state.isLoading = activeProjectSnapshot.freshness === "loading";
