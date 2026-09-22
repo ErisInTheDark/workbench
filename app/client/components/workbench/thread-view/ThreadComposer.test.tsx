@@ -33,6 +33,18 @@ test("unsnoozed saved questionnaires can be snoozed without a live turn", () => 
   }), { action: "snooze", disabled: false, visible: true });
 });
 
+test("qualifying shift intent swaps questionnaire snooze for stop", () => {
+  assert.deepEqual(getThreadComposerStopControlState({
+    hasPendingUserInputRequest: true,
+    isActiveThread: true,
+    isCommentMode: false,
+    isStopping: false,
+    canSnoozeQuestionnaire: true,
+    preferStop: true,
+    snoozed: false,
+  }), { action: "stop", disabled: false, visible: true });
+});
+
 test("idle composers without questionnaires do not show stop", () => {
   assert.deepEqual(getThreadComposerStopControlState({
     hasPendingUserInputRequest: false,

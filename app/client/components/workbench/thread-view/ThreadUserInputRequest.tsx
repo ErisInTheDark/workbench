@@ -85,6 +85,7 @@ type InteractiveThreadUserInputRequestProps = {
   knownSkills?: WorkbenchSkillSummary[];
   leadingActions?: ReactNode;
   mode: "live";
+  onActionsHoverChange?: (hovered: boolean) => void;
   onDraftChange: (update: DraftUpdate<WorkbenchQuestionnaireDraft>) => Promise<WorkbenchQuestionnaireDraft> | WorkbenchQuestionnaireDraft;
   onDraftClear: () => Promise<void> | void;
   onSubmit: (
@@ -684,7 +685,11 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
       </div>
 
       {interactiveProps && (!compact || interactiveProps.leadingActions || interactiveProps.actions) ? (
-        <div className="thread-user-input-request-actions flex flex-wrap items-center justify-between gap-3">
+        <div
+          className="thread-user-input-request-actions flex flex-wrap items-center justify-between gap-3"
+          onPointerEnter={() => interactiveProps.onActionsHoverChange?.(true)}
+          onPointerLeave={() => interactiveProps.onActionsHoverChange?.(false)}
+        >
           <div className="flex items-center gap-2">
             {interactiveProps?.leadingActions}
           </div>

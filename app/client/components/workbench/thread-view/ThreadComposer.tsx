@@ -57,6 +57,7 @@ import { getThreadComposerStopControlState } from "./thread-composer-controls";
 import { getThreadUserInputRequestPreviewText } from "./thread-user-input-request-preview";
 import { buildPendingUserInputRequestSubmissionOptions } from "./thread-user-input-request-submission";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
+import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -168,6 +169,7 @@ export default function ThreadComposer ({
   const attachments = isSending ? [] : editing.draft.attachments;
   const [isRecoveringInterruptedTurn, setIsRecoveringInterruptedTurn] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [isQuestionnaireActionsHovered, setIsQuestionnaireActionsHovered] = useState(false);
   const [isStickyComposerCollapsed, setIsStickyComposerCollapsed] = useState(false);
   const isCommentMode = controlsMode === "comment";
   const trimmedValue = value.trim();
@@ -177,6 +179,9 @@ export default function ThreadComposer ({
   const hasVisiblePendingUserInputRequest = visiblePendingUserInputRequest !== null;
   const questionnaireRequestKey = pendingUserInputRequest?.requestKey ?? "";
   const showQuestionnairePanel = hasVisiblePendingUserInputRequest && isQuestionnaireVisible;
+  useEffect(() => {
+    setIsQuestionnaireActionsHovered(false);
+  }, [questionnaireRequestKey]);
   const isProviderUnavailable = !isCommentMode && !installedProviderKeys.some(key => key === thread.harness);
   const isThreadStateBroken = hasStaleApprovalState(thread);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
@@ -185,9 +190,13 @@ export default function ThreadComposer ({
   const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(thread, threadLifecycle, hasPendingUserInputRequest, controlsMode);
   const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken;
   const isSendDisabled = isInputDisabled || isProviderUnavailable || (!isActiveThread && !hasEffectiveProfile);
+  const isShiftPressed = useNonTextInputShiftKey({
+    allowWhileTextInputFocused: showQuestionnairePanel && isQuestionnaireActionsHovered,
+  });
   const stopControlState = getThreadComposerStopControlState({
     hasPendingUserInputRequest, isActiveThread, isCommentMode, isStopping,
     canSnoozeQuestionnaire: sidebarEntry?.entryKind === "thread" && !sidebarEntry.metadata.archived && !isApprovalBlocked,
+    preferStop: isShiftPressed,
     snoozed: sidebarEntry?.entryKind === "thread" && sidebarEntry.metadata.snoozed,
   });
   const isStopDisabled = stopControlState.disabled;
@@ -479,6 +488,7 @@ export default function ThreadComposer ({
           : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_96%,var(--composer-surface-bg))] text-fg/muted hover:text-text",
       )}
       onClick={() => {
+        setIsQuestionnaireActionsHovered(false);
         setIsQuestionnaireVisible((current) => !current);
       }}
     >
@@ -537,6 +547,7 @@ export default function ThreadComposer ({
                   highlightSources={highlightSources}
                   knownSkills={knownSkills}
                   leadingActions={questionnaireToggleButton}
+                  onActionsHoverChange={setIsQuestionnaireActionsHovered}
                   spellCheck={composerSpellCheck}
                   onDraftChange={questionnaire.save}
                   onDraftClear={questionnaire.clear}
