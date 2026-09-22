@@ -875,6 +875,7 @@ async function readProjectState<T extends object>(storageRoot: string, projectId
 }
 
 test("accepted questionnaire response returns its thread to working", async () => {
+  const notices: string[] = [];
   const question = {
     itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44",
     requestKey: "request",
@@ -898,6 +899,7 @@ test("accepted questionnaire response returns its thread to working", async () =
   };
   const controller = new WorkbenchThreadStateController({
     storageRoot: "accepted-questionnaire-working",
+    publishAgentContext: async (_harness, _threadId, text) => { notices.push(text); },
     threadStateStore: new MemoryThreadStatePersistence(),
     getProjectCatalog: projectCatalog,
     projectState: projectState(),
@@ -926,6 +928,7 @@ test("accepted questionnaire response returns its thread to working", async () =
     }));
 
     assert.equal(result?.delivery, "delivered");
+    assert.equal(notices.length, 1);
     const current = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(
       entry => entry.entryKind === "thread" && entry.identity.threadId === fixtureThreadIds["thread"],
     );
@@ -980,6 +983,53 @@ test("accepted questionnaire response returns its thread to working", async () =
       settled: false,
     });
     assert.equal(stopped?.entryKind === "thread" ? stopped.pendingQuestionnaire : null, null);
+    assert.equal(notices.length, 1);
+  } finally {
+    await controller.dispose();
+  }
+});
+
+test("status notices follow committed input transitions, not repeats or notification success", async () => {
+  const notices: string[] = [];
+  const statesAtPublication: Array<string | null> = [];
+  const warnings: string[] = [];
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "status-notices",
+    threadStateStore: new MemoryThreadStatePersistence(),
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => {},
+    reconcileProject: async () => [],
+    publishAgentContext: async (_harness, threadId, text) => {
+      notices.push(text);
+      const entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, threadId);
+      statesAtPublication.push(entry?.entryKind === "thread" ? entry.lifecycle.kind : null);
+      throw new Error("notification rejected");
+    },
+    log: message => { warnings.push(message); },
+  });
+  try {
+    const entry = pinnedRecord("thread", "Task");
+    await controller.ensureProviderEntry(fixtureProjectIds.project, entry);
+    for (const status of ["blocked", "completed"] as const) {
+      await controller.applyLifecycle(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, { kind: "agentStatus", status });
+      await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, fixtureTurnIds.turn);
+      await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, fixtureTurnIds.turn);
+    }
+    const { metadata: _metadata, ...common } = entry;
+    await controller.ensureProviderEntry(fixtureProjectIds.project, {
+      ...common, entryKind: "subagent", identity: { harness: "codex", threadId: fixtureThreadIds.child },
+      createdAt: 1, updatedAt: 1, cwd: "C:/workspace", directSubagentIndex: 0,
+      name: "child", parentThreadId: fixtureThreadIds.thread, pinned: false,
+      profileId: "profile", profileName: "profile", projectId: fixtureProjectIds.project,
+    });
+    await controller.applyLifecycle(fixtureProjectIds.project, "codex", fixtureThreadIds.child, { kind: "agentStatus", status: "blocked" });
+    await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.child, fixtureTurnIds.turn);
+    assert.equal(notices.length, 2);
+    assert.deepEqual(statesAtPublication, ["working", "working"]);
+    assert.equal(warnings.length, 2);
+    const entryAfter = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, fixtureThreadIds.thread);
+    assert.equal(entryAfter?.entryKind === "thread" ? entryAfter.lifecycle.kind : null, "working");
   } finally {
     await controller.dispose();
   }

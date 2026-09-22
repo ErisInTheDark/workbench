@@ -1,8 +1,10 @@
 /*
  * Exports:
- * - CodexAppServerNotification: typed app-server notification union. Keywords: codex, app-server, notification, event.
- * - WorkbenchBrowseResultRecordedNotification: Workbench-owned Browse result sidecar notification. Keywords: browse, result, transcript.
- * - isCodexAppServerNotification: identify JSON-RPC app-server notifications from incoming WebSocket messages. Keywords: websocket, method, params.
+ * - CodexAppServerNotification: typed app-server notification union.
+ * - WorkbenchQuestionnaireRequestedNotification: provider questionnaire publication.
+ * - WorkbenchQuestionnaireResolvedNotification: resolution with optional successful-answer evidence.
+ * - WorkbenchBrowseResultRecordedNotification: Workbench-owned Browse result sidecar notification.
+ * - isCodexAppServerNotification: identify JSON-RPC app-server notifications from incoming WebSocket messages.
  */
 import type { ServerNotification } from "./generated/app-server/ServerNotification.ts";
 import type { WorkbenchUserInputRequest } from "../types.ts";
@@ -23,6 +25,7 @@ export interface WorkbenchQuestionnaireResolvedNotification {
   params: {
     threadId: string;
     requestKey: string;
+    answered?: true;
   };
 }
 

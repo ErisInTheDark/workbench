@@ -83,7 +83,7 @@ export function mapProviderLifecycleNotification(
   }
   if (notification.method === "questionnaire/resolved") {
     const requestKey = typeof params.requestKey === "string" ? params.requestKey : null;
-    return requestKey ? { event: { kind: "inputResolved", requestKey }, threadId } : null;
+    return requestKey ? { event: { kind: "inputResolved", requestKey, ...(params.answered === true ? { answered: true as const } : {}) }, threadId } : null;
   }
   return notification.method === "thread/status/changed" && record(params.status)?.type === "systemError"
     ? { event: { kind: "providerSystemError" }, threadId } : null;

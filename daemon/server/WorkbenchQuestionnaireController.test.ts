@@ -42,6 +42,8 @@ function deferred<TValue>() {
 }
 
 function createHarness(options: {
+  beforeAnswer?: WorkbenchQuestionnaireControllerOptions["beforeAnswer"];
+  logError?: WorkbenchQuestionnaireControllerOptions["logError"];
   beforeClear?: () => Promise<void>;
   beforePublish?: () => Promise<void>;
   publishUnrelatedStateFirst?: boolean;
@@ -57,6 +59,8 @@ function createHarness(options: {
     }
   };
   const controller = new WorkbenchQuestionnaireController({
+    beforeAnswer: options.beforeAnswer,
+    logError: options.logError,
     clearPending: async (_threadId, requestKey) => {
       clearCount += 1;
       await options.beforeClear?.();
@@ -125,6 +129,52 @@ test("freeform request publishes one durable question and returns its correlated
   await nextWaiting;
 });
 
+test("both answer routes collect context before resolving their unchanged response", async () => {
+  for (const route of ["respond", "deliver"] as const) {
+    const events: string[] = [];
+    const harness = createHarness({ beforeAnswer: async () => { events.push("context"); } });
+    const waiting = harness.controller.request(freeformInput, new AbortController().signal).then(response => {
+      events.push("answer");
+      return response;
+    });
+    const question = await harness.published;
+    const response = { answers: { details: { answers: ["yes"] } } };
+    await harness.controller[route]({ threadId: freeformInput.callerThreadId, requestKey: question.requestKey, response });
+    assert.deepEqual(await waiting, response);
+    assert.deepEqual(events, ["context", "answer"]);
+    await harness.controller.dispose();
+  }
+});
+
+test("answer-owned context collection survives caller cancellation and reports preparation failure without resending", async () => {
+  for (const fail of [false, true]) {
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const warnings: string[] = [];
+    const harness = createHarness({
+      beforeAnswer: async () => {
+        entered.resolve();
+        await release.promise;
+        if (fail) throw new Error("private context data");
+      },
+      logError: message => warnings.push(message),
+    });
+    const abort = new AbortController();
+    const waiting = harness.controller.request(freeformInput, abort.signal);
+    const question = await harness.published;
+    const response = { answers: { details: { answers: ["yes"] } } };
+    const answer = harness.controller.deliver({ threadId: freeformInput.callerThreadId, requestKey: question.requestKey, response });
+    await entered.promise;
+    abort.abort();
+    const retiring = harness.controller.dispose();
+    release.resolve();
+    assert.deepEqual((await answer)?.response, response);
+    assert.deepEqual(await waiting, response);
+    await retiring;
+    assert.equal(warnings.length, fail ? 1 : 0);
+    assert.equal(warnings.some(message => message.includes("private context data")), false);
+  }
+});
 test("daemon-owned delivery resolves the waiter without clearing durable state", async () => {
   const harness = createHarness();
   const waiting = harness.controller.request(freeformInput, new AbortController().signal);

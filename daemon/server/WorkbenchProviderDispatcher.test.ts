@@ -59,6 +59,7 @@ function fixture() {
   let read: WorkbenchProvider["configuration"]["modelContext"]["read"] | undefined;
   let singleFile: WorkbenchProvider["singleFile"];
   let tools: WorkbenchProvider["tools"];
+  let context: WorkbenchProvider["context"];
   const disposed: number[] = [];
   const started = deferred();
   const releaseStart = deferred();
@@ -74,6 +75,7 @@ function fixture() {
         return {
           registrations: {
             codexProvider: {
+              context,
               singleFile,
               tools,
               threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
@@ -117,8 +119,31 @@ function fixture() {
     setRead: (value: typeof read) => { read = value; },
     setSingleFile: (value: typeof singleFile) => { singleFile = value; },
     setTools: (value: typeof tools) => { tools = value; },
+    setContext: (value: typeof context) => { context = value; },
   };
 }
+
+test("passive context follows replacement capabilities without falling back to turn submission", async () => {
+  const f = fixture();
+  await f.host.start();
+  try {
+    const capability = f.providers.get("codex").context;
+    const input = { threadId: WorkbenchThreadIdSchema.parse("thread"), text: "event" };
+    assert.equal(await capability.inject(input), "unsupported");
+    let calls = 0;
+    f.setContext({ inject: async received => {
+      assert.deepEqual(received, input);
+      calls++;
+      return "admitted";
+    } });
+    await f.host.reload(["server:codex/def"]);
+    assert.equal(await capability.inject(input), "admitted");
+    f.setContext(undefined);
+    await f.host.reload(["server:codex/def"]);
+    assert.equal(await capability.inject(input), "unsupported");
+    assert.equal(calls, 1);
+  } finally { await f.host.dispose(); }
+});
 
 test("optional single-file calls reject unsupported owners and follow replacement capabilities", async () => {
   const f = fixture();

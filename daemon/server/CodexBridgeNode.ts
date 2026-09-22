@@ -183,6 +183,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         return { ...requests, resumeRequest, startRequest };
     };
     bridge = new CodexStdioBridge({
+      prepareInputContext: async (nativeThreadId, trigger, inject, signal) => {
+        const threadId = threadIdentity.workbenchIdForNative(threadIdentity.knownNativeBinding("codex", nativeThreadId));
+        await build.get("agentContext").collect({ harness: "codex", threadId }, trigger, signal, async (_target, text) => {
+          await inject(text);
+          return "admitted";
+        });
+      },
       appServer: parent.appServer,
       initialState: build.handoffState as CodexStdioBridgeReloadState | undefined,
       handleWorkbenchRequest: request => request.method === "workbench/subagent/message"
@@ -370,7 +377,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge", "codexThreadOperations", "codexNativeConfiguration"],
-  requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptReader", "transcriptReconciliation", "codexRecovery", "providerObservations"],
+  requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptReader", "transcriptReconciliation", "codexRecovery", "providerObservations", "agentContext"],
   safeAll: true,
   scope: "server:codex",
   sources: [

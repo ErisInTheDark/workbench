@@ -376,6 +376,7 @@ test("cold native thread lookup admits exact metadata before public request rout
     identities: owners,
     resolveProject: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/repo" }),
     bridge: {
+      injectAgentContext: async () => { assert.fail("Unexpected passive context"); },
       reconcileSqliteTranscriptWindow: async () => { throw new Error("Unexpected native recovery"); },
       canDeliverQuestionnaire: () => false,
       ensureInitialized: async () => {},

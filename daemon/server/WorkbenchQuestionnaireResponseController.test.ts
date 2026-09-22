@@ -264,11 +264,11 @@ test("admitted native turns settle questionnaire history under SQLite canonical 
   }
 });
 
-test("terminal lifecycle admits even when the daemon still exposes an orphan waiter", async () => {
+test("stopped lifecycle admits even when the daemon still exposes an orphan waiter", async () => {
   const harness = createHarness({
-    agent: { agentStatus: "blocked", turnId },
-    kind: "needsAttention",
-    reason: "agentBlocked",
+    kind: "stopped",
+    reason: "providerInterrupted",
+    turnId,
     settled: false,
   });
 
@@ -287,6 +287,18 @@ test("terminal lifecycle admits even when the daemon still exposes an orphan wai
   const recorded = harness.requests.find(({ method }) => method === "record");
   assert.equal((recorded?.params as { turnId?: string } | undefined)?.turnId, admittedTurnId);
   assert.equal((recorded?.params as { insertAfterItemId?: string | null } | undefined)?.insertAfterItemId, null);
+});
+
+test("blocked and completed questionnaires retain live answer delivery", async () => {
+  for (const lifecycle of [
+    { agent: { agentStatus: "blocked" as const, turnId }, kind: "needsAttention" as const, reason: "agentBlocked" as const, settled: false },
+    { agent: { agentStatus: "completed" as const, turnId }, kind: "completed" as const, reason: "agentCompleted" as const, settled: false },
+  ] satisfies WorkbenchThreadLifecycle[]) {
+    const harness = createHarness(lifecycle);
+    const result = await harness.controller.respond({ ...request(), supplementalInput: undefined, activatedSkillPaths: undefined });
+    assert.equal(result.route, "live");
+    assert.deepEqual(harness.events, ["waiter", "settled", "record"]);
+  }
 });
 
 test("matching pending-input lifecycle resolves its live waiter before settlement", async () => {
@@ -332,7 +344,7 @@ test("detached admission stamps a steered response onto the accepted active turn
     kind: "needsAttention",
     reason: "agentBlocked",
     settled: false,
-  }, { admissionKind: "steered" });
+  }, { admissionKind: "steered", deliverable: false });
 
   const result = await harness.controller.respond(request());
 
@@ -348,7 +360,7 @@ test("detached provider admission stamps its response onto the started turn", as
     kind: "needsAttention",
     reason: "agentBlocked",
     settled: false,
-  }, { requestKey });
+  }, { requestKey, deliverable: false });
 
   const result = await harness.controller.respond({
     ...request(),
@@ -411,7 +423,7 @@ test("failed detached admission leaves durable settlement untouched", async () =
     kind: "needsAttention",
     reason: "agentBlocked",
     settled: false,
-  }, { admissionError: "admission failed" });
+  }, { admissionError: "admission failed", deliverable: false });
 
   await assert.rejects(harness.controller.respond(request()), /admission failed/u);
 
@@ -449,7 +461,7 @@ test("concurrent duplicate answers admit and settle exactly once", async () => {
     kind: "needsAttention",
     reason: "agentBlocked",
     settled: false,
-  });
+  }, { deliverable: false });
 
   const results = await Promise.allSettled([
     harness.controller.respond(request()),

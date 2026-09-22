@@ -755,6 +755,21 @@ test("delivered user input reactivates provider-owned terminal state without ove
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, delivered), pendingInput);
 });
 
+test("answered input can reopen terminal lifecycle without changing ordinary resolution", () => {
+  const turnId = fixtureIdentityValues.WorkbenchTurnId["turn"];
+  for (const status of ["blocked", "completed"] as const) {
+    const terminal = reduceWorkbenchThreadLifecycle(
+      reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId }),
+      { kind: "agentStatus", status, turnId },
+    );
+    const resolution = { kind: "inputResolved" as const, requestKey: "question", turnId };
+    assert.equal(reduceWorkbenchThreadLifecycle(terminal, resolution), terminal);
+    const answered = { ...resolution, answered: true as const };
+    assert.equal(reduceWorkbenchThreadLifecycle(terminal, answered).kind, "working");
+    assert.equal(reduceWorkbenchThreadLifecycle(terminal, { ...answered, turnId: fixtureIdentityValues.WorkbenchTurnId["new"] }), terminal);
+  }
+});
+
 test("late same-turn intent admission preserves an unresolved questionnaire", () => {
   const turnId = fixtureIdentityValues.WorkbenchTurnId["turn"];
   const pendingInput = reduceWorkbenchThreadLifecycle(

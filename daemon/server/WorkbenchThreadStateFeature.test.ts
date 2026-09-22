@@ -104,6 +104,7 @@ function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThrea
     operations = new CodexThreadOperations({
       reconciliation: { reconcile: async () => { throw new Error("Unexpected recovery"); } },
       bridge: {
+        injectAgentContext: async () => { assert.fail("Unexpected passive context"); },
         reconcileSqliteTranscriptWindow: async () => { throw new Error("Unexpected native recovery"); },
         canDeliverQuestionnaire: () => false,
         ensureInitialized: async () => {},
@@ -181,6 +182,7 @@ test("browser project admission rejects unknown owners before loading or replaci
 
 async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
   const requests: JsonRpcRequest[] = [];
+  const contexts: Array<{ harness: string; threadId: string; text: string }> = [];
   const releases: string[] = [];
   const questionnaire: WorkbenchDurableQuestionnaire = {
     itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44",
@@ -203,6 +205,10 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
     beforeRelease: async () => {},
   };
   const options = {
+    agentContext: { publish: async (target: { harness: string; threadId: string }, text: string) => {
+      contexts.push({ ...target, text });
+      return "admitted" as const;
+    } },
     database: createThreadStateDatabase(),
     getProjectCatalog: () => ({ data: [], rootPath: "C:/workspace" }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
@@ -265,13 +271,33 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
   });
   requests.length = 0;
   return {
-    feature, provider, questionnaire, releases, requests, state,
+    feature, provider, questionnaire, releases, requests, state, contexts,
     read: async () => (await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).entries.find((entry) => entry.entryKind === "thread"),
     complete: () => feature.controller.handleRequest("observer", {
       identity: provider.identity, method: "workbench/thread-state/status/set", projectId: fixtureIdentityValues.ProjectId.project, status: "completed",
     }),
   };
 }
+
+test("answered provider evidence publishes context for the canonical thread and stale evidence does not reopen it", async () => {
+  const h = await questionnaireHarness();
+  const threadId = fixtureIdentityValues.WorkbenchThreadId.thread;
+  try {
+    await h.feature.controller.applyLifecycle(fixtureIdentityValues.ProjectId.project, "codex", threadId, { kind: "agentStatus", status: "blocked" });
+    const resolve = (requestKey: string) => h.feature.observeProviderNotification("codex", {
+      lifecycle: { threadId, event: { kind: "inputResolved", requestKey, answered: true } },
+      activity: null, displayLabel: null,
+    });
+    await resolve("stale");
+    assert.equal(h.contexts.length, 0);
+    await resolve(h.questionnaire.requestKey);
+    assert.equal(h.contexts.length, 1);
+    assert.equal(h.contexts[0]?.threadId, threadId);
+    assert.equal(h.contexts[0]?.harness, "codex");
+    await resolve(h.questionnaire.requestKey);
+    assert.equal(h.contexts.length, 1);
+  } finally { await h.feature.dispose(); }
+});
 
 test("manual questionnaire completion preserves its question and survives a late interrupted notification", async () => {
   const h = await questionnaireHarness();

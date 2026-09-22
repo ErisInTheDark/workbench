@@ -8,6 +8,7 @@ import type { CodexThreadContextReadResponse, CodexThreadPageResponse } from "wo
 import { parseTranscriptAssetAddress } from "workbench-shared/workbench/transcript/transcript-asset-address";
 import { randomUUID } from "node:crypto";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
+import type { WorkbenchContextTrigger } from "workbench-shared/workbench/provider/provider-context";
 
 import type { ApplyPatchApprovalParams } from "workbench-shared/codex/generated/app-server/ApplyPatchApprovalParams";
 import type { ExecCommandApprovalParams } from "workbench-shared/codex/generated/app-server/ExecCommandApprovalParams";
@@ -129,6 +130,12 @@ type PendingResponse = {
 };
 
 export type CodexStdioBridgeOptions = {
+  prepareInputContext?: (
+    threadId: NativeThreadId,
+    trigger: WorkbenchContextTrigger,
+    inject: (text: string) => Promise<void>,
+    signal: AbortSignal,
+  ) => Promise<void>;
   appServer: CodexAppServer;
   handleWorkbenchRequest: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   initialState?: CodexStdioBridgeReloadState;
@@ -816,6 +823,7 @@ export default class CodexStdioBridge {
   private readonly onAcceptedTurnSteer: NonNullable<CodexStdioBridgeOptions["onAcceptedTurnSteer"]>;
   private readonly publishNativeNotification: (notification: JsonRpcNotification) => void;
   private readonly prepareTurnStart: NonNullable<CodexStdioBridgeOptions["prepareTurnStart"]>;
+  private readonly prepareInputContext: CodexStdioBridgeOptions["prepareInputContext"];
   private readonly prepareThreadConfiguration: CodexStdioBridgeOptions["prepareThreadConfiguration"];
   private readonly withThreadAdmission: CodexStdioBridgeOptions["withThreadAdmission"];
   private readonly createThread: CodexStdioBridgeOptions["createThread"];
@@ -867,7 +875,7 @@ export default class CodexStdioBridge {
   private readonly identities: CodexStdioBridgeOptions["identities"];
   private readonly onInitialized: () => void;
 
-  constructor({ appServer, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onAcceptedTurnSteer = () => undefined, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, transcriptAssets, sqliteReader, readSqliteProviderCursor, readSqliteRecoveryGapIds }: CodexStdioBridgeOptions) {
+  constructor({ appServer, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onAcceptedTurnSteer = () => undefined, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, prepareInputContext, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, transcriptAssets, sqliteReader, readSqliteProviderCursor, readSqliteRecoveryGapIds }: CodexStdioBridgeOptions) {
     this.sqliteReader = sqliteReader;
     this.readSqliteProviderCursor = readSqliteProviderCursor;
     this.readSqliteRecoveryGapIds = readSqliteRecoveryGapIds;
@@ -883,6 +891,7 @@ export default class CodexStdioBridge {
     };
     this.onInitialized = onInitialized;
     this.prepareTurnStart = prepareTurnStart;
+    this.prepareInputContext = prepareInputContext;
     this.prepareThreadConfiguration = prepareThreadConfiguration;
     this.withThreadAdmission = withThreadAdmission;
     this.createThread = createThread;
@@ -1752,6 +1761,33 @@ export default class CodexStdioBridge {
     });
   }
 
+  async injectAgentContext(threadId: NativeThreadId, text: string, signal?: AbortSignal) {
+    this.assertAcceptingWork();
+    const response = await this.dispatchManagedProviderRequest({
+      method: "thread/inject_items",
+      params: {
+        threadId,
+        items: [{ type: "message", role: "developer", content: [{ type: "input_text", text }] }],
+      },
+    }, signal);
+    if (response.error) throw new Error("Codex rejected passive agent context.");
+  }
+
+  private async collectInputContext(
+    threadId: NativeThreadId,
+    trigger: WorkbenchContextTrigger,
+    signal: AbortSignal,
+  ) {
+    signal.throwIfAborted();
+    try {
+      await this.prepareInputContext?.(threadId, trigger, text => this.injectAgentContext(threadId, text, signal), signal);
+    } catch {
+      signal.throwIfAborted();
+      logError("agent-context", "Context preparation failed; native input delivery will continue.");
+    }
+    signal.throwIfAborted();
+  }
+
   private async dispatchRequest(
     message: JsonRpcRequest,
     {
@@ -1768,6 +1804,10 @@ export default class CodexStdioBridge {
       ? "autoRefresh"
       : message[WORKBENCH_REQUEST_SOURCE_FIELD] === "sqliteRecovery" ? "sqliteRecovery" : "internal";
     const method = typeof message.method === "string" ? message.method : null;
+    if (method === "turn/start" || method === "turn/steer") {
+      const threadId = asString(asRecord(message.params)?.threadId);
+      if (threadId) await this.collectInputContext(NativeThreadIdSchema.parse(threadId), method === "turn/start" ? "start" : "steer", signal);
+    }
     const threadHydration = readThreadHydration(message);
     if (method === "thread/start") this.traceThreadCreation(message.id, "instruction-augmentation", upstreamRequestId);
     const upstreamMessage = createUpstreamRequest(await this.instructions.augment(message, method), upstreamRequestId);
@@ -3044,9 +3084,12 @@ export default class CodexStdioBridge {
     }
 
     if (pendingRequest.kind !== "questionnaire") {
+      const result = this.buildApprovalResponse(pendingRequest, resolvedResponse.response);
+      await this.collectInputContext(NativeThreadIdSchema.parse(pendingRequest.threadId), "answer", this.generation.signal);
+      if (this.pendingUserInputRequests.get(pendingRequest.requestKey) !== pendingRequest) throw new Error("That questionnaire is no longer pending.");
       this.send({
         id: pendingRequest.upstreamRequestId,
-        result: this.buildApprovalResponse(pendingRequest, resolvedResponse.response),
+        result,
       });
       this.pendingUserInputRequests.delete(pendingRequest.requestKey);
       this.publishNativeNotification({
@@ -3054,6 +3097,7 @@ export default class CodexStdioBridge {
         params: {
           requestKey: pendingRequest.requestKey,
           threadId: pendingRequest.threadId,
+          answered: true,
         },
       });
       return { ok: true };
@@ -3071,11 +3115,12 @@ export default class CodexStdioBridge {
       turnId: resolvedResponse.turnId ?? pendingRequest.turnId ?? "",
     };
 
+    await this.collectInputContext(NativeThreadIdSchema.parse(pendingRequest.threadId), "answer", this.generation.signal);
+    if (this.pendingUserInputRequests.get(pendingRequest.requestKey) !== pendingRequest) throw new Error("That questionnaire is no longer pending.");
     this.send({
       id: pendingRequest.upstreamRequestId,
       result: toToolRequestUserInputResponse(resolvedResponse.response),
     });
-    const settlement = await this.settleQuestionnaireHistoryEntry(historyEntry);
 
     this.pendingUserInputRequests.delete(pendingRequest.requestKey);
     this.publishNativeNotification({
@@ -3083,10 +3128,11 @@ export default class CodexStdioBridge {
       params: {
         requestKey: pendingRequest.requestKey,
         threadId: pendingRequest.threadId,
+        answered: true,
       },
     });
 
-    return settlement;
+    return await this.settleQuestionnaireHistoryEntry(historyEntry);
   }
 
   private createThreadWindowStore(recovery?: WorkbenchTranscriptRecordingContext["recovery"]): CodexThreadWindowStore {

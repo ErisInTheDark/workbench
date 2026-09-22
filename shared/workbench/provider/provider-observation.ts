@@ -43,7 +43,7 @@ export type WorkbenchTranscriptNotification =
 
 export type WorkbenchProviderLifecycleEvent =
   | Exclude<WorkbenchLifecycleEvent, { kind: "inputResolved" | "pendingInput" }>
-  | { kind: "inputResolved"; requestKey: string }
+  | { kind: "inputResolved"; requestKey: string; answered?: true }
   | { kind: "pendingInput"; questionnaire: WorkbenchDurableQuestionnaire | null; requestKey: string; turnId: WorkbenchTurnId | null };
 
 export type WorkbenchProviderObservation = {

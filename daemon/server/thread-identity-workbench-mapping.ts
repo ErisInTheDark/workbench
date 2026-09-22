@@ -40,9 +40,9 @@ export function createWorkbenchQuestionnaireStatePorts(
     return thread;
   };
   return {
-    clearPending: async (threadId, requestKey) => {
+    clearPending: async (threadId, requestKey, answered) => {
       const thread = await resolveThread(threadId);
-      await state.clearPendingQuestionnaire(thread.projectId, thread.threadId, requestKey);
+      await state.clearPendingQuestionnaire(thread.projectId, thread.threadId, requestKey, answered);
     },
     publishPending: async (threadId, questionnaire) => {
       const thread = await resolveThread(threadId);

@@ -14,8 +14,10 @@ import type { WorkbenchProviderBrowse } from "workbench-shared/workbench/provide
 import type { WorkbenchProviderSandboxNetwork } from "workbench-shared/workbench/provider/provider-settings";
 import type { WorkbenchProviderRecovery } from "workbench-shared/workbench/provider/provider-recovery";
 import type { WorkbenchProviderSingleFile } from "workbench-shared/workbench/provider/provider-single-file";
+import type { WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
 
 export default interface WorkbenchProvider {
+  readonly context?: WorkbenchProviderContext;
   readonly singleFile?: WorkbenchProviderSingleFile;
   readonly threads: WorkbenchProviderThreads;
   readonly goals?: WorkbenchProviderGoals;

@@ -27,6 +27,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       registrations: { codexProvider: {
         singleFile,
         threads,
+        context: threads.context,
         tools: get("codexTools"),
         recovery: get("codexRecovery"),
         browse: threads.browse,

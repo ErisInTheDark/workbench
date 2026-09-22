@@ -32,9 +32,10 @@ import type { WorkbenchProviderBrowse } from "workbench-shared/workbench/provide
 import { WORKBENCH_TOOL_CONTEXT_METHOD, WorkbenchToolContextResponseSchema } from "workbench-shared/workbench/thread/thread-tool-output";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 import type WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
+import type { WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
 
 export interface CodexThreadOperationOwners {
-  bridge: Pick<CodexStdioBridge, "canDeliverQuestionnaire" | "ensureInitialized" | "handleServerRequest" | "reconcileSqliteTranscriptWindow">;
+  bridge: Pick<CodexStdioBridge, "canDeliverQuestionnaire" | "ensureInitialized" | "handleServerRequest" | "reconcileSqliteTranscriptWindow" | "injectAgentContext">;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   identities: NativeTranscriptIdentityOwners;
   resolveProject(cwd: string): Promise<{ id: ProjectId; rootPath: string }>;
@@ -47,6 +48,14 @@ function record(value: unknown) {
 
 export default class CodexThreadOperations implements WorkbenchProviderThreads {
   constructor(private readonly owners: CodexThreadOperationOwners) {}
+
+  readonly context: WorkbenchProviderContext = {
+    inject: async (input, signal) => {
+      const threadId = await this.nativeThreadId(input.threadId);
+      await this.owners.bridge.injectAgentContext(threadId, input.text, signal);
+      return "admitted";
+    },
+  };
 
   async reconcile(input: WorkbenchProviderTranscriptReconcile, signal: AbortSignal) {
     signal.throwIfAborted();

@@ -19,6 +19,7 @@ import { readWorkbenchAgentMessageText } from "workbench-shared/workbench/thread
 import type { WorkbenchThreadReconcile } from "workbench-shared/workbench/thread/thread-actions";
 
 async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object>, options: {
+  injectContext?: (threadId: string, text: string, signal?: AbortSignal) => Promise<void>;
   nativeQuestionnaireRequestKey?: string;
   workbenchQuestionnaireRequestKey?: string;
 } = {}) {
@@ -37,6 +38,7 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
   }]);
   const turnId = database.identities.threads.workbenchTurnIdForNative(native);
   const bridge = {
+    injectAgentContext: options.injectContext ?? (async () => { assert.fail("Unexpected passive context"); }),
     reconcileSqliteTranscriptWindow: async () => { throw new Error("Unexpected native recovery"); },
     ensureInitialized: async () => {},
     handleServerRequest: async (request: JsonRpcRequest) => ({ id: request.id ?? null, result: await handle(request) }),
@@ -62,6 +64,20 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
   });
   return { operations, demands, threadId: thread.threadId, turnId };
 }
+
+test("passive context resolves canonical identity without ordinary provider admission and propagates rejection", async () => {
+  const seen: string[] = [];
+  const fixture = await threadFixture(async () => assert.fail("ordinary provider request"), {
+    injectContext: async (threadId, text) => {
+      assert.equal(threadId, "native-thread");
+      seen.push(text);
+      if (text === "rejected") throw new Error("provider rejected");
+    },
+  });
+  assert.equal(await fixture.operations.context.inject({ threadId: fixture.threadId, text: "accepted" }), "admitted");
+  await assert.rejects(fixture.operations.context.inject({ threadId: fixture.threadId, text: "rejected" }), /provider rejected/u);
+  assert.deepEqual(seen, ["accepted", "rejected"]);
+});
 
 for (const fails of [false, true]) {
   test(`provider deletion translates only its owned thread and ${fails ? "propagates failure" : "settles"}`, async () => {

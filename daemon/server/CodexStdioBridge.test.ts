@@ -2606,6 +2606,7 @@ test("SQLite transcript failure does not block steer or questionnaire side effec
   const fixtureIdentities = await recordingIdentities({ existingTurn: true });
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-failed-"));
   const upstreamMessages: unknown[] = [];
+  const contextOrder: string[] = [];
   const client: BridgeClient = {
     OPEN: 1, close() {}, on() {}, once() {}, readyState: 1, send() {},
   };
@@ -2613,13 +2614,20 @@ test("SQLite transcript failure does not block steer or questionnaire side effec
     identities: fixtureIdentities,
     appServer: { send(message: JsonRpcRequest) {
       upstreamMessages.push(message);
+      contextOrder.push(message.method ?? "answer");
       if (message.method === "turn/steer") {
         queueMicrotask(() => void bridge.handleUpstreamMessage({ id: message.id ?? null, result: { turnId: "turn" } }));
       }
     } } as unknown as CodexAppServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
-    onNotification() {},
-    recordSqliteTranscript: async () => { throw new Error("SQLite transcript failed"); },
+    prepareInputContext: async (_threadId, trigger) => { contextOrder.push(`context:${trigger}`); },
+    onNotification(notification) {
+      if (notification.method === "questionnaire/resolved") contextOrder.push("resolved");
+    },
+    recordSqliteTranscript: async observations => {
+      if (observations.some(observation => observation.kind === "questionnaire")) contextOrder.push("history");
+      throw new Error("SQLite transcript failed");
+    },
     resolveProjectFromCwd: async () => null,
   });
   try {
@@ -2667,10 +2675,77 @@ test("SQLite transcript failure does not block steer or questionnaire side effec
       warning: "Your response was sent, but Workbench could not save it to SQLite transcript history.",
     });
     assert.equal((upstreamMessages[1] as { id?: string } | undefined)?.id, "questionnaire");
+    assert.deepEqual(contextOrder, ["context:steer", "turn/steer", "context:answer", "answer", "resolved", "history"]);
   } finally {
     await bridge.disposeImmediately();
     await fs.rm(root, { force: true, recursive: true });
   }
+});
+
+test("passive agent context sends developer content without a turn and propagates provider rejection", async () => {
+  const sent: JsonRpcRequest[] = [];
+  let reject = false;
+  const bridge = new CodexStdioBridge({
+    appServer: { send(message: JsonRpcRequest) {
+      sent.push(message);
+      queueMicrotask(() => { void bridge.handleUpstreamMessage(reject
+        ? { id: message.id ?? null, error: { code: -32000, message: "private rejection detail" } }
+        : { id: message.id ?? null, result: {} }); });
+    } } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+  });
+  try {
+    const threadId = NativeThreadIdSchema.parse("thread");
+    const text = "first event\nsecond event";
+    await bridge.injectAgentContext(threadId, text);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.method, "thread/inject_items");
+    assert.deepEqual(sent[0]?.params, {
+      threadId,
+      items: [{ type: "message", role: "developer", content: [{ type: "input_text", text }] }],
+    });
+    reject = true;
+    await assert.rejects(bridge.injectAgentContext(threadId, "rejected"));
+    const cancellation = new AbortController();
+    cancellation.abort();
+    await assert.rejects(bridge.injectAgentContext(threadId, "cancelled", cancellation.signal));
+    assert.equal(sent.length, 2);
+  } finally { await bridge.disposeImmediately(); }
+});
+
+test("native questionnaire resolution during context collection prevents a stale answer send", async () => {
+  const sent: JsonRpcRequest[] = [];
+  const notifications: JsonRpcNotification[] = [];
+  const bridge = new CodexStdioBridge({
+    appServer: { send: (message: JsonRpcRequest) => { sent.push(message); } } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification: notification => { notifications.push(notification); },
+    resolveProjectFromCwd: async () => null,
+    prepareInputContext: async (_threadId, trigger) => {
+      assert.equal(trigger, "answer");
+      await bridge.handleUpstreamMessage({
+        method: "serverRequest/resolved", params: { threadId: "thread", requestId: "question" },
+      });
+    },
+  });
+  try {
+    await bridge.handleUpstreamMessage({
+      id: "question", method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread", turnId: "turn", itemId: "item",
+        questions: [{ id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false }],
+      },
+    });
+    const result = await bridge.handleBridgeRequest({
+      id: "answer", method: "questionnaire/respond",
+      params: { threadId: "thread", requestKey: "question", response: { answers: { choice: { answers: ["yes"] } } } },
+    });
+    assert.ok(result?.error);
+    assert.equal(sent.some(message => message.id === "question"), false);
+    assert.equal(notifications.some(notification => (notification.params as { answered?: boolean })?.answered), false);
+  } finally { await bridge.disposeImmediately(); }
 });
 
 test("detached questionnaire history records directly without answering a provider request", async () => {
@@ -3227,7 +3302,7 @@ test("live transcript recording and reload use only SQL and preserve image asset
     assert.equal(pendingInput.event.questionnaire.turnId, publicTurnId);
     assert.equal(question[1].projectId, fixtureIdentityValues.ProjectId.project);
     assert.deepEqual(publications.find(([event]) => event.method === "questionnaire/resolved")?.[1].lifecycle, {
-      threadId: publicThreadId, event: { kind: "inputResolved", requestKey: "questionnaire" },
+      threadId: publicThreadId, event: { kind: "inputResolved", requestKey: "questionnaire", answered: true },
     });
     assert.deepEqual(publications.find(([event]) => event.method === "turn/completed")?.[1].lifecycle, {
       threadId: publicThreadId, event: { kind: "turnCompleted", turnId: publicTurnId, status: "interrupted" },
@@ -3739,7 +3814,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
                 thread: resumedThread,
               };
             })()
-            : message.method === "config/mcpServer/reload"
+            : message.method === "config/mcpServer/reload" || message.method === "thread/inject_items"
               ? {}
               : message.method === "turn/start"
                 ? { turn: startedTurn }
@@ -3762,6 +3837,13 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
     handleWorkbenchRequest: rejectWorkbenchRequest,
     instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
     onNotification() { events.push("receive:notification"); },
+    prepareInputContext: async (threadId, trigger, inject) => {
+      assert.equal(threadId, "thread");
+      assert.equal(trigger, "start");
+      assert.equal(resumed, true);
+      events.push("prepare:context");
+      await inject("background update");
+    },
     withThreadAdmission: async (thread, requests, admit) => {
       assert.equal(thread.id, "thread");
       events.push("prepare:profile");
@@ -3839,6 +3921,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
       "thread/resume",
       "thread/read",
       "config/mcpServer/reload",
+      "thread/inject_items",
       "turn/start",
     ]);
     assert.deepEqual(events, [
@@ -3854,6 +3937,9 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
       "receive:notification",
       "send:config/mcpServer/reload",
       "receive:notification",
+      "prepare:context",
+      "send:thread/inject_items",
+      "receive:notification",
       "send:turn/start",
       "receive:notification",
       "commit:profile",
@@ -3867,7 +3953,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
       developerInstructions?: string | null;
     };
     assert.match(`${resumeParams.baseInstructions ?? ""}\n${resumeParams.developerInstructions ?? ""}`, /LILY PREFIX SENTINEL/u);
-    const startParams = upstreamRequests[5]?.params as Record<string, unknown>;
+    const startParams = upstreamRequests.find(request => request.method === "turn/start")?.params as Record<string, unknown>;
     assert.equal(startParams.model, "saved-model");
     assert.equal(startParams.effort, null);
     assert.equal(startParams.serviceTier, null);

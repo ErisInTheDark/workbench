@@ -111,7 +111,11 @@ export default class WorkbenchQuestionnaireResponseController {
       const pendingInput = lifecycle.kind === "needsAttention"
         && lifecycle.reason === "pendingInput"
         && lifecycle.requestKey === input.requestKey;
-      const live = pendingInput && await interactions.canDeliver(threadId, input.requestKey);
+      const liveLifecycle = pendingInput || (!approval && (
+        lifecycle.kind === "completed"
+        || (lifecycle.kind === "needsAttention" && lifecycle.reason === "agentBlocked")
+      ));
+      const live = liveLifecycle && await interactions.canDeliver(threadId, input.requestKey);
       const settle = <TDelivery>(delivery: TDelivery, acceptedTurnId: WorkbenchTurnId) => ({
         delivery,
         insertAfterItemId: approval ? input.insertAfterItemId ?? questionnaire.itemId : null,

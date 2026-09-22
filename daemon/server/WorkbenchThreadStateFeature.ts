@@ -29,6 +29,7 @@ import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread
 import { ThreadReferenceSchema, TurnReferenceSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
+import type WorkbenchAgentContextController from "./WorkbenchAgentContextController";
 
 interface ProjectRecord { id: ProjectId; rootPath: string }
 interface ProjectResolution { cwd: string; project: ProjectRecord }
@@ -60,6 +61,7 @@ function legacyGitArc(claim: WorkbenchGitArcActiveClaim) {
 }
 
 export interface WorkbenchThreadStateFeatureContext {
+  agentContext?: Pick<WorkbenchAgentContextController, "publish">;
   identities: NativeTranscriptIdentityOwners;
   readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
   recordComposerProfileUsage?: (profileId: string, at: number) => Promise<void>;
@@ -180,6 +182,10 @@ export default class WorkbenchThreadStateFeature {
         subscribeReloadDirt: (listener: () => void) => context.reloadDirt!.subscribe(listener),
       } : {}),
       log: context.log,
+      publishAgentContext: async (harness, threadId, text) => {
+        const key = installedProviderKeys.find(key => key === harness);
+        if (key) await context.agentContext?.publish({ harness: key, threadId }, text);
+      },
       interruptQuestionnaire: (projectId, harness, threadId, questionnaire) => this.interruptQuestionnaire(projectId, harness, threadId, questionnaire),
       getProjectCatalog: context.getProjectCatalog,
       projectState: context.projectState,

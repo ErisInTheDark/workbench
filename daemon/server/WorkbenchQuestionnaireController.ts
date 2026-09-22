@@ -17,7 +17,8 @@ import type { WorkbenchThreadId, WorkbenchTurnId, ProjectId } from "workbench-sh
 export type WorkbenchQuestionnaire = WorkbenchDurableQuestionnaire;
 
 export interface WorkbenchQuestionnaireControllerOptions {
-  clearPending(threadId: WorkbenchThreadId, requestKey: string): Promise<void>;
+  beforeAnswer?: (threadId: WorkbenchThreadId, signal: AbortSignal) => Promise<void>;
+  clearPending(threadId: WorkbenchThreadId, requestKey: string, answered?: true): Promise<void>;
   createRequestKey?: () => string;
   logError?: (message: string) => void;
   publishPending(threadId: WorkbenchThreadId, questionnaire: WorkbenchQuestionnaire): Promise<void>;
@@ -186,7 +187,7 @@ export default class WorkbenchQuestionnaireController {
     if (!pending || !this.canDeliver(input.threadId, input.requestKey)) return null;
     pending.status = "responding";
     try {
-      await this.options.clearPending(input.threadId, input.requestKey);
+      await this.options.clearPending(input.threadId, input.requestKey, true);
     } catch (error) {
       if (pending.cancelReason !== null) {
         this.pendingByThreadId.delete(input.threadId);
@@ -226,7 +227,13 @@ export default class WorkbenchQuestionnaireController {
     return this.finishDelivery(pending, input.response);
   }
 
-  private finishDelivery(pending: PendingQuestionnaire, response: WorkbenchUserInputResponse) {
+  private async finishDelivery(pending: PendingQuestionnaire, response: WorkbenchUserInputResponse) {
+    try {
+      await this.options.beforeAnswer?.(pending.threadId, pending.signal);
+    } catch {
+      // The answer already owns settlement. Context failure must not ask the user to send it twice.
+      this.options.logError?.("Questionnaire context preparation failed; the accepted answer will still settle.");
+    }
     this.pendingByThreadId.delete(pending.threadId);
     pending.stopAbort?.();
     const cancellation = pending.cancelReason;

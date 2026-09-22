@@ -5,7 +5,6 @@
  * - DaemonCodexAppServerRuntime: persistent Codex app-server registration.
  * - DaemonBrowseExecution: warm Browse execution registration.
  * - DaemonDatabaseRegistration: mandatory SQLite lifecycle and typed statement registration.
- * - WorkbenchCodexSandboxNetworkController: server-owned Codex sandbox network settings.
  * - DaemonTranscriptRegistration: SQLite transcript recording and recovery registration.
  * - DaemonRuntimeObjects: centralized live object registry contract populated by reloadable nodes.
  */
@@ -180,6 +179,7 @@ export interface DaemonTranscriptRegistration {
 
 
 export interface DaemonRuntimeObjects {
+  agentContext: import("./WorkbenchAgentContextController").default;
   daemonSleep: WorkbenchDaemonSleepController;
   transcriptReader: import("./WorkbenchTranscriptReader").default;
   transcriptReconciliation: import("./WorkbenchTranscriptReconciliationController").default;

@@ -16,6 +16,7 @@ import { createThreadStateTestDatabase } from "./workbench-thread-state-test-dat
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
+import WorkbenchAgentContextController from "./WorkbenchAgentContextController";
 
 function deferred() {
   let resolve!: () => void;
@@ -171,11 +172,24 @@ test("managed steering interrupts only the mapped WB thread wait before returnin
     status: { type: "active", activeFlags: [] }, source: "appServer", turns: [],
   };
   const registrations = {
+    agentContext: new WorkbenchAgentContextController({
+      sources: [{
+        id: "background",
+        collect: async (target, trigger) => {
+          assert.equal(target.threadId, identity.threadId);
+          assert.equal(trigger, "steer");
+          return [{ text: "background event" }];
+        },
+      }],
+      inject: async () => assert.fail("collection must use the bridge's direct admission transport"),
+      warn: message => assert.fail(message),
+    }),
     codexAppServer: {
       appServer: { send(request: JsonRpcRequest) {
         const result = request.method === "thread/read" ? { thread }
           : request.method === "thread/turns/list" ? { data: [turn], nextCursor: null }
-            : request.method === "turn/steer" ? { turnId: turn.id } : null;
+            : request.method === "turn/steer" ? { turnId: turn.id }
+              : request.method === "thread/inject_items" ? {} : null;
         assert.ok(result, `Unexpected native operation: ${request.method}`);
         assert.equal(wait.signal.aborted, false);
         queueMicrotask(() => { void bridge.handleUpstreamMessage({ id: request.id ?? null, result }); });

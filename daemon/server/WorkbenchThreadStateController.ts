@@ -174,6 +174,7 @@ export interface WorkbenchThreadStateControllerOptions {
   getReloadDirt?: () => WorkbenchReloadDirtSnapshot;
   hasLiveGitArcClaims: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<boolean>;
   log?: (message: string) => void;
+  publishAgentContext?: (harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, text: string) => Promise<void>;
   now?: () => number;
   projectState: {
     getCurrentUpdate: (projectId: ProjectId) => WorkbenchProjectStateUpdate | null;
@@ -214,7 +215,7 @@ export interface WorkbenchThreadClaimContext {
 
 export type WorkbenchObservedLifecycleEvent =
   | Exclude<WorkbenchLifecycleEvent, { kind: "inputResolved" | "pendingInput" }>
-  | { kind: "inputResolved"; requestKey: string }
+  | { kind: "inputResolved"; requestKey: string; answered?: true }
   | { kind: "pendingInput"; questionnaire: WorkbenchDurableQuestionnaire | null; requestKey: string; turnId: WorkbenchTurnId | null };
 
 type ProjectState = WorkbenchProjectThreadState;
@@ -888,9 +889,13 @@ export default class WorkbenchThreadStateController {
       }
       const existing = state.entries.get(key);
       if (!existing || existing.entryKind === "draft") return null;
+      const validatedEvent = event.kind === "inputResolved" && event.answered && (
+        existing.entryKind !== "thread"
+        || existing.pendingQuestionnaire?.requestKey !== event.requestKey
+      ) ? { ...event, answered: undefined } : event;
       const ownedEvent = existing.entryKind === "subagent" && event.kind === "turnCompleted" && event.status === "completed"
         ? { kind: "agentStatus" as const, status: "completed" as const, turnId: event.turnId }
-        : event;
+        : validatedEvent;
       const reducedLifecycle = reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
       const heldQuestionnaire = this.heldQuestionnaire(existing, questionnaireMutation);
       const retainedQuestionnaire = existing.entryKind === "thread"
@@ -971,10 +976,26 @@ export default class WorkbenchThreadStateController {
         ...(promotedDraftId ? [getThreadDisplayDraftKey(promotedDraftId)] : []),
       ], { layout: Boolean(promotedDraftId) });
       this.publish(projectId, state, parsedNext, beforePublication);
+      if (ownedEvent.kind === "acceptedIntent" || ownedEvent.kind === "userInputDelivered"
+        || (ownedEvent.kind === "inputResolved" && ownedEvent.answered)) {
+        await this.publishWorkingTransition(existing, parsedNext, ownedEvent.kind === "inputResolved");
+      }
       return parsedNext;
     });
     await this.reevaluateDependentSnoozes(projectId, key);
     return result;
+  }
+
+  private async publishWorkingTransition(before: WorkbenchThreadStateEntry, after: WorkbenchThreadStateEntry, answered = false) {
+    if (before.entryKind !== "thread" || after.entryKind !== "thread" || after.lifecycle.kind !== "working") return;
+    const previous = before.lifecycle;
+    if (previous.kind !== "completed" && !(previous.kind === "needsAttention"
+      && (previous.reason === "agentBlocked" || (answered && previous.reason === "pendingInput")))) return;
+    try {
+      await this.options.publishAgentContext?.(after.identity.harness, after.identity.threadId, '<wb:thread-status value="working" />');
+    } catch {
+      this.options.log?.("Working status was saved, but agent context admission failed.");
+    }
   }
 
   private heldQuestionnaire(
@@ -1065,12 +1086,12 @@ export default class WorkbenchThreadStateController {
     return next;
   }
 
-  async clearPendingQuestionnaire(projectId: ProjectId, threadId: WorkbenchThreadId, requestKey: string) {
+  async clearPendingQuestionnaire(projectId: ProjectId, threadId: WorkbenchThreadId, requestKey: string, answered?: true) {
     projectId = this.canonicalProjectId(projectId);
     const entry = await this.getCanonicalThreadEntry(projectId, threadId);
     if (!entry || entry.entryKind === "draft") throw new Error("The questionnaire thread has no stored thread state.");
     return this.applyLifecycle(projectId, entry.identity.harness, threadId,
-      { kind: "inputResolved", requestKey }, undefined, { kind: "clear", requestKey });
+      { kind: "inputResolved", requestKey, ...(answered ? { answered } : {}) }, undefined, { kind: "clear", requestKey });
   }
 
   async resolvePendingQuestionnaire<TDelivery>(
@@ -1151,6 +1172,7 @@ export default class WorkbenchThreadStateController {
         state.entries.set(key, next);
         await this.persist(input.projectId, state, [key], { previousEntries });
         this.publish(input.projectId, state, next);
+        await this.publishWorkingTransition(current, next, true);
         return { delivery: accepted.delivery, historyEntry };
       });
     });
@@ -1180,8 +1202,11 @@ export default class WorkbenchThreadStateController {
         const turnId = event.turnId ?? getWorkbenchLifecycleTurnId(entry.lifecycle);
         exactEvent = turnId ? { kind: "pendingInput", requestKey: event.requestKey, turnId } : null;
       } else if (event.kind === "inputResolved") {
+        const pending = entry.pendingQuestionnaire?.requestKey === event.requestKey ? entry.pendingQuestionnaire : null;
         exactEvent = entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput" && entry.lifecycle.requestKey === event.requestKey
-          ? { kind: "inputResolved", requestKey: event.requestKey, turnId: entry.lifecycle.turnId }
+          ? { ...event, turnId: entry.lifecycle.turnId }
+          : event.answered && pending && entry.entryKind === "thread"
+          ? { ...event, ...(pending.turnId ? { turnId: pending.turnId } : {}) }
           : null;
       }
       const questionnaireMutation = event.kind === "pendingInput" && event.questionnaire

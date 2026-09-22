@@ -30,6 +30,7 @@ import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import VoiceSettingsStore from "./voice/VoiceSettingsStore";
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import WorkbenchAgentContextController from "./WorkbenchAgentContextController";
 import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCoreFeature";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
@@ -95,6 +96,14 @@ function createWorkbenchCoreFeature(
   let threadState: WorkbenchThreadStateFeature | null = null;
   let stats: WorkbenchStatsController | null = null;
   const providers = new WorkbenchProviderDispatcher(run);
+  const agentContext = new WorkbenchAgentContextController({
+    sources: [],
+    inject: async (target, text, signal) => {
+      if (!lease.isCurrent()) throw new Error("Agent context generation has retired.");
+      return await providers.get(target.harness).context?.inject({ threadId: target.threadId, text }, signal) ?? "unsupported";
+    },
+    warn: message => { console.warn("[agent-context]", message); },
+  });
   const requireThreadState = () => {
     if (!threadState) throw new Error("Thread state is not ready for subagent lifecycle projection.");
     return threadState;
@@ -219,6 +228,7 @@ function createWorkbenchCoreFeature(
     },
   });
   threadState = new WorkbenchThreadStateFeature({
+    agentContext,
     providers,
     identities: { threads: threadIdentity, items: transcriptIdentity },
     readComposerProfiles: () => profileStore.read(),
@@ -236,6 +246,11 @@ function createWorkbenchCoreFeature(
     transitions: worktreeGitTransitions,
   });
   const questionnaires = new WorkbenchQuestionnaireController({
+    beforeAnswer: async (threadId, signal) => {
+      const identity = await threadIdentity.resolve({ threadId });
+      const harness = installedProviderKeys.find(key => key === identity?.bindings[0]?.harness);
+      if (harness) await agentContext.collect({ harness, threadId }, "answer", signal);
+    },
     ...createWorkbenchQuestionnaireStatePorts({ threads: threadIdentity, items: transcriptIdentity }, threadState.controller, async cwd => {
       const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Questionnaire" });
       return ProjectIdSchema.parse(resolved.project.id);
@@ -360,6 +375,7 @@ function createWorkbenchCoreFeature(
     },
   });
   const registrations: Pick<DaemonRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
+    agentContext,
     voiceSettings,
     browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions, transcriptReader, transcriptReconciliation,
     providerObservations: {
@@ -454,6 +470,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   safeAll: true,
   scope: "server:core",
   sources: [
+    "daemon/server/WorkbenchAgentContextController.ts",
+    "daemon/server/WorkbenchProvider.ts",
+    "daemon/server/WorkbenchProviderHandle.ts",
+    "shared/workbench/provider/provider-context.ts",
     "daemon/server/WorkbenchCoreNode.ts",
     "daemon/server/WorkbenchWorkingTreeController.ts",
     "daemon/server/WorkbenchDaemonRequestController.ts",

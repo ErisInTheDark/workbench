@@ -12,6 +12,12 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     private readonly run: WorkbenchProviderOperation,
   ) {}
 
+  readonly context: NonNullable<WorkbenchProvider["context"]> = {
+    inject: (input, signal) => this.run(providerRegistrations[this.key], provider => (
+      provider.context?.inject(input, signal) ?? Promise.resolve("unsupported" as const)
+    ), `${this.key}: context.inject`),
+  };
+
   readonly configuration: WorkbenchProvider["configuration"] & {
     sandboxNetwork: NonNullable<WorkbenchProvider["configuration"]["sandboxNetwork"]>;
   } = {

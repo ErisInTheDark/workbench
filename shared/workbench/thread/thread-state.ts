@@ -948,7 +948,7 @@ export type WorkbenchLifecycleEvent =
   | { kind: "acceptedIntent"; turnId: WorkbenchTurnId }
   | { kind: "userInputDelivered"; turnId: WorkbenchTurnId }
   | { kind: "pendingInput"; requestKey: string; turnId?: WorkbenchTurnId }
-  | { kind: "inputResolved"; requestKey: string; turnId?: WorkbenchTurnId }
+  | { kind: "inputResolved"; requestKey: string; turnId?: WorkbenchTurnId; answered?: true }
   | { kind: "agentStatus"; status: "completed" | "blocked"; turnId?: WorkbenchTurnId }
   | { kind: "turnCompleted"; status: "completed" | "interrupted" | "failed"; turnId: WorkbenchTurnId }
   | { kind: "recoveryFailed" }
@@ -1002,6 +1002,12 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
       if (event.turnId && currentTurnId && currentTurnId !== event.turnId) return current!;
       return { kind: "needsAttention", reason: "pendingInput", requestKey: event.requestKey, settled: false, ...(event.turnId ? { turnId: event.turnId } : {}) };
     case "inputResolved":
+      if (event.answered && (
+        current?.kind === "completed"
+        || (current?.kind === "needsAttention" && current.reason === "agentBlocked")
+      ) && (!event.turnId || !currentTurnId || event.turnId === currentTurnId)) {
+        return { agent: { agentStatus: "working", ...(currentTurnId ? { turnId: currentTurnId } : {}) }, kind: "working", reason: "acceptedIntent", settled: false };
+      }
       if (current?.kind !== "needsAttention" || current.reason !== "pendingInput" || current.requestKey !== event.requestKey
         || (event.turnId && current.turnId !== event.turnId)) return current!;
       return { agent: { agentStatus: "working", ...(currentTurnId ? { turnId: currentTurnId } : {}) }, kind: "working", reason: "acceptedIntent", settled: false };
