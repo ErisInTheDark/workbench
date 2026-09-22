@@ -54,8 +54,8 @@ Run `wb test` and `pnpm typecheck` from the repository root.
 
 `pnpm typecheck`
 
-`wb test -- [<file>...]` tests only the specified files
-`wb test` tests full suite filtered by claims
+`wb test` tests full suite filtered by claims (run this first!)
+`wb test -- [<file>...]` tests only the specified files (useful for targeted retests)
 
 note: the following two scenario tests take a LONG time, and should be used for FINAL validation; do not set a timeout!
 `pnpm test:lifecycle` runs a clone of the full app, testing schema migration; do not use if you have not changed the db!
