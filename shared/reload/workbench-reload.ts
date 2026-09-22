@@ -1,9 +1,23 @@
 /*
  * Exports:
- * - WORKBENCH_RELOAD_SCOPE_PATTERN/WorkbenchReloadScope/WorkbenchReloadScopeDescriptor: shared reload node identity and catalog metadata. Keywords: reload, scope, catalog.
- * - WorkbenchReloadDirtScope/WorkbenchReloadDirtSnapshot: process-local source dirt projection. Keywords: reload, dirt, browser.
- * - WorkbenchReloadResponse: admitted and completed reload batch state. Keywords: reload, response, lifecycle.
+ * - WORKBENCH_RELOAD_SCOPE_PATTERN/WorkbenchReloadScope/WorkbenchReloadScopeDescriptor: shared reload node identity and catalog metadata.
+ * - WorkbenchReloadDirtScope/WorkbenchReloadDirtSnapshot: process-local source dirt projection.
+ * - WorkbenchReloadDirtSnapshotSchema: validate reload ownership and pending-scope diagnostics.
+ * - WorkbenchReloadResponse: admitted and completed reload batch state.
  */
+import { z } from "zod";
+
+export const WorkbenchReloadDirtSnapshotSchema = z.object({
+  dirtyScopes: z.array(z.object({
+    dependantScopes: z.array(z.string()).optional(),
+    description: z.string(),
+    destructive: z.boolean(),
+    scope: z.string(),
+  }).strict()),
+  error: z.string().max(500).nullable(),
+  pendingScopes: z.array(z.string()),
+}).strict();
+
 export const WORKBENCH_RELOAD_SCOPE_PATTERN = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u;
 export type WorkbenchReloadScope = string;
 

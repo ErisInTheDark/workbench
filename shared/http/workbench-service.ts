@@ -12,7 +12,7 @@ import {
 } from "./workbench-network.ts";
 import { WorkbenchDaemonDiscoverySchema, WorkbenchDaemonIdentitySchema } from "./workbench-daemon-discovery.ts";
 import { WorkbenchDaemonEndpointSchema } from "./workbench-daemon-endpoint.ts";
-import { WorkbenchReloadDirtSnapshotSchema } from "../workbench/thread/thread-state.ts";
+import { WorkbenchReloadDirtSnapshotSchema } from "../reload/workbench-reload.ts";
 
 const localOrigin = z.url().max(2048).refine(value => {
   const url = new URL(value);

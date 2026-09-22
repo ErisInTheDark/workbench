@@ -48,6 +48,7 @@
  */
 
 import { z } from "zod";
+import { WorkbenchReloadDirtSnapshotSchema } from "../../reload/workbench-reload.ts";
 import { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
 import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchTurnId } from "../identity.ts";
 
@@ -66,6 +67,7 @@ import {
 } from "./thread-display-order.ts";
 
 export { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
+export { WorkbenchReloadDirtSnapshotSchema } from "../../reload/workbench-reload.ts";
 export type WorkbenchHarnessId = z.infer<typeof WorkbenchHarnessSchema>;
 export const WorkbenchThreadPrioritySchema = z.enum(["pinned", "main", "snoozed"]);
 export type WorkbenchThreadPriority = z.infer<typeof WorkbenchThreadPrioritySchema>;
@@ -443,17 +445,6 @@ const SubagentEntrySchema = SidebarCommonSchema.extend({
 export const WorkbenchThreadSidebarEntrySchema = z.discriminatedUnion("entryKind", [DraftEntrySchema, TopLevelEntrySchema, SubagentEntrySchema]);
 export type WorkbenchThreadSidebarEntry = z.infer<typeof WorkbenchThreadSidebarEntrySchema>;
 export type WorkbenchTopLevelThreadSidebarEntry = z.infer<typeof TopLevelEntrySchema>;
-
-export const WorkbenchReloadDirtSnapshotSchema = z.object({
-  dirtyScopes: z.array(z.object({
-    dependantScopes: z.array(z.string()).optional(),
-    description: z.string(),
-    destructive: z.boolean(),
-    scope: z.string(),
-  }).strict()),
-  error: z.string().max(500).nullable(),
-  pendingScopes: z.array(z.string()),
-}).strict();
 
 export const WorkbenchThreadSidebarSnapshotSchema = z.object({
   displayOrder: WorkbenchThreadDisplayOrderSchema.optional(),
