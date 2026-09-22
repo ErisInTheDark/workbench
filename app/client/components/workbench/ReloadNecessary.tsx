@@ -10,8 +10,8 @@ import type { WorkbenchAppRuntimeStore, WorkbenchDaemonRuntimeStore, WorkbenchRe
 import ChevronIcon from "./ChevronIcon";
 import PrimaryButton from "./PrimaryButton";
 import {
-  getReloadAllHoldMs,
   getAffectedReloadScopes,
+  getReloadAllHoldMs,
   getReloadScopeHoldMs,
   mergeReloadDirt,
   partitionReloadScopes,
@@ -86,7 +86,7 @@ export default function ReloadNecessary ({
           className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 ${showReloadBody || tabOutOfDate ? "border-b border-[color-mix(in_srgb,var(--text)_12%,transparent)] pb-2" : ""
             }`}
         >
-          {hasReloadDirt ? (
+          {hasReloadDirt && (
             <button
               aria-expanded={!collapsed}
               aria-label={collapsed ? "Expand reload controls" : "Collapse reload controls"}
@@ -97,7 +97,7 @@ export default function ReloadNecessary ({
             >
               <ChevronIcon className={`transition-transform ${collapsed ? "rotate-180" : ""}`} size={16} />
             </button>
-          ) : <span aria-hidden="true" className="size-8" />}
+          )}
           <p className="m-0 min-w-0 truncate font-semibold text-text">
             Reload necessary
           </p>
@@ -123,11 +123,10 @@ export default function ReloadNecessary ({
                 <div className="flex items-center justify-between gap-2" key={scope.scope}>
                   <p className="m-0 min-w-0 truncate text-[0.8rem] font-medium text-text">{scope.scope}</p>
                   <PrimaryButton
-                    className={`!shrink-0 !px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px] ${
-                      affectedScopes.has(scope.scope)
+                    className={`!shrink-0 !px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px] ${affectedScopes.has(scope.scope)
                         ? "[&>span:first-of-type]:!ring-2 [&>span:first-of-type]:!ring-accent"
                         : ""
-                    }`}
+                      }`}
                     disabled={allBusy}
                     holdToConfirmMs={getReloadScopeHoldMs(scope)}
                     onClick={() => void reload([scope])}
