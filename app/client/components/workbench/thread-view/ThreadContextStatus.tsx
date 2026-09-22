@@ -7,6 +7,7 @@
 import { useState } from "react";
 
 import type { ThreadPayload } from "workbench-shared/types";
+import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchProgressWheel from "../WorkbenchProgressWheel";
 import { CompactIcon } from "../workbench-icons";
 
@@ -41,10 +42,14 @@ function isThreadActive (thread: ThreadPayload) {
 }
 
 export default function ThreadContextStatus ({
+  lifecycle,
   onCompactThread,
+  snoozed = false,
   thread,
 }: {
+  lifecycle?: WorkbenchThreadLifecycle;
   onCompactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  snoozed?: boolean;
   thread: ThreadPayload;
 }) {
   const [isCompacting, setIsCompacting] = useState(false);
@@ -65,7 +70,9 @@ export default function ThreadContextStatus ({
     remainingTokens,
   });
   const canCompact = !thread.isDraft;
-  const active = isThreadActive(thread);
+  const inactiveByWorkbenchState = lifecycle?.kind === "stopped"
+    || (snoozed && lifecycle?.kind === "needsAttention" && lifecycle.reason === "pendingInput");
+  const active = isThreadActive(thread) && !inactiveByWorkbenchState;
   const compactDisabled = isCompacting || active;
   const compactTitle = active
     ? "Compact is unavailable while the thread is active"

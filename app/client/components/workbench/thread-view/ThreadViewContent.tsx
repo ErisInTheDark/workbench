@@ -384,6 +384,8 @@ export default memo(function ThreadViewContent ({
   }), [entryMotionController, threadScrollViewport, workedRunController]);
   const activeProvider = activeThread?.harness ?? thread.harness;
   const activeSidebarEntry = activeThreadController.state.entry;
+  const activeThreadSnoozed = activeSidebarEntry?.entryKind === "thread"
+    && activeSidebarEntry.metadata.snoozed;
   const activeGitArcSelection = useMemo<{
     gitArc: WorkbenchGitArcLifecycleState | null;
     gitArcPlan: WorkbenchGitArcPlanState | null;
@@ -938,7 +940,9 @@ export default memo(function ThreadViewContent ({
       rateLimits={rateLimits}
       trailingContent={(
         <ThreadContextStatus
+          lifecycle={activeSidebarEntry?.lifecycle}
           onCompactThread={handleCompactThread}
+          snoozed={activeThreadSnoozed}
           thread={activeThread}
         />
       )}
@@ -980,7 +984,7 @@ export default memo(function ThreadViewContent ({
           harness={resolvedActiveThread?.harness ?? activeThread.harness}
           leadingContent={draftLeadingContent}
           rateLimits={rateLimits}
-          trailingContent={<ThreadContextStatus onCompactThread={handleCompactThread} thread={activeThread} />}
+          trailingContent={<ThreadContextStatus lifecycle={activeSidebarEntry?.lifecycle} onCompactThread={handleCompactThread} snoozed={activeThreadSnoozed} thread={activeThread} />}
         />
       ) : null}
     </ThreadComposer>
