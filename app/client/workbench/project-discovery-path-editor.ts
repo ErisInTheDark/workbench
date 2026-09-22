@@ -3,6 +3,7 @@
  * - ProjectDiscoveryPathRow: stable identity and text for one draft row.
  * - createProjectDiscoveryRows: initialise ordered paths with one trailing blank.
  * - editProjectDiscoveryRow: keep one trailing blank as the last row fills.
+ * - removeProjectDiscoveryRow: delete one row while retaining an editable trailing blank.
  * - blurProjectDiscoveryRow: remove empty non-final rows.
  * - populatedProjectDiscoveryRows: pair persisted values with stable row identities.
  */
@@ -21,6 +22,13 @@ export function editProjectDiscoveryRow(rows: readonly ProjectDiscoveryPathRow[]
     next.push({ id: Math.max(-1, ...next.map(row => row.id)) + 1, value: "" });
   }
   return next;
+}
+
+export function removeProjectDiscoveryRow(rows: readonly ProjectDiscoveryPathRow[], id: number): ProjectDiscoveryPathRow[] {
+  const remaining = rows.filter(row => row.id !== id);
+  return remaining.some(row => !row.value.trim())
+    ? remaining
+    : [...remaining, { id: Math.max(-1, ...rows.map(row => row.id)) + 1, value: "" }];
 }
 
 export function blurProjectDiscoveryRow(rows: readonly ProjectDiscoveryPathRow[]): ProjectDiscoveryPathRow[] {

@@ -11,7 +11,9 @@ import {
   createProjectDiscoveryRows,
   editProjectDiscoveryRow,
   populatedProjectDiscoveryRows,
+  removeProjectDiscoveryRow,
 } from "../../workbench/project-discovery-path-editor";
+import InputList from "./InputList";
 import { useWorkbenchDaemonClient } from "./WorkbenchDaemonClientContext";
 
 const ISSUE_LABELS: Record<Extract<ProjectDiscoverySettingsResult, { accepted: false }>["issues"][number]["reason"], string> = {
@@ -21,11 +23,11 @@ const ISSUE_LABELS: Record<Extract<ProjectDiscoverySettingsResult, { accepted: f
   duplicate: "This folder is already listed.",
 };
 
-function looksAbsolute(value: string) {
+function looksAbsolute (value: string) {
   return /^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(value);
 }
 
-export default function WorkbenchProjectDiscoverySettings({ onSaved }: { onSaved: () => Promise<void> }) {
+export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSaved: () => Promise<void> }) {
   const daemon = useWorkbenchDaemonClient();
   const [savedPaths, setSavedPaths] = useState<string[]>([]);
   const [rows, setRows] = useState(() => createProjectDiscoveryRows([]));
@@ -77,7 +79,7 @@ export default function WorkbenchProjectDiscoverySettings({ onSaved }: { onSaved
   const blocked = loading || saving || !available || !dirty || Object.keys(localIssues).length > 0
     || filled.some(row => Boolean(serverIssues[row.id]));
 
-  async function save() {
+  async function save () {
     if (blocked) return;
     setSaving(true);
     setError("");
@@ -110,41 +112,38 @@ export default function WorkbenchProjectDiscoverySettings({ onSaved }: { onSaved
     <section className="space-y-3 py-1">
       <div>
         <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">Git roots</h3>
-        <p className="mt-1 text-[0.8rem] leading-5 text-fg/muted">Folders this daemon scans for Git repositories and workspaces. Leave every box empty to scan none.</p>
+        <p className="mt-1 text-[0.8rem] leading-5 text-fg/muted">Folders scanned for git repositories and workspaces.</p>
       </div>
-      {rows.map((row, index) => {
-        const issue = localIssues[row.id] ?? serverIssues[row.id];
-        return (
-          <div key={row.id} className="space-y-1">
-            <input
-              id={`git-root-${row.id}`}
-              aria-label={`Git root ${index + 1}`}
-              aria-invalid={Boolean(issue)}
-              aria-describedby={issue ? `git-root-${row.id}-issue` : undefined}
-              autoComplete="off"
-              className={`w-full min-w-0 rounded-lg border bg-transparent px-3 py-2 text-[0.85rem] text-text outline-none focus-visible:ring-2 ${
-                issue ? "border-danger focus-visible:ring-danger" : "border-transparent focus-visible:ring-accent-soft"
-              }`}
-              disabled={loading || saving || !available}
-              onBlur={() => setRows(current => blurProjectDiscoveryRow(current))}
-              onChange={event => {
-                setRows(current => editProjectDiscoveryRow(current, row.id, event.target.value));
-                setServerIssues(current => {
-                  const next = { ...current };
-                  delete next[row.id];
-                  return next;
-                });
-                setStatus("");
-              }}
-              placeholder="Absolute folder path"
-              spellCheck={false}
-              type="text"
-              value={row.value}
-            />
-            {issue ? <p id={`git-root-${row.id}-issue`} role="alert" className="m-0 text-[0.76rem] text-danger">{issue}</p> : null}
-          </div>
-        );
-      })}
+      <InputList
+        disabled={loading || saving || !available}
+        idPrefix="git-root"
+        onBlur={() => setRows(current => blurProjectDiscoveryRow(current))}
+        onChange={(id, value) => {
+          setRows(current => editProjectDiscoveryRow(current, id, value));
+          setServerIssues(current => {
+            const next = { ...current };
+            delete next[id];
+            return next;
+          });
+          setStatus("");
+        }}
+        onRemove={id => {
+          setRows(current => removeProjectDiscoveryRow(current, id));
+          setServerIssues(current => {
+            const next = { ...current };
+            delete next[id];
+            return next;
+          });
+          setStatus("");
+        }}
+        placeholder="Absolute folder path"
+        rows={rows.map((row, index) => ({
+          id: row.id,
+          label: `Git root ${index + 1}`,
+          value: row.value,
+          error: localIssues[row.id] ?? serverIssues[row.id],
+        }))}
+      />
       <div className="flex flex-wrap items-center gap-2">
         <button className="rounded-lg px-3 py-1.5 text-[0.83rem] font-medium text-accent hover:bg-accent-soft disabled:opacity-40" disabled={blocked} onClick={() => { void save(); }} type="button">Save Git roots</button>
         <button
