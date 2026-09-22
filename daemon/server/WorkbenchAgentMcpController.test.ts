@@ -1,4 +1,4 @@
-/* No exports. Tests cover typed MCP inventory, trusted identity, dispatch, waits, and cancellation. */
+/* Exports: none. Tests cover typed MCP inventory, trusted identity, dispatch, waits, and cancellation. */
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -530,12 +530,12 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
 
     const instructionTokens = await projectClient.callTool({
       _meta: { threadId: "thread-1" },
-      arguments: { model: "gpt-5-test" },
+      arguments: { model: "gpt-5-test", toc: true },
       name: "tokens_instructions",
     });
     assert.equal(instructionTokens.isError, false);
     assert.deepEqual(executed.at(-1), {
-      body: { callerThreadId: "thread-1", cwd: "C:/authoritative", kind: "instructions", model: "gpt-5-test" },
+      body: { callerThreadId: "thread-1", cwd: "C:/authoritative", kind: "instructions", model: "gpt-5-test", toc: true },
       method: "POST",
       path: "/internal/tokens",
       responseKind: "native",
@@ -543,12 +543,12 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
 
     const projectTokens = await client.callTool({
       _meta: { threadId: "thread-1" },
-      arguments: { model: "gpt-5-test" },
+      arguments: { model: "gpt-5-test", toc: true },
       name: "tokens_project",
     });
     assert.equal(projectTokens.isError, false);
     assert.deepEqual(executed.at(-1), {
-      body: { cwd: "C:/authoritative", kind: "projectInstructions", model: "gpt-5-test" },
+      body: { cwd: "C:/authoritative", kind: "projectInstructions", model: "gpt-5-test", toc: true },
       method: "POST",
       path: "/internal/tokens",
       responseKind: "native",

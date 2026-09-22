@@ -1,8 +1,7 @@
 /*
- * Keywords: tokens, instructions, project, MCP, CLI.
  * Exports:
- * - WorkbenchTokenCountExecutionRequestSchema: validate direct text, Workbench-source, and cwd-owned project instruction token requests. Keywords: tokens, instructions, project, cwd, thread.
- * - WORKBENCH_TOKEN_COMMANDS: expose exact local GPT-5 text and instruction counting through CLI and typed MCP definitions. Keywords: tokens, GPT-5, project, MCP, CLI.
+ * - WorkbenchTokenCountExecutionRequestSchema: validate text and source-aware instruction token requests.
+ * - WORKBENCH_TOKEN_COMMANDS: expose local GPT-5 token counting through CLI and typed MCP definitions.
  */
 import { z } from "zod";
 
@@ -16,13 +15,14 @@ const model = z.string().trim().min(1).max(200)
   .default(DEFAULT_MODEL)
   .describe("GPT-5-family model whose o200k_base tokenizer must count the text.");
 const text = z.string().min(1).max(2 * 1024 * 1024).describe("Exact text to count.");
+const toc = z.boolean().optional().describe("Include source-file and Markdown heading token counts.");
 const cwd = z.string().trim().min(1);
 const callerThreadId = z.string().trim().min(1).max(4096).nullable();
 
 export const WorkbenchTokenCountExecutionRequestSchema = z.discriminatedUnion("kind", [
   z.object({ cwd, kind: z.literal("text"), model, text }).strict(),
-  z.object({ callerThreadId, cwd, kind: z.literal("instructions"), model }).strict(),
-  z.object({ cwd, kind: z.literal("projectInstructions"), model }).strict(),
+  z.object({ callerThreadId, cwd, kind: z.literal("instructions"), model, toc }).strict(),
+  z.object({ cwd, kind: z.literal("projectInstructions"), model, toc }).strict(),
 ]);
 
 const countText = defineWorkbenchAgentCommand({
@@ -50,14 +50,23 @@ const countInstructions = defineWorkbenchAgentCommand({
   managedThreadRootOnly: true,
   mcpCodeModeEligible: true,
   words: ["tokens", "instructions"],
-  usage: "wb tokens instructions [--model <model>]",
-  inputSchema: z.object({ model }).strict(),
+  usage: "wb tokens instructions [--toc] [--model <model>]",
+  inputSchema: z.object({ model, toc }).strict(),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--model"] });
-    return { model: flags.optional("--model") ?? DEFAULT_MODEL };
+    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--toc"], values: ["--model"] });
+    return {
+      model: flags.optional("--model") ?? DEFAULT_MODEL,
+      ...(flags.has("--toc") ? { toc: true } : {}),
+    };
   },
   buildRequest(input, { callerThreadId, cwd }) {
-    return postWorkbenchAgentCommand("/internal/tokens", { callerThreadId, cwd, kind: "instructions", model: input.model });
+    return postWorkbenchAgentCommand("/internal/tokens", {
+      callerThreadId,
+      cwd,
+      kind: "instructions",
+      model: input.model,
+      ...(input.toc ? { toc: true } : {}),
+    });
   },
 });
 
@@ -67,14 +76,22 @@ const countProjectInstructions = defineWorkbenchAgentCommand({
   helpGroups: ["tokens"],
   mcpCodeModeEligible: true,
   words: ["tokens", "project"],
-  usage: "wb tokens project [--model <model>]",
-  inputSchema: z.object({ model }).strict(),
+  usage: "wb tokens project [--toc] [--model <model>]",
+  inputSchema: z.object({ model, toc }).strict(),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--model"] });
-    return { model: flags.optional("--model") ?? DEFAULT_MODEL };
+    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--toc"], values: ["--model"] });
+    return {
+      model: flags.optional("--model") ?? DEFAULT_MODEL,
+      ...(flags.has("--toc") ? { toc: true } : {}),
+    };
   },
   buildRequest(input, { cwd }) {
-    return postWorkbenchAgentCommand("/internal/tokens", { cwd, kind: "projectInstructions", model: input.model });
+    return postWorkbenchAgentCommand("/internal/tokens", {
+      cwd,
+      kind: "projectInstructions",
+      model: input.model,
+      ...(input.toc ? { toc: true } : {}),
+    });
   },
 });
 

@@ -1,4 +1,4 @@
-/* No production exports. Tests protect project AGENTS ownership, ordering, overrides, imports, freshness, and root bounds. */
+/* Exports: none. Tests protect project AGENTS ownership, ordering, provenance, overrides, imports, freshness, and root bounds. */
 
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -7,7 +7,10 @@ import path from "node:path";
 import { test } from "node:test";
 
 import type { WorkbenchProjectRoot } from "workbench-shared/types";
-import { buildProjectInstructionContent } from "./project-instruction-files";
+import {
+  buildProjectInstructionContent,
+  buildProjectInstructionContentWithSources,
+} from "./project-instruction-files";
 
 async function write(rootPath: string, relativePath: string, content: string) {
   const filePath = path.join(rootPath, relativePath);
@@ -48,10 +51,11 @@ test("resolves the owning root-to-cwd chain with active imports and no source na
       write(rootPath, "packages/app/AGENTS.md", "app rule"),
     ]);
 
-    assert.equal(buildProjectInstructionContent({
+    const context = {
       cwd,
       roots: [root(rootPath)],
-    }), [
+    };
+    const expected = [
       "root",
       "overridden base",
       "glob a",
@@ -63,7 +67,22 @@ test("resolves the owning root-to-cwd chain with active imports and no source na
       "package override",
       "",
       "app rule",
-    ].join("\n"));
+    ].join("\n");
+    assert.equal(buildProjectInstructionContent(context), expected);
+    const rendered = buildProjectInstructionContentWithSources(context);
+    assert.equal(rendered?.content, expected);
+    assert.deepEqual([
+      ...new Set(rendered?.sources.map(({ absolutePath }) => (
+        path.relative(rootPath, absolutePath).replaceAll("\\", "/")
+      ))),
+    ].sort(), [
+      "AGENTS.md",
+      "packages/AGENTS.override.md",
+      "packages/app/AGENTS.md",
+      "rules/a.md",
+      "rules/b.md",
+      "rules/base.override.md",
+    ]);
   });
 });
 

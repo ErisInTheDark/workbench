@@ -1,12 +1,13 @@
 /*
  * Exports:
- * - default WorkbenchTokenCountController: own local GPT-5 text counting, Workbench source admission, and catalog-owned project AGENTS counting.
+ * - default WorkbenchTokenCountController: own local GPT-5 counting and source-aware Workbench/project instruction reports.
  */
 import path from "node:path";
 
 import {
   buildProjectInstructionTokenCorpus,
   buildWorkbenchInstructionTokenCorpus,
+  type InstructionTokenSource,
 } from "./lib/workbench/commands/instruction-token-corpus";
 import Gpt5TextTokens from "./lib/workbench/commands/gpt-5-text-tokens";
 import { WorkbenchTokenCountExecutionRequestSchema } from "./lib/workbench/commands/token-command-definition";
@@ -36,6 +37,25 @@ function boundedErrorMessage(error: unknown) {
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/gu, "?")
     .trim()
     .slice(0, 1000);
+}
+
+function tokenCountLabel(count: number) {
+  return `${count} token${count === 1 ? "" : "s"}`;
+}
+
+function formatSourceBreakdown(sources: readonly InstructionTokenSource[]) {
+  const lines = [
+    "Source and section counts are independent; heading ranges include nested headings, active sources are listed once even when imports reuse them, and these counts do not sum to the resolved total.",
+  ];
+  for (const source of sources) {
+    lines.push("", `${source.path}: ${tokenCountLabel(Gpt5TextTokens.count(source.content))}`);
+    for (const section of source.sections) {
+      lines.push(
+        `  ${section.startLine}-${section.endLine} ${section.heading ?? "[preamble]"}: ${tokenCountLabel(Gpt5TextTokens.count(section.content))}`,
+      );
+    }
+  }
+  return lines.join("\n");
 }
 
 export default class WorkbenchTokenCountController {
@@ -71,7 +91,10 @@ export default class WorkbenchTokenCountController {
         if (signal.aborted) throw signal.reason;
         const count = Gpt5TextTokens.count(corpus.content);
         const suffix = ` across ${corpus.files.length} instruction file${corpus.files.length === 1 ? "" : "s"}`;
-        return new Response(`${count} tokens${suffix} for ${parsed.data.model}\n`);
+        const summary = `${count} tokens${suffix} for ${parsed.data.model}`;
+        return new Response(parsed.data.toc
+          ? `${summary}\n\n${formatSourceBreakdown(corpus.sources)}\n`
+          : `${summary}\n`);
       } catch (error) {
         if (signal.aborted) throw signal.reason;
         return new Response("Workbench instruction sources could not be read for token counting.\n", { status: 500 });
@@ -96,9 +119,10 @@ export default class WorkbenchTokenCountController {
         roots: [{ rootPath: project.root.root }],
       });
       if (signal.aborted) throw signal.reason;
-      return new Response(
-        `${Gpt5TextTokens.count(corpus.content)} tokens across the resolved project AGENTS chain for ${parsed.data.model}\n`,
-      );
+      const summary = `${Gpt5TextTokens.count(corpus.content)} tokens across the resolved project AGENTS chain for ${parsed.data.model}`;
+      return new Response(parsed.data.toc
+        ? `${summary}\n\n${formatSourceBreakdown(corpus.sources)}\n`
+        : `${summary}\n`);
     } catch (error) {
       if (signal.aborted) throw signal.reason;
       return new Response(

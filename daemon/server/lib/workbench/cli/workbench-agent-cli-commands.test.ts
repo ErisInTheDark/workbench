@@ -287,6 +287,24 @@ test("token commands restrict managed threads without restricting direct users",
       responseKind: "native",
     },
   });
+  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "instructions", "--toc"], threadInside), {
+    kind: "request",
+    request: {
+      body: { callerThreadId: "thread", cwd: "C:/workbench", kind: "instructions", model: "gpt-5.6", toc: true },
+      method: "POST",
+      path: "/internal/tokens",
+      responseKind: "native",
+    },
+  });
+  assert.deepEqual(await parseWorkbenchAgentCliCommand(["tokens", "project", "--toc"], threadInside), {
+    kind: "request",
+    request: {
+      body: { cwd: "C:/workbench", kind: "projectInstructions", model: "gpt-5.6", toc: true },
+      method: "POST",
+      path: "/internal/tokens",
+      responseKind: "native",
+    },
+  });
   const userHelp = await parseWorkbenchAgentCliCommand(["--help"], userOutside);
   const outsideThreadHelp = await parseWorkbenchAgentCliCommand(["--help"], threadOutside);
   const insideThreadHelp = await parseWorkbenchAgentCliCommand(["--help"], threadInside);

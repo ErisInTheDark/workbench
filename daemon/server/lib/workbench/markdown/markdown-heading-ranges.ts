@@ -1,10 +1,21 @@
 /*
  * Exports:
- * - listMarkdownHeadingRangeLines: list hierarchy-aware ATX heading ranges while excluding fenced code and HTML comments. Keywords: markdown, toc, headings, ranges, fences, comments.
+ * - MarkdownHeadingRange/listMarkdownHeadingRanges: locate hierarchy-aware ATX heading source ranges outside fenced code and HTML comments.
+ * - listMarkdownHeadingRangeLines: format heading ranges for the toc command.
  */
+export interface MarkdownHeadingRange {
+  readonly endLine: number;
+  readonly endOffset: number;
+  readonly level: number;
+  readonly source: string;
+  readonly startLine: number;
+  readonly startOffset: number;
+}
+
 interface MarkdownHeading {
   level: number;
   line: number;
+  offset: number;
   source: string;
 }
 
@@ -85,19 +96,27 @@ function isFenceClose(line: string, fence: MarkdownFence) {
   return !!match && match[1][0] === fence.marker && match[1].length >= fence.length;
 }
 
-function parseHeading(line: string, lineNumber: number): MarkdownHeading | null {
+function parseHeading(line: string, lineNumber: number, offset: number): MarkdownHeading | null {
   const match = /^( {0,3})(#+)(?:[ \t]+.*)?$/u.exec(line);
   if (!match) return null;
   return {
     level: match[2].length,
     line: lineNumber,
+    offset,
     source: line.slice(match[1].length).trimEnd(),
   };
 }
 
-export function listMarkdownHeadingRangeLines(markdown: string) {
-  const lines = markdown.replace(/\r\n?/gu, "\n").split("\n");
+export function listMarkdownHeadingRanges(markdown: string): MarkdownHeadingRange[] {
+  const normalizedMarkdown = markdown.replace(/\r\n?/gu, "\n");
+  const lines = normalizedMarkdown.split("\n");
   if (lines.at(-1) === "") lines.pop();
+  const lineOffsets: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    lineOffsets.push(offset);
+    offset += line.length + 1;
+  }
 
   const headings: MarkdownHeading[] = [];
   let fence: MarkdownFence | null = null;
@@ -117,19 +136,33 @@ export function listMarkdownHeadingRangeLines(markdown: string) {
     fence = parseFenceOpen(line);
     if (fence) continue;
 
-    const heading = parseHeading(line, index + 1);
+    const heading = parseHeading(line, index + 1, lineOffsets[index]);
     if (heading) headings.push(heading);
     inHtmlComment = updateHtmlCommentState(line, false);
   }
 
   return headings.map((heading, index) => {
     let endLine = lines.length;
+    let endOffset = normalizedMarkdown.length;
     for (let nextIndex = index + 1; nextIndex < headings.length; nextIndex += 1) {
       if (headings[nextIndex].level <= heading.level) {
         endLine = headings[nextIndex].line - 1;
+        endOffset = headings[nextIndex].offset;
         break;
       }
     }
-    return `${heading.line}-${endLine} ${heading.source}`;
+    return {
+      endLine,
+      endOffset,
+      level: heading.level,
+      source: heading.source,
+      startLine: heading.line,
+      startOffset: heading.offset,
+    };
   });
+}
+
+export function listMarkdownHeadingRangeLines(markdown: string) {
+  return listMarkdownHeadingRanges(markdown)
+    .map(({ endLine, source, startLine }) => `${startLine}-${endLine} ${source}`);
 }

@@ -1,11 +1,11 @@
-/*
- * Exports:
- * - No production exports; tests protect ATX hierarchy ranges and Markdown exclusion boundaries. Keywords: markdown, toc, headings, ranges, fences, comments, test.
- */
+/* Exports: none. Tests protect structured ATX heading ranges and Markdown exclusion boundaries. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { listMarkdownHeadingRangeLines } from "./markdown-heading-ranges";
+import {
+  listMarkdownHeadingRangeLines,
+  listMarkdownHeadingRanges,
+} from "./markdown-heading-ranges";
 
 test("lists hierarchy-aware ranges for ATX headings of any depth", () => {
   const markdown = [
@@ -31,6 +31,21 @@ test("lists hierarchy-aware ranges for ATX headings of any depth", () => {
     "11-11 ########",
     "12-12 ## Next",
   ]);
+  const ranges = listMarkdownHeadingRanges(markdown);
+  assert.deepEqual(ranges.map(({ endLine, level, source, startLine }) => ({
+    endLine, level, source, startLine,
+  })), [
+    { endLine: 11, level: 2, source: "## Parent", startLine: 1 },
+    { endLine: 6, level: 3, source: "### Child", startLine: 3 },
+    { endLine: 6, level: 7, source: "####### Deep", startLine: 5 },
+    { endLine: 11, level: 3, source: "### Sibling", startLine: 7 },
+    { endLine: 11, level: 8, source: "########", startLine: 11 },
+    { endLine: 12, level: 2, source: "## Next", startLine: 12 },
+  ]);
+  assert.equal(
+    markdown.slice(ranges[1].startOffset, ranges[1].endOffset),
+    ["### Child", "child body", "####### Deep", "deep body", ""].join("\n"),
+  );
 });
 
 test("ignores headings inside fenced code and HTML comments", () => {
