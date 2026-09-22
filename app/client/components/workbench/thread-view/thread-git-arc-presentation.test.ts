@@ -75,6 +75,19 @@ function gitArc({
   };
 }
 
+function stashedGitArc(proposals: WorkbenchGitArcLifecycleState["proposals"] = []): WorkbenchGitArcLifecycleState {
+  return {
+    checkpointCommit: "a".repeat(40),
+    claimedPaths: [],
+    intentDescription: "",
+    intentName: "test",
+    phase: "stashed",
+    proposals,
+    stashedPaths: ["src/one.ts"],
+    updatedAt: "2026-09-12T00:00:00.000Z",
+  };
+}
+
 function proposal(proposalId: string, status: GitCheckpointProposal["status"]): GitCheckpointProposal {
   return {
     amendTargetMessage: null,
@@ -96,13 +109,14 @@ function proposal(proposalId: string, status: GitCheckpointProposal["status"]): 
   };
 }
 
+function observed(value: GitCheckpointProposal) {
+  return { proposal: { proposal: value, status: "loaded" as const } };
+}
+
 test("terminal Git arc hoisting keeps only useful current work", () => {
   const currentTurn = turn("current", []);
   const oldProposalTurns = new Map([["proposal", "old"]]);
   const currentProposalTurns = new Map([["proposal", currentTurn.id]]);
-  const observed = (value: GitCheckpointProposal) => ({
-    proposal: { proposal: value, status: "loaded" as const },
-  });
 
   assert.equal(getHoistedThreadGitArc({
     currentTurn,
@@ -172,6 +186,30 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
     proposalObservations: observed(proposal("proposal", "proposed")),
     proposalTurnIds: currentProposalTurns,
   }), null, "an in-progress latest turn suppresses terminal presentation");
+});
+
+test("a stashed arc stays hoisted while its proposals are no longer actionable", () => {
+  const currentTurn = turn("current", []);
+  const oldProposalTurns = new Map([["proposal", "old"]]);
+
+  assert.ok(getHoistedThreadGitArc({
+    currentTurn,
+    gitArc: stashedGitArc([{ proposalId: "proposal", status: "proposed" }]),
+    proposalObservations: observed(proposal("proposal", "unavailable")),
+    proposalTurnIds: oldProposalTurns,
+  }), "stashed files stay recoverable while their proposal is invalid");
+  assert.ok(getHoistedThreadGitArc({
+    currentTurn,
+    gitArc: stashedGitArc([{ proposalId: "proposal", status: "committed" }]),
+    proposalObservations: observed(proposal("proposal", "committed")),
+    proposalTurnIds: oldProposalTurns,
+  }), "stashed files stay recoverable after their proposal is accepted");
+  assert.equal(getHoistedThreadGitArc({
+    currentTurn: { ...currentTurn, status: "inProgress" },
+    gitArc: stashedGitArc([{ proposalId: "proposal", status: "proposed" }]),
+    proposalObservations: {},
+    proposalTurnIds: oldProposalTurns,
+  }), null, "an in-progress latest turn still suppresses stashed presentation");
 });
 
 test("visible proposal intents associate title and description with the proposal receipt", () => {

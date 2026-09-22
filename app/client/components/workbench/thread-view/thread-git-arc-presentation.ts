@@ -118,7 +118,9 @@ export function getHoistedThreadGitArc({
     && proposals.every((proposal, index) => proposal.status === gitArc.proposals[index]?.status)
     ? gitArc
     : { ...gitArc, proposals };
-  if (gitArc.claimedPaths.length) return visibleGitArc;
+  // A stashed arc's files are recoverable terminal work, so the card must stay available
+  // to unstash even when none of its proposals is currently actionable.
+  if (gitArc.claimedPaths.length || gitArc.phase === "stashed") return visibleGitArc;
   if (!proposals.length) return null;
   if (proposals.some(({ status }) => status === "proposed")) return visibleGitArc;
   return currentTurn && proposals.some(({ proposalId }) => (
