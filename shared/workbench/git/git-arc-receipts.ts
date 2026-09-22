@@ -18,7 +18,7 @@ const GitArcReceiptSchema = z.object({
   plannedPathCount: z.number().int().nonnegative().optional(),
   adoptedPathCount: z.number().int().nonnegative().optional(),
   fullScope: z.boolean().optional(),
-  phase: z.enum(["plan", "active", "stashed", "resolved"]).optional(),
+  phase: z.enum(["plan", "active", "stashed", "resolved", "workspace"]).optional(),
   stashedPaths: z.array(z.string().min(1)).optional(),
   conflictedPaths: z.array(z.string().min(1)).optional(),
   plannedPaths: z.array(z.string().min(1)).optional(),
@@ -121,7 +121,7 @@ export function formatGitArcTextReceipt(input: GitArcReceipt) {
 
 function parseTextReceipt(output: string) {
   const lines = output.split(/\r?\n/u);
-  const start = lines.findIndex((line) => /^arc \S+ (plan|active|stashed|resolved)$/u.test(line));
+  const start = lines.findIndex((line) => /^arc \S+ (plan|active|stashed|resolved|workspace)$/u.test(line));
   if (start < 0) return null;
   const [, action, phase] = lines[start]!.split(" ");
   const result: Record<string, string | number | boolean | null | string[] | object[]> = {

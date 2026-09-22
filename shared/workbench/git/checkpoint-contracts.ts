@@ -292,7 +292,7 @@ const GitCheckpointCompareMemberSchema = z.object({
 });
 
 export const GitCheckpointCompareResultSchema = z.object({
-  phase: z.enum(["plan", "active", "stashed", "resolved"]).optional(),
+  phase: z.enum(["plan", "active", "stashed", "resolved", "workspace"]).optional(),
   changes: z.array(GitCheckpointFileChangeSchema),
   checkpointCommit: checkpointSha,
   checkpointRef: nonEmptyString,

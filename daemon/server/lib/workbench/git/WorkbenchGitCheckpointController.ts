@@ -135,7 +135,7 @@ export interface GitArcStashResult extends GitCheckpointCreateResult {
 type GitArcContinuationResult = GitCheckpointCreateResult;
 
 export interface GitCheckpointCompareResult {
-  phase?: "plan" | "active" | "stashed" | "resolved";
+  phase?: "plan" | "active" | "stashed" | "resolved" | "workspace";
   changes: GitCheckpointFileChange[];
   checkpointCommit: string;
   checkpointRef: string;
@@ -1097,6 +1097,16 @@ export default class WorkbenchGitCheckpointController {
           }
           if (current?.phase === "resolved" || current?.retainedArc?.phase === "resolved") {
             throw new Error("The claim-loss baseline is unavailable. Inspect affected files or select an explicit arc ref.");
+          }
+          if (!current && input.paths?.length) {
+            const paths = repository.normalizePaths(input.paths);
+            return {
+              checkpointCommit: inspection.head, checkpointRef: inspection.head, phase: "workspace",
+              changes: await repository.buildFileChanges(inspection.head, inspection.tree, paths),
+              scopePaths: paths,
+              hasUncommittedChanges: (await repository.listChangedPaths(inspection.head, inspection.tree, paths)).length > 0,
+              intentName: null, repoRoot: repository.root,
+            };
           }
         }
         if (current?.phase === "plan") input = { ...input, ref: current.checkpointCommit };

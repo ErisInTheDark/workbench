@@ -23,14 +23,15 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
   const action = (request.responseKind === "git-arc-wait" ? "start" : request.responseKind.replace("git-arc-", "")) as GitArcAction;
   const members = rows(payload, "members");
   const sources = members.length ? members : [payload];
-  const phase = payload.phase === "resolved" ? "resolved"
+  const phase = payload.phase === "workspace" ? "workspace"
+    : payload.phase === "resolved" ? "resolved"
     : payload.phase === "stashed" ? "stashed"
     : payload.phase === "plan" || payload.kind === "plan" || action === "plan" ? "plan" : "active";
   const fullScope = action === "scope" || action === "stash" || action === "unstash";
   const claimedPaths = action === "stash" ? []
     : action === "release" ? paths(payload, "scopePaths")
     : action === "compare" || action === "diff"
-    ? sources.flatMap(member => member.phase === "resolved" ? [] : paths(member, "scopePaths"))
+    ? sources.flatMap(member => member.phase === "resolved" || member.phase === "workspace" ? [] : paths(member, "scopePaths"))
     : phase === "plan" || action === "scope" ? paths(payload, "claimedPaths") : paths(payload, "scopePaths");
   const plannedPaths = phase === "plan" && action !== "release"
     ? paths(payload, "plannedPaths").length ? paths(payload, "plannedPaths") : paths(payload, "scopePaths")

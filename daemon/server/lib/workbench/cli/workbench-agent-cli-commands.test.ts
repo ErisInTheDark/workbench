@@ -1631,6 +1631,17 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     unclaimedDirtPaths: ["src/unclaimed.ts"],
   }, { action: "compare" });
   assert.match(compareResponse.stdout, /unclaimed dirt 1\nsrc\/unclaimed\.ts/u);
+  const workspaceDiff = adapt("git-arc-diff", {
+    changes: [],
+    checkpointCommit: planRef,
+    diff: "diff --git a/src/one.ts b/src/one.ts\n",
+    intentName: null,
+    phase: "workspace",
+    scopePaths: ["src/one.ts"],
+    unclaimedDirtPaths: ["src/one.ts"],
+  }, { action: "diff", paths: ["src/one.ts"] });
+  assert.deepEqual(parseGitArcReceipt(workspaceDiff.stdout)?.claimedPaths, []);
+  assert.equal(parseGitArcReceipt(workspaceDiff.stdout)?.phase, "workspace");
   const proposalCompareResponse = adapt("git-arc-compare", {
     changes: [],
     checkpointCommit: planRef,

@@ -1,7 +1,4 @@
-/*
- * Keywords: git, claims, CLI operands, literal paths.
- * Exports: none. Protect operation prefixes without interpreting MCP-style literal paths.
- */
+/* Exports: none. Tests claim parsing and scope operation invariants. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseGitClaimArguments, parseGitClaimOperands } from "./git-claim-arguments";
@@ -18,6 +15,18 @@ test("claim refusals retain typed reasons and affected paths", () => {
     assert.deepEqual(error.rejection, { reason: "unclaimedRemoval", paths: ["missing.ts"] });
     return true;
   });
+});
+
+test("adoption and ordinary addition of one path produce one scope entry", () => {
+  assert.deepEqual(applyGitClaimChanges([], {
+    addPaths: ["dirty.ts", "clean.ts"],
+    adoptPaths: ["dirty.ts"],
+  }), ["clean.ts", "dirty.ts"]);
+  assert.throws(() => applyGitClaimChanges(["dirty.ts"], {
+    inherit: true,
+    removePaths: ["dirty.ts"],
+    adoptPaths: ["dirty.ts"],
+  }));
 });
 
 test("claim operands distinguish operations from literal prefixed filenames", () => {

@@ -370,6 +370,22 @@ controllerTest("empty", "empty and ignored plans preserve visibility and no-op b
 
 controllerTest("legacy", "v3 plans and legacy activation preserve adoption, drift and ownership", async ({ repository, source, state }) => {
   const controller = new WorkbenchGitCheckpointController();
+  const inspectionIdentity = { cwd: source, harness: "codex" as const, threadId: "no-arc-inspection" };
+  await fs.writeFile(path.join(source, "ordinary.txt"), "selected edit\n");
+  await fs.writeFile(path.join(source, "unselected.txt"), "unselected edit\n");
+  try {
+    const selected = await controller.diff({ ...inspectionIdentity, paths: ["ordinary.txt"] });
+    assert.equal(selected.phase, "workspace");
+    assert.deepEqual(selected.scopePaths, ["ordinary.txt"]);
+    assert.match(selected.diff, /new file mode 100644/u);
+    assert.match(selected.diff, /\+selected edit/u);
+    assert.doesNotMatch(selected.diff, /unselected edit/u);
+    assert.equal(await new GitArcRegistry(repository).find({ harness: "codex", threadId: inspectionIdentity.threadId }), null);
+    await assert.rejects(controller.diff(inspectionIdentity), /active Git arc/u);
+  } finally {
+    await fs.unlink(path.join(source, "ordinary.txt"));
+    await fs.unlink(path.join(source, "unselected.txt"));
+  }
   await fs.writeFile(path.join(source, "duplicate.txt"), "intentional duplicate work\n");
   const duplicate = await controller.createPlan({
     adoptPaths: ["duplicate.txt"],
@@ -382,6 +398,19 @@ controllerTest("legacy", "v3 plans and legacy activation preserve adoption, drif
   const duplicateCheckpoint = await new GitCheckpointStore(repository).readCheckpoint("codex", "overlap-thread", duplicate.checkpointCommit);
   assert.deepEqual(duplicateCheckpoint.metadata?.scopePaths, ["duplicate.txt"]);
   assert.deepEqual(duplicateCheckpoint.metadata?.adoptedPaths, ["duplicate.txt"]);
+  const overlappingEdit = await controller.editPlanClaims({
+    addPaths: ["duplicate.txt"],
+    adoptPaths: ["duplicate.txt"],
+    cwd: source,
+    harness: "codex",
+    inherit: true,
+    intentName: "overlapping plan operations",
+    threadId: "overlap-thread",
+  });
+  assert.deepEqual(overlappingEdit.scopePaths, ["duplicate.txt"]);
+  assert.ok("checkpointCommit" in overlappingEdit);
+  const editedCheckpoint = await new GitCheckpointStore(repository).readCheckpoint("codex", "overlap-thread", overlappingEdit.checkpointCommit);
+  assert.deepEqual(editedCheckpoint.metadata?.adoptedPaths, ["duplicate.txt"]);
   await fs.mkdir(path.join(source, "folder"));
   await fs.writeFile(path.join(source, "folder", "file.txt"), "intentional nested work\n");
   const nested = await controller.createPlan({
