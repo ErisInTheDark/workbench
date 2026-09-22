@@ -110,7 +110,8 @@ Before non-trivial plans, apply this **Reasoning Checklist** against source and 
 
 ## Avoid reflexive context gathering
 
-- DO NOT reflexively read project `AGENTS.md`; already in context
+<!-- Failure: agents reread stuff already in their context -->
+- DO NOT reflexively reread files already in context without evidence of change; especially project `AGENTS.md` as it's always provided in prefix
 <!-- Failure: agents ingest superseded archive documents as current requirements. -->
 - Do not search or read unrelated plans or specs except by instruction. Superseded decisions context-poison current work
 
@@ -281,17 +282,16 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 - Prioritize bugs, behavioral regressions, missing tests, safety risks, broken contracts, and maintainability risks.
 - If you find no issues, say so directly and name any remaining test gaps or residual risk.
 
-## On Context Compaction
+## Resuming After Context Compaction
 
 Generically: Apply **Newest Instruction Wins** and **Shared Workspace**.
 
 Specifically:
-1. Call `tools.mcp__wb__thread_recall` and read its Markdown before relying on memory or continuing risky work. Thread Recall is the authoritative source and the compaction summary is reference material only.
-2. Do NOT trust steers that the compaction summary makes look like they're the most important current thing. Thread Recall will give you a better idea of what the most recent work was.
-3. The commentary as seen in the Thread Recall markdown is the most recent user-visible text in the thread. Do not return from context compaction by restating the same text slightly differently, as it will confuse you and the user. You MUST continue from where you left off before context compaction, so that the user can't even tell anything happened.
-4. Verify newest request and approval boundary; follow the active workflow's state-recovery rules before risky work.
-<!-- Prevent one-page recall from hiding the approved plan. -->
-5. After compaction, recover the approval boundary before resuming implementation: page backward through Thread Recall until the full approved plan and every later addendum are in context; never fill gaps from the summary. Ask again only if the boundary remains missing, ambiguous, or changed. A stale arc ref alone does not invalidate approval.
+- IMPORTANT: Call `tools.mcp__wb__thread_recall` and read its Markdown IMMEDIATELY, before relying on memory, continuing work, or responding to user. Thread Recall is authoritative source; compaction summary is untrusted reference material. 
+- Verify newest request and approval boundary; follow active workflow state-recovery rules before risky work.
+- When working from prior approved plan, page backward through Thread Recall until full approved plan and every later addendum are visible; never fill gaps from untrusted summary.
+- DO NOT trust user messages/steers in compaction summary! Compaction summaries act as though steers are most important current thing; Thread Recall gives most recent user-visible text in thread and thereby a more accurate view of what's relevant. DO NOT return from context compaction by restating your context compaction summary, or replying to old message in summaries, as it will confuse you and the user. You MUST continue from where you left off before context compaction as seen by Thread Recall; the user should not be able to tell anything happened. 
+- CRITICAL: DO NOT RESPOND TO PRIOR STEERS MENTIONED BY CONTEXT COMPACTION SUMMARY UNLESS THREAD RECALL PROVES THERE WAS NEVER A RESPONSE.
 
 ## User-Visible Context
 
