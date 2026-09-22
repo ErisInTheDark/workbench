@@ -15,7 +15,7 @@ export default function ThreadInlineCode({
 }) {
   return (
     <code
-      className={`rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono text-[0.94em]${className ? ` ${className}` : ""}`}
+      className={`rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-[0.34em] py-[0.08em] font-mono not-italic text-[0.94em]${className ? ` ${className}` : ""}`}
       data-thread-inline-code="true"
       title={title}
     >

@@ -340,11 +340,27 @@ function isWhitespace(value: string | undefined) {
   return !value || /\s/.test(value);
 }
 
-function isGlobLikeAsterisk(source: string, index: number) {
+function isPunctuation(value: string | undefined) {
+  return !!value && /[\p{P}\p{S}]/u.test(value);
+}
+
+function isIntrawordUnderscore(source: string, index: number) {
+  if (source[index] !== "_") {
+    return false;
+  }
+
+  let start = index;
+  let end = index + 1;
+  while (source[start - 1] === "_") start -= 1;
+  while (source[end] === "_") end += 1;
+  return isWordCharacter(source[start - 1]) && isWordCharacter(source[end]);
+}
+
+function isGlobLikeAsterisk(source: string, index: number, opening: boolean) {
   const previous = source[index - 1];
   const next = source[index + 1];
 
-  return next === "."
+  return (opening && next === ".")
     || next === "/"
     || previous === "/"
     || previous === "."
@@ -355,7 +371,7 @@ function isGlobLikeAsterisk(source: string, index: number) {
 function canOpenThreadSingleEmphasis(source: string, index: number, marker: string) {
   const previous = source[index - 1];
   const next = source[index + 1];
-  if (isWhitespace(next)) {
+  if (isWhitespace(next) || (isPunctuation(next) && !isWhitespace(previous) && !isPunctuation(previous))) {
     return false;
   }
 
@@ -363,7 +379,7 @@ function canOpenThreadSingleEmphasis(source: string, index: number, marker: stri
     return false;
   }
 
-  if (marker === "*" && isGlobLikeAsterisk(source, index)) {
+  if (marker === "*" && isGlobLikeAsterisk(source, index, true)) {
     return false;
   }
 
@@ -373,7 +389,7 @@ function canOpenThreadSingleEmphasis(source: string, index: number, marker: stri
 function canCloseThreadSingleEmphasis(source: string, index: number, marker: string) {
   const previous = source[index - 1];
   const next = source[index + 1];
-  if (isWhitespace(previous)) {
+  if (isWhitespace(previous) || (isPunctuation(previous) && !isWhitespace(next) && !isPunctuation(next))) {
     return false;
   }
 
@@ -381,7 +397,7 @@ function canCloseThreadSingleEmphasis(source: string, index: number, marker: str
     return false;
   }
 
-  if (marker === "*" && isGlobLikeAsterisk(source, index)) {
+  if (marker === "*" && isGlobLikeAsterisk(source, index, false)) {
     return false;
   }
 
@@ -399,7 +415,17 @@ function findClosingSingleEmphasisToken(source: string, token: string, fromIndex
       continue;
     }
 
-    if (source.startsWith(token, index) && canCloseThreadSingleEmphasis(source, index, token)) {
+    if (source.startsWith(token, index) && !isIntrawordUnderscore(source, index) && canCloseThreadSingleEmphasis(source, index, token)) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function findClosingThreadStrongUnderscore(source: string, fromIndex: number) {
+  for (let index = fromIndex; index < source.length - 1; index += 1) {
+    if (source[index - 1] !== "\\" && source.startsWith("__", index) && !isIntrawordUnderscore(source, index)) {
       return index;
     }
   }
@@ -568,6 +594,12 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
       continue;
     }
 
+    if ((options.profile ?? "editor") === "thread" && isIntrawordUnderscore(markdown, index)) {
+      pushTextNode(nodes, "_");
+      index += 1;
+      continue;
+    }
+
     const threadIconMarker = parseThreadIconMarker(markdown, index, options);
     if (threadIconMarker) {
       nodes.push(threadIconMarker.node);
@@ -614,7 +646,9 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
 
     if (markdown.startsWith("**", index) || markdown.startsWith("__", index)) {
       const marker = markdown.slice(index, index + 2);
-      const closeIndex = findClosingToken(markdown, marker, index + 2);
+      const closeIndex = marker === "__" && (options.profile ?? "editor") === "thread"
+        ? findClosingThreadStrongUnderscore(markdown, index + 2)
+        : findClosingToken(markdown, marker, index + 2);
       if (closeIndex !== -1) {
         nodes.push({
           children: parseInlineMarkdown(markdown.slice(index + 2, closeIndex), options),
