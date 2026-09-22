@@ -6,9 +6,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { WorkbenchSandboxNetworkSetting } from "workbench-shared/workbench/provider/provider-settings";
-import WorkbenchIconButton from "./WorkbenchIconButton";
-import { ReloadIcon } from "./workbench-icons";
+import { ResetIcon } from "./workbench-icons";
 import { useWorkbenchDaemonClient } from "./WorkbenchDaemonClientContext";
+import WorkbenchIconButton from "./WorkbenchIconButton";
 import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
 
 export default function SandboxNetworkSettings ({
@@ -103,7 +103,7 @@ export default function SandboxNetworkSettings ({
             update(setting.provider, null);
           }}
         >
-          <ReloadIcon size={20} />
+          <ResetIcon size={20} />
         </WorkbenchIconButton>
       ) : null}
       </div>;
