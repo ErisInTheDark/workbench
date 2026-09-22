@@ -1,6 +1,4 @@
-/*
- * No production exports. Tests protect stable Codex thread instructions, fresh filtered project rules, per-input activated skills, caller config preservation, and project-local MCP capability stamping.
- */
+/* Exports: none. Tests protect Codex instructions, filtering, activated skills, caller config, and MCP capability stamping. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -38,7 +36,7 @@ function readPromptInstructions(request: JsonRpcRequest) {
   };
 }
 
-test("voice assembly keeps the selected agent and role packs in one resolved prompt", async () => {
+test("voice assembly omits the selected agent while preserving role-targeted packs", async () => {
   const { buildWorkbenchPromptInstructions, filterWorkbenchInstructionContent } = await import("./lib/workbench/instructions/workbench-prompt-assembly");
   const { default: buildWorkbenchOwnedPromptFields } = await import("./codex-owned-prompt");
   await buildWorkbenchPromptInstructions();
@@ -62,7 +60,7 @@ test("voice assembly keeps the selected agent and role packs in one resolved pro
       role: "voice-to-text", harness: "codex", model: "model", shell: "pwsh", available: new Set(),
       field: "voice fixture", onWarning: warning => { throw new Error(warning.message); },
     });
-    assert.match(resolved ?? "", /selected-agent-fixture/);
+    assert.doesNotMatch(resolved ?? "", /selected-agent-fixture/);
     assert.match(resolved ?? "", /voice-pack-fixture/);
     assert.doesNotMatch(resolved ?? "", /ordinary-(?:only-policy|pack-fixture)/);
     assert.equal(prompt.developerInstructions, null);

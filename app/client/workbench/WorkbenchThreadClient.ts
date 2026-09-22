@@ -57,7 +57,6 @@ import ThreadTextPresentationController, {
     type ThreadTextPresentationField,
     type ThreadTextPresentationKey,
 } from "./thread/ThreadTextPresentationController";
-import { getWorkbenchThreadHarnessCandidates } from "workbench-shared/workbench/thread/thread-harness-candidates";
 import type { WorkbenchThreadPageResult as WorkbenchThreadPageResponse } from "workbench-shared/workbench/thread/thread-actions";
 import { WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED } from "workbench-shared/workbench/thread/thread-actions";
 import { getTurnRenderSignature } from "./thread/thread-item-signature";
@@ -2390,7 +2389,8 @@ function WorkbenchThreadClient(
   }
 
   function getThreadHarnessCandidates(threadId: string, harness?: WorkbenchHarness) {
-    return getWorkbenchThreadHarnessCandidates(threadId, harness ?? getKnownThreadHarness(threadId));
+    const knownHarness = harness ?? getKnownThreadHarness(threadId);
+    return knownHarness ? [knownHarness] : [...installedProviderKeys];
   }
 
   function getThreadModel(threadId: string) {

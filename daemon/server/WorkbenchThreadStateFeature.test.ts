@@ -1,7 +1,4 @@
-/*
- * Exports:
- * - No production exports; tests protect provider normalization, SQLite store routing, relationship projection, progressive reconciliation, Git projection and retention routing, managed resume, and controller-owned title mutation.
- */
+/* Exports: none. Tests protect provider normalization, state routing, relationships, reconciliation, Git projection, retention, resume, and titles. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -100,33 +97,43 @@ function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThrea
   harnesses: ReturnType<typeof createHarnesses>;
   interruptRetainingQuestionnaire?: (threadId: string, requestKey: string, interrupt: () => Promise<boolean>) => Promise<boolean>;
 }) {
-  const operations = new CodexThreadOperations({
-    reconciliation: { reconcile: async () => { throw new Error("Unexpected recovery"); } },
-    bridge: {
-      reconcileSqliteTranscriptWindow: async () => { throw new Error("Unexpected native recovery"); },
-      canDeliverQuestionnaire: () => false,
-      ensureInitialized: async () => {},
-      handleServerRequest: request => options.harnesses.request("codex", request),
-    },
-    identities: options.database.identities,
-    resolveProject: async cwd => (await options.resolveProjectFromCwd(cwd)).project,
-    questionnaires: {
-      canDeliver: () => false,
-      deliver: async () => { throw new Error("Unexpected questionnaire delivery"); },
-      interruptRetainingQuestionnaire: options.interruptRetainingQuestionnaire ?? (async () => {
-        throw new Error("Unexpected questionnaire interruption");
-      }),
-    },
-  });
+  const operationsByHarness = new Map<WorkbenchHarness, CodexThreadOperations>();
+  const getOperations = (harness: WorkbenchHarness) => {
+    let operations = operationsByHarness.get(harness);
+    if (operations) return operations;
+    operations = new CodexThreadOperations({
+      reconciliation: { reconcile: async () => { throw new Error("Unexpected recovery"); } },
+      bridge: {
+        reconcileSqliteTranscriptWindow: async () => { throw new Error("Unexpected native recovery"); },
+        canDeliverQuestionnaire: () => false,
+        ensureInitialized: async () => {},
+        handleServerRequest: request => options.harnesses.request(harness, request),
+      },
+      identities: options.database.identities,
+      resolveProject: async cwd => (await options.resolveProjectFromCwd(cwd)).project,
+      questionnaires: {
+        canDeliver: () => false,
+        deliver: async () => { throw new Error("Unexpected questionnaire delivery"); },
+        interruptRetainingQuestionnaire: options.interruptRetainingQuestionnaire ?? (async () => {
+          throw new Error("Unexpected questionnaire interruption");
+        }),
+      },
+    });
+    operationsByHarness.set(harness, operations);
+    return operations;
+  };
   const unused = async (): Promise<never> => { throw new Error("Unexpected configuration read"); };
-  const provider: WorkbenchProvider = {
-    threads: operations, interactions: operations.interactions,
-    recovery: { refresh: threadId => options.harnesses.resumeThread("codex", threadId) },
-    configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
+  const getProvider = (harness: WorkbenchHarness): WorkbenchProvider => {
+    const operations = getOperations(harness);
+    return {
+      threads: operations, interactions: operations.interactions,
+      recovery: { refresh: threadId => options.harnesses.resumeThread(harness, threadId) },
+      configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
+    };
   };
   const feature = new WorkbenchThreadStateFeature({
     ...options, identities: options.database.identities,
-    providers: { get: () => provider },
+    providers: { get: getProvider },
     getProjectCatalog: () => {
       const catalog = options.getProjectCatalog();
       const admitted = options.database.sqlite.prepare("SELECT id FROM workbench_projects ORDER BY id").all() as { id: string }[];
@@ -135,7 +142,7 @@ function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThrea
       }))] };
     },
   });
-  return Object.assign(feature, { observeThread: (thread: ThreadReadResponse["thread"]) => operations.observeThread(thread) });
+  return Object.assign(feature, { observeThread: (thread: ThreadReadResponse["thread"]) => getOperations("codex").observeThread(thread) });
 }
 
 test("browser project admission rejects unknown owners before loading or replacing observations", async () => {
@@ -945,7 +952,7 @@ test("provider reconciliation publishes its first page before deeper history and
         }
         return { id: request.id ?? null, result: { data: [providerThread(storageRoot, "child", { name: "Child provider", updatedAt: 2 })], nextCursor: "codex-next" } };
       }
-      throw new Error("Unexpected provider");
+      return { id: request.id ?? null, result: { data: [], nextCursor: null } };
     }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
     resolveProjectFromCwd: async cwd => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
@@ -954,7 +961,7 @@ test("provider reconciliation publishes its first page before deeper history and
 
   await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
   await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.harness === "codex")), "First page did not publish while deeper history remained pending.");
-  assert.deepEqual(starts, ["codex"]);
+  assert.deepEqual(starts, ["codex", "opencode"]);
   assert.deepEqual(codexCursors, [null, "codex-next"]);
   assert.equal(codexRequests[0]?.workbenchRequestSource, "autoRefresh");
   assert.deepEqual(codexRequests[0]?.params, {

@@ -1,7 +1,4 @@
-/*
- * Keywords: git, unborn, initial commit, adoption, drift, claims, restore.
- * Exports: none. Tests protect arc lifecycle and first acceptance before branch history exists.
- */
+/* Exports: none. Tests protect arc lifecycle and first acceptance before branch history exists. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -85,7 +82,10 @@ unbornTest("unborn arc drift, collisions, moves and restore preserve ownership",
   }), /claim|collision/u);
   await controller.editArcClaims({ ...identity, inherit: true, addPaths: ["unused.txt"] });
   await controller.editArcClaims({ ...identity, inherit: true, removePaths: ["unused.txt"] });
-  await assert.rejects(controller.releaseArc({ ...identity, disown: false }), GitCheckpointDirtyPathsError);
+  const unchanged = await controller.releaseArc({ ...identity, disown: false });
+  assert.equal(unchanged.unchanged, true);
+  assert.deepEqual(unchanged.releasedClaims, []);
+  assert.deepEqual(unchanged.scopePaths, ["one.txt"]);
   const moved = await controller.moveInArc({
     ...identity, move: { kind: "maps", mappings: [{ source: "one.txt", destination: "moved.txt" }] },
   });

@@ -1,7 +1,4 @@
-/*
- * Exports:
- * - No production exports; Node tests cover reads, retention, lifecycle fencing, canonical placement, streaming, admission, and questionnaire answer intent.
- */
+/* Exports: none. Tests protect reads, retention, lifecycle fencing, canonical placement, streaming, admission, and questionnaire answer intent. */
 
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
@@ -128,7 +125,19 @@ class FakeWebSocket {
     if (request.method === "initialize") {
       queueMicrotask(() => this.respond(request.id, {}));
     } else if (request.method === "account/limits/read") {
-      queueMicrotask(() => this.fail(request.id, "rate limits unavailable in test"));
+      queueMicrotask(() => this.respond(request.id, {
+        rateLimits: {
+          credits: null,
+          individualLimit: null,
+          limitId: "codex",
+          limitName: null,
+          planType: null,
+          primary: null,
+          rateLimitReachedType: null,
+          secondary: null,
+        },
+        rateLimitsByLimitId: null,
+      }));
     } else if (request.method === "thread/metadata/read") {
       const threadId = String(request.params?.threadId ?? "thread");
       queueMicrotask(() => this.respond(request.id, { thread: wireThread(threadId) }));
@@ -156,9 +165,8 @@ class FakeWebSocket {
       queueMicrotask(() => this.respond(request.id, { ok: true }));
     } else if (request.method === "thread/browse/read" || request.method === "thread/questionnaires/read" || request.method === "thread/steers/read") {
       queueMicrotask(() => this.respond(request.id, { data: [] }));
-    } else if (isSteerRequest(request)) {
-      const turnId = String(request.params?.expectedTurnId ?? "turn");
-      queueMicrotask(() => this.respond(request.id, { kind: "steered", turnId }));
+    } else if (isContinueRequest(request)) {
+      queueMicrotask(() => this.respond(request.id, { kind: "steered", turnId: "turn" }));
     } else if (isAdmissionRequest(request)) {
       const threadId = String(request.params?.threadId ?? "thread");
       queueMicrotask(() => this.respond(request.id, {
@@ -222,18 +230,19 @@ class FakeWebSocket {
   }
 }
 
-function isSteerRequest(request: SocketRequest) {
-  return request.method === "thread/message/submit" && request.params?.intent === "steer";
+function isContinueRequest(request: SocketRequest) {
+  return request.method === "thread/message/submit" && request.params?.intent === "continue";
 }
 
 function isAdmissionRequest(request: SocketRequest) {
-  return request.method === "thread/message/submit" && request.params?.intent !== "steer";
+  return request.method === "thread/message/submit"
+    && (request.params?.intent === "continue" || request.params?.intent === "newTurn");
 }
 
 async function waitForRequest(socket: FakeWebSocket, method: string, offset = 0) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const requests = socket.requests.filter((request) => method === "steer"
-      ? isSteerRequest(request)
+    const requests = socket.requests.filter((request) => method === "continue"
+      ? isContinueRequest(request)
       : method === "admission" ? isAdmissionRequest(request) : request.method === method);
     if (requests[offset]) {
       return requests[offset];
@@ -638,11 +647,11 @@ test("selected active Codex steers settle at admission and canonical notificatio
     assert.equal(first, null);
     assert.equal(second, null);
     const methods = socket?.requests.map((request) => request.method) ?? [];
-    assert.equal(socket.requests.filter(isSteerRequest).length, 2);
+    assert.equal(socket.requests.filter(isContinueRequest).length, 2);
     assert.equal(methods.some((method) => method === "thread/metadata/read" || method === "thread/steers/read" || method === "thread/list"), false);
     assert.equal(client.getSnapshot().currentThread?.turns[0]?.items.filter((item) => item.type === "userMessage").length, 2);
 
-    const steerRequests = socket?.requests.filter(isSteerRequest) ?? [];
+    const steerRequests = socket?.requests.filter(isContinueRequest) ?? [];
     const firstHandle = steerRequests[0]?.params?.clientMessageId;
     assert.equal(typeof firstHandle, "string");
     socket?.notify("item/started", {
@@ -682,11 +691,11 @@ test("selected active Codex steers settle at admission and canonical notificatio
     );
     assert.equal(backgroundResult?.id, "background");
     const backgroundRequests = socket?.requests.filter((request) => request.params?.threadId === "background") ?? [];
-    const backgroundSteerIndex = backgroundRequests.findIndex(isSteerRequest);
+    const backgroundSteerIndex = backgroundRequests.findIndex(isContinueRequest);
     const backgroundPreparationIndex = backgroundRequests.findIndex((request) => request.method === "thread/metadata/read");
     assert.ok(backgroundSteerIndex >= 0);
     assert.ok(backgroundPreparationIndex === -1 || backgroundSteerIndex < backgroundPreparationIndex);
-    assert.equal(backgroundRequests[backgroundSteerIndex]?.params?.expectedTurnId, "background-turn");
+    assert.equal(backgroundRequests[backgroundSteerIndex]?.params?.intent, "continue");
   } finally {
     client.dispose();
     globalThis.WebSocket = originalWebSocket;
@@ -816,21 +825,21 @@ test("differing acknowledgement runs the preserved tail once and tail failure st
   const source = activeThread();
   client.selectThreadPayload(source);
   FakeWebSocket.intercept = (target, request) => {
-    if (isSteerRequest(request)) {
+    if (isContinueRequest(request)) {
       queueMicrotask(() => target.respond(request.id, { kind: "steered", turnId: "different-turn" }));
       return true;
     }
     return false;
   };
   assert.equal((await client.sendThreadMessage(source, [{ text: "one", text_elements: [], type: "text" }]))?.id, "thread");
-  assert.equal(socket.requests.filter(isSteerRequest).length, 1);
+  assert.equal(socket.requests.filter(isContinueRequest).length, 1);
   assert.equal(socket.requests.filter((request) => request.method === "thread/metadata/read").length, 1);
   assert.equal(socket.requests.filter((request) => request.method === "thread/steers/read").length, 1);
 
   const second = activeThread("codex", "second");
   client.selectThreadPayload(second);
   FakeWebSocket.intercept = (target, request) => {
-    if (isSteerRequest(request)) {
+    if (isContinueRequest(request)) {
       queueMicrotask(() => target.respond(request.id, { kind: "steered", turnId: "different-second-turn" }));
       return true;
     }
@@ -852,7 +861,7 @@ test("Codex slash mentions travel outside plain user input on steer and start", 
   assert.equal(await client.sendThreadMessage(active, input, {
     activatedSkillPaths: [skillPath],
   }), null);
-  const steer = socket.requests.find(isSteerRequest);
+  const steer = socket.requests.find(isContinueRequest);
   assert.deepEqual(steer?.params?.input, input);
   assert.deepEqual((steer?.params?.context as { activatedSkillPaths?: string[] })?.activatedSkillPaths, [skillPath]);
   assert.equal((steer?.params?.input as Array<{ type?: string }>).some((item) => item.type === "skill"), false);
@@ -882,13 +891,19 @@ test("existing-thread sends preserve provider routes without publishing browser 
   assert.equal(socket.requests.some((request) => request.method === "thread/resume"), false);
   assert.equal(socket.requests.some((request) => request.method === "turn/start" && request.params?.threadId === "idle"), false);
   assert.equal(socket.requests.some((request) => request.method === "thread/metadata/read" && request.params?.threadId === "idle"), false);
-  assert.equal(socket.requests.some((request) => isSteerRequest(request) && request.params?.threadId === "idle"), false);
   assert.equal(socket.requests.some((request) => request.method === "workbench/thread-state/intent/accept"
     && (request.params?.identity as { threadId?: string } | undefined)?.threadId === "idle"), false);
 
   FakeWebSocket.intercept = null;
 
-  for (const harness of ["copilot", "opencode", "future-provider"] as const) {
+  const opencode = activeThread("opencode", "opencode-thread");
+  client.selectThreadPayload(opencode);
+  assert.equal(await client.sendThreadMessage(opencode, [{ text: "opencode", text_elements: [], type: "text" }]), null);
+  assert.equal(socket.requests.some((request) => (
+    request.method === "thread/message/submit" && request.params?.threadId === "opencode-thread"
+  )), true);
+
+  for (const harness of ["copilot", "future-provider"] as const) {
     const provider = activeThread(harness, `${harness}-thread`);
     client.selectThreadPayload(provider);
     const before = socket.requests.length;
@@ -928,7 +943,6 @@ test("bounded selected Codex captures one lifecycle resume intent and preserves 
   const admission = socket.requests.find((request) => isAdmissionRequest(request) && request.params?.threadId === "idle");
   assert.equal(admission?.params?.intent, "continue");
   assert.equal(socket.requests.filter((request) => request.method === "turn/start" && request.params?.threadId === "idle").length, 0);
-  assert.equal(socket.requests.some((request) => isSteerRequest(request) && request.params?.threadId === "idle"), false);
   const snapshot = client.getSnapshot().currentThread;
   assert.deepEqual(snapshot?.turns.find((turn) => turn.id === "idle-turn")?.items.map((item) => item.id), ["loaded-item"]);
   assert.equal(snapshot?.turns.find((turn) => turn.id === "idle-turn")?.itemsView, "full");
@@ -946,7 +960,7 @@ test("managed admission reports an unseen provider-active turn without a browser
   };
 
   assert.equal(await client.sendThreadMessage(idle, [{ text: "steer", text_elements: [], type: "text" }]), null);
-  assert.equal(socket.requests.some(isSteerRequest), false);
+  assert.equal(socket.requests.filter(isAdmissionRequest).length, 1);
   assert.equal(socket.requests.some((request) => request.method === "turn/start" && request.params?.threadId === "idle"), false);
 }));
 
@@ -963,10 +977,8 @@ test("managed admission fails closed when provider-active state has no turn iden
     client.sendThreadMessage(idle, [{ text: "do not guess", text_elements: [], type: "text" }]),
     /no current in-progress turn/u,
   );
-  assert.equal(socket.requests.some((request) => (
-    request.params?.threadId === "idle"
-    && (request.method === "turn/start" || isSteerRequest(request))
-  )), false);
+  assert.equal(socket.requests.filter((request) => isAdmissionRequest(request) && request.params?.threadId === "idle").length, 1);
+  assert.equal(socket.requests.some((request) => request.method === "turn/start"), false);
 }));
 
 test("detached new-turn admission rejects authoritative active lifecycle evidence", async () => withClient(async (client, socket) => {
@@ -989,7 +1001,7 @@ test("detached new-turn admission rejects authoritative active lifecycle evidenc
   assert.ok(admission);
   assert.equal(admission.params?.intent, "newTurn");
   assert.equal(socket.requests.some((request) => request.method === "turn/start"), false);
-  assert.equal(socket.requests.some(isSteerRequest), false);
+  assert.equal(socket.requests.some(isContinueRequest), false);
 }));
 
 test("detached new-turn admission fails closed when active lifecycle has no turn identity", async () => withClient(async (client, socket) => {
@@ -1009,7 +1021,7 @@ test("detached new-turn admission fails closed when active lifecycle has no turn
     /no current in-progress turn/u,
   );
   assert.equal(socket.requests.some((request) => (
-    request.method === "turn/start" || isSteerRequest(request)
+    request.method === "turn/start" || isContinueRequest(request)
   )), false);
 }));
 
@@ -1123,13 +1135,13 @@ test("refreshing the selected thread preserves pending steer ownership", async (
   client.selectThreadPayload(source);
   let steerRequest: SocketRequest | null = null;
   FakeWebSocket.intercept = (_target, request) => {
-    if (!isSteerRequest(request)) return false;
+    if (!isContinueRequest(request)) return false;
     steerRequest = request;
     return true;
   };
 
   const send = client.sendThreadMessage(source, [{ text: "queued", text_elements: [], type: "text" }]);
-  await waitForRequest(socket, "steer");
+  await waitForRequest(socket, "continue");
 
   assert.equal((await client.refreshCurrentThread())?.id, "thread");
   socket.respond(steerRequest!.id, { kind: "steered", turnId: "different-turn" });
@@ -1740,7 +1752,7 @@ test("same-key, A-B-A, and clear-reselect commands invalidate fast preparation w
     agentPath: "agent://changed", agentSource: null, harness: "codex", model: "changed-model", reasoningEffort: null, serviceTier: "fast",
   });
   assert.equal(await profile, null);
-  assert.equal(socket.requests.filter(isSteerRequest).length, 1);
+  assert.equal(socket.requests.filter(isContinueRequest).length, 1);
   assert.equal(socket.requests.some((request) => request.method === "thread/resume"), false);
 }));
 
@@ -1768,9 +1780,9 @@ test("visible questionnaire keeps back-to-back selected steers admissible", asyn
   )));
 
   assert.deepEqual(results, [null, null, null]);
-  const steerRequests = socket.requests.filter(isSteerRequest);
+  const steerRequests = socket.requests.filter(isContinueRequest);
   assert.equal(steerRequests.length, 3);
-  assert.deepEqual(steerRequests.map((request) => request.params?.expectedTurnId), ["turn", "turn", "turn"]);
+  assert.deepEqual(steerRequests.map((request) => request.params?.intent), ["continue", "continue", "continue"]);
   const handles = steerRequests.map((request) => String(request.params?.clientMessageId ?? ""));
   assert.equal(handles.every(Boolean), true);
   assert.equal(new Set(handles).size, 3);
@@ -1798,7 +1810,8 @@ test("selection drift after managed admission keeps the newly selected thread", 
   client.selectThreadPayload(activeThread("codex", "other"));
   socket.respond(admissionRequest!.id, { kind: "started", turn: wireThread("idle", "idle-started").turns[0] });
   assert.equal(await send, null);
-  assert.equal(socket.requests.some((request) => (isSteerRequest(request) || request.method === "turn/start") && request.params?.threadId === "idle"), false);
+  assert.equal(socket.requests.filter((request) => isAdmissionRequest(request) && request.params?.threadId === "idle").length, 1);
+  assert.equal(socket.requests.some((request) => request.method === "turn/start" && request.params?.threadId === "idle"), false);
   assert.equal(client.getSnapshot().currentThread?.id, "other");
 }));
 
@@ -1840,7 +1853,6 @@ test("idle status with a stale in-progress turn delegates authoritative admissio
   };
 
   const result = await client.sendThreadMessage(stale, [{ text: "new turn", text_elements: [], type: "text" }]);
-  assert.equal(socket.requests.filter(isSteerRequest).length, 0);
   assert.equal(socket.requests.filter((request) => request.method === "turn/start").length, 0);
   assert.equal(socket.requests.filter(isAdmissionRequest).length, 1);
   assert.equal(result, null);
@@ -1895,7 +1907,7 @@ test("daemon-side active-turn admission settles without a second browser steer",
   socket.respond(admissionRequest!.id, { kind: "steered", turnId: "notification-turn" });
 
   assert.equal(await send, null);
-  assert.equal(socket.requests.filter(isSteerRequest).length, 0);
+  assert.equal(socket.requests.filter(isAdmissionRequest).length, 1);
   assert.equal(socket.requests.some((request) => request.method === "turn/start" && request.params?.threadId === "idle"), false);
 }));
 
@@ -1937,7 +1949,7 @@ test("preserved general active steer rejects interruption before acknowledgement
   client.selectThreadPayload(source);
   let pendingSteer: SocketRequest | null = null;
   FakeWebSocket.intercept = (_target, request) => {
-    if (isSteerRequest(request)) {
+    if (isContinueRequest(request)) {
       pendingSteer = request;
       return true;
     }
@@ -1948,7 +1960,7 @@ test("preserved general active steer rejects interruption before acknowledgement
     [{ text: "interrupted", text_elements: [], type: "text" }],
     { selectThread: false },
   );
-  await waitForRequest(socket, "steer");
+  await waitForRequest(socket, "continue");
   socket.notify("turn/completed", {
     threadId: "thread",
     turn: {
@@ -1965,7 +1977,7 @@ test("preserved general active steer rejects interruption before acknowledgement
 
 test("malformed general acknowledgements render exact failed evidence before rejection", async () => withClient(async (client, socket) => {
   FakeWebSocket.intercept = (target, request) => {
-    if (!isSteerRequest(request)) {
+    if (!isContinueRequest(request)) {
       return false;
     }
     queueMicrotask(() => target.respond(request.id, { kind: "steered", turnId: " " }));
@@ -2489,7 +2501,7 @@ test("project reset during admitted reconciliation history cannot reinstall the 
   client.selectThreadPayload(source);
   let historyRequest: SocketRequest | null = null;
   FakeWebSocket.intercept = (target, request) => {
-    if (isSteerRequest(request)) {
+    if (isContinueRequest(request)) {
       queueMicrotask(() => target.respond(request.id, { kind: "steered", turnId: "acknowledged-turn" }));
       return true;
     }
@@ -2515,7 +2527,7 @@ test("project reset suppresses stale reconciliation failure warnings", async () 
     client.selectThreadPayload(source);
     let readRequest: SocketRequest | null = null;
     FakeWebSocket.intercept = (target, request) => {
-      if (isSteerRequest(request)) {
+      if (isContinueRequest(request)) {
         queueMicrotask(() => target.respond(request.id, { kind: "steered", turnId: "acknowledged-turn" }));
         return true;
       }
@@ -2630,7 +2642,7 @@ test("project changes during draft materialization prevent stale dispatch withou
   await assert.rejects(send, ThreadMessageNotSentError);
   assert.equal(socket.requests.some((request) => request.method === "thread/list"), false);
   assert.equal(socket.requests.some((request) => request.method === "thread/metadata/read" && request.params?.threadId === "materialized"), false);
-  assert.equal(socket.requests.some((request) => isSteerRequest(request) && request.params?.threadId === "materialized"), false);
+  assert.equal(socket.requests.some((request) => isContinueRequest(request) && request.params?.threadId === "materialized"), false);
 }));
 
 test("navigation during creation profile acknowledgement cannot select or send the old draft", async () => withClient(async (client, socket) => {
@@ -2654,7 +2666,7 @@ test("navigation during creation profile acknowledgement cannot select or send t
   await assert.rejects(send, ThreadMessageNotSentError);
   assert.deepEqual(created, []);
   assert.notEqual(client.getSnapshot().currentThread?.id, "created");
-  assert.equal(socket.requests.some(request => request.method === "turn/start" || isSteerRequest(request)), false);
+  assert.equal(socket.requests.some(request => request.method === "turn/start" || isContinueRequest(request)), false);
 }));
 
 for (const defect of ["predecessor", "identity", "boundary"] as const) {
@@ -2918,7 +2930,7 @@ test("steer-history reads are latest-wins, retain the last success, and warn onc
     const source = activeThread();
     client.selectThreadPayload(source);
     await client.sendThreadMessage(source, [{ text: "queued", text_elements: [], type: "text" }]);
-    const handle = String(socket.requests.find(isSteerRequest)?.params?.clientMessageId ?? "");
+    const handle = String(socket.requests.find(isContinueRequest)?.params?.clientMessageId ?? "");
     const history: WorkbenchSteerHistoryEntry = {
       attemptedAt: 1, canonicalItemId: null, clientUserMessageId: handle, dispatchSequence: 0,
       entryKey: `turn-steer-client:${handle}`, error: null, input: [{ text: "queued", text_elements: [], type: "text" }],
@@ -3145,14 +3157,14 @@ test("selection drift after dispatch keeps exact failed evidence without selecti
   client.selectThreadPayload(source);
   let pending: SocketRequest | null = null;
   FakeWebSocket.intercept = (_target, request) => {
-    if (isSteerRequest(request) && request.params?.threadId === "a") {
+    if (isContinueRequest(request) && request.params?.threadId === "a") {
       pending = request;
       return true;
     }
     return false;
   };
   const admission = client.sendThreadMessage(source, [{ text: "one", text_elements: [], type: "text" }]);
-  await waitForRequest(socket, "steer");
+  await waitForRequest(socket, "continue");
   client.selectThreadPayload(other);
   socket.fail(pending!.id, "transport failed");
   await assert.rejects(admission, /transport failed/u);
@@ -3165,14 +3177,14 @@ test("selection drift after dispatch keeps exact failed evidence without selecti
   client.selectThreadPayload(admittedSource);
   pending = null;
   FakeWebSocket.intercept = (_target, request) => {
-    if (isSteerRequest(request) && request.params?.threadId === "c") {
+    if (isContinueRequest(request) && request.params?.threadId === "c") {
       pending = request;
       return true;
     }
     return false;
   };
   const admitted = client.sendThreadMessage(admittedSource, [{ text: "two", text_elements: [], type: "text" }]);
-  await waitForRequest(socket, "steer", 1);
+  await waitForRequest(socket, "continue", 1);
   client.selectThreadPayload(selectedOther);
   socket.respond(pending!.id, { kind: "steered", turnId: "different-c-turn" });
   assert.equal((await admitted)?.id, "c");
@@ -3195,7 +3207,7 @@ test("questionnaire supplemental input and skills stay inside one daemon answer 
   });
   const supplemental = socket.requests.filter((request) => request.method === "questionnaire/respond").at(-1);
   assert.deepEqual(supplemental?.params?.supplementalInput, [{ text: "extra", text_elements: [], type: "text" }]);
-  assert.equal(socket.requests.some(isSteerRequest), false);
+  assert.equal(socket.requests.some(isContinueRequest), false);
 
   const skillPath = "C:/skills/iterate/SKILL.md";
   socket.notify("questionnaire/requested", {
@@ -3207,7 +3219,7 @@ test("questionnaire supplemental input and skills stay inside one daemon answer 
   });
   const activatedOnly = socket.requests.filter((request) => request.method === "questionnaire/respond").at(-1);
   assert.deepEqual(activatedOnly?.params?.activatedSkillPaths, [skillPath]);
-  assert.equal(socket.requests.some(isSteerRequest), false);
+  assert.equal(socket.requests.some(isContinueRequest), false);
 }));
 
 test("interrupted proper questionnaires detach while approvals are discarded", async () => withClient(async (client, socket) => {

@@ -1,4 +1,4 @@
-/* No production exports. Shared-state batteries protect atomic final-loss publication and every loss route. */
+/* Exports: none. Shared-state batteries protect atomic final-loss publication and every loss route. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -81,6 +81,7 @@ async function checkLossRoutes(prepared: ClaimLossFixture) {
   for (const route of ["planning", "removal", "restore", "settlement"] as const) {
     const fixture = { root: path.join(prepared.bundleRoot, prepared.state.routes[route]) };
     const repository = new WorkbenchGitRepository(fixture.root);
+    const registry = new GitArcRegistry(repository);
     const store = new GitArcClaimLossStore(repository);
     const identity = { cwd: fixture.root, harness: "codex" as const, threadId: prepared.state.threadId };
     if (route === "planning") await controller.createPlan({ ...identity, intentName: "new plan", paths: ["two.txt"] });
@@ -106,8 +107,12 @@ async function checkLossRoutes(prepared: ClaimLossFixture) {
     }
     else {
       await fs.writeFile(path.join(fixture.root, "one.txt"), "restore me\n");
-      await assert.rejects(controller.releaseArc({ ...identity, disown: false }));
+      const unchanged = await controller.releaseArc({ ...identity, disown: false });
+      assert.equal(unchanged.unchanged, true);
+      assert.deepEqual(unchanged.releasedClaims, []);
+      assert.deepEqual(unchanged.scopePaths, ["one.txt"]);
       assert.equal(await store.read(identity), null);
+      assert.deepEqual((await registry.find(identity))?.claimedPaths, ["one.txt"]);
       await controller.restore({ ...identity, checkpointCommit: prepared.state.routeCheckpoint, confirmRestore: true });
     }
     assert.deepEqual((await store.read(identity))?.paths, ["one.txt"]);
@@ -120,6 +125,6 @@ test("claim-loss boundaries", { concurrency: 2 }, async context => {
   context.after(prepared.dispose);
   await Promise.all([
     context.test("final-loss ref and registry compare-and-swap publish together and preserve the disown snapshot", () => checkAtomicLoss(prepared)),
-    context.test("planning, final removal and restore capture the boundary while a rejected release does not", () => checkLossRoutes(prepared)),
+    context.test("planning, final removal and restore capture the boundary while unchanged dirty release does not", () => checkLossRoutes(prepared)),
   ]);
 });

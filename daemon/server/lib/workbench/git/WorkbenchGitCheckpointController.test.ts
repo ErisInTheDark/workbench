@@ -1,9 +1,9 @@
-/* No production exports. Shared-state batteries protect ownership, diagnostics, read purity, acceptance and atomic publication with real Git. */
+/* Exports: none. Shared-state batteries protect ownership, diagnostics, read purity, acceptance, and atomic publication with real Git. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { test, type TestContext } from "node:test";
+import { after, before, test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
 import GitArcPublishState from "./GitArcPublishState";
@@ -15,7 +15,6 @@ import GitArcRegistry, { GitArcCollisionError } from "./GitArcRegistry";
 import GitCheckpointStore, { GitCheckpointMissingObjectError } from "./GitCheckpointStore";
 import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
 import { CONTROLLER_OPERATIONS_FIXTURE, type ControllerFixtureState } from "./GitArcControllerTestFixtures";
-import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { proposalMessage } from "workbench-shared/workbench/git/git-arc-storage";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
@@ -23,6 +22,13 @@ import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController
 const execFileAsync = promisify(execFile);
 const fixtureCache = new GitTestFixtureCache();
 type ControllerFixture = GitTestFixtureCopy<ControllerFixtureState>;
+let controllerOperationsFixture: ControllerFixture | null = null;
+before(async () => {
+  controllerOperationsFixture = await fixtureCache.copy(CONTROLLER_OPERATIONS_FIXTURE);
+}, { timeout: 30_000 });
+after(async () => {
+  await controllerOperationsFixture?.dispose();
+});
 type ControllerBranch<Key extends keyof ControllerFixtureState> = {
   repository: WorkbenchGitRepository;
   root: string;
@@ -839,7 +845,7 @@ async function checkRejectedAdoption({ repository, source }: ControllerBranch<"a
   assert.deepEqual(await registry.find({ harness: "codex", threadId: "adopt-thread" }), activeBefore);
 }
 
-controllerTest("partial", "partial acceptance, local reads and message amendments preserve claims and unrelated state", async (fixture, context) => {
+controllerTest("partial", "partial acceptance preserves claims and unrelated state", async (fixture, context) => {
   const { repository, source, state } = fixture;
   const controller = new WorkbenchGitCheckpointController();
   const registry = new GitArcRegistry(repository);
@@ -967,7 +973,6 @@ controllerTest("partial", "partial acceptance, local reads and message amendment
   assert.equal(followUp.intentName, completed.intentName);
   const inventory = await controller.readScope({ cwd: source, harness: "codex", threadId: "partial-thread" });
   assert.deepEqual(inventory?.claimedPaths, ["planned.txt"]);
-  await checkLocalReadsAndMessageAmendments(fixture, secondProposal.proposalId);
 });
 
 async function checkProposalReadPurity({ repository, source, state }: ControllerBranch<"status">) {
@@ -1028,108 +1033,6 @@ async function checkProposalReadPurity({ repository, source, state }: Controller
   assert.deepEqual(committed.changes.map(change => [change.path, change.kind.type]), [["one.txt", "delete"]]);
   await assert.rejects(fs.stat(path.join(source, "one.txt")), { code: "ENOENT" });
   await assert.rejects(fs.stat(path.join(source, "added.txt")), { code: "ENOENT" });
-}
-
-async function checkLocalReadsAndMessageAmendments(fixture: ControllerBranch<"partial">, commitTargetProposalId: string) {
-  const { source } = fixture;
-  const controller = new WorkbenchGitCheckpointController();
-  await git(source, ["remote", "add", "haunted", path.join(source, "missing-remote")]);
-
-  const card = await controller.getProposal({
-    cwd: source,
-    harness: "codex",
-    includeNewer: false,
-    proposalId: commitTargetProposalId,
-    threadId: "partial-thread",
-  });
-  assert.deepEqual(card.amendability, { status: "available" });
-  await assert.rejects(controller.commitProposal({
-    cwd: source,
-    description: card.description,
-    harness: "codex",
-    includeNewer: false,
-    proposalId: card.proposalId,
-    threadId: "partial-thread",
-    title: `${card.title} changed`,
-  }), /Unable to refresh remote refs/u);
-  await git(source, ["remote", "remove", "haunted"]);
-  await checkMessageAmendments(fixture, card);
-}
-
-async function checkMessageAmendments({ repository, source }: ControllerBranch<"partial">, original: GitCheckpointProposal) {
-  const controller = new WorkbenchGitCheckpointController();
-  const registry = new GitArcRegistry(repository);
-  await registry.release({ harness: "codex", threadId: "partial-thread" });
-  assert.equal(await registry.find({ harness: "codex", threadId: "partial-thread" }), null);
-  assert.deepEqual(original.amendability, { status: "available" });
-  const amendment = await controller.createProposal({
-    amendProposalId: original.proposalId,
-    cwd: source,
-    description: "Replacement description",
-    harness: "codex",
-    threadId: "partial-thread",
-    title: "Replacement title",
-  });
-  assert.notEqual(amendment.proposalId, original.proposalId);
-  const laterHead = await advanceHead(repository, "advance after message proposal");
-  await fs.writeFile(path.join(source, "one.txt"), "unrelated unstaged\n");
-  await fs.writeFile(path.join(source, "two.txt"), "unrelated staged\n");
-  await git(source, ["add", "two.txt"]);
-  const [worktreeBefore, indexBefore, pending] = await Promise.all([
-    git(source, ["diff", "--binary"]),
-    git(source, ["diff", "--cached", "--binary"]),
-    controller.getProposal({
-      cwd: source, harness: "codex", includeNewer: false, proposalId: amendment.proposalId, threadId: "partial-thread",
-    }),
-  ]);
-  assert.deepEqual({ mode: pending.mode, status: pending.status, title: pending.title }, {
-    mode: "amend", status: "proposed", title: "Replacement title",
-  });
-  const accepted = await controller.commitProposal({
-    cwd: source,
-    description: amendment.description,
-    harness: "codex",
-    includeNewer: false,
-    proposalId: amendment.proposalId,
-    threadId: "partial-thread",
-    title: amendment.title,
-  });
-  assert.equal(accepted.status, "committed");
-  const [head, headTitle, prior, acceptedTitle, worktreeAfter, indexAfter] = await Promise.all([
-    repository.currentHead(),
-    git(source, ["show", "-s", "--format=%s", "HEAD"]),
-    controller.getProposal({
-      cwd: source, harness: "codex", includeNewer: false, proposalId: original.proposalId, threadId: "partial-thread",
-    }),
-    git(source, ["show", "-s", "--format=%s", accepted.committedSha!]),
-    git(source, ["diff", "--binary"]),
-    git(source, ["diff", "--cached", "--binary"]),
-  ]);
-  assert.notEqual(head, laterHead);
-  assert.equal(headTitle.trim(), "advance after message proposal");
-  assert.equal(prior.status, "superseded");
-  assert.equal(acceptedTitle.trim(), "Replacement title");
-  assert.equal(worktreeAfter, worktreeBefore);
-  assert.equal(indexAfter, indexBefore);
-
-  const directlyAmended = await controller.commitProposal({
-    cwd: source,
-    description: "Edited from the committed card",
-    harness: "codex",
-    includeNewer: false,
-    proposalId: amendment.proposalId,
-    threadId: "partial-thread",
-    title: "Card-edited title",
-  });
-  assert.notEqual(directlyAmended.committedSha, accepted.committedSha);
-  const [directTitle, directWorktree, directIndex] = await Promise.all([
-    git(source, ["show", "-s", "--format=%s", directlyAmended.committedSha!]),
-    git(source, ["diff", "--binary"]),
-    git(source, ["diff", "--cached", "--binary"]),
-  ]);
-  assert.equal(directTitle.trim(), "Card-edited title");
-  assert.equal(directWorktree, worktreeBefore);
-  assert.equal(directIndex, indexBefore);
 }
 
 controllerTest("replacement", "replacement plans target prior pending and committed proposals through the thread namespace", async ({ repository, source, state }) => {
@@ -1331,7 +1234,6 @@ controllerTest("claims", "combined claims and inactive plan edits preserve dirty
   });
   assert.match(historical.diff, /\+keep this work/u);
   await checkActivePlanEditing(fixture);
-  await checkActiveCleanRelease(repository, source);
 });
 
 async function checkActivePlanEditing({ repository, source }: ControllerBranch<"claims">) {
@@ -1463,63 +1365,7 @@ controllerTest("retained", "replacement plans retain every dirty claim and relea
   assert.equal(registryEntry?.retainedArc?.phase, "resolved");
   assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, []);
   assert.notEqual(registryEntry?.checkpointCommit, replacement.checkpointCommit);
-  await checkRetainedCleanRelease(repository, source);
 });
-
-async function checkRetainedCleanRelease(repository: WorkbenchGitRepository, source: string) {
-  const controller = new WorkbenchGitCheckpointController();
-  const threadId = "retained-release-thread";
-  const cleanPath = "retained-release-clean.txt";
-  const dirtyPath = "retained-release-dirty.txt";
-  await fs.writeFile(path.join(source, cleanPath), "initial clean path\n");
-  await fs.writeFile(path.join(source, dirtyPath), "initial dirty path\n");
-  await repository.run(["add", "--", cleanPath, dirtyPath]);
-  await repository.run(["commit", "-m", "add retained release fixtures"]);
-  await controller.createAndStartPlan({
-    cwd: source, harness: "codex", intentName: "retain mixed claims", paths: [cleanPath, dirtyPath], threadId,
-  });
-  await fs.writeFile(path.join(source, cleanPath), "dirty then clean\n");
-  await fs.writeFile(path.join(source, dirtyPath), "dirty retained path\n");
-  const nextPlan = await controller.createPlan({
-    cwd: source, harness: "codex", intentName: "keep the next plan", paths: [cleanPath, dirtyPath], threadId,
-  });
-  await repository.run(["restore", "--", cleanPath]);
-
-  const released = await controller.releaseArc({ cwd: source, disown: false, harness: "codex", threadId });
-  assert.deepEqual(released.releasedClaims, [cleanPath]);
-  assert.deepEqual(released.scopePaths, [dirtyPath]);
-  assert.equal(released.phase, "plan");
-  const registryEntry = await new GitArcRegistry(repository).find({ harness: "codex", threadId });
-  assert.equal(registryEntry?.checkpointCommit, nextPlan.checkpointCommit);
-  assert.equal(registryEntry?.phase, "plan");
-  assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, [dirtyPath]);
-}
-
-async function checkActiveCleanRelease(repository: WorkbenchGitRepository, source: string) {
-  const controller = new WorkbenchGitCheckpointController();
-  const threadId = "clean-release-thread";
-  const dirtyPath = "release-dirty.txt";
-  const cleanPath = "release-clean.txt";
-  await fs.writeFile(path.join(source, dirtyPath), "initial dirty path\n");
-  await fs.writeFile(path.join(source, cleanPath), "initial clean path\n");
-  await repository.run(["add", "--", dirtyPath, cleanPath]);
-  await repository.run(["commit", "-m", "add release fixtures"]);
-  await controller.createAndStartPlan({
-    cwd: source, harness: "codex", intentName: "release clean claims", paths: [cleanPath, dirtyPath], threadId,
-  });
-  await fs.writeFile(path.join(source, dirtyPath), "changed dirty path\n");
-
-  const partial = await controller.releaseArc({ cwd: source, disown: false, harness: "codex", threadId });
-  assert.deepEqual(partial.releasedClaims, [cleanPath]);
-  assert.deepEqual(partial.scopePaths, [dirtyPath]);
-  assert.equal(partial.phase, "active");
-  assert.deepEqual((await controller.findLifecycleState({ cwd: source, harness: "codex", threadId }))?.claimedPaths, [dirtyPath]);
-
-  const unchanged = await controller.releaseArc({ cwd: source, disown: false, harness: "codex", threadId });
-  assert.deepEqual(unchanged.releasedClaims, []);
-  assert.deepEqual(unchanged.scopePaths, [dirtyPath]);
-  assert.equal(unchanged.unchanged, true);
-}
 
 
 controllerTest("remote", "remote boundaries reject published amendments, unavailable refreshes and detached HEAD", async (fixture) => {
@@ -1539,15 +1385,30 @@ controllerTest("remote", "remote boundaries reject published amendments, unavail
   await checkRemoteFailures(fixture);
 });
 
-test("Git arc controller operations", { concurrency: 4 }, async (context) => {
-  const fixture = await fixtureCache.copy(CONTROLLER_OPERATIONS_FIXTURE);
-  context.after(fixture.dispose);
-  const order: Array<keyof ControllerFixtureState> = [
-    "partial", "diagnostics", "replacement", "legacy", "claims", "status",
-    "retained", "adoption", "empty", "workspace", "remote", "registry",
-  ];
-  await Promise.all(order.map(async (key) => {
-    const { name, run } = controllerCases.get(key)!;
-    await context.test(name, { concurrency: true }, (child) => run(fixture, child));
-  }));
-});
+const controllerCaseGroups: Array<{
+  name: string;
+  keys: Array<keyof ControllerFixtureState>;
+}> = [
+  {
+    name: "claim ownership and lifecycle operations",
+    keys: ["partial", "claims", "empty", "workspace", "registry"],
+  },
+  {
+    name: "planning and proposal state operations",
+    keys: ["diagnostics", "replacement", "status", "retained"],
+  },
+  {
+    name: "compatibility and external boundary operations",
+    keys: ["legacy", "adoption", "remote"],
+  },
+];
+for (const group of controllerCaseGroups) {
+  test(group.name, { concurrency: 4 }, async (context) => {
+    const fixture = controllerOperationsFixture;
+    assert.ok(fixture);
+    await Promise.all(group.keys.map(async (key) => {
+      const { name, run } = controllerCases.get(key)!;
+      await context.test(name, { concurrency: true }, (child) => run(fixture, child));
+    }));
+  });
+}

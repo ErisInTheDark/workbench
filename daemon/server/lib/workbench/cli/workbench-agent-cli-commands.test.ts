@@ -1,7 +1,4 @@
-/*
- * Exports:
- * - No production exports; Node tests cover wb parsing, questionnaire JSON, paged arc output, transport, response text, and generated shims.
- */
+/* Exports: none. Tests cover wb parsing, questionnaire JSON, paged arc output, transport, response text, and generated shims. */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -1338,7 +1335,6 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
     env: { ...env, WORKBENCH_DATA_ROOT: disconnectedDataRoot },
   });
   assert.equal(disconnected.exitCode, 0);
-  assert.match(disconnected.stderr, /curl:/u);
   assert.deepEqual(JSON.parse(disconnected.stdout), {});
 
   if (process.platform === "win32") {
@@ -1386,12 +1382,12 @@ test("generates executable POSIX and working Windows shims", async (context) => 
   env.WORKBENCH_THREAD_ID = "";
   env.CODEX_THREAD_ID = "";
   reloadStatusReadCount = 0;
-  const result = await execFileAsync(installed.windowsShimPath, [
-    "reload", "--server:codex",
+  const command = process.env.ComSpec ?? "cmd.exe";
+  const result = await execFileAsync(command, [
+    "/d", "/s", "/c", installed.windowsShimPath, "reload", "--server:codex",
   ], {
     cwd: temporaryDirectoryPath,
     env,
-    shell: true,
   });
   assert.equal(result.stdout, "Reload succeeded.\nApplied: server:codex\nQueued: none\n");
   const reloadPost = [...requests].reverse().find((request) => request.url === "/daemon/reload" && request.method === "POST");

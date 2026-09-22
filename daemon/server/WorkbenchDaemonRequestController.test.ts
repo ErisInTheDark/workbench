@@ -1,7 +1,4 @@
-/*
- * Exports:
- * - No production exports; tests protect semantic dispatch, parameter errors, and replaceable Browse ownership.
- */
+/* Exports: none. Tests protect semantic dispatch, parameter errors, and replaceable Browse ownership. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import Database from "better-sqlite3";
@@ -405,13 +402,16 @@ test("profile RPC preserves field intent and rejects malformed changes instead o
   });
   await controller.handle({ id: 1, method: "profiles/upsert", params: { profile: original, changes: { model: "latest" } } });
   await controller.handle({ id: 2, method: "profiles/upsert", params: { profile: original, changes: { reasoningEffort: null } } });
+  await controller.handle({ id: 3, method: "profiles/upsert", params: { profile: original, changes: { harness: "opencode" } } });
   assert.equal(profiles[0]?.model, "latest");
   assert.equal(profiles[0]?.reasoningEffort, null);
-  for (const changes of [[], null, "invalid", { harness: "copilot" }, { model: "" }]) {
-    const response = await controller.handle({ id: 3, method: "profiles/upsert", params: { profile: original, changes } });
+  assert.equal(profiles[0]?.harness, "opencode");
+  for (const changes of [[], null, "invalid", { harness: "" }, { model: "" }]) {
+    const response = await controller.handle({ id: 4, method: "profiles/upsert", params: { profile: original, changes } });
     assert.ok(response.error, "Malformed changes must fail, never turn into a full upsert or empty patch.");
   }
   assert.equal(profiles[0]?.model, "latest");
+  assert.equal(profiles[0]?.reasoningEffort, null);
 });
 
 test("search query dispatch preserves empty text and validates project ids", async () => {

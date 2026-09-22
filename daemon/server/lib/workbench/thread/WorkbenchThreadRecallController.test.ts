@@ -1,6 +1,4 @@
-/*
- * No production exports. Tests protect incremental SQLite history, exact-turn materialisation, search, expansion, validation, and cancellation.
- */
+/* Exports: none. Tests protect incremental SQLite history, exact-turn materialisation, search, expansion, validation, and cancellation. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -15,7 +13,9 @@ import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptObservation,
 } from "../../../database/transcript/workbench-transcript-types.ts";
-import WorkbenchThreadRecallController from "./WorkbenchThreadRecallController";
+import WorkbenchThreadRecallController, {
+  type WorkbenchThreadRecallControllerOptions,
+} from "./WorkbenchThreadRecallController";
 import { createSqliteWorkbenchThreadRecallRef, createWorkbenchThreadRecallCursor } from "./thread-context-recall.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
@@ -32,7 +32,11 @@ const fixtureIdentityValues = {
   },
 };
 
-function thread(): WorkbenchTranscriptAtomicObservation {
+type ThreadObservation = Extract<WorkbenchTranscriptAtomicObservation, { kind: "thread" }>;
+type TurnObservation = Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }>;
+type ItemObservation = Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }>;
+
+function thread(): ThreadObservation {
   return {
     activityAt: 10,
     createdAt: 1,
@@ -45,7 +49,7 @@ function thread(): WorkbenchTranscriptAtomicObservation {
   };
 }
 
-function turn(turnId: string, turnIndex: number): WorkbenchTranscriptAtomicObservation {
+function turn(turnId: string, turnIndex: number): TurnObservation {
   return {
     createdAt: turnIndex + 1,
     durationMs: 1,
@@ -68,7 +72,7 @@ function item(
   itemId: string,
   value: string,
   type: "agent" | "user",
-): WorkbenchTranscriptAtomicObservation {
+): ItemObservation {
   return {
     item: type === "agent"
       ? {
@@ -98,13 +102,50 @@ function item(
 function window(
   observations: WorkbenchTranscriptAtomicObservation[],
   materializedTurnIds: string[],
+  threadId: ThreadObservation["threadId"] = fixtureIdentityValues.WorkbenchThreadId["thread-one"],
 ): WorkbenchTranscriptObservation {
   return {
     contentVersion: 3,
     kind: "canonicalWindow",
     materializedTurnIds: materializedTurnIds.map((id) => fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(id)),
     observations,
-    threadId: fixtureIdentityValues.WorkbenchThreadId["thread-one"],
+    threadId,
+  };
+}
+
+function createReferenceResolver(
+  database: Database.Database,
+  readTranscript: (
+    request: Parameters<WorkbenchTranscriptRepository["read"]>[0],
+  ) => Promise<ReturnType<WorkbenchTranscriptRepository["read"]>>,
+  materializeTurn: (threadId: string, turnId: string | null) => Promise<void>,
+): NonNullable<WorkbenchThreadRecallControllerOptions["resolveReference"]> {
+  const threads = new WorkbenchThreadIdentityRepository(database);
+  const items = new WorkbenchTranscriptIdentityRepository(database);
+  return async (threadId, reference) => {
+    const canonicalThread = threads.resolve({
+      threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse(threadId),
+    });
+    assert.ok(canonicalThread);
+    const canonicalThreadId = canonicalThread.threadId;
+    const turn = threads.resolveTurn({
+      threadId: canonicalThreadId,
+      turnId: fixtureIdentitySchemas.TurnReferenceSchema.parse(reference.turnId),
+    });
+    assert.ok(turn);
+    let snapshot = await readTranscript({ threadId: canonicalThreadId, turnIds: [turn.turnId], turnLimit: 1 });
+    if (!snapshot) {
+      await materializeTurn(canonicalThreadId, turn.turnId);
+      snapshot = await readTranscript({ threadId: canonicalThreadId, turnIds: [turn.turnId], turnLimit: 1 });
+    }
+    assert.ok(snapshot);
+    const item = items.resolve({
+      threadId: canonicalThreadId,
+      turnId: turn.turnId,
+      itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse(reference.itemId),
+    });
+    assert.ok(item);
+    return { ...reference, turnId: turn.turnId, itemId: item.itemId };
   };
 }
 
@@ -133,28 +174,49 @@ function createHarness({
   const materializations: Array<string | null> = [];
   const reads: Array<readonly string[] | undefined> = [];
   const projects: string[] = [];
+  const readTranscript = async (request: Parameters<WorkbenchTranscriptRepository["read"]>[0]) => {
+    reads.push(request.turnIds);
+    return repository.read(request);
+  };
+  const materializeTurn = async (_threadId: string, turnId: string | null) => {
+    const identities = new WorkbenchThreadIdentityRepository(database);
+    const canonicalThread = identities.resolve({
+      threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("thread-one"),
+    });
+    const canonicalOldTurnId = canonicalThread && identities.resolveTurn({
+      threadId: canonicalThread.threadId,
+      turnId: fixtureIdentitySchemas.TurnReferenceSchema.parse("turn-old"),
+    })?.turnId;
+    const materializedTurnId = canonicalOldTurnId && turnId === canonicalOldTurnId ? "turn-old" : turnId;
+    materializations.push(materializedTurnId);
+    if (turnId === null) {
+      repository.settle([latestWindow]);
+      return;
+    }
+    if (materializedTurnId !== "turn-old") throw new Error(`unexpected materialisation ${turnId}`);
+    assert.ok(canonicalThread);
+    const materializedOldTurn = canonicalOldTurnId
+      ? { ...oldTurn, threadId: canonicalThread.threadId, turnId: canonicalOldTurnId }
+      : oldTurn;
+    const materializedOldItem = {
+      ...item("turn-old", "user-old", "older matching user", "user"),
+      threadId: canonicalThread.threadId,
+      turnId: materializedOldTurn.turnId,
+    };
+    const materializedWindow = window([
+      { ...thread(), threadId: canonicalThread.threadId },
+      materializedOldTurn,
+      materializedOldItem,
+    ], [materializedOldTurn.turnId], canonicalThread.threadId);
+    repository.settle([materializedWindow]);
+  };
   const controller = new WorkbenchThreadRecallController({
-    materializeTurn: async (_threadId, turnId) => {
-      materializations.push(turnId);
-      if (turnId === null) {
-        repository.settle([latestWindow]);
-        return;
-      }
-      if (turnId !== "turn-old") throw new Error(`unexpected materialisation ${turnId}`);
-      repository.settle([window([
-        thread(),
-        oldTurn,
-        newTurn,
-        item("turn-old", "user-old", "older matching user", "user"),
-      ], ["turn-old"])]);
-    },
-    readTranscript: async (request) => {
-      reads.push(request.turnIds);
-      return repository.read(request);
-    },
+    materializeTurn,
+    readTranscript,
     resolveProjectFromCwd: async (cwd) => {
       projects.push(cwd);
     },
+    resolveReference: createReferenceResolver(database, readTranscript, materializeTurn),
   });
   return {
     close: () => database.close(),
@@ -203,20 +265,13 @@ test("retained Recall references and cursor offsets survive identity conversion 
   reopened.pragma("foreign_keys = ON");
   harness.close();
   const repository = new WorkbenchTranscriptRepository(reopened);
-  const threads = new WorkbenchThreadIdentityRepository(reopened);
-  const items = new WorkbenchTranscriptIdentityRepository(reopened);
   const controller = new WorkbenchThreadRecallController({
     materializeTurn: async () => { throw new Error("Converted warm Recall must not read provider history"); },
     readTranscript: async (input) => repository.read(input),
     resolveProjectFromCwd: async () => {},
-    resolveReference: async (threadId, reference) => {
-      const turn = threads.resolveTurn({ threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), turnId: fixtureIdentitySchemas.TurnReferenceSchema.parse(reference.turnId) });
-      assert.ok(turn);
-      repository.read({ threadId, turnIds: [turn.turnId], turnLimit: 1 });
-      const item = items.resolve({ threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), turnId: turn.turnId, itemId: fixtureIdentitySchemas.ItemReferenceSchema.parse(reference.itemId) });
-      assert.ok(item);
-      return { ...reference, turnId: turn.turnId, itemId: item.itemId };
-    },
+    resolveReference: createReferenceResolver(reopened, async input => repository.read(input), async () => {
+      throw new Error("Converted warm Recall must not read provider history");
+    }),
   });
   try {
     const response = await controller.execute({ ...request, threadId: identity.threadId }, new AbortController().signal);
@@ -242,8 +297,9 @@ test("filtered history and expansion materialize only reached turns", async () =
       searchParams: new URLSearchParams([["kind", "user-message"]]),
       threadId: "thread-one",
     }, new AbortController().signal);
-    assert.equal(history.status, 200);
-    assert.match(await history.text(), /older matching user/u);
+    const historyText = await history.text();
+    assert.equal(history.status, 200, historyText);
+    assert.match(historyText, /older matching user/u);
     assert.deepEqual(historyHarness.materializations, ["turn-old"]);
     assert.deepEqual(historyHarness.reads, [
       [],
@@ -267,10 +323,15 @@ test("filtered history and expansion materialize only reached turns", async () =
       searchParams: new URLSearchParams(),
       threadId: "thread-one",
     }, new AbortController().signal);
-    assert.equal(expansion.status, 200);
-    assert.match(await expansion.text(), /older matching user/u);
+    const expansionText = await expansion.text();
+    assert.equal(expansion.status, 200, expansionText);
+    assert.match(expansionText, /older matching user/u);
     assert.deepEqual(expansionHarness.materializations, ["turn-old"]);
-    assert.deepEqual(expansionHarness.reads, [[], ["turn-old"], ["turn-old"]]);
+    assert.equal(expansionHarness.reads.length, 4);
+    assert.deepEqual(expansionHarness.reads[0], []);
+    assert.equal(expansionHarness.reads[1]?.length, 1);
+    assert.deepEqual(expansionHarness.reads[2], expansionHarness.reads[1]);
+    assert.deepEqual(expansionHarness.reads[3], expansionHarness.reads[1]);
   } finally {
     expansionHarness.close();
   }
@@ -285,8 +346,9 @@ test("search scans all turns while invalid requests and cancellation avoid trans
       searchParams: new URLSearchParams(),
       threadId: "thread-one",
     }, new AbortController().signal);
-    assert.equal(search.status, 200);
-    assert.match(await search.text(), /older matching user/u);
+    const searchText = await search.text();
+    assert.equal(search.status, 200, searchText);
+    assert.match(searchText, /older matching user/u);
     assert.deepEqual(harness.materializations, ["turn-old"]);
 
     const readsBeforeInvalid = harness.reads.length;
