@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - captureThreadStateMigrationSource: capture a consistent current migrated database without providers.
+ * - captureThreadStateMigrationSource: capture a consistent database directly into its private runtime location.
  * - verifyThreadStateMigrationSource: upgrade a real copy and verify retained relational facts.
- * - installThreadStateMigrationSource: install the upgraded capture with isolated filesystem addresses.
+ * - isolateThreadStateMigrationSource: rewrite the verified capture's filesystem addresses in place.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -16,16 +16,44 @@ import { tableForeignKeys } from "../../shared/database/schema/schema-definition
 import databaseReleases from "../../shared/workbench/database/schema/releases";
 import WorkbenchProjectIdentityMigration from "../../daemon/server/database/project/WorkbenchProjectIdentityMigration";
 
-export async function captureThreadStateMigrationSource(sourceDatabasePath: string, privateRoot: string) {
-  const directory = await fs.mkdtemp(path.join(privateRoot, "thread-state-source-"));
-  const databasePath = path.join(directory, "workbench.sqlite3");
+type CopyOptions = {
+  signal?: AbortSignal;
+  onProgress?: (progress: Database.BackupMetadata) => void;
+};
+
+export async function captureThreadStateMigrationSource(sourceDatabasePath: string, databasePath: string, options: CopyOptions = {}) {
+  options.signal?.throwIfAborted();
   const database = new Database(sourceDatabasePath, {
     readonly: true, fileMustExist: true,
   });
   try {
+    // Keep one source snapshot across incremental backup steps. Without it,
+    // writes from the live daemon can restart every batch indefinitely.
+    database.exec("BEGIN");
     const version = database.pragma("user_version", { simple: true }) as number;
     assert.ok(version >= 33, "Scenario source must be a current migrated database");
-    await database.backup(databasePath);
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    options.signal?.throwIfAborted();
+    // Reserve exclusively: cleanup may delete only the destination we created.
+    const reservation = await fs.open(databasePath, "wx");
+    await reservation.close();
+    try {
+      await database.backup(databasePath, {
+        progress: progress => {
+          options.signal?.throwIfAborted();
+          options.onProgress?.(progress);
+          options.signal?.throwIfAborted();
+          return 100;
+        },
+      });
+      options.signal?.throwIfAborted();
+    } catch (error) {
+      try { await fs.unlink(databasePath); }
+      catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "Database capture and partial-file cleanup failed");
+      }
+      throw error;
+    }
   } finally { database.close(); }
   return { databasePath };
 }
@@ -34,6 +62,9 @@ export async function verifyThreadStateMigrationSource(source: Awaited<ReturnTyp
   const database = new Database(source.databasePath, { fileMustExist: true });
   database.pragma("foreign_keys = ON");
   try {
+    // Read-only mappings avoid copying every scanned page into SQLite's cache.
+    // Keep migrations unmapped so Windows can still truncate database files.
+    database.pragma("mmap_size = 2147483648");
     const retained = workbenchDatabaseSchema.currentTables.filter(table =>
       !table.name.startsWith("workbench_thread_state_")
       && !table.name.startsWith("workbench_git_arc_proposal_diff")
@@ -51,11 +82,13 @@ export async function verifyThreadStateMigrationSource(source: Awaited<ReturnTyp
     ).all() as Row[];
     const before = retained.map(rows);
     const version = database.pragma("user_version", { simple: true }) as number;
+    database.pragma("mmap_size = 0");
     if (version < databaseReleases.stableProjectPreparation.version) {
       await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, { targetVersion: databaseReleases.stableProjectPreparation.version });
     }
     await new WorkbenchProjectIdentityMigration(database).run();
     await migrateWorkbenchDatabase(database, workbenchDatabaseSchema);
+    database.pragma("mmap_size = 2147483648");
     new WorkbenchThreadStateIntegrity(database).verify();
     const aliases = new Map((database.prepare("SELECT alias, project_id FROM workbench_project_aliases").all() as Array<{
       alias: string; project_id: string;
@@ -90,26 +123,27 @@ export async function verifyThreadStateMigrationSource(source: Awaited<ReturnTyp
         assert.equal(after.length, expected.length, `${table.name} must retain its row count`);
       }
     }
+    database.pragma("mmap_size = 0");
     await new WorkbenchProjectIdentityMigration(database).run();
     await migrateWorkbenchDatabase(database, workbenchDatabaseSchema);
+    database.pragma("mmap_size = 2147483648");
     new WorkbenchThreadStateIntegrity(database).verify();
+    assert.equal(database.pragma("user_version", { simple: true }), workbenchDatabaseSchema.currentVersion);
     assert.equal(database.pragma("integrity_check", { simple: true }), "ok");
     assert.deepEqual(database.pragma("foreign_key_check"), []);
-    console.log(`real current database upgraded and read back: ${retained.length} retained relational tables`);
+    console.log(`database schema ${version} -> ${workbenchDatabaseSchema.currentVersion}${version === workbenchDatabaseSchema.currentVersion ? " (no pending migration)" : ""}; ${retained.length} relational tables verified`);
   } finally { database.close(); }
 }
 
-export async function installThreadStateMigrationSource(
+export async function isolateThreadStateMigrationSource(
   source: Awaited<ReturnType<typeof captureThreadStateMigrationSource>>,
-  target: string,
   privateRoot: string,
+  signal?: AbortSignal,
 ) {
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  const captured = new Database(source.databasePath, { readonly: true, fileMustExist: true });
-  try { await captured.backup(target); }
-  finally { captured.close(); }
-  const database = new Database(target, { fileMustExist: true });
+  signal?.throwIfAborted();
+  const database = new Database(source.databasePath, { fileMustExist: true });
   try {
+    database.pragma("mmap_size = 2147483648");
     database.pragma("foreign_keys = OFF");
     database.transaction(() => {
       for (const table of workbenchDatabaseSchema.currentTables) {

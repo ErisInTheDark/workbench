@@ -391,7 +391,11 @@ export default class IsolatedWorkbench {
     };
     // These children represent a separate installation, never the agent's live caller.
     for (const key of ["WORKBENCH_THREAD_ID", "CODEX_THREAD_ID", "WORKBENCH_DESKTOP_PROTOCOL", "WORKBENCH_APP_PORT",
-      "CODEX_APP_SERVER_URL", "WORKBENCH_CODEX_APP_SERVER_URL", "WORKBENCH_CODEX_APP_SERVER_PORT"]) delete env[key];
+      "CODEX_APP_SERVER_URL", "WORKBENCH_CODEX_APP_SERVER_URL", "WORKBENCH_CODEX_APP_SERVER_PORT",
+      // Native acknowledgement, runtime ownership and foreground stdin belong to
+      // the parent supervisor. startService supplies the fixture's own session.
+      "WORKBENCH_SERVICE_ACK_REQUIRED", "WORKBENCH_SERVICE_RUNTIME", "WORKBENCH_SERVICE_SESSION",
+      "WORKBENCH_FOREGROUND_PIPE"]) delete env[key];
     env.WORKBENCH_APP_HOST = "127.0.0.1";
     return env;
   }

@@ -12,7 +12,7 @@ import WorkbenchComposerProfileStore from "../../daemon/server/WorkbenchComposer
 import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseRow } from "../../shared/database/workbench-database-statements";
 import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-database-schema";
 import IsolatedWorkbench from "./IsolatedWorkbench";
-import { captureThreadStateMigrationSource, installThreadStateMigrationSource, verifyThreadStateMigrationSource } from "./thread-state-migration-fixture";
+import { captureThreadStateMigrationSource, isolateThreadStateMigrationSource, verifyThreadStateMigrationSource } from "./thread-state-migration-fixture";
 import type { WorkbenchComposerProfile, WorkbenchProjectsPayload, WorkbenchPendingUserInputRequest } from "../../shared/types";
 import type { ThreadPayload } from "../../shared/types";
 import type { Turn } from "../../shared/workbench/thread/workbench-thread-turn";
@@ -70,13 +70,13 @@ test("current Workbench admits luna.low, preserves managed identity and records 
   const retainedFile = path.join(legacyRoot, "retained-cutover-evidence.json");
   const retainedContents = `{"retained":"${randomUUID()}"}`;
   try {
-    const captured = await captureThreadStateMigrationSource(sourceDatabasePath, runtime.root);
-    await verifyThreadStateMigrationSource(captured);
-    await installThreadStateMigrationSource(
-      captured,
+    const captured = await captureThreadStateMigrationSource(
+      sourceDatabasePath,
       path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"),
-      runtime.root,
+      { signal: t.signal },
     );
+    await verifyThreadStateMigrationSource(captured);
+    await isolateThreadStateMigrationSource(captured, runtime.root, t.signal);
     await fs.mkdir(legacyRoot, { recursive: true });
     await fs.writeFile(retainedFile, retainedContents);
     const gateProof = `gate-${randomUUID()}`;

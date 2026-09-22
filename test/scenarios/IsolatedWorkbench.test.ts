@@ -41,12 +41,58 @@ async function runtime(
 }
 
 const hostProgram = `
-  console.log("host-pid", process.pid);
+  console.log("host-pid " + process.pid);
   console.log("workbench-host-ready");
   process.on("message", message => {
     if (message.type === "workbench-scenario-close") process.exit(0);
   });
 `;
+
+test("isolated host and app do not inherit the caller's supervisor ownership", async context => {
+  const inherited = {
+    WORKBENCH_SERVICE_ACK_REQUIRED: "1",
+    WORKBENCH_SERVICE_RUNTIME: path.join(os.tmpdir(), "parent-host-runtime"),
+    WORKBENCH_SERVICE_SESSION: "parent-supervision-session",
+    WORKBENCH_FOREGROUND_PIPE: "1",
+  };
+  for (const [key, value] of Object.entries(inherited)) {
+    const previous = process.env[key];
+    process.env[key] = value;
+    context.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+  }
+  const rejectBorrowedOwner = `
+    for (const key of ["WORKBENCH_SERVICE_ACK_REQUIRED", "WORKBENCH_SERVICE_RUNTIME", "WORKBENCH_FOREGROUND_PIPE"]) {
+      if (process.env[key]) throw new Error("Borrowed parent supervision: " + key);
+    }
+  `;
+  const fixture = await runtime(context, context.signal, undefined, {
+    host: `
+      ${rejectBorrowedOwner}
+      if (!process.env.WORKBENCH_SERVICE_SESSION || process.env.WORKBENCH_SERVICE_SESSION === "parent-supervision-session") {
+        throw new Error("Host must own a fresh supervision session");
+      }
+      ${hostProgram}
+    `,
+    app: `
+      ${rejectBorrowedOwner}
+      if (process.env.WORKBENCH_SERVICE_SESSION) throw new Error("App inherited a host session");
+      console.log("listening at http://127.0.0.1:12345");
+      process.on("message", message => {
+        if (message.type === "workbench-scenario-close") process.exit(0);
+      });
+    `,
+  });
+  try {
+    await fixture.startApp();
+    assert.equal((await fixture.stop()).app, 0);
+    for (const [key, value] of Object.entries(inherited)) assert.equal(process.env[key], value);
+  } finally {
+    await fixture.close();
+  }
+});
 
 test("owned host and app can stop and reopen without retaining old processes", async context => {
   const fixture = await runtime(context, context.signal, undefined, {
