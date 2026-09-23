@@ -178,7 +178,7 @@ export default function ThreadGitArcLifecycleCard({
                   </span>
                   <span className="inline-flex min-w-0 items-center justify-end gap-2" data-thread-summary-action="true">
                     {phase === "stashed" ? (
-                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("unstash")}>
+                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("unstash")} pendingHalo={activeAction === "unstash"}>
                         <GitArcIcon action="unstash" className="mr-1.5" size={14} />
                         {activeAction === "unstash" ? "Unstashing." : "Unstash"}
                       </PrimaryButton>
@@ -191,6 +191,7 @@ export default function ThreadGitArcLifecycleCard({
                           disabled={activeAction !== null}
                           holdToConfirmMs={2000}
                           onClick={() => void runAction("restoreAndUnclaim")}
+                          pendingHalo={activeAction === "restoreAndUnclaim"}
                           tone="danger"
                         >
                           <ResetIcon className="mr-1.5" size={14} />
@@ -204,6 +205,7 @@ export default function ThreadGitArcLifecycleCard({
                             disabled={activeAction !== null}
                             holdToConfirmMs={2000}
                             onClick={() => void runAction("restore")}
+                            pendingHalo={activeAction === "restore"}
                             tone="danger"
                           >
                             <ResetIcon className="mr-1.5" size={14} />
@@ -214,6 +216,7 @@ export default function ThreadGitArcLifecycleCard({
                             className="!px-3 !py-1.5 !text-[0.76rem]"
                             disabled={activeAction !== null}
                             onClick={() => void runAction("unclaim")}
+                            pendingHalo={activeAction === "unclaim"}
                           >
                             <GitArcUnclaimedIcon className="mr-1.5" size={14} />
                             {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim"}
@@ -221,13 +224,13 @@ export default function ThreadGitArcLifecycleCard({
                         </>
                       )
                     ) : phase === "active" && changeState === "clean" ? (
-                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("unclaim")}>
+                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("unclaim")} pendingHalo={activeAction === "unclaim"}>
                         <GitArcUnclaimedIcon className="mr-1.5" size={14} />
                         {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim"}
                       </PrimaryButton>
                     ) : phase === "active" && changeState === "loading" ? <span className="text-[0.74em] text-fg/muted">Checking claimed files…</span> : null}
                     {phase === "active" ? (
-                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("stash")}>
+                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("stash")} pendingHalo={activeAction === "stash"}>
                         <GitArcIcon action="stash" className="mr-1.5" size={14} />
                         {activeAction === "stash" ? "Stashing…" : "Stash"}
                       </PrimaryButton>
