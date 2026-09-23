@@ -135,6 +135,15 @@ export default class WorkbenchStatsImportRepository {
         error_text = NULL
     `);
     this.database.transaction(() => {
+      this.database.prepare(`
+        DELETE FROM git_claim_imports
+        WHERE state != 'completed'
+          AND NOT EXISTS (
+            SELECT 1 FROM workbench_project_roots root
+            WHERE root.project_id = git_claim_imports.project_id
+              AND root.root_id = git_claim_imports.root_id
+          )
+      `).run();
       for (const discovery of discoveries) {
         this.database.prepare("INSERT INTO workbench_harnesses(id) VALUES (?) ON CONFLICT(id) DO NOTHING").run(discovery.harness);
         insert.run(

@@ -84,6 +84,63 @@ test("usage and claim imports resume safely and isolate failed work", () => {
   }
 });
 
+test("removed project roots do not retry unfinished claim imports or lose completed facts", () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  try {
+    database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(testProjectIds.project);
+    const insertRoot = database.prepare(`
+      INSERT INTO workbench_project_roots(project_id, root_id, root_index, name, relative_path, root_path)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insertRoot.run(testProjectIds.project, "removed", 0, "removed", "removed", "C:/removed");
+    insertRoot.run(testProjectIds.project, "active", 1, "active", "active", "C:/active");
+    const repository = new WorkbenchStatsImportRepository(database);
+    const discovery = (rootId: string, name: string, observedAt: number) => ({
+      checkpointCommit: "a".repeat(40),
+      checkpointRef: `refs/worktree/agents/codex/thread/checkpoints/${name}`,
+      harness: "codex",
+      observedAt,
+      projectId: testProjectIds.project,
+      repositoryRoot: `C:/${rootId}`,
+      rootId,
+      threadId: "thread",
+      workspaceRoot: `C:/${rootId}`,
+    });
+    const completed = discovery("removed", "completed", 4);
+    const removedFailure = discovery("removed", "removed-failed", 3);
+    const activeFailure = discovery("active", "active-failed", 2);
+    const removedProcessing = discovery("removed", "processing", 1);
+    const removedPending = discovery("removed", "pending", 0);
+    repository.addClaimDiscoveries("first", [completed, removedFailure, activeFailure, removedProcessing, removedPending], 1);
+    for (const [expected, state] of [
+      [completed, "completed"], [removedFailure, "failed"], [activeFailure, "failed"],
+    ] as const) {
+      const candidate = repository.claimClaims("first", 2);
+      assert.equal(candidate?.checkpointRef, expected.checkpointRef);
+      repository.settleClaims("first", candidate!, state === "completed"
+        ? { paths: ["src/file.ts"], state }
+        : { error: "spawn git ENOENT", state }, 3);
+    }
+    assert.equal(repository.claimClaims("first", 3)?.checkpointRef, removedProcessing.checkpointRef);
+
+    database.prepare("DELETE FROM workbench_project_roots WHERE project_id = ? AND root_id = 'removed'").run(testProjectIds.project);
+    repository.addClaimDiscoveries("second", [activeFailure], 4);
+
+    const retried = repository.claimClaims("second", 5);
+    assert.equal(retried?.checkpointRef, activeFailure.checkpointRef);
+    assert.equal(repository.claimClaims("second", 6), null);
+    assert.deepEqual(database.prepare("SELECT checkpoint_ref, state FROM git_claim_imports ORDER BY checkpoint_ref").all(), [
+      { checkpoint_ref: completed.checkpointRef, state: "completed" },
+      { checkpoint_ref: activeFailure.checkpointRef, state: "processing" },
+    ].sort((left, right) => left.checkpoint_ref.localeCompare(right.checkpoint_ref)));
+    assert.deepEqual(database.prepare("SELECT claimed_path FROM git_claim_thread_file_days").all(), [
+      { claimed_path: "src/file.ts" },
+    ]);
+  } finally { database.close(); }
+});
+
 test("usage schema v10 preserves pricing context while discarding v1 token facts", () => {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
