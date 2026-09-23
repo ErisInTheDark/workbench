@@ -4,6 +4,11 @@
 @import "./theme.css";
 @import "./tailwind/colour-utilities.css";
 @import "./tailwind/scrollbar-utilities.css";
+@import "./tailwind/loading-utilities.css";
+
+@custom-variant coarse-touch (@media (hover: none) and (pointer: coarse));
+@custom-variant code-wrap (&:where([data-thread-codeblock-wrap=true] *));
+
 @source "./";
 
 @layer base {

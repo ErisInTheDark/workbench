@@ -76,21 +76,22 @@ export default function ThreadLiveActivity({
   );
 
   if (!activity) return null;
+  const showReasoning = Boolean(reasoningDisplay?.body || (activity.kind === "webSearch" && activity.contextItems.length));
   return (
     <div className="py-4">
       <ThreadDisclosure
         hideChevron
-        className="thread-live-disclosure"
-        contentClassName="thread-live-content"
+        className="group/live overflow-hidden rounded-[0.8rem] border border-transparent open:border-fg-alpha/16 open:bg-fg-alpha/3"
+        contentClassName="flex h-[min(100vh,24rem)] flex-col"
         open={isOpen}
         onOffscreen={() => setIsOpen(false)}
         onToggle={event => setIsOpen(event.currentTarget.open)}
-        summaryClassName="thread-live-summary text-[0.92em] font-medium leading-[1.6]"
+        summaryClassName="group-open/live:border-b group-open/live:border-fg-alpha/16 px-3 py-2 text-[0.92em] font-medium leading-[1.6]"
         summaryContentClassName="-mb-1"
         summary={<span aria-live="polite">{title}</span>}
       >
-        {reasoningDisplay?.body || (activity?.kind === "webSearch" && activity.contextItems.length) ? (
-          <ThreadScrollViewport resetKey={`${threadId}:${turnId}:reasoning`} className="thread-live-reasoning" contentClassName="px-3 py-2">
+        {showReasoning ? (
+          <ThreadScrollViewport resetKey={`${threadId}:${turnId}:reasoning`} className="flex-[0_1_auto] max-h-[30%] overscroll-contain border-b border-fg-alpha/16 [&_[data-thread-scroll-end=true]]:[scroll-margin-block-start:0]" contentClassName="px-3 py-2">
             {reasoningDisplay?.body ? <ThreadMarkdown
               className="text-[0.8em] text-fg/muted"
               inlineMentionSources={inlineMentionSources}
@@ -107,7 +108,7 @@ export default function ThreadLiveActivity({
             <ThreadScrollViewportEnd />
           </ThreadScrollViewport>
         ) : null}
-        <ThreadCommandTerminal items={items} context={terminalContext} retention={terminalRetention} open={isOpen} presentationSource={presentationSource} threadId={threadId} turnId={turnId} />
+        <ThreadCommandTerminal items={items} context={terminalContext} retention={terminalRetention} hasReasoning={showReasoning} open={isOpen} presentationSource={presentationSource} threadId={threadId} turnId={turnId} />
       </ThreadDisclosure>
     </div>
   );

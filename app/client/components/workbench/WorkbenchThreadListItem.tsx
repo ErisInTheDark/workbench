@@ -290,8 +290,7 @@ export default function WorkbenchThreadListItem({
     <button
       type="button"
       aria-label={`More actions for ${entry.title}`}
-      className="pointer-events-auto absolute right-0 top-1/2 z-30 size-11 -translate-y-1/2 items-center justify-center rounded-lg text-fg/muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-      data-thread-context-menu-trigger="true"
+      className="pointer-events-auto absolute right-0 top-1/2 z-30 hidden size-11 -translate-y-1/2 items-center justify-center rounded-lg text-fg/muted transition coarse-touch:inline-flex hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
       onClick={(event) => {
         event.stopPropagation();
         const rect = event.currentTarget.getBoundingClientRect();
@@ -351,8 +350,11 @@ export default function WorkbenchThreadListItem({
       {contextMenuButton}
       {compact ? (
         <div
-          className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-[var(--thread-context-menu-row-padding-right,0.5rem)] pl-2 md:min-h-0"
-          data-thread-context-menu-content={contextMenu ? "true" : undefined}
+          className={`
+            pointer-events-none relative z-10 grid min-h-11 min-w-0
+            grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-0
+            ${contextMenu ? "coarse-touch:pr-12" : ""}
+          `}
         >
           <Icon className={`mr-1.5 ${statusClassName}`} size={14} />
           <span className={`${workbenchThreadListLabelClassName} truncate${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>

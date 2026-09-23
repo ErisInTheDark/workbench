@@ -291,14 +291,13 @@ function renderThreadListItem (
   return (
     <li className="[&+li]:mt-1" key={keyPrefix} value={item.ordinal ?? undefined}>
       <details
-        className="thread-disclosure block min-w-0 max-w-full"
+        className="block min-w-0 max-w-full"
         open
       >
         <summary className="flex min-w-0 max-w-full cursor-pointer list-none items-center [&::-webkit-details-marker]:hidden">
           <span className="min-w-0">{content.length ? content : <br />}</span>
           <ChevronIcon
-            data-thread-chevron
-            className="ml-[0.12em] transition-transform"
+            className="ml-[0.12em] transform-[rotate(-90deg)] [details[open]>summary_&]:transform-[rotate(0deg)] transition-transform"
             size={20}
           />
         </summary>
@@ -579,7 +578,6 @@ function ThreadCodeBlock ({
       className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`}
       data-thread-codeblock="true"
       data-thread-codeblock-diff={isDiffCodeBlock ? "true" : undefined}
-      data-thread-codeblock-svg-preview-state={isSvgCodeBlock ? (isSvgPreviewing ? "preview" : "code") : undefined}
     >
       <div className="flex min-h-[2.05rem] items-center justify-between gap-2 border-b border-[color-mix(in_srgb,var(--text)_8%,transparent)] px-[0.65rem] py-[0.28rem]">
         <span className="flex min-w-0 items-center gap-1.5 pl-[0.15rem] font-mono text-[0.72em] leading-none text-fg/muted">
@@ -612,7 +610,6 @@ function ThreadCodeBlock ({
               size="compact"
               aria-pressed={isSvgPreviewing}
               className={CODE_BLOCK_HEADER_BUTTON_CLASS}
-              data-thread-codeblock-svg-preview="true"
               data-thread-codeblock-toggle-state={isSvgPreviewing ? "active" : "idle"}
               onClick={() => setIsSvgPreviewing((current) => !current)}
               title={isSvgPreviewing ? "Show SVG source" : "Preview SVG code block"}
@@ -637,22 +634,29 @@ function ThreadCodeBlock ({
       </div>
       <div className="relative min-h-[2.8rem]" data-thread-codeblock-body="true">
         <pre
-          className={`max-w-full overflow-x-auto whitespace-pre py-[0.8rem] ${isDiffCodeBlock ? "px-0" : "px-[0.95rem]"}`}
+          className={`
+            max-w-full overflow-x-auto whitespace-pre py-[0.8rem]
+            code-wrap:overflow-x-hidden code-wrap:wrap-anywhere code-wrap:whitespace-pre-wrap code-wrap:[word-break:break-word]
+            ${isDiffCodeBlock ? "px-0" : "px-[0.95rem]"}
+            ${isSvgPreviewing ? "invisible pointer-events-none" : ""}
+          `}
           data-language={language}
           data-thread-codeblock-pre="true"
         >
-          <code className="block w-max min-w-full rounded-none bg-transparent p-0 font-mono text-[0.94em]" data-thread-codeblock-code="true">
+          <code
+            className="
+              block w-max min-w-full rounded-none bg-transparent p-0 font-mono text-[0.94em]
+              code-wrap:max-w-full code-wrap:min-w-0 code-wrap:w-full code-wrap:wrap-anywhere code-wrap:[white-space:inherit]
+            "
+            data-thread-codeblock-code="true"
+          >
             {isDiffCodeBlock ? renderThreadDiffCodeBlock(block.text, keyPrefix) : block.text}
           </code>
         </pre>
         {svgPreviewSrcDoc ? (
-          <div
-            className="absolute inset-0 overflow-auto p-[0.95rem]"
-            data-thread-codeblock-svg-preview-layer="true"
-          >
+          <div className="absolute inset-0 overflow-auto p-[0.95rem]">
             <iframe
-              className="block size-full border-0 bg-transparent"
-              data-thread-codeblock-svg-preview-frame="true"
+              className="block size-full border-0 bg-transparent scheme-light-dark"
               key={svgPreviewSrcDoc}
               sandbox=""
               srcDoc={svgPreviewSrcDoc}

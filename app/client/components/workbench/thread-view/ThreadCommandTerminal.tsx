@@ -44,7 +44,7 @@ const TerminalCommandRow = memo(function TerminalCommandRow({
   threadId: string;
   turnId: string;
 }) {
-  return <div data-terminal-row={id} className={`thread-terminal-row ${firstRunning ? "thread-terminal-running" : ""}`}>
+  return <div data-terminal-row={id} className={`shrink-0 ${firstRunning ? "mt-auto border-t border-fg-alpha/16" : ""}`}>
     <ThreadMeasuredContent>
     {open && streamsOutput && status === "inProgress" ? <TerminalOutputSubscription
       entry={{ id, output }} controller={controller} presentationSource={presentationSource} threadId={threadId} turnId={turnId}
@@ -61,10 +61,11 @@ const TerminalCommandRow = memo(function TerminalCommandRow({
   </div>;
 });
 
-export default function ThreadCommandTerminal({ items, context, retention, open, presentationSource, threadId, turnId }: {
+export default function ThreadCommandTerminal({ items, context, retention, hasReasoning, open, presentationSource, threadId, turnId }: {
   items: readonly ThreadItem[];
   context: ThreadTerminalContext;
   retention: Omit<ThreadTerminalRetention, "now">;
+  hasReasoning: boolean;
   open: boolean;
   presentationSource?: ThreadTextPresentationSource | null;
   threadId: string;
@@ -131,7 +132,11 @@ export default function ThreadCommandTerminal({ items, context, retention, open,
     if (event.button === 2 && selectedTerminalText(event.currentTarget)) event.preventDefault();
   };
   return <>
-    <ThreadScrollViewport resetKey={turnId} className="thread-live-terminal" contentClassName="flex min-w-0 flex-col">
+    <ThreadScrollViewport
+      resetKey={turnId}
+      className={`overscroll-contain [&_[data-thread-scroll-end=true]]:[scroll-margin-block-start:0] ${hasReasoning ? "flex-[1_1_70%] max-h-[70%]" : "flex-[1_1_100%] max-h-full"}`}
+      contentClassName="flex min-w-0 flex-col"
+    >
       <div
         ref={content}
         className="relative flex min-w-0 flex-1 flex-col"

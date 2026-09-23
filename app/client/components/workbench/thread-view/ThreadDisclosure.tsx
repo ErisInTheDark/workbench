@@ -129,7 +129,7 @@ function ThreadDisclosureContent ({
 
   return (
     <details
-      className={joinClasses("thread-disclosure min-w-0 max-w-full [&>summary::-webkit-details-marker]:hidden", className)}
+      className={joinClasses("min-w-0 max-w-full [&>summary::-webkit-details-marker]:hidden", className)}
       open={isOpen}
       onToggle={(event) => {
         if (!isControlled) {
@@ -149,9 +149,8 @@ function ThreadDisclosureContent ({
         onKeyDown={handleSummaryKeyDown}
       >
         {!hideChevron ? <ChevronIcon
-          data-thread-chevron
           className={joinClasses(
-            "transition-transform",
+            "transform-[rotate(-90deg)] [details[open]>summary_&]:transform-[rotate(0deg)] transition-transform",
             chevronClassName,
           )}
           size={18}

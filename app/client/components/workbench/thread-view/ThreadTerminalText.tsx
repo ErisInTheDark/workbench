@@ -38,7 +38,7 @@ export default function ThreadTerminalText({ text, expanded, onExpand, command =
     </pre>
     {!expanded && (shown.length < text.length || overflowing) ? <button
       type="button"
-      className="thread-terminal-expand absolute bottom-0 right-0 cursor-pointer rounded px-1 focus-visible:outline focus-visible:outline-1"
+      className="absolute bottom-0 right-0 cursor-pointer rounded px-1 [&:hover]:bg-fg-alpha/7 focus-visible:outline focus-visible:outline-1"
       aria-label={command ? "Show full command" : "Show full output"}
       onClick={onExpand}
     >[...]</button> : null}

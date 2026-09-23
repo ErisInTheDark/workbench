@@ -40,8 +40,7 @@ test("context menu renders action, separator, checkbox, and radio semantics", ()
   }));
 
   assert.match(html, /role="menu" aria-label="Thread actions"/u);
-  assert.match(html, /aria-label="Close context menu"[^>]*data-workbench-context-menu-backdrop="true"/u);
-  assert.match(html, /data-workbench-context-menu="true"/u);
+  assert.match(html, /aria-label="Close context menu"/u);
   assert.match(html, /role="menuitem"[^>]*>[^<]*<span[^>]*>Open/u);
   assert.match(html, /role="separator"/u);
   assert.match(html, /role="group" aria-label="Priority"/u);

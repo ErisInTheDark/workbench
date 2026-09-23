@@ -6,7 +6,7 @@
  */
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 import { getWorkbenchThreadStatusControlClassName } from "./workbench-thread-status-colors";
 import type { WorkbenchContextMenuControl, WorkbenchContextMenuControlGroup, WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
@@ -114,8 +114,7 @@ export default function WorkbenchContextMenuSurface({
         ref={backdropRef}
         type="button"
         aria-label="Close context menu"
-        className="pointer-events-none fixed inset-0 z-50 cursor-default border-0 bg-transparent p-0"
-        data-workbench-context-menu-backdrop="true"
+        className="pointer-events-none fixed inset-0 z-50 cursor-default border-0 bg-transparent p-0 coarse-touch:pointer-events-auto coarse-touch:[background:color-mix(in_srgb,var(--shell-fade-bg),transparent_10%)]"
         tabIndex={-1}
         onClick={(event) => {
           event.preventDefault();
@@ -127,9 +126,18 @@ export default function WorkbenchContextMenuSurface({
       <WorkbenchMenuSurface
         ref={menuRef}
         aria-label={menu.label}
-        className="min-w-48 max-w-[min(18rem,calc(100vw-1rem))] pb-[calc(0.25rem+min(0.75rem,var(--workbench-safe-area-bottom,0px)))]"
-        data-workbench-context-menu="true"
-        style={{ left: position.left, top: position.top }}
+        className={`
+          left-(--context-menu-left) top-(--context-menu-top)
+          min-w-48 max-w-[min(18rem,calc(100vw-1rem))]
+          pb-[calc(0.25rem+min(0.75rem,var(--workbench-safe-area-bottom,0px)))]
+          coarse-touch:bottom-0 coarse-touch:left-0 coarse-touch:right-0 coarse-touch:top-auto
+          coarse-touch:w-full coarse-touch:max-h-[50dvh] coarse-touch:max-w-none
+          coarse-touch:overflow-y-auto coarse-touch:overscroll-contain coarse-touch:rounded-b-none
+        `}
+        style={{
+          "--context-menu-left": `${position.left}px`,
+          "--context-menu-top": `${position.top}px`,
+        } as CSSProperties}
       >
       {menu.items.map((item) => {
         if (item.kind === "separator") {

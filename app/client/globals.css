@@ -242,21 +242,6 @@
     width: 2.25rem;
   }
 
-  .workbench-skeleton {
-    background-color: color-mix(in srgb, var(--text) 7%, transparent);
-    background-image:
-      linear-gradient(
-        90deg,
-        color-mix(in srgb, var(--text) 7%, transparent) 0%,
-        color-mix(in srgb, var(--text) 7%, transparent) 36%,
-        color-mix(in srgb, var(--accent) 15%, transparent) 50%,
-        color-mix(in srgb, var(--text) 7%, transparent) 64%,
-        color-mix(in srgb, var(--text) 7%, transparent) 100%
-      );
-    background-size: 200% 100%;
-    animation: workbench-skeleton-shimmer 1.6s linear infinite;
-  }
-
   .editor-content:empty::before {
     color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
     content: attr(data-placeholder);
@@ -346,16 +331,6 @@
 
   .editor-diff-marker[data-marker-type="modify"] {
     color: var(--attention);
-  }
-
-  @keyframes workbench-skeleton-shimmer {
-    from {
-      background-position: 200% 50%;
-    }
-
-    to {
-      background-position: 0% 50%;
-    }
   }
 
   .editor-diff-marker[data-marker-type="delete"] {
@@ -470,14 +445,6 @@
 
   .editor-content li > details[open] > summary::after {
     transform: rotate(90deg);
-  }
-
-  .thread-disclosure [data-thread-chevron] {
-    transform: rotate(-90deg);
-  }
-
-  .thread-disclosure[open] > summary [data-thread-chevron] {
-    transform: rotate(0deg);
   }
 
   .editor-content blockquote {
@@ -854,7 +821,6 @@
       transition: none;
     }
 
-    .workbench-skeleton,
     .workbench-spinning-border-trail,
     .thread-thinking-text {
       animation: none;
@@ -880,148 +846,6 @@
     word-break: break-word;
   }
 
-  [data-thread-codeblock-wrap="true"] [data-thread-codeblock-pre="true"] {
-    overflow-x: hidden !important;
-    overflow-wrap: anywhere !important;
-    white-space: pre-wrap !important;
-    word-break: break-word !important;
-  }
-
-  [data-thread-codeblock-wrap="true"] [data-thread-codeblock-code="true"] {
-    max-width: 100% !important;
-    min-width: 0 !important;
-    overflow-wrap: anywhere !important;
-    white-space: inherit !important;
-    width: 100% !important;
-  }
-
-  [data-thread-codeblock-wrap="true"] [data-thread-codeblock-wrap-toggle="true"] {
-    color: var(--accent);
-  }
-
-  [data-thread-codeblock-toggle-state="active"] {
-    background: color-mix(in srgb, var(--accent) 11%, transparent);
-    color: var(--accent);
-  }
-
-  [data-thread-codeblock-toggle-state="active"]:hover,
-  [data-thread-codeblock-toggle-state="active"]:focus-visible {
-    background: color-mix(in srgb, var(--accent) 17%, transparent);
-    color: var(--accent);
-  }
-
-  [data-thread-codeblock-svg-preview-state="preview"] [data-thread-codeblock-pre="true"] {
-    pointer-events: none;
-    visibility: hidden;
-  }
-
-  [data-thread-codeblock-svg-preview-layer="true"] {
-    display: none;
-  }
-
-  [data-thread-codeblock-svg-preview-state="preview"] [data-thread-codeblock-svg-preview-layer="true"] {
-    display: block;
-  }
-
-  [data-thread-codeblock-svg-preview-frame="true"] {
-    background: transparent;
-    border: 0;
-    color-scheme: light dark;
-  }
-
-  [data-thread-context-menu-trigger="true"] {
-    display: none;
-  }
-
-  .thread-live-disclosure {
-    --thread-live-height: min(100vh, 24rem);
-    --thread-live-border: color-mix(in srgb, var(--text) 16%, transparent);
-    border: 1px solid transparent;
-    border-radius: 0.8rem;
-    overflow: hidden;
-  }
-
-  .thread-live-disclosure[open] {
-    border-color: var(--thread-live-border);
-    background: color-mix(in srgb, var(--text) 3%, transparent);
-  }
-
-  .thread-live-summary {
-    padding: 0.5rem 0.75rem;
-  }
-
-  .thread-live-disclosure[open] > .thread-live-summary {
-    border-bottom: 1px solid var(--thread-live-border);
-  }
-
-  .thread-live-content {
-    display: flex;
-    flex-direction: column;
-    height: var(--thread-live-height);
-  }
-
-  .thread-live-reasoning {
-    flex: 0 1 auto;
-    max-height: 30%;
-    border-bottom: 1px solid var(--thread-live-border);
-    overscroll-behavior: contain;
-  }
-
-  .thread-live-terminal {
-    flex: 1 1 70%;
-    max-height: 70%;
-    overscroll-behavior: contain;
-  }
-
-  .thread-live-content:not(:has(> .thread-live-reasoning)) > .thread-live-terminal {
-    flex-basis: 100%;
-    max-height: 100%;
-  }
-
-  /* The thread's near-end snap area exceeds these nested viewports and prevents growth following. */
-  :is(.thread-live-reasoning, .thread-live-terminal) [data-thread-scroll-end="true"] {
-    scroll-margin-block-start: 0;
-  }
-
-  .thread-terminal-row {
-    flex-shrink: 0;
-  }
-
-  .thread-terminal-running {
-    margin-top: auto;
-    border-top: 1px solid var(--thread-live-border);
-  }
-
-  .thread-terminal-expand:hover {
-    background: color-mix(in srgb, var(--text) 7%, transparent);
-  }
-
-  [data-thread-scroll-target="true"] {
-    --thread-scroll-inline-padding: 1.25rem;
-    --thread-scroll-snap-distance: var(--thread-scroll-near-end-distance);
-    overflow-anchor: none;
-    scroll-snap-type: none;
-  }
-
-  [data-thread-scroll-target="true"][data-thread-scroll-direction="down"] {
-    scroll-snap-type: y proximity;
-  }
-
-  [data-thread-scroll-target="true"][data-thread-scroll-direction="down"][data-thread-scroll-proximity="near"] {
-    --thread-scroll-snap-distance: calc(100dvh - 1px);
-  }
-
-  [data-thread-scroll-end="true"] {
-    scroll-margin-block-start: var(--thread-scroll-snap-distance);
-    scroll-snap-align: end;
-  }
-
-  @media (min-width: 48rem) {
-    [data-thread-scroll-target="true"] {
-      --thread-scroll-inline-padding: 1.5rem;
-    }
-  }
-
   @media (hover: none) and (pointer: coarse) {
     .sticky-composer-shell {
       bottom: 0;
@@ -1033,33 +857,6 @@
         border-bottom-left-radius: 0;
         border-bottom-right-radius: 0;
       }
-    }
-
-    [data-thread-context-menu-trigger="true"] {
-      display: inline-flex;
-    }
-
-    [data-thread-context-menu-content="true"] {
-      --thread-context-menu-row-padding-right: 3rem;
-    }
-
-    [data-workbench-context-menu-backdrop="true"] {
-      background: color-mix(in srgb, var(--shell-fade-bg), transparent 10%) !important;
-      pointer-events: auto !important;
-    }
-
-    [data-workbench-context-menu="true"] {
-      bottom: 0 !important;
-      left: 0 !important;
-      right: 0 !important;
-      top: auto !important;
-      width: 100% !important;
-      max-height: 50dvh !important;
-      max-width: none !important;
-      overflow-y: auto !important;
-      overscroll-behavior: contain !important;
-      border-bottom-left-radius: 0 !important;
-      border-bottom-right-radius: 0 !important;
     }
 
     .thread-plaintext-editable {

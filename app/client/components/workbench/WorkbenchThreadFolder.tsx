@@ -247,7 +247,7 @@ export default function WorkbenchThreadFolder({
     <WorkbenchTooltip content={tooltip} enabled={!isDragActive} interactive>
       <div className="min-w-0">
         {project ? fullSummary : open ? (
-          <div className="grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-[var(--thread-context-menu-row-padding-right,0.5rem)] pl-2 md:min-h-0">
+          <div className="grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-0">
             <FolderOpenIcon className="mr-1.5 shrink-0" size={14} />
             {titleInput}
             {errorLabel}

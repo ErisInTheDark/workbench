@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadListFullRowContent: render the shared two-row sidebar body or a three-row thread body with leading context, title, status, metadata, and timestamp slots. Keywords: thread, folder, sidebar, row, project, layout.
+ * - default WorkbenchThreadListFullRowContent: render the shared two-row sidebar body or a three-row thread body with leading context, title, status, metadata, and timestamp slots.
  */
 
 import type { ReactNode } from "react";
@@ -26,8 +26,10 @@ export default function WorkbenchThreadListFullRowContent({
 }) {
   return (
     <div
-      className="pointer-events-none relative z-10 min-w-0 pr-[var(--thread-context-menu-row-padding-right,0.5rem)]"
-      data-thread-context-menu-content={contextMenu ? "true" : undefined}
+      className={`
+        pointer-events-none relative z-10 min-w-0 pr-2
+        ${contextMenu ? "coarse-touch:pr-12" : ""}
+      `}
     >
       {eyebrow ? <div className="pointer-events-none min-w-0 px-2 pt-1.5">{eyebrow}</div> : null}
       <div className={`pointer-events-none grid min-w-0 grid-cols-[minmax(0,1fr)_auto] pr-0 pl-2 ${eyebrow ? "pt-0.5" : "pt-1.5"}`}>

@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect ordered-list ordinals, SVG preview laziness, agent-authored inline markers, notice blocks, Markdown bodies, and literal fallback. Keywords: thread, markdown, list, SVG, icon, notice, color.
+ * No production exports. Regression wards protect ordered-list ordinals, SVG preview laziness, agent-authored inline markers, notice blocks, Markdown bodies, and literal fallback.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -15,8 +15,8 @@ test("SVG source mode does not load a hidden preview document", () => {
     "```",
   ].join("\n"))));
 
-  assert.match(html, /data-thread-codeblock-svg-preview="true"/u);
-  assert.doesNotMatch(html, /data-thread-codeblock-svg-preview-frame="true"/u);
+  assert.match(html, /aria-label="Preview SVG code block"/u);
+  assert.doesNotMatch(html, /<iframe\b/u);
 });
 
 test("ordered lists render every source ordinal literally", () => {

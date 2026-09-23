@@ -1264,7 +1264,10 @@ export default memo(function ThreadViewContent ({
         <div
           ref={initialThreadContentReady ? threadScrollViewport.setEndTarget : null}
           aria-hidden="true"
-          className="h-px w-full shrink-0"
+          className={joinClasses(
+            "h-px w-full shrink-0",
+            initialThreadContentReady && "[scroll-margin-block-start:var(--thread-scroll-snap-distance)] snap-end",
+          )}
           data-thread-scroll-end={initialThreadContentReady ? "true" : undefined}
         />
       </>
