@@ -143,6 +143,7 @@ function createWorkbenchCoreFeature(
       if (!threadState) throw new Error("Thread state is not ready for Git arc publication.");
       await threadState.controller.refreshGitArcState(projectId, harness, threadId);
     },
+    publishAgentContext: (target, text) => agentContext.publish(target, text),
     observeClaimSnapshot: (snapshot) => stats?.observeClaimSnapshot(snapshot),
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" }),
     transitions: worktreeGitTransitions,

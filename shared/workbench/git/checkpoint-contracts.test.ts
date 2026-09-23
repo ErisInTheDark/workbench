@@ -10,6 +10,7 @@ import {
   GitCheckpointCompareResultSchema,
   GitCheckpointProposalSchema,
   GitCheckpointRequestSchema,
+  GitArcStashResultSchema,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { remapArcOutcome } from "workbench-shared/workbench/git/git-arc-storage";
 import type { GitArcRegistryEntry } from "../../../daemon/server/lib/workbench/git/GitArcRegistry";
@@ -64,6 +65,15 @@ test("stash actions are whole-arc requests without path filters", () => {
     assert.equal(GitCheckpointRequestSchema.safeParse({ action, ...common }).success, true);
     assert.equal(GitCheckpointRequestSchema.safeParse({ action, paths: ["src/a.ts"], ...common }).success, false);
   }
+});
+
+test("legacy unstash results keep their active wire phase", () => {
+  assert.equal(GitArcStashResultSchema.safeParse({
+    conflictedPaths: [], phase: "active", stashedPaths: [],
+  }).success, true);
+  assert.equal(GitArcStashResultSchema.safeParse({
+    conflictedPaths: [], phase: "plan", stashedPaths: [],
+  }).success, false);
 });
 
 test("plan and arc requests encode claimed-path defaults and successor refs", () => {

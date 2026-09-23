@@ -55,7 +55,7 @@ function gitFixtureIdentities() {
   });
 }
 
-function waitFeature() {
+function waitFeature(extraOptions: object = {}) {
   return new WorkbenchGitArcFeature({
     identities: gitFixtureIdentities(),
     getThreadCreatedAt: async () => 1,
@@ -66,8 +66,49 @@ function waitFeature() {
     refreshThreadGitArcState: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
     transitions: { run: async (_key, operation) => await operation() },
+    ...extraOptions,
   });
 }
+
+test("conflicted unstash passively informs the owner without changing the successful result", async () => {
+  const admitted: Array<{ harness: string; threadId: string; text: string }> = [];
+  let admission: "admitted" | "failed" = "admitted";
+  const feature = waitFeature({
+    publishAgentContext: async (target: { harness: string; threadId: string }, text: string) => {
+      admitted.push({ ...target, text });
+      return admission;
+    },
+  });
+  const internal = feature as unknown as {
+    controller: { unstashArc: (input: object) => Promise<object> };
+  };
+  let conflictedPaths: string[] = [];
+  internal.controller.unstashArc = async () => ({
+    checkpointCommit: "a".repeat(40), checkpointRef: "refs/test",
+    conflictedPaths, intentName: "test", kind: "plan", phase: "active",
+    repoRoot: "C:/Git/Project", scopePaths: ["selected.txt"], stashedPaths: [],
+  });
+  const request = { action: "arcUnstash", cwd: "C:/Git/Project", harness: "codex", threadId: "thread" };
+  assert.equal((await feature.executeRequest(request)).ok, true);
+  assert.deepEqual(admitted, []);
+
+  conflictedPaths = ["selected.txt"];
+  const response = await feature.executeRequest(request);
+  assert.equal(response.ok, true);
+  assert.equal((await response.json() as { conflictedPaths: string[] }).conflictedPaths.length, 1);
+  assert.equal(admitted.length, 1);
+  assert.equal(admitted[0]?.threadId, wbThreadId("codex", "thread"));
+  assert.match(admitted[0]!.text, /conflict/u);
+  assert.doesNotMatch(admitted[0]!.text, /selected\.txt/u);
+
+  admission = "failed";
+  assert.equal((await feature.executeRequest(request)).ok, true);
+  assert.equal(admitted.length, 2);
+
+  internal.controller.unstashArc = async () => { throw new Error("unstash failed"); };
+  assert.equal((await feature.executeRequest(request)).ok, false);
+  assert.equal(admitted.length, 2);
+});
 
 test("proposal dispatch preserves on-demand inspection and inspected selection", async () => {
   const feature = waitFeature();

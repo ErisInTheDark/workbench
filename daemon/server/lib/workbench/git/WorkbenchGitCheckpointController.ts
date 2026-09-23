@@ -310,6 +310,28 @@ export default class WorkbenchGitCheckpointController {
     return { active, checkpoint, harness, metadata, registry, repository };
   }
 
+  private async requireStashableArc({ cwd, harness: rawHarness, threadId }: ControllerInput) {
+    const repository = await WorkbenchGitRepository.open(cwd);
+    const harness = normalizeHarness(rawHarness);
+    const registry = this.registry(repository);
+    const active = await registry.find({ harness, threadId });
+    const retained = active?.phase === "plan" ? active.retainedArc : null;
+    const arc = retained ?? (active?.phase === "active" ? active : null);
+    if (!active || !arc || arc.phase !== "active" || !arc.claimedPaths.length) {
+      throw new Error("This thread does not own active or plan-retained Git arc claims.");
+    }
+    const checkpoint = await readCheckpoint(repository.root, harness, threadId, arc.checkpointCommit, this.resolveThreadIdentity);
+    const metadata = requireArcMetadata(checkpoint);
+    if (arc.claimedPaths.some((path) => !metadata.scopePaths.includes(path))) {
+      throw new Error("The retained Git arc registry does not match its checkpoint claim set.");
+    }
+    const plan = active.phase === "plan"
+      ? await readCheckpoint(repository.root, harness, threadId, active.checkpointCommit, this.resolveThreadIdentity)
+      : null;
+    if (plan && plan.metadata?.kind !== "plan") throw new Error("The pending plan checkpoint is invalid.");
+    return { active, arc, checkpoint, harness, metadata, plan, registry, repository };
+  }
+
   private async requireMutableActiveArc(input: ControllerInput) {
     const activeArc = await this.requireActiveArc(input);
     await this.proposals.requireNoAcceptedReceipts({
@@ -367,9 +389,15 @@ export default class WorkbenchGitCheckpointController {
     if (!active || active.phase !== "stashed" || !active.claimedPaths.length) {
       throw new Error("This thread does not own a stashed Git arc.");
     }
-    const checkpoint = await readCheckpoint(repository.root, harness, threadId, active.checkpointCommit, this.resolveThreadIdentity);
+    const checkpoint = await readCheckpoint(
+      repository.root, harness, threadId, active.retainedArc?.checkpointCommit ?? active.checkpointCommit, this.resolveThreadIdentity,
+    );
     requireArcMetadata(checkpoint);
-    return { active, checkpoint, harness, registry, repository };
+    const plan = active.retainedArc
+      ? await readCheckpoint(repository.root, harness, threadId, active.checkpointCommit, this.resolveThreadIdentity)
+      : null;
+    if (plan && plan.metadata?.kind !== "plan") throw new Error("The stashed pending plan checkpoint is invalid.");
+    return { active, checkpoint, harness, plan, registry, repository };
   }
 
   private async replaceWorktreePaths(
@@ -390,7 +418,7 @@ export default class WorkbenchGitCheckpointController {
 
   async assertArcStashable(input: ControllerInput) {
     await GitObjectReadSession.run(async () => {
-      await this.requireActiveArc(input);
+      await this.requireStashableArc(input);
     });
   }
 
@@ -416,13 +444,16 @@ export default class WorkbenchGitCheckpointController {
 
   async stashArc(input: ControllerInput): Promise<GitArcStashResult> {
     return await GitObjectReadSession.run(async () => {
-      const { active, checkpoint, registry, repository } = await this.requireActiveArc(input);
+      const { active, arc, checkpoint, plan, registry, repository } = await this.requireStashableArc(input);
       const head = await repository.headOrNull();
-      const paths = [...active.claimedPaths];
+      const paths = [...arc.claimedPaths];
       const snapshot = { head, tree: await repository.writeScopedWorktreeTree(paths, head) };
       const previousIndex = await repository.writeIndexTree();
       const mutation = await registry.prepareSet(
-        { ...active, phase: "stashed" },
+        {
+          ...active, claimedPaths: paths, phase: "stashed",
+          proposalIds: active.phase === "plan" ? arc.proposalIds ?? [] : active.proposalIds,
+        },
         active.checkpointCommit,
         { claimLossSnapshot: snapshot },
       );
@@ -440,8 +471,8 @@ export default class WorkbenchGitCheckpointController {
         throw publicationError;
       }
       return {
-        checkpointCommit: checkpoint.checkpointCommit,
-        checkpointRef: checkpoint.checkpointRef,
+        checkpointCommit: active.checkpointCommit,
+        checkpointRef: plan?.checkpointRef ?? checkpoint.checkpointRef,
         conflictedPaths: [],
         intentName: active.intentName,
         kind: "arc",
@@ -455,12 +486,14 @@ export default class WorkbenchGitCheckpointController {
 
   async unstashArc(input: ControllerInput): Promise<GitArcStashResult> {
     return await GitObjectReadSession.run(async () => {
-      const { active, checkpoint, harness, registry, repository } = await this.requireStashedArc(input);
+      const { active, checkpoint, harness, plan, registry, repository } = await this.requireStashedArc(input);
       const metadata = requireArcMetadata(checkpoint);
       const paths = [...active.claimedPaths];
       const head = await repository.headOrNull();
       const dirty = await repository.listWorktreeChangedPaths(head, paths);
       if (dirty.length) throw new Error(`Stashed paths contain current worktree changes: ${dirty.join(", ")}`);
+      const collisions = findGitArcCollisions(await registry.list(), { harness, threadId: input.threadId }, paths);
+      if (collisions.length) throw new GitArcCollisionError(collisions);
       const snapshot = await new GitArcClaimLossStore(repository, this.resolveThreadIdentity).read({ harness, threadId: input.threadId });
       if (!snapshot?.frozen || snapshot.paths.length !== paths.length || snapshot.paths.some((path, index) => path !== paths[index])) {
         throw new Error("The stashed Git arc snapshot is unavailable or does not match its retained claim set.");
@@ -486,10 +519,18 @@ export default class WorkbenchGitCheckpointController {
           version: 3,
         },
       );
-      const mutation = await registry.prepareClaim(
-        { ...active, checkpointCommit: rebased.checkpointCommit, phase: "active" },
-        { expectedCheckpointCommit: active.checkpointCommit },
-      );
+      const mutation = plan
+        ? await registry.prepareSet({
+          ...active,
+          claimedPaths: [],
+          phase: "plan",
+          proposalIds: [],
+          retainedArc: { ...active.retainedArc!, checkpointCommit: rebased.checkpointCommit, claimedPaths: paths },
+        }, active.checkpointCommit)
+        : await registry.prepareClaim(
+          { ...active, checkpointCommit: rebased.checkpointCommit, phase: "active" },
+          { expectedCheckpointCommit: active.checkpointCommit },
+        );
       await repository.updateRefs([rebased.update, ...mutation.updates]);
       try {
         await this.replaceWorktreePaths(repository, merged.tree, paths);
@@ -498,7 +539,7 @@ export default class WorkbenchGitCheckpointController {
           await this.replaceWorktreePaths(repository, head, paths);
           const rollback = await registry.prepareSet(
             active,
-            rebased.checkpointCommit,
+            plan ? active.checkpointCommit : rebased.checkpointCommit,
             { claimLossSnapshot: { head: snapshot.head, tree: snapshot.tree } },
           );
           await repository.updateRefs(
@@ -511,14 +552,15 @@ export default class WorkbenchGitCheckpointController {
         throw restoreError;
       }
       return {
-        checkpointCommit: rebased.checkpointCommit,
-        checkpointRef: rebased.checkpointRef,
+        checkpointCommit: plan?.checkpointCommit ?? rebased.checkpointCommit,
+        checkpointRef: plan?.checkpointRef ?? rebased.checkpointRef,
         conflictedPaths: merged.conflictedPaths,
         intentName: active.intentName,
-        kind: "arc",
+        kind: plan ? "plan" : "arc",
         phase: "active",
         repoRoot: repository.root,
-        scopePaths: paths,
+        scopePaths: plan?.metadata?.scopePaths ?? paths,
+        ...(plan ? { claimedPaths: paths, plannedPaths: plan.metadata?.scopePaths ?? [] } : {}),
         stashedPaths: [],
       };
     });
@@ -526,8 +568,8 @@ export default class WorkbenchGitCheckpointController {
 
   async restashArc(input: ControllerInput): Promise<GitArcStashResult> {
     return await GitObjectReadSession.run(async () => {
-      const { active, checkpoint, harness, registry, repository } = await this.requireActiveArc(input);
-      const paths = [...active.claimedPaths];
+      const { active, arc, checkpoint, harness, plan, registry, repository } = await this.requireStashableArc(input);
+      const paths = [...arc.claimedPaths];
       const snapshot = await new GitArcClaimLossStore(repository, this.resolveThreadIdentity).read({ harness, threadId: input.threadId });
       if (!snapshot?.frozen || snapshot.paths.length !== paths.length || snapshot.paths.some((path, index) => path !== paths[index])) {
         throw new Error("The original stashed Git arc snapshot is unavailable for rollback.");
@@ -536,7 +578,10 @@ export default class WorkbenchGitCheckpointController {
       const rollbackTree = await repository.writeScopedWorktreeTree(paths, head);
       const previousIndex = await repository.writeIndexTree();
       const mutation = await registry.prepareSet(
-        { ...active, phase: "stashed" },
+        {
+          ...active, claimedPaths: paths, phase: "stashed",
+          proposalIds: active.phase === "plan" ? arc.proposalIds ?? [] : active.proposalIds,
+        },
         active.checkpointCommit,
         { claimLossSnapshot: { head: snapshot.head, tree: snapshot.tree } },
       );
@@ -554,8 +599,8 @@ export default class WorkbenchGitCheckpointController {
         throw publicationError;
       }
       return {
-        checkpointCommit: checkpoint.checkpointCommit,
-        checkpointRef: checkpoint.checkpointRef,
+        checkpointCommit: active.checkpointCommit,
+        checkpointRef: plan?.checkpointRef ?? checkpoint.checkpointRef,
         conflictedPaths: [],
         intentName: active.intentName,
         kind: "arc",

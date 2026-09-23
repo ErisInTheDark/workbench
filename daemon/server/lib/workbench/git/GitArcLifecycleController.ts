@@ -47,10 +47,12 @@ export default class GitArcLifecycleController {
       phase: current.phase ?? "active",
       checkpointCommit: current.checkpointCommit,
       intentName: current.intentName,
-      plannedPaths: current.phase === "plan" ? checkpoint.metadata?.scopePaths ?? [] : [],
+      plannedPaths: current.phase === "plan" || (current.phase === "stashed" && current.retainedArc)
+        ? checkpoint.metadata?.scopePaths ?? [] : [],
       claimedPaths: getGitArcLiveClaimPaths(current),
       ...(current.phase === "stashed" ? { stashedPaths: current.claimedPaths } : {}),
-      adoptedPaths: current.phase === "plan" ? checkpoint.metadata?.adoptedPaths ?? [] : [],
+      adoptedPaths: current.phase === "plan" || (current.phase === "stashed" && current.retainedArc)
+        ? checkpoint.metadata?.adoptedPaths ?? [] : [],
       proposals: (await this.proposals.findLifecycleState(input))?.proposals ?? [],
       repoRoot: repository.root,
     };

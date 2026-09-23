@@ -1,10 +1,15 @@
 /* No production exports. A shared-state battery covers checkpoints, claims, proposals, commit isolation, history replacement and restore. */
+/*
+ * Exports:
+ * - No production exports; tests protect Git checkpoint, proposal, stash, and restore lifecycles.
+ */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
+import { GitArcStashResultSchema } from "workbench-shared/workbench/git/checkpoint-contracts";
 
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -435,6 +440,62 @@ checkpointTest("stash releases claims and conflict-safe unstash restores editabl
   assert.ok(lifecycle?.proposals.some(candidate => candidate.proposalId === proposal.proposalId));
   assert.equal(lifecycle?.phase, "active");
   assert.equal(await controller.hasLiveClaimsAtRepoRoot({ cwd: repoRoot, threadId: state.threadId }), true);
+});
+
+checkpointTest("stash preserves a pending plan while releasing its retained claims", 9, async (bundle) => {
+  const { root: repoRoot, state } = branchFixture(bundle, "stashPlan");
+  await write(repoRoot, "selected.txt", "pending work\n");
+  const proposal = await controller.createProposal({
+    cwd: repoRoot, description: "", threadId: state.threadId, title: "retain pending work",
+  });
+  const plan = await controller.createPlan({
+    cwd: repoRoot,
+    intentName: "pending successor",
+    paths: ["selected.txt", "future.txt"],
+    threadId: state.threadId,
+  });
+  assert.equal("claimedPaths" in plan, true);
+  if (!("claimedPaths" in plan)) return;
+  assert.deepEqual(plan.claimedPaths, ["selected.txt"]);
+
+  const stashed = await controller.stashArc({ cwd: repoRoot, threadId: state.threadId });
+  assert.equal(stashed.phase, "stashed");
+  assert.deepEqual(stashed.stashedPaths, ["selected.txt"]);
+  assert.equal(await controller.hasLiveClaimsAtRepoRoot({ cwd: repoRoot, threadId: state.threadId }), false);
+  assert.equal(await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8"), "selected checkpoint\n");
+  assert.deepEqual((await controller.readStatus({ cwd: repoRoot, threadId: state.threadId })).pending.map(item => item.proposalId), [proposal.proposalId]);
+  const scopeWhileStashed = await controller.readScope({ cwd: repoRoot, threadId: state.threadId });
+  assert.deepEqual(scopeWhileStashed?.plannedPaths, ["future.txt", "selected.txt"]);
+
+  const other = "another-agent";
+  await controller.createAndStartPlan({
+    cwd: repoRoot,
+    intentName: "temporary claim",
+    paths: ["selected.txt"],
+    threadId: other,
+  });
+  await assert.rejects(controller.unstashArc({ cwd: repoRoot, threadId: state.threadId }), /collis|claim/u);
+  assert.equal((await controller.readScope({ cwd: repoRoot, threadId: state.threadId }))?.phase, "stashed");
+  await controller.releaseArc({ cwd: repoRoot, disown: false, threadId: other });
+
+  await write(repoRoot, "future.txt", "another agent's change\n");
+  await write(repoRoot, "selected.txt", "other committed work\n");
+  await git(repoRoot, ["add", "--", "future.txt", "selected.txt"]);
+  await git(repoRoot, ["commit", "-m", "change future path while stashed"]);
+  const unstashed = await controller.unstashArc({ cwd: repoRoot, threadId: state.threadId });
+  assert.equal(unstashed.phase, "active");
+  assert.equal(unstashed.kind, "plan");
+  assert.equal(GitArcStashResultSchema.safeParse({
+    conflictedPaths: unstashed.conflictedPaths, phase: unstashed.phase, stashedPaths: unstashed.stashedPaths,
+  }).success, true);
+  assert.deepEqual(unstashed.conflictedPaths, ["selected.txt"]);
+  assert.match(await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8"), /<<<<<<<[\s\S]*pending work[\s\S]*>>>>>>>/u);
+  const scope = await controller.readScope({ cwd: repoRoot, threadId: state.threadId });
+  assert.equal(scope?.phase, "plan");
+  assert.equal(scope?.checkpointCommit, plan.checkpointCommit);
+  assert.deepEqual(scope?.claimedPaths, ["selected.txt"]);
+  assert.deepEqual(scope?.plannedPaths, ["future.txt", "selected.txt"]);
+  await assert.rejects(controller.startArc({ cwd: repoRoot, threadId: state.threadId }), /drift|baseline|future\.txt/u);
 });
 
 checkpointTest("dirty disown preserves inactive plans and proposals remain committable after unclaim", 4, async (bundle, context) => {

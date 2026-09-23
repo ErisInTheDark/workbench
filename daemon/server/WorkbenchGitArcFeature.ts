@@ -26,6 +26,8 @@ import { GitArcCollisionError } from "./lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "./lib/workbench/git/GitCheckpointStore";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { GitCheckpointRequestSchema, type GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
+import type { WorkbenchContextAdmission } from "workbench-shared/workbench/provider/provider-context";
+import type { WorkbenchAgentContextTarget } from "./WorkbenchAgentContextController";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type { AgentEndpointProjectResolution } from "./lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchThreadClaimContext } from "./WorkbenchThreadStateController";
@@ -33,10 +35,12 @@ import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 import WorkbenchWorkspaceGitArcController, { WorkspaceGitArcMemberError, type WorkspaceGitArcLifecycleState, type WorkspaceGitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import GitArcProposalDiffController, { type GitArcProposalDiffStore } from "./lib/workbench/git/GitArcProposalDiffController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
+const UNSTASH_CONFLICT_CONTEXT = "Git arc unstash left editable conflict markers. Inspect `wb git arc status` and resolve the markers before continuing.";
 
 export interface WorkbenchGitArcFeatureOptions {
   identities: WorkbenchThreadIdentityController;
@@ -46,6 +50,7 @@ export interface WorkbenchGitArcFeatureOptions {
   getThreadCreatedAt(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<number | null>;
   getThreadClaimContext(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadClaimContext | null>;
   refreshThreadGitArcState(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<void>;
+  publishAgentContext?(target: WorkbenchAgentContextTarget, text: string): Promise<WorkbenchContextAdmission | "failed">;
   onReloadEligibilityChanged?: () => void;
   observeClaimSnapshot?(snapshot: WorkbenchGitClaimSnapshot): void;
   reloadScopeProjectRoot?: string;
@@ -342,6 +347,21 @@ export default class WorkbenchGitArcFeature {
             if (after?.lifecycle.settled) {
               await this.workspaceController.releaseActiveClaim(project, effectiveRequest.harness, effectiveRequest.threadId);
               throw new Error("The thread settled while its Git arc claim was starting. The new claim was released.");
+            }
+          }
+          if (response.ok && effectiveRequest.action === "arcUnstash") {
+            try {
+              const result = await response.clone().json() as { conflictedPaths?: string[] };
+              if (result.conflictedPaths?.length) {
+                const harness = installedProviderKeys.find(key => key === owner.harness);
+                if (!harness) throw new Error("The Git arc owner provider is unavailable for passive conflict context.");
+                const admission = await this.options.publishAgentContext?.({
+                  harness, threadId: owner.threadId,
+                }, UNSTASH_CONFLICT_CONTEXT) ?? "unsupported";
+                if (admission === "unsupported") console.warn("Git arc unstash restored conflicts, but passive agent context is unsupported.");
+              }
+            } catch (error) {
+              console.error(`Git arc unstash restored work, but conflict context admission failed: ${sanitizeError(error)}`);
             }
           }
           return response;

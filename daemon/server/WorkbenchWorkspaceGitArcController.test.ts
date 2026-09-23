@@ -1,4 +1,7 @@
-/* No production exports. Tests protect workspace arc membership, shared inspection snapshots, claim-presence reads, global diff paging, workspace dirt, patch claim coverage, ignored-path skips, root-qualified projection, repo deduplication, per-root proposals, and amendment routing. */
+/*
+ * Exports:
+ * - No production exports; tests protect workspace Git arc routing, projection, and rollback.
+ */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -11,6 +14,7 @@ import type { AgentEndpointProjectResolution } from "./lib/workbench/project/age
 import type WorkbenchGitCheckpointController from "./lib/workbench/git/WorkbenchGitCheckpointController";
 import { WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
+import { renderGitArcOutput } from "./lib/workbench/cli/git-arc-output";
 import WorkbenchWorkspaceGitArcController from "./WorkbenchWorkspaceGitArcController";
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 import { applyGitClaimChanges, type GitArcClaimChanges } from "workbench-shared/workbench/git/git-arc-state";
@@ -125,8 +129,14 @@ class FakeLocalGitArcController {
   private readonly states = new Map<string, {
     checkpointCommit: string; claimedPaths: string[]; harness: string; intentDescription: string; intentName: string;
     phase: "active" | "stashed"; proposals: Array<{ proposalId: string; status: "proposed" }>; stashedPaths?: string[];
-    threadId: string; updatedAt: string;
+    threadId: string; updatedAt: string; pendingPlan?: boolean;
   }>();
+
+  markPendingPlan(root: string) {
+    const state = this.states.get(root);
+    if (!state) throw new Error("Missing fake arc.");
+    this.states.set(root, { ...state, pendingPlan: true });
+  }
 
   async readScope(input: { cwd: string }) {
     const active = this.states.get(input.cwd);
@@ -135,7 +145,8 @@ class FakeLocalGitArcController {
     return {
       checkpointCommit: (active ?? plan)!.checkpointCommit,
       intentName: (active ?? plan)!.intentName,
-      phase: active ? "active" as const : "plan" as const,
+      phase: active?.phase === "stashed" ? "stashed" as const
+        : active ? active.pendingPlan ? "plan" as const : "active" as const : "plan" as const,
       claimedPaths: active?.claimedPaths ?? [], plannedPaths: active ? [] : plan!.scopePaths,
       adoptedPaths: [], repoRoot: input.cwd,
     };
@@ -273,7 +284,7 @@ class FakeLocalGitArcController {
     this.states.set(input.cwd, { ...state, claimedPaths, phase: "active", stashedPaths: undefined });
     return {
       checkpointCommit: state.checkpointCommit, checkpointRef: `refs/${state.checkpointCommit}`,
-      conflictedPaths: [], intentName: state.intentName, kind: "arc", phase: "active" as const,
+      conflictedPaths: [], intentName: state.intentName, kind: state.pendingPlan ? "plan" as const : "arc" as const, phase: "active" as const,
       repoRoot: input.cwd, scopePaths: claimedPaths, stashedPaths: [],
     };
   }
@@ -993,10 +1004,18 @@ test("workspace stash and unstash compensate completed members when a later repo
   assert.equal((await controller.findLifecycleState(project, "codex", identity.threadId))?.phase, "active");
 
   local.stashFailureRoots.clear();
+  local.markPendingPlan("C:/repo/api");
   await controller.execute(project, { ...identity, action: "arcStash" });
   local.unstashCalls.length = 0;
   local.unstashFailureRoots.add("C:/repo/web");
   await assert.rejects(controller.execute(project, { ...identity, action: "arcUnstash" }), /unstash failed/u);
   assert.deepEqual(local.restashCalls.map(path.normalize), [path.resolve("C:/repo/api")].map(path.normalize));
   assert.equal((await controller.findLifecycleState(project, "codex", identity.threadId))?.phase, "stashed");
+  assert.equal((await controller.execute(project, { ...identity, action: "arcScope" }) as { members: Array<{ phase: string }> }).members[0]?.phase, "stashed");
+  local.unstashFailureRoots.clear();
+  const restored = await controller.execute(project, { ...identity, action: "arcUnstash" });
+  assert.match(renderGitArcOutput({
+    method: "POST", path: "/api/git/arc/unstash", responseKind: "git-arc-unstash",
+  }, restored as Record<string, unknown>), /^arc unstash plan$/mu);
+  assert.equal((await controller.execute(project, { ...identity, action: "arcScope" }) as { members: Array<{ phase: string }> }).members[0]?.phase, "plan");
 });
