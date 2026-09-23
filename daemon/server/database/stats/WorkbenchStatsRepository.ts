@@ -53,6 +53,8 @@ function sameWindow(left: RateWindowObservation | null, right: RateWindowObserva
     && left?.usedPercent === right?.usedPercent;
 }
 
+const MAX_RATE_LIMIT_SAMPLES = 2_000;
+
 export default class WorkbenchStatsRepository {
   constructor(private readonly database: Database.Database) {}
 
@@ -124,9 +126,10 @@ export default class WorkbenchStatsRepository {
     if (request.projectId !== null) request = { ...request, projectId: new WorkbenchProjectRepository(this.database).resolveStoredReference(request.projectId) };
     const usage = new WorkbenchUsageStatsRepository(this.database).read(request, now);
     const claimHotspots = new WorkbenchClaimStatsRepository(this.database).hotspots(request.projectId, usage.startedAt, now, renames);
+    const rateBucketMs = Math.max(1, Math.ceil((now - usage.startedAt + 1) / (MAX_RATE_LIMIT_SAMPLES - 1)));
 
     const rateRows = this.database.prepare(`
-      WITH selected AS (
+      WITH candidates AS (
         SELECT * FROM account_rate_limit_samples WHERE observed_at BETWEEN ? AND ?
         UNION
         SELECT prior.* FROM account_rate_limit_samples prior
@@ -135,11 +138,25 @@ export default class WorkbenchStatsRepository {
           WHERE candidate.harness_id = prior.harness_id AND candidate.limit_id = prior.limit_id
             AND candidate.observed_at < ?
         )
+      ), ranked AS (
+        SELECT id,
+          COUNT(*) OVER (PARTITION BY harness_id, limit_id) sample_count,
+          ROW_NUMBER() OVER (
+            PARTITION BY harness_id, limit_id,
+              CASE WHEN observed_at < ? THEN -1 ELSE CAST((observed_at - ?) / ? AS INTEGER) END
+            ORDER BY observed_at DESC, id DESC
+          ) sample_rank
+        FROM candidates
       )
       SELECT s.*, w.window_kind, w.used_basis_points, w.duration_minutes, w.resets_at
-      FROM selected s LEFT JOIN account_rate_limit_windows w ON w.sample_id = s.id
+      FROM account_rate_limit_samples s
+      JOIN ranked r ON r.id = s.id AND (r.sample_count <= ? OR r.sample_rank = 1)
+      LEFT JOIN account_rate_limit_windows w ON w.sample_id = s.id
       ORDER BY s.observed_at, s.id
-    `).all(usage.startedAt, now, usage.startedAt, usage.startedAt) as Array<{
+    `).all(
+      usage.startedAt, now, usage.startedAt, usage.startedAt,
+      usage.startedAt, usage.startedAt, rateBucketMs, MAX_RATE_LIMIT_SAMPLES,
+    ) as Array<{
       duration_minutes: number | null; harness_id: WorkbenchHarness; id: number; limit_id: string;
       limit_name: string | null; observed_at: number; resets_at: number | null;
       used_basis_points: number | null; window_kind: "primary" | "secondary" | "tertiary" | null;

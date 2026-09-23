@@ -42,3 +42,29 @@ test("claim history imports active scopes, excludes plans, and expands directori
     const paths = await reader.hydrate(discovered.candidates[0]!);
     assert.deepEqual(paths, ["deleted.ts", "nested/one.txt", "nested/two.txt"]);
 });
+
+test("claim history hydrates its discovered checkpoint after the ref is renamed", async (context) => {
+    const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);
+    context.after(fixture.dispose);
+    const repository = await WorkbenchGitRepository.open(fixture.root);
+    const head = await repository.currentHead();
+    const tree = await repository.resolveTree(head);
+    const original = await repository.createCommitFromTree(tree, head, checkpointMessage({
+      amendedFrom: null, kind: "arc", scopePaths: ["nested"], version: 3,
+    }));
+    const oldRef = "refs/worktree/agents/codex/thread/checkpoints/old";
+    await repository.updateRef(oldRef, original);
+    const reader = new GitClaimHistoryReader();
+    const discovered = await reader.discover({ projectId: "project", rootId: "root", workspaceRoot: fixture.root });
+    const candidate = discovered.candidates[0]!;
+    const replacement = await repository.createCommitFromTree(tree, head, checkpointMessage({
+      amendedFrom: null, kind: "arc", scopePaths: ["deleted.ts"], version: 3,
+    }));
+    await repository.updateRef("refs/worktree/agents/codex/thread/checkpoints/new", replacement);
+    await repository.deleteRef(oldRef, original);
+    assert.deepEqual(await reader.hydrate(candidate), ["nested/one.txt", "nested/two.txt"]);
+    await assert.rejects(
+      reader.hydrate({ ...candidate, checkpointCommit: "f".repeat(40) }),
+      /missing|unavailable|unable/iu,
+    );
+});

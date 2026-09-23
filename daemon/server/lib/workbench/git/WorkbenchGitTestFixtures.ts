@@ -331,7 +331,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(THREAD_GIT_BASE_FIXTURE, process.platform === "win32" ? 3 : 4),
   ], nested: false }],
   ["GitClaimHistoryReader.test.ts", { fixtures: [
-    demand(THREAD_GIT_BASE_FIXTURE, 1),
+    demand(THREAD_GIT_BASE_FIXTURE, 2),
   ], nested: false }],
   ["GitArcPathMover.test.ts", { fixtures: [
     demand(PATH_MOVER_BASE_FIXTURE, 4),

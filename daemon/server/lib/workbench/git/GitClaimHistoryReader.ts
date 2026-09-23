@@ -105,9 +105,6 @@ export default class GitClaimHistoryReader {
 
   async hydrate(candidate: WorkbenchGitClaimImportDiscovery) {
     const repository = new WorkbenchGitRepository(candidate.repositoryRoot);
-    if (await repository.readRef(candidate.checkpointRef) !== candidate.checkpointCommit) {
-      throw new Error(`Claim checkpoint ref changed before import: ${candidate.checkpointRef}`);
-    }
     const commit = await repository.readCommit(candidate.checkpointCommit);
     const metadata = activeMetadata(commit.message);
     if (!metadata) throw new Error(`Claim checkpoint metadata is unavailable: ${candidate.checkpointRef}`);

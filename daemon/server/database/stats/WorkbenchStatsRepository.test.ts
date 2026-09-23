@@ -10,6 +10,7 @@ import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts"
 import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository.ts";
 import type { WorkbenchTranscriptAtomicObservation } from "../transcript/workbench-transcript-types.ts";
 import WorkbenchStatsRepository from "./WorkbenchStatsRepository.ts";
+import { WorkbenchStatsDetailedResponseSchema } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
@@ -563,4 +564,41 @@ test("rate limits preserve a tertiary account window", () => {
   } finally {
     database.close();
   }
+});
+
+test("rate-limit reads retain range history and the newest sample within the response bound", () => {
+  const database = createDatabase();
+  try {
+    const now = Date.UTC(2026, 8, 4, 12);
+    const start = Date.UTC(2026, 7, 29);
+    const count = 2_100;
+    const step = Math.floor((now - start) / count);
+    const insert = database.prepare(`
+      INSERT INTO account_rate_limit_samples (harness_id, limit_id, limit_name, observed_at)
+      VALUES (?, ?, NULL, ?)
+    `);
+    const window = database.prepare(`
+      INSERT INTO account_rate_limit_windows (sample_id, window_kind, used_basis_points, duration_minutes, resets_at)
+      VALUES (?, 'primary', ?, 300, NULL)
+    `);
+    database.transaction(() => {
+      for (const [harness, limitId] of [["codex", "codex"], ["opencode", "opencode"]] as const) {
+        for (let index = -1; index < count; index += 1) {
+          const observedAt = index < 0 ? start - 1_000 : start + index * step;
+          const id = Number(insert.run(harness, limitId, observedAt).lastInsertRowid);
+          window.run(id, index < 0 ? 0 : index % 10_000);
+        }
+      }
+    })();
+    const result = new WorkbenchStatsRepository(database).readDetailed({ projectId: null, range: "7d" }, now);
+    assert.equal(WorkbenchStatsDetailedResponseSchema.safeParse(result).success, true);
+    assert.equal(result.rateLimits.length, 2);
+    for (const limit of result.rateLimits) {
+      assert.ok(limit.samples.length <= 2_000);
+      assert.equal(limit.samples[0]?.observedAt, start - 1_000);
+      assert.ok(limit.samples.some(({ observedAt }) => observedAt >= start && observedAt < start + 600_000));
+      assert.ok(limit.samples.some(({ observedAt }) => observedAt > start + (now - start) / 2));
+      assert.equal(limit.samples.at(-1)?.observedAt, start + (count - 1) * step);
+    }
+  } finally { database.close(); }
 });
