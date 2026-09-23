@@ -350,7 +350,7 @@ export default class WorkbenchFrontendCompiler {
           const message = result.errors.length
             ? `build failed with ${result.errors.length} ${result.errors.length === 1 ? "error" : "errors"} in ${durationText}`
             : `build finished${warnings} in ${durationText}`;
-          this.logger.line("esbuild", message);
+          this.logger.line("app", `esbuild ${message}`);
         });
       },
     };

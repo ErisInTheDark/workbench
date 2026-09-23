@@ -18,7 +18,9 @@ import {
     type WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
 
-import migrateWorkbenchDatabase, { restoreWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
+import migrateWorkbenchDatabase, {
+  restoreWorkbenchDatabaseBackup, type WorkbenchDatabaseDiagnostic,
+} from "workbench-shared/database/workbench-database-migration";
 import recoverWorkbenchDatabase from "workbench-shared/database/recover-workbench-database";
 import {
     appStateSchema,
@@ -36,12 +38,14 @@ import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 export interface WorkbenchAppStateRepositoryOptions {
   dataRootPath?: string;
   databasePath?: string;
+  diagnostic?: WorkbenchDatabaseDiagnostic;
   now?: () => number;
 }
 
 export default class WorkbenchAppStateRepository {
   readonly databasePath: string;
   readonly #now: () => number;
+  #diagnostic: WorkbenchDatabaseDiagnostic | undefined;
   #database: Database.Database | null = null;
   #daemonRegistrationId: string | null = null;
   #opening: Promise<string> | null = null;
@@ -52,6 +56,12 @@ export default class WorkbenchAppStateRepository {
     const dataRootPath = options.dataRootPath ?? resolveWorkbenchDataRoot();
     this.databasePath = path.resolve(options.databasePath ?? path.join(dataRootPath, "app", "app-state.sqlite3"));
     this.#now = options.now ?? Date.now;
+    this.#diagnostic = options.diagnostic;
+  }
+
+  configureDiagnostics(diagnostic: WorkbenchDatabaseDiagnostic) {
+    if (this.#database || this.#opening) throw new Error("App database diagnostics must be configured before opening.");
+    this.#diagnostic = diagnostic;
   }
 
   get daemonRegistrationId() {
@@ -70,11 +80,11 @@ export default class WorkbenchAppStateRepository {
   async #open(beforeMigration?: (backupPath: string) => void) {
     assertSchemaReleaseManifest(appStateSchema, appStateReleases, "app");
     fs.mkdirSync(path.dirname(this.databasePath), { recursive: true });
-    await recoverWorkbenchDatabase(this.databasePath, appStateSchema, beforeMigration);
+    await recoverWorkbenchDatabase(this.databasePath, appStateSchema, beforeMigration, this.#diagnostic);
     const database = new Database(this.databasePath);
     try {
       database.pragma("foreign_keys = ON");
-      await migrateWorkbenchDatabase(database, appStateSchema, { beforeMigration });
+      await migrateWorkbenchDatabase(database, appStateSchema, { beforeMigration, diagnostic: this.#diagnostic });
       this.#database = database;
       this.#ensureMetadataAndRegistration();
       return this.daemonRegistrationId;

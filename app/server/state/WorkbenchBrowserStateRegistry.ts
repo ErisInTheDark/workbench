@@ -17,9 +17,11 @@ import {
 
 import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
+import type { WorkbenchDatabaseDiagnostic } from "workbench-shared/database/workbench-database-migration";
 
 export interface WorkbenchBrowserStateRegistryOptions {
   browserStateDirectoryPath?: string;
+  onDatabaseDiagnostic?: (browserStateId: string, ...args: Parameters<WorkbenchDatabaseDiagnostic>) => void;
   onDiagnostic?: (message: string) => void;
 }
 
@@ -74,6 +76,7 @@ export default class WorkbenchBrowserStateRegistry {
   readonly #sharedRepository: WorkbenchAppStateRepository;
   readonly #browserStateDirectoryPath: string | null;
   readonly #onDiagnostic: (message: string) => void;
+  readonly #onDatabaseDiagnostic: WorkbenchBrowserStateRegistryOptions["onDatabaseDiagnostic"];
   readonly #controllers = new Map<string, WorkbenchAppStateController>();
   readonly #openingControllers = new Map<string, Promise<WorkbenchAppStateController>>();
   #seedQueue = Promise.resolve();
@@ -91,6 +94,7 @@ export default class WorkbenchBrowserStateRegistry {
         ? path.join(path.dirname(sharedRepository.databasePath), "browser-state")
         : null;
     this.#onDiagnostic = options.onDiagnostic ?? (() => {});
+    this.#onDatabaseDiagnostic = options.onDatabaseDiagnostic;
   }
 
   start() {
@@ -213,7 +217,13 @@ export default class WorkbenchBrowserStateRegistry {
         }
       }
     }
-    const repository = new WorkbenchAppStateRepository({ databasePath });
+    const onDatabaseDiagnostic = this.#onDatabaseDiagnostic;
+    const repository = new WorkbenchAppStateRepository({
+      databasePath,
+      ...(onDatabaseDiagnostic
+        ? { diagnostic: (level, message) => onDatabaseDiagnostic(browserStateId, level, message) }
+        : {}),
+    });
     const controller = new WorkbenchAppStateController(repository);
     await controller.start();
     try {

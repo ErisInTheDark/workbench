@@ -1,17 +1,16 @@
 /*
  * Default export:
- * - WorkbenchProcessLogger: frame Workbench process lines, preserve producer styling, and derive producer-formatted views.
+ * - WorkbenchProcessLogger: frame timestamped process and scoped browser lines while preserving producer styling.
  */
-const ANSI_BLUE = "\u001b[34m";
 const ANSI_CYAN = "\u001b[36m";
 const ANSI_GRAY = "\u001b[90m";
 const ANSI_GREEN = "\u001b[32m";
-const ANSI_RED = "\u001b[31m";
+const ANSI_PURPLE = "\u001b[35m";
 const ANSI_RESET = "\u001b[0m";
-const ANSI_YELLOW = "\u001b[33m";
 const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/gu;
 
-type WorkbenchProcessLogDomain = "app" | "client" | "esbuild" | "http" | "daemon" | "host" | "tailwind";
+type FixedLogDomain = "app" | "client" | "daemon" | "host";
+type WorkbenchProcessLogDomain = FixedLogDomain | `browser:${string}`;
 
 interface WorkbenchProcessLoggerOptions {
   color?: boolean;
@@ -21,14 +20,11 @@ interface WorkbenchProcessLoggerOptions {
   writeOutput?: (value: string) => void;
 }
 
-const domainColors: Record<WorkbenchProcessLogDomain, string> = {
-  app: ANSI_CYAN,
-  client: ANSI_RED,
-  esbuild: ANSI_GREEN,
-  http: ANSI_BLUE,
+const domainColors: Record<FixedLogDomain, string> = {
+  app: ANSI_GREEN,
+  client: ANSI_PURPLE,
   daemon: ANSI_CYAN,
-  host: ANSI_YELLOW,
-  tailwind: ANSI_YELLOW,
+  host: ANSI_GRAY,
 };
 
 function timestamp(now: Date) {
@@ -97,7 +93,8 @@ export default class WorkbenchProcessLogger {
     const content = this.color ? formattedMessage : formattedMessage.replace(ANSI_PATTERN, "");
     return content.split(/\r\n|\n|\r/u).map((line) => {
       if (!this.color) return `${timestamp(this.now())} ${domain} ${line}\n`;
-      return `${ANSI_GRAY}${timestamp(this.now())}${ANSI_RESET} ${domainColors[domain]}${domain}${ANSI_RESET} ${line}\n`;
+      const domainColor = domain.startsWith("browser:") ? ANSI_PURPLE : domainColors[domain as FixedLogDomain];
+      return `${ANSI_GRAY}${timestamp(this.now())}${ANSI_RESET} ${domainColor}${domain}${ANSI_RESET} ${line}\n`;
     }).join("");
   }
 }

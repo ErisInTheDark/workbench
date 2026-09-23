@@ -5,6 +5,8 @@
  * - restoreWorkbenchDatabaseBackup: restore a verified checkpoint after every destination connection is closed.
  * - readWorkbenchDatabaseBackups: read verified ordinary checkpoints newest-first, excluding archives and scratch files.
  * - default migrateWorkbenchDatabase: verify a complete pre-upgrade backup, run migrations, then prune its expired duplicates.
+ * - WorkbenchDatabaseDiagnostic: route migration and recovery progress to the owning process logger.
+ * - reportWorkbenchDatabaseDiagnostic: emit through an injected owner or the existing console fallback.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -18,8 +20,21 @@ import {
 
 export interface WorkbenchDatabaseMigrationOptions {
   beforeMigration?(backupPath: string): Promise<void> | void;
+  diagnostic?: WorkbenchDatabaseDiagnostic;
   targetVersion?: number;
   now?: () => number;
+}
+
+export type WorkbenchDatabaseDiagnostic = (level: "info" | "warn", message: string) => void;
+
+export function reportWorkbenchDatabaseDiagnostic(
+  diagnostic: WorkbenchDatabaseDiagnostic | undefined,
+  level: "info" | "warn",
+  message: string,
+) {
+  if (diagnostic) diagnostic(level, message);
+  else if (level === "warn") console.warn(message);
+  else console.info(message);
 }
 
 export async function restoreWorkbenchDatabaseBackup(backupPath: string, databasePath: string) {
@@ -57,14 +72,19 @@ function boundedMessage(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).replace(/[\r\n]/g, " ").slice(0, 500);
 }
 
-export async function preserveWorkbenchDatabaseBackup(database: Database.Database, directory: string) {
+export async function preserveWorkbenchDatabaseBackup(
+  database: Database.Database,
+  directory: string,
+  diagnostic?: WorkbenchDatabaseDiagnostic,
+) {
   const startedAt = performance.now();
   const installedVersion = database.pragma("user_version", { simple: true }) as number;
   const id = randomUUID();
   const temporaryPath = path.join(directory, `${id}.partial`);
   const backupPath = path.join(directory, `${id}.sqlite3`);
   try {
-    console.info(formatDatabaseLog("backup", "pending", `${path.basename(database.name)}, schema: ${installedVersion}`));
+    reportWorkbenchDatabaseDiagnostic(diagnostic, "info",
+      formatDatabaseLog("backup", "pending", `${path.basename(database.name)}, schema: ${installedVersion}`));
     await fs.mkdir(directory, { recursive: true });
     const reservation = await fs.open(temporaryPath, "wx", 0o600);
     await reservation.close();
@@ -73,7 +93,7 @@ export async function preserveWorkbenchDatabaseBackup(database: Database.Databas
       progress: ({ totalPages, remainingPages }) => {
         const now = performance.now();
         if (now - reportedAt >= 5_000) {
-          console.info(formatDatabaseLog("backup", "copying",
+          reportWorkbenchDatabaseDiagnostic(diagnostic, "info", formatDatabaseLog("backup", "copying",
             `${path.basename(database.name)}, ${Math.round((totalPages - remainingPages) / totalPages * 100)}%, ${totalPages - remainingPages}/${totalPages} pages`,
             now - startedAt));
           reportedAt = now;
@@ -82,7 +102,7 @@ export async function preserveWorkbenchDatabaseBackup(database: Database.Databas
         return 100;
       },
     });
-    verifyBackup(temporaryPath, installedVersion, path.basename(database.name));
+    verifyBackup(temporaryPath, installedVersion, path.basename(database.name), diagnostic);
     const file = await fs.open(temporaryPath, "r+");
     try { await file.sync(); }
     finally { await file.close(); }
@@ -92,11 +112,12 @@ export async function preserveWorkbenchDatabaseBackup(database: Database.Databas
       try { await fs.unlink(`${temporaryPath}${suffix}`); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          console.warn(`[database] backup scratch cleanup retained ${boundedMessage(temporaryPath + suffix)}: ${boundedMessage(error)}`);
+          reportWorkbenchDatabaseDiagnostic(diagnostic, "warn",
+            `[database] backup scratch cleanup retained ${boundedMessage(temporaryPath + suffix)}: ${boundedMessage(error)}`);
         }
       }
     }
-    console.info(formatDatabaseLog("backup", "ok",
+    reportWorkbenchDatabaseDiagnostic(diagnostic, "info", formatDatabaseLog("backup", "ok",
       `${path.basename(database.name)}, schema: ${installedVersion}, checkpoint: ${id.slice(0, 8)}`, performance.now() - startedAt));
     return backupPath;
   } catch (error) {
@@ -104,10 +125,15 @@ export async function preserveWorkbenchDatabaseBackup(database: Database.Databas
   }
 }
 
-function verifyBackup(filePath: string, version: number, databaseName = path.basename(path.dirname(filePath))) {
+function verifyBackup(
+  filePath: string,
+  version: number,
+  databaseName = path.basename(path.dirname(filePath)),
+  diagnostic?: WorkbenchDatabaseDiagnostic,
+) {
   const startedAt = performance.now();
   const detail = `${databaseName}, schema: ${version}, checkpoint: ${path.basename(filePath).slice(0, 8)}`;
-  console.info(formatDatabaseLog("verify", "pending", detail));
+  reportWorkbenchDatabaseDiagnostic(diagnostic, "info", formatDatabaseLog("verify", "pending", detail));
   const backup = new Database(filePath, { readonly: true, fileMustExist: true });
   try {
     const integrity = backup.pragma("quick_check") as { quick_check: string }[];
@@ -120,10 +146,10 @@ function verifyBackup(filePath: string, version: number, databaseName = path.bas
   } catch (error) {
     throw new Error(`Database checkpoint verification failed at ${boundedMessage(filePath)}: ${boundedMessage(error)}`, { cause: error });
   } finally { backup.close(); }
-  console.info(formatDatabaseLog("verify", "ok", detail, performance.now() - startedAt));
+  reportWorkbenchDatabaseDiagnostic(diagnostic, "info", formatDatabaseLog("verify", "ok", detail, performance.now() - startedAt));
 }
 
-async function pruneBackups(directory: string, verifiedBackupPath: string, now: number) {
+async function pruneBackups(directory: string, verifiedBackupPath: string, now: number, diagnostic?: WorkbenchDatabaseDiagnostic) {
   const startedAt = performance.now();
   try {
     const backups = await readBackupInventory(directory);
@@ -137,7 +163,7 @@ async function pruneBackups(directory: string, verifiedBackupPath: string, now: 
         && now - backup.modifiedAt > retentionAgeMs;
     });
     const databaseName = path.basename(directory);
-    if (expired.length) console.info(formatDatabaseLog("retention", "pending",
+    if (expired.length) reportWorkbenchDatabaseDiagnostic(diagnostic, "info", formatDatabaseLog("retention", "pending",
       `${databaseName}, ${backups.length} checkpoints, ${expired.length} expired duplicates`));
     if (!expired.length) return;
     // The caller just verified, synced and atomically published this checkpoint.
@@ -153,16 +179,17 @@ async function pruneBackups(directory: string, verifiedBackupPath: string, now: 
       await fs.unlink(backup.filePath);
       removed++;
     }
-    console.info(formatDatabaseLog("retention", "ok",
+    reportWorkbenchDatabaseDiagnostic(diagnostic, "info", formatDatabaseLog("retention", "ok",
       `${databaseName}, ${backups.length} checkpoints, ${removed} removed`, performance.now() - startedAt));
   } catch (error) {
-    console.warn(`[database] migration backup cleanup retained extra files in ${boundedMessage(directory)}: ${boundedMessage(error)}`);
+    reportWorkbenchDatabaseDiagnostic(diagnostic, "warn",
+      `[database] migration backup cleanup retained extra files in ${boundedMessage(directory)}: ${boundedMessage(error)}`);
   }
 }
 
-export async function readWorkbenchDatabaseBackups(directory: string) {
+export async function readWorkbenchDatabaseBackups(directory: string, diagnostic?: WorkbenchDatabaseDiagnostic) {
   const backups = await readBackupInventory(directory);
-  for (const backup of backups) verifyBackup(backup.filePath, backup.version);
+  for (const backup of backups) verifyBackup(backup.filePath, backup.version, undefined, diagnostic);
   return backups;
 }
 
@@ -203,16 +230,17 @@ export default async function migrateWorkbenchDatabase(
   let verifiedBackupPath: string | null = null;
   if (directory && installedVersion < targetVersion
     && database.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get()) {
-    verifiedBackupPath = await preserveWorkbenchDatabaseBackup(database, directory);
+    verifiedBackupPath = await preserveWorkbenchDatabaseBackup(database, directory, options.diagnostic);
     await options.beforeMigration?.(verifiedBackupPath);
   }
   const reportUpgrade = directory && installedVersion > 0 && installedVersion < targetVersion;
   const startedAt = performance.now();
   const detail = `${path.basename(database.name)}, ${installedVersion} -> ${targetVersion}`;
-  if (reportUpgrade) console.info(formatDatabaseLog("migrate", "pending", detail));
+  if (reportUpgrade) reportWorkbenchDatabaseDiagnostic(options.diagnostic, "info", formatDatabaseLog("migrate", "pending", detail));
   applyWorkbenchDatabaseSchema(database, schema, options);
-  if (reportUpgrade) console.info(formatDatabaseLog("migrate", "ok", detail, performance.now() - startedAt));
+  if (reportUpgrade) reportWorkbenchDatabaseDiagnostic(options.diagnostic, "info",
+    formatDatabaseLog("migrate", "ok", detail, performance.now() - startedAt));
   if (directory && verifiedBackupPath) {
-    await pruneBackups(directory, verifiedBackupPath, (options.now ?? Date.now)());
+    await pruneBackups(directory, verifiedBackupPath, (options.now ?? Date.now)(), options.diagnostic);
   }
 }

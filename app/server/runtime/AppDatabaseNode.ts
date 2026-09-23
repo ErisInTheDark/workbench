@@ -20,6 +20,10 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   children: [AppStateNode, AppNetworkNode],
   create: (context, build) => {
     const database = context.createDatabase(WorkbenchAppStateRepository);
+    database.configureDiagnostics((level, message) => {
+      if (level === "warn") context.processLogger.error("app", message.trimStart());
+      else context.processLogger.line("app", message.trimStart());
+    });
     const handoffState = build.handoffState as AppDatabaseReloadState | undefined;
     if (handoffState) handoffState.releaseCandidate = () => database.close();
     let detached = false;

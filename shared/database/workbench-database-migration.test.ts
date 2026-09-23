@@ -69,10 +69,16 @@ async function completedBackups(directory: string) {
 
 test("backup includes committed WAL data and the schema removed by the upgrade", async context => {
   const { database, backups } = await fixture(context);
+  const diagnostics: string[] = [];
   database.prepare("INSERT INTO records VALUES (1, 'only-in-old-schema', 'retained')").run();
   database.exec("CREATE TABLE extension(payload BLOB); INSERT INTO extension VALUES (x'010203')");
   assert.ok((await fs.stat(`${database.name}-wal`)).size > 0);
-  await migrateWorkbenchDatabase(database, schema);
+  await migrateWorkbenchDatabase(database, schema, {
+    diagnostic: (level, message) => { if (level === "info") diagnostics.push(message); },
+  });
+  assert.ok(diagnostics.some(message => message.includes("backup")));
+  assert.ok(diagnostics.some(message => message.includes("verify")));
+  assert.ok(diagnostics.some(message => message.includes("migrate")));
   const names = await completedBackups(backups);
   assert.equal(names.length, 1, "upgrade requires one completed backup");
   const backup = new Database(path.join(backups, names[0]!), { readonly: true, fileMustExist: true });
@@ -83,7 +89,11 @@ test("backup includes committed WAL data and the schema removed by the upgrade",
     assert.deepEqual(backup.pragma("quick_check"), [{ quick_check: "ok" }]);
     assert.deepEqual(database.prepare("SELECT * FROM records").all(), [{ id: 1, kept: "retained" }]);
   } finally { backup.close(); }
-  await migrateWorkbenchDatabase(database, schema);
+  const reported = diagnostics.length;
+  await migrateWorkbenchDatabase(database, schema, {
+    diagnostic: (level, message) => { if (level === "info") diagnostics.push(message); },
+  });
+  assert.equal(diagnostics.length, reported);
   assert.deepEqual(await completedBackups(backups), names, "unchanged schema must not create another backup");
 });
 

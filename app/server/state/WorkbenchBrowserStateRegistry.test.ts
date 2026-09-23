@@ -15,6 +15,7 @@ import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbenc
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { DATABASE_LOG_PREFIX } from "workbench-shared/database/database-log-format";
+import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
@@ -137,7 +138,7 @@ async function fixture(context: TestContext) {
 
 test("opening an existing browser database backs it up before upgrading", async (context) => {
   const { directory, registry } = await fixture(context);
-  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
+  const defaultDiagnostics = captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const browserDirectory = path.join(directory, "browser-state");
   await fs.mkdir(browserDirectory);
   const databasePath = path.join(browserDirectory, `${BROWSER_A}.sqlite3`);
@@ -146,6 +147,8 @@ test("opening an existing browser database backs it up before upgrading", async 
   old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('theme','retained',0,1)").run();
   old.close();
   assert.equal(globalPreference(records(await registry.readBrowser(BROWSER_A)), "theme")?.preference.value, "retained");
+  assert.ok(defaultDiagnostics.some(message => message.includes("migrate")),
+    "callers without a diagnostic owner must retain visible database progress");
   const backups = path.join(browserDirectory, "backups", path.basename(databasePath));
   const files = await fs.readdir(backups).catch(error => {
     if (error.code === "ENOENT") return [];
@@ -159,6 +162,32 @@ test("opening an existing browser database backs it up before upgrading", async 
   } finally {
     backup.close();
   }
+});
+
+test("late browser rollback reports progress with the opening browser identity", async context => {
+  const { directory, shared } = await fixture(context);
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX)
+    || text.startsWith("[database] restored schema "));
+  const browserDirectory = path.join(directory, "browser-state");
+  await fs.mkdir(browserDirectory);
+  const databasePath = path.join(browserDirectory, `${BROWSER_A}.sqlite3`);
+  const candidate = new Database(databasePath);
+  try {
+    applyWorkbenchDatabaseSchema(candidate, appStateSchema);
+    await preserveWorkbenchDatabaseBackup(candidate, path.join(browserDirectory, "backups", path.basename(databasePath)));
+    candidate.pragma(`user_version = ${appStateSchema.currentVersion + 1}`);
+  } finally { candidate.close(); }
+  const events: Array<{ browserStateId: string; level: string; message: string }> = [];
+  const registry = new WorkbenchBrowserStateRegistry(shared, {
+    browserStateDirectoryPath: browserDirectory,
+    onDatabaseDiagnostic: (browserStateId, level, message) => { events.push({ browserStateId, level, message }); },
+  });
+  registry.start();
+  try {
+    await registry.readBrowser(BROWSER_A);
+    assert.ok(events.some(event => event.browserStateId === BROWSER_A
+      && event.level === "info" && event.message.includes("restored schema")));
+  } finally { await registry.close(); }
 });
 
 test("UUID databases clone, diverge, reopen, and share one coalesced first open", async (context) => {

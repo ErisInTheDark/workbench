@@ -22,13 +22,13 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
     const launcher = new WorkbenchServiceLauncher({
       root: context.repositoryRootPath, endpointPath,
       startup: new WorkbenchServiceStartup({ root: context.repositoryRootPath, dataRoot }),
-      warn: message => logger.error("http", message),
+      warn: message => logger.error("app", `network ${message}`),
     });
     const network = (context.createNetwork ?? (options => new WorkbenchNetworkController(options)))({
       endpointPath,
       ensure: async signal => { await launcher.ensure(signal); },
       wakeLocal: !process.env.WORKBENCH_CODEX_APP_SERVER_URL?.trim(),
-      warn: message => logger.error("http", message),
+      warn: message => logger.error("app", `network ${message}`),
       appPort: context.appPort,
       privateIssue: () => {
         const configured = process.env.WORKBENCH_CODEX_APP_SERVER_URL?.trim();

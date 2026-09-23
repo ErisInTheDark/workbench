@@ -91,11 +91,11 @@ export default class WorkbenchAppHttpRouter {
         const origin = typeof forwarded === "string" ? forwarded : `http://${request.headers.host ?? ""}`;
         return options.network?.stableOrigin(origin) ?? null;
       },
-      onDiagnostic: (message) => options.logger.error("http", message),
+      onDiagnostic: (message) => options.logger.error("app", `http ${message}`),
     });
     this.settingsRoutes = options.readAppliedReactDevelopmentMode
       ? new WorkbenchAppSettingsRoutes({
-          onDiagnostic: (message) => options.logger.error("http", message),
+          onDiagnostic: (message) => options.logger.error("app", `http ${message}`),
           readAppliedReactDevelopmentMode: options.readAppliedReactDevelopmentMode,
           readRequestedReactDevelopmentMode: () => (
             options.state.readGlobalPreference("reactDevelopmentMode")

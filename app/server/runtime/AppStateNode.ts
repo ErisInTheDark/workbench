@@ -19,6 +19,11 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
     const logger = context.processLogger.withMessageFormatter(formatWorkbenchAppLogMessage);
     const state = new WorkbenchBrowserStateRegistry(build.get("database"), {
       onDiagnostic: (message) => logger.error("app", message),
+      onDatabaseDiagnostic: (browserStateId, level, message) => {
+        const domain = `browser:${browserStateId.slice(0, 8)}` as const;
+        if (level === "warn") logger.error(domain, message.trimStart());
+        else logger.line(domain, message.trimStart());
+      },
     });
     return {
       dispose: async () => await state.close(),

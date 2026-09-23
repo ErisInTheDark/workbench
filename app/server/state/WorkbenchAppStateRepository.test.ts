@@ -210,6 +210,10 @@ for (const rejectCheckpoint of [false, true]) {
       candidate.pragma(`user_version = ${appStateSchema.currentVersion + 1}`);
     } finally { candidate.close(); }
     let archive = "";
+    const diagnostics: string[] = [];
+    repository.configureDiagnostics((level, message) => {
+      if (level === "info") diagnostics.push(message);
+    });
     try {
       const opening = repository.start(archivePath => {
         archive = archivePath;
@@ -217,6 +221,8 @@ for (const rejectCheckpoint of [false, true]) {
       });
       if (rejectCheckpoint) await assert.rejects(opening, /recovery checkpoint rejected/);
       else assert.equal(await opening, registration);
+      assert.ok(diagnostics.some(message => message.includes("backup")));
+      if (!rejectCheckpoint) assert.ok(diagnostics.some(message => message.includes("restored schema")));
       assert.equal(path.dirname(archive), path.join(backups, "failed-upgrades"));
       const inspection = new Database(databasePath, { readonly: true });
       const archived = new Database(archive, { readonly: true });

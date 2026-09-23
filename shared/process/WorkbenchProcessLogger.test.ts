@@ -28,6 +28,16 @@ test("prefixes every stack line with the client domain", () => {
   assert.equal(errors[0], "01:02:03 client boom\n01:02:03 client at owner\n");
 });
 
+test("frames scoped browser database diagnostics with their browser tag", () => {
+  const output: string[] = [];
+  const logger = new WorkbenchProcessLogger({
+    now: () => new Date(2026, 0, 1, 1, 2, 3),
+    writeOutput: value => output.push(value),
+  });
+  logger.line("browser:ca9bf66e", "DB backup pending");
+  assert.match(output[0] ?? "", /\u001b\[[0-9]+mbrowser:ca9bf66e\u001b\[0m DB backup pending\n/u);
+});
+
 test("reports only complete non-empty child lines as activity", () => {
   const output: string[] = [];
   let activity = 0;

@@ -53,6 +53,10 @@ function read(file: string, sql: string) {
 
 test("revert restores old-only data and archives committed newer WAL writes before acknowledgement", async context => {
   const { database, databasePath, backups } = await fixture(context);
+  const diagnostics: string[] = [];
+  const diagnostic = (level: "info" | "warn", message: string) => {
+    if (level === "info") diagnostics.push(message);
+  };
   await migrateWorkbenchDatabase(database, newSchema);
   let archive = "";
   // Keep WAL frames present without another writer. Recovery must snapshot them.
@@ -68,12 +72,17 @@ test("revert restores old-only data and archives committed newer WAL writes befo
       assert.deepEqual(read(archive, "SELECT value FROM records"), [{ value: "failed-upgrade-write" }]);
       assert.deepEqual(read(databasePath, "SELECT value FROM records"), [{ value: "failed-upgrade-write" }]);
       walReader.close();
-    });
+    }, diagnostic);
   } finally { if (walReader.open) walReader.close(); }
   assert.equal(path.dirname(archive), path.join(backups, "failed-upgrades"));
   assert.deepEqual(read(databasePath, "SELECT legacy FROM records"), [{ legacy: "original" }]);
   assert.deepEqual(read(archive, "PRAGMA user_version"), [{ user_version: 2 }]);
-  await recoverWorkbenchDatabase(databasePath, oldSchema);
+  assert.ok(diagnostics.some(message => message.includes("verify")));
+  assert.ok(diagnostics.some(message => message.includes("backup")));
+  assert.ok(diagnostics.some(message => message.includes("restored schema")));
+  const reported = diagnostics.length;
+  await recoverWorkbenchDatabase(databasePath, oldSchema, undefined, diagnostic);
+  assert.equal(diagnostics.length, reported);
   assert.equal((await fs.readdir(path.join(backups, "failed-upgrades"))).filter(name => name.endsWith(".sqlite3")).length, 1);
 });
 

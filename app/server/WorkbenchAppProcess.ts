@@ -30,7 +30,7 @@ async function main() {
     readReactDevelopmentMode: () => boolean,
   ) => new WorkbenchFrontendCompiler({
     logger,
-    onDiagnostic: (message) => logger.error("tailwind", message),
+    onDiagnostic: (message) => logger.error("app", `tailwind ${message}`),
     readReactDevelopmentMode,
     repositoryRootPath,
   });
@@ -66,7 +66,7 @@ async function main() {
     }),
     createServer: (runtime, port) => new WorkbenchFrontendServer({
       hostname,
-      onDiagnostic: (message) => processLogger.error("http", message),
+      onDiagnostic: (message) => processLogger.error("app", `http ${message}`),
       port,
       requests: {
         handleRequest: async (request, response) => {
