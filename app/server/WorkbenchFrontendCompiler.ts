@@ -89,12 +89,10 @@ export default class WorkbenchFrontendCompiler {
   private startTask: Promise<string> | null = null;
   private retirement: Promise<void> | null = null;
   private stylesheetGeneration: string | null = null;
-  private stylesheetGenerationTail = Promise.resolve();
   private esbuildContext: esbuild.BuildContext | null = null;
   private sourceWatcher: WorkbenchFrontendWatcher | null = null;
   private readonly subscribeSources: WorkbenchFrontendWatcherOptions["subscribe"];
   private javascriptGeneration: string | null = null;
-  private tailwindWatcher: ChildProcess | null = null;
 
   constructor(options: WorkbenchFrontendCompilerOptions = {}) {
     this.repositoryRootPath = path.resolve(options.repositoryRootPath ?? defaultRepositoryRootPath);
@@ -117,17 +115,15 @@ export default class WorkbenchFrontendCompiler {
   async buildOnce() {
     this.generation.signal.throwIfAborted();
     await this.prepareStaticOutput();
-    await Promise.all([
-      esbuild.build(this.esbuildOptions()),
-      this.runTailwindOnce(),
-    ]);
-    await this.refreshStylesheetGeneration();
+    await this.runTailwindOnce();
+    await this.captureStylesheetGeneration();
+    await esbuild.build(this.esbuildOptions());
     return this.outputDirectoryPath;
   }
 
   async startWatching() {
     this.generation.signal.throwIfAborted();
-    if (this.startTask || this.esbuildContext || this.tailwindWatcher) {
+    if (this.startTask || this.esbuildContext) {
       throw new Error("Workbench frontend compiler is already watching.");
     }
     const start = this.startWatchingOwned();
@@ -156,6 +152,8 @@ export default class WorkbenchFrontendCompiler {
         subscribe: this.subscribeSources,
         rebuild: async () => {
           signal.throwIfAborted();
+          await this.runTailwindOnce();
+          await this.captureStylesheetGeneration();
           await context.rebuild();
         },
         onError: error => {
@@ -163,14 +161,8 @@ export default class WorkbenchFrontendCompiler {
         },
       });
       this.sourceWatcher = sourceWatcher;
-      await Promise.all([
-        sourceWatcher.start(),
-        this.runTailwindOnce(),
-      ]);
+      await sourceWatcher.start();
       signal.throwIfAborted();
-      await this.refreshStylesheetGeneration();
-      signal.throwIfAborted();
-      this.tailwindWatcher = this.startTailwindWatcher();
       return this.outputDirectoryPath;
     } catch (error) {
       this.retire();
@@ -187,7 +179,6 @@ export default class WorkbenchFrontendCompiler {
     const children = [...this.children];
     this.esbuildContext = null;
     this.sourceWatcher = null;
-    this.tailwindWatcher = null;
 
     for (const child of children) {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
@@ -199,7 +190,6 @@ export default class WorkbenchFrontendCompiler {
         if (child.killed) return;
         throw error;
       })),
-      this.stylesheetGenerationTail,
       this.publicationTail,
     ]).then(async (results) => {
       const failures = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
@@ -366,27 +356,22 @@ export default class WorkbenchFrontendCompiler {
     };
   }
 
-  private refreshStylesheetGeneration() {
+  private async captureStylesheetGeneration() {
     const signal = this.generation.signal;
-    const operation = this.stylesheetGenerationTail.then(async () => {
-      signal.throwIfAborted();
-      const stylesheetPath = path.join(this.workingDirectoryPath, "assets", "app.css");
-      const current = await readFile(stylesheetPath, "utf8");
-      signal.throwIfAborted();
-      const source = current.replace(STYLESHEET_GENERATION_PATTERN, "\n");
-      const generation = createHash("sha256").update(source).digest("hex");
-      const marker = `:root{${WORKBENCH_STYLESHEET_GENERATION_PROPERTY}:${generation}}`;
-      const sourceMapIndex = source.lastIndexOf("/*# sourceMappingURL=");
-      const next = sourceMapIndex < 0
-        ? `${source.trimEnd()}\n${marker}\n`
-        : `${source.slice(0, sourceMapIndex).trimEnd()}\n${marker}\n${source.slice(sourceMapIndex)}`;
-      const sourceMap = await readFile(`${stylesheetPath}.map`);
-      signal.throwIfAborted();
-      this.stylesheetOutput = { generation, contents: next, sourceMap };
-      await this.publishOutput();
-    });
-    this.stylesheetGenerationTail = operation.catch(() => undefined);
-    return operation;
+    signal.throwIfAborted();
+    const stylesheetPath = path.join(this.workingDirectoryPath, "assets", "app.css");
+    const current = await readFile(stylesheetPath, "utf8");
+    signal.throwIfAborted();
+    const source = current.replace(STYLESHEET_GENERATION_PATTERN, "\n");
+    const generation = createHash("sha256").update(source).digest("hex");
+    const marker = `:root{${WORKBENCH_STYLESHEET_GENERATION_PROPERTY}:${generation}}`;
+    const sourceMapIndex = source.lastIndexOf("/*# sourceMappingURL=");
+    const next = sourceMapIndex < 0
+      ? `${source.trimEnd()}\n${marker}\n`
+      : `${source.slice(0, sourceMapIndex).trimEnd()}\n${marker}\n${source.slice(sourceMapIndex)}`;
+    const sourceMap = await readFile(`${stylesheetPath}.map`);
+    signal.throwIfAborted();
+    this.stylesheetOutput = { generation, contents: next, sourceMap };
   }
 
   private async prepareStaticOutput() {
@@ -421,7 +406,7 @@ export default class WorkbenchFrontendCompiler {
     return publication;
   }
 
-  private tailwindArguments(watch: boolean) {
+  private tailwindArguments() {
     return [
       tailwindCliPath,
       "--input",
@@ -432,13 +417,12 @@ export default class WorkbenchFrontendCompiler {
       this.appDirectoryPath,
       "--map",
       path.join(this.workingDirectoryPath, "assets", "app.css.map"),
-      ...(watch ? ["--watch=always"] : []),
     ];
   }
 
   private async runTailwindOnce() {
     this.generation.signal.throwIfAborted();
-    const child = this.spawnTailwind(this.tailwindArguments(false), {
+    const child = this.spawnTailwind(this.tailwindArguments(), {
       cwd: this.repositoryRootPath,
       env: this.environment,
       stdio: ["ignore", "pipe", "pipe"],
@@ -459,53 +443,4 @@ export default class WorkbenchFrontendCompiler {
     }
   }
 
-  private startTailwindWatcher() {
-    this.generation.signal.throwIfAborted();
-    const child = this.spawnTailwind(this.tailwindArguments(true), {
-      cwd: this.repositoryRootPath,
-      env: this.environment,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    this.children.add(child);
-    child.once("exit", () => this.children.delete(child));
-    child.once("error", () => { if (!child.pid) this.children.delete(child); });
-    const stdout = this.logger.createLineStream("tailwind");
-    const stderr = this.logger.createLineStream("tailwind", true);
-    const observeCompletion = () => {
-      let pending = "";
-      return (chunk: Buffer) => {
-        if (this.generation.signal.aborted) return;
-        pending += chunk.toString();
-        const lines = pending.split(/\r?\n/u);
-        pending = lines.pop() ?? "";
-        if (!lines.some((line) => line.includes("Done in "))) return;
-        void this.refreshStylesheetGeneration().catch((error) => {
-          if (error === this.generation.signal.reason) return;
-          this.onDiagnostic(`Tailwind generation stamping failed: ${error instanceof Error ? error.message : String(error)}`);
-        });
-      };
-    };
-    const observeStdoutCompletion = observeCompletion();
-    const observeStderrCompletion = observeCompletion();
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout.write(chunk);
-      observeStdoutCompletion(chunk);
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr.write(chunk);
-      observeStderrCompletion(chunk);
-    });
-    child.once("error", (error) => {
-      this.logger.error("tailwind", `watcher failed: ${error.message}`);
-    });
-    child.once("exit", (code, signal) => {
-      stdout.flush();
-      stderr.flush();
-      if (this.tailwindWatcher !== child) return;
-      const reason = signal ? `signal ${signal}` : `exit code ${code ?? 1}`;
-      this.logger.error("tailwind", `watcher stopped unexpectedly after ${reason}`);
-      this.tailwindWatcher = null;
-    });
-    return child;
-  }
 }

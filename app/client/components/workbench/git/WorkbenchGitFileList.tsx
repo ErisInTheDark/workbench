@@ -125,7 +125,7 @@ export default function WorkbenchGitFileList ({ onSelect }: { onSelect (): void 
         indeterminate={snapshot.selections.length > 0 && (snapshot.selections.length !== repository?.files.filter(file => !file.ownerIds.length).length || snapshot.selections.some(selection => selection.lineIds !== null))}
         onChange={checked => state.selectAll(checked)} />
     </div>
-    <div className="explorer-scrollbar min-h-0 flex-1 overflow-y-auto">
+    <div className="scrollbar-hover-reveal min-h-0 flex-1 overflow-y-auto">
       {unclaimed.map(row)}
       {!unclaimed.length ? <p className="px-3 text-sm text-fg/muted">No unclaimed files{filter ? " match this filter" : ""}.</p> : null}
       {ownerIds.map(id => {

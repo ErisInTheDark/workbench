@@ -81,7 +81,7 @@ export default function WorkbenchGitComposer ({ getViewport }: { getViewport ():
         </span> : null}
       </div>
       {draft.mode !== "stash" ? <PlaintextEditable ref={body} ariaLabel="Commit description" placeholder="Description (optional)"
-        className="explorer-scrollbar max-h-64 min-h-10 w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-1 text-sm text-fg/muted outline-none data-[empty=true]:before:text-fg/32 data-[empty=true]:before:content-[attr(data-placeholder)] focus:text-text"
+        className="scrollbar-hover-reveal max-h-64 min-h-10 w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-1 text-sm text-fg/muted outline-none data-[empty=true]:before:text-fg/32 data-[empty=true]:before:content-[attr(data-placeholder)] focus:text-text"
         disabled={snapshot.busy} value={draft.description} onChange={description => state.setDraft({ description })} /> : null}
       {reason ? <p className="m-0 text-xs text-fg/muted">{reason}</p> : null}
       {staleHead ? <button type="button" disabled={snapshot.busy} className="rounded-lg px-2 py-1 text-sm text-accent hover:bg-accent-soft"

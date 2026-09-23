@@ -1,0 +1,29 @@
+@utility scrollbar-hover-reveal {
+  @apply fg-alpha/16;
+  scrollbar-color: transparent transparent;
+  scrollbar-width: thin;
+
+  &:hover {
+    scrollbar-color: var(--fg) transparent;
+  }
+
+  &::-webkit-scrollbar {
+    height: 0.7rem;
+    width: 0.7rem;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-clip: content-box;
+    background-color: transparent;
+    border: 0.2rem solid transparent;
+    border-radius: 999px;
+  }
+
+  &:hover::-webkit-scrollbar-thumb {
+    background-color: var(--fg);
+  }
+}

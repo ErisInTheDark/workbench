@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchMainLayoutView: render a recursive desktop split layout with panel drop targets. Keywords: workbench, split pane, drag drop.
- * - Local helpers: resolve panel placement and render the isolated live drop preview. Keywords: mosaic, pointer, preview, geometry.
+ * - default WorkbenchMainLayoutView: render a recursive desktop split layout with panel drop targets.
+ * - Local helpers: resolve panel placement and render the isolated live drop preview.
  */
 "use client";
 
@@ -270,7 +270,7 @@ export default function WorkbenchMainLayoutView ({
       >
         <section
         className={joinClasses(
-          "explorer-scrollbar relative h-full min-h-0 min-w-0 overflow-x-hidden border border-[color-mix(in_srgb,var(--text)_10%,transparent)]",
+          "scrollbar-hover-reveal relative h-full min-h-0 min-w-0 overflow-x-hidden border border-[color-mix(in_srgb,var(--text)_10%,transparent)]",
           isPanelScrollOwnedByContent(node.target) ? "overflow-hidden" : "overflow-y-auto",
         )}
         data-panel-id={node.id}

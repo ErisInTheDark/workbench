@@ -1,0 +1,95 @@
+/* Foreground-mix utilities let each element resolve contrast against its local --fg-bg. */
+@utility text-fg-* {
+  color: color-mix(
+    in srgb,
+    --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%),
+    var(--fg-bg, var(--bg))
+  );
+  color: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--fg-bg, var(--bg)));
+}
+
+@utility border-fg-* {
+  border-color: color-mix(
+    in srgb,
+    --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%),
+    var(--fg-bg, var(--bg))
+  );
+  border-color: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--fg-bg, var(--bg)));
+}
+
+@utility fill-fg-* {
+  fill: color-mix(
+    in srgb,
+    --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%),
+    var(--fg-bg, var(--bg))
+  );
+  fill: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--fg-bg, var(--bg)));
+}
+
+@utility stroke-fg-* {
+  stroke: color-mix(
+    in srgb,
+    --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%),
+    var(--fg-bg, var(--bg))
+  );
+  stroke: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--fg-bg, var(--bg)));
+}
+
+@utility bg-fg-* {
+  background-color: color-mix(
+    in srgb,
+    --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%),
+    var(--fg-bg, var(--bg))
+  );
+  background-color: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--fg-bg, var(--bg)));
+}
+
+/* Alpha utilities keep the foreground translucent instead of blending it into --fg-bg. */
+@utility text-fg-alpha-* {
+  color: color-mix(in srgb, --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%), transparent);
+  color: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), transparent);
+}
+
+@utility border-fg-alpha-* {
+  border-color: color-mix(in srgb, --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%), transparent);
+  border-color: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), transparent);
+}
+
+@utility fill-fg-alpha-* {
+  fill: color-mix(in srgb, --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%), transparent);
+  fill: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), transparent);
+}
+
+@utility stroke-fg-alpha-* {
+  stroke: color-mix(in srgb, --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%), transparent);
+  stroke: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), transparent);
+}
+
+@utility bg-fg-alpha-* {
+  background-color: color-mix(in srgb, --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%), transparent);
+  background-color: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), transparent);
+}
+
+@utility fg-alpha-* {
+  --fg: color-mix(in srgb, --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%), transparent);
+  --fg: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), transparent);
+}
+
+/* Hue degrees: text-hue-210, border-hue-300/35, bg-hue-(--identity-hue)/22.
+ * Set --hue-chroma to a percentage to override 90%; lightness follows the theme.
+ * Keep each colour local so text, border, and background can use different hues.
+ */
+@utility text-hue-* {
+  color: oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*]));
+  color: color-mix(in srgb, oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*])) calc(--modifier(number, [*]) * 1%), var(--fg-bg, var(--bg)));
+}
+
+@utility border-hue-* {
+  border-color: oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*]));
+  border-color: color-mix(in srgb, oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*])) calc(--modifier(number, [*]) * 1%), transparent);
+}
+
+@utility bg-hue-* {
+  background-color: oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*]));
+  background-color: color-mix(in srgb, oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*])) calc(--modifier(number, [*]) * 1%), transparent);
+}

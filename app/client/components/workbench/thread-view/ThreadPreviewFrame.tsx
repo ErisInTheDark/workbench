@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadPreviewFrame: render shared edge-framed previews for bulky thread content. Keywords: workbench, thread, preview, scroll, frame.
+ * - default ThreadPreviewFrame: render shared edge-framed previews for bulky thread content.
  */
 "use client";
 
@@ -89,7 +89,7 @@ export default function ThreadPreviewFrame ({
     <div className={frameClassName} style={outerStyle}>
       <div
         className={joinClasses(
-          "explorer-scrollbar min-w-0 max-w-full overflow-y-auto",
+          "scrollbar-hover-reveal min-w-0 max-w-full overflow-y-auto",
           contentPadding === "normal" && "py-2",
           contentClassName,
         )}

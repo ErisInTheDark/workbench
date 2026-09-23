@@ -1,2 +1,52 @@
+@import url("https://fonts.googleapis.com/css2?family=Sour+Gummy:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
 @import "./globals.css";
+@import "./theme.css";
+@import "./tailwind/colour-utilities.css";
+@import "./tailwind/scrollbar-utilities.css";
 @source "./";
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    min-height: 100%;
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  body {
+    margin: 0;
+    color: var(--text);
+    font-family: var(--font-sans);
+  }
+
+  @supports not (overflow: clip) {
+    html,
+    body {
+      overflow-x: hidden;
+    }
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    box-shadow: var(--shadow-float);
+    background: var(--app-bg-image);
+    z-index: -1;
+  }
+
+  ::selection {
+    background: var(--selection);
+  }
+}
+
+@utility bg-checkerboard {
+  background-image: conic-gradient(color-mix(in srgb, currentColor 12%, transparent) 25%, transparent 0 50%, color-mix(in srgb, currentColor 12%, transparent) 0 75%, transparent 0);
+  background-size: 20px 20px;
+}

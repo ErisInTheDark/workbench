@@ -1,5 +1,4 @@
 /*
- * Keywords: project, row, sidebar, search, status, tooltip.
  * Exports:
  * - default WorkbenchProjectListItem: canonical project row with compact and listbox presentation.
  */
@@ -28,7 +27,7 @@ function ProjectTooltipContent({ entry, nowMs }: { entry: ProjectSidebarProject;
         <p className="m-0 break-words text-[0.9rem] font-medium leading-[1.45] text-text">{project.name || project.id}</p>
         <p className="m-0 whitespace-pre-wrap break-all font-mono text-[0.72rem] leading-[1.45] text-fg/muted">{WorkbenchProjectLabel.getFullPath(project)}</p>
       </div>
-      <div className="explorer-scrollbar flex max-h-64 min-h-0 flex-col gap-1 overflow-y-auto">
+      <div className="scrollbar-hover-reveal flex max-h-64 min-h-0 flex-col gap-1 overflow-y-auto">
         {unsettledThreads.map((thread) => {
           const status = WorkbenchThreadStatusCounts.itemsByKey.get(thread.status) ?? WorkbenchThreadStatusCounts.items.at(-1)!;
           const threadTimestamp = new Date(thread.activityAt);

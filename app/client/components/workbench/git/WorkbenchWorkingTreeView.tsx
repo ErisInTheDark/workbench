@@ -75,7 +75,7 @@ export default function WorkbenchWorkingTreeView () {
         }}
         onPointerUp={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} />
       <div ref={viewport} className={`
-        explorer-scrollbar min-h-0 min-w-0 overflow-y-auto px-2 pb-3 md:block
+        scrollbar-hover-reveal min-h-0 min-w-0 overflow-y-auto px-2 pb-3 md:block
         ${mobileDiff ? "block" : "hidden"}
       `}>
         <PrimaryButton className="mb-2 md:hidden" onClick={() => setMobileDiff(false)}><BackArrowIcon size={16} />Back to files</PrimaryButton>

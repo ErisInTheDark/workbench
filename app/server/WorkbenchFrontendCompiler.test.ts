@@ -10,6 +10,7 @@ import type parcelWatcher from "@parcel/watcher";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 import WorkbenchFrontendCompiler from "./WorkbenchFrontendCompiler.ts";
@@ -29,6 +30,7 @@ function quietLogger() {
 function compilerTools() {
   let onStart: () => void | Promise<void> = () => {};
   let onEnd: (result: esbuild.BuildResult) => void | Promise<void> = () => {};
+  let stylesheet: string | null = "body { color: red; }";
   let outputPaths: string[] = [];
   let watches = 0;
   let disposals = 0;
@@ -49,6 +51,7 @@ function compilerTools() {
   } as esbuild.BuildContext;
   return {
     context,
+    setStylesheet(value: string | null) { stylesheet = value; },
     async subscribeSources(directory: string, callback: parcelWatcher.SubscribeCallback) {
       sourceObservers.set(directory, callback);
       return { async unsubscribe() { sourceObservers.delete(directory); } };
@@ -80,12 +83,15 @@ function compilerTools() {
           return true;
         },
       });
-      if (!args.includes("--watch=always")) {
-        void Promise.all([
-          writeFile(args[args.indexOf("--output") + 1]!, "body { color: red; }"),
-          writeFile(args[args.indexOf("--map") + 1]!, "{}"),
-        ]).then(() => { child.exitCode = 0; child.emit("exit", 0, null); }, error => child.emit("error", error));
+      const nextStylesheet = stylesheet;
+      if (nextStylesheet === null) {
+        queueMicrotask(() => { child.exitCode = 1; child.emit("exit", 1, null); });
+        return child as unknown as ChildProcess;
       }
+      void Promise.all([
+        writeFile(args[args.indexOf("--output") + 1]!, nextStylesheet),
+        writeFile(args[args.indexOf("--map") + 1]!, "{}"),
+      ]).then(() => { child.exitCode = 0; child.emit("exit", 0, null); }, error => child.emit("error", error));
       return child as unknown as ChildProcess;
     },
   };
@@ -101,6 +107,61 @@ test("frontend watching starts without enabling esbuild content polling", async 
   context.after(async () => await compiler.close());
   await compiler.startWatching();
   assert.ok(compiler.getFrontendGeneration());
+});
+
+test("source events publish fresh CSS with JS and preserve the last pair across CSS failures", async context => {
+  const repositoryRootPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const outputDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-compiler-css-update-"));
+  const tools = compilerTools();
+  let built = Promise.withResolvers<void>();
+  const logger = new WorkbenchProcessLogger({
+    color: false,
+    writeError: () => undefined,
+    writeOutput: value => {
+      if (value.includes("esbuild build finished")) built.resolve();
+    },
+  });
+  let failed = Promise.withResolvers<string>();
+  const compiler = new WorkbenchFrontendCompiler({
+    logger,
+    repositoryRootPath,
+    outputDirectoryPath,
+    createContext: tools.createContext,
+    spawnTailwind: tools.spawnTailwind,
+    subscribeSources: tools.subscribeSources,
+    onDiagnostic: message => failed.resolve(message),
+  });
+  context.after(async () => {
+    await compiler.close();
+    await rm(outputDirectoryPath, { recursive: true, force: true });
+  });
+  await compiler.startWatching();
+  const initial = compiler.getFrontendGeneration();
+  assert.ok(initial);
+
+  built = Promise.withResolvers<void>();
+  tools.setStylesheet("body { color: blue; }");
+  tools.sourceEvent(repositoryRootPath, "app/client/tailwind.css");
+  await built.promise;
+  const updated = compiler.getFrontendGeneration();
+  assert.ok(updated);
+  assert.notEqual(updated.stylesheet, initial.stylesheet);
+  assert.notEqual(updated.javascript, initial.javascript);
+  assert.match(await readFile(path.join(outputDirectoryPath, "assets/app.css"), "utf8"), /body \{ color: blue; \}/u);
+
+  failed = Promise.withResolvers<string>();
+  tools.setStylesheet(null);
+  tools.sourceEvent(repositoryRootPath, "app/client/tailwind.css");
+  assert.match(await failed.promise, /Tailwind compilation failed/u);
+  assert.deepEqual(compiler.getFrontendGeneration(), updated);
+  assert.match(await readFile(path.join(outputDirectoryPath, "assets/app.css"), "utf8"), /body \{ color: blue; \}/u);
+
+  built = Promise.withResolvers<void>();
+  tools.setStylesheet("body { color: green; }");
+  tools.sourceEvent(repositoryRootPath, "app/client/tailwind.css");
+  await built.promise;
+  assert.notEqual(compiler.getFrontendGeneration()?.stylesheet, updated.stylesheet);
+  assert.match(await readFile(path.join(outputDirectoryPath, "assets/app.css"), "utf8"), /body \{ color: green; \}/u);
 });
 
 test("a native source event rebuilds real esbuild output after creating a missing import", async context => {

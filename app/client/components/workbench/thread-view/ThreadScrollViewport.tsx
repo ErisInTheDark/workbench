@@ -289,7 +289,7 @@ function ActiveThreadScrollViewport ({
     <div
       ref={setViewportRef}
       className={joinClasses(
-        "explorer-scrollbar flex min-h-0 flex-col overflow-x-hidden overflow-y-auto",
+        "scrollbar-hover-reveal flex min-h-0 flex-col overflow-x-hidden overflow-y-auto",
         className,
       )}
       data-thread-scroll-direction="down"

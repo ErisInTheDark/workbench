@@ -117,7 +117,7 @@ function ThreadTooltipContent({
       </div>
       {extraDetails}
       {claimedPaths.length ? (
-        <div className="explorer-scrollbar flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--thread-files-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] p-2">
+        <div className="scrollbar-hover-reveal flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--thread-files-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] p-2">
           <div className="contents [--fg-bg:var(--thread-files-bg)]">
             <span className="inline-flex size-5 shrink-0 items-center justify-center text-fg/muted" aria-hidden="true">
               {stashed ? <ArchiveIcon size={14} /> : <FlagIcon size={14} />}

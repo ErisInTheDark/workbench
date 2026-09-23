@@ -161,7 +161,7 @@ export default function WorkbenchGitTextDiff({ mode, whitespace }: { mode: "unif
         </Fragment> : null;
       })}
     </div>
-    {(["old", "new"] as const).map(side => <div key={side} className="explorer-scrollbar min-w-0 overflow-x-auto" aria-label={side === "old" ? "Before changes" : "After changes"}>
+    {(["old", "new"] as const).map(side => <div key={side} className="scrollbar-hover-reveal min-w-0 overflow-x-auto" aria-label={side === "old" ? "Before changes" : "After changes"}>
       <div className="w-max min-w-full">
         {model.hunks.map((hunk, hunkIndex) => {
           const rows = display.hunks.get(hunkIndex);
@@ -178,7 +178,7 @@ export default function WorkbenchGitTextDiff({ mode, whitespace }: { mode: "unif
     </div>)}
   </div>;
 
-  return <div className="explorer-scrollbar overflow-x-auto pb-4 font-mono text-xs leading-5">
+  return <div className="scrollbar-hover-reveal overflow-x-auto pb-4 font-mono text-xs leading-5">
     {model.hunks.map((hunk, hunkIndex) => {
       const rows = display.hunks.get(hunkIndex);
       if (!rows?.length) return null;

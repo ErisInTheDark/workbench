@@ -99,7 +99,7 @@ export default function ThreadSubagentWaitItem ({
         <>
           <div
             aria-label="Watched subagents"
-            className="explorer-scrollbar -mb-px flex max-w-full gap-3 overflow-x-auto"
+            className="scrollbar-hover-reveal -mb-px flex max-w-full gap-3 overflow-x-auto"
             role="tablist"
           >
             {entries.map((entry, index) => {

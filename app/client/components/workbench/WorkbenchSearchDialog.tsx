@@ -92,7 +92,7 @@ export default function WorkbenchSearchDialog({ controller, projects, projectSid
         </div>
         <div className="h-px shrink-0 bg-gradient-to-r from-transparent via-text/15 to-transparent" />
         <div
-          className="explorer-scrollbar flex min-h-24 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-2 text-[0.9rem] leading-6 md:px-4"
+          className="scrollbar-hover-reveal flex min-h-24 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-2 text-[0.9rem] leading-6 md:px-4"
           id="workbench-search-results"
           role="listbox"
         >
