@@ -25,6 +25,23 @@ test("thread emphasis closes before punctuation without consuming the next phras
   );
 });
 
+test("thread emphasis can end with punctuation before its closing star", () => {
+  assert.deepEqual(
+    parseInlineMarkdown("*batch two, no proposal until `globals.css` is gone.* next", { profile: "thread" }),
+    [
+      {
+        type: "em",
+        children: [
+          { type: "text", text: "batch two, no proposal until " },
+          { type: "code", text: "globals.css" },
+          { type: "text", text: " is gone." },
+        ],
+      },
+      { type: "text", text: " next" },
+    ],
+  );
+});
+
 test("thread emphasis leaves glob stars and intraword underscores literal", () => {
   assert.deepEqual(
     parseInlineMarkdown("src/*.ts and word_part_name, then *yes*!", { profile: "thread" }),

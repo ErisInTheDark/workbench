@@ -356,11 +356,11 @@ function isIntrawordUnderscore(source: string, index: number) {
   return isWordCharacter(source[start - 1]) && isWordCharacter(source[end]);
 }
 
-function isGlobLikeAsterisk(source: string, index: number, opening: boolean) {
+function isGlobLikeAsterisk(source: string, index: number) {
   const previous = source[index - 1];
   const next = source[index + 1];
 
-  return (opening && next === ".")
+  return next === "."
     || next === "/"
     || previous === "/"
     || previous === "."
@@ -379,7 +379,7 @@ function canOpenThreadSingleEmphasis(source: string, index: number, marker: stri
     return false;
   }
 
-  if (marker === "*" && isGlobLikeAsterisk(source, index, true)) {
+  if (marker === "*" && isGlobLikeAsterisk(source, index)) {
     return false;
   }
 
@@ -394,10 +394,6 @@ function canCloseThreadSingleEmphasis(source: string, index: number, marker: str
   }
 
   if (marker === "_" && isWordCharacter(previous) && isWordCharacter(next)) {
-    return false;
-  }
-
-  if (marker === "*" && isGlobLikeAsterisk(source, index, false)) {
     return false;
   }
 
