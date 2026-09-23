@@ -456,6 +456,21 @@ test("WB active flags retain working sidebar state", () => {
   assert.equal(entry.lifecycle.kind, "working");
 });
 
+test("provider-pending current turn does not require an admitted turn identity", () => {
+  const entry = normalizeSidebar("codex", {
+    id: "thread", status: { type: "active" }, currentTurnId: "pending-turn",
+    turns: [{ id: "pending-turn", status: "inProgress", workbenchAdmission: "providerPending" }],
+    updatedAt: 1,
+  }, {
+    ...canonicalFixtureLookup,
+    knownTurn: () => { throw new Error("Pending turn has not been admitted."); },
+  });
+  assert.ok(entry?.entryKind === "thread");
+  assert.deepEqual(entry.lifecycle, {
+    agent: { agentStatus: "working" }, kind: "working", reason: "acceptedIntent", settled: false,
+  });
+});
+
 test("provider sidebar normalization keeps provider names as display labels only", () => {
   const id = "123e4567-e89b-42d3-a456-426614174000";
   const entry = normalizeProviderSidebarEntry("codex", { id, name: id, preview: "First request", status: { type: "idle" }, updatedAt: 1 });

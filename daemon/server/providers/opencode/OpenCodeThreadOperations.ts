@@ -214,15 +214,28 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const data = [];
     for (const session of response.data) {
       const identity = await this.syncSession(session, []);
-      const page = await this.options.reader.readPage({ threadId: identity.threadId, cursor: null });
-      if (page) data.push(page.thread);
+      data.push(await this.readHydratedThread(identity.threadId));
     }
     return { data, nextCursor: response.cursor.next ?? null };
   }
 
   async read(threadId: string) {
     const identity = await this.identity(threadId);
-    return (await this.options.reader.readPage({ threadId: identity.threadId, cursor: null })).thread;
+    return await this.readHydratedThread(identity.threadId);
+  }
+
+  private async readHydratedThread(threadId: WorkbenchThreadId) {
+    const { thread } = await this.options.reader.readPage({ threadId, cursor: null });
+    const activeTurn = [...thread.turns].reverse().find(turn => turn.status === "inProgress");
+    if (activeTurn) {
+      const identity = await this.options.identities.resolveTurn({
+        threadId, turnId: TurnReferenceSchema.parse(activeTurn.id),
+      });
+      if (!identity || identity.threadId !== threadId) {
+        throw new Error("The canonical active turn does not belong to this Workbench thread.");
+      }
+    }
+    return thread;
   }
 
   async readLatest(threadId: string) {

@@ -123,7 +123,7 @@ export function normalizeProviderSidebarEntry(harness: HarnessKind, value: unkno
   const turns = Array.isArray(record.turns) ? record.turns : [];
   const activeTurn = [...turns].reverse().map(asRecord).find((turn) => turn?.status === "inProgress");
   const pendingTurn = activeTurn?.workbenchAdmission === "connecting" || activeTurn?.workbenchAdmission === "providerPending";
-  const turnId = typeof record.currentTurnId === "string" && record.currentTurnId.trim()
+  const turnId = !pendingTurn && typeof record.currentTurnId === "string" && record.currentTurnId.trim()
     ? identities.knownTurn(TurnReferenceSchema.parse(record.currentTurnId)).turnId
     : !pendingTurn && typeof activeTurn?.id === "string" && activeTurn.id.trim()
       ? identities.knownTurn(TurnReferenceSchema.parse(activeTurn.id)).turnId : undefined;

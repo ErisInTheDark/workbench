@@ -208,9 +208,14 @@ export default class WorkbenchGitArcFeature {
   async pruneThreadHistories(cwd: string, identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>) {
     if (!identities.length) return { prunedRefCount: 0, registryEntryRemoved: false };
     const project = await this.resolveProject(cwd);
-    const owners = await Promise.all(identities.map(identity => (
-      this.gitThreadIdentity(project, identity.harness, identity.threadId)
-    )));
+    const resolved = await Promise.all(identities.map(async ({ harness, threadId }) => {
+      const identity = await this.options.identities.resolveGitArcThreadIdentity({
+        harness, projectId: project.project.id, repositoryRoot: project.cwd, threadId,
+      });
+      return identity ? { harness, threadId: WorkbenchThreadIdSchema.parse(identity.threadId) } : null;
+    }));
+    const owners = resolved.filter((owner): owner is NonNullable<typeof owner> => owner !== null);
+    if (!owners.length) return { prunedRefCount: 0, registryEntryRemoved: false };
     return await this.workspaceController.pruneThreadHistories(project, owners);
   }
 

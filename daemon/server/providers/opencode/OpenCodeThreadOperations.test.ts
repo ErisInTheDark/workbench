@@ -17,6 +17,7 @@ import { createThreadStateTestDatabase } from "../../workbench-thread-state-test
 import WorkbenchTranscriptRepository from "../../database/transcript/WorkbenchTranscriptRepository";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import { normalizeProviderSidebarEntry } from "../../WorkbenchThreadStateFeature";
 
 test("accepted questionnaires persist once in their accepted turn and recording failures propagate", async () => {
   const fixture = createThreadStateTestDatabase();
@@ -112,6 +113,7 @@ function operations(
     observe?: (facts: object) => Promise<void>;
     questionnaires?: object;
     readPage?: () => Promise<object>;
+    resolveTurn?: (input: { threadId: string; turnId: string }) => Promise<{ threadId: typeof threadId; turnId: typeof turnId } | null>;
     signal?: AbortSignal;
     refresh?: OpenCodeManagedSessionController["refresh"];
   } = {},
@@ -144,6 +146,10 @@ function operations(
           turnIndex: 0,
         }],
       }),
+      resolveTurn: lifecycle.resolveTurn ?? (async ({ turnId: requestedTurnId }) => ({
+        threadId,
+        turnId: WorkbenchTurnIdSchema.parse(requestedTurnId),
+      })),
     } as never,
     projects: {
       resolveAgentEndpointProjectFromCwd: async () => ({
@@ -185,6 +191,52 @@ function operations(
   });
   return owner;
 }
+
+test("cold opencode reads hydrate active canonical turns before sidebar projection", async () => {
+  let hydrated = false;
+  const thread = {
+    id: threadId, cwd: "C:/repo", name: "Thread", status: "active", updatedAt: 2,
+    turns: [{ id: turnId, status: "inProgress", items: [] }],
+  };
+  const owner = operations({
+    session: { list: async () => ({ data: [session], cursor: {} }) },
+  }, {
+    record: async () => ({ threadId, latestTurnId: null }),
+  }, {}, {
+    readPage: async () => ({ thread }),
+    resolveTurn: async ({ threadId: requestedThreadId, turnId: requestedTurnId }) => {
+      assert.equal(requestedThreadId, threadId);
+      assert.equal(requestedTurnId, turnId);
+      hydrated = true;
+      return { threadId, turnId };
+    },
+  });
+  const project = (value: object) => normalizeProviderSidebarEntry("opencode", value, {
+    knownThread: () => ({ threadId }),
+    knownTurn: () => {
+      if (!hydrated) throw new Error("Canonical turn identity has not been hydrated.");
+      return { turnId };
+    },
+  });
+
+  const readEntry = project(await owner.read(threadId));
+  assert.ok(readEntry?.entryKind === "thread");
+  assert.equal(readEntry.lifecycle.kind, "working");
+  hydrated = false;
+  const listed = await owner.list({ cwd: "C:/repo", cursor: null, limit: 50, archived: false, background: true });
+  assert.equal(listed.data.length, 1);
+  const listedEntry = project(listed.data[0]!);
+  assert.ok(listedEntry?.entryKind === "thread");
+  assert.equal(listedEntry.lifecycle.kind, "working");
+
+  const missing = operations({}, {
+    record: async () => ({ threadId, latestTurnId: null }),
+  }, {}, {
+    readPage: async () => ({ thread }),
+    resolveTurn: async () => null,
+  });
+  await assert.rejects(missing.read(threadId), /canonical active turn does not belong/u);
+});
 
 test("admits a created session into thread state with its captured profile", async () => {
   const profile = {

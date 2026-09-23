@@ -576,6 +576,30 @@ test("settled threads cannot start claims", async () => {
   assert.match(JSON.stringify(await response.json()), /settled thread cannot start or continue/u);
 });
 
+test("retention prunes repository-bound threads without rejecting unrelated unbound threads", async () => {
+  const feature = waitFeature();
+  const received: string[][] = [];
+  const internal = feature as unknown as {
+    workspaceController: {
+      pruneThreadHistories: (_project: object, owners: Array<{ threadId: string }>) => Promise<{ prunedRefCount: number; registryEntryRemoved: boolean }>;
+    };
+  };
+  internal.workspaceController.pruneThreadHistories = async (_project, owners) => {
+    received.push(owners.map(owner => owner.threadId));
+    return { prunedRefCount: owners.length, registryEntryRemoved: false };
+  };
+  const bound = { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(wbThreadId("codex", "thread-one")) };
+  const unbound = { harness: "opencode" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(wbThreadId("opencode", "unbound")) };
+
+  assert.deepEqual(await feature.pruneThreadHistories("C:/Git/Project", [unbound, bound]), {
+    prunedRefCount: 1, registryEntryRemoved: false,
+  });
+  assert.deepEqual(await feature.pruneThreadHistories("C:/Git/Project", [unbound]), {
+    prunedRefCount: 0, registryEntryRemoved: false,
+  });
+  assert.deepEqual(received, [[bound.threadId]]);
+});
+
 test("atomic claim collisions use structured owner and path diagnostics", async () => {
   const feature = new WorkbenchGitArcFeature({
     identities: gitFixtureIdentities(),
