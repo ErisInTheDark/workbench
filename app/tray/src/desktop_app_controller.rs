@@ -330,7 +330,6 @@ impl DesktopAppController {
                 drop(origin_state);
                 match change {
                     AppOriginChange::Ready => {
-                        self.log_launcher(&format!("Workbench app ready at {app_origin}."));
                         if open_browser {
                             self.open_browser(app);
                         }
