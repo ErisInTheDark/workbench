@@ -33,6 +33,7 @@ import {
   DiscardDraftIcon,
   DraftThreadIcon,
   FlagIcon,
+  ImageIcon,
   MoreVerticalIcon,
   NeedsAttentionThreadIcon,
   PinIcon,
@@ -212,6 +213,12 @@ export default function WorkbenchThreadListItem({
   const claimedPaths = stashed ? gitArc.stashedPaths : gitArc?.claimedPaths ?? [];
   const claimedFileCount = claimedPaths.length;
   const showComposerDraft = claimedFileCount === 0 && hasComposerDraft;
+  const hasDraftImages = entry.entryKind === "draft"
+    && (isPinnedDraftSummaryEntry(entry) ? entry.hasAttachments : entry.draft.attachments.length > 0);
+  const titleContent = <span className="inline-flex min-w-0 items-center gap-1">
+    {hasDraftImages ? <ImageIcon className="shrink-0" size={14} /> : null}
+    <span className="truncate">{entry.title}</span>
+  </span>;
   const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
   const waiting = entry.entryKind !== "draft" && Boolean(entry.waitingFor)
     && !(entry.entryKind === "thread" && entry.metadata.snoozed && lifecycle?.kind === "needsAttention");
@@ -254,7 +261,7 @@ export default function WorkbenchThreadListItem({
   const PriorityIcon = priority === "snoozed" ? SnoozedThreadIcon : priority === "pinned" ? PinIcon : null;
   const actionDisplay = action ? THREAD_ACTIONS[action] : null;
   const projectName = project ? `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
-  const rowName = `${projectName}${entry.title}, ${status}${claimedFileCount ? `, ${claimedFileCount} ${stashed ? "stashed" : "claimed"} ${claimedFileCount === 1 ? "file" : "files"}` : ""}${showComposerDraft ? ", unsent draft" : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
+  const rowName = `${projectName}${entry.title}${hasDraftImages ? ", includes image" : ""}, ${status}${claimedFileCount ? `, ${claimedFileCount} ${stashed ? "stashed" : "claimed"} ${claimedFileCount === 1 ? "file" : "files"}` : ""}${showComposerDraft ? ", unsent draft" : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
   const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled" || archived));
   const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
@@ -357,7 +364,7 @@ export default function WorkbenchThreadListItem({
           `}
         >
           <Icon className={`mr-1.5 ${statusClassName}`} size={14} />
-          <span className={`${workbenchThreadListLabelClassName} truncate${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>
+          <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate${selected ? " font-semibold text-text" : ""}`}>{titleContent}</span>
           <span className={`col-start-3 row-start-1 inline-flex items-center gap-1.5 text-[0.72rem] text-fg/muted${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
             {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon size={14} /></span> : null}
             <time dateTime={dateTime} title={exactTime}>{relativeTime}</time>
@@ -399,7 +406,7 @@ export default function WorkbenchThreadListItem({
           statusIcon={<Icon className={statusClassName} size={14} />}
           statusLabel={<span className={`truncate ${statusClassName}`}>{status}</span>}
           timestamp={<time dateTime={dateTime} title={exactTime}>{relativeTime}</time>}
-          title={<span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold text-text" : ""}`}>{entry.title}</span>}
+          title={<span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold text-text" : ""}`}>{titleContent}</span>}
         />
       )}
     </Container>

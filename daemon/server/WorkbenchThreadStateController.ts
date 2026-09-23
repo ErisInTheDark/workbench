@@ -89,6 +89,7 @@ import {
   type WorkbenchThreadStateOpenResult,
   type WorkbenchThreadStateRequest,
   type WorkbenchThreadStateSnapshot,
+  type WorkbenchProjectThreadSummary,
   type WorkbenchThreadObservationSnapshot,
   type WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
@@ -123,8 +124,21 @@ export type WorkbenchObservedThreadEntry = WorkbenchThreadSidebarEntry & { workb
 interface StoredThreadMetadata { archived: boolean; harness: WorkbenchHarness; lifecycle: WorkbenchThreadLifecycle; mcpGeneration?: string | null; orderAt?: number; pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null; pinned: boolean; questionnaireHistory?: WorkbenchQuestionnaireHistoryEntryState[]; snoozed: boolean; threadId: string; titleFallback?: string }
 type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
 type ProjectObservation =
-  | { pinnedThreadKeys: Set<string>; projectId: ProjectId; scope: "project"; version: 1 | 2 | 3 | 4 | 5 }
+  | { pinnedThreadKeys: Set<string>; projectId: ProjectId; scope: "project"; version: 1 | 2 | 3 | 4 | 5 | 6 }
   | { pinnedThreadKeys: Set<string>; scope: "global"; version: 4 | 5 | 6 | 7 };
+
+function summaryForObservation(summary: WorkbenchProjectThreadSummary, observation: ProjectObservation): WorkbenchProjectThreadSummary {
+  if (observation.scope === "project" && observation.version >= 6) return summary;
+  return {
+    ...summary,
+    pinnedThreads: summary.pinnedThreads.map((entry) => {
+      if (entry.entryKind !== "draft") return entry;
+      const { hasAttachments: _hasAttachments, ...legacy } = entry;
+      // The legacy wire omits this required parsed field; new clients restore its schema default.
+      return legacy as typeof entry;
+    }),
+  };
+}
 interface StoredProjectStateV1 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
 interface StoredProjectStateV2 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 2 }
 interface StoredProjectStateV3 { displayOrder?: WorkbenchThreadDisplayOrder; drafts: StoredThreadDraft[]; records: WorkbenchThreadStateRecord[]; version: 3 }
@@ -564,13 +578,14 @@ export default class WorkbenchThreadStateController {
   }
 
   async open(connectionId: string, projectId: ProjectId): Promise<WorkbenchThreadStateOpenResultV2>;
+  async open(connectionId: string, projectId: ProjectId, version: 6): Promise<WorkbenchThreadStateOpenResult>;
   async open(connectionId: string, projectId: ProjectId, version: 5): Promise<WorkbenchThreadStateOpenResult>;
   async open(connectionId: string, projectId: ProjectId, version: 4): Promise<WorkbenchThreadStateOpenResult>;
   async open(connectionId: string, projectId: ProjectId, version: 3): Promise<WorkbenchThreadStateOpenResult>;
   async open(connectionId: string, projectId: ProjectId, version: 2): Promise<WorkbenchThreadStateOpenResultV2>;
   async open(connectionId: string, projectId: ProjectId, version: 1): Promise<WorkbenchThreadSidebarSnapshot>;
-  async open(connectionId: string, projectId: ProjectId, version: 1 | 2 | 3 | 4 | 5): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult>;
-  async open(connectionId: string, projectId: ProjectId, version: 1 | 2 | 3 | 4 | 5 = 2): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult> {
+  async open(connectionId: string, projectId: ProjectId, version: 1 | 2 | 3 | 4 | 5 | 6): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult>;
+  async open(connectionId: string, projectId: ProjectId, version: 1 | 2 | 3 | 4 | 5 | 6 = 2): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult> {
     projectId = this.canonicalProjectId(projectId);
     const priorObservation = this.connectionProjects.get(connectionId);
     if (priorObservation?.scope === "global") await this.closeGlobal(connectionId);
@@ -598,7 +613,7 @@ export default class WorkbenchThreadStateController {
     const loadedProjectSummaries = catalog.data.flatMap(({ id }) => {
       const loadedState = this.projects.get(id);
       return loadedState
-        ? [createWorkbenchProjectThreadSummary(id, this.naturallyOrderedEntries(loadedState), loadedState.revision, loadedState.displayOrder)]
+        ? [summaryForObservation(createWorkbenchProjectThreadSummary(id, this.naturallyOrderedEntries(loadedState), loadedState.revision, loadedState.displayOrder), observation)]
         : [];
     });
     this.hydrateProjectThreadSummaries(
@@ -1743,7 +1758,7 @@ export default class WorkbenchThreadStateController {
       try {
         const summary = await this.getProjectThreadSummary(projectId);
         if (!this.active || this.connectionProjects.get(connectionId) !== observation) return;
-        this.options.publish(connectionId, { summary, updateKind: "projectThreadSummary" });
+        this.options.publish(connectionId, { summary: summaryForObservation(summary, observation), updateKind: "projectThreadSummary" });
       } catch (error) {
         this.options.log?.(`project thread summary hydration failed project=${sanitizeLogValue(projectId)} error=${sanitizeError(error)}`);
       }
@@ -1908,7 +1923,7 @@ export default class WorkbenchThreadStateController {
           this.options.publish(connectionId, delta && observation.version >= 5
             ? delta : this.snapshotForObservation(fullSidebar(), observation));
         }
-        if (observation.version >= 3) this.options.publish(connectionId, { summary, updateKind: "projectThreadSummary" });
+        if (observation.version >= 3) this.options.publish(connectionId, { summary: summaryForObservation(summary, observation), updateKind: "projectThreadSummary" });
       } else {
         this.options.publish(connectionId, delta && observation.version >= 7 ? delta : {
           sidebar: this.snapshotForObservation(fullSidebar(), observation), updateKind: "projectThreadSidebar",

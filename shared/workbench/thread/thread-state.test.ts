@@ -1071,6 +1071,7 @@ test("project summaries expose ordered unsnoozed pins without draft bodies", () 
     activityAt: 3,
     draftId,
     entryKind: "draft",
+    hasAttachments: true,
     metadata: { archived: false, pinned: true, snoozed: false },
     status: "draft",
     title: "Pinned draft",

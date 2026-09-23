@@ -317,7 +317,7 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
 }
 
 test("thread-state open negotiates incremental delivery with a complete bootstrap", async () => {
-  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 | 5 }> = [];
+  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 | 5 | 6 }> = [];
   const catalogs: unknown[] = [];
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
@@ -328,7 +328,7 @@ test("thread-state open negotiates incremental delivery with a complete bootstra
       return { catalog: { data: [], rootPath: "C:/projects" }, project: null, sidebar: sidebar() };
     },
   });
-  assert.deepEqual(requests, [{ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 5 }]);
+  assert.deepEqual(requests, [{ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 6 }]);
   assert.equal(result.sidebar.projectId, "project");
   assert.deepEqual(result.pinnedThreadLayout, {
     displayOrder: {},
@@ -337,6 +337,24 @@ test("thread-state open negotiates incremental delivery with a complete bootstra
   });
   assert.deepEqual(result.projectThreads, { projects: [] });
   assert.equal(catalogs.length, 1);
+});
+
+test("thread-state open tries attachment-aware summaries before the prior protocol", async () => {
+  const versions: number[] = [];
+  await openWorkbenchThreadStateObservation({
+    acceptProject: () => undefined,
+    installCatalog: () => undefined,
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    request: async ({ version }) => {
+      versions.push(version ?? 0);
+      if (version === 6) throw new WorkbenchDaemonRequestError(
+        "Invalid literal value, expected 5",
+        "invalidThreadStateMutation" as never,
+      );
+      return { catalog: { data: [], rootPath: "C:/projects" }, project: null, sidebar: sidebar() };
+    },
+  });
+  assert.deepEqual(versions, [6, 5]);
 });
 
 test("global thread-state open installs a catalog and full sidebars without a selected project snapshot", async () => {
@@ -419,7 +437,7 @@ test("global thread-state failures retain the actual server error and request bo
 });
 
 test("thread-state open negotiates back to version 2 while the server is still old", async () => {
-  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 | 5 }> = [];
+  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 | 5 | 6 }> = [];
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,
@@ -436,6 +454,7 @@ test("thread-state open negotiates back to version 2 while the server is still o
     },
   });
   assert.deepEqual(requests, [
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 6 },
     { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 5 },
     { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 4 },
     { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 3 },
@@ -446,7 +465,7 @@ test("thread-state open negotiates back to version 2 while the server is still o
 });
 
 test("thread-state open falls back from version 4 on the typed old-server rejection", async () => {
-  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 | 5 }> = [];
+  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 | 5 | 6 }> = [];
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,
@@ -468,6 +487,7 @@ test("thread-state open falls back from version 4 on the typed old-server reject
     },
   });
   assert.deepEqual(requests, [
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 6 },
     { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 5 },
     { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 4 },
     { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 3 },
@@ -476,7 +496,7 @@ test("thread-state open falls back from version 4 on the typed old-server reject
 });
 
 test("thread-state open retries legacy only for an unsupported version field", async () => {
-  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 | 5 }> = [];
+  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 | 5 | 6 }> = [];
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
     installCatalog: () => undefined,
@@ -488,6 +508,7 @@ test("thread-state open retries legacy only for an unsupported version field", a
     },
   });
   assert.deepEqual(requests, [
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 6 },
     { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 5 },
     { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 4 },
     { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 3 },
@@ -498,7 +519,7 @@ test("thread-state open retries legacy only for an unsupported version field", a
 });
 
 test("thread-state open accepts a composite bootstrap from the versionless compatibility retry", async () => {
-  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 | 5 }> = [];
+  const requests: Array<{ projectId: string; version?: 2 | 3 | 4 | 5 | 6 }> = [];
   const catalogs: unknown[] = [];
   const result = await openWorkbenchThreadStateObservation({
     acceptProject: () => undefined,
@@ -516,6 +537,7 @@ test("thread-state open accepts a composite bootstrap from the versionless compa
     },
   });
   assert.deepEqual(requests, [
+    { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 6 },
     { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 5 },
     { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 4 },
     { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), version: 3 },

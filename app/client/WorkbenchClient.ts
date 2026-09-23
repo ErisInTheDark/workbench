@@ -213,7 +213,7 @@ export async function openWorkbenchThreadStateObservation({
   acceptProject: (update: WorkbenchProjectStateUpdate) => void;
   installCatalog: (catalog: WorkbenchProjectsPayload) => void | Promise<unknown>;
   projectId: string;
-  request: (params: { projectId: string; version?: 2 | 3 | 4 | 5 }) => Promise<unknown>;
+  request: (params: { projectId: string; version?: 2 | 3 | 4 | 5 | 6 }) => Promise<unknown>;
 }) {
   const acceptComposite = async (response: unknown) => {
     const parsed = WorkbenchThreadStateOpenResultSchema.safeParse(response);
@@ -226,7 +226,7 @@ export async function openWorkbenchThreadStateObservation({
     return conformed;
   };
   let response: unknown;
-  for (const version of [5, 4, 3, 2, undefined] as const) {
+  for (const version of [6, 5, 4, 3, 2, undefined] as const) {
     try {
       response = await request(version === undefined ? { projectId } : { projectId, version });
       break;

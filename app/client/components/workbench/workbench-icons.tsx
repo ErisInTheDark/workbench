@@ -13,6 +13,7 @@
  * - SaveIcon: save glyph with disabled slash.
  * - ResetIcon: counterclockwise reset arrow.
  * - DraftThreadIcon/ComposerDraftIcon/NeedsAttentionThreadIcon/CompletedThreadIcon/ProposedCommitThreadIcon/WorkingThreadIcon/StoppedThreadIcon: lifecycle and draft glyphs.
+ * - ImageIcon: attached-image glyph for draft titles.
  * - DiscardDraftIcon/SettleThreadIcon/RestoreThreadIcon/UnsnoozeThreadIcon/SnoozedThreadIcon: sidebar action glyphs.
  * - BinIcon: discard glyph.
  * - ZoomInIcon: text-size control.
@@ -302,6 +303,14 @@ export function PanelLeftOpenIcon(props: IconProps) {
       <path d="m14 9 3 3-3 3" />
     </OutlinedIcon>
   );
+}
+
+export function ImageIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+    <circle cx="9" cy="9" r="2" />
+    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+  </OutlinedIcon>;
 }
 
 export function SquareMinusIcon(props: IconProps) {

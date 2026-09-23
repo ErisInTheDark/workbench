@@ -53,7 +53,7 @@ import {
 import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
 import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
-import { type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import { createDraftTitle, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import WorkbenchBrowseSessionController from "../workbench/browse/WorkbenchBrowseSessionController";
 import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
@@ -116,6 +116,7 @@ import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/threa
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
+import { ImageIcon } from "./workbench/workbench-icons";
 import {
     useWorkbenchClientMount,
     useWorkbenchProjectThreadSidebar,
@@ -400,6 +401,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     initialRoute,
   });
   const { navigateToRoute, route } = useWorkbenchRoute(workbenchClient);
+  const navigateToRouteRef = useRef(navigateToRoute);
+  navigateToRouteRef.current = navigateToRoute;
   const projectHref = useWorkbenchProjectNavigation(workbenchClient);
   currentRouteRef.current = route;
   const threads = useWorkbenchThreads(workbenchClient);
@@ -620,10 +623,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     };
   }, [route]);
 
-  const routeMosaicNodeForControls = isMobile && route.view === "mosaic" ? route.mosaicNode : null;
+  const isMobileMosaicRoute = isMobile && route.view === "mosaic";
+  const routeMosaicNodeForControls = isMobileMosaicRoute ? route.mosaicNode : null;
   const routeToApplyToControls = useMemo(() => {
     if (route.view === "mosaic") {
-      const mobileMosaicTarget = getRouteMosaicFallbackTarget(routeMosaicNodeForControls, isMobile);
+      const mobileMosaicTarget = getRouteMosaicFallbackTarget(routeMosaicNodeForControls, isMobileMosaicRoute);
       if (mobileMosaicTarget?.kind === "file") {
         return createFileRoute(route.projectId, mobileMosaicTarget.filePath);
       }
@@ -656,7 +660,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
     return route;
   }, [
-    isMobile,
+    isMobileMosaicRoute,
     route.error,
     route.filePath,
     route.projectId,
@@ -684,7 +688,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         return;
       }
       if (result.canonicalRoute) {
-        navigateToRoute(result.canonicalRoute, { replace: true });
+        navigateToRouteRef.current(result.canonicalRoute, { replace: true });
         return;
       }
       if (!result.ok && result.error) {
@@ -695,7 +699,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     return () => {
       cancelled = true;
     };
-  }, [controls, navigateToRoute, routeToApplyToControls]);
+  }, [controls, routeToApplyToControls]);
 
   const expandedDirectories = new Set(explorer.expandedDirectories);
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
@@ -1420,7 +1424,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     ?? (isThreadOwnedByEffectiveRoute(currentThread)
       ? currentThread
       : null)
-    ?? (isThreadOwnedByEffectiveRoute(retainedThread)
+    ?? (effectiveThreadTarget?.kind !== "new" && isThreadOwnedByEffectiveRoute(retainedThread)
       ? retainedThread
       : null);
   const handleSelectedThreadChange = useCallback((selectedThreadId: string) => {
@@ -2379,8 +2383,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to_bottom,var(--shell-fade-bg)_calc(100%-var(--spacing)*6),transparent)] md:backdrop-blur-none"
                 />
                 <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                  <div className="order-2 min-w-0 w-full flex-1 md:order-1" hidden={!showGitView && Boolean(currentThread?.isDraft)}>
-                    {showThreadView && threadShellSource && !isThreadShellTitleLoading ? (
+                  <div className="order-2 min-w-0 w-full flex-1 md:order-1">
+                    {showThreadView && threadForThreadView?.isDraft && !isThreadShellTitleLoading ? (
+                      <>
+                        <p id="file-path" ref={filePathLabelRef} className="flex min-w-0 items-center gap-1 truncate text-base font-semibold leading-tight">
+                          {activeRouteDraft?.attachments.length ? <ImageIcon className="shrink-0" size={16} /> : null}
+                          <span className="truncate">{activeRouteDraft ? createDraftTitle(activeRouteDraft.prompt) : threadShellTitle}</span>
+                        </p>
+                        <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">{threadShellStatusLabel}</p>
+                      </>
+                    ) : showThreadView && threadShellSource && !isThreadShellTitleLoading ? (
                       <ThreadShellTitleInput
                         key={`${threadShellSource.harness}:${threadShellSource.id}`}
                         activityLabel={threadShellStatusLabel}

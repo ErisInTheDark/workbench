@@ -180,6 +180,7 @@ export default class WorkbenchNavigationController {
       route,
       selectedPinnedThreadDraft: null,
     });
+    if (route.view === "thread" && route.threadTarget?.kind === "new") this.ports.clearSelection();
 
     if (route.view === "invalid") {
       this.ports.clearSelection();

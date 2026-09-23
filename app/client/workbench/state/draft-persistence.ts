@@ -63,7 +63,8 @@ export async function saveComposerDraft(
     if (existing) await target.owner.remove(target.projectId, target.draftId);
     return existing || options.reason === "submission" ? input : null;
   }
-  if (target.isNew && !existing && options.reason === "autosave" && countDraftPromptTokens(input.text) < 3) return null;
+  if (target.isNew && !existing && options.reason === "autosave"
+    && !input.attachments.length && countDraftPromptTokens(input.text) < 3) return null;
   const draftId = target.draftId;
   const baseline = existing ?? target.owner.create(target.projectId, draftId);
   const draft: WorkbenchThreadDraft = {

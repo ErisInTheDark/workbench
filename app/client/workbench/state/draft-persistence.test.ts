@@ -82,7 +82,7 @@ test("detached creation never navigates and clearing uses the original project i
   assert.ok(store.owner.read(fixtureIdentitySchemas.ProjectIdSchema.parse("other"), store.target.draftId));
 });
 
-test("below-threshold edits remain buffered until materialisation, including screenshots", async () => {
+test("an image materialises a new draft below the text threshold", async () => {
   const state = new WorkbenchClientStateController();
   const store = sidebarFixture();
   const session = new DraftSessionController(sidebarDraftToInput(null), {
@@ -96,11 +96,11 @@ test("below-threshold edits remain buffered until materialisation, including scr
   await session.flush();
   session.edit((draft) => ({ ...draft, attachments: [{ id: "shot", url: "image:shot" }] }));
   await session.flush();
-  assert.equal(store.records.size, 0);
-  session.edit((draft) => ({ ...draft, text: "now this has enough words to persist" }));
-  await session.flush();
+  assert.equal(store.records.size, 1);
   const saved = [...store.records.values()][0];
   assert.deepEqual(saved.attachments, [{ id: "shot", url: "image:shot" }]);
+  assert.equal(saved.prompt, "hi");
+  assert.deepEqual(store.navigations, [store.target.draftId]);
   session.detach();
 });
 

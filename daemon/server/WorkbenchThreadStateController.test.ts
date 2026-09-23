@@ -1741,6 +1741,140 @@ test("version 3 returns loaded summaries before cold projects and fences progres
   await fs.rm(root, { force: true, recursive: true });
 });
 
+test("pinned image presence is sent only to version 6 project observers", async context => {
+  const persistence = new MemoryThreadStatePersistence();
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000401");
+  const draft = {
+    attachments: [{ id: "shot", url: "image:shot" }],
+    clientUpdatedAt: 1,
+    composerSettings: EMPTY_CODEX_SETTINGS,
+    createdAt: 1,
+    draftId,
+    pinned: true,
+    profileId: null,
+    projectId: fixtureProjectIds.beta,
+    prompt: "picture",
+    snoozed: false,
+    updatedAt: 1,
+  };
+  persistence.projects.set(fixtureProjectIds.beta, { version: 4, records: [], drafts: [draft] });
+  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [projectOption("alpha", "C:/alpha"), projectOption("beta", "C:/beta")],
+      rootPath: "C:/",
+    }),
+    projectState: projectState(),
+    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
+    reconcileProject: async () => [],
+    storageRoot: "pinned-image-presence",
+    threadStateStore: persistence,
+  });
+  context.after(() => controller.dispose());
+  await controller.open("warm-beta", fixtureProjectIds.beta, 2);
+  const oldClient = await controller.open("v5", fixtureProjectIds.alpha, 5);
+  const newClient = await controller.open("v6", fixtureProjectIds.alpha, 6);
+  const pinned = (result: typeof oldClient) => {
+    const entry = result.projectThreads.projects
+      .find(({ projectId }) => projectId === fixtureProjectIds.beta)?.pinnedThreads
+      .find(({ entryKind }) => entryKind === "draft");
+    return entry?.entryKind === "draft" ? entry : null;
+  };
+  assert.equal(Object.hasOwn(pinned(oldClient) ?? {}, "hasAttachments"), false);
+  assert.equal(pinned(newClient)?.hasAttachments, true);
+
+  publications.length = 0;
+  const { pinned: _pinned, snoozed: _snoozed, ...draftInput } = draft;
+  const written = await controller.handleRequest("warm-beta", {
+    method: "workbench/thread-state/draft/upsert",
+    projectId: fixtureProjectIds.beta,
+    draft: { ...draftInput, clientUpdatedAt: 2, updatedAt: 2 },
+  });
+  const updates = publications.filter(({ snapshot }) => "updateKind" in snapshot
+    && snapshot.updateKind === "projectThreadSummary"
+    && snapshot.summary.projectId === fixtureProjectIds.beta);
+  assert.equal(written.error, undefined);
+  const updatedDraft = (connectionId: string) => {
+    const update = updates.find((candidate) => candidate.connectionId === connectionId)?.snapshot;
+    if (!update || !("updateKind" in update) || update.updateKind !== "projectThreadSummary") return null;
+    const entry = update.summary.pinnedThreads.find(({ entryKind }) => entryKind === "draft");
+    return entry?.entryKind === "draft" ? entry : null;
+  };
+  assert.ok(updatedDraft("v5"));
+  assert.equal(Object.hasOwn(updatedDraft("v5")!, "hasAttachments"), false);
+  assert.equal(updatedDraft("v6")?.hasAttachments, true);
+
+  publications.length = 0;
+  await controller.handleRequest("warm-beta", {
+    method: "workbench/thread-state/draft/upsert",
+    projectId: fixtureProjectIds.beta,
+    draft: { ...draftInput, attachments: [], clientUpdatedAt: 3, updatedAt: 3 },
+  });
+  const clearedUpdate = publications.find(({ connectionId, snapshot }) => connectionId === "v6"
+    && "updateKind" in snapshot && snapshot.updateKind === "projectThreadSummary"
+    && snapshot.summary.projectId === fixtureProjectIds.beta)?.snapshot;
+  assert.ok(clearedUpdate && "updateKind" in clearedUpdate && clearedUpdate.updateKind === "projectThreadSummary");
+  const clearedDraft = clearedUpdate.summary.pinnedThreads.find(({ entryKind }) => entryKind === "draft");
+  assert.equal(clearedDraft?.entryKind === "draft" ? clearedDraft.hasAttachments : null, false);
+});
+
+test("cold pinned draft summaries keep the image flag version-gated", async context => {
+  const persistence = new MemoryThreadStatePersistence();
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000402");
+  persistence.projects.set(fixtureProjectIds.beta, {
+    version: 4,
+    records: [],
+    drafts: [{
+      attachments: [{ id: "shot", url: "image:shot" }],
+      clientUpdatedAt: 1,
+      composerSettings: EMPTY_CODEX_SETTINGS,
+      createdAt: 1,
+      draftId,
+      pinned: true,
+      profileId: null,
+      projectId: fixtureProjectIds.beta,
+      prompt: "picture",
+      snoozed: false,
+      updatedAt: 1,
+    }],
+  });
+  let releaseBeta = () => undefined;
+  const betaRead = new Promise<void>((resolve) => { releaseBeta = resolve; });
+  const readProject = persistence.readProject.bind(persistence);
+  persistence.readProject = async (projectId) => {
+    if (projectId === fixtureProjectIds.beta) await betaRead;
+    return await readProject(projectId);
+  };
+  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [projectOption("alpha", "C:/alpha"), projectOption("beta", "C:/beta")],
+      rootPath: "C:/",
+    }),
+    projectState: projectState(),
+    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
+    reconcileProject: async () => [],
+    storageRoot: "cold-pinned-image-presence",
+    threadStateStore: persistence,
+  });
+  context.after(() => controller.dispose());
+  await controller.open("v5", fixtureProjectIds.alpha, 5);
+  await controller.open("v6", fixtureProjectIds.alpha, 6);
+  releaseBeta();
+  await controller.open("warm-beta", fixtureProjectIds.beta, 2);
+  const coldDraft = (connectionId: string) => {
+    const publication = publications.find(({ connectionId: id, snapshot }) => id === connectionId
+      && "updateKind" in snapshot && snapshot.updateKind === "projectThreadSummary"
+      && snapshot.summary.projectId === fixtureProjectIds.beta)?.snapshot;
+    if (!publication || !("updateKind" in publication) || publication.updateKind !== "projectThreadSummary") return null;
+    const entry = publication.summary.pinnedThreads.find(({ entryKind }) => entryKind === "draft");
+    return entry?.entryKind === "draft" ? entry : null;
+  };
+  assert.ok(coldDraft("v5"));
+  assert.equal(Object.hasOwn(coldDraft("v5")!, "hasAttachments"), false);
+  assert.equal(coldDraft("v6")?.hasAttachments, true);
+});
+
 test("an observed project represents a missing thread as an empty observation", async () => {
   const controller = new WorkbenchThreadStateController({
     storageRoot: "missing-thread-observation",

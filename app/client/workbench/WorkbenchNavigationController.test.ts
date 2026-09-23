@@ -140,6 +140,28 @@ test("overlapping thread opens publish only the latest route", async () => {
   assert.equal(controller.getSnapshot().route.threadId, "second");
 });
 
+test("new-thread navigation clears the prior selection before async project setup", async () => {
+  const projectReady = deferred<string>();
+  const events: string[] = [];
+  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
+    clearSelection: () => { events.push("clear"); },
+    createDraft: () => { events.push("create"); },
+    ensureProject: async () => await projectReady.promise,
+  }));
+  const route: WorkbenchRoute = {
+    ...createHomeRoute(),
+    projectId: ProjectIdSchema.parse("project"),
+    threadTarget: { kind: "new" },
+    view: "thread",
+  };
+
+  const navigation = controller.applyRoute(route);
+  assert.deepEqual(events, ["clear"]);
+  projectReady.resolve("");
+  assert.deepEqual(await navigation, { ok: true });
+  assert.deepEqual(events, ["clear", "create"]);
+});
+
 test("failed thread opens publish to the exact current owner", async () => {
   const failures: Array<{ error: string; projectId: string; threadId: string }> = [];
   const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
