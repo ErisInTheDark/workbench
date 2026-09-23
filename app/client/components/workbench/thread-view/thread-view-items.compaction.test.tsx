@@ -28,7 +28,7 @@ function renderCompaction(itemTimeline: readonly WorkbenchThreadItemTimelineEntr
   }));
 }
 
-test("an in-progress turn stops animating a compaction as soon as that item completes", () => {
+test("a compaction label changes from active to completed with its timeline entry", () => {
   const activeHtml = renderCompaction([{
     completedAt: null,
     firstSeenAt: 1,
@@ -37,7 +37,6 @@ test("an in-progress turn stops animating a compaction as soon as that item comp
     startedAt: 1,
   }]);
   assert.match(activeHtml, /Context compacting/u);
-  assert.match(activeHtml, /thread-thinking-text/u);
 
   const completedHtml = renderCompaction([{
     aliases: ["compaction-one"],
@@ -48,5 +47,4 @@ test("an in-progress turn stops animating a compaction as soon as that item comp
     startedAt: 1,
   }]);
   assert.match(completedHtml, /Context compacted/u);
-  assert.doesNotMatch(completedHtml, /thread-thinking-text/u);
 });

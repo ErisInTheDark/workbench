@@ -32,7 +32,7 @@ import {
 import PrimaryButton from "../PrimaryButton";
 import { FeatherIcon, SendHorizontalIcon, XIcon } from "../workbench-icons";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
-import PlaintextEditable from "./PlaintextEditable";
+import PlaintextEditable, { threadPlaintextEditableClassName } from "./PlaintextEditable";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import { formatQuestionDisplay, shouldUseCompactSingleQuestionDisplay } from "./thread-user-input-request-preview";
@@ -561,7 +561,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           <PlaintextEditable
                             id={`${request.id}:${question.id}:custom`}
                             ariaLabel={`${headerText} answer`}
-                            className="thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none"
+                            className={`${threadPlaintextEditableClassName} min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none`}
                             readOnly
                             spellCheck={false}
                             highlights={customValueHighlights}
@@ -584,7 +584,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                             id={`${request.id}:${question.id}:custom`}
                             ariaLabel={`${headerText} answer`}
                             autoFocus={isSoleFreeformQuestion || isQuickResponseCustomInputRequested}
-                            className="thread-plaintext-editable min-h-8 w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none"
+                            className={`${threadPlaintextEditableClassName} min-h-8 w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none`}
                             placeholder={isSoleFreeformQuestion ? "Write a response" : undefined}
                             spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
                             highlights={customValueHighlights}
@@ -612,7 +612,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           ariaLabel={`${headerText} answer`}
                           autoFocus={isSoleFreeformQuestion || isQuickResponseCustomInputRequested}
                           className={joinClasses(
-                            "thread-plaintext-editable min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition",
+                            `${threadPlaintextEditableClassName} min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition`,
                             customValue || isSoleFreeformQuestion
                               ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] py-3 mt-1 mb-3"
                               : `

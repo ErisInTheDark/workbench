@@ -80,7 +80,7 @@ function areNumberArraysEqual(left: readonly number[], right: readonly number[])
 function renderAppendReveal(children: ReactNode, key: string) {
   return (
     <span
-      className="thread-markdown-append-reveal"
+      className="relative animate-slide-reveal motion-reduce:animate-none motion-reduce:filter-none motion-reduce:opacity-100 motion-reduce:top-0"
       data-thread-markdown-append-reveal="true"
       key={key}
     >

@@ -40,7 +40,7 @@ import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbe
 import PrimaryButton from "../PrimaryButton";
 import { PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
-import PlaintextEditable from "./PlaintextEditable";
+import PlaintextEditable, { threadPlaintextEditableClassName } from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
 import StickyComposerSurface from "./StickyComposerSurface";
@@ -578,7 +578,7 @@ export default function ThreadComposer ({
               <PlaintextEditable
                 id={`thread-composer:${thread.id}`}
                 ariaLabel={isCommentMode ? "Write comment" : "Message thread"}
-                className="thread-plaintext-editable min-h-[5.75rem] w-full border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none"
+                className={`${threadPlaintextEditableClassName} min-h-[5.75rem] w-full border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none`}
                 disabled={isInputDisabled}
                 placeholder={composerPlaceholder}
                 highlights={composerHighlights}

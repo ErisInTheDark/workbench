@@ -1,5 +1,4 @@
 /*
- * Keywords: thread, compaction, label, live duration.
  * Exports:
  * - default ThreadContextCompactionItem: render compaction activity and elapsed duration in one label.
  */
@@ -7,6 +6,7 @@
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 
+import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import { formatThreadDuration } from "./thread-view-formatters";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 
@@ -35,7 +35,7 @@ export default function ThreadContextCompactionItem ({
         title={item.id}
       >
         <div className="h-[1px] grow bg-fg/muted opacity-10" />
-        <p className={isActive ? "thread-thinking-text m-0 text-[0.92em] font-medium leading-[1.6]" : "m-0 text-[0.92em] leading-[1.6]"}>
+        <p className={isActive ? `${shimmerTextClassName} m-0 text-[0.92em] font-medium leading-[1.6]` : "m-0 text-[0.92em] leading-[1.6]"}>
           {isActive ? "Context compacting" : "Context compacted"}
           {duration ? ` ${duration}` : ""}
         </p>

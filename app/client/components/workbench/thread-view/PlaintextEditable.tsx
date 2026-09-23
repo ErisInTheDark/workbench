@@ -2,6 +2,7 @@
  * Exports:
  * - default PlaintextEditable: plaintext input with autofocus, overlays and mention suggestions.
  * - PlaintextEditableHandle: focus the editor at a model-text offset.
+ * - threadPlaintextEditableClassName: shared Tailwind styling for thread text editors.
  */
 "use client";
 
@@ -21,6 +22,14 @@ import { capturePlaintextSelection, restorePlaintextSelection } from "./plaintex
 import type { VoiceSelection } from "workbench-shared/workbench/voice/voice-document";
 
 export interface PlaintextEditableHandle { focus(offset?: number): void }
+
+export const threadPlaintextEditableClassName = [
+  "block whitespace-pre-wrap wrap-anywhere [word-break:break-word]",
+  "coarse-touch:text-[max(1rem,1em)]",
+  "data-[empty=true]:before:content-[attr(data-placeholder)]",
+  "data-[empty=true]:before:pointer-events-none",
+  "data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_var(--muted-strength),var(--editable-fg-bg,var(--fg-bg,var(--bg))))]",
+].join(" ");
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");

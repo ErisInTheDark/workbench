@@ -1,6 +1,45 @@
 @theme {
+  --animate-shimmer: shimmer 1.45s linear infinite;
+  --animate-slide-reveal: slide-reveal 180ms cubic-bezier(0.22, 0.82, 0.28, 1) both;
+  --animate-tick: tick 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
   --color-button-hover: color-mix(in srgb, white 20%, var(--shell-fade-bg) 80%);
   --container-content: 56rem;
+
+  @keyframes slide-reveal {
+    from {
+      top: 0.12em;
+      filter: blur(0.14em);
+      opacity: 0;
+    }
+
+    to {
+      top: 0;
+      filter: blur(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes shimmer {
+    from {
+      background-position: 100% 50%;
+    }
+
+    to {
+      background-position: 0% 50%;
+    }
+  }
+
+  @keyframes tick {
+    from {
+      opacity: 0.42;
+      transform: translateY(0.42em);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
 }
 
 @theme inline {

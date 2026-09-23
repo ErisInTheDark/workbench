@@ -9,6 +9,8 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
+import { enterMotionClassName } from "../../../tailwind/enter-motion-classes";
+import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import ThreadDisclosure from "./ThreadDisclosure";
 import { LoaderIcon } from "../workbench-icons";
 import ThreadMarkdown from "./ThreadMarkdown";
@@ -71,7 +73,7 @@ export default function ThreadLiveActivity({
   const title = (
     <span className="inline-flex items-center gap-2">
       <LoaderIcon className="shrink-0" />
-      <span className="thread-live-status-enter thread-thinking-text -mt-0.5" key={activityTitle}>{activityTitle}</span>
+      <span className={`inline-block ${enterMotionClassName} ${shimmerTextClassName} -mt-0.5`} key={activityTitle}>{activityTitle}</span>
     </span>
   );
 

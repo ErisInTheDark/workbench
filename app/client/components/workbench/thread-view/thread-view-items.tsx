@@ -32,6 +32,7 @@ import type {
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
+import { enterMotionClassName } from "../../../tailwind/enter-motion-classes";
 import {
   WORKBENCH_QUESTIONNAIRE_TOOL_NAME,
 } from "workbench-shared/workbench/thread/thread-questionnaire-history";
@@ -2110,7 +2111,7 @@ export function ThreadTranscriptItemsDetails ({
       identity={identity}
       key={key}
     >
-      {(animate) => <div className={animate ? "thread-item-enter" : undefined}>
+      {(animate) => <div className={animate ? `block ${enterMotionClassName}` : undefined}>
         <ThreadMeasuredContent>
           {entry.kind === "generic" ? (
             <ThreadGenericItem item={entry.item} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
@@ -2345,7 +2346,7 @@ function ThreadTurnDetailsComponent ({
             : block.kind === "webSearchSequence"
               ? `webSearches:${block.items[0]?.id ?? index}`
               : `item:${block.item.id}`}>
-      {(animate) => <div className={animate ? "thread-item-enter" : undefined}>
+      {(animate) => <div className={animate ? `block ${enterMotionClassName}` : undefined}>
         <ThreadMeasuredContent>
           <ThreadRenderableBlockView
             animateEntries={animateEntries}

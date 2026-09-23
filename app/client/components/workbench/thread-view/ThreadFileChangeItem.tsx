@@ -16,6 +16,7 @@ import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getOpenCodeFileChanges } from "../../../workbench/thread/thread-command-matchers";
 import type { FileChangeAnalysis } from "workbench-shared/workbench/thread/file-change-analysis";
+import { enterMotionClassName } from "../../../tailwind/enter-motion-classes";
 import {
   parseUnifiedDiff,
   type ParsedUnifiedDiff,
@@ -119,11 +120,12 @@ export function ThreadFileChangeTotals ({
     return null;
   }
 
+  const tickClassName = animateChanges ? "inline-block animate-tick motion-reduce:animate-none" : "";
   return (
     <span className="inline-flex items-baseline gap-2 font-mono text-[0.78em] leading-[1.6]">
       {additions ? (
         <span
-          className={`${animateChanges ? "thread-file-change-total-tick " : ""}text-[color:color-mix(in_srgb,var(--success)_78%,var(--text)_22%)]`}
+          className={`${tickClassName} text-[color:color-mix(in_srgb,var(--success)_78%,var(--text)_22%)]`}
           key={animateChanges ? `additions-${additions}` : "additions"}
         >
           +{additions}
@@ -131,7 +133,7 @@ export function ThreadFileChangeTotals ({
       ) : null}
       {deletions ? (
         <span
-          className={`${animateChanges ? "thread-file-change-total-tick " : ""}text-[color:color-mix(in_srgb,var(--danger)_78%,var(--text)_22%)]`}
+          className={`${tickClassName} text-[color:color-mix(in_srgb,var(--danger)_78%,var(--text)_22%)]`}
           key={animateChanges ? `deletions-${deletions}` : "deletions"}
         >
           -{deletions}
@@ -405,7 +407,7 @@ function ThreadFileChangeRows ({
       <ThreadEntryMotion enabled={animateEntries} identity={getThreadFileChangeMotionIdentity(change.sourceItemId, change.sourceChangeIndex)} key={key}>
         {(animate) => change.detailsAvailable ? (
           <ThreadDisclosure
-            className={animate ? "thread-file-change-enter py-0.5" : "py-0.5"}
+            className={animate ? `block ${enterMotionClassName} py-0.5` : "py-0.5"}
             contentClassName="mt-2 pl-6"
             summary={summary}
             summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
@@ -415,13 +417,13 @@ function ThreadFileChangeRows ({
           </ThreadDisclosure>
         ) : change.staticMarker ? (
           <ThreadDisclosureStaticRow
-            className={animate ? "thread-file-change-enter !py-0.5" : "!py-0.5"}
+            className={animate ? `block ${enterMotionClassName} !py-0.5` : "!py-0.5"}
             markerClassName={change.danger ? "text-danger" : undefined}
             summary={summary}
             summaryClassName={`text-[0.92em] leading-[1.6] ${change.danger ? "text-danger" : "text-fg/muted"}`}
           />
         ) : (
-          <div className={`${animate ? "thread-file-change-enter " : ""}py-0.5 text-[0.92em] leading-[1.6] text-fg/muted ${plainInset ? "pl-6" : ""}`}>
+          <div className={`${animate ? `block ${enterMotionClassName} ` : ""}py-0.5 text-[0.92em] leading-[1.6] text-fg/muted ${plainInset ? "pl-6" : ""}`}>
             {summary}
           </div>
         )}
