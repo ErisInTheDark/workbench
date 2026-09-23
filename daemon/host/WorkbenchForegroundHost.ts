@@ -163,4 +163,10 @@ export default class WorkbenchForegroundHost {
     })();
     return this.stopping;
   }
+
+  forceStop() {
+    this.closed = true;
+    this.cancellation.abort(new Error("Foreground host emergency stop."));
+    this.child?.stdin?.end();
+  }
 }

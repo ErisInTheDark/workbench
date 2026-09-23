@@ -40,6 +40,8 @@ test("cold service reads and app detach preserve durable identity without waking
   let demandChanged = () => {};
   const clients: WorkbenchServiceClient[] = [];
   let stopped!: () => void;
+  let emergencyStops = 0;
+  let activeDaemon: WorkbenchDaemonHost | null = null;
   const shutdownRequested = new Promise<void>(resolve => { stopped = resolve; });
   context.after(async () => {
     await Promise.all(clients.map(client => client.close()));
@@ -57,6 +59,7 @@ test("cold service reads and app detach preserve durable identity without waking
       createDaemon: options => {
         demanded = options.hasDemand!;
         const daemon = new WorkbenchDaemonHost(options);
+        activeDaemon = daemon;
         const publish = daemon.demandChanged.bind(daemon);
         context.mock.method(daemon, "demandChanged", () => { publish(); demandChanged(); });
         return daemon;
@@ -65,6 +68,7 @@ test("cold service reads and app detach preserve durable identity without waking
       warn: message => warnings.push(message),
       restart: () => assert.fail("Cold reads must not request a restart."),
       stop: () => stopped(),
+      emergencyStop: () => { emergencyStops++; },
     });
     services.push(service);
     return { service, endpoint: await service.start() };
@@ -121,7 +125,21 @@ test("cold service reads and app detach preserve durable identity without waking
   assert.equal(client.getSnapshot().snapshot?.reloadDirt?.error, null);
   assert.equal(client.getSnapshot().snapshot?.identity.daemonId, identity.daemonId);
   assert.equal(client.getSnapshot().snapshot?.identity.state, "sleeping");
-  await client.request({ method: "service/daemon/stop", instanceId: first.endpoint.instanceId });
+  let entered!: () => void;
+  let release!: () => void;
+  const stopEntered = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  context.mock.method(activeDaemon!, "stop", async () => { entered(); await held; });
+  const normalStop = client.request({ method: "service/daemon/stop", instanceId: first.endpoint.instanceId });
+  await stopEntered;
+  await assert.rejects(client.request({
+    method: "service/emergency/stop", instanceId: "00000000-0000-4000-8000-000000000000",
+  }), /replaced/u);
+  warnings.length = 0;
+  await client.request({ method: "service/emergency/stop", instanceId: first.endpoint.instanceId });
+  assert.equal(emergencyStops, 1);
+  release();
+  await normalStop;
   assert.equal(first.service.identity().state, "sleeping");
   await client.request({ method: "service/stop", instanceId: first.endpoint.instanceId });
   await shutdownRequested;

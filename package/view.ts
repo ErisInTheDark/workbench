@@ -68,6 +68,7 @@ async function appConnection(lifetime: AbortSignal): Promise<ProcessViewConnecti
     logDirectory: info.logDirectory, logPrefix: info.logPrefix,
     stopDaemon: async () => { throw new Error("This is an app view."); },
     stopHost: async () => { throw new Error("This is an app view."); },
+    emergencyStopHost: async () => { throw new Error("This is an app view."); },
     quitApp: async () => {
       const target = await readCurrent();
       const stopped = await fetch(`${target.origin}/_workbench-control/quit/${target.instanceId}`, {
@@ -103,8 +104,9 @@ async function daemonConnection(signal: AbortSignal): Promise<ProcessViewConnect
     });
     return {
       logDirectory: info.logDirectory, logPrefix: info.logPrefix,
-      stopDaemon: async () => { await client.request({ method: "service/daemon/stop", instanceId: info.instanceId }); },
+      stopDaemon: async (requestSignal) => { await client.request({ method: "service/daemon/stop", instanceId: info.instanceId }, requestSignal); },
       stopHost: async () => { await client.request({ method: "service/stop", instanceId: info.instanceId }); },
+      emergencyStopHost: async () => { await client.request({ method: "service/emergency/stop", instanceId: info.instanceId }); },
       quitApp: async () => { throw new Error("This is a daemon view."); },
       close: async () => { signal.removeEventListener("abort", cancelled); unsubscribe(); await client.close(); },
     };

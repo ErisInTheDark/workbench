@@ -31,6 +31,10 @@ async function main() {
     warn: message => logger.error("host", message),
     restart: fatal => setImmediate(() => stop("supervisor replacement", fatal ? 78 : 1)),
     stop: () => stop("explicit shutdown", 0),
+    emergencyStop: () => {
+      logger.error("host", "Emergency host halt requested; exiting the supervised crash unit without graceful disposal.");
+      process.exit(78);
+    },
     writeLog: write,
   });
   let stopping: Promise<void> | null = null;

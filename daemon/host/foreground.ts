@@ -22,7 +22,10 @@ async function main() {
     output: text => process.stdout.write(text),
     warn: text => process.stderr.write(`${text}\n`),
   });
+  let stopRequested = false;
   const stop = () => {
+    if (stopRequested) { host.forceStop(); return; }
+    stopRequested = true;
     void host.stop().catch(error => {
       process.stderr.write(`Foreground shutdown failed: ${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;

@@ -9,8 +9,9 @@ import WorkbenchLogFollower from "../shared/process/WorkbenchLogFollower.ts";
 export interface ProcessViewConnection {
   logDirectory: string;
   logPrefix: "workbench-host" | "workbench-app";
-  stopDaemon(): Promise<void>;
+  stopDaemon(signal: AbortSignal): Promise<void>;
   stopHost(): Promise<void>;
+  emergencyStopHost(): Promise<void>;
   quitApp(): Promise<void>;
   close(): Promise<void>;
 }
@@ -19,7 +20,8 @@ export default class WorkbenchProcessView {
   private closed = false;
   private release: (() => void) | null = null;
   private commands = Promise.resolve();
-  private stage: "daemon" | "host" = "daemon";
+  private stage: "daemon" | "stopping-daemon" | "host" | "emergency" = "daemon";
+  private stopAbort: AbortController | null = null;
   private readonly lifetime = new AbortController();
 
   constructor(private readonly options: {
@@ -41,23 +43,42 @@ export default class WorkbenchProcessView {
     const wasRaw = this.options.input.isRaw;
     const data = (bytes: Buffer | string) => {
       for (const key of bytes.toString()) {
-        if (key === "q" || key === "Q") this.detach();
+        if (key === "q" || key === "Q") { this.detach(); continue; }
         if (key !== "\u0003" || this.closed) continue;
+        if (this.options.target === "daemon" && this.stage === "stopping-daemon") {
+          this.stage = "emergency";
+          this.stopAbort?.abort(new Error("Viewer escalated to emergency host halt."));
+          void connection.emergencyStopHost().then(() => this.detach(), error => {
+            if (!this.closed) this.options.warn(`Emergency host halt was not confirmed: ${error instanceof Error ? error.message : String(error)}`);
+          });
+          continue;
+        }
+        if (this.options.target === "daemon" && this.stage === "emergency") continue;
+        if (this.options.target === "daemon" && this.stage === "daemon") {
+          this.stage = "stopping-daemon";
+          this.stopAbort = new AbortController();
+        }
         this.commands = this.commands.then(async () => {
           if (this.closed) return;
           if (this.options.target !== "daemon") {
             await connection.quitApp();
             this.detach();
-          } else if (this.stage === "daemon") {
-            await connection.stopDaemon();
+          } else if (this.stage === "stopping-daemon") {
+            await connection.stopDaemon(this.stopAbort!.signal);
+            if (this.closed || this.stage !== "stopping-daemon") return;
             this.stage = "host";
+            this.stopAbort = null;
             await this.options.write("\nDaemon stopped. Ctrl+C again stops the host; q detaches.\n");
-          } else {
+          } else if (this.stage === "host") {
             await connection.stopHost();
             this.detach();
           }
         }).catch(error => {
-          if (!this.closed) this.options.warn(`Stop failed: ${error instanceof Error ? error.message : String(error)}`);
+          if (this.stage === "stopping-daemon") {
+            this.stage = "daemon";
+            this.stopAbort = null;
+          }
+          if (!this.closed && this.stage !== "emergency") this.options.warn(`Stop failed: ${error instanceof Error ? error.message : String(error)}`);
         });
       }
     };
@@ -93,7 +114,6 @@ export default class WorkbenchProcessView {
       }
       // Closing transport cancels outstanding viewer waits, never emits stop.
       const results = await Promise.allSettled([connection.close(), follower?.close()]);
-      await this.commands;
       const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
       if (failures.length) throw new AggregateError(failures, "Process view cleanup failed.");
     }
@@ -102,6 +122,7 @@ export default class WorkbenchProcessView {
   detach() {
     this.closed = true;
     this.lifetime.abort(new Error("Process view detached."));
+    this.stopAbort?.abort(new Error("Process view detached."));
     this.release?.();
   }
 }

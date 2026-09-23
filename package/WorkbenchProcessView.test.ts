@@ -32,6 +32,7 @@ function fixture(target: "app" | "daemon" | "all") {
       logDirectory: "/unused", logPrefix: target === "app" ? "workbench-app" : "workbench-host",
       stopDaemon: async () => { calls.push("daemon"); daemonStopped.resolve(); },
       stopHost: async () => { calls.push("host"); },
+      emergencyStopHost: async () => { calls.push("emergency"); },
       quitApp: async () => { calls.push("app"); },
       close: async () => { calls.push("detach"); },
     }),
@@ -60,10 +61,91 @@ test("daemon Ctrl+C requests ordered daemon then host shutdown", async () => {
   const running = f.view.run();
   await f.attached.promise;
   await Promise.resolve();
-  f.input.write("\u0003\u0003");
+  f.input.write("\u0003");
+  await f.daemonStopped.promise;
+  await Promise.resolve();
+  await Promise.resolve();
+  f.input.write("\u0003");
   await running;
   assert.deepEqual(f.calls.slice(0, 2), ["daemon", "host"]);
   assert.equal(f.input.isRaw, false);
+});
+
+test("a second Ctrl+C bypasses a pending daemon stop instead of joining its queue", async () => {
+  const input = new Terminal();
+  const attached = event();
+  const started = event();
+  const calls: string[] = [];
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const view = new WorkbenchProcessView({
+    target: "daemon", input,
+    write: async text => { if (text.includes("Viewing")) attached.resolve(); },
+    warn: message => assert.fail(message),
+    createFollower: () => ({ start: async () => {}, close: async () => {} }),
+    connect: async () => ({
+      logDirectory: "/unused", logPrefix: "workbench-host",
+      stopDaemon: async () => { calls.push("daemon"); started.resolve(); await pending; },
+      stopHost: async () => { calls.push("host"); },
+      emergencyStopHost: async () => { calls.push("emergency"); },
+      quitApp: async () => {},
+      close: async () => {},
+    }),
+  });
+  const running = view.run();
+  try {
+    await attached.promise;
+    await Promise.resolve();
+    input.write("\u0003");
+    await started.promise;
+    input.write("\u0003");
+    await Promise.resolve();
+    assert.deepEqual(calls, ["daemon", "emergency"]);
+  } finally {
+    release();
+    view.detach();
+    await running;
+  }
+});
+
+test("q cancels a pending viewer wait without pretending to undo an admitted stop", async () => {
+  const input = new Terminal();
+  const attached = event();
+  const started = event();
+  let cancelled = false;
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const view = new WorkbenchProcessView({
+    target: "daemon", input,
+    write: async text => { if (text.includes("Viewing")) attached.resolve(); },
+    warn: () => {},
+    createFollower: () => ({ start: async () => {}, close: async () => {} }),
+    connect: async () => ({
+      logDirectory: "/unused", logPrefix: "workbench-host",
+      stopDaemon: async (signal?: AbortSignal) => {
+        started.resolve();
+        signal?.addEventListener("abort", () => { cancelled = true; }, { once: true });
+        await pending;
+      },
+      stopHost: async () => {},
+      emergencyStopHost: async () => {},
+      quitApp: async () => {},
+      close: async () => {},
+    }),
+  });
+  const running = view.run();
+  try {
+    await attached.promise;
+    await Promise.resolve();
+    input.write("\u0003");
+    await started.promise;
+    input.write("q");
+    assert.equal(cancelled, true);
+  } finally {
+    release();
+    view.detach();
+    await running;
+  }
 });
 
 for (const target of ["app", "all"] as const) test(`${target} Ctrl+C invokes only app Quit`, async () => {

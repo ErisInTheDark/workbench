@@ -32,6 +32,7 @@ export interface WorkbenchServiceOptions {
   warn(message: string): void;
   restart(fatal?: boolean): void;
   stop?(): void;
+  emergencyStop?(): void;
   writeLog?: ConstructorParameters<typeof WorkbenchDaemonHost>[0]["writeLog"];
 }
 
@@ -282,10 +283,11 @@ export default class WorkbenchService {
         return this.execute(request, abort.signal);
       };
       void run().then(response => {
-        if (request.method === "service/stop") {
+        if (request.method === "service/stop" || request.method === "service/emergency/stop") {
           // An admitted explicit stop survives viewer loss, but a live viewer
           // receives its acknowledgement before host disposal closes sockets.
-          send(response, () => this.options.stop!());
+          send(response, () => request.method === "service/emergency/stop"
+            ? this.options.emergencyStop!() : this.options.stop!());
         } else if (!abort.signal.aborted && request.method !== "service/reload") send(response);
       }, error => {
         if (!abort.signal.aborted) {
@@ -302,6 +304,10 @@ export default class WorkbenchService {
       case "service/process/read":
         return { kind: "process", id: request.id, instanceId: this.instanceId,
           logDirectory: path.join(this.options.root, ".workbench", "logs"), logPrefix: "workbench-host" };
+      case "service/emergency/stop":
+        if (request.instanceId !== this.instanceId) throw new Error("The viewed host was replaced. Attach again before stopping it.");
+        if (!this.options.emergencyStop) throw new Error("Emergency host shutdown is unavailable.");
+        return { kind: "ok", id: request.id };
       case "service/daemon/stop":
       case "service/stop":
         if (request.instanceId !== this.instanceId) throw new Error("The viewed host was replaced. Attach again before stopping it.");

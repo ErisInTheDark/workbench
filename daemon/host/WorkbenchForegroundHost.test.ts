@@ -78,6 +78,53 @@ for (const platform of ["win32", "linux"] as const) {
   });
 }
 
+test("foreground emergency input closes its owner pipe while graceful control is stuck", async () => {
+  const child = new EventEmitter() as ChildProcess;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin.once("finish", () => child.emit("close", 0, null));
+  const spawned = event();
+  const woken = event();
+  const stopping = event();
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  let readCount = 0;
+  const host = new WorkbenchForegroundHost({
+    root: "/repo", dataRoot: "/data", platform: "win32", environment: {},
+    output: () => {}, warn: message => assert.fail(message),
+    read: async () => readCount++ === 0 ? null : endpoint,
+    verify: async () => {},
+    spawn: () => { spawned.resolve(); return child; },
+    createControl: () => ({
+      start: async () => {},
+      request: async intent => {
+        if (intent.method === "service/daemon/wake") woken.resolve();
+        if (intent.method === "service/stop") { stopping.resolve(); await pending; }
+        return { kind: "ok", id: endpoint.instanceId };
+      },
+      close: async () => {},
+    }),
+  });
+  const running = host.run();
+  try {
+    await spawned.promise;
+    child.stdout.emit("data", Buffer.from(`\u001eWORKBENCH_HOST_V1 ${JSON.stringify({ pid: endpoint.pid })}\n`));
+    await woken.promise;
+    const graceful = host.stop();
+    await stopping.promise;
+    assert.equal(child.stdin.writableEnded, false);
+    host.forceStop();
+    assert.equal(child.stdin.writableEnded, true);
+    release();
+    await graceful;
+    await running;
+  } finally {
+    release();
+    child.stdin.end();
+  }
+});
+
 test("the committed Windows supervisor retires its real foreground fixture when its owner pipe closes", {
   skip: process.platform !== "win32",
 }, async context => {

@@ -48,6 +48,7 @@ export const WorkbenchServiceRequestSchema = z.discriminatedUnion("method", [
   z.object({ id, method: z.literal("service/process/read") }).strict(),
   z.object({ id, method: z.literal("service/daemon/stop"), instanceId: z.uuid() }).strict(),
   z.object({ id, method: z.literal("service/stop"), instanceId: z.uuid() }).strict(),
+  z.object({ id, method: z.literal("service/emergency/stop"), instanceId: z.uuid() }).strict(),
   z.object({ id, method: z.literal("service/app/register"), registration: WorkbenchServiceRegistrationSchema }).strict(),
   z.object({ id, method: z.literal("service/daemon/wake"), retry: z.boolean().default(false) }).strict(),
   z.object({ id, method: z.literal("service/wake/enable"), enabled: z.boolean() }).strict(),
