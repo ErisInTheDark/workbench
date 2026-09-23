@@ -260,6 +260,26 @@ test("portable settings refresh the seed, drafts do not, and new browsers wait f
   assert.equal(globalPreference(browserD, "reactDevelopmentMode"), undefined);
 });
 
+test("remote daemon preferences keep their registration and do not become the local seed", async context => {
+  const { registry } = await fixture(context);
+  const registered = await registry.registerBrowserDaemon(
+    BROWSER_A, "502902c0-9512-40be-bb06-c65d86ef2029", false);
+  const remote = registered.registrationId;
+  const local = (await registry.readBrowser(BROWSER_A)).daemonRegistrationId;
+  assert.notEqual(remote, local);
+  await registry.mutateBrowser(BROWSER_A, {
+    action: "put",
+    record: { kind: "sidebarPreference", daemonRegistrationId: remote,
+      projectId: "same-id", preference: { key: "threadsOpen", value: false } },
+  });
+  const first = records(await registry.readBrowser(BROWSER_A))
+    .filter(record => record.kind === "sidebarPreference");
+  assert.equal(first[0]?.daemonRegistrationId, remote);
+  const second = records(await registry.readBrowser(BROWSER_B))
+    .filter(record => record.kind === "sidebarPreference");
+  assert.equal(second.length, 0);
+});
+
 test("missing IDs use shared state and invalid IDs never create browser storage", async (context) => {
   const { directory, registry } = await fixture(context);
   await registry.mutateBrowser(undefined, {

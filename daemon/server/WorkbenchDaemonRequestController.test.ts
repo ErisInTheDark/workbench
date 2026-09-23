@@ -29,6 +29,16 @@ test("discovery settings RPC admits bounded lists and rejects malformed replacem
   })).error);
 });
 
+test("modern locations read does not change the legacy project catalogue response", async () => {
+  const { controller } = createController();
+  assert.deepEqual((await controller.handle({
+    id: 1, method: "project/catalog/read", params: {},
+  })).result, { data: [], rootPath: "" });
+  assert.deepEqual((await controller.handle({
+    id: 2, method: "project/locations/read", params: {},
+  })).result, { data: [] });
+});
+
 test("command approval settings resolve canonical project ownership before listing or removal", async () => {
   const calls: Array<{ projectId: string; id?: string }> = [];
   const canonicalProjectId = "a6652caf-f7c1-4a2a-ab55-6b387a19ab05";
@@ -171,6 +181,7 @@ function createController(options: {
     },
     projects: {
       readCatalog: async () => ({ data: [], rootPath: "" }),
+      readLocations: async () => ({ data: [] }),
       readDiscoverySettings: async () => ({ paths: [] }),
       updateDiscoverySettings: async paths => ({ accepted: true, paths: [...paths] }),
       resolveProjectById: async (projectId) => {

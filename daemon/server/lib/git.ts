@@ -6,6 +6,7 @@
  * - isGitTrackedFile: report whether Git tracks a project-relative path in its index.
  * - resolveGitDirectory: resolve ordinary and file-backed Git metadata directories.
  * - isLinkedGitWorktree: distinguish shared worktree metadata from independent Git directories.
+ * - readRegisteredGitWorktrees: list concrete worktrees registered by one repository.
  * - readGitProjectMetadata: read local origin identity and worktree classification without network access.
  */
 import { execFile } from "node:child_process";
@@ -73,12 +74,22 @@ export async function resolveGitDirectory(rootDir: string): Promise<string | nul
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
-  if (marker.isDirectory()) return markerPath;
-  if (!marker.isFile()) return null;
-  const contents = await fs.readFile(markerPath, "utf8");
-  const match = /^gitdir:\s*(.+)\s*$/imu.exec(contents);
-  if (!match) throw new Error("Git directory marker is invalid.");
-  return path.resolve(rootDir, match[1]!.trim());
+  let gitDirectory: string;
+  if (marker.isDirectory()) gitDirectory = markerPath;
+  else {
+    if (!marker.isFile()) return null;
+    const contents = await fs.readFile(markerPath, "utf8");
+    const match = /^gitdir:\s*(.+)\s*$/imu.exec(contents);
+    if (!match) throw new Error("Git directory marker is invalid.");
+    gitDirectory = path.resolve(rootDir, match[1]!.trim());
+  }
+  try {
+    // Git init creates HEAD before the first commit; the referenced branch need not exist.
+    return (await fs.stat(path.join(gitDirectory, "HEAD"))).isFile() ? gitDirectory : null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 async function hasSharedGitDirectory(gitDirectory: string) {
@@ -97,6 +108,25 @@ async function hasSharedGitDirectory(gitDirectory: string) {
   return process.platform === "win32" ? own.toLowerCase() !== common.toLowerCase() : own !== common;
 }
 
+async function commonGitDirectory(gitDirectory: string) {
+  let relative: string;
+  try {
+    relative = (await fs.readFile(path.join(gitDirectory, "commondir"), "utf8")).trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return await fs.realpath(gitDirectory);
+    throw error;
+  }
+  if (!relative) throw new Error("Git common directory marker is empty.");
+  return await fs.realpath(path.resolve(gitDirectory, relative));
+}
+
+export async function readRegisteredGitWorktrees(rootDir: string, signal?: AbortSignal): Promise<string[]> {
+  const { stdout } = await runGit(rootDir, ["worktree", "list", "--porcelain", "-z"], signal);
+  return stdout.split("\0")
+    .filter(item => item.startsWith("worktree "))
+    .map(item => path.resolve(item.slice("worktree ".length)));
+}
+
 export async function isLinkedGitWorktree(rootDir: string) {
   const gitDirectory = await resolveGitDirectory(rootDir);
   return gitDirectory !== null && await hasSharedGitDirectory(gitDirectory);
@@ -105,18 +135,20 @@ export async function isLinkedGitWorktree(rootDir: string) {
 export async function readGitProjectMetadata(rootDir: string, signal?: AbortSignal): Promise<{
   origin: string | null;
   linkedWorktree: boolean;
+  commonGitDirectory: string;
 } | null> {
   signal?.throwIfAborted();
   const gitDirectory = await resolveGitDirectory(rootDir);
   if (gitDirectory === null) return null;
-  if (await hasSharedGitDirectory(gitDirectory)) return { origin: null, linkedWorktree: true };
-  const configPath = path.join(gitDirectory, "config");
+  const sharedDirectory = await commonGitDirectory(gitDirectory);
+  const linkedWorktree = await hasSharedGitDirectory(gitDirectory);
+  const configPath = path.join(sharedDirectory, "config");
   let origin: string;
   try {
     origin = (await runGit(rootDir, ["config", "--file", configPath, "--no-includes", "--get", "remote.origin.url"], signal)).stdout.trim();
   } catch (error) {
     const failure = error as NodeJS.ErrnoException & { stderr?: string };
-    if (String(failure.code) === "1" && !failure.stderr?.trim()) return { origin: null, linkedWorktree: false };
+    if (String(failure.code) === "1" && !failure.stderr?.trim()) return { origin: null, linkedWorktree, commonGitDirectory: sharedDirectory };
     throw error;
   }
   if (!origin) throw new Error("Git origin is empty.");
@@ -133,7 +165,7 @@ export async function readGitProjectMetadata(rootDir: string, signal?: AbortSign
     }
     origin = pathToFileURL(location).href;
   }
-  return { origin, linkedWorktree: false };
+  return { origin, linkedWorktree, commonGitDirectory: sharedDirectory };
 }
 
 async function hasHeadCommit(rootDir: string) {

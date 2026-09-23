@@ -10,12 +10,15 @@ import HttpReverseProxy from "../../../shared/http/HttpReverseProxy.ts";
 import ReloadableNode from "../../../shared/reload/ReloadableNode.ts";
 import type { ServiceProcessContext } from "./service-process-context.ts";
 import type { ServiceRuntimeObjects } from "./service-runtime-objects.ts";
+import type WorkbenchNetworkController from "../network/WorkbenchNetworkController.ts";
 
 export class ServiceHttp {
   private readonly local: HttpReverseProxy;
   private readonly remote: HttpReverseProxy;
 
-  constructor(private readonly context: ServiceProcessContext) {
+  constructor(private readonly context: Pick<ServiceProcessContext,
+    "identity" | "daemonTarget" | "warn" | "proxyActivityChanged" | "ingressToken" | "control">,
+    private readonly network: Pick<WorkbenchNetworkController, "browserEndpoints">) {
     this.local = new HttpReverseProxy({ target: signal => context.daemonTarget(signal, false), warn: context.warn,
       activityChanged: context.proxyActivityChanged });
     this.remote = new HttpReverseProxy({ target: signal => context.daemonTarget(signal, true), warn: context.warn,
@@ -31,7 +34,15 @@ export class ServiceHttp {
     }
     if (request.url === "/_workbench-service/identity" && request.method === "GET") {
       response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-      response.end(JSON.stringify(this.context.identity()));
+      const identity = this.context.identity();
+      response.end(JSON.stringify(request.headers["x-workbench-identity-version"] === "2"
+        ? { identity, endpoints: this.network.browserEndpoints() }
+        : identity));
+      return;
+    }
+    if (!this.checkExpectedDaemon(request)) {
+      response.writeHead(409, { "Cache-Control": "no-store" });
+      response.end("Daemon identity changed.");
       return;
     }
     await (ingress ? this.remote : this.local).handle(request, response);
@@ -45,10 +56,26 @@ export class ServiceHttp {
       this.context.control(request, socket, head);
       return;
     }
+    if (!this.checkExpectedDaemon(request)) { socket.destroy(); return; }
     await (ingress ? this.remote : this.local).upgrade(request, socket, head);
   }
 
   close() { this.local.close(); this.remote.close(); }
+
+  private checkExpectedDaemon(request: IncomingMessage) {
+    try {
+      const url = new URL(request.url ?? "/", "http://workbench.local");
+      const values = url.searchParams.getAll("wb-daemon");
+      if (!values.length) return true;
+      if (values.length !== 1 || !values[0]) return false;
+      if (values[0] !== this.context.identity().daemonId) return false;
+      url.searchParams.delete("wb-daemon");
+      request.url = `${url.pathname}${url.search}`;
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   private admit(request: IncomingMessage) {
     const forwarded = Object.keys(request.headers).some(key => key.startsWith("x-workbench-network-") && key !== "x-workbench-network-request");
@@ -69,8 +96,8 @@ export default ReloadableNode.define<ServiceProcessContext, ServiceRuntimeObject
     "daemon/host/runtime/ServiceHttpNode.ts", "shared/http/HttpReverseProxy.ts",
     "shared/http/workbench-service.ts",
   ].join("\n"),
-  create(context) {
-    const http = new ServiceHttp(context);
+  create(context, build) {
+    const http = new ServiceHttp(context, build.get("network"));
     return { registrations: { http }, start: () => {}, dispose: () => http.close() };
   },
 });

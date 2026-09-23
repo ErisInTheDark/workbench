@@ -12,6 +12,7 @@ import { canonicalApprovalWorkdir, COMMAND_APPROVAL_CONFIRMATION, hasApprovalCon
 import { getPackageScriptPrefix } from "./lib/workbench/package-script-prefixes";
 import { hasWorkbenchApprovalDecisionSelection } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
+import { WorkbenchThreadLaunchReadSchema } from "workbench-shared/workbench/thread/thread-launch";
 import type { WorkbenchContextTrigger } from "workbench-shared/workbench/provider/provider-context";
 
 import type { ApplyPatchApprovalParams } from "workbench-shared/codex/generated/app-server/ApplyPatchApprovalParams";
@@ -117,6 +118,12 @@ class CodexTranscriptSqliteRecordingFailure extends Error {
   }
 }
 
+type CreationLocation = {
+  id: import("workbench-shared/workbench/identity").ProjectId;
+  rootPath: string;
+  launchId?: string;
+};
+
 type PendingResponse = {
   method: string | null;
   reject: (reason?: unknown) => void;
@@ -124,6 +131,9 @@ type PendingResponse = {
   resolve: (value: JsonRpcResponse) => void;
   threadHydration: WorkbenchThreadHydrationRequest | null;
   upstreamRequest: JsonRpcRequest;
+  creationLocation?: CreationLocation;
+  earlyStarted?: JsonRpcNotification[];
+  settling?: boolean;
   toolContext?: {
     sent?: boolean;
     threadId: string;
@@ -414,13 +424,14 @@ function requestsHydratedTurnContextEntries(message: JsonRpcRequest) {
 }
 
 function createUpstreamRequest(message: JsonRpcRequest, upstreamRequestId: number) {
-  const upstreamMessage = {
+  const upstreamMessage: JsonRpcRequest = {
     ...message,
     id: upstreamRequestId,
   };
   delete upstreamMessage[WORKBENCH_PROMPT_CONTEXT_FIELD];
   delete upstreamMessage[WORKBENCH_REQUEST_SOURCE_FIELD];
   delete upstreamMessage[WORKBENCH_THREAD_HYDRATION_FIELD];
+  delete upstreamMessage.workbenchCreationLocation;
   return upstreamMessage;
 }
 
@@ -1842,6 +1853,15 @@ export default class CodexStdioBridge {
       ? "autoRefresh"
       : message[WORKBENCH_REQUEST_SOURCE_FIELD] === "sqliteRecovery" ? "sqliteRecovery" : "internal";
     const method = typeof message.method === "string" ? message.method : null;
+    const rawCreationLocation = asRecord(message.workbenchCreationLocation);
+    const creationLocation = method === "thread/start" && rawCreationLocation
+      ? {
+        id: ProjectIdSchema.parse(rawCreationLocation.id),
+        rootPath: typeof rawCreationLocation.rootPath === "string" ? rawCreationLocation.rootPath : "",
+        ...(rawCreationLocation.launchId
+          ? { launchId: WorkbenchThreadLaunchReadSchema.shape.launchId.parse(rawCreationLocation.launchId) } : {}),
+      } : undefined;
+    if (creationLocation && !creationLocation.rootPath) throw new Error("Captured creation location has no root.");
     if (method === "turn/start" || method === "turn/steer") {
       const threadId = asString(asRecord(message.params)?.threadId);
       if (threadId) await this.collectInputContext(NativeThreadIdSchema.parse(threadId), method === "turn/start" ? "start" : "steer", signal);
@@ -1861,6 +1881,7 @@ export default class CodexStdioBridge {
         resolve: response => resolve({ ...response, id: callerRequestId }),
         threadHydration,
         upstreamRequest: upstreamMessage,
+        creationLocation,
       });
     });
     // Cancellation can settle this before transcript admission returns it to the caller.
@@ -1970,11 +1991,11 @@ export default class CodexStdioBridge {
 
   private async handleUpstreamResponse(message: JsonRpcResponse) {
     const pending = this.pendingResponses.get(Number(message.id));
-    if (!pending) {
+    if (!pending || pending.settling) {
       return;
     }
 
-    this.pendingResponses.delete(Number(message.id));
+    pending.settling = true;
     if (pending.method === "thread/start") this.traceThreadCreation(undefined, "native-response", message.id);
     try {
       await this.settleUpstreamResponse(pending, message);
@@ -1984,6 +2005,23 @@ export default class CodexStdioBridge {
       // must reject that caller, never leave it waiting forever.
       logError("codex-response", sanitizeTranscriptErrorMessage(error));
       pending.reject(error);
+    } finally {
+      this.pendingResponses.delete(Number(message.id));
+      if (pending.method === "thread/start" && pending.creationLocation && pending.earlyStarted?.length
+        && ![...this.pendingResponses.values()].some(entry => entry.method === "thread/start" && entry.creationLocation)) {
+        const unbound = pending.earlyStarted.some(started => {
+          const thread = asRecord(asRecord(started.params)?.thread);
+          const id = asString(thread?.id);
+          const cwd = asString(thread?.cwd);
+          if (!id || !cwd) return true;
+          try {
+            return !this.identities?.threads.findNativeThread({
+              harness: "codex", nativeLocation: cwd, nativeThreadId: NativeThreadIdSchema.parse(id),
+            });
+          } catch { return true; }
+        });
+        if (unbound) logError("codex-creation", "Early native start was not admitted because its owner was uncorrelated.");
+      }
     }
   }
 
@@ -2006,7 +2044,9 @@ export default class CodexStdioBridge {
     const shouldCaptureTranscript = shouldCapturePollingTranscript(pending.method, pending.requestSource);
     if (this.identities && !hydratedMessage.error) {
       const thread = asRecord(hydratedMessage.result)?.thread as Thread | undefined;
-      if (thread?.id && Array.isArray(thread.turns)) await this.resolveTranscriptThreadContext(thread, true, signal);
+      if (thread?.id && (Array.isArray(thread.turns) || pending.creationLocation)) {
+        await this.resolveTranscriptThreadContext(thread, true, signal, pending.creationLocation);
+      }
       if (pending.method === "thread/list") {
         const data = asRecord(hydratedMessage.result)?.data;
         if (Array.isArray(data)) {
@@ -2074,10 +2114,21 @@ export default class CodexStdioBridge {
           : undefined,
       });
     }
+    if (pending.earlyStarted?.length) {
+      const returnedId = asString(asRecord(asRecord(hydratedMessage.result)?.thread)?.id);
+      if (returnedId && !hydratedMessage.error) {
+        for (let index = 0; index < pending.earlyStarted.length; index += 1) {
+          const started = pending.earlyStarted[index]!;
+          if (asString(asRecord(asRecord(started.params)?.thread)?.id) === returnedId) {
+            await this.handleUpstreamNonResponseMessage(started, true);
+          }
+        }
+      }
+    }
     pending.resolve(hydratedMessage);
   }
 
-  private async handleUpstreamNonResponseMessage(message: unknown) {
+  private async handleUpstreamNonResponseMessage(message: unknown, replayingEarlyStart = false) {
     const signal = this.generation.signal;
     if (isJsonRpcServerRequest(message)) {
       const observation = createCodexTranscriptProviderDynamicToolObservation(message, Date.now());
@@ -2134,6 +2185,12 @@ export default class CodexStdioBridge {
       if (isUnsupportedNativePlanNotification(message)) return;
       if (this.identities && message.method === "thread/started") {
         const thread = asRecord(message.params)?.thread as Thread | undefined;
+        const creating = [...this.pendingResponses.values()].filter(pending =>
+          pending.method === "thread/start" && pending.creationLocation);
+        if (thread?.id && creating.length && !replayingEarlyStart) {
+          for (const pending of creating) (pending.earlyStarted ??= []).push(message);
+          return;
+        }
         if (thread?.id) await this.resolveTranscriptThreadContext(thread, true, signal);
       }
       signal.throwIfAborted();
@@ -3870,9 +3927,21 @@ export default class CodexStdioBridge {
     thread: CodexThreadContextReadResponse["thread"],
     remember = true,
     signal = this.generation.signal,
+    creationLocation?: CreationLocation,
   ): Promise<CodexTranscriptThreadContext> {
     signal.throwIfAborted();
-    const resolution = await this.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex transcript" });
+    const retained = this.identities?.threads.findNativeThread({
+      harness: "codex", nativeLocation: thread.cwd, nativeThreadId: NativeThreadIdSchema.parse(thread.id),
+    });
+    const prior = this.transcriptThreadContexts.get(thread.id);
+    const owner = creationLocation
+      ? { projectId: creationLocation.id, projectRoot: creationLocation.rootPath }
+      : retained
+        ? { projectId: retained.projectId, projectRoot: retained.projectRoot }
+        : prior
+          ? { projectId: prior.projectId, projectRoot: prior.projectRoot }
+          : null;
+    const resolution = owner ? null : await this.resolveProjectFromCwd(thread.cwd, { endpointName: "Codex transcript" });
     signal.throwIfAborted();
     const context: CodexTranscriptThreadContext = {
       ...(this.transcriptThreadContexts.get(thread.id)?.usageContext
@@ -3880,8 +3949,8 @@ export default class CodexStdioBridge {
       activityAt: Math.round((thread.recencyAt ?? thread.updatedAt) * 1_000),
       createdAt: Math.round(thread.createdAt * 1_000),
       nativeLocation: thread.cwd,
-      projectId: ProjectIdSchema.parse(resolution.project.id),
-      projectRoot: resolution.root.rootPath,
+      projectId: owner?.projectId ?? ProjectIdSchema.parse(resolution!.project.id),
+      projectRoot: owner?.projectRoot ?? resolution!.root.rootPath,
       title: thread.name?.trim() || thread.preview.trim() || "Untitled thread",
       updatedAt: Math.round(thread.updatedAt * 1_000),
     };
@@ -3889,6 +3958,7 @@ export default class CodexStdioBridge {
     if (this.identities && remember) {
       await this.persistTranscript(() => admitProviderThreads(this.identities!, [{ metadata: {
         ...context,
+        ...(creationLocation?.launchId ? { launchId: creationLocation.launchId } : {}),
         native: { harness: "codex", nativeLocation: context.nativeLocation, nativeThreadId: NativeThreadIdSchema.parse(thread.id) },
       }, thread }]), signal);
     }

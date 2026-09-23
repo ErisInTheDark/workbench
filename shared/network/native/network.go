@@ -155,6 +155,11 @@ type privatePresentation struct {
 }
 
 func (node *privateNetwork) hostname() string { return node.presentation.Load().hostname }
+func privateDaemonOrigin(hostname string, port uint16) *string {
+	if port == 0 { return nil }
+	origin := "https://" + net.JoinHostPort(hostname, strconv.Itoa(int(port)))
+	return &origin
+}
 func (node *privateNetwork) certificate() *tls.Certificate { return node.presentation.Load().certificate }
 func (node *privateNetwork) controlHostname() string {
 	host, _ := machineHostname(stableNodeLabel(*node.settings.Load()))
@@ -457,7 +462,9 @@ func (node *privateNetwork) run() (result error) {
 		if node.ctx.Err() != nil {
 			return
 		}
-		node.change(func(current *privateStatus) { current.Phase, current.Message = "failed", &message })
+		node.change(func(current *privateStatus) {
+			current.Phase, current.Message, current.DaemonURL = "failed", &message, nil
+		})
 		node.cancel()
 	}
 	if node.group != nil {
@@ -677,8 +684,10 @@ func (node *privateNetwork) run() (result error) {
 			if certificate != nil && time.Now().Before(certificate.Leaf.NotAfter) && node.settings.Load().Enabled {
 				address := "https://" + node.hostname()
 				current.Phase, current.URL = "ready", &address
+				current.DaemonURL = privateDaemonOrigin(node.hostname(), node.port)
 			} else {
 				current.Phase, current.URL = "setup", nil
+				current.DaemonURL = nil
 				if certificate != nil && !time.Now().Before(certificate.Leaf.NotAfter) {
 					message := "Private certificate has expired; reconnect to the setup installation."
 					current.Phase, current.Message = "failed", &message

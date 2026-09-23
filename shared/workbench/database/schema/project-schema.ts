@@ -68,10 +68,11 @@ const preparingProjects = defineTable("workbench_projects", {
 }, table => ({
   constraints: [...projectConstraints(table), unique([table.identity_key])],
 }));
-const stableProjects = defineTable("workbench_projects", preparingProjects.columns, table => ({
+function defineStableProjects(uniqueIdentity: boolean) {
+  return defineTable("workbench_projects", preparingProjects.columns, table => ({
   constraints: [
     ...projectConstraints(table),
-    unique([table.identity_key]),
+    ...(uniqueIdentity ? [unique([table.identity_key])] : []),
     check(sql`${table.id} = ${literal("workbench-library")} OR (
       length(${table.id}) = 36 AND substr(${table.id}, 9, 1) = '-' AND substr(${table.id}, 14, 1) = '-'
       AND substr(${table.id}, 19, 1) = '-' AND substr(${table.id}, 24, 1) = '-'
@@ -84,7 +85,10 @@ const stableProjects = defineTable("workbench_projects", preparingProjects.colum
       OR ${table.identity_key} GLOB ${literal("local://?*")}
       OR ${table.identity_key} GLOB ${literal("workspace://?*")}`),
   ],
-}));
+  }));
+}
+const stableProjects = defineStableProjects(true);
+const locationProjects = defineStableProjects(false);
 
 const roots = defineTable("workbench_project_roots", {
   project_id: text().notNull().references("workbench_projects", "id"),
@@ -115,7 +119,7 @@ function initial<Table extends TableDefinition>(table: Table) {
 }
 
 const projectsHistory = defineTableHistory({
-  current: stableProjects,
+  current: locationProjects,
   versions: [
     ...initial(projects).versions,
     tableVersion({
@@ -135,6 +139,11 @@ const projectsHistory = defineTableHistory({
       schemaVersion: databaseReleases.stableProjectOwnership.version,
       table: stableProjects,
       migration: rebuildTable({ from: preparingProjects, to: stableProjects }),
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.projectLocations.version,
+      table: locationProjects,
+      migration: rebuildTable({ from: stableProjects, to: locationProjects }),
     }),
   ],
 });

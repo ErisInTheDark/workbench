@@ -443,6 +443,18 @@ export default class WorkbenchProjectCatalogController {
     return (await this.readFreshCatalog()).catalog.payload;
   }
 
+  async readLocations() {
+    const { catalog } = await this.readFreshCatalog();
+    return {
+      data: catalog.records.map(record => {
+        if (!record.identityKey || !record.rootIdentityKeys) {
+          throw new Error("Project location identity is unavailable until discovery completes.");
+        }
+        return { project: record.project, identityKey: record.identityKey, rootIdentityKeys: record.rootIdentityKeys };
+      }),
+    };
+  }
+
   async readDiscoverySettings() {
     return { paths: [...await this.readConfiguredRoots()] };
   }

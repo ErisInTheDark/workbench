@@ -22,6 +22,10 @@ import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "../../shared
 import WorkbenchTranscriptClient from "../../app/client/workbench/database/transcript/WorkbenchTranscriptClient";
 import type { WorkbenchComposerProfile } from "../../shared/types";
 import { WorkbenchDaemonReadySchema, type WorkbenchDaemonEndpoint } from "../../shared/http/workbench-daemon-endpoint";
+import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient";
+import { readDaemonEndpoint } from "../../shared/process/workbench-daemon-endpoint";
+import { WORKBENCH_RELOAD_METHOD } from "../../shared/workbench/daemon-reload";
+import { WorkbenchProjectsPayloadSchema } from "../../shared/workbench/project/project-state";
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message: string }; workbenchEventStreamSequence?: number };
 
@@ -136,6 +140,7 @@ export default class IsolatedWorkbench {
   private endpoint: WorkbenchDaemonEndpoint | null = null;
   private releaseSignalCleanup: (() => void) | null = null;
   private readonly cancellation = new AbortController();
+  private readonly serviceSession = randomUUID();
   readonly signal: AbortSignal;
   private constructor(
     private readonly fixtures: string,
@@ -282,6 +287,61 @@ export default class IsolatedWorkbench {
     });
   }
 
+  async exerciseManagedProcessReload(expectedProjectRoot: string) {
+    this.signal.throwIfAborted();
+    this.closed = false;
+    this.releaseSignalCleanup ??= isolatedWorkbenchSignalCleanup.register(async () => {
+      await this.stopForSignal();
+    });
+    await this.prepareDaemonEnvironment("lifecycle", this.signal);
+    await this.startService(this.signal);
+    const openControl = async () => {
+      const client = new WorkbenchServiceClient({
+        endpointPath: path.join(this.dataRootPath, "service", "runtime.json"),
+        warn: message => this.markPhase(`service control warning: ${message}`),
+      });
+      await client.start();
+      return client;
+    };
+    let control = await openControl();
+    try {
+      this.markPhase("waking host-owned daemon");
+      await control.request({ method: "service/daemon/wake", retry: false }, this.signal);
+      const endpointPath = path.join(this.dataRootPath, "daemon", "runtime.json");
+      const initial = await readDaemonEndpoint(endpointPath);
+      assert.ok(initial, "Managed daemon must publish its initial endpoint");
+      const request = async (endpoint: WorkbenchDaemonEndpoint, method: string, params: object) => {
+        const socket = new WorkbenchSocketClient();
+        try {
+          await this.withSignal(socket.connect(endpoint.origin.replace("http:", "ws:")), this.signal);
+          const response = await this.withSignal(socket.sendRequest({ method, params }, { socketOnly: true }), this.signal);
+          if (isWorkbenchRpcFailure(response)) throw new Error(response.error.message);
+          return response.result;
+        } finally { socket.dispose(); }
+      };
+      const includesExpectedProject = (value: unknown) => WorkbenchProjectsPayloadSchema.parse(value).data.some(project =>
+        path.resolve(project.rootPath).toLowerCase() === path.resolve(expectedProjectRoot).toLowerCase());
+      assert.ok(includesExpectedProject(await request(initial, "project/catalog/read", {})),
+        "Managed daemon must discover the retained checkout before reload");
+      this.markPhase("requesting managed server:process reload");
+      await request(initial, WORKBENCH_RELOAD_METHOD, { scopes: ["server:process"] });
+      this.markPhase("waiting for the old host crash unit to exit");
+      await this.until(() => this.serviceChild?.exited === true, this.signal);
+      await control.close();
+      this.serviceChild = null;
+      this.markPhase("replacing the host in its supervision session");
+      await this.startService(this.signal);
+      control = await openControl();
+      await control.request({ method: "service/daemon/wake", retry: false }, this.signal);
+      const replacement = await readDaemonEndpoint(endpointPath);
+      assert.ok(replacement, "Managed replacement must publish its endpoint");
+      assert.notEqual(replacement.instanceId, initial.instanceId, "Managed reload must replace the process");
+      assert.ok(includesExpectedProject(await request(replacement, "project/catalog/read", {})),
+        "Managed replacement must rediscover the same retained checkout");
+      this.markPhase("managed replacement served its retained project catalogue");
+    } finally { await control.close(); }
+  }
+
   private async startDaemon(profiles: readonly WorkbenchComposerProfile[], prefixProof: string, signal: AbortSignal) {
     signal.throwIfAborted();
     assert.equal(this.child, null, "Stop the existing daemon before reopening");
@@ -290,16 +350,7 @@ export default class IsolatedWorkbench {
     this.releaseSignalCleanup ??= isolatedWorkbenchSignalCleanup.register(async () => {
       await this.stopForSignal();
     });
-    const home = path.join(this.root, "codex");
-    const library = path.join(this.root, "library");
-    await fs.mkdir(home, { recursive: true });
-    await fs.mkdir(library, { recursive: true });
-    await fs.mkdir(path.join(this.root, "user"), { recursive: true });
-    await fs.writeFile(path.join(this.project, "AGENTS.md"), `The scenario passphrase is "${prefixProof}". When asked for the prefix proof, quote this passphrase exactly in commentary. Do not edit files or start other agents.\n`);
-    const originalHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-    if (this.codexIdentity) await fs.copyFile(path.join(originalHome, "auth.json"), path.join(home, "auth.json"));
-    await fs.writeFile(path.join(home, "config.toml"), 'approval_policy = "never"\nsandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n'
-      + (this.codexIdentity && process.platform === "win32" ? '[windows]\nsandbox = "elevated"\n' : ""));
+    await this.prepareDaemonEnvironment(prefixProof, signal);
     signal.throwIfAborted();
     assert.equal(this.closed, false, "Scenario stopped during startup");
     const env = this.environment();
@@ -371,12 +422,27 @@ export default class IsolatedWorkbench {
     }
   }
 
+  private async prepareDaemonEnvironment(prefixProof: string, signal: AbortSignal) {
+    const home = path.join(this.root, "codex");
+    const library = path.join(this.root, "library");
+    await fs.mkdir(home, { recursive: true });
+    await fs.mkdir(library, { recursive: true });
+    await fs.mkdir(path.join(this.root, "user"), { recursive: true });
+    await fs.writeFile(path.join(this.project, "AGENTS.md"), `The scenario passphrase is "${prefixProof}". When asked for the prefix proof, quote this passphrase exactly in commentary. Do not edit files or start other agents.\n`);
+    const originalHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+    if (this.codexIdentity) await fs.copyFile(path.join(originalHome, "auth.json"), path.join(home, "auth.json"));
+    await fs.writeFile(path.join(home, "config.toml"), 'approval_policy = "never"\nsandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n'
+      + (this.codexIdentity && process.platform === "win32" ? '[windows]\nsandbox = "elevated"\n' : ""));
+    signal.throwIfAborted();
+  }
+
   private environment(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
       ...process.env, CODEX_HOME: path.join(this.root, "codex"), WORKBENCH_LIBRARY_ROOT: path.join(this.root, "library"),
       HOME: path.join(this.root, "user"), USERPROFILE: path.join(this.root, "user"),
       WORKBENCH_DATA_ROOT: this.dataRootPath,
       WORKBENCH_PROJECTS_ROOT: path.dirname(this.project),
+      WORKBENCH_STARTUP_DIAGNOSTICS: "1",
       WORKBENCH_DAEMON_LOOP: "1",
       WORKBENCH_SERVICE_MANAGED: "1",
       WORKBENCH_TEMPORARY_ROOT: path.join(this.project, ".workbench", "tmp"),
@@ -409,7 +475,7 @@ export default class IsolatedWorkbench {
     const child = spawn(process.execPath, ["--import", "tsx", "--import",
       pathToFileURL(path.join(this.project, ".workbench/isolated-shutdown.mjs")).href, "daemon/host/launch-node.mjs"], {
       ...createSpawnOptions(this.project, {
-        ...this.environment(), WORKBENCH_SERVICE_SESSION: randomUUID(),
+        ...this.environment(), WORKBENCH_SERVICE_SESSION: this.serviceSession,
       }, true),
       windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe", "ipc"],
     });

@@ -30,6 +30,7 @@ export interface OpenCodeEventControllerOptions {
     markExecutionSettled(nativeThreadId: string): void;
     markExecutionStarted(nativeThreadId: string): void;
     syncNative(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId; latestTurnId?: WorkbenchTurnId | null; hasPendingSteers?: boolean }>;
+    syncCreatedNative?(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId } | null>;
   } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "completeExecution" | "executionIntentVersion">;
   transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordItem" | "recordTurnState">
     & Partial<Pick<OpenCodeTranscriptAdapter, "previewToolPatch">>;
@@ -96,7 +97,8 @@ export default class OpenCodeEventController {
     switch (event.type) {
       case "session.created":
       case "session.renamed":
-        await this.options.threads.syncNative(sessionID);
+        if (this.options.threads.syncCreatedNative) await this.options.threads.syncCreatedNative(sessionID);
+        else await this.options.threads.syncNative(sessionID);
         return;
       case "session.inbox.delivered": {
         const identity = await this.options.threads.syncNative(sessionID);

@@ -25,6 +25,7 @@ export interface WorkbenchNativeThreadIdentity {
 
 export interface WorkbenchThreadIdentityMetadata {
   native: WorkbenchNativeThreadIdentity;
+  launchId?: string;
   projectId: ProjectId;
   projectRoot: string;
   title: string;

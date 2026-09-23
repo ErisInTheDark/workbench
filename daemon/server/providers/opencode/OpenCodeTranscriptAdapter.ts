@@ -365,7 +365,7 @@ export default class OpenCodeTranscriptAdapter {
   async record(
     session: SessionInfo,
     messages: readonly SessionMessageInfo[],
-    project: { id: string; rootPath: string },
+    project: { id: string; rootPath: string; launchId?: string },
     options: {
       keepLatestTurnOpen?: boolean;
       settleUsage?: boolean;
@@ -376,6 +376,7 @@ export default class OpenCodeTranscriptAdapter {
     const nativeLocation = session.location.directory;
     const identity = await this.owners.threads.observe({
       native: { harness: "opencode", nativeLocation, nativeThreadId },
+      ...(project.launchId ? { launchId: project.launchId } : {}),
       projectId: ProjectIdSchema.parse(project.id),
       projectRoot: project.rootPath,
       title: session.title ?? "New thread",

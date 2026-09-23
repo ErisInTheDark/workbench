@@ -9,12 +9,22 @@
  * - default WorkbenchThreadStateController: coordinate admission, provider observation, cross-project operations, publication, and owned project stores.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
+import { createHash } from "node:crypto";
+import { z } from "zod";
 
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot, WorkbenchUserInputResponse } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
 import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import { DraftIdSchema, ProjectIdSchema, ThreadDisplayKeySchema, type DraftId, type ProjectId, type ProjectThreadDisplayKey, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import {
+  WorkbenchPresentationAttachmentChunkRequestSchema,
+  WorkbenchPresentationAttachmentChunkSchema,
+  WorkbenchPresentationExportRequestSchema,
+  WorkbenchPresentationExportPageSchema,
+  WorkbenchPresentationLayoutChunkRequestSchema,
+  WorkbenchPresentationLayoutChunkSchema,
+} from "workbench-shared/workbench/thread/thread-presentation-export";
 import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import { currentThreadTitleName, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
@@ -278,6 +288,99 @@ export default class WorkbenchThreadStateController {
   private readonly stopReloadDirtSubscription: (() => void) | null;
   private readonly subscribers = new Set<(projectId: ProjectId, entry: WorkbenchThreadSidebarEntry) => void>();
   private readonly waitingByThreadKey = new Map<string, "subagents" | "other">();
+
+  private inlineAttachment(url: string) {
+    const match = /^data:image\/(png|jpeg|jpg|webp|gif);base64,([A-Za-z0-9+/]*={0,2})$/iu.exec(url);
+    if (!match) return null;
+    const bytes = Buffer.from(match[2]!, "base64");
+    return {
+      bytes,
+      mediaType: `image/${match[1]!.toLowerCase() === "jpg" ? "jpeg" : match[1]!.toLowerCase()}` as
+        "image/png" | "image/jpeg" | "image/webp" | "image/gif",
+      contentHash: createHash("sha256").update(bytes).digest("hex"),
+    };
+  }
+
+  async exportPresentationPage(value: z.input<typeof WorkbenchPresentationExportRequestSchema>) {
+    const request = WorkbenchPresentationExportRequestSchema.parse(value);
+    const state = await this.getProject(request.projectId);
+    const cursor = request.cursor
+      ? z.object({ revision: z.number().int().nonnegative(), index: z.number().int().nonnegative() }).strict()
+        .parse(JSON.parse(request.cursor))
+      : { revision: state.revision, index: 0 };
+    if (cursor.revision !== state.revision) throw new Error("Draft source changed during export; restart the page read.");
+    const drafts = [...state.drafts.values()].sort((left, right) => left.draftId.localeCompare(right.draftId));
+    const page = drafts.slice(cursor.index, cursor.index + request.limit).map(draft => {
+      const entry = state.entries.get(`draft:${draft.draftId}`);
+      return {
+        draftId: draft.draftId, prompt: draft.prompt,
+        createdAt: draft.createdAt, updatedAt: draft.updatedAt,
+        clientUpdatedAt: draft.clientUpdatedAt,
+        profileId: draft.profileId, composerSettings: draft.composerSettings,
+        pinned: entry?.entryKind === "draft" && entry.metadata.pinned,
+        snoozed: entry?.entryKind === "draft" && entry.metadata.snoozed,
+        attachments: draft.attachments.map(attachment => {
+          const inline = this.inlineAttachment(attachment.url);
+          return inline
+            ? { kind: "inline" as const, id: attachment.id, mediaType: inline.mediaType,
+              byteLength: inline.bytes.length, contentHash: inline.contentHash }
+            : { kind: "url" as const, id: attachment.id, url: attachment.url };
+        }),
+      };
+    });
+    const next = cursor.index + page.length;
+    return WorkbenchPresentationExportPageSchema.parse({
+      projectId: request.projectId,
+      sourceRevision: state.revision,
+      drafts: page,
+      nextCursor: next < drafts.length ? JSON.stringify({ revision: state.revision, index: next }) : null,
+    });
+  }
+
+  async exportPresentationLayoutChunk(value: z.input<typeof WorkbenchPresentationLayoutChunkRequestSchema>) {
+    const request = WorkbenchPresentationLayoutChunkRequestSchema.parse(value);
+    const source = request.scope === "project"
+      ? await this.getProject(request.projectId).then(state => ({
+        revision: state.revision,
+        content: { displayOrder: state.displayOrder, newThreadProfile: state.newThreadProfile },
+      }))
+      : request.scope === "home"
+        ? await this.homeDisplayOrder.getSnapshot().then(state => ({
+          revision: state.revision, content: state.displayOrder,
+        }))
+        : await this.pinnedLayout.getSnapshot().then(state => ({
+          revision: state.revision, content: state.displayOrder,
+        }));
+    const revision = source.revision;
+    if (request.sourceRevision !== null && request.sourceRevision !== revision) {
+      throw new Error("Layout source changed during export; restart the chunk read.");
+    }
+    const bytes = Buffer.from(JSON.stringify(source.content), "utf8");
+    if (request.offset > bytes.length) throw new Error("Layout offset exceeds its content.");
+    const chunk = bytes.subarray(request.offset, request.offset + 64 * 1024);
+    const next = request.offset + chunk.length;
+    return WorkbenchPresentationLayoutChunkSchema.parse({
+      sourceRevision: revision, bytes: chunk.toString("base64"),
+      totalBytes: bytes.length, nextOffset: next < bytes.length ? next : null,
+    });
+  }
+
+  async readPresentationAttachmentChunk(value: z.input<typeof WorkbenchPresentationAttachmentChunkRequestSchema>) {
+    const request = WorkbenchPresentationAttachmentChunkRequestSchema.parse(value);
+    const state = await this.getProject(request.projectId);
+    const attachment = state.drafts.get(request.draftId)?.attachments.find(item => item.id === request.attachmentId);
+    if (!attachment) throw new Error("Draft attachment is no longer available.");
+    const inline = this.inlineAttachment(attachment.url);
+    if (!inline) throw new Error("Draft attachment is not stored as inline content.");
+    if (request.offset > inline.bytes.length) throw new Error("Attachment offset exceeds its content.");
+    const bytes = inline.bytes.subarray(request.offset, request.offset + 64 * 1024);
+    const nextOffset = request.offset + bytes.length;
+    return WorkbenchPresentationAttachmentChunkSchema.parse({
+      bytes: bytes.toString("base64"),
+      nextOffset: nextOffset < inline.bytes.length ? nextOffset : null,
+      byteLength: inline.bytes.length, contentHash: inline.contentHash, mediaType: inline.mediaType,
+    });
+  }
 
   constructor(options: WorkbenchThreadStateControllerOptions) {
     const persistence = options.threadStateStore;

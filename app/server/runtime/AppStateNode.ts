@@ -5,6 +5,7 @@
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 
 import WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
+import WorkbenchPresentationController from "../state/WorkbenchPresentationController.ts";
 import { formatWorkbenchAppLogMessage } from "../workbench-app-log-format.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
@@ -25,16 +26,17 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
         else logger.line(domain, message.trimStart());
       },
     });
+    const presentation = new WorkbenchPresentationController(build.get("presentationDatabase"));
     return {
-      dispose: async () => await state.close(),
-      registrations: { logger, state },
+      dispose: async () => { presentation.close(); await state.close(); },
+      registrations: { logger, state, presentation },
       start: () => state.start(),
     };
   },
   description: "Reload typed app-state reads, projections, and mutations without replacing SQLite.",
   lifecycle: "atomic",
-  provides: ["logger", "state"],
-  requires: ["database"],
+  provides: ["logger", "state", "presentation"],
+  requires: ["database", "presentationDatabase"],
   safeAll: false,
   scope: "client:state",
   sources: [
@@ -42,9 +44,12 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
     "app/server/workbench-app-log-format.ts",
     "app/server/state/WorkbenchAppStateController.ts",
     "app/server/state/WorkbenchBrowserStateRegistry.ts",
+    "app/server/state/WorkbenchPresentationController.ts",
     "shared/state/**",
     "!shared/state/workbench-app-state-schema.ts",
     "!shared/state/workbench-app-state-releases.ts",
+    "!shared/state/workbench-presentation-schema.ts",
+    "!shared/state/workbench-presentation-releases.ts",
     "shared/database/**",
   ].join("\n"),
 });

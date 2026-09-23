@@ -36,6 +36,7 @@ import WorkbenchTranscriptCaptureGapController from "./database/transcript/Workb
 import type { WorkbenchTranscriptObservation, WorkbenchTranscriptRecordingContext } from "./database/transcript/workbench-transcript-types";
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository";
+import WorkbenchThreadLaunchRepository from "./database/thread-launch/WorkbenchThreadLaunchRepository";
 import WorkbenchTranscriptIdentityRepository from "./database/transcript/WorkbenchTranscriptIdentityRepository";
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
@@ -5085,6 +5086,71 @@ test("transcript materialisation waits for an admitted live turn to settle", asy
     releaseLiveTurnRecording.resolve();
     await bridge.dispose();
     await fs.rm(root, { force: true, recursive: true });
+  }
+});
+
+test("overlapping managed starts defer early notifications until each captured response identifies its owner", async () => {
+  const database = databaseFixture();
+  const identities = await recordingIdentities({ database });
+  const launches = new WorkbenchThreadLaunchRepository(database);
+  const launchIds = [
+    "bb23927f-44ba-4580-a27e-0969d04fe133",
+    "5037e8cb-dde7-40be-a605-6f1bfa97c60f",
+  ];
+  for (const launchId of launchIds) {
+    launches.reserve({
+      launchId, projectId: fixtureIdentityValues.ProjectId.project,
+      profile: { kind: "custom", settings: { agentPath: null, agentSource: null,
+        harness: "codex", model: "test", reasoningEffort: null, serviceTier: null } },
+      firstInput: [{ type: "text", text: "hello", text_elements: [] }],
+      clientMessageId: launchId,
+    }, { rootPath: "C:/repo", roots: ["C:/repo"] });
+    launches.advance(launchId, "prepared", { phase: "creating", launchId });
+  }
+  const requests: JsonRpcRequest[] = [];
+  const observed: string[] = [];
+  const bridge = new CodexStdioBridge({
+    identities,
+    appServer: { send(message: JsonRpcRequest) { requests.push(message); } } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification(notification) {
+      const event = notification as ServerNotification;
+      if (event.method === "thread/started") observed.push(event.params.thread.id);
+    },
+    resolveProjectFromCwd: async () => ({
+      cwd: "C:/repo",
+      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
+      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
+    }),
+  });
+  const start = (id: number) => bridge.handleServerRequest({
+    id, method: "thread/start",
+    params: { cwd: "C:/overlap" },
+    workbenchCreationLocation: { id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/repo",
+      launchId: launchIds[id - 1] },
+  } as JsonRpcRequest);
+  try {
+    const first = start(1);
+    const second = start(2);
+    await bridge.waitForIdle();
+    assert.equal(requests.length, 2);
+    const firstThread = { ...bridgeThread([]), id: "first" };
+    const secondThread = { ...bridgeThread([]), id: "second" };
+    await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: firstThread } });
+    await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: secondThread } });
+    assert.deepEqual(observed, []);
+    await bridge.handleUpstreamMessage({ id: requests[1]!.id, result: { thread: secondThread } });
+    await second;
+    assert.equal(observed.length, 1);
+    assert.equal(launches.read(launchIds[1]!)?.state.phase, "created");
+    assert.equal(launches.read(launchIds[0]!)?.state.phase, "creating");
+    await bridge.handleUpstreamMessage({ id: requests[0]!.id, result: { thread: firstThread } });
+    await first;
+    assert.equal(observed.length, 2);
+    assert.notEqual(observed[0], observed[1]);
+    assert.equal(launches.read(launchIds[0]!)?.state.phase, "created");
+  } finally {
+    await bridge.dispose();
   }
 });
 

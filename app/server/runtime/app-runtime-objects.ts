@@ -5,6 +5,8 @@
 import type WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
 import type WorkbenchNetworkController from "../network/WorkbenchNetworkController.ts";
 import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
+import type WorkbenchPresentationRepository from "../state/WorkbenchPresentationRepository.ts";
+import type WorkbenchPresentationController from "../state/WorkbenchPresentationController.ts";
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 import type WorkbenchAppHttpRouter from "./WorkbenchAppHttpRouter.ts";
@@ -14,6 +16,8 @@ import type WorkbenchAppReloadDirtController from "./WorkbenchAppReloadDirtContr
 export interface AppRuntimeObjects {
   compiler: WorkbenchFrontendCompiler;
   database: WorkbenchAppStateRepository;
+  presentationDatabase: WorkbenchPresentationRepository;
+  presentation: WorkbenchPresentationController;
   http: WorkbenchAppHttpRouter;
   logger: WorkbenchProcessLogger;
   network: WorkbenchNetworkController;

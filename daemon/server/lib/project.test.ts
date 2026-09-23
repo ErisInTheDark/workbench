@@ -120,9 +120,9 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
   assert.ok(identified.data.some(project => project.kind === "git" && project.rootPath === canonicalRootPath));
   const identifiedDirect = identified.data.find(project => project.kind === "git" && project.rootPath === directProject.rootPath)!;
   assert.equal(repository.resolve(identifiedDirect.identityKey), directProject.id);
-  assert.deepEqual(identified.aliases.find(alias => alias.alias === directProject.relativePath), {
-    alias: directProject.relativePath, identityKey: identifiedDirect.identityKey,
-  });
+  const directAlias = identified.aliases.find(alias => alias.alias === directProject.relativePath);
+  assert.equal(directAlias?.identityKey, identifiedDirect.identityKey);
+  assert.ok(directAlias?.locationKey);
 
   const empty = await discoverProjectIdentities([]);
   assert.deepEqual(empty.data.map(project => project.kind), ["workbench-library"]);
@@ -157,26 +157,49 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
   const warning = context.mock.method(console, "warn", (message: string) => warnings.push(message));
   const ambiguous = await discoverProjectIdentities([configuredProjectsRoot]);
   assert.ok(ambiguous.observedKeys.includes(identifiedDirect.identityKey));
-  assert.equal(warnings.length, 1);
-  assert.ok(!ambiguous.data.some(project => project.rootPath === directProject.rootPath || project.rootPath === normalizePath(cloneRoot)));
+  assert.equal(warnings.length, 0);
+  assert.ok(ambiguous.data.some(project => project.rootPath === directProject.rootPath));
+  assert.ok(ambiguous.data.some(project => project.rootPath === normalizePath(cloneRoot)));
   assert.ok(ambiguous.data.some(project => project.rootPath === canonicalRootPath));
   const repeatedAmbiguous = await discoverProjectIdentities([configuredProjectsRoot]);
-  assert.equal(warnings.length, 1);
-  assert.ok(!repeatedAmbiguous.data.some(project => (
-    project.rootPath === directProject.rootPath || project.rootPath === normalizePath(cloneRoot)
-  )));
+  assert.equal(warnings.length, 0);
+  assert.ok(repeatedAmbiguous.data.some(project => project.rootPath === directProject.rootPath));
+  assert.ok(repeatedAmbiguous.data.some(project => project.rootPath === normalizePath(cloneRoot)));
+
+  const emptyMarkerRoot = path.join(projectsRoot, "empty-marker");
+  const partialMarkerRoot = path.join(projectsRoot, "partial-marker");
+  await fs.mkdir(path.join(emptyMarkerRoot, ".git"), { recursive: true });
+  await fs.mkdir(path.join(partialMarkerRoot, ".git"), { recursive: true });
+  await fs.writeFile(path.join(partialMarkerRoot, ".git", "blank.txt"), "");
+  await fs.writeFile(path.join(projectsRoot, "placeholder.code-workspace"),
+    JSON.stringify({ folders: [{ path: "empty-marker" }] }));
+  await assert.rejects(git("-C", cloneRoot, "rev-parse", "--verify", "HEAD"),
+    "The valid clone fixture must still have an unborn HEAD");
+  const withPlaceholders = await discoverProjectIdentities([configuredProjectsRoot]);
+  assert.ok(withPlaceholders.data.some(project => project.kind === "git"
+    && project.rootPath === normalizePath(cloneRoot)), "An unborn repository must remain discoverable");
+  assert.ok(withPlaceholders.data.some(project => project.kind === "workspace"
+    && project.rootPath === normalizePath(emptyMarkerRoot)), "The separate workspace must remain discoverable");
+  assert.ok(!withPlaceholders.data.some(project => project.kind === "git"
+    && [normalizePath(emptyMarkerRoot), normalizePath(partialMarkerRoot)].includes(project.rootPath)),
+  "Folders with incomplete .git markers must not become Git projects");
+  assert.equal(withPlaceholders.complete, true);
+  assert.equal(warnings.length, 0, "Incomplete .git markers must not trigger repeated worktree warnings");
 
   await git("-C", canonicalProjectRoot, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
     "commit", "--quiet", "--allow-empty", "-m", "fixture");
   const linkedWorktree = path.join(canonicalProjectRoot, "linked-worktree");
   await git("-C", canonicalProjectRoot, "worktree", "add", "--quiet", "--detach", linkedWorktree);
   await fs.writeFile(path.join(projectsRoot, "linked.code-workspace"), JSON.stringify({ folders: [{ path: linkedWorktree }] }));
-  const withoutWorktrees = await discoverProjectIdentities([configuredProjectsRoot]);
-  assert.ok(!withoutWorktrees.data.some(project => project.relativePath === "linked.code-workspace"));
-  assert.ok(withoutWorktrees.excludedRootPaths.includes(normalizePath(linkedWorktree)));
+  const withWorktrees = await discoverProjectIdentities([configuredProjectsRoot]);
+  assert.ok(withWorktrees.data.some(project => project.relativePath === "linked.code-workspace"));
+  assert.ok(withWorktrees.data.some(project => project.rootPath === normalizePath(linkedWorktree)));
+  assert.ok(!withWorktrees.excludedRootPaths.includes(normalizePath(linkedWorktree)));
   await assert.rejects(
     resolveAgentEndpointProjectFromProjects(projects, linkedWorktree),
-    /worktree|excluded/i,
+    /unregistered|excluded/i,
   );
+  const linkedProjects = repository.reconcile(withWorktrees).catalog.map(record => record.project);
+  assert.equal((await resolveAgentEndpointProjectFromProjects(linkedProjects, linkedWorktree)).cwd, linkedWorktree);
   warning.mock.restore();
 });

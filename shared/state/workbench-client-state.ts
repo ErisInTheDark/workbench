@@ -23,11 +23,23 @@
  * - workbenchClientStateMutationKinds: record kinds admitted by a route.
  * - WorkbenchProjectRemapSchema: validate project-address adoption.
  * - WorkbenchProjectRemap: daemon-scoped address adoption.
+ * - WorkbenchDaemonRegistrationRequestSchema/WorkbenchDaemonRegistrationSchema: durable peer-to-browser registration mapping.
  */
 import { appStateClientTables } from "./workbench-app-state-schema.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
 import { z } from "zod";
 import { WorkbenchProjectAliasSchema } from "../workbench/project/project-state.ts";
+import { DaemonIdSchema } from "../workbench/identity.ts";
+
+export const WorkbenchDaemonRegistrationRequestSchema = z.object({
+  daemonId: DaemonIdSchema,
+  attachedLocal: z.boolean(),
+}).strict();
+export const WorkbenchDaemonRegistrationSchema = z.object({
+  id: z.string().min(1),
+  daemonId: DaemonIdSchema.nullable(),
+  kind: z.enum(["local", "remote"]),
+}).strict();
 
 export const WorkbenchProjectRemapSchema = z.object({
   daemonRegistrationId: z.string().min(1).max(256),
@@ -155,6 +167,7 @@ export type WorkbenchClientStateRows = {
 
 interface WorkbenchClientStateVersion {
   daemonRegistrationId: string;
+  registrations?: z.infer<typeof WorkbenchDaemonRegistrationSchema>[];
   oldestAvailableRevision: number;
   revision: number;
   schemaVersion?: number;

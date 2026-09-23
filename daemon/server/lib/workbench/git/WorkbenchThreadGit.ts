@@ -10,6 +10,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { isPathWithinRoot, normalizeRelativePath } from "../../project";
+import { readRegisteredGitWorktrees } from "../../git";
 import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
@@ -78,10 +79,7 @@ function pathsEqual(left: string, right: string) {
 async function resolveRegisteredWorktree(controlRepoRoot: string, targetWorktree: string) {
   if (!path.isAbsolute(targetWorktree)) throw new Error("Explicit Git worktree must be an absolute path.");
   const requestedRoot = path.resolve(targetWorktree);
-  const registeredRoots = (await runGit(controlRepoRoot, ["worktree", "list", "--porcelain"]))
-    .split(/\r?\n/gu)
-    .filter((line) => line.startsWith("worktree "))
-    .map((line) => path.resolve(line.slice("worktree ".length)));
+  const registeredRoots = await readRegisteredGitWorktrees(controlRepoRoot);
   const registeredRoot = registeredRoots.find((candidate) => pathsEqual(candidate, requestedRoot));
   if (!registeredRoot) throw new Error("Explicit Git target is not a registered Git worktree of the control repository.");
   return registeredRoot;

@@ -11,6 +11,8 @@ import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProce
 
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import WorkbenchAppStateRoutes from "../state/workbench-app-state-routes.ts";
+import WorkbenchPresentationRoutes from "../state/workbench-presentation-routes.ts";
+import type WorkbenchPresentationController from "../state/WorkbenchPresentationController.ts";
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
 import WorkbenchAppSettingsRoutes from "./WorkbenchAppSettingsRoutes.ts";
@@ -68,6 +70,7 @@ export default class WorkbenchAppHttpRouter {
   private readonly portRoutes: WorkbenchAppPortRoutes;
   private readonly settingsRoutes: WorkbenchAppSettingsRoutes | null;
   private readonly stateRoutes: WorkbenchAppStateRoutes;
+  private readonly presentationRoutes: WorkbenchPresentationRoutes | null;
   private readonly staticRequests: StaticHttpRequestController;
   private readonly networkRoutes: WorkbenchNetworkRoutes | null;
 
@@ -78,6 +81,7 @@ export default class WorkbenchAppHttpRouter {
     outputDirectoryPath: string;
     readAppliedReactDevelopmentMode?: () => boolean;
     state: WorkbenchBrowserStateRegistry;
+    presentation?: WorkbenchPresentationController;
   }) {
     this.networkRoutes = options.network ? new WorkbenchNetworkRoutes(options.network) : null;
     this.portRoutes = new WorkbenchAppPortRoutes({
@@ -111,7 +115,9 @@ export default class WorkbenchAppHttpRouter {
           },
         })
       : null;
-    this.stateRoutes = new WorkbenchAppStateRoutes(options.state);
+    this.stateRoutes = new WorkbenchAppStateRoutes(options.state,
+      daemonId => options.network?.snapshot().daemon?.daemonId === daemonId);
+    this.presentationRoutes = options.presentation ? new WorkbenchPresentationRoutes(options.presentation) : null;
     this.staticRequests = new StaticHttpRequestController({
       cacheSeconds: 0,
       rootDirectoryPath: options.outputDirectoryPath,
@@ -124,6 +130,7 @@ export default class WorkbenchAppHttpRouter {
   }
 
   async close() {
+    await this.presentationRoutes?.close();
     this.networkRoutes?.close();
     this.staticRequests.close();
   }
@@ -154,6 +161,7 @@ export default class WorkbenchAppHttpRouter {
     if (await this.portRoutes.handle(request, response, url)) return;
     if (this.settingsRoutes && await this.settingsRoutes.handle(request, response, url)) return;
     if (await this.stateRoutes.handle(request, response, url)) return;
+    if (this.presentationRoutes && await this.presentationRoutes.handle(request, response, url)) return;
     if (url.pathname.startsWith("/api/")) {
       sendJson(response, 404, { error: "Workbench app route not found." });
       return;

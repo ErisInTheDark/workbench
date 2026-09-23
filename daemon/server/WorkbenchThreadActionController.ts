@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state and project owners.
+ * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
  * - default WorkbenchThreadActionController: route WB actions without constructing provider packets.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -10,6 +11,7 @@ import {
   type WorkbenchThreadMessage, type WorkbenchThreadStop,
 } from "workbench-shared/workbench/thread/thread-actions";
 import { ThreadReferenceSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadLaunchLocation } from "workbench-shared/workbench/thread/thread-launch";
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
@@ -24,7 +26,7 @@ export interface WorkbenchThreadActionOwners {
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   projects: Pick<WorkbenchProjectCatalogController, "resolveProjectById">;
   identities: Pick<WorkbenchThreadIdentityController, "resolve" | "resolveTurn">;
-  profiles: Pick<WorkbenchThreadStateFeature, "captureCreationProfile">;
+  profiles: Pick<WorkbenchThreadStateFeature, "captureCreationProfile" | "captureCreationProfileForProject">;
   state: Pick<
     WorkbenchThreadStateController,
     "acceptProviderIntent" | "getCanonicalThreadEntry" | "handleRequest" | "listPendingQuestionnaires"
@@ -38,6 +40,8 @@ type Actions = {
     connectionId?: string,
   ) => Promise<WorkbenchThreadActionMap[Method]["result"]>;
 };
+
+export class WorkbenchThreadCreationNotDispatchedError extends Error {}
 
 export default class WorkbenchThreadActionController {
   constructor(private readonly owners: WorkbenchThreadActionOwners) {}
@@ -151,12 +155,38 @@ export default class WorkbenchThreadActionController {
     return this.actions[method](input, connectionId);
   }
 
-  private async create(input: WorkbenchThreadCreate) {
-    const project = await this.owners.projects.resolveProjectById(input.projectId);
-    const captured = await this.owners.profiles.captureCreationProfile(undefined, project.rootPath, input.profile);
-    return this.provider(captured.selection.settings.harness).threads.create({
-      cwd: captured.cwd, profile: captured.selection, ...(input.context ? { context: input.context } : {}),
-      projectRoots: project.roots.map(root => root.rootPath),
+  async createForLaunch(input: WorkbenchThreadCreate, launchId: string,
+    location: WorkbenchThreadLaunchLocation) {
+    return this.create(input, launchId, location);
+  }
+
+  private async create(input: WorkbenchThreadCreate, launchId?: string,
+    location?: WorkbenchThreadLaunchLocation) {
+    let prepared: {
+      project: Awaited<ReturnType<WorkbenchProjectCatalogController["resolveProjectById"]>>;
+      captured: Awaited<ReturnType<WorkbenchThreadStateFeature["captureCreationProfileForProject"]>>;
+      provider: ReturnType<WorkbenchThreadActionController["provider"]>;
+    };
+    try {
+      const project = await this.owners.projects.resolveProjectById(input.projectId);
+      const captured = await this.owners.profiles.captureCreationProfileForProject(undefined, project, input.profile);
+      if (location && (project.rootPath !== location.rootPath || captured.cwd !== location.rootPath
+        || project.roots.length !== location.roots.length
+        || project.roots.some((root, index) => root.rootPath !== location.roots[index]))) {
+        throw new Error("Captured launch location changed before provider creation.");
+      }
+      prepared = { project, captured, provider: this.provider(captured.selection.settings.harness) };
+    } catch (error) {
+      if (!launchId) throw error;
+      throw new WorkbenchThreadCreationNotDispatchedError(
+        error instanceof Error ? error.message : "Thread creation could not be prepared.", { cause: error });
+    }
+    const { project, captured, provider } = prepared;
+    return provider.threads.create({
+      cwd: location?.rootPath ?? captured.cwd, profile: captured.selection,
+      ...(input.context ? { context: input.context } : {}),
+      projectLocation: { id: project.id, rootPath: project.rootPath, ...(launchId ? { launchId } : {}) },
+      projectRoots: location?.roots ?? project.roots.map(root => root.rootPath),
       additionalWritableRoots: input.additionalWritableRoots,
     });
   }

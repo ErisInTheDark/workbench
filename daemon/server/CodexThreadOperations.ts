@@ -183,9 +183,12 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     return response.result;
   }
 
-  async observeThread(thread: Thread): Promise<ThreadPayload> {
-    const project = await this.owners.resolveProject(thread.cwd);
+  async observeThread(thread: Thread, location?: { id: import("workbench-shared/workbench/identity").ProjectId; rootPath: string }): Promise<ThreadPayload> {
     const native = { harness: "codex", nativeLocation: thread.cwd, nativeThreadId: NativeThreadIdSchema.parse(thread.id) };
+    const retained = this.owners.identities.threads.findNativeThread(native);
+    const project = location ?? (retained
+      ? { id: retained.projectId, rootPath: retained.projectRoot }
+      : await this.owners.resolveProject(thread.cwd));
     await admitProviderThreads(this.owners.identities, [{
       thread,
       metadata: {
@@ -253,11 +256,12 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
       method: "thread/start",
       params: { cwd: input.cwd, ephemeral: false, ...sandbox },
       workbenchCreationProfile: { kind: "snapshot", selection: input.profile },
+      ...(input.projectLocation ? { workbenchCreationLocation: input.projectLocation } : {}),
       workbenchPromptContext: { ...input.context, cwd: input.cwd, harness: "codex" },
     });
     const thread = record(this.result(response))?.thread as Thread | undefined;
     if (!thread) throw new Error("Codex creation returned no thread.");
-    return this.observeThread(thread);
+    return this.observeThread(thread, input.projectLocation);
   }
 
   async list(input: WorkbenchProviderThreadList) {

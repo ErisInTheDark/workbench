@@ -3,10 +3,46 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/netip"
 	"sync/atomic"
 	"testing"
 )
+
+func TestDiscoveryDescriptorKeepsOnlyVerifiedEndpoints(t *testing.T) {
+	origin := "http://100.64.1.2:52739"
+	identity := `{"protocol":1,"daemonId":"063e3626-50f7-4635-950e-cdff695d0bc1","hostname":"peer","state":"sleeping","wakeEnabled":true}`
+	for _, test := range []struct {
+		name string
+		body string
+		secure string
+	}{
+		{"legacy", identity, ""},
+		{"published", `{"identity":` + identity + `,"endpoints":{"httpOrigin":"` + origin + `","secureOrigin":"https://peer.wb.inthedark.boo:32123"}}`, "https://peer.wb.inthedark.boo:32123"},
+		{"without private TLS", `{"identity":` + identity + `,"endpoints":{"httpOrigin":"` + origin + `","secureOrigin":null}}`, ""},
+		{"wrong peer", `{"identity":` + identity + `,"endpoints":{"httpOrigin":"http://100.64.1.3:52739","secureOrigin":"https://peer.wb.inthedark.boo:32123"}}`, ""},
+		{"external secure host", `{"identity":` + identity + `,"endpoints":{"httpOrigin":"` + origin + `","secureOrigin":"https://example.com:32123"}}`, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			descriptor, err := decodeDaemonDescriptor([]byte(test.body), origin)
+			if err != nil { t.Fatal(err) }
+			secure := ""
+			if descriptor.Endpoints != nil && descriptor.Endpoints.SecureOrigin != nil {
+				secure = *descriptor.Endpoints.SecureOrigin
+			}
+			if descriptor.Identity.DaemonID != "063e3626-50f7-4635-950e-cdff695d0bc1" || secure != test.secure {
+				t.Fatalf("wrong verified descriptor: %+v", descriptor)
+			}
+			if test.name == "without private TLS" {
+				encoded, err := json.Marshal(descriptor.Endpoints)
+				if err != nil { t.Fatal(err) }
+				if string(encoded) != `{"httpOrigin":"` + origin + `","secureOrigin":null}` {
+					t.Fatalf("nullable endpoint changed on the wire: %s", encoded)
+				}
+			}
+		})
+	}
+}
 
 func TestDiscoveryCoalescesInvalidationsAndOwnsCancellation(t *testing.T) {
 	var reads atomic.Int32
@@ -18,9 +54,9 @@ func TestDiscoveryCoalescesInvalidationsAndOwnsCancellation(t *testing.T) {
 			reads.Add(1)
 			return []daemonDiscoveryPeer{{id: "peer", hostname: "peer", address: netip.MustParseAddr("100.64.1.2")}}, nil
 		},
-		probe: func(ctx context.Context, peer daemonDiscoveryPeer) (daemonIdentity, string, error) {
+		probe: func(ctx context.Context, peer daemonDiscoveryPeer) (daemonDescriptor, string, error) {
 			if reads.Load() == 1 { close(entered); select { case <-release: case <-ctx.Done(): } }
-			return daemonIdentity{Protocol: 1, DaemonID: "063e3626-50f7-4635-950e-cdff695d0bc1", Hostname: "peer", State: "sleeping"}, "http://100.64.1.2:52739", ctx.Err()
+			return daemonDescriptor{Identity: daemonIdentity{Protocol: 1, DaemonID: "063e3626-50f7-4635-950e-cdff695d0bc1", Hostname: "peer", State: "sleeping"}}, "http://100.64.1.2:52739", ctx.Err()
 		},
 		publish: func(snapshot daemonDiscoverySnapshot) { published <- snapshot },
 		warn: func(error) { t.Error("unexpected discovery failure") },

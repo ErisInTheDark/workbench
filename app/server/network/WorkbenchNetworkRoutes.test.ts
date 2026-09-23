@@ -16,7 +16,13 @@ test("cross-origin actions are rejected; admitted actions do not pin route dispo
   let deviceNodeId: string | null = null;
   const routes = new WorkbenchNetworkRoutes({
     ingress: () => ({ deviceNodeId, manageApp: true, manageNetwork, trustHost }),
-    discovery: () => ({ refreshing: false, peers: [] }),
+    discovery: () => ({ refreshing: false, peers: [{
+      phase: "verified", peerId: "peer", hostname: "peer",
+      identity: { protocol: 1, daemonId: "063e3626-50f7-4635-950e-cdff695d0bc1",
+        hostname: "peer", state: "sleeping", wakeEnabled: true },
+      origin: "http://100.64.1.2:52739",
+      endpoints: { httpOrigin: "http://100.64.1.2:52739", secureOrigin: "https://peer.wb.inthedark.boo:52739" },
+    }] }),
     connection: () => ({ localPort: null, tailnetPort: 52739 }),
     snapshot: () => ({ configuration: { privateAccess: null } }) as WorkbenchNetworkSnapshot,
     subscribe: () => () => {},
@@ -48,6 +54,10 @@ test("cross-origin actions are rejected; admitted actions do not pin route dispo
   const remote = await (await fetch(`${origin}/api/workbench-network?capabilities=3`)).json();
   assert.equal(remote.capabilities.localConnection, false);
   assert.equal(remote.capabilities.settingsApply, true);
+  const compatible = await (await fetch(`${origin}/api/workbench-network?capabilities=4`)).json();
+  assert.equal("endpoints" in compatible.discovery.peers[0], false);
+  const modern = await (await fetch(`${origin}/api/workbench-network?capabilities=5`)).json();
+  assert.equal(modern.discovery.peers[0].endpoints.secureOrigin, "https://peer.wb.inthedark.boo:52739");
   for (const action of [{ action: "mode", mode: "localhost" }, { action: "tailnet-port", port: 8089 }, { action: "private-access", enabled: false }]) {
     const unsafe = await fetch(`${origin}/api/workbench-network`, {
       method: "POST", headers: { Origin: origin, "Content-Type": "application/json", "X-Workbench-Network-Request": "1" },

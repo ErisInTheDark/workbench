@@ -1,7 +1,9 @@
 /* Exports: none. Protect WB action ownership and accepted-message settlement. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import WorkbenchThreadActionController, { type WorkbenchThreadActionOwners } from "./WorkbenchThreadActionController";
+import WorkbenchThreadActionController, {
+  WorkbenchThreadCreationNotDispatchedError, type WorkbenchThreadActionOwners,
+} from "./WorkbenchThreadActionController";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
@@ -47,7 +49,7 @@ function fixture(providerWarning?: string) {
         nativeThreadId: NativeThreadIdSchema.parse("native-thread"), pending: false, turnIndex: 0,
       }],
     }) },
-    profiles: { captureCreationProfile: unused },
+    profiles: { captureCreationProfile: unused, captureCreationProfileForProject: unused },
     state: {
       acceptProviderIntent: async (_project, _harness, acceptedThread, acceptedTurn) => {
         assert.equal(acceptedThread, threadId);
@@ -87,6 +89,36 @@ test("provider deletion resolves aliases without mutating WB state and preserves
   f.provider.threads.delete = async () => { throw new Error("provider refused deletion"); };
   await assert.rejects(f.controller.handle("thread/provider/delete", { threadId: "wb-thread" }), /provider refused deletion/);
   assert.deepEqual(f.mutations, []);
+});
+
+test("creation preparation failure is distinct from an uncertain provider failure", async () => {
+  const f = fixture();
+  const input = { projectId: "project", profile: { kind: "snapshot" as const,
+    selection: { kind: "custom" as const, settings: {
+      agentPath: null, agentSource: null, harness: "codex" as const, model: "test",
+      reasoningEffort: null, serviceTier: null,
+    } },
+  } };
+  const location = { rootPath: "C:/project", roots: ["C:/project"] };
+  f.owners.projects.resolveProjectById = async () => { throw new Error("project unavailable"); };
+  await assert.rejects(f.controller.createForLaunch(input, "launch", location), error =>
+    error instanceof WorkbenchThreadCreationNotDispatchedError);
+  f.owners.projects.resolveProjectById = async () => ({
+    id: ProjectIdSchema.parse("project"), kind: "git", root: "C:/project",
+    rootPath: "C:/project", roots: [{ id: "root", name: "project",
+      root: "C:/project", rootPath: "C:/project", relativePath: "." }],
+  });
+  f.owners.profiles.captureCreationProfileForProject = async () => ({
+    cwd: "C:/project",
+    selection: { kind: "custom", settings: {
+      agentPath: null, agentSource: null, harness: "codex", model: "test",
+      reasoningEffort: null, serviceTier: null,
+    } },
+  }) as never;
+  f.provider.threads.create = async () => { throw new Error("native response lost"); };
+  await assert.rejects(f.controller.createForLaunch(input, "launch", location), error =>
+    error instanceof Error && !(error instanceof WorkbenchThreadCreationNotDispatchedError)
+    && error.message === "native response lost");
 });
 
 test("canonical page reads do not require an available provider", async () => {

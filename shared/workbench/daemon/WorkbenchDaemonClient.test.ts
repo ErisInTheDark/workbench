@@ -34,6 +34,17 @@ test("discovery settings reject malformed daemon rows without leaking paths", as
   assert.ok(!diagnostics[0]!.includes("private"));
 });
 
+test("location catalogue rejects malformed identity metadata without logging project paths", async context => {
+  const diagnostics: string[] = [];
+  context.mock.method(console, "error", (message: string) => { diagnostics.push(message); });
+  const client = new WorkbenchDaemonClient({
+    request: async <TResponse>() => ({ data: [{ identityKey: "private-path", project: {} }] }) as TResponse,
+  });
+  await assert.rejects(client.projects.locations());
+  assert.equal(diagnostics.length, 1);
+  assert.ok(!diagnostics[0]!.includes("private-path"));
+});
+
 test("voice events reject malformed remote data without logging document contents", async context => {
   const diagnostics: string[] = [];
   context.mock.method(console, "error", (message: string) => { diagnostics.push(message); });

@@ -27,6 +27,36 @@ async function temporaryDatabase(context: TestContext) {
   return path.join(directory, "state.sqlite3");
 }
 
+test("durable daemon registrations retain old scoped state when the attached daemon changes", async context => {
+  const databasePath = await temporaryDatabase(context);
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  try {
+    const original = await repository.start();
+    const desktop = "4f29787d-5a30-4c4c-9d1f-224913a3468c";
+    const laptop = "502902c0-9512-40be-bb06-c65d86ef2029";
+    assert.equal(repository.registerDaemon(desktop, true), original);
+    repository.commit(revision => [insertRow(appStateTables.projectPreferences, {
+      daemon_registration_id: original, project_id: "old-project",
+      key: "threadCodeBlockWrap", enabled: 1, boolean_value: 1,
+      integer_value: null, text_value: null, deleted: 0, revision,
+    })]);
+    const remote = repository.registerDaemon(laptop, false);
+    assert.equal(repository.registerDaemon(laptop, false), remote);
+    assert.notEqual(remote, original);
+    assert.equal(repository.registerDaemon(laptop, true), remote);
+    assert.equal(repository.daemonRegistrationId, remote);
+    assert.deepEqual(repository.readDaemonRegistrations().map(row => ({
+      id: row.id, kind: row.kind, daemonId: row.daemonId,
+    })).sort((left, right) => left.id.localeCompare(right.id)), [
+      { id: original, kind: "remote", daemonId: desktop },
+      { id: remote, kind: "local", daemonId: laptop },
+    ].sort((left, right) => left.id.localeCompare(right.id)));
+    assert.equal(repository.query(selectRows(appStateTables.projectPreferences, {
+      where: { daemon_registration_id: original, project_id: "old-project" },
+    }))[0]?.boolean_value, 1);
+  } finally { await repository.close(); }
+});
+
 test("code-detail preferences survive reopening and retain pre-upgrade settings", async context => {
   const databasePath = await temporaryDatabase(context);
   const old = new Database(databasePath);

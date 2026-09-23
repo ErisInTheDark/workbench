@@ -19,6 +19,13 @@ import {
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import { CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
+import { WorkbenchThreadLaunchReadSchema, WorkbenchThreadLaunchRequestSchema } from "workbench-shared/workbench/thread/thread-launch";
+import {
+  WorkbenchPresentationAttachmentChunkRequestSchema,
+  WorkbenchPresentationExportRequestSchema,
+  WorkbenchPresentationLayoutChunkRequestSchema,
+} from "workbench-shared/workbench/thread/thread-presentation-export";
+import type WorkbenchThreadLaunchController from "./WorkbenchThreadLaunchController";
 import {
     GitArcStashResultSchema,
     GitCheckpointCompareResultSchema,
@@ -77,7 +84,8 @@ const METHODS = new Set([
   "local-capabilities/read", "local-capabilities/update",
   "native/file/link-roots", "native/file/open", "native/file/reveal",
   "profiles/delete", "profiles/read", "profiles/target/read", "profiles/target/set", "profiles/upsert",
-  "project/catalog/read",
+  "project/catalog/read", "project/locations/read", "thread/launch", "thread/launch/read",
+  "thread/presentation/export", "thread/presentation/attachment/read", "thread/presentation/layout/read",
   "project/file/read", "project/file/reset", "project/file/save",
   "questionnaire/respond",
   "search/query",
@@ -206,6 +214,9 @@ export default class WorkbenchDaemonRequestController {
     commandApprovals?: Pick<import("./WorkbenchCommandApprovalController").default, "list" | "remove">;
     providers?: Pick<WorkbenchProviderDispatcher, "get">;
     threadActions?: Pick<WorkbenchThreadActionController, "handle">;
+    launches?: Pick<WorkbenchThreadLaunchController, "launch" | "read">;
+    presentationExport?: Pick<WorkbenchThreadStateController,
+      "exportPresentationPage" | "readPresentationAttachmentChunk" | "exportPresentationLayoutChunk">;
     agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readSkills">;
     files: Pick<WorkbenchProjectFileController, "read" | "write">;
     gitArc: Pick<WorkbenchGitArcFeature, "executeRequest">;
@@ -213,7 +224,7 @@ export default class WorkbenchDaemonRequestController {
     nativeFiles: Pick<WorkbenchNativeFileController, "linkRoots" | "open" | "reveal">;
     profiles: Pick<WorkbenchComposerProfileStore, "mutate" | "read">;
     profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
-    projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "resolveProjectById" | "readDiscoverySettings" | "updateDiscoverySettings">;
+    projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "readLocations" | "resolveProjectById" | "readDiscoverySettings" | "updateDiscoverySettings">;
     search: Pick<WorkbenchSearchController, "search">;
     stats: Pick<WorkbenchStatsController, "read" | "readDetailed" | "refreshRateLimits" | "startImport">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
@@ -335,6 +346,35 @@ export default class WorkbenchDaemonRequestController {
           break;
         }
         case "project/catalog/read": result = await this.owners.projects.readCatalog(); break;
+        case "project/locations/read": result = await this.owners.projects.readLocations(); break;
+        case "thread/launch": {
+          if (!this.owners.launches) throw new Error("Thread launch is unavailable.");
+          result = await this.owners.launches.launch(WorkbenchThreadLaunchRequestSchema.parse(params));
+          break;
+        }
+        case "thread/launch/read": {
+          if (!this.owners.launches) throw new Error("Thread launch is unavailable.");
+          result = { state: await this.owners.launches.read(WorkbenchThreadLaunchReadSchema.parse(params).launchId) };
+          break;
+        }
+        case "thread/presentation/export": {
+          if (!this.owners.presentationExport) throw new Error("Presentation export is unavailable.");
+          result = await this.owners.presentationExport.exportPresentationPage(
+            WorkbenchPresentationExportRequestSchema.parse(params));
+          break;
+        }
+        case "thread/presentation/attachment/read": {
+          if (!this.owners.presentationExport) throw new Error("Presentation export is unavailable.");
+          result = await this.owners.presentationExport.readPresentationAttachmentChunk(
+            WorkbenchPresentationAttachmentChunkRequestSchema.parse(params));
+          break;
+        }
+        case "thread/presentation/layout/read": {
+          if (!this.owners.presentationExport) throw new Error("Presentation export is unavailable.");
+          result = await this.owners.presentationExport.exportPresentationLayoutChunk(
+            WorkbenchPresentationLayoutChunkRequestSchema.parse(params));
+          break;
+        }
         case "project/file/read": result = await this.owners.files.read({
           path: requiredString(params, "path"),
           projectId: requiredString(params, "projectId"),

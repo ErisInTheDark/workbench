@@ -2,21 +2,26 @@
  * No production exports. Tests protect persisted default-off global and project Codex sandbox network resolution.
  */
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
+import { promisify } from "node:util";
 
 import type { DaemonProcessContext } from "./daemon-process-context";
 let WorkbenchDatabaseNode: typeof import("./WorkbenchDatabaseNode").default;
 let CodexConfigurationNode: typeof import("./CodexConfigurationNode").default;
 let discoveryRoot: string;
 const previousLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
+const execFileAsync = promisify(execFile);
 
 before(async () => {
   discoveryRoot = await mkdtemp(join(tmpdir(), "workbench-network-discovery-"));
-  await mkdir(join(discoveryRoot, "project", ".git"), { recursive: true });
-  await mkdir(join(discoveryRoot, "other", ".git"), { recursive: true });
+  for (const name of ["project", "other"]) {
+    await mkdir(join(discoveryRoot, name), { recursive: true });
+    await execFileAsync("git", ["init", "-q"], { cwd: join(discoveryRoot, name), windowsHide: true });
+  }
   process.env.WORKBENCH_LIBRARY_ROOT = join(discoveryRoot, "library");
   ({ default: WorkbenchDatabaseNode } = await import("./WorkbenchDatabaseNode"));
   ({ default: CodexConfigurationNode } = await import("./CodexConfigurationNode"));

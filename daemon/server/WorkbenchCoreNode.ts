@@ -55,6 +55,7 @@ import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
 import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadMessageController from "./WorkbenchThreadMessageController";
+import WorkbenchThreadLaunchController from "./WorkbenchThreadLaunchController";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
@@ -62,6 +63,8 @@ import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController"
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import WorkbenchVoiceNode from "./WorkbenchVoiceNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
+
+const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
 
 function createModules(): DaemonReloadableModules {
   return { project, threadBootstrap, workbenchLibrary, workbenchPromptFiles };
@@ -316,6 +319,10 @@ function createWorkbenchCoreFeature(
     profiles: threadState, state: threadState.controller,
     warn: message => logThreadStateWarning(message),
   });
+  const launches = new WorkbenchThreadLaunchController({
+    database, projects: projectCatalog, actions: threadActions,
+    warn: message => logThreadStateWarning(message),
+  });
   const workingTree = new WorkbenchWorkingTreeController({
     resolveProject: projectId => projectCatalog.resolveProjectById(projectId),
     resolveIdentity: async input => {
@@ -337,6 +344,8 @@ function createWorkbenchCoreFeature(
     workingTree,
     providers,
     threadActions,
+    launches,
+    presentationExport: threadState.controller,
     agents: new WorkbenchAgentSkillCatalogController(
       (projectId) => projectCatalog.resolveProjectById(projectId),
       (provider, sections) => providers.get(harnesses.resolveHarness(provider)).configuration.guidance.contains(sections),
@@ -393,7 +402,7 @@ function createWorkbenchCoreFeature(
     },
   };
   return new WorkbenchCoreFeature({
-    hasPendingWork: () => stats.hasPendingWork() || transcriptReconciliation.hasPendingWork(),
+    hasPendingWork: () => launches.hasPendingWork() || stats.hasPendingWork() || transcriptReconciliation.hasPendingWork(),
     captureReloadState: () => projectCatalog.captureReloadState(),
     afterCommit: () => {
       if (!initialCatalog) return;
@@ -408,7 +417,7 @@ function createWorkbenchCoreFeature(
         });
       }
     },
-    beginRuntimeDrain: () => { messages.beginRuntimeDrain(); subagents.beginRuntimeDrain(); },
+    beginRuntimeDrain: () => { launches.beginRuntimeDrain(); messages.beginRuntimeDrain(); subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
       reportPhase("transcript reconciliation disposal");
       await transcriptReconciliation.dispose();
@@ -420,6 +429,8 @@ function createWorkbenchCoreFeature(
       await subagents.dispose();
       reportPhase("thread-message disposal");
       await messages.dispose();
+      reportPhase("thread launch disposal");
+      await launches.dispose();
       reportPhase("Git arc disposal");
       gitArc.dispose();
       reportPhase("stats disposal");
@@ -440,19 +451,24 @@ function createWorkbenchCoreFeature(
     },
     registrations,
     start: async (reportPhase) => {
+      if (startupDiagnostics) console.info("[startup] daemon project catalogue loading");
       if (initialCatalog) {
         reportPhase("validate retained project catalog");
         await projectCatalog.ensureLoaded();
+        if (startupDiagnostics) console.info("[startup] daemon project catalogue ready");
+        if (startupDiagnostics) console.info("[startup] daemon core ready");
         return;
       }
       reportPhase("prepared project catalog");
       await projectCatalog.ensureLoaded();
+      if (startupDiagnostics) console.info("[startup] daemon project catalogue ready");
       reportPhase("composer profile startup");
       await profileStore.start();
       reportPhase("stats startup");
       stats.start();
       reportPhase("browse session cleanup startup");
       browseSessionCleanup.start();
+      if (startupDiagnostics) console.info("[startup] daemon core ready");
     },
   });
 }
@@ -500,9 +516,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/WorkbenchHarnessController.ts",
     "daemon/server/thread-identity-workbench-mapping.ts",
     "daemon/server/WorkbenchThreadActionController.ts",
+    "daemon/server/WorkbenchThreadLaunchController.ts",
+    "shared/workbench/thread/thread-launch.ts",
     "daemon/server/WorkbenchTranscriptReader.ts",
     "daemon/server/WorkbenchTranscriptReconciliationController.ts",
     "daemon/server/WorkbenchProjectCatalogController.ts",
+    "daemon/server/lib/workbench/project/project-location-discovery.ts",
+    "shared/workbench/project/project-location.ts",
     "daemon/server/WorkbenchProjectSnapshotController.ts",
     "daemon/server/WorkbenchSearchController.ts",
     "daemon/server/stats/**",

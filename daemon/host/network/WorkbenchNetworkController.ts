@@ -14,6 +14,7 @@ import { areDeeplyEqual } from "../../../shared/workbench/deep-equality.ts";
 import WorkbenchNetworkProcess from "../../../shared/network/WorkbenchNetworkProcess.ts";
 import type WorkbenchNetworkRepository from "./WorkbenchNetworkRepository.ts";
 import type { WorkbenchDaemonDiscovery } from "../../../shared/http/workbench-daemon-discovery.ts";
+import type { WorkbenchDaemonBrowserEndpoints } from "../../../shared/http/workbench-daemon-discovery.ts";
 
 export default class WorkbenchNetworkController {
   private configuration!: WorkbenchNetworkConfiguration;
@@ -66,6 +67,15 @@ export default class WorkbenchNetworkController {
       localUrl: target.appOrigin ? new URL("/launch", target.appOrigin).href : null,
       change: null,
     });
+  }
+
+  browserEndpoints(): WorkbenchDaemonBrowserEndpoints | null {
+    const httpOrigin = this.runtime.daemonServe?.phase === "ready" ? this.runtime.daemonServe.url : null;
+    if (!httpOrigin) return null;
+    const secureOrigin = this.configuration.privateAccess?.enabled
+      && this.runtime.privateAccess.phase === "ready"
+      ? this.runtime.privateAccess.daemonUrl ?? null : null;
+    return { httpOrigin, secureOrigin };
   }
 
   subscribe(listener: () => void) {

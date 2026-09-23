@@ -30,6 +30,7 @@ import WorkbenchStatsImportRepository from "./stats/WorkbenchStatsImportReposito
 import WorkbenchStatsAttributionRepository from "./stats/WorkbenchStatsAttributionRepository.ts";
 import GitArcProposalDiffRepository from "./git/GitArcProposalDiffRepository.ts";
 import WorkbenchProjectRepository from "./project/WorkbenchProjectRepository.ts";
+import WorkbenchThreadLaunchRepository from "./thread-launch/WorkbenchThreadLaunchRepository.ts";
 import WorkbenchProjectIdentityMigration from "./project/WorkbenchProjectIdentityMigration.ts";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import WorkbenchExternalStorageMigration from "./WorkbenchExternalStorageMigration.ts";
@@ -42,6 +43,7 @@ if (!parentPort) throw new Error("Workbench database worker requires a parent po
 
 let database: Database.Database | null = null;
 let projectRepository: WorkbenchProjectRepository | null = null;
+let threadLaunchRepository: WorkbenchThreadLaunchRepository | null = null;
 let transcriptRepository: WorkbenchTranscriptRepository | null = null;
 let threadIdentityRepository: WorkbenchThreadIdentityRepository | null = null;
 let transcriptIdentityRepository: WorkbenchTranscriptIdentityRepository | null = null;
@@ -58,6 +60,8 @@ function initializeRepositories() {
   if (!database) throw new Error("Workbench database is not initialized");
   proveReadWrite();
   projectRepository = new WorkbenchProjectRepository(database);
+  threadLaunchRepository = new WorkbenchThreadLaunchRepository(database);
+  threadLaunchRepository.recoverInterrupted();
   threadIdentityRepository = new WorkbenchThreadIdentityRepository(database);
   transcriptIdentityRepository = new WorkbenchTranscriptIdentityRepository(database);
   transcriptRepository = new WorkbenchTranscriptRepository(database, threadIdentityRepository);
@@ -102,6 +106,7 @@ function post(response: WorkbenchDatabaseResponse) {
 
 function closeDatabase() {
   projectRepository = null;
+  threadLaunchRepository = null;
   threadIdentityRepository = null;
   transcriptIdentityRepository = null;
   transcriptRepository = null;
@@ -158,6 +163,20 @@ function executeTransaction(request: Extract<WorkbenchDatabaseRequest, { type: "
 }
 
 function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { type: "initialize" | "acknowledgeMigration" | "suspend" | "resume" }>) {
+  if (request.type === "reserveThreadLaunch" || request.type === "readThreadLaunch" || request.type === "advanceThreadLaunch") {
+    if (!threadLaunchRepository) throw new Error("Workbench thread launch repository is not initialized");
+    if (request.type === "reserveThreadLaunch") {
+      post({ id: request.id, type: "threadLaunch", launch: threadLaunchRepository.reserve(request.request, request.location) });
+    } else if (request.type === "readThreadLaunch") {
+      const retained = threadLaunchRepository.read(request.launchId);
+      post({ id: request.id, type: "threadLaunch", launch: retained?.state ?? null,
+        request: retained?.request, location: retained?.location });
+    } else {
+      post({ id: request.id, type: "threadLaunch",
+        launch: threadLaunchRepository.advance(request.launchId, request.from, request.next) });
+    }
+    return;
+  }
   switch (request.type) {
     case "reconcileProjectCatalog":
     case "readProjectAliases":

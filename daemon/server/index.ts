@@ -595,12 +595,17 @@ async function startDaemon() {
   }
   const endpoint = await startBridgeServer();
   if (shuttingDown) return;
+  log("daemon", "loopback listener bound");
   featureHost = createFeatureHost(endpoint);
+  log("daemon", "feature graph loaded");
   await ensureWorkbenchPromptFiles();
   if (shuttingDown) return;
+  log("daemon", "prompt library ready");
   await featureHost.start();
   if (shuttingDown) return;
+  log("daemon", "feature graph started");
   await daemonListener.publish();
+  log("daemon", "runtime endpoint published");
   if (process.connected && process.send) {
     await new Promise<void>((resolve, reject) => {
       process.send!({ type: "workbench-daemon-ready", endpoint }, error => error ? reject(error) : resolve());

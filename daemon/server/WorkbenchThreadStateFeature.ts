@@ -30,6 +30,7 @@ import { ThreadReferenceSchema, TurnReferenceSchema, type ProjectId, type Workbe
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 import type WorkbenchAgentContextController from "./WorkbenchAgentContextController";
+import { isPathWithinRoot } from "./lib/project";
 
 interface ProjectRecord { id: ProjectId; rootPath: string }
 interface ProjectResolution { cwd: string; project: ProjectRecord }
@@ -376,14 +377,17 @@ export default class WorkbenchThreadStateFeature {
 
   private async providerProfileTarget(harness: WorkbenchHarness, thread: ThreadPayload) {
     if (!thread.id || !thread.cwd) throw new Error("Profile preparation requires a provider thread and cwd.");
-    const resolved = await this.context.resolveProjectFromCwd(thread.cwd, { endpointName: "Thread profile preparation" });
     const canonical = this.context.identities.threads.knownThread(ThreadReferenceSchema.parse(thread.id));
+    if (!isPathWithinRoot(thread.cwd, canonical.projectRoot)) {
+      throw new Error("Provider thread cwd is outside its recorded project location.");
+    }
+    await this.context.resolveProjectById(canonical.projectId);
     const entry = normalizeProviderSidebarEntry(harness, thread, this.context.identities.threads);
     if (!entry || entry.entryKind === "draft") throw new Error("The managed thread could not be normalized.");
-    await this.controller.ensureProviderEntry(resolved.project.id, entry);
+    await this.controller.ensureProviderEntry(canonical.projectId, entry);
     return {
-      cwd: resolved.cwd, projectId: resolved.project.id,
-      slot: { kind: "thread" as const, harness, projectId: resolved.project.id, threadId: canonical.threadId },
+      cwd: thread.cwd, projectId: canonical.projectId,
+      slot: { kind: "thread" as const, harness, projectId: canonical.projectId, threadId: canonical.threadId },
     };
   }
 
@@ -403,14 +407,22 @@ export default class WorkbenchThreadStateFeature {
 
   async captureCreationProfile(harness: WorkbenchHarness | undefined, cwd: string, source: WorkbenchThreadCreationProfile) {
     const resolved = await this.context.resolveProjectFromCwd(cwd, { endpointName: "Thread profile creation" });
+    return await this.captureCreationProfileForProject(harness, resolved.project, source);
+  }
+
+  async captureCreationProfileForProject(
+    harness: WorkbenchHarness | undefined,
+    project: ProjectRecord,
+    source: WorkbenchThreadCreationProfile,
+  ) {
     if (source.kind === "target") source = { ...source, slot: { ...source.slot, projectId: this.canonicalProjectId(source.slot.projectId) } };
-    if (source.kind === "target" && source.slot.projectId !== resolved.project.id) {
+    if (source.kind === "target" && source.slot.projectId !== project.id) {
       throw new Error("The creation profile target belongs to another project.");
     }
     const selection = source.kind === "snapshot" ? source.selection
       : (await this.controller.prepareComposerProfileTarget(source.slot)).selection;
     if (harness !== undefined && selection.settings.harness !== harness) throw new Error("The creation profile harness does not match the thread.");
-    return { selection, cwd: resolved.cwd, projectId: resolved.project.id };
+    return { selection, cwd: project.rootPath, projectId: project.id };
   }
 
   private canonicalProjectId(projectId: ProjectId) {

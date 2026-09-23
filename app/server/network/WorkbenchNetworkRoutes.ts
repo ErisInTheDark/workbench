@@ -28,13 +28,22 @@ export default class WorkbenchNetworkRoutes {
       const current = this.controller.ingress(request.headers);
       const { localPort, change, daemon, discovery: _discovery, ...legacy } = this.controller.snapshot();
       const version = url.searchParams.get("capabilities");
+      const discovery = current ? this.controller.discovery(current.deviceNodeId) : { refreshing: false, peers: [] };
+      const visibleDiscovery = version === "5" ? discovery : {
+        ...discovery,
+        peers: discovery.peers.map(peer => {
+          if (peer.phase !== "verified") return peer;
+          const { endpoints: _endpoints, ...legacyPeer } = peer;
+          return legacyPeer;
+        }),
+      };
       return { ...legacy,
-        ...(version === "3" || version === "4" ? { localPort, change } : {}),
-        ...(version === "4" ? { daemon, discovery: current ? this.controller.discovery(current.deviceNodeId) : { refreshing: false, peers: [] } } : {}),
+        ...(["3", "4", "5"].includes(version ?? "") ? { localPort, change } : {}),
+        ...(["4", "5"].includes(version ?? "") ? { daemon, discovery: visibleDiscovery } : {}),
         capabilities: {
           manageApp: current?.manageApp ?? false, manageNetwork: current?.manageNetwork ?? false,
-          ...(["2", "3", "4"].includes(version ?? "") ? { trustHost: current?.trustHost ?? false } : {}),
-          ...(version === "3" || version === "4" ? { localConnection: current?.deviceNodeId === null, settingsApply: true } : {}),
+          ...(["2", "3", "4", "5"].includes(version ?? "") ? { trustHost: current?.trustHost ?? false } : {}),
+          ...(["3", "4", "5"].includes(version ?? "") ? { localConnection: current?.deviceNodeId === null, settingsApply: true } : {}),
         } };
     };
     if (request.method === "GET" && !progress) {

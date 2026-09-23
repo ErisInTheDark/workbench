@@ -20,6 +20,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       outputDirectoryPath: context.outputDirectoryPath,
       readAppliedReactDevelopmentMode: context.readAppliedReactDevelopmentMode,
       state: build.get("state"),
+      presentation: build.get("presentation"),
     });
     return {
       dispose: () => router.close(),
@@ -30,7 +31,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   description: "Reload app routes, static SPA serving, and browser diagnostic admission.",
   lifecycle: "atomic",
   provides: ["http"],
-  requires: ["logger", "state", "network"],
+  requires: ["logger", "state", "presentation", "network"],
   safeAll: false,
   scope: "client:http",
   sources: [
@@ -39,6 +40,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
     "app/server/runtime/WorkbenchAppPortRoutes.ts",
     "app/server/runtime/WorkbenchAppSettingsRoutes.ts",
     "app/server/state/workbench-app-state-routes.ts",
+    "app/server/state/workbench-presentation-routes.ts",
     "shared/http/workbench-app-port.ts",
     "shared/http/workbench-app-settings.ts",
     "shared/http/StaticHttpRequestController.ts",

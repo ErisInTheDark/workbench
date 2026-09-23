@@ -43,8 +43,51 @@ test("a changed remote at the same checkout retains its durable owner across reo
   } finally { database.close(); }
 });
 
-test("incomplete or conflicting identity evidence never creates a replacement owner at a retained checkout", context => {
-  context.mock.method(console, "warn", () => undefined);
+test("two concrete checkouts sharing one remote retain separate project owners", () => {
+  const { database, repository } = setup();
+  try {
+    const first = project("/first");
+    const second = project("/second");
+    const catalog = repository.reconcile(discovery([first, second])).catalog;
+    assert.equal(catalog.length, 2);
+    assert.notEqual(catalog[0]!.project.id, catalog[1]!.project.id);
+    const reopened = new WorkbenchProjectRepository(database).reconcile(discovery([second, first])).catalog;
+    assert.equal(reopened.find(item => item.project.rootPath === "/first")?.project.id,
+      catalog.find(item => item.project.rootPath === "/first")?.project.id);
+  } finally { database.close(); }
+});
+
+test("a reused discovery address cannot hide a new checkout or steal its retained alias", () => {
+  const { database, repository } = setup();
+  try {
+    const legacy = project("/legacy");
+    const newcomer = project("/isolated");
+    const oldOwner = repository.reconcile(discovery([legacy], {
+      aliases: [{ alias: "fixture", identityKey: legacy.identityKey }],
+    })).catalog[0]!.project.id;
+    const result = repository.reconcile(discovery([newcomer], {
+      aliases: [{ alias: "fixture", identityKey: newcomer.identityKey }],
+    }));
+    assert.equal(result.catalog.length, 1);
+    assert.notEqual(result.catalog[0]?.project.id, oldOwner);
+    assert.equal(repository.requireStoredReference("fixture"), oldOwner);
+    assert.deepEqual(result.excludedRootPaths, []);
+  } finally { database.close(); }
+});
+
+test("an unaliased remote cannot choose an arbitrary owner when several locations match", () => {
+  const { database, repository } = setup();
+  try {
+    const identity = "remote://example.test/owner/repo";
+    database.prepare("INSERT INTO workbench_projects(id, identity_key) VALUES (?, ?)")
+      .run("00000000-0000-4000-8000-000000000001", identity);
+    database.prepare("INSERT INTO workbench_projects(id, identity_key) VALUES (?, ?)")
+      .run("00000000-0000-4000-8000-000000000002", identity);
+    assert.throws(() => repository.admitStoredReference(identity), /ambiguous/u);
+  } finally { database.close(); }
+});
+
+test("remote changes at one checkout retain its owner despite incomplete scans or other locations", () => {
   for (const evidence of ["incomplete", "old-present", "reserved"] as const) {
     const { database, repository } = setup();
     try {
@@ -59,33 +102,30 @@ test("incomplete or conflicting identity evidence never creates a replacement ow
         complete: evidence !== "incomplete",
         observedKeys: evidence === "old-present" ? [original.identityKey, changed.identityKey] : [changed.identityKey],
       });
-      const before = database.prepare("SELECT id, identity_key FROM workbench_projects ORDER BY id").all();
       const result = repository.reconcile(snapshot);
-      assert.deepEqual(result.catalog, []);
-      assert.ok(result.excludedRootPaths.includes(original.rootPath));
-      assert.deepEqual(database.prepare("SELECT id, identity_key FROM workbench_projects ORDER BY id").all(), before);
+      assert.equal(result.catalog.find(item => item.project.rootPath === original.rootPath)?.project.id, owner);
+      assert.ok(!result.excludedRootPaths.includes(original.rootPath));
       assert.equal(repository.requireStoredReference(original.identityKey), owner);
     } finally { database.close(); }
   }
 });
 
-test("changing a retained checkout to another owner's current key cannot transfer its location", context => {
-  context.mock.method(console, "warn", () => undefined);
+test("changing a checkout to another location's remote cannot transfer its owner", () => {
   const { database, repository } = setup();
   try {
     const original = project();
     const other = project("/independent", "remote://example.test/independent/repo");
-    repository.reconcile(discovery([original, other]));
-    const before = database.prepare("SELECT * FROM workbench_project_roots ORDER BY project_id").all();
+    const initial = repository.reconcile(discovery([original, other])).catalog;
+    const firstId = initial.find(item => item.project.rootPath === "/repo")!.project.id;
+    const otherId = initial.find(item => item.project.rootPath === "/independent")!.project.id;
     const result = repository.reconcile(discovery([project("/repo", other.identityKey)]));
-    assert.deepEqual(result.catalog, []);
-    assert.deepEqual(database.prepare("SELECT * FROM workbench_project_roots ORDER BY project_id").all(), before);
-    assert.ok(result.excludedRootPaths.includes("/repo"));
+    assert.equal(result.catalog[0]?.project.id, firstId);
+    assert.notEqual(result.catalog[0]?.project.id, otherId);
+    assert.equal(repository.requireStoredReference(otherId), otherId);
   } finally { database.close(); }
 });
 
-test("discovery order cannot steal an owner whose old key is still present at another location", context => {
-  context.mock.method(console, "warn", () => undefined);
+test("discovery order cannot move an owner to another checkout sharing its old remote", () => {
   for (const reverse of [false, true]) {
     const { database, repository } = setup();
     try {
@@ -93,10 +133,9 @@ test("discovery order cannot steal an owner whose old key is still present at an
       const owner = repository.reconcile(discovery([original])).catalog[0]!.project.id;
       const candidates = [project("/elsewhere"), project("/repo", "remote://example.test/new/repo")];
       const result = repository.reconcile(discovery(reverse ? candidates.reverse() : candidates));
-      assert.equal(result.catalog.length, 1);
-      assert.equal(result.catalog[0]!.project.id, owner);
-      assert.equal(result.catalog[0]!.project.rootPath, "/elsewhere");
-      assert.ok(result.excludedRootPaths.includes("/repo"));
+      assert.equal(result.catalog.length, 2);
+      assert.equal(result.catalog.find(item => item.project.rootPath === "/repo")?.project.id, owner);
+      assert.notEqual(result.catalog.find(item => item.project.rootPath === "/elsewhere")?.project.id, owner);
     } finally { database.close(); }
   }
 });
@@ -137,20 +176,20 @@ test("positive and negative icon results survive repeated catalogue reads and re
   } finally { database.close(); }
 });
 
-test("root changes fence old icon work and older settlements cannot replace newer results", () => {
+test("a new checkout has a new owner and cannot receive an old checkout's icon result", () => {
   const { database, repository } = setup();
   try {
     const before = repository.reconcile(discovery([project()])).catalog[0]!;
     const projectId = before.project.id;
     const moved = repository.reconcile(discovery([project("/new-location")])).catalog[0]!;
     const icon = { rootId: "repo", path: "favicon.png" };
-    assert.notEqual(moved.sourceKey, before.sourceKey);
+    assert.notEqual(moved.project.id, before.project.id);
     assert.equal(repository.settleIcon({ projectId, sourceKey: before.sourceKey, checkedAt: 300, icon }), false);
-    assert.equal(repository.settleIcon({ projectId, sourceKey: moved.sourceKey, checkedAt: 200, icon }), true);
-    assert.equal(repository.settleIcon({ projectId, sourceKey: moved.sourceKey, checkedAt: 100, icon: null }), false);
+    assert.equal(repository.settleIcon({ projectId: moved.project.id, sourceKey: moved.sourceKey, checkedAt: 200, icon }), true);
+    assert.equal(repository.settleIcon({ projectId: moved.project.id, sourceKey: moved.sourceKey, checkedAt: 100, icon: null }), false);
     assert.equal(repository.reconcile(discovery([project("/new-location")])).catalog[0]?.checkedAt, 200);
     assert.throws(() => repository.settleIcon({
-      projectId, sourceKey: moved.sourceKey, checkedAt: 400, icon: { rootId: "foreign", path: "favicon.png" },
+      projectId: moved.project.id, sourceKey: moved.sourceKey, checkedAt: 400, icon: { rootId: "foreign", path: "favicon.png" },
     }), /root|FOREIGN KEY/i);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { database.close(); }
@@ -201,7 +240,9 @@ test("equivalent workspace descriptions preserve the current binding or choose a
     const fresh = setup();
     try { assert.equal(fresh.repository.reconcile(discovery([b, a])).catalog[0]!.project.workspacePath, a.workspacePath); }
     finally { fresh.database.close(); }
-    assert.throws(() => repository.reconcile(discovery([project("/a"), project("/b")])), /duplicate/i);
+    const clones = repository.reconcile(discovery([project("/a"), project("/b")])).catalog;
+    assert.equal(clones.length, 2);
+    assert.notEqual(clones[0]!.project.id, clones[1]!.project.id);
   } finally { database.close(); }
 });
 

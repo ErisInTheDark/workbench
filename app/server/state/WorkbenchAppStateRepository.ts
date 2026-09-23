@@ -31,7 +31,7 @@ import { assertSchemaReleaseManifest } from "workbench-shared/database/schema/sc
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import { WorkbenchProjectRemapSchema, type WorkbenchProjectRemap } from "workbench-shared/state/workbench-client-state";
 import type { WorkbenchProjectAlias } from "workbench-shared/types";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { composeProjectAliases } from "workbench-shared/workbench/project/project-aliases";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
@@ -152,9 +152,58 @@ export default class WorkbenchAppStateRepository {
     };
   }
 
-  readProjectAliases(): WorkbenchProjectAlias[] {
+  readDaemonRegistrations() {
+    return this.query(selectRows(appStateTables.daemonRegistrations)).map(row => ({
+      id: row.id, kind: row.kind,
+      daemonId: row.durable_daemon_id === null ? null : DaemonIdSchema.parse(row.durable_daemon_id),
+    }));
+  }
+
+  registerDaemon(daemonId: string, attachedLocal: boolean) {
+    const durableId = DaemonIdSchema.parse(daemonId);
+    const existing = this.query(selectRows(appStateTables.daemonRegistrations, {
+      where: { durable_daemon_id: durableId },
+      limit: 1,
+    }))[0];
+    if (!attachedLocal) {
+      if (existing) return existing.id;
+      const id = randomUUID();
+      this.commit(revision => [insertRow(appStateTables.daemonRegistrations, {
+        id, kind: "remote", durable_daemon_id: durableId, created_at: this.#now(), revision,
+      })]);
+      return id;
+    }
+    const local = this.query(selectRows(appStateTables.daemonRegistrations, {
+      where: { kind: "local" }, limit: 1,
+    }))[0];
+    if (!local) throw new Error("Local daemon registration is missing.");
+    if (local.durable_daemon_id === durableId) return local.id;
+    if (local.durable_daemon_id === null && existing) {
+      throw new Error("Unbound legacy local state conflicts with an existing daemon registration.");
+    }
+    if (local.durable_daemon_id === null) {
+      this.commit(revision => [updateRows(appStateTables.daemonRegistrations, {
+        durable_daemon_id: durableId, revision,
+      }, { id: local.id })]);
+      return local.id;
+    }
+    const nextId = existing?.id ?? randomUUID();
+    this.commit(revision => [
+      updateRows(appStateTables.daemonRegistrations, { kind: "remote", revision }, { id: local.id }),
+      existing
+        ? updateRows(appStateTables.daemonRegistrations, { kind: "local", revision }, { id: existing.id })
+        : insertRow(appStateTables.daemonRegistrations, {
+          id: nextId, kind: "local", durable_daemon_id: durableId,
+          created_at: this.#now(), revision,
+        }),
+    ]);
+    this.#daemonRegistrationId = nextId;
+    return nextId;
+  }
+
+  readProjectAliases(daemonRegistrationId = this.daemonRegistrationId): WorkbenchProjectAlias[] {
     return this.query(selectRows(appStateTables.projectAliases, {
-      where: { daemon_registration_id: this.daemonRegistrationId },
+      where: { daemon_registration_id: daemonRegistrationId },
     })).map(row => ({ alias: row.alias, projectId: ProjectIdSchema.parse(row.project_id) }));
   }
 
@@ -169,8 +218,10 @@ export default class WorkbenchAppStateRepository {
     build: (aliases: readonly WorkbenchProjectAlias[], revision: number) => readonly WorkbenchDatabaseMutation[],
   ) {
     const request = WorkbenchProjectRemapSchema.parse(input);
-    if (request.daemonRegistrationId !== this.daemonRegistrationId) throw new Error("Project remap belongs to another daemon registration.");
-    const existing = this.readProjectAliases();
+    if (!this.query(selectRows(appStateTables.daemonRegistrations, {
+      where: { id: request.daemonRegistrationId }, limit: 1,
+    })).length) throw new Error("Project remap belongs to an unknown daemon registration.");
+    const existing = this.readProjectAliases(request.daemonRegistrationId);
     const { changes: aliases } = composeProjectAliases(existing, request.aliases);
     if (!aliases.length) return this.currentVersion().revision;
     return this.commit(revision => {
@@ -244,6 +295,7 @@ export default class WorkbenchAppStateRepository {
         created_at: this.#now(),
         id,
         kind: "local",
+        durable_daemon_id: null,
         revision,
       }),
     ]);

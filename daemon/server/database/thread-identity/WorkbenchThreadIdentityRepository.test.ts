@@ -9,6 +9,7 @@ import Database from "better-sqlite3";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository.ts";
 import WorkbenchThreadIdentityRepository from "./WorkbenchThreadIdentityRepository.ts";
+import WorkbenchThreadLaunchRepository from "../thread-launch/WorkbenchThreadLaunchRepository.ts";
 import type { WorkbenchThreadIdentityMetadata, WorkbenchTurnIdentityMetadata } from "./workbench-thread-identity-types.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
@@ -57,6 +58,27 @@ function setup() {
   installWorkbenchDatabaseSchema(database);
   return { database, identity: new WorkbenchThreadIdentityRepository(database) };
 }
+
+test("native identity admission and launch creation commit as one database fact", () => {
+  const { database, identity } = setup();
+  const launch = new WorkbenchThreadLaunchRepository(database);
+  const launchId = "84f3661a-1ba2-4191-8118-851255a5f1de";
+  try {
+    database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(testProjectIds.project);
+    launch.reserve({
+      launchId, projectId: testProjectIds.project,
+      profile: { kind: "custom", settings: { agentPath: null, agentSource: null,
+        harness: "codex", model: "test", reasoningEffort: null, serviceTier: null } },
+      firstInput: [{ type: "text", text: "hello", text_elements: [] }], clientMessageId: "message",
+    }, { rootPath: "C:/project", roots: ["C:/project"] });
+    launch.advance(launchId, "prepared", { phase: "creating", launchId });
+    const admitted = identity.observe({ ...metadata(), launchId });
+    assert.deepEqual(launch.read(launchId)?.state, {
+      phase: "created", launchId, threadId: admitted.threadId,
+    });
+    assert.equal(identity.observe({ ...metadata(), launchId }).threadId, admitted.threadId);
+  } finally { database.close(); }
+});
 
 test("observed and retained thread admission use canonical project aliases and create project parents", () => {
   const { database, identity } = setup();

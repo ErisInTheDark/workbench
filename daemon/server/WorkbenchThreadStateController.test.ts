@@ -2247,6 +2247,90 @@ test("draft saves update defaults atomically without defaults rewriting other dr
   assert.equal((await reopened.readComposerProfileTarget(secondSlot))?.settings.model, "second");
 });
 
+test("legacy presentation export pages drafts and reads inline attachments without copying full data URLs", async context => {
+  const persistence = new MemoryThreadStatePersistence();
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+    reconcileProject: async () => [], storageRoot: "presentation-export", threadStateStore: persistence,
+  });
+  context.after(() => controller.dispose());
+  const projectId = fixtureProjectIds.project;
+  const firstId = fixtureIdentitySchemas.DraftIdSchema.parse("11111111-1111-4111-8111-111111111111");
+  const secondId = fixtureIdentitySchemas.DraftIdSchema.parse("22222222-2222-4222-8222-222222222222");
+  const image = Buffer.from("legacy-image");
+  const draft = {
+    projectId, profileId: null, composerSettings: EMPTY_CODEX_SETTINGS,
+    prompt: "preserve", attachments: [{ id: "image-1", url: `data:image/png;base64,${image.toString("base64")}` }],
+    clientUpdatedAt: 1, createdAt: 1, updatedAt: 1,
+  };
+  for (const draftId of [firstId, secondId]) {
+    const response = await controller.handleRequest("observer", {
+      method: "workbench/thread-state/draft/upsert", projectId, draft: { ...draft, draftId },
+    });
+    assert.equal(response.error, undefined);
+  }
+  const first = await controller.exportPresentationPage({ projectId, limit: 1 });
+  assert.equal(first.drafts.length, 1);
+  assert.equal(first.drafts[0]?.attachments[0]?.kind, "inline");
+  const chunk = await controller.readPresentationAttachmentChunk({
+    projectId, draftId: firstId, attachmentId: "image-1", offset: 0,
+  });
+  assert.deepEqual(Buffer.from(chunk.bytes, "base64"), image);
+  assert.equal(chunk.nextOffset, null);
+  const second = await controller.exportPresentationPage({ projectId, cursor: first.nextCursor, limit: 1 });
+  assert.equal(second.drafts[0]?.draftId, secondId);
+  assert.equal(second.nextCursor, null);
+  const layout = await controller.exportPresentationLayoutChunk({
+    scope: "project", projectId, sourceRevision: null, offset: 0,
+  });
+  assert.equal(JSON.parse(Buffer.from(layout.bytes, "base64").toString("utf8")).displayOrder !== undefined, true);
+  assert.equal(layout.nextOffset, null);
+  await controller.handleRequest("observer", {
+    method: "workbench/thread-state/draft/upsert", projectId,
+    draft: { ...draft, draftId: firstId, clientUpdatedAt: 2, prompt: "changed", updatedAt: 2 },
+  });
+  await assert.rejects(controller.exportPresentationPage({ projectId, cursor: first.nextCursor, limit: 1 }),
+    /source changed/u);
+  await assert.rejects(controller.exportPresentationLayoutChunk({
+    scope: "project", projectId, sourceRevision: layout.sourceRevision, offset: 0,
+  }), /source changed/u);
+});
+
+test("legacy layout export keeps each socket response bounded across a large retained order", async context => {
+  const persistence = new MemoryThreadStatePersistence();
+  const projectId = fixtureProjectIds.project;
+  persistence.projects.set(projectId, {
+    version: 4, records: [], drafts: [],
+    displayOrder: { pinned: Object.fromEntries(Array.from({ length: 2_500 }, (_, index) =>
+      [`codex:thread-${index}`, { above: [], below: [] }])) },
+  });
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+    reconcileProject: async () => [], storageRoot: "presentation-large-layout", threadStateStore: persistence,
+  });
+  context.after(() => controller.dispose());
+  const chunks: Buffer[] = [];
+  let revision: number | null = null;
+  let offset = 0;
+  for (;;) {
+    const result = await controller.exportPresentationLayoutChunk({
+      scope: "project", projectId, sourceRevision: revision, offset,
+    });
+    revision = result.sourceRevision;
+    const bytes = Buffer.from(result.bytes, "base64");
+    assert.ok(bytes.length <= 64 * 1024);
+    chunks.push(bytes);
+    if (result.nextOffset === null) {
+      assert.equal(Buffer.concat(chunks).length, result.totalBytes);
+      break;
+    }
+    offset = result.nextOffset;
+  }
+  assert.ok(chunks.length > 1);
+  const decoded = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  assert.equal(Object.keys(decoded.displayOrder.pinned).length, 2_500);
+});
+
 test("draft targets are provider-agnostic and adopt any addressed provider", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-draft-provider-"));
   const projectId = fixtureProjectIds.project;

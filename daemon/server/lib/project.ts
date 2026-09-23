@@ -21,8 +21,9 @@ import path from "node:path";
 import type { ProjectId } from "workbench-shared/workbench/identity";
 import type { WorkbenchProjectDiscovery } from "../database/project/workbench-project-persistence";
 
-import { getGitChanges, readGitProjectMetadata, resolveGitDirectory } from "./git";
+import { getGitChanges, isLinkedGitWorktree, readGitProjectMetadata, readRegisteredGitWorktrees, resolveGitDirectory } from "./git";
 import { localProjectKey, remoteProjectKey, workspaceProjectKey } from "./workbench/project/project-identity";
+import { projectLocationKey } from "./workbench/project/project-location-discovery";
 import { ProjectIdentityKeySchema, type ProjectIdentityKey } from "workbench-shared/workbench/identity";
 import type { ProjectSnapshot, TreeNode, WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "workbench-shared/types";
 import { createGitignoreMatcher } from "./workbench/gitignore-matcher";
@@ -39,7 +40,6 @@ export const appRoot = process.cwd();
 export const projectRoot = path.resolve(appRoot, "..");
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
 const discoveryIgnoredNames = new Set([...ignoredNames, "dist", "build", "coverage"]);
-const reportedDuplicateProjectOrigins = new Set<ProjectIdentityKey>();
 const README_FILE_NAME = "README.md";
 const WORKSPACE_FILE_EXTENSION = ".code-workspace";
 
@@ -177,12 +177,7 @@ export function isPathWithinRoot(candidatePath: string, rootPath = projectRoot) 
 }
 
 async function hasGitMarker(rootDir: string) {
-  try {
-    const stats = await fs.lstat(path.join(rootDir, ".git"));
-    return stats.isDirectory() || stats.isFile();
-  } catch {
-    return false;
-  }
+  return await resolveGitDirectory(rootDir) !== null;
 }
 
 function isLocalAbsolutePath(filePath: string) {
@@ -640,6 +635,26 @@ async function discoverProjectOptions(discoveryFolders: readonly string[], signa
     discoveredProjects.push(...filterIndirectGitProjectDuplicates(projects, canonicalFolder));
     addresses.push(...projects);
   }
+  const registeredRoots = new Set<string>();
+  for (const candidate of [...discoveredProjects]) {
+    for (const root of candidate.roots) {
+      const rootPath = path.resolve(root.rootPath);
+      const key = normalizePathForComparison(rootPath);
+      if (registeredRoots.has(key) || !await resolveGitDirectory(rootPath)) continue;
+      registeredRoots.add(key);
+      try {
+        for (const registered of await readRegisteredGitWorktrees(rootPath, signal)) {
+          if (normalizePathForComparison(registered) === key) continue;
+          if (!await isDirectory(registered) || !await resolveGitDirectory(registered)) continue;
+          discoveredProjects.push(await createProjectOption(registered, discoveryFolders[0] ?? registered, ""));
+        }
+      } catch (error) {
+        signal?.throwIfAborted();
+        complete = false;
+        console.warn(`[projects] registered worktrees unavailable for ${rootPath} (${error instanceof Error ? error.name : "error"})`);
+      }
+    }
+  }
   const normalizedLibraryRoot = normalizePathForComparison(workbenchLibraryRoot);
   const seenLocations = new Set<string>();
   const uniqueProjects = discoveredProjects
@@ -671,20 +686,15 @@ export async function discoverProjectIdentities(discoveryFolders: readonly strin
   const roots = new Map(candidates.filter(project => project.kind !== "workbench-library")
     .flatMap(project => project.roots.map(root => [normalizePathForComparison(root.rootPath), root.rootPath] as const)));
   const classifications = new Map<string, { identityKey: ProjectIdentityKey; excluded: boolean }>();
-  const origins = new Map<ProjectIdentityKey, string[]>();
   const remaining = roots.entries();
   await Promise.all(Array.from({ length: Math.min(8, roots.size) }, async () => {
     for (const [key, rootPath] of remaining) {
       signal?.throwIfAborted();
       try {
         const metadata = await readGitProjectMetadata(rootPath, signal);
-        const identityKey = metadata?.origin ? remoteProjectKey(metadata.origin) : localProjectKey(rootPath);
-        classifications.set(key, { identityKey, excluded: metadata?.linkedWorktree ?? false });
-        if (metadata?.origin && !metadata.linkedWorktree) {
-          const locations = origins.get(identityKey) ?? [];
-          locations.push(key);
-          origins.set(identityKey, locations);
-        }
+        const identityKey = metadata?.origin ? remoteProjectKey(metadata.origin)
+          : localProjectKey(metadata?.commonGitDirectory ?? rootPath);
+        classifications.set(key, { identityKey, excluded: false });
       } catch (error) {
         signal?.throwIfAborted();
         complete = false;
@@ -693,15 +703,6 @@ export async function discoverProjectIdentities(discoveryFolders: readonly strin
       }
     }
   }));
-  for (const [projectId, locations] of origins) {
-    if (locations.length < 2) continue;
-    for (const key of locations) classifications.get(key)!.excluded = true;
-    if (reportedDuplicateProjectOrigins.has(projectId)) continue;
-    reportedDuplicateProjectOrigins.add(projectId);
-    const paths = locations.map(key => normalizeRelativePath(roots.get(key)!)
-      .replace(/[\r\n\t]/gu, " ").slice(0, 300) || ".").sort();
-    console.warn(`[projects] skipped checkouts sharing one origin: ${paths.slice(0, 10).join(", ")}${paths.length > 10 ? ` (+${paths.length - 10} more)` : ""}`);
-  }
   const data: WorkbenchProjectDiscovery["data"] = [];
   const aliases: WorkbenchProjectDiscovery["aliases"] = [];
   const candidateIdentities = new Map<WorkbenchProjectOption, ProjectIdentityKey>();
@@ -722,7 +723,7 @@ export async function discoverProjectIdentities(discoveryFolders: readonly strin
       : members[0]!.identityKey;
     observedKeys.add(identityKey);
     if (excluded) continue;
-    if (candidate.id !== String(identityKey)) aliases.push({ alias: candidate.id, identityKey });
+    if (candidate.id !== String(identityKey)) aliases.push({ alias: candidate.id, identityKey, locationKey: projectLocationKey(candidate) });
     candidateIdentities.set(candidate, identityKey);
     const { id: _address, ...metadata } = candidate;
     data.push({ ...metadata, identityKey, roots: candidate.roots.map((root, index) => ({ ...root, identityKey: members[index]!.identityKey })) });
@@ -733,7 +734,7 @@ export async function discoverProjectIdentities(discoveryFolders: readonly strin
       && normalizePathForComparison(candidate.rootPath) === normalizePathForComparison(address.rootPath));
     if (!retained) continue;
     const identityKey = retained.kind === "workbench-library" ? ProjectIdentityKeySchema.parse("workbench-library") : candidateIdentities.get(retained);
-    if (identityKey && address.id !== String(identityKey)) aliases.push({ alias: address.id, identityKey });
+    if (identityKey && address.id !== String(identityKey)) aliases.push({ alias: address.id, identityKey, locationKey: projectLocationKey(retained) });
   }
   return {
     data,
@@ -770,6 +771,15 @@ export async function resolveProjectRootFromProjects(
   return await resolveDiscoveredProject(project);
 }
 
+async function verifyRegisteredWorktree(rootPath: string) {
+  if (!await isLinkedGitWorktree(rootPath)) return;
+  const canonical = normalizePathForComparison(await resolveCanonicalPath(rootPath));
+  const registered = await readRegisteredGitWorktrees(rootPath);
+  if (!registered.some(candidate => normalizePathForComparison(candidate) === canonical)) {
+    throw new Error("Linked worktree is no longer registered.");
+  }
+}
+
 export async function resolveDiscoveredProject(project: WorkbenchProjectOption): Promise<ResolvedProject> {
   if (project.kind === "workbench-library") {
     await ensureWorkbenchLibrary();
@@ -804,6 +814,7 @@ export async function resolveDiscoveredProject(project: WorkbenchProjectOption):
       if (!await isDirectory(root.root)) {
         throw new Error(`Workspace root is missing a directory: ${root.name}`);
       }
+      await verifyRegisteredWorktree(root.root);
     }
 
     return {
@@ -820,6 +831,7 @@ export async function resolveDiscoveredProject(project: WorkbenchProjectOption):
   if (project.kind !== "git" || !await hasGitMarker(canonicalRoot)) {
     throw new Error("Project is missing a .git marker.");
   }
+  await verifyRegisteredWorktree(canonicalRoot);
 
   return {
     id: project.id,

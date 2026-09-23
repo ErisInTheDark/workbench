@@ -103,9 +103,10 @@ export async function resolveAgentEndpointProjectFromProjects(
     if (await isCwdWithinRoot(resolvedCwd, excludedRoot)) throw new Error(`${endpointName} cwd belongs to an excluded checkout.`);
   }
   let ancestor = await fs.realpath(resolvedCwd);
+  let linkedRoot: string | null = null;
   while (true) {
     if (await resolveGitDirectory(ancestor)) {
-      if (await isLinkedGitWorktree(ancestor)) throw new Error(`${endpointName} cwd belongs to an excluded linked worktree.`);
+      if (await isLinkedGitWorktree(ancestor)) linkedRoot = ancestor;
       break;
     }
     const parent = path.dirname(ancestor);
@@ -115,6 +116,10 @@ export async function resolveAgentEndpointProjectFromProjects(
   const projectMatch = await findProjectMatchForCwd(projects, resolvedCwd);
   if (!projectMatch) {
     throw new Error(`${endpointName} cwd must be inside a discovered Workbench project.`);
+  }
+  if (linkedRoot && !projectMatch.project.roots.some(root =>
+    normalizeComparablePath(root.rootPath) === normalizeComparablePath(linkedRoot))) {
+    throw new Error(`${endpointName} cwd belongs to an unregistered project location.`);
   }
 
   const project = await resolveDiscoveredProject(projectMatch.project);

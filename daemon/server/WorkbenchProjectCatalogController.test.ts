@@ -57,6 +57,9 @@ test("catalogue admission and reopening publish one owner across remote changes"
       try {
         await controller.ensureLoaded();
         const snapshot = controller.getCurrentSnapshot();
+        const locations = await controller.readLocations();
+        assert.equal(locations.data[0]?.identityKey, identityKey);
+        assert.equal(locations.data[0]?.project.id, snapshot.data[0]?.id);
         owner ??= snapshot.data[0]!.id;
         assert.equal(snapshot.data[0]!.id, owner);
         assert.equal(snapshot.aliases?.find(alias => alias.alias === address)?.projectId, owner);

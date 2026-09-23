@@ -59,18 +59,18 @@ test("project overrides require a retained project owner", () => {
   } finally { database.close(); }
 });
 
-test("current identity keys are unique while historical owners may lack discovery metadata", () => {
+test("matching remote keys may belong to distinct concrete owners while historical owners lack metadata", () => {
   const database = new Database(":memory:");
   try {
     installWorkbenchDatabaseSchema(database);
     const insert = database.prepare("INSERT INTO workbench_projects(id, identity_key) VALUES (?, ?)");
     insert.run(testProjectIds.project, "remote://example.test/owner/repo");
-    assert.throws(() => insert.run(testProjectIds.other, "remote://example.test/owner/repo"), /UNIQUE/);
-    assert.throws(() => insert.run(testProjectIds.other, "not-an-identity"), /CHECK/);
-    insert.run(testProjectIds.other, null);
+    insert.run(testProjectIds.other, "remote://example.test/owner/repo");
+    assert.throws(() => insert.run(testProjectIds.foreign, "not-an-identity"), /CHECK/);
+    insert.run(testProjectIds.foreign, null);
     assert.throws(() => database.prepare(`UPDATE workbench_projects SET kind = 'git', name = 'repo',
-      relative_path = 'repo', icon_source_key = 'generation' WHERE id = ?`).run(testProjectIds.other), /CHECK/);
-    assert.equal(database.prepare("SELECT count(*) FROM workbench_projects").pluck().get(), 2);
+      relative_path = 'repo', icon_source_key = 'generation' WHERE id = ?`).run(testProjectIds.foreign), /CHECK/);
+    assert.equal(database.prepare("SELECT count(*) FROM workbench_projects").pluck().get(), 3);
   } finally { database.close(); }
 });
 

@@ -53,6 +53,7 @@ import type {
   WorkbenchSearchRequest,
   WorkbenchSearchResponse,
 } from "workbench-shared/workbench/search/workbench-search";
+import type { WorkbenchThreadLaunchLocation, WorkbenchThreadLaunchRequest, WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
 import type { WorkbenchRateLimitObservation } from "./stats/WorkbenchStatsRepository.ts";
 import type { TranscriptQuery, TranscriptQueryPage } from "./transcript/transcript-query-contract";
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation.ts";
@@ -93,6 +94,9 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "readProjectAliases" }
   | { type: "resolveProjectIdentity"; projectId: string }
   | { type: "settleProjectIcon"; settlement: WorkbenchProjectIconSettlement }
+  | { type: "reserveThreadLaunch"; request: WorkbenchThreadLaunchRequest; location: WorkbenchThreadLaunchLocation }
+  | { type: "readThreadLaunch"; launchId: string }
+  | { type: "advanceThreadLaunch"; launchId: string; from: WorkbenchThreadLaunchState["phase"]; next: WorkbenchThreadLaunchState }
   | { type: "acknowledgeMigration" }
   | { type: "suspend" }
   | { type: "resume"; restoreBackupPath?: string }
@@ -166,6 +170,8 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "projectAliases"; aliases: WorkbenchProjectAlias[] }
   | { id: number; type: "projectIdentity"; projectId: ProjectId }
   | { id: number; type: "projectIconSettlement"; accepted: boolean }
+  | { id: number; type: "threadLaunch"; launch: WorkbenchThreadLaunchState | null;
+      request?: WorkbenchThreadLaunchRequest; location?: WorkbenchThreadLaunchLocation }
   | { id: number; type: "migrationCheckpoint"; backupPath: string }
   | { id: number; type: "suspended" }
   | { id: number; type: "inventory"; inventory: WorkbenchDatabaseInventory }

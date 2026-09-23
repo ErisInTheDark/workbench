@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -28,12 +29,23 @@ type daemonIdentity struct {
 	WakeEnabled bool `json:"wakeEnabled"`
 }
 
+type daemonBrowserEndpoints struct {
+	HTTPOrigin string `json:"httpOrigin"`
+	SecureOrigin *string `json:"secureOrigin"`
+}
+
+type daemonDescriptor struct {
+	Identity daemonIdentity `json:"identity"`
+	Endpoints *daemonBrowserEndpoints `json:"endpoints"`
+}
+
 type discoveredDaemon struct {
 	Kind string `json:"phase"`
 	PeerID string `json:"peerId"`
 	Hostname string `json:"hostname"`
 	Identity *daemonIdentity `json:"identity,omitempty"`
 	Origin string `json:"origin,omitempty"`
+	Endpoints *daemonBrowserEndpoints `json:"endpoints,omitempty"`
 	Message string `json:"message,omitempty"`
 }
 
@@ -57,7 +69,7 @@ type daemonDiscovery struct {
 	closed bool
 	publish func(daemonDiscoverySnapshot)
 	peers func(context.Context) ([]daemonDiscoveryPeer, error)
-	probe func(context.Context, daemonDiscoveryPeer) (daemonIdentity, string, error)
+	probe func(context.Context, daemonDiscoveryPeer) (daemonDescriptor, string, error)
 	warn func(error)
 }
 
@@ -137,14 +149,14 @@ func (owner *daemonDiscovery) run(ctx context.Context) {
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
-				identity, origin, err := owner.probe(ctx, peers[index])
+				descriptor, origin, err := owner.probe(ctx, peers[index])
 				if ctx.Err() != nil { return }
 				mu.Lock()
 				item := &snapshot.Peers[index]
 				if err != nil {
 					item.Kind, item.Message = "failed", "Workbench identity could not be verified."
 				} else {
-					item.Kind, item.Identity, item.Origin = "verified", &identity, origin
+					item.Kind, item.Identity, item.Origin, item.Endpoints = "verified", &descriptor.Identity, origin, descriptor.Endpoints
 				}
 				// Every publication owns its slice; no worker mutates an emitted value.
 				copy := snapshot
@@ -193,28 +205,59 @@ func hostDiscoveryPeers(ctx context.Context) ([]daemonDiscoveryPeer, error) {
 
 var daemonUUID = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
 
-func probeDaemonIdentity(ctx context.Context, peer daemonDiscoveryPeer) (daemonIdentity, string, error) {
-	var identity daemonIdentity
-	if !tailnetAddress(peer.address) { return identity, "", errors.New("peer is not a tailnet address") }
+func probeDaemonIdentity(ctx context.Context, peer daemonDiscoveryPeer) (daemonDescriptor, string, error) {
+	var descriptor daemonDescriptor
+	if !tailnetAddress(peer.address) { return descriptor, "", errors.New("peer is not a tailnet address") }
 	origin := "http://" + net.JoinHostPort(peer.address.String(), strconv.Itoa(int(daemonTailnetPort)))
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/_workbench-service/identity", nil)
-	if err != nil { return identity, "", err }
+	if err != nil { return descriptor, "", err }
+	request.Header.Set("x-workbench-identity-version", "2")
 	transport := &http.Transport{Proxy: nil}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)
-	if err != nil { return identity, "", err }
+	if err != nil { return descriptor, "", err }
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK { return identity, "", errors.New("peer did not publish an identity") }
+	if response.StatusCode != http.StatusOK { return descriptor, "", errors.New("peer did not publish an identity") }
 	bytes, err := io.ReadAll(io.LimitReader(response.Body, 16385))
-	if err != nil || len(bytes) > 16384 { return identity, "", errors.New("peer identity exceeded its limit") }
-	if err := json.Unmarshal(bytes, &identity); err != nil { return identity, "", err }
+	if err != nil || len(bytes) > 16384 { return descriptor, "", errors.New("peer identity exceeded its limit") }
+	descriptor, err = decodeDaemonDescriptor(bytes, origin)
+	if err != nil { return daemonDescriptor{}, "", err }
+	return descriptor, origin, nil
+}
+
+func decodeDaemonDescriptor(bytes []byte, origin string) (daemonDescriptor, error) {
+	var envelope struct { Identity json.RawMessage `json:"identity"`; Endpoints *daemonBrowserEndpoints `json:"endpoints"` }
+	if err := json.Unmarshal(bytes, &envelope); err != nil { return daemonDescriptor{}, err }
+	var descriptor daemonDescriptor
+	payload := bytes
+	if len(envelope.Identity) != 0 {
+		payload = envelope.Identity
+		descriptor.Endpoints = envelope.Endpoints
+	}
+	if err := json.Unmarshal(payload, &descriptor.Identity); err != nil { return daemonDescriptor{}, err }
+	identity := descriptor.Identity
 	if identity.Protocol != 1 || !daemonUUID.MatchString(identity.DaemonID) || len(identity.Hostname) == 0 || len(identity.Hostname) > 253 {
-		return identity, "", errors.New("peer identity is invalid")
+		return daemonDescriptor{}, errors.New("peer identity is invalid")
 	}
 	switch identity.State {
 	case "sleeping", "starting", "ready", "failed":
-	default: return identity, "", errors.New("peer lifecycle is invalid")
+	default: return daemonDescriptor{}, errors.New("peer lifecycle is invalid")
 	}
-	return identity, origin, nil
+	if descriptor.Endpoints != nil && !validDaemonEndpoints(*descriptor.Endpoints, origin) { descriptor.Endpoints = nil }
+	return descriptor, nil
+}
+
+func validDaemonEndpoints(endpoints daemonBrowserEndpoints, origin string) bool {
+	if endpoints.HTTPOrigin != origin { return false }
+	if endpoints.SecureOrigin == nil { return true }
+	parsed, err := url.Parse(*endpoints.SecureOrigin)
+	if err != nil || parsed == nil { return false }
+	port, portError := strconv.Atoi(parsed.Port())
+	if parsed.Scheme != "https" || parsed.User != nil || parsed.Path != "" ||
+		parsed.RawQuery != "" || parsed.Fragment != "" || portError != nil || port < 1 || port > 65535 ||
+		!strings.HasSuffix(parsed.Hostname(), ".wb.inthedark.boo") || parsed.String() != *endpoints.SecureOrigin {
+		return false
+	}
+	return true
 }

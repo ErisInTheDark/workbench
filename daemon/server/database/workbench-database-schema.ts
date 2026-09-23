@@ -54,6 +54,7 @@ import { assertSchemaReleaseManifest } from "workbench-shared/database/schema/sc
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { codexTranscriptSchemaHistory } from "workbench-shared/workbench/database/schema/codex-transcript-schema";
 import { projectSchemaHistory } from "workbench-shared/workbench/database/schema/project-schema";
+import { threadLaunchSchemaHistory } from "workbench-shared/workbench/database/schema/thread-launch-schema";
 import { localCapabilitySchemaHistory } from "../lib/workbench/database/schema/local-capability-schema.ts";
 import { browsePersistenceSchemaHistory } from "../lib/workbench/database/schema/browse-persistence-schema.ts";
 import { externalStorageImportSchemaHistory } from "../lib/workbench/database/schema/external-storage-import-schema.ts";
@@ -91,6 +92,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
   return defineWorkbenchDatabaseSchema({
     subsystems: [
       projectSchemaHistory,
+      threadLaunchSchemaHistory,
       composerProfileSchemaHistory,
       voiceSettingsSchemaHistory,
       codexSandboxNetworkSchemaHistory,

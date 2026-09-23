@@ -58,6 +58,8 @@ type CaptureGapControllerConstructor = new (
   options: import("./database/transcript/WorkbenchTranscriptCaptureGapController").WorkbenchTranscriptCaptureGapControllerOptions,
 ) => CaptureGapController;
 
+const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
+
 function loadDatabaseControllers() {
   const CommandApprovalController = (
     require("./WorkbenchCommandApprovalController") as { default: typeof import("./WorkbenchCommandApprovalController").default }
@@ -176,10 +178,12 @@ export default ReloadableNode.define<
         signal?.throwIfAborted();
         await mkdir(dirname(databasePath), { recursive: true });
         signal?.throwIfAborted();
+        if (startupDiagnostics) console.info("[startup] daemon database opening");
         await transcript.start();
         signal?.throwIfAborted();
         await threadIdentity.start();
         signal?.throwIfAborted();
+        if (startupDiagnostics) console.info("[startup] daemon database ready");
       },
       detachForReload: shutdown,
       dispose: shutdown,

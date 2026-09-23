@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
+import WorkbenchProjectClient from "../../app/client/workbench/WorkbenchProjectClient";
+import WorkbenchClientStateController from "../../app/client/workbench/state/WorkbenchClientStateController";
 import IsolatedWorkbench from "./IsolatedWorkbench";
 import { seedLifecycleTranscript } from "./lifecycle-fixture";
 import { captureThreadStateMigrationSource, verifyThreadStateMigrationSource, isolateThreadStateMigrationSource } from "./thread-state-migration-fixture";
@@ -19,10 +21,14 @@ import { WorkbenchDaemonConnectionSchema, WorkbenchDaemonEndpointSchema } from "
 import { readServiceEndpoint } from "../../shared/process/workbench-service-endpoint";
 import { WorkbenchDaemonIdentitySchema } from "../../shared/http/workbench-daemon-discovery";
 import WorkbenchAppStateRepository from "../../app/server/state/WorkbenchAppStateRepository";
+import { WorkbenchProjectLocationsPayloadSchema } from "../../shared/workbench/project/project-location";
+import { PresentationSnapshotSchema } from "../../shared/state/workbench-presentation-state";
+import { presentationSchema } from "../../shared/state/workbench-presentation-schema";
 import WorkbenchNetworkRepository from "../../daemon/host/network/WorkbenchNetworkRepository";
 import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "../../shared/database/workbench-database-statements";
 import { serviceTableInventory } from "../../shared/state/workbench-service-schema";
 import { ProjectDiscoverySettingsResultSchema } from "../../shared/workbench/project/project-discovery-settings";
+import { WorkbenchProjectsPayloadSchema } from "../../shared/workbench/project/project-state";
 
 test("forward database migration preserves data and the real app can use it", {
   skip: process.env.WORKBENCH_LIFECYCLE_TEST_FILE !== "test/scenarios/lifecycle.scenario.test.ts",
@@ -32,6 +38,7 @@ test("forward database migration preserves data and the real app can use it", {
   const runtime = await IsolatedWorkbench.create(path.resolve(process.cwd(), ".."), t.signal, { codexIdentity: false });
   console.log(`migration fixture: ${runtime.root}`);
   const appDatabase = path.join(runtime.dataRootPath, "app", "app-state.sqlite3");
+  const presentationDatabase = path.join(runtime.dataRootPath, "app", "presentation-state.sqlite3");
   const serverDatabase = path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3");
   const serviceDatabase = path.join(runtime.dataRootPath, "service", "service.sqlite3");
   let failed = false;
@@ -49,10 +56,30 @@ test("forward database migration preserves data and the real app can use it", {
           runtime.markPhase(`database capture: ${totalPages - remainingPages}/${totalPages} pages copied`);
         },
       });
+    // The managed host imports app-owned settings on its first start.
+    const legacyApp = new WorkbenchAppStateRepository({ databasePath: appDatabase });
+    await legacyApp.start();
+    try {
+      new WorkbenchNetworkRepository(legacyApp).write({
+        hostServe: { enabled: false, port: 8123 }, privateAccess: null, members: [],
+      });
+    } finally { await legacyApp.close(); }
+    runtime.markPhase("reloading a host-owned daemon with retained discovery roots");
+    await runtime.exerciseManagedProcessReload(path.resolve(process.cwd(), ".."));
+    await runtime.stop();
     runtime.markPhase("verifying forward migration and retained data");
     await verifyThreadStateMigrationSource(captured);
     runtime.markPhase("isolating the verified database paths in place");
     const capturedCounts = await isolateThreadStateMigrationSource(captured, runtime.root, t.signal);
+
+    const clonePath = path.join(path.dirname(runtime.project), "fixture-clone");
+    const sharedRemote = "https://example.test/workbench/scenario.git";
+    await IsolatedWorkbench.command("git", ["clone", "-q", "--no-hardlinks", runtime.project, clonePath],
+      runtime.root, process.env, t.signal);
+    await IsolatedWorkbench.command("git", ["remote", "add", "origin", sharedRemote],
+      runtime.project, process.env, t.signal);
+    await IsolatedWorkbench.command("git", ["remote", "set-url", "origin", sharedRemote],
+      clonePath, process.env, t.signal);
 
     await runtime.start();
     const emptyCatalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
@@ -64,16 +91,11 @@ test("forward database migration preserves data and the real app can use it", {
     const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
     const project = catalog.data.find(entry => path.resolve(entry.rootPath) === runtime.project);
     assert.ok(project, "The migrated daemon must discover the isolated project");
+    const clone = catalog.data.find(entry => path.resolve(entry.rootPath) === clonePath);
+    assert.ok(clone, "The legacy catalogue must expose the second checkout");
+    assert.notEqual(project.id, clone.id, "Matching remotes must not merge concrete execution owners");
     const transcript = await seedLifecycleTranscript(runtime.project, serverDatabase, project.id);
 
-    // Host startup must import existing app-owned settings, not replace them with defaults.
-    const legacyApp = new WorkbenchAppStateRepository({ databasePath: appDatabase });
-    await legacyApp.start();
-    try {
-      new WorkbenchNetworkRepository(legacyApp).write({
-        hostServe: { enabled: false, port: 8123 }, privateAccess: null, members: [],
-      });
-    } finally { await legacyApp.close(); }
     await runtime.startApp();
 
     const verifyApp = async (label: string) => {
@@ -100,11 +122,33 @@ test("forward database migration preserves data and the real app can use it", {
         }
         const appState = await (await http("/api/workbench-client-state")).json() as { daemonRegistrationId: string };
         assert.ok(appState.daemonRegistrationId, "The app must register its daemon");
+        assert.equal("registrations" in appState, false, "The old app-state response shape must remain available");
         const service = await readServiceEndpoint(path.join(runtime.dataRootPath, "service", "runtime.json"));
         assert.ok(service);
         const identity = await fetch(`${service.origin}/_workbench-service/identity`, { signal });
         assert.ok(identity.ok);
         const hostIdentity = WorkbenchDaemonIdentitySchema.parse(await identity.json());
+        const locationCatalog = WorkbenchProjectLocationsPayloadSchema.parse(
+          await runtime.request("project/locations/read", {}, {}, signal));
+        const registered = await fetch(new URL("/api/workbench-presentation/mutate", runtime.appOrigin), {
+          method: "POST", signal, headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "registerLocations", daemonId: hostIdentity.daemonId,
+            hostname: hostIdentity.hostname, catalog: locationCatalog }),
+        });
+        assert.equal(registered.status, 200);
+        const presentation = PresentationSnapshotSchema.parse(
+          await (await http("/api/workbench-presentation")).json());
+        const primaryLocation = presentation.locations.find(location =>
+          location.target.daemonId === hostIdentity.daemonId && location.target.projectId === project.id);
+        const cloneLocation = presentation.locations.find(location =>
+          location.target.daemonId === hostIdentity.daemonId && location.target.projectId === clone.id);
+        assert.ok(primaryLocation && cloneLocation);
+        assert.equal(primaryLocation.logicalProjectId, cloneLocation.logicalProjectId,
+          "The new presentation owner must group matching remotes without merging execution locations");
+        const presentationFile = new Database(presentationDatabase, { readonly: true });
+        try {
+          assert.equal(presentationFile.pragma("user_version", { simple: true }), presentationSchema.currentVersion);
+        } finally { presentationFile.close(); }
         const importedService = new Database(serviceDatabase, { readonly: true });
         try {
           const repository = new WorkbenchNetworkRepository({
@@ -131,6 +175,31 @@ test("forward database migration preserves data and the real app can use it", {
         const globalState = WorkbenchGlobalThreadStateOpenResultSchema.parse(
           await runtime.request("workbench/thread-state/global/open", { version: 7 }, {}, signal));
         assert.ok(globalState.catalog.data.some(entry => entry.id === project.id));
+        const legacyGlobalState = WorkbenchGlobalThreadStateOpenResultSchema.parse(
+          await runtime.request("workbench/thread-state/global/open", { version: 5 }, {}, signal));
+        assert.ok(legacyGlobalState.projectSidebars.projects.some(entry => entry.projectId === project.id));
+        assert.ok(legacyGlobalState.projectSidebars.projects.some(entry => entry.projectId === clone.id));
+        const legacyClientState = new WorkbenchClientStateController({ mode: "memory" });
+        const legacyProjectClient = WorkbenchProjectClient({ clientStateController: legacyClientState, transport: {
+          readCatalog: async () => WorkbenchProjectsPayloadSchema.parse(
+            await runtime.request("project/catalog/read", {}, {}, signal)),
+          createEntry: async () => { throw new Error("Compatibility check must not mutate files."); },
+          deleteFile: async () => { throw new Error("Compatibility check must not mutate files."); },
+          refresh: async () => { throw new Error("Compatibility check must not mutate files."); },
+        } });
+        try {
+          for (const location of [project, clone]) {
+            assert.equal(await legacyProjectClient.selectProjectStrict(location.id), true);
+            const selected = legacyProjectClient.getSnapshot();
+            assert.equal(selected.currentProjectId, location.id);
+            assert.equal(path.resolve(selected.rootPath), path.resolve(location.rootPath));
+            assert.ok(selected.projects.some(entry => entry.id === project.id));
+            assert.ok(selected.projects.some(entry => entry.id === clone.id));
+          }
+        } finally {
+          legacyProjectClient.dispose();
+          legacyClientState.dispose();
+        }
         const projectState = WorkbenchThreadStateOpenResultSchema.parse(
           await runtime.request("workbench/thread-state/open", { projectId: project.id, version: 4 }, {}, signal));
         assert.ok(projectState.catalog.data.some(entry => entry.id === project.id));
@@ -172,7 +241,8 @@ test("forward database migration preserves data and the real app can use it", {
           assert.ok(Number(database.prepare("SELECT count(*) FROM workbench_threads").pluck().get()) >= Number(capturedCounts.threads));
           assert.equal(database.prepare("SELECT project_id FROM workbench_threads WHERE id = ?").pluck().get(transcript.threadId), project.id);
         } finally { database.close(); }
-        return { registrationId: appState.daemonRegistrationId, hostId: hostIdentity.daemonId };
+        return { registrationId: appState.daemonRegistrationId, hostId: hostIdentity.daemonId,
+          logicalProjectId: primaryLocation.logicalProjectId };
       }).catch(error => {
         throw new Error(`${label} failed; last localPort: ${lastPort === undefined ? "not observed" : lastPort}`,
           { cause: error });

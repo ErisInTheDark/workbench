@@ -17,7 +17,7 @@ import type { WorkbenchThreadMessageResult } from "workbench-shared/workbench/th
 import type { WorkbenchUserInput } from "workbench-shared/workbench/provider/provider-input";
 import { createWorkbenchTextInput } from "workbench-shared/workbench/provider/provider-input";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
-import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchProjectCatalogController from "../../WorkbenchProjectCatalogController";
 import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireController";
@@ -56,7 +56,7 @@ export interface OpenCodeThreadOperationsOptions {
   acquire: () => Promise<WorkbenchOpenCodeClient>;
   observe: (facts: WorkbenchProviderObservation) => Promise<void>;
   identities: WorkbenchThreadIdentityController;
-  projects: Pick<WorkbenchProjectCatalogController, "resolveAgentEndpointProjectFromCwd">;
+  projects: Pick<WorkbenchProjectCatalogController, "resolveAgentEndpointProjectFromCwd" | "resolveProjectById">;
   questionnaires: Pick<
     WorkbenchQuestionnaireController,
     "canDeliver" | "deliver" | "interruptRetainingQuestionnaire"
@@ -126,12 +126,14 @@ function openCodeFailure(operation: string, error: unknown) {
 
 export default class OpenCodeThreadOperations implements WorkbenchProviderThreads {
   hasPendingWork() {
-    return this.pendingPrompts.size > 0 || this.pendingSteerSessions.size > 0
+    return this.pendingCreations.size > 0 || this.pendingPrompts.size > 0 || this.pendingSteerSessions.size > 0
       || [...this.executions.values()].some(execution => execution.active || execution.admission !== null);
   }
   private readonly executions = new Map<string, SessionExecution>();
   private readonly pendingPrompts = new Set<Promise<void>>();
   private readonly sessions = new Map<string, SessionInfo>();
+  private readonly pendingCreations = new Set<Promise<ThreadPayload>>();
+  private readonly deferredCreatedSessions = new Set<string>();
   private readonly pendingSteers = new Map<string, Map<string, WorkbenchSteerHistoryEntry>>();
   private readonly pendingSteerSessions = new Map<string, Set<string>>();
   private readonly requestedInterruptions = new Set<string>();
@@ -186,10 +188,39 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   };
 
   async create(input: Parameters<WorkbenchProviderThreads["create"]>[0]) {
+    const operation = this.createOwned(input);
+    this.pendingCreations.add(operation);
+    try {
+      return await operation;
+    } finally {
+      while (this.pendingCreations.size === 1 && this.deferredCreatedSessions.size) {
+        const sessionId = this.deferredCreatedSessions.values().next().value!;
+        this.deferredCreatedSessions.delete(sessionId);
+        if (!this.sessions.has(sessionId)) {
+          console.error("[opencode] early session could not be correlated to a captured creation.");
+          continue;
+        }
+        try { await this.syncNative(sessionId); }
+        catch (error) {
+          console.error(`[opencode] deferred session admission failed: ${
+            error instanceof Error ? error.message.slice(0, 500) : "unknown failure"
+          }`);
+        }
+      }
+      this.pendingCreations.delete(operation);
+    }
+  }
+
+  private async createOwned(input: Parameters<WorkbenchProviderThreads["create"]>[0]) {
     const client = await this.options.acquire();
-    const project = (await this.options.projects.resolveAgentEndpointProjectFromCwd(
-      input.cwd, { endpointName: "OpenCode provider thread admission" },
-    )).project;
+    const project = input.projectLocation
+      ? await this.options.projects.resolveProjectById(input.projectLocation.id)
+      : (await this.options.projects.resolveAgentEndpointProjectFromCwd(
+        input.cwd, { endpointName: "OpenCode provider thread admission" },
+      )).project;
+    if (input.projectLocation && project.rootPath !== input.cwd) {
+      throw new Error("OpenCode creation target disagrees with its captured project.");
+    }
     const settings = input.profile.settings;
     const session = await client.session.create({
       location: { directory: input.cwd },
@@ -197,10 +228,21 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       ...this.options.managed.creation(),
     });
     this.sessions.set(session.id, session);
-    const identity = await this.options.transcript.record(session, [], { id: project.id, rootPath: project.rootPath });
+    const identity = await this.options.transcript.record(session, [], {
+      id: project.id, rootPath: project.rootPath,
+      ...(input.projectLocation?.launchId ? { launchId: input.projectLocation.launchId } : {}),
+    });
     const thread = await this.read(identity.threadId);
     await this.options.state.installCreatedProfile("opencode", thread, input.profile);
     return thread;
+  }
+
+  async syncCreatedNative(nativeThreadId: string) {
+    if (this.pendingCreations.size && !this.sessions.has(nativeThreadId)) {
+      this.deferredCreatedSessions.add(nativeThreadId);
+      return null;
+    }
+    return await this.syncNative(nativeThreadId);
   }
 
   async list(input: Parameters<WorkbenchProviderThreads["list"]>[0]) {
@@ -685,9 +727,16 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const startingTurn = execution.turn;
     const startingIntent = execution.intentVersion;
     this.sessions.set(session.id, session);
-    const resolution = await this.options.projects.resolveAgentEndpointProjectFromCwd(
-      session.location.directory, { endpointName: "OpenCode provider history" },
-    );
+    const retained = this.options.identities.findNativeThread({
+      harness: "opencode",
+      nativeLocation: session.location.directory,
+      nativeThreadId: NativeThreadIdSchema.parse(session.id),
+    });
+    const resolution = retained
+      ? { project: { id: retained.projectId, rootPath: retained.projectRoot } }
+      : await this.options.projects.resolveAgentEndpointProjectFromCwd(
+        session.location.directory, { endpointName: "OpenCode provider history" },
+      );
     const latest = options.window?.latest !== false;
     const result = await this.options.transcript.record(session, messages, {
       id: resolution.project.id,

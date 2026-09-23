@@ -16,12 +16,14 @@ import type {
 import type { WorkbenchMessageContext } from "./provider-input.ts";
 import type { Turn } from "../thread/workbench-thread-turn.ts";
 import type { WorkbenchAgentMessage } from "../thread/thread-agent-message.ts";
+import type { ProjectId } from "../identity.ts";
 
 export const WORKBENCH_THREAD_HISTORY_PENDING = -32010;
 export class WorkbenchThreadHistoryPendingError extends Error {}
 
 export interface WorkbenchProviderThreadCreate {
   cwd: string;
+  projectLocation?: { id: ProjectId; rootPath: string; launchId?: string };
   profile: WorkbenchComposerProfileTargetSelection;
   context?: WorkbenchMessageContext;
   projectRoots?: string[];

@@ -93,6 +93,7 @@ type privateStatus struct {
 	Devices []networkDevice `json:"devices,omitempty"`
 	PendingUpdates []string `json:"pendingUpdates,omitempty"`
 	modeStatus
+	DaemonURL            *string          `json:"daemonUrl"`
 	Hostname             *string          `json:"hostname"`
 	LoginURL             *string          `json:"loginUrl"`
 	NodeID               *string          `json:"nodeId"`

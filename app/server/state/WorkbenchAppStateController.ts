@@ -71,6 +71,7 @@ export default class WorkbenchAppStateController {
       && sinceRevision <= version.revision;
     return {
       daemonRegistrationId: this.daemonRegistrationId,
+      registrations: this.#repository.readDaemonRegistrations(),
       kind: canUseDelta ? "delta" : "snapshot",
       rows: this.#readRows(canUseDelta ? sinceRevision : -1),
       schemaVersion: appStateSchema.currentVersion,
@@ -110,6 +111,15 @@ export default class WorkbenchAppStateController {
 
   readProjectAliases() {
     return this.#repository.readProjectAliases();
+  }
+
+  registerDaemon(daemonId: string, attachedLocal: boolean) {
+    const operation = this.#mutationQueue.then(() => {
+      const registrationId = this.#repository.registerDaemon(daemonId, attachedLocal);
+      return { registrationId, state: this.read() };
+    });
+    this.#mutationQueue = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 
   remapProjects(request: WorkbenchProjectRemap) {

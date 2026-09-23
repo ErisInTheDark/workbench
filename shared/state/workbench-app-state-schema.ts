@@ -59,14 +59,32 @@ const appStateMetadataHistory = initialHistory(defineTable("app_state_metadata",
   revision: integer().notNull().default(0).nonNegative(),
 }));
 
-const daemonRegistrationsHistory = initialHistory(defineTable("daemon_registrations", {
+const localDaemonRegistrations = defineTable("daemon_registrations", {
   id: text().primaryKey(),
   kind: enumText("local").notNull(),
   created_at: integer().notNull().nonNegative(),
   revision: integer().notNull().nonNegative(),
 }, (table) => ({
   constraints: [unique([table.kind])],
-})));
+}));
+const durableDaemonRegistrations = defineTable("daemon_registrations", {
+  id: text().primaryKey(),
+  kind: enumText("local", "remote").notNull(),
+  durable_daemon_id: text(),
+  created_at: integer().notNull().nonNegative(),
+  revision: integer().notNull().nonNegative(),
+}, table => ({ constraints: [unique([table.durable_daemon_id])] }));
+const daemonRegistrationsHistory = defineTableHistory({
+  current: durableDaemonRegistrations,
+  versions: [
+    ...initialHistory(localDaemonRegistrations).versions,
+    tableVersion({
+      schemaVersion: appStateReleases.durableDaemonRegistrations.version,
+      table: durableDaemonRegistrations,
+      migration: rebuildTable({ from: localDaemonRegistrations, to: durableDaemonRegistrations }),
+    }),
+  ],
+});
 
 const lastLaunchTargetHistory = initialHistory(defineTable("last_launch_target", {
   id: enumText("singleton").primaryKey(),

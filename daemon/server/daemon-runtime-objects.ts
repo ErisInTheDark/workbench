@@ -132,6 +132,9 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   readTranscriptAsset: import("./database/WorkbenchDatabaseController").default["readTranscriptAsset"];
   readLegacyDiffArtifact: import("./database/WorkbenchDatabaseController").default["readLegacyDiffArtifact"];
   executeThreadGitSelection: import("./database/WorkbenchDatabaseController").default["executeThreadGitSelection"];
+  reserveThreadLaunch: import("./database/WorkbenchDatabaseController").default["reserveThreadLaunch"];
+  readThreadLaunch: import("./database/WorkbenchDatabaseController").default["readThreadLaunch"];
+  advanceThreadLaunch: import("./database/WorkbenchDatabaseController").default["advanceThreadLaunch"];
   readStats(request: WorkbenchStatsReadRequest): Promise<WorkbenchStatsResponse>;
   readStatsDetailed(request: import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedReadRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedResponse>;
   readClaimStats(request: import("workbench-shared/workbench/stats/workbench-stats-claims-contract").WorkbenchClaimStatsRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-claims-contract").WorkbenchClaimStatsResponse>;

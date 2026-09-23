@@ -10,6 +10,7 @@ import { ProjectIdSchema, ProjectIdentityKeySchema, type ProjectId } from "workb
 import { WorkbenchProjectIconSchema, WorkbenchProjectOptionSchema } from "workbench-shared/workbench/project/project-state";
 import type { ProjectSchemaRows } from "workbench-shared/workbench/database/schema/project-schema";
 import { nativeLocationKey } from "../thread-identity/native-location-key.ts";
+import { projectLocationKey } from "../../lib/workbench/project/project-location-discovery.ts";
 import type { WorkbenchProjectAlias, WorkbenchProjectCandidate, WorkbenchProjectDiscovery, WorkbenchProjectStartup, WorkbenchProjectIconSettlement } from "./workbench-project-persistence.ts";
 
 const uuid = z.string().uuid();
@@ -64,7 +65,10 @@ export default class WorkbenchProjectRepository {
     }
     const key = ProjectIdentityKeySchema.parse(id);
     return this.database.transaction(() => {
-      const existing = this.database.prepare("SELECT id FROM workbench_projects WHERE identity_key = ?").pluck().get(key) as string | undefined;
+      const matches = this.database.prepare("SELECT id FROM workbench_projects WHERE identity_key = ? LIMIT 2")
+        .all(key) as Array<{ id: string }>;
+      if (matches.length > 1) throw new Error("Unaliased project identity is ambiguous across locations.");
+      const existing = matches[0]?.id;
       const admitted = ProjectIdSchema.parse(existing ?? randomUUID());
       if (!existing) this.database.prepare("INSERT INTO workbench_projects(id, identity_key) VALUES (?, ?)").run(admitted, key);
       this.retainAlias(key, admitted);
@@ -88,6 +92,11 @@ export default class WorkbenchProjectRepository {
     this.database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?) ON CONFLICT(alias) DO NOTHING").run(alias, projectId);
   }
 
+  private retainAvailableAlias(alias: string, projectId: ProjectId) {
+    const previous = this.database.prepare("SELECT project_id FROM workbench_project_aliases WHERE alias = ?").pluck().get(alias);
+    if (!previous || previous === projectId) this.retainAlias(alias, projectId);
+  }
+
   reconcile(discovery: WorkbenchProjectDiscovery): WorkbenchProjectStartup {
     const parsed = discovery.data.map(candidate => ({
       ...candidate,
@@ -95,7 +104,6 @@ export default class WorkbenchProjectRepository {
       roots: candidate.roots.map(root => ({ ...root, identityKey: ProjectIdentityKeySchema.parse(root.identityKey) })),
     }));
     return this.database.transaction(() => {
-      const observed = new Set(discovery.observedKeys);
       const excludedRootPaths = new Set(discovery.excludedRootPaths);
       const retainedProjects = this.database.prepare("SELECT * FROM workbench_projects").all() as ProjectSchemaRows["projects"][];
       const retainedRoots = new Map(retainedProjects.map(project => [
@@ -104,17 +112,18 @@ export default class WorkbenchProjectRepository {
       ]));
       const candidates = new Map<string, WorkbenchProjectCandidate[]>();
       for (const project of parsed) {
-        const group = candidates.get(project.identityKey) ?? [];
+        const key = projectLocationKey(project);
+        const group = candidates.get(key) ?? [];
         group.push(project);
-        candidates.set(project.identityKey, group);
+        candidates.set(key, group);
       }
       const selected = [...candidates.values()].map(group => {
         if (group.length === 1) return group[0]!;
-        if (group.some(project => project.kind !== "workspace" || !project.workspacePath)) {
-          throw new Error("Project catalogue contains duplicate identities.");
-        }
-        const previous = this.database.prepare("SELECT workspace_path FROM workbench_projects WHERE identity_key = ?")
-          .get(group[0]!.identityKey) as Pick<ProjectSchemaRows["projects"], "workspace_path"> | undefined;
+        if (group.some(project => project.kind !== "workspace" || !project.workspacePath)) return group[0]!;
+        const previous = retainedProjects.find(row => row.kind === "workspace"
+          && projectLocationKey({ kind: row.kind, rootPath: group[0]!.rootPath,
+            roots: retainedRoots.get(row.id)?.map(root => ({ rootPath: root.root_path })) ?? [] })
+            === projectLocationKey(group[0]!));
         const retained = previous?.workspace_path
           ? group.find(project => nativeLocationKey(project.workspacePath!) === nativeLocationKey(previous.workspace_path!))
           : undefined;
@@ -124,6 +133,20 @@ export default class WorkbenchProjectRepository {
           return a < b ? -1 : a > b ? 1 : 0;
         })[0]!;
       });
+      if (discovery.complete) {
+        const present = new Set(selected.map(projectLocationKey));
+        for (const previous of retainedProjects) {
+          if (previous.kind !== "git" && previous.kind !== "workspace") continue;
+          const roots = retainedRoots.get(previous.id) ?? [];
+          if (present.has(projectLocationKey({
+            kind: previous.kind,
+            rootPath: roots[0]?.root_path ?? "",
+            roots: roots.map(root => ({ rootPath: root.root_path })),
+          }))) continue;
+          this.database.prepare("UPDATE workbench_projects SET icon_source_key = ? WHERE id = ?")
+            .run(randomUUID(), previous.id);
+        }
+      }
       const catalog: WorkbenchProjectStartup["catalog"] = [];
       for (const project of selected) {
       if (!project.roots.length || !project.roots[0]!.isPrimary || project.roots.slice(1).some(root => root.isPrimary)
@@ -132,51 +155,31 @@ export default class WorkbenchProjectRepository {
         || nativeLocationKey(project.rootPath) !== nativeLocationKey(project.roots[0]!.rootPath)) {
         throw new Error("Project catalogue has invalid ordered roots.");
       }
-      const stored = this.database.prepare("SELECT * FROM workbench_projects WHERE identity_key = ?").get(project.identityKey) as ProjectSchemaRows["projects"] | undefined;
       const rootsFor = (id: string) => retainedRoots.get(id) ?? [];
       const sameLocation = (row: ProjectSchemaRows["projects"]) => {
         if (row.kind !== project.kind) return false;
-        if (row.kind === "workspace" && (!row.workspace_path || !project.workspacePath
-          || nativeLocationKey(row.workspace_path) !== nativeLocationKey(project.workspacePath))) return false;
         const roots = rootsFor(row.id);
         return roots.length === project.roots.length && roots.every(root =>
           project.roots.some(next => nativeLocationKey(next.rootPath) === nativeLocationKey(root.root_path)));
       };
       const atLocation = retainedProjects.filter(row => (row.kind === "git" || row.kind === "workspace") && sameLocation(row));
-      const aliasOwner = this.database.prepare("SELECT project_id FROM workbench_project_aliases WHERE alias = ?").pluck().get(project.identityKey) as string | undefined;
-      let owner = stored;
+      const historical = retainedProjects.filter(row => row.kind === "historical" && row.identity_key === project.identityKey);
+      let owner = atLocation[0] ?? (project.kind === "workbench-library"
+        ? retainedProjects.find(row => row.id === "workbench-library") : historical.length === 1 ? historical[0] : undefined);
       let conflict = "";
-      if (owner && atLocation.some(previous => previous.id !== owner.id)) {
-        conflict = "current identity and checkout have different retained owners";
-      } else if (!owner && atLocation.length) {
-        const previous = atLocation[0]!;
-        if (atLocation.length !== 1) conflict = "multiple retained owners at the checkout";
-        else if (!discovery.complete) conflict = "incomplete discovery cannot prove a remote change";
-        else if (!previous.identity_key || observed.has(ProjectIdentityKeySchema.parse(previous.identity_key))) conflict = "previous identity is still observed";
-        else if (aliasOwner && aliasOwner !== previous.id) conflict = "new identity has another retained owner";
-        else if (project.kind === "workspace" && rootsFor(previous.id).some(root => {
-          const next = project.roots.find(item => nativeLocationKey(item.rootPath) === nativeLocationKey(root.root_path))!;
-          return !root.identity_key || (root.identity_key !== next.identityKey && observed.has(ProjectIdentityKeySchema.parse(root.identity_key)));
-        })) conflict = "workspace member identity is missing or still observed";
-        else owner = previous;
-      } else if (!owner && aliasOwner) {
-        conflict = "retained identity requires same-location evidence";
-      } else if (owner && owner.kind !== "historical" && !sameLocation(owner) && !discovery.complete) {
-        conflict = "incomplete discovery cannot prove a checkout move";
-      }
+      if (atLocation.length > 1) conflict = "multiple retained owners at the checkout";
+      if (historical.length > 1 && !atLocation.length) conflict = "ambiguous historical project identity";
       const id = ProjectIdSchema.parse(owner?.id ?? (project.kind === "workbench-library" ? "workbench-library" : randomUUID()));
       const addresses: string[] = [];
-      for (const { alias: address } of discovery.aliases.filter(alias => alias.identityKey === project.identityKey)) {
+      for (const { alias: address } of discovery.aliases.filter(alias =>
+        alias.locationKey === projectLocationKey(project)
+        || !alias.locationKey && alias.identityKey === project.identityKey
+          && selected.filter(candidate => candidate.identityKey === project.identityKey).length === 1)) {
         const retained = this.database.prepare("SELECT project_id FROM workbench_project_aliases WHERE alias = ?").pluck().get(address);
         if (retained && retained !== id) {
-          const previous = retainedProjects.find(row => row.id === retained);
-          // Changing workspace membership creates a new owner, not a reassignment
-          // of its historical file address. Publish only its new identity key.
-          if ((!owner || sameLocation(owner)) && discovery.complete && project.kind === "workspace" && previous?.kind === "workspace"
-            && previous.workspace_path && project.workspacePath
-            && nativeLocationKey(previous.workspace_path) === nativeLocationKey(project.workspacePath)
-            && !sameLocation(previous)) continue;
-          conflict = "checkout address has another retained owner";
+          // A short discovery address may be reused under a different scan root.
+          // Retain its historical owner, but never hide the new concrete location.
+          continue;
         }
         addresses.push(address);
       }
@@ -192,10 +195,10 @@ export default class WorkbenchProjectRepository {
       });
       if (!owner) this.database.prepare("INSERT INTO workbench_projects(id, identity_key) VALUES (?, ?)").run(id, project.identityKey);
       else if (owner.identity_key !== project.identityKey) {
-        if (owner.identity_key) this.retainAlias(owner.identity_key, id);
+        if (owner.identity_key) this.retainAvailableAlias(owner.identity_key, id);
         this.database.prepare("UPDATE workbench_projects SET identity_key = ? WHERE id = ?").run(project.identityKey, id);
       }
-      this.retainAlias(project.identityKey, id);
+      this.retainAvailableAlias(project.identityKey, id);
       for (const address of addresses) this.retainAlias(address, id);
       const previous = this.database.prepare("SELECT * FROM workbench_projects WHERE id = ?").get(id) as ProjectSchemaRows["projects"];
       const previousRoots = this.database.prepare("SELECT * FROM workbench_project_roots WHERE project_id = ? ORDER BY root_index")
@@ -230,6 +233,8 @@ export default class WorkbenchProjectRepository {
       const { icon: _discoveredIcon, ...withoutIcon } = metadata;
       catalog.push({
         project: { ...withoutIcon, ...(iconRootId !== null && iconPath !== null ? { icon: { rootId: iconRootId, path: iconPath } } : {}) },
+        identityKey: project.identityKey,
+        rootIdentityKeys: project.roots.map(root => root.identityKey),
         sourceKey,
         checkedAt,
       });

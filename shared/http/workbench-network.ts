@@ -96,6 +96,7 @@ export const WorkbenchNetworkRuntimeSchema = z.object({
   daemonServe: modeStatus.optional(),
   host: z.object({ hostname: z.string().max(253).nullable(), address: address.nullable(), nodeId: nodeId.nullable().optional() }).strict().optional(),
   privateAccess: modeStatus.extend({
+    daemonUrl: z.url().nullable().optional(),
     hostname: z.string().max(253).nullable(),
     loginUrl: z.url().nullable(),
     nodeId: z.string().max(256).nullable(),

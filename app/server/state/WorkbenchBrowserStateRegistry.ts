@@ -128,13 +128,32 @@ export default class WorkbenchBrowserStateRegistry {
   async mutateBrowser(browserStateId: string | undefined, mutation: WorkbenchClientStateMutation) {
     const controller = await this.#controllerFor(browserStateId);
     const response = await controller.mutate(mutation);
-    if (browserStateId && isPortableSeedMutation(mutation)) this.#enqueueSeedMutation(mutation);
+    const registrationId = mutation.action === "put"
+      ? "daemonRegistrationId" in mutation.record ? mutation.record.daemonRegistrationId : null
+      : "daemonRegistrationId" in mutation.identity ? mutation.identity.daemonRegistrationId : null;
+    if (browserStateId && isPortableSeedMutation(mutation)
+      && (registrationId === null || registrationId === controller.daemonRegistrationId)) {
+      this.#enqueueSeedMutation(mutation);
+    }
     return response;
+  }
+
+  async registerBrowserDaemon(browserStateId: string | undefined, daemonId: string, attachedLocal: boolean) {
+    const selected = await this.#controllerFor(browserStateId);
+    if (attachedLocal && selected !== this.#sharedController) {
+      await this.#sharedController.registerDaemon(daemonId, true);
+    }
+    return await selected.registerDaemon(daemonId, attachedLocal);
   }
 
   async remapBrowserProjects(browserStateId: string | undefined, request: WorkbenchProjectRemap) {
     const selected = await this.#controllerFor(browserStateId);
-    if (request.daemonRegistrationId !== selected.daemonRegistrationId) throw new Error("Project remap belongs to another daemon registration.");
+    if (request.daemonRegistrationId !== selected.daemonRegistrationId) {
+      if (!selected.read().registrations?.some(item => item.id === request.daemonRegistrationId)) {
+        throw new Error("Project remap belongs to another daemon registration.");
+      }
+      return await selected.remapProjects(request);
+    }
     const operation = this.#seedQueue.then(async () => {
       if (this.#disposed) throw new Error("Workbench browser state registry is closed.");
       await this.#sharedController.remapProjects({ ...request, daemonRegistrationId: this.daemonRegistrationId });

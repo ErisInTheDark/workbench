@@ -229,24 +229,33 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       onInitialized: build.mode === "initial" ? startRecovery : undefined,
       instructions: codexInstructions,
       createThread: async (request, create, signal) => {
-        const { workbenchCreationProfile, ...nativeRequest } = request;
+        const { workbenchCreationProfile, workbenchCreationLocation, ...nativeRequest } = request;
         if (workbenchCreationProfile === undefined) return create(nativeRequest);
         const source = WorkbenchThreadCreationProfileSchema.parse(workbenchCreationProfile);
         const cwd = record(request.params)?.cwd;
         if (typeof cwd !== "string") throw new Error("Thread creation requires a project cwd.");
         bridge.traceThreadCreation(request.id, "profile-capture");
-        const captured = await threadState.captureCreationProfile("codex", cwd, source);
+        const location = workbenchCreationLocation && typeof workbenchCreationLocation === "object"
+          ? workbenchCreationLocation as { id: import("workbench-shared/workbench/identity").ProjectId; rootPath: string }
+          : null;
+        const captured = location
+          ? await threadState.captureCreationProfileForProject("codex",
+            await projectCatalog.resolveProjectById(location.id), source)
+          : await threadState.captureCreationProfile("codex", cwd, source);
+        if (location && captured.cwd !== cwd) throw new Error("Captured project location disagrees with native cwd.");
         bridge.traceThreadCreation(request.id, "profile-configuration");
         const configured = await configureProfileRequests({ resumeRequest: nativeRequest }, {
           ...captured, subagentName: readWorkbenchPromptContext(request)?.subagentName ?? null,
         }, null, signal);
         bridge.traceThreadCreation(request.id, "native-creation");
-        const response = await create(configured.resumeRequest);
+        const response = await create(location
+          ? { ...configured.resumeRequest, workbenchCreationLocation: location }
+          : configured.resumeRequest);
         if (response.error) return response;
         const thread = record(response.result)?.thread as ThreadReadResponse["thread"] | undefined;
         if (!thread) throw new Error("Codex creation returned no thread to store its profile.");
         bridge.traceThreadCreation(request.id, "profile-installation");
-        await threadState.installCreatedProfile("codex", await threadOperations.observeThread(thread), captured.selection);
+        await threadState.installCreatedProfile("codex", await threadOperations.observeThread(thread, location ?? undefined), captured.selection);
         return response;
       },
       prepareThreadConfiguration: async (thread, requests, signal) => configureProfileRequests(

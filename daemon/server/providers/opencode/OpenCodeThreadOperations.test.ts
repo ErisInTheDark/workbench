@@ -134,6 +134,7 @@ function operations(
     },
     observe: lifecycle.observe ?? (async () => undefined),
     identities: {
+      findNativeThread: () => null,
       resolve: async () => ({
         threadId,
         projectId: ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003"),
@@ -152,6 +153,10 @@ function operations(
       })),
     } as never,
     projects: {
+      resolveProjectById: async () => ({
+        id: ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003"),
+        rootPath: "C:/repo",
+      }),
       resolveAgentEndpointProjectFromCwd: async () => ({
         project: {
           id: ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003"),
@@ -262,10 +267,14 @@ test("admits a created session into thread state with its captured profile", asy
     updatedAt: 2,
   };
   const installed: object[] = [];
+  const admittedOwners: object[] = [];
   const owner = operations({
     session: { create: async () => session },
   }, {
-    record: async () => ({ threadId, latestTurnId: null }),
+    record: async (_session: object, _messages: object[], project: object) => {
+      admittedOwners.push(project);
+      return { threadId, latestTurnId: null };
+    },
   }, {
     installCreatedProfile: async (...input: object[]) => { installed.push(input); },
   });
@@ -277,8 +286,58 @@ test("admits a created session into thread state with its captured profile", asy
     cwd: "C:/repo",
     profile,
     projectRoots: ["C:/repo"],
+    projectLocation: { id: ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003"),
+      rootPath: "C:/repo", launchId: "84f3661a-1ba2-4191-8118-851255a5f1de" },
   }), thread);
+  assert.deepEqual(admittedOwners, [{
+    id: ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003"),
+    rootPath: "C:/repo", launchId: "84f3661a-1ba2-4191-8118-851255a5f1de",
+  }]);
   assert.deepEqual(installed, [["opencode", thread, profile]]);
+});
+
+test("an early created event waits for captured session ownership before history admission", async () => {
+  let release!: (value: typeof session) => void;
+  const creating = new Promise<typeof session>(resolve => { release = resolve; });
+  let syncEntered!: () => void;
+  const entered = new Promise<void>(resolve => { syncEntered = resolve; });
+  let finishSync!: () => void;
+  const syncing = new Promise<void>(resolve => { finishSync = resolve; });
+  let records = 0;
+  const owner = operations({
+    session: { create: async () => await creating },
+  }, {
+    record: async () => { records += 1; return { threadId, latestTurnId: null }; },
+  });
+  let synced = 0;
+  Object.assign(owner, {
+    read: async () => ({ id: threadId, cwd: "C:/repo" }),
+    syncNative: async () => {
+      assert.ok(records >= 1);
+      synced += 1;
+      syncEntered();
+      await syncing;
+      return { threadId };
+    },
+  });
+  const launch = owner.create({
+    cwd: "C:/repo",
+    profile: {
+      kind: "custom",
+      settings: { agentPath: null, agentSource: null, harness: "opencode", model: "",
+        reasoningEffort: null, serviceTier: null },
+    },
+  });
+  assert.equal(await owner.syncCreatedNative(nativeThreadId), null);
+  assert.equal(records, 0);
+  release(session);
+  try {
+    await entered;
+    assert.equal(owner.hasPendingWork(), true, "deferred admission is still part of creation lifecycle");
+  } finally { finishSync(); }
+  await launch;
+  assert.ok(records >= 1);
+  assert.equal(synced, 1);
 });
 
 test("fails a public read when no OpenCode binding exists", async () => {

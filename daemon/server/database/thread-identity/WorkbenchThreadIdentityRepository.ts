@@ -13,6 +13,7 @@ import {
 
 import { nativeLocationKey } from "./native-location-key.ts";
 import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
+import WorkbenchThreadLaunchRepository from "../thread-launch/WorkbenchThreadLaunchRepository.ts";
 import { compileWorkbenchDatabaseStatement, updateRows } from "workbench-shared/database/workbench-database-statements";
 import {
   coreTables,
@@ -95,6 +96,8 @@ export default class WorkbenchThreadIdentityRepository {
         `).run(threadId, input.native.harness, input.native.nativeLocation,
           input.native.nativeThreadId, input.createdAt, input.updatedAt);
       }
+      if (input.launchId) new WorkbenchThreadLaunchRepository(this.database)
+        .bindCreated(input.launchId, input.projectId, threadId);
       return this.read(threadId)!;
     })();
   }

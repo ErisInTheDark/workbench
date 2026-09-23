@@ -17,6 +17,7 @@ import type {
 } from "workbench-shared/database/workbench-database-statements";
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
+import type { WorkbenchThreadLaunchLocation, WorkbenchThreadLaunchRequest, WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
 import type { WorkbenchClaimStatsRequest } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 import type { WorkbenchStatsImportProgress, WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchStatsDetailedReadRequest } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
@@ -396,6 +397,31 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     const response = await this.#request({ type: "reconcileProjectCatalog", discovery });
     if (response.type !== "projectCatalog") throw new WorkbenchDatabaseFailure(`Unexpected project catalogue response: ${response.type}`);
     return response.projects;
+  }
+
+  async reserveThreadLaunch(request: WorkbenchThreadLaunchRequest, location: WorkbenchThreadLaunchLocation) {
+    await this.start();
+    const response = await this.#request({ type: "reserveThreadLaunch", request, location });
+    if (response.type !== "threadLaunch" || !response.launch) {
+      throw new WorkbenchDatabaseFailure("Unexpected launch admission response.");
+    }
+    return response.launch;
+  }
+
+  async readThreadLaunch(launchId: string) {
+    await this.start();
+    const response = await this.#request({ type: "readThreadLaunch", launchId });
+    if (response.type !== "threadLaunch") throw new WorkbenchDatabaseFailure("Unexpected launch lookup response.");
+    return response.launch ? { request: response.request!, location: response.location!, state: response.launch } : null;
+  }
+
+  async advanceThreadLaunch(launchId: string, from: WorkbenchThreadLaunchState["phase"], next: WorkbenchThreadLaunchState) {
+    await this.start();
+    const response = await this.#request({ type: "advanceThreadLaunch", launchId, from, next });
+    if (response.type !== "threadLaunch" || !response.launch) {
+      throw new WorkbenchDatabaseFailure("Unexpected launch settlement response.");
+    }
+    return response.launch;
   }
 
   async readProjectAliases() {

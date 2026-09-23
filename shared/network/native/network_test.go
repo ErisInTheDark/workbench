@@ -20,6 +20,16 @@ func testHTTPResponse(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
 }
 
+func TestPrivateDaemonOriginFollowsOpenedListenerPort(t *testing.T) {
+	if privateDaemonOrigin("peer.wb.inthedark.boo", 0) != nil {
+		t.Fatal("published a daemon endpoint without a listener")
+	}
+	origin := privateDaemonOrigin("peer.wb.inthedark.boo", 32123)
+	if origin == nil || *origin != "https://peer.wb.inthedark.boo:32123" {
+		t.Fatalf("wrong private daemon endpoint: %v", origin)
+	}
+}
+
 func TestRetiringPrivateNodeCannotOverwriteReplacementStatus(t *testing.T) {
 	var output bytes.Buffer
 	current, retired := &privateNetwork{}, &privateNetwork{}

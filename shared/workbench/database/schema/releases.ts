@@ -59,6 +59,8 @@ const databaseReleases = Object.freeze({
   stashedGitArcObservations: release(49, "427c25079c6da6b386b4bd9f0817ad9f27379801ea4141b49bd53f1e4ef3a746"),
   commandApprovals: release(50, "5ea74d8c5113604c342671eae5282d1e51c44aad26a5f63d407e80d96cf1ca27"),
   projectDiscoveryRoots: release(51, "c5bcd7883dfbf164e28e4e5dc8ba451c44e11d69317cc9f6c64f3accda47778f"),
+  projectLocations: release(52, "5fa7586730e94b00f397c99cc653ef62ca60d1530228cdc80a1f246b3734e722"),
+  threadLaunches: release(53, "3fbac49ded45d93265dfc55752a4f73ee139c16658f52c326a5bc12ac8bef826"),
 });
 
 export default databaseReleases;

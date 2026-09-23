@@ -17,6 +17,13 @@ import { WorkingTreeReadSchema, WorkingTreeDiffSchema, WorkingTreePreviewSchema,
 import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provider-settings";
 import { CommandApprovalSnapshotSchema } from "../settings/command-approvals";
 import { ProjectDiscoverySettingsReadSchema, ProjectDiscoverySettingsResultSchema } from "../project/project-discovery-settings";
+import { WorkbenchProjectLocationsPayloadSchema } from "../project/project-location";
+import { WorkbenchThreadLaunchStateSchema } from "../thread/thread-launch";
+import {
+  WorkbenchPresentationAttachmentChunkSchema,
+  WorkbenchPresentationExportPageSchema,
+  WorkbenchPresentationLayoutChunkSchema,
+} from "../thread/thread-presentation-export";
 import {
   GitArcStashResultSchema,
   GitCheckpointCompareResultSchema,
@@ -93,6 +100,12 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "project/discovery-settings/read": return ProjectDiscoverySettingsReadSchema;
     case "project/discovery-settings/update": return ProjectDiscoverySettingsResultSchema;
     case "project/catalog/read": return WorkbenchProjectsPayloadSchema;
+    case "project/locations/read": return WorkbenchProjectLocationsPayloadSchema;
+    case "thread/launch": return WorkbenchThreadLaunchStateSchema;
+    case "thread/launch/read": return z.object({ state: WorkbenchThreadLaunchStateSchema.nullable() }).strict();
+    case "thread/presentation/export": return WorkbenchPresentationExportPageSchema;
+    case "thread/presentation/attachment/read": return WorkbenchPresentationAttachmentChunkSchema;
+    case "thread/presentation/layout/read": return WorkbenchPresentationLayoutChunkSchema;
     case "thread/identity/resolve": return z.object({ data: WorkbenchThreadIdentityResolutionSchema.nullable() }).strict();
     case "project/file/read": return z.object({
       content: z.string(), headContent: z.string().nullable(), mtimeMs: z.number(), path: z.string(), projectId: z.string(), updatedAt: z.string(),
@@ -219,6 +232,7 @@ class WorkbenchDaemonClient {
 
   readonly projects = {
     catalog: () => this.request("project/catalog/read", {}),
+    locations: () => this.request("project/locations/read", {}),
     files: {
       read: (params: WorkbenchDaemonParams<"project/file/read">) => this.request("project/file/read", params),
       reset: (params: WorkbenchDaemonParams<"project/file/reset">) => this.request("project/file/reset", params),
@@ -257,6 +271,20 @@ class WorkbenchDaemonClient {
   readonly sandboxNetwork = {
     read: (params: WorkbenchDaemonParams<"sandbox-network/read">) => this.request("sandbox-network/read", params),
     update: (params: WorkbenchDaemonParams<"sandbox-network/update">) => this.request("sandbox-network/update", params),
+  };
+
+  readonly launches = {
+    create: (params: WorkbenchDaemonParams<"thread/launch">) => this.request("thread/launch", params),
+    read: (params: WorkbenchDaemonParams<"thread/launch/read">) => this.request("thread/launch/read", params),
+  };
+
+  readonly presentationExport = {
+    project: (params: WorkbenchDaemonParams<"thread/presentation/export">) =>
+      this.request("thread/presentation/export", params),
+    attachment: (params: WorkbenchDaemonParams<"thread/presentation/attachment/read">) =>
+      this.request("thread/presentation/attachment/read", params),
+    layout: (params: WorkbenchDaemonParams<"thread/presentation/layout/read">) =>
+      this.request("thread/presentation/layout/read", params),
   };
 
   readonly commandApprovals = {

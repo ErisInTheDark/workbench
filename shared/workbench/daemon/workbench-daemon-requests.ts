@@ -149,6 +149,21 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "command-approvals/remove": { params: import("../settings/command-approvals").CommandApprovalRemove; result: import("../settings/command-approvals").CommandApprovalSnapshot };
   "project/discovery-settings/read": { params: object; result: import("../project/project-discovery-settings").ProjectDiscoverySettingsUpdate };
   "project/discovery-settings/update": { params: import("../project/project-discovery-settings").ProjectDiscoverySettingsUpdate; result: import("../project/project-discovery-settings").ProjectDiscoverySettingsResult };
+  "project/locations/read": { params: object; result: import("../project/project-location").WorkbenchProjectLocationsPayload };
+  "thread/launch": { params: import("../thread/thread-launch").WorkbenchThreadLaunchRequest; result: import("../thread/thread-launch").WorkbenchThreadLaunchState };
+  "thread/launch/read": { params: { launchId: string }; result: { state: import("../thread/thread-launch").WorkbenchThreadLaunchState | null } };
+  "thread/presentation/export": {
+    params: import("../thread/thread-presentation-export").WorkbenchPresentationExportRequest;
+    result: import("../thread/thread-presentation-export").WorkbenchPresentationExportPage;
+  };
+  "thread/presentation/attachment/read": {
+    params: import("../thread/thread-presentation-export").WorkbenchPresentationAttachmentChunkRequest;
+    result: import("../thread/thread-presentation-export").WorkbenchPresentationAttachmentChunk;
+  };
+  "thread/presentation/layout/read": {
+    params: import("../thread/thread-presentation-export").WorkbenchPresentationLayoutChunkRequest;
+    result: import("../thread/thread-presentation-export").WorkbenchPresentationLayoutChunk;
+  };
   "sandbox-network/update": { params: import("../provider/provider-settings").WorkbenchSandboxNetworkUpdate; result: import("../provider/provider-settings").WorkbenchSandboxNetworkSettingsResponse };
   "git/arc/compare": { params: GitArcParams<"compare">; result: GitCheckpointCompareResult };
   "git/arc/diff-artifact/read": { params: GitArcParams<"readDiffArtifact">; result: string };

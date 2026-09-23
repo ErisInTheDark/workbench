@@ -20,7 +20,7 @@ export interface WorkbenchProjectCandidate extends Omit<WorkbenchProjectOption, 
 
 export interface WorkbenchProjectDiscovery {
   data: WorkbenchProjectCandidate[];
-  aliases: Array<{ alias: string; identityKey: ProjectIdentityKey }>;
+  aliases: Array<{ alias: string; identityKey: ProjectIdentityKey; locationKey?: string }>;
   observedKeys: ProjectIdentityKey[];
   complete: boolean;
   excludedRootPaths: string[];
@@ -42,6 +42,8 @@ export interface WorkbenchProjectStartup {
 
 export interface WorkbenchProjectCacheRecord {
   project: WorkbenchProjectOption;
+  identityKey?: ProjectIdentityKey;
+  rootIdentityKeys?: ProjectIdentityKey[];
   sourceKey: string;
   checkedAt: number | null;
 }
