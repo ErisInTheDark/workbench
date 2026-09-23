@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadTooltipDetails: select compact plan, questionnaire, and proposal presentation for one sidebar thread.
+ * - default WorkbenchThreadTooltipDetails: select compact plan or stashed intersections, questionnaire, and proposal presentation for one sidebar thread.
  */
 "use client";
 
@@ -50,6 +50,7 @@ export default function WorkbenchThreadTooltipDetails({
     entry.entryKind === "thread" && entry.identity.harness === harness && entry.identity.threadId === threadId
   ));
   const entry = questionnaire.thread.state.entry ?? sidebarEntry ?? (pinnedEntry?.entryKind === "thread" ? pinnedEntry : null);
+  const arcPhase = sidebarEntry?.gitArc?.phase ?? entry?.gitArc?.phase;
   const pendingRequest = questionnaire.request;
   const proposalId = entry?.gitArc?.proposals.find(proposal => proposal.status === "proposed")?.proposalId ?? null;
   const questionnaireLoading = !pendingRequest && Boolean(entry && (
@@ -59,8 +60,19 @@ export default function WorkbenchThreadTooltipDetails({
   ));
   const questionnaireIsLive = Boolean(pendingRequest && !materialized && questionnaire.thread.state.canRead);
   if (questionnaire.thread.state.status === "failed") return null;
+  const intersectionCard = (
+    <ThreadGitArcIntersectionCard
+      harness={harness}
+      mode={arcPhase === "stashed" ? "stashed" : "plan"}
+      onOpenThread={onOpenThread}
+      presentation="compact"
+      projectId={projectId}
+      threadId={threadId}
+    />
+  );
   return (
     <div className="flex min-w-0 flex-col gap-2" data-thread-tooltip-details="true">
+      {arcPhase === "stashed" ? intersectionCard : null}
       {pendingRequest || questionnaireLoading ? (
         <section
           aria-label="Pending questionnaire"
@@ -126,13 +138,7 @@ export default function WorkbenchThreadTooltipDetails({
           </div>
         </section>
       ) : null}
-      <ThreadGitArcIntersectionCard
-        harness={harness}
-        onOpenThread={onOpenThread}
-        presentation="compact"
-        projectId={projectId}
-        threadId={threadId}
-      />
+      {arcPhase === "stashed" ? null : intersectionCard}
     </div>
   );
 }

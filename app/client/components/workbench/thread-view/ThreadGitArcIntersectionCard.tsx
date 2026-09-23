@@ -1,13 +1,13 @@
 /*
  * Exports:
- * - default ThreadGitArcIntersectionCard: subscribe to and render plan intersections or active claimants blocking a Git arc wait.
+ * - default ThreadGitArcIntersectionCard: render plan, wait, or stashed-claim intersections with sibling threads.
  */
 "use client";
 
 import { useMemo } from "react";
 
 import {
-  createWorkbenchThreadPlanIntersectionSelector,
+  createWorkbenchThreadClaimIntersectionSelector,
   type WorkbenchHarnessId,
   type WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
@@ -30,18 +30,20 @@ export default function ThreadGitArcIntersectionCard({
   threadId,
 }: {
   harness: WorkbenchHarnessId;
-  mode?: "plan" | "wait";
+  mode?: "plan" | "wait" | "stashed";
   onOpenThread: (target: WorkbenchThreadTarget) => void;
   presentation?: "compact" | "full";
   projectId: string;
   threadId: string;
 }) {
-  const selector = useMemo(() => createWorkbenchThreadPlanIntersectionSelector({ harness, threadId }), [harness, threadId]);
+  const scope = mode === "stashed" ? "stashed" : "plan";
+  const selector = useMemo(() => createWorkbenchThreadClaimIntersectionSelector({ harness, threadId }, scope), [harness, scope, threadId]);
   const projectSidebar = useWorkbenchProjectThreadSidebar(projectId ? ProjectIdSchema.parse(projectId) : "");
   const intersections = useMemo(() => selector(projectSidebar), [projectSidebar, selector]);
-  if (!intersections.hasPlannedClaims) return null;
+  if (!intersections.hasScope) return null;
   const waiting = mode === "wait";
-  const compact = presentation === "compact" || waiting;
+  const stashed = mode === "stashed";
+  const compact = presentation === "compact" || waiting || stashed;
   const activeThreadCount = intersections.activeEntries.length;
   const plannedThreadCount = intersections.plannedEntries.length;
   const visibleThreadCount = activeThreadCount + (compact ? 0 : plannedThreadCount);
@@ -56,17 +58,19 @@ export default function ThreadGitArcIntersectionCard({
     <section
       className="my-2 w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))]"
       data-thread-git-arc-intersection-card={mode}
-      data-thread-plan-conflict-card={waiting ? undefined : "true"}
+      data-thread-plan-conflict-card={mode === "plan" ? "true" : undefined}
     >
       <h2 className={`m-0 flex min-w-0 items-center gap-2 px-3 pt-2 text-[0.82em] leading-[1.45]${visibleThreadCount ? "" : " pb-2"}`}>
         {waiting ? <GitArcWaitIcon className="shrink-0" size={16} /> : <GitArcConflictIcon className="shrink-0" size={16} />}
         <span className="min-w-0 flex-1 truncate font-medium text-text">
           {waiting
             ? "Waiting for Git arc claims"
-            : activeThreadCount ? "Planned changes overlap active threads" : "No active work intersects this plan."}
+            : stashed
+              ? activeThreadCount ? "Stashed claims overlap active threads" : "No active work intersects stashed claims."
+              : activeThreadCount ? "Planned changes overlap active threads" : "No active work intersects this plan."}
         </span>
       </h2>
-      <ThreadGitArcConflictList entries={intersections.activeEntries} onOpenThread={onOpenThread} projectId={projectId} />
+      <ThreadGitArcConflictList entries={intersections.activeEntries} onOpenThread={onOpenThread} projectId={projectId} showPaths={!stashed} />
       {!waiting && !compact && plannedThreadCount ? (
         <ThreadDisclosure
           contentClassName="pb-1"

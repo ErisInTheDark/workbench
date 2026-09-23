@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchThreadListItem: render a thread row or disclosure body with shared status, optional action slot, navigation and context menu.
+ * - ThreadTooltipContent: render thread status and active claim paths without exposing stashed paths.
  * Local helpers derive pinned-draft targets and render bounded tooltip details.
  */
 "use client";
@@ -75,7 +76,7 @@ function targetForEntry(entry: ThreadListEntry): WorkbenchThreadTarget {
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
 }
 
-function ThreadTooltipContent({
+export function ThreadTooltipContent({
   claimedPaths,
   dateTime,
   exactTime,
@@ -116,11 +117,11 @@ function ThreadTooltipContent({
         <time className="shrink-0" dateTime={dateTime} title={exactTime}>{relativeTime}</time>
       </div>
       {extraDetails}
-      {claimedPaths.length ? (
+      {!stashed && claimedPaths.length ? (
         <div className="scrollbar-hover-reveal flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--thread-files-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] p-2">
           <div className="contents [--fg-bg:var(--thread-files-bg)]">
             <span className="inline-flex size-5 shrink-0 items-center justify-center text-fg/muted" aria-hidden="true">
-              {stashed ? <ArchiveIcon size={14} /> : <FlagIcon size={14} />}
+              <FlagIcon size={14} />
             </span>
             {claimedPaths.map((filePath) => (
               <ProjectFilePath className="max-w-full shrink" disambiguationPaths={claimedPaths} key={filePath} path={filePath} projectId={projectId} />

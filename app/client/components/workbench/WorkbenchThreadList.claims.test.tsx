@@ -23,7 +23,7 @@ import WorkbenchHomeThreadList from "./WorkbenchHomeThreadList";
 import ThreadRateLimits from "./thread-view/ThreadRateLimits";
 import WorkbenchSidebarPreferencesProvider from "./WorkbenchSidebarPreferencesProvider";
 import WorkbenchThreadList from "./WorkbenchThreadList";
-import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
+import WorkbenchThreadListItem, { ThreadTooltipContent } from "./WorkbenchThreadListItem";
 import WorkbenchContextMenuContext, { type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchDragProvider from "./drag/WorkbenchDragProvider";
@@ -326,6 +326,25 @@ test("stashed arcs show the archive icon count and retained paths instead of liv
   assert.match(html, /aria-label="Stashed work, Completed, 2 stashed files,/u);
   assert.match(html, /data-role="thread-file-stash"[\s\S]*?<span>2<\/span>/u);
   assert.doesNotMatch(html, /data-role="thread-file-claim"/u);
+});
+
+test("thread tooltip hides stashed paths but keeps active claim links", () => {
+  const props = {
+    claimedPaths: ["src/one.ts"],
+    dateTime: "2026-08-20",
+    exactTime: "2026-08-20",
+    Icon: () => null,
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    relativeTime: "now",
+    snoozed: false,
+    status: "Completed",
+    statusClassName: "",
+    title: "Thread",
+  };
+  const stashed = renderToStaticMarkup(createElement(ThreadTooltipContent, { ...props, stashed: true }));
+  assert.doesNotMatch(stashed, /data-project-file-relative-path=/u);
+  const active = renderToStaticMarkup(createElement(ThreadTooltipContent, { ...props, stashed: false }));
+  assert.match(active, /data-project-file-relative-path="src\/one.ts"/u);
 });
 
 test("claim-free thread rows show only non-empty composer drafts in the claim slot", async () => {

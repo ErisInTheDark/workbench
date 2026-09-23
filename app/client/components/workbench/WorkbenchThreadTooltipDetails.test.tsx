@@ -18,7 +18,7 @@ import WorkbenchContextMenuProvider from "./WorkbenchContextMenuProvider";
 import WorkbenchThreadTooltipDetails from "./WorkbenchThreadTooltipDetails";
 import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
 import ThreadGitArcConflictList from "./thread-view/ThreadGitArcConflictList";
-import { getWorkbenchThreadPlanIntersections } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchThreadClaimIntersections } from "workbench-shared/workbench/thread/thread-state";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -350,7 +350,7 @@ test("planned-work tooltips keep active intersection navigation and omit planned
   );
   assert.match(fullHtml, /<details/u);
   const plannedHtml = renderWithClient(createElement(ThreadGitArcConflictList, {
-    entries: getWorkbenchThreadPlanIntersections(planSnapshot.entries, planOwner.identity).plannedEntries,
+    entries: getWorkbenchThreadClaimIntersections(planSnapshot.entries, planOwner.identity, "plan").plannedEntries,
     onOpenThread: () => undefined,
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   }), planStore);
@@ -374,4 +374,35 @@ test("Git arc waits show active claim owners without planned-only intersections"
   assert.doesNotMatch(html, /data-project-file-relative-path="(?:docs\/unrelated.ts|src\/feature\/other.ts)"/u);
   assert.match(html, /href="\/project\/@\/thread\/active%20intersection"/u);
   assert.doesNotMatch(html, /planned%20intersection|<details/u);
+});
+
+test("stashed tooltips identify live claim owners without listing paths or planned-only threads", async () => {
+  const stashedOwner = planThread("thread", {
+    checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "stashed",
+    phase: "stashed", proposals: [], stashedPaths: ["src/feature"], updatedAt: "2026-08-27",
+  }, {
+    checkpointCommit: "b".repeat(40), intentDescription: "", intentName: "pending plan",
+    scopePaths: ["docs"], updatedAt: "2026-08-27",
+  });
+  const snapshot = { ...planSnapshot, entries: [stashedOwner, activeIntersection, plannedIntersection] };
+  const store = { ...planStore, getProjectSnapshot: () => snapshot };
+  const html = await renderDetails(false, "C:/workspace", true, {
+    pendingRequest: null, proposalId: null, sidebarStore: store,
+  });
+  assert.match(html, /data-thread-git-arc-intersection-card="stashed"/u);
+  assert.match(html, /href="\/project\/@\/thread\/active%20intersection"/u);
+  assert.doesNotMatch(html, /data-project-file-relative-path=|planned%20intersection|<details/u);
+
+  const clearHtml = await renderDetails(false, "C:/workspace", true, {
+    pendingRequest: null, proposalId: null,
+    sidebarStore: { ...planStore, getProjectSnapshot: () => ({ ...snapshot, entries: [stashedOwner] }) },
+  });
+  assert.match(clearHtml, /data-thread-git-arc-intersection-card="stashed"/u);
+  assert.doesNotMatch(clearHtml, /data-thread-git-arc-conflict-list=/u);
+
+  const busyHtml = await renderDetails(false, "C:/workspace", true, { sidebarStore: store });
+  const cardStart = busyHtml.indexOf('data-thread-git-arc-intersection-card="stashed"');
+  assert.notEqual(cardStart, -1);
+  assert.ok(cardStart < busyHtml.indexOf('data-thread-tooltip-questionnaire='));
+  assert.ok(cardStart < busyHtml.indexOf('data-thread-tooltip-proposal='));
 });

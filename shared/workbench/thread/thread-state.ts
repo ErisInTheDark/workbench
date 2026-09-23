@@ -39,7 +39,7 @@
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, project-summary, mutation, title, project, and request protocol.
  * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness.
  * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries: partition ordered entries into pinned, main, snoozed, settled, and archived render sections.
- * - WorkbenchThreadPlanIntersections/getWorkbenchThreadPlanIntersections/createWorkbenchThreadPlanIntersectionSelector: derive and identity-stabilize sibling active and planned intersections with narrower overlapping paths.
+ * - WorkbenchThreadClaimIntersections/getWorkbenchThreadClaimIntersections/createWorkbenchThreadClaimIntersectionSelector: derive and identity-stabilize sibling intersections for plan or stashed claims.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback.
  * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: thread-owned status, provider-event fencing, and direct-child status projection.
@@ -877,15 +877,15 @@ export function groupWorkbenchThreadSidebarEntries(entries: readonly WorkbenchTh
   };
 }
 
-export interface WorkbenchThreadPlanIntersections {
+export interface WorkbenchThreadClaimIntersections {
   activeEntries: Array<{ entry: WorkbenchTopLevelThreadSidebarEntry; paths: string[] }>;
-  hasPlannedClaims: boolean;
+  hasScope: boolean;
   plannedEntries: Array<{ entry: WorkbenchTopLevelThreadSidebarEntry; paths: string[] }>;
 }
 
-const EMPTY_WORKBENCH_THREAD_PLAN_INTERSECTIONS: WorkbenchThreadPlanIntersections = {
+const EMPTY_WORKBENCH_THREAD_CLAIM_INTERSECTIONS: WorkbenchThreadClaimIntersections = {
   activeEntries: [],
-  hasPlannedClaims: false,
+  hasScope: false,
   plannedEntries: [],
 };
 
@@ -894,17 +894,20 @@ function orderWorkbenchTopLevelThreadEntries(entries: readonly WorkbenchTopLevel
   return [...grouped.pinnedEntries, ...grouped.mainEntries, ...grouped.snoozedEntries, ...grouped.settledEntries] as WorkbenchTopLevelThreadSidebarEntry[];
 }
 
-export function getWorkbenchThreadPlanIntersections(
+export function getWorkbenchThreadClaimIntersections(
   entries: readonly WorkbenchThreadSidebarEntry[],
   identity: { harness: WorkbenchHarnessId; threadId: string },
-): WorkbenchThreadPlanIntersections {
+  scope: "plan" | "stashed",
+): WorkbenchThreadClaimIntersections {
   const owner = entries.find((entry): entry is WorkbenchTopLevelThreadSidebarEntry => (
     entry.entryKind === "thread"
     && entry.identity.harness === identity.harness
     && entry.identity.threadId === identity.threadId
   ));
-  const scopePaths = owner?.gitArcPlan?.scopePaths ?? [];
-  if (!scopePaths.length) return EMPTY_WORKBENCH_THREAD_PLAN_INTERSECTIONS;
+  const scopePaths = scope === "stashed"
+    ? owner?.gitArc?.phase === "stashed" ? owner.gitArc.stashedPaths : []
+    : owner?.gitArcPlan?.scopePaths ?? [];
+  if (!scopePaths.length) return EMPTY_WORKBENCH_THREAD_CLAIM_INTERSECTIONS;
   const candidates = entries.filter((entry): entry is WorkbenchTopLevelThreadSidebarEntry => (
     entry.entryKind === "thread"
     && (entry.identity.harness !== identity.harness || entry.identity.threadId !== identity.threadId)
@@ -920,15 +923,15 @@ export function getWorkbenchThreadPlanIntersections(
   );
   return {
     activeEntries: intersect((entry) => entry.gitArc?.claimedPaths ?? []),
-    hasPlannedClaims: true,
-    plannedEntries: intersect((entry) => entry.gitArcPlan?.scopePaths ?? []),
+    hasScope: true,
+    plannedEntries: scope === "stashed" ? [] : intersect((entry) => entry.gitArcPlan?.scopePaths ?? []),
   };
 }
 
-export function createWorkbenchThreadPlanIntersectionSelector(identity: { harness: WorkbenchHarnessId; threadId: string }) {
-  let selected = EMPTY_WORKBENCH_THREAD_PLAN_INTERSECTIONS;
+export function createWorkbenchThreadClaimIntersectionSelector(identity: { harness: WorkbenchHarnessId; threadId: string }, scope: "plan" | "stashed") {
+  let selected = EMPTY_WORKBENCH_THREAD_CLAIM_INTERSECTIONS;
   return (snapshot: WorkbenchThreadSidebarSnapshot | null) => {
-    const next = snapshot ? getWorkbenchThreadPlanIntersections(snapshot.entries, identity) : EMPTY_WORKBENCH_THREAD_PLAN_INTERSECTIONS;
+    const next = snapshot ? getWorkbenchThreadClaimIntersections(snapshot.entries, identity, scope) : EMPTY_WORKBENCH_THREAD_CLAIM_INTERSECTIONS;
     if (areDeeplyEqual(selected, next)) return selected;
     selected = next;
     return selected;

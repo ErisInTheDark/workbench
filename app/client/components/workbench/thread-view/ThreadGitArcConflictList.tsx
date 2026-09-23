@@ -17,10 +17,12 @@ export default function ThreadGitArcConflictList({
   entries,
   onOpenThread,
   projectId,
+  showPaths = true,
 }: {
   entries: readonly { entry: ProviderThreadSidebarEntry; paths: readonly string[] }[];
   onOpenThread: (target: WorkbenchThreadTarget) => void;
   projectId: string;
+  showPaths?: boolean;
 }) {
   const projectHref = useWorkbenchProjectNavigation();
   if (!entries.length) return null;
@@ -36,7 +38,7 @@ export default function ThreadGitArcConflictList({
           key={`${entry.identity.harness}:${entry.identity.threadId}`}
           onActivate={onOpenThread}
           projectId={ProjectIdSchema.parse(projectId)}
-          secondaryRow={paths.length ? <ProjectFileLinkList paths={paths} projectFilePaths={projectFilePaths} projectId={projectId} /> : undefined}
+          secondaryRow={showPaths && paths.length ? <ProjectFileLinkList paths={paths} projectFilePaths={projectFilePaths} projectId={projectId} /> : undefined}
           showTooltip={false}
         />
       ))}

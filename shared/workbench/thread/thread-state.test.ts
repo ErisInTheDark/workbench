@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isWorkbenchSidebarThreadCompletionAvailable, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema } from "./thread-state.ts";
-import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadPlanIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadPlanIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
+import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -629,31 +629,66 @@ test("plan intersections classify active and planned siblings while stabilizing 
   assert.deepEqual(grouped.mainEntries.map((entry) => entry.title), ["owner", "working", "pending-attention", "completed", "attention", "unrelated", "planned", "unrelated-plan", "resolved-attention"]);
   assert.deepEqual(grouped.snoozedEntries.map((entry) => entry.title), ["snoozed-attention"]);
   assert.deepEqual(grouped.settledEntries.map((entry) => entry.title), ["settled"]);
-  assert.deepEqual(getWorkbenchThreadPlanIntersections([owner], owner.identity), {
+  assert.deepEqual(getWorkbenchThreadClaimIntersections([owner], owner.identity, "plan"), {
     activeEntries: [],
-    hasPlannedClaims: true,
+    hasScope: true,
     plannedEntries: [],
   });
-  const intersections = getWorkbenchThreadPlanIntersections(entries, owner.identity);
+  const intersections = getWorkbenchThreadClaimIntersections(entries, owner.identity, "plan");
   assert.deepEqual(intersections.activeEntries.map(({ entry }) => entry.title), ["working", "completed", "attention", "settled"]);
   assert.deepEqual(intersections.activeEntries.map(({ paths }) => paths), [
     ["src/feature"], ["src/feature"], ["src/feature/card.tsx"], ["src/feature/deep/file.ts"],
   ]);
   assert.deepEqual(intersections.plannedEntries.map(({ entry, paths }) => [entry.title, paths]), [["planned", ["src/feature/planned.ts"]]]);
-  const duplicateMatches = getWorkbenchThreadPlanIntersections([
+  const duplicateMatches = getWorkbenchThreadClaimIntersections([
     { ...owner, gitArcPlan: { ...owner.gitArcPlan, scopePaths: ["src/feature", "src/feature/card.tsx"] } },
     { ...attention, gitArc: { ...attention.gitArc!, claimedPaths: ["src/feature/card.tsx", "docs/unrelated.ts"] } },
-  ], owner.identity);
+  ], owner.identity, "plan");
   assert.deepEqual(duplicateMatches.activeEntries.map(({ paths }) => paths), [["src/feature/card.tsx"]]);
-  assert.equal(getWorkbenchThreadPlanIntersections(entries, { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("missing") }).hasPlannedClaims, false);
+  assert.equal(getWorkbenchThreadClaimIntersections(entries, { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("missing") }, "plan").hasScope, false);
 
-  const select = createWorkbenchThreadPlanIntersectionSelector(owner.identity);
+  const select = createWorkbenchThreadClaimIntersectionSelector(owner.identity, "plan");
   const snapshot = { entries, error: null, freshness: "fresh" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 1 };
   const first = select(snapshot);
   assert.equal(select({ ...snapshot, error: "unrelated", revision: 2 }), first);
   const changed = select({ ...snapshot, entries: entries.map((entry) => entry === working ? { ...working, title: "working changed" } : entry), revision: 3 });
   assert.notEqual(changed, first);
   assert.equal(changed.activeEntries[0]?.entry.title, "working changed");
+});
+
+test("stashed claim intersections use retained paths rather than a pending plan", () => {
+  const owner: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 10,
+    entryKind: "thread" as const,
+    gitArc: {
+      checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "stash",
+      phase: "stashed" as const, proposals: [], stashedPaths: ["src/feature"], updatedAt: "2026-08-20",
+    },
+    gitArcPlan: {
+      checkpointCommit: "b".repeat(40), intentDescription: "", intentName: "plan",
+      scopePaths: ["docs"], updatedAt: "2026-08-20",
+    },
+    identity: { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("stashed") },
+    lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "stashed",
+  };
+  const sibling = (threadId: string, paths: string[]): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
+    ...owner,
+    gitArc: {
+      checkpointCommit: "c".repeat(40), claimedPaths: paths, intentDescription: "", intentName: "active",
+      phase: "active" as const, proposals: [], updatedAt: "2026-08-20",
+    },
+    gitArcPlan: null,
+    identity: { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
+    title: threadId,
+  });
+  const entries = [owner, sibling("blocking", ["src/feature/card.tsx"]), sibling("unrelated", ["docs"])];
+  const stashed = getWorkbenchThreadClaimIntersections(entries, owner.identity, "stashed");
+  assert.deepEqual(stashed.activeEntries.map(({ entry, paths }) => [entry.title, paths]), [["blocking", ["src/feature/card.tsx"]]]);
+  assert.deepEqual(stashed.plannedEntries, []);
+  assert.deepEqual(getWorkbenchThreadClaimIntersections(entries, owner.identity, "plan").activeEntries.map(({ entry }) => entry.title), ["unrelated"]);
+  assert.deepEqual(getWorkbenchThreadClaimIntersections([owner], owner.identity, "stashed").activeEntries, []);
 });
 
 test("lifecycle parsing preserves canonical attention variants and normalizes legacy reasons", () => {
