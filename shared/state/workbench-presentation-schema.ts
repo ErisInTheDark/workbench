@@ -4,11 +4,11 @@
  * - presentationSchema: protected relational history for the shared presentation database.
  */
 import {
-  blob, defineTable, enumText, foreignKey, integer, primaryKey, text, unique,
+  blob, booleanInteger, defineTable, enumText, foreignKey, integer, primaryKey, text, unique,
   type SelectRow, type TableDefinition,
 } from "../database/schema/schema-definition.ts";
 import {
-  createTable, defineSubsystemHistory, defineTableHistory, defineWorkbenchDatabaseSchema, tableVersion,
+  addColumns, createTable, defineSubsystemHistory, defineTableHistory, defineWorkbenchDatabaseSchema, sqlData, tableVersion,
 } from "../database/schema/schema-history.ts";
 import releases from "./workbench-presentation-releases.ts";
 
@@ -30,11 +30,76 @@ const daemons = initial(defineTable("presentation_daemons", {
   hostname: text().notNull(),
   last_seen_at: integer().notNull().nonNegative(),
 }));
-const projects = initial(defineTable("presentation_projects", {
+const projectTable = defineTable("presentation_projects", {
   id: text().primaryKey(),
   match_key: text().notNull(),
   label: text().notNull(),
-}, table => ({ constraints: [unique([table.match_key])] })));
+}, table => ({ constraints: [unique([table.match_key])] }));
+const projects = defineTableHistory({
+  current: projectTable,
+  versions: [
+    tableVersion({ schemaVersion: releases.initialPresentation.version,
+      table: projectTable, migration: createTable(projectTable) }),
+    tableVersion({ schemaVersion: releases.convergedIdentity.version, table: projectTable,
+      migration: sqlData([
+        `CREATE TEMP TABLE presentation_project_convergence AS
+          WITH keys AS (
+            SELECT id AS old_id,
+              CASE WHEN substr(match_key, 37, 1) = ':'
+                AND (substr(match_key, 38) LIKE 'local://%'
+                  OR substr(match_key, 38) LIKE 'workspace://%'
+                  OR substr(match_key, 38) LIKE 'remote://%')
+                THEN substr(match_key, 38) ELSE match_key END AS canonical_key
+            FROM presentation_projects
+          )
+          SELECT old_id, canonical_key,
+            MIN(old_id) OVER (PARTITION BY canonical_key) AS winner_id FROM keys`,
+        `CREATE TEMP TABLE presentation_folder_order AS
+          SELECT f.id, ROW_NUMBER() OVER (
+            PARTITION BY f.scope, c.winner_id ORDER BY f.logical_project_id, f.position, f.id
+          ) - 1 AS position
+          FROM presentation_folders f
+          JOIN presentation_project_convergence c ON c.old_id = f.logical_project_id
+          WHERE f.scope = 'project'`,
+        `CREATE TEMP TABLE presentation_member_order AS
+          SELECT m.id, ROW_NUMBER() OVER (
+            PARTITION BY m.scope, c.winner_id ORDER BY m.logical_project_id, m.position, m.id
+          ) - 1 AS position
+          FROM presentation_layout_members m
+          JOIN presentation_project_convergence c ON c.old_id = m.logical_project_id
+          WHERE m.scope = 'project'`,
+        `UPDATE presentation_locations SET logical_project_id = (
+          SELECT winner_id FROM presentation_project_convergence WHERE old_id = logical_project_id
+        )`,
+        `UPDATE presentation_drafts SET logical_project_id = (
+          SELECT winner_id FROM presentation_project_convergence WHERE old_id = logical_project_id
+        )`,
+        `UPDATE presentation_folders SET logical_project_id = (
+          SELECT winner_id FROM presentation_project_convergence WHERE old_id = logical_project_id
+        ), position = (SELECT position FROM presentation_folder_order WHERE id = presentation_folders.id)
+          WHERE scope = 'project'`,
+        `UPDATE presentation_layout_members SET logical_project_id = (
+          SELECT winner_id FROM presentation_project_convergence WHERE old_id = logical_project_id
+        ), position = (SELECT position FROM presentation_member_order WHERE id = presentation_layout_members.id)
+          WHERE scope = 'project'`,
+        `UPDATE presentation_import_receipts SET target_id = (
+          SELECT winner_id FROM presentation_project_convergence WHERE old_id = target_id
+        ) WHERE source_kind = 'layout' AND target_id IN (
+          SELECT old_id FROM presentation_project_convergence
+        )`,
+        `DELETE FROM presentation_projects WHERE id IN (
+          SELECT old_id FROM presentation_project_convergence WHERE old_id <> winner_id
+        )`,
+        `UPDATE presentation_projects SET match_key = (
+          SELECT canonical_key FROM presentation_project_convergence WHERE old_id = id
+        )`,
+        `UPDATE presentation_metadata SET revision = revision + 1 WHERE id = 'singleton'`,
+        `DROP TABLE presentation_member_order`,
+        `DROP TABLE presentation_folder_order`,
+        `DROP TABLE presentation_project_convergence`,
+      ]) }),
+  ],
+});
 const locations = initial(defineTable("presentation_locations", {
   daemon_id: text().notNull().references("presentation_daemons", "id"),
   project_id: text().notNull(),
@@ -57,7 +122,7 @@ const defaults = initial(defineTable("presentation_new_thread_defaults", {
     }),
   ],
 })));
-const drafts = initial(defineTable("presentation_drafts", {
+const initialDraftTable = defineTable("presentation_drafts", {
   id: text().primaryKey(),
   logical_project_id: text().notNull().references("presentation_projects", "id"),
   daemon_id: text().notNull(),
@@ -76,7 +141,30 @@ const drafts = initial(defineTable("presentation_drafts", {
       table: "presentation_locations", columns: ["daemon_id", "project_id"],
     }),
   ],
-})));
+}));
+const draftTable = defineTable("presentation_drafts", {
+  ...initialDraftTable.columns,
+  pinned: booleanInteger().notNull().default(0),
+  snoozed: booleanInteger().notNull().default(0),
+}, table => ({
+  constraints: [
+    unique([table.launch_id]),
+    foreignKey([table.daemon_id, table.project_id], {
+      table: "presentation_locations", columns: ["daemon_id", "project_id"],
+    }),
+  ],
+}));
+const drafts = defineTableHistory({
+  current: draftTable,
+  versions: [
+    tableVersion({ schemaVersion: releases.initialPresentation.version,
+      table: initialDraftTable, migration: createTable(initialDraftTable) }),
+    tableVersion({ schemaVersion: releases.convergedIdentity.version,
+      table: draftTable, migration: addColumns({
+        from: initialDraftTable, to: draftTable, columns: ["pinned", "snoozed"],
+      }) }),
+  ],
+});
 const attachments = initial(defineTable("presentation_draft_attachments", {
   draft_id: text().notNull().references("presentation_drafts", "id"),
   id: text().notNull(),

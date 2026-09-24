@@ -13,7 +13,6 @@ import { assertSchemaReleaseManifest } from "workbench-shared/database/schema/sc
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import { WorkbenchComposerProfileSelectionSchema } from "workbench-shared/workbench/thread/thread-state";
-import { logicalProjectMatchKey } from "workbench-shared/workbench/project/project-location";
 import {
   PresentationDraftInputSchema, PresentationMutationSchema, PresentationSnapshotSchema,
   type PresentationMutation, type PresentationSnapshot,
@@ -128,6 +127,7 @@ export default class WorkbenchPresentationRepository {
         id: row.id, logicalProjectId: row.logical_project_id,
         target: { daemonId: row.daemon_id, projectId: row.project_id },
         prompt: row.prompt, selection: this.selection(row.selection_json),
+        pinned: Boolean(row.pinned), snoozed: Boolean(row.snoozed),
         updatedAt: row.updated_at, revision: row.revision, phase: row.phase,
         launchId: row.launch_id, acceptedThreadId: row.accepted_thread_id,
         attachments: attachments.filter(item => item.draft_id === row.id).map(item => ({
@@ -164,10 +164,12 @@ export default class WorkbenchPresentationRepository {
         case "registerLocations": this.registerLocations(mutation); break;
         case "putDraft": this.putDraft(mutation); break;
         case "deleteDraft": this.deleteDraft(mutation); break;
+        case "setDraftPriority": this.setDraftPriority(mutation); break;
         case "deleteAttachment": this.deleteAttachment(mutation); break;
         case "reserveLaunch": this.reserveLaunch(mutation); break;
         case "completeLaunch": this.completeLaunch(mutation); break;
         case "saveLayout": this.saveLayout(mutation); break;
+        case "saveLayouts": this.saveLayouts(mutation); break;
         case "importDraft": this.importDraft(mutation); break;
         case "finishImportDraft": this.finishImportDraft(mutation); break;
         case "importLayout": this.importLayout(mutation); break;
@@ -289,7 +291,7 @@ export default class WorkbenchPresentationRepository {
       ON CONFLICT(id) DO UPDATE SET hostname = excluded.hostname, last_seen_at = excluded.last_seen_at
     `).run(input.daemonId, input.hostname, now);
     for (const location of input.catalog.data) {
-      const key = logicalProjectMatchKey(input.daemonId, location.identityKey, location.rootIdentityKeys);
+      const key = location.identityKey;
       const existing = db.prepare("SELECT id FROM presentation_projects WHERE match_key = ?")
         .get(key) as { id: string } | undefined;
       const priorLocation = db.prepare(`
@@ -378,6 +380,17 @@ export default class WorkbenchPresentationRepository {
     }
   }
 
+  private setDraftPriority(input: Extract<PresentationMutation, { kind: "setDraftPriority" }>) {
+    const draft = this.draft(input.draftId);
+    if (!draft || draft.phase !== "unsent" || draft.revision !== input.expectedRevision) {
+      throw new Error("Draft changed before its priority could be saved.");
+    }
+    if (Boolean(draft.pinned) === input.pinned && Boolean(draft.snoozed) === input.snoozed) return;
+    this.requireDatabase().prepare(`
+      UPDATE presentation_drafts SET pinned = ?, snoozed = ?, revision = ? WHERE id = ?
+    `).run(input.pinned ? 1 : 0, input.snoozed ? 1 : 0, this.nextRevision(), input.draftId);
+  }
+
   private deleteDraft(input: Extract<PresentationMutation, { kind: "deleteDraft" }>) {
     const db = this.requireDatabase();
     const draft = this.draft(input.draftId);
@@ -439,10 +452,21 @@ export default class WorkbenchPresentationRepository {
   }
 
   private saveLayout(input: Extract<PresentationMutation, { kind: "saveLayout" }>) {
+    this.saveLayouts({ kind: "saveLayouts", expectedRevision: input.expectedRevision, layouts: [input] });
+  }
+
+  private saveLayouts(input: Extract<PresentationMutation, { kind: "saveLayouts" }>) {
     const db = this.requireDatabase();
     const current = (db.prepare("SELECT revision FROM presentation_metadata WHERE id = 'singleton'")
       .pluck().get() as number);
     if (current !== input.expectedRevision) throw new Error("Layout changed in another browser.");
+    const scopes = input.layouts.map(layout => `${layout.scope}:${layout.logicalProjectId ?? ""}`);
+    if (new Set(scopes).size !== scopes.length) throw new Error("Layout scope is duplicated.");
+    for (const layout of input.layouts) this.replaceLayout(layout);
+  }
+
+  private replaceLayout(input: Extract<PresentationMutation, { kind: "saveLayouts" }>["layouts"][number]) {
+    const db = this.requireDatabase();
     if ((input.scope === "project") !== (input.logicalProjectId !== null)
       || input.folders.some(folder => folder.scope !== input.scope
       || folder.logicalProjectId !== input.logicalProjectId)
@@ -493,6 +517,7 @@ export default class WorkbenchPresentationRepository {
     if (existing) {
       if (existing.prompt !== draft.prompt || existing.logical_project_id !== draft.logicalProjectId
         || existing.daemon_id !== draft.target.daemonId || existing.project_id !== draft.target.projectId
+        || Boolean(existing.pinned) !== input.pinned || Boolean(existing.snoozed) !== input.snoozed
         || !areDeeplyEqual(this.selection(existing.selection_json), draft.selection)) {
         throw new Error("Imported draft content changed during attachment transfer.");
       }
@@ -502,13 +527,14 @@ export default class WorkbenchPresentationRepository {
     db.prepare(`
       INSERT INTO presentation_drafts
         (id, logical_project_id, daemon_id, project_id, prompt, selection_json, phase,
-          launch_id, accepted_thread_id, revision, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'importing', NULL, NULL, ?, ?)
+          launch_id, accepted_thread_id, revision, updated_at, pinned, snoozed)
+      VALUES (?, ?, ?, ?, ?, ?, 'importing', NULL, NULL, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         prompt = excluded.prompt, selection_json = excluded.selection_json,
         revision = excluded.revision, updated_at = excluded.updated_at
     `).run(draft.id, draft.logicalProjectId, draft.target.daemonId, draft.target.projectId,
-      draft.prompt, JSON.stringify(draft.selection), revision, draft.updatedAt);
+      draft.prompt, JSON.stringify(draft.selection), revision, draft.updatedAt,
+      input.pinned ? 1 : 0, input.snoozed ? 1 : 0);
     // Expected attachment metadata is retained until every content digest is checked.
     db.prepare("DELETE FROM presentation_import_attachments WHERE daemon_id = ? AND source_id = ?")
       .run(input.daemonId, input.sourceId);

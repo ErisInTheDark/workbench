@@ -3,6 +3,7 @@
 
 import { useSyncExternalStore } from "react";
 import { getWorkbenchTranscriptAssetUrl, workbenchDaemonConnection } from "workbench-shared/workbench/workbench-connection";
+import { useWorkbenchDaemonAssetOrigin } from "../WorkbenchDaemonClientContext";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 
 export default function ThreadUserImage({
@@ -15,7 +16,7 @@ export default function ThreadUserImage({
   src: string;
 }) {
   useSyncExternalStore(workbenchDaemonConnection.subscribe, workbenchDaemonConnection.getSnapshot, workbenchDaemonConnection.getSnapshot);
-  const resolvedSrc = getWorkbenchTranscriptAssetUrl(src);
+  const resolvedSrc = getWorkbenchTranscriptAssetUrl(src, useWorkbenchDaemonAssetOrigin());
   if (!resolvedSrc) return <span className={className}>Image unavailable while the daemon is disconnected.</span>;
   return (
     <ThreadLightboxImage

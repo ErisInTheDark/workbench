@@ -11,7 +11,7 @@
  * - removeWorkbenchThreadFromProjectFolder: remove project-owned folder membership separately.
  */
 
-import { ThreadDisplayKeySchema, type FolderId, type ProjectId, type ProjectThreadDisplayKey } from "../identity.ts";
+import { ThreadDisplayKeySchema, type FolderId, type ProjectThreadDisplayKey } from "../identity.ts";
 import {
   getProjectQualifiedThreadDisplayKey,
   getThreadDisplayFolderKey,
@@ -33,16 +33,23 @@ import {
   getThreadSidebarGroup,
   WorkbenchHomeThreadDisplayOrderSchema,
   type WorkbenchHomeThreadDisplayOrder,
-  type WorkbenchProjectThreadSidebars,
   type WorkbenchThreadSidebarEntry,
 } from "./thread-state.ts";
+
+type HomeThreadSources = {
+  projects: readonly {
+    projectId: string;
+    entries: readonly WorkbenchThreadSidebarEntry[];
+    displayOrder?: WorkbenchThreadDisplayOrder;
+  }[];
+};
 
 export { WorkbenchHomeThreadDisplayOrderSchema };
 export type { WorkbenchHomeThreadDisplayOrder };
 
 export interface WorkbenchHomeThreadEntry {
   entry: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>;
-  projectId: ProjectId;
+  projectId: string;
   threadKey: ProjectThreadDisplayKey;
 }
 
@@ -52,7 +59,7 @@ export type WorkbenchHomeThreadDisplayItem =
     entries: WorkbenchHomeThreadEntry[];
     folder: ThreadDisplayFolder;
     itemKind: "folder";
-    projectId: ProjectId;
+    projectId: string;
     threadKeys: ProjectThreadDisplayKey[];
   };
 
@@ -72,15 +79,15 @@ export function normalizeWorkbenchHomeThreadDisplayOrder(candidate: unknown): Wo
   return order;
 }
 
-export function getWorkbenchHomeThreadKey(projectId: ProjectId, entry: WorkbenchThreadSidebarEntry) {
+export function getWorkbenchHomeThreadKey(projectId: string, entry: WorkbenchThreadSidebarEntry) {
   return getProjectQualifiedThreadDisplayKey(projectId, getWorkbenchThreadDisplayKey(entry));
 }
 
-export function getWorkbenchHomeFolderKey(projectId: ProjectId, folderId: FolderId) {
+export function getWorkbenchHomeFolderKey(projectId: string, folderId: FolderId) {
   return getProjectQualifiedThreadDisplayKey(projectId, getThreadDisplayFolderKey(folderId));
 }
 
-function collectHomeEntries(sidebars: WorkbenchProjectThreadSidebars) {
+function collectHomeEntries(sidebars: HomeThreadSources) {
   const naturallyOrdered = sortThreadSidebarEntries(sidebars.projects.flatMap((sidebar) => sidebar.entries));
   const entriesByIdentity = new Map(sidebars.projects.flatMap((sidebar) => sidebar.entries.map((entry) => [
     entry,
@@ -103,7 +110,7 @@ function layoutEntries(entries: readonly WorkbenchHomeThreadEntry[]) {
   });
 }
 
-function folderLookup(sidebars: WorkbenchProjectThreadSidebars) {
+function folderLookup(sidebars: HomeThreadSources) {
   return new Map(sidebars.projects.flatMap((sidebar) => (sidebar.displayOrder?.folders ?? []).map((folder) => [
     getWorkbenchHomeFolderKey(sidebar.projectId, folder.folderId),
     { folder, projectId: sidebar.projectId, sidebar },
@@ -112,7 +119,7 @@ function folderLookup(sidebars: WorkbenchProjectThreadSidebars) {
 
 function collapseProjectFolders(
   orderedEntries: readonly WorkbenchHomeThreadEntry[],
-  sidebars: WorkbenchProjectThreadSidebars,
+  sidebars: HomeThreadSources,
 ): WorkbenchHomeThreadDisplayItem[] {
   const folders = folderLookup(sidebars);
   const folderByMember = new Map<string, ReturnType<typeof folders.get>>();
@@ -145,7 +152,7 @@ function collapseProjectFolders(
 
 function projectSection(
   entries: readonly WorkbenchHomeThreadEntry[],
-  sidebars: WorkbenchProjectThreadSidebars,
+  sidebars: HomeThreadSources,
   displayOrder: WorkbenchHomeThreadDisplayOrder,
   section: WorkbenchThreadDisplaySection,
 ) {
@@ -161,7 +168,7 @@ function projectSection(
 }
 
 export function projectWorkbenchHomeThreadList(
-  sidebars: WorkbenchProjectThreadSidebars,
+  sidebars: HomeThreadSources,
   candidate: unknown,
 ): WorkbenchHomeThreadList {
   const entries = collectHomeEntries(sidebars);

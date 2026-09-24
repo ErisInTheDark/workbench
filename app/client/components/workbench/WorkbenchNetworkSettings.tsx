@@ -3,9 +3,9 @@
  * - WorkbenchNetworkSettings: render one connection mode, its address controls and contextual setup.
  */
 "use client";
-import { useEffect, useState } from "react";
+import { useContext, useState } from "react";
 import { workbenchNetworkMode, type WorkbenchNetworkAction } from "workbench-shared/http/workbench-network";
-import WorkbenchNetworkClient, { WorkbenchNetworkClientContext, useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
+import { WorkbenchNetworkClientContext, useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
 import PrimaryButton from "./PrimaryButton";
 import WorkbenchCopyButton from "./WorkbenchCopyButton";
 import WorkbenchIconButton from "./WorkbenchIconButton";
@@ -107,13 +107,7 @@ function NetworkSettingsContent () {
 }
 
 export default function WorkbenchNetworkSettings () {
-  const [client, setClient] = useState<WorkbenchNetworkClient | null>(null);
-  useEffect(() => {
-    const owner = new WorkbenchNetworkClient();
-    setClient(owner);
-    void owner.start();
-    return () => owner.close();
-  }, []);
+  const client = useContext(WorkbenchNetworkClientContext);
   if (!client) return null;
-  return <WorkbenchNetworkClientContext.Provider value={client}><NetworkSettingsContent /></WorkbenchNetworkClientContext.Provider>;
+  return <NetworkSettingsContent />;
 }

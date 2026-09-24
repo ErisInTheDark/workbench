@@ -13,6 +13,9 @@ import type {
   WorkbenchClientStateResponse,
   WorkbenchClientStateRows,
 } from "workbench-shared/state/workbench-client-state";
+import { WorkbenchDaemonRegistrationSchema } from "workbench-shared/state/workbench-client-state";
+import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
+import { z } from "zod";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -37,6 +40,7 @@ export function conformWorkbenchClientStateResponse(
     "oldestAvailableRevision",
     "revision",
     "rows",
+    "registrations",
     "schemaVersion",
   ]);
   for (const key of Object.keys(value)) {
@@ -66,6 +70,12 @@ export function conformWorkbenchClientStateResponse(
   } else if (!Object.hasOwn(value, "schemaVersion")) {
     repairedPaths.push(["schemaVersion"]);
   }
+  const registrations = value.registrations === undefined
+    ? null : z.array(WorkbenchDaemonRegistrationSchema).safeParse(value.registrations);
+  if (registrations && !registrations.success) {
+    reportClientSchemaError("Rejected Workbench daemon registrations", registrations.error);
+    issues.push(invalidValue(["registrations"]));
+  }
 
   const rowsValue = isRecord(value.rows) ? value.rows : {};
   if (!isRecord(value.rows)) issues.push(invalidValue(["rows"]));
@@ -94,6 +104,7 @@ export function conformWorkbenchClientStateResponse(
       oldestAvailableRevision: oldestAvailableRevision as number,
       revision: revision as number,
       rows: rows as WorkbenchClientStateRows,
+      ...(registrations?.success ? { registrations: registrations.data } : {}),
       schemaVersion: schemaVersion as number,
     },
     repairedPaths,

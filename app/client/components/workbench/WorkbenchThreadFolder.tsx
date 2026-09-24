@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
 
-import type { WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import {
   isWorkbenchThreadRowDragPayload,
   WORKBENCH_THREAD_ORDER_DROP_TARGET_ID,
@@ -115,7 +115,7 @@ export default function WorkbenchThreadFolder({
   onPrependThread?: (payload: WorkbenchThreadRowDragPayload) => void;
   onRename: (title: string) => Promise<string>;
   open: boolean;
-  project?: WorkbenchProjectOption;
+  project?: WorkbenchProjectOption | WorkbenchLogicalProject;
   tooltip: ReactNode;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);

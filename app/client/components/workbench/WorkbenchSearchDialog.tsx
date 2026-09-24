@@ -6,9 +6,9 @@
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
 
-import type { WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchProjectOption } from "workbench-shared/types";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
-import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { createLogicalExistingThreadRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchSearchController from "../../workbench/search/WorkbenchSearchController";
@@ -16,9 +16,11 @@ import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchSearchResultItem from "./WorkbenchSearchResultItem";
 
-export default function WorkbenchSearchDialog({ controller, projects, projectSidebars, projectSummaries }: {
+export default function WorkbenchSearchDialog({ controller, projects, logicalProjects, logicalSummaries, projectSidebars, projectSummaries }: {
   controller: WorkbenchSearchController;
   projects: readonly WorkbenchProjectOption[];
+  logicalProjects?: readonly WorkbenchLogicalProject[];
+  logicalSummaries?: Readonly<Record<string, WorkbenchLogicalProjectSummary>>;
   projectSidebars: WorkbenchProjectThreadSidebars;
   projectSummaries: WorkbenchProjectThreadSummaries;
 }) {
@@ -97,6 +99,7 @@ export default function WorkbenchSearchDialog({ controller, projects, projectSid
           role="listbox"
         >
           {snapshot.error ? <p className="px-4 py-5 text-sm text-red-500">{snapshot.error}</p> : null}
+          {snapshot.warning ? <p className="px-4 py-2 text-sm text-fg/muted">{snapshot.warning}</p> : null}
           {snapshot.isLoading ? <p className="px-2 py-2 text-sm text-fg/muted">Searching...</p> : null}
           {!snapshot.error && !snapshot.isLoading && snapshot.results.length === 0 ? (
             <p className="px-4 py-5 text-sm text-fg/muted">No matching results.</p>
@@ -105,6 +108,8 @@ export default function WorkbenchSearchDialog({ controller, projects, projectSid
             const id = `workbench-search-result-${index}`;
             const selected = index === snapshot.selectedIndex;
             const project = result.kind === "action" ? undefined : projects.find(({ id }) => id === result.projectId);
+            const logicalProject = result.logicalProjectId
+              ? logicalProjects?.find(item => item.id === result.logicalProjectId) : undefined;
             const summary = projectSummaries.projects.find(({ projectId }) => projectId === project?.id) ?? null;
             const thread = result.kind === "thread"
               ? projectSidebars.projects.find(({ projectId }) => projectId === result.projectId)?.entries.find((entry) => (
@@ -121,10 +126,15 @@ export default function WorkbenchSearchDialog({ controller, projects, projectSid
                 }}
                 role="presentation"
               >
-                {result.kind === "project" && project ? (
+                {result.kind === "project" && (logicalProject || project) ? (
                   <WorkbenchProjectListItem
                     compact
-                    entry={{ activityAt: summary?.lastThreadUpdateAt ?? project.lastCommitTimeMs, project, summary }}
+                    entry={logicalProject ? {
+                      activityAt: logicalSummaries?.[logicalProject.id]?.lastThreadUpdateAt ?? null,
+                      project: logicalProject, summary: logicalSummaries?.[logicalProject.id] ?? null,
+                    } : {
+                      activityAt: summary?.lastThreadUpdateAt ?? project!.lastCommitTimeMs, project: project!, summary,
+                    }}
                     id={id}
                     nowMs={Date.now()}
                     onProjectLinkClick={(event) => { event.preventDefault(); controller.activate(result); }}
@@ -137,7 +147,11 @@ export default function WorkbenchSearchDialog({ controller, projects, projectSid
                     compact
                     dimmedOverride={false}
                     entry={thread}
-                    href={projectHref(createThreadRoute(result.projectId, { kind: "provider", harness: thread.identity.harness, threadId: thread.identity.threadId }))}
+                    href={projectHref(result.logicalProjectId
+                      ? createLogicalExistingThreadRoute(result.logicalProjectId,
+                        { kind: "provider", harness: thread.identity.harness, threadId: thread.identity.threadId })
+                      : createThreadRoute(result.projectId,
+                        { kind: "provider", harness: thread.identity.harness, threadId: thread.identity.threadId }))}
                     id={id}
                     onActivate={() => controller.activate(result)}
                     project={project}

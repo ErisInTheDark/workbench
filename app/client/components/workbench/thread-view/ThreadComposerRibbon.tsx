@@ -30,6 +30,7 @@ export default function ThreadComposerRibbon({
   profileControl,
   providerLabel = "",
   selectedProfileLabel = null,
+  targetControl,
   showsFastModeControl,
   showsProfileControl = true,
   showsProviderControl = false,
@@ -51,6 +52,7 @@ export default function ThreadComposerRibbon({
   profileControl?: ReactNode;
   providerLabel?: string;
   selectedProfileLabel?: string | null;
+  targetControl?: ReactNode;
   showsFastModeControl: boolean;
   showsProfileControl?: boolean;
   showsProviderControl?: boolean;
@@ -59,6 +61,7 @@ export default function ThreadComposerRibbon({
   const ribbon = useRef<HTMLDivElement>(null);
   return (
     <div ref={ribbon} className="inline-flex min-w-0 max-w-full items-center overflow-x-auto whitespace-nowrap text-[0.78em] font-medium text-text *:shrink-0 [&>span[aria-hidden]]:h-4">
+      {targetControl ? <>{targetControl}<span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" /></> : null}
       {showsProfileControl && profileControl ? <>{profileControl}
       {!selectedProfileLabel ? <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" /> : null}</> : null}
       {!selectedProfileLabel ? <>

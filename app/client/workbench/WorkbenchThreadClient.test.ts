@@ -96,9 +96,11 @@ class FakeWebSocket {
   readyState = 1;
   readonly requests: SocketRequest[] = [];
   observationRevision = 1;
+  readonly url: string;
   private readonly listeners = new Map<string, Listener[]>();
 
-  constructor(_url: string) {
+  constructor(url: string) {
+    this.url = url;
     FakeWebSocket.current = this;
     queueMicrotask(() => this.emit("open", {}));
   }
@@ -233,6 +235,12 @@ class FakeWebSocket {
 function isContinueRequest(request: SocketRequest) {
   return request.method === "thread/message/submit" && request.params?.intent === "continue";
 }
+
+test("a daemon session resolves its own socket address", async () => {
+  await withClient(async (_client, socket) => {
+    assert.equal(socket.url, "wss://peer.wb.inthedark.boo:52739/");
+  }, { resolveDaemonUrl: async () => "wss://peer.wb.inthedark.boo:52739/" });
+});
 
 function isAdmissionRequest(request: SocketRequest) {
   return request.method === "thread/message/submit"

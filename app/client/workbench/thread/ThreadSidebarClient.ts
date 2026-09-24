@@ -5,9 +5,21 @@
  * - ThreadSidebarTransport: observation and draft mutation ports.
  * - ThreadSidebarClientOptions: transport and snapshot callback.
  * - ThreadSidebarAcceptedIntent: provider-confirmed local admission.
+ * - openWorkbenchThreadStateObservation/openWorkbenchGlobalThreadStateObservation: negotiate browser-safe sidebar opens.
  * - default ThreadSidebarClient: project/global sidebar state and project-qualified draft save queues.
  */
-import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
+import type { WorkbenchProjectsPayload, WorkbenchThreadSidebarStore } from "workbench-shared/types";
+import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
+import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
+import {
+  WorkbenchGlobalThreadStateOpenResultSchema, WorkbenchThreadSidebarSnapshotSchema,
+  WorkbenchThreadStateOpenResultSchema, WorkbenchThreadStateSnapshotSchema,
+} from "workbench-shared/workbench/thread/thread-state";
+import conformWorkbenchThreadStateOpenResult, {
+  conformWorkbenchGlobalThreadStateOpenResult,
+  conformWorkbenchThreadStateSnapshot,
+} from "./browser-thread-state-conformance";
 import { findWorkbenchThreadFolder, moveWorkbenchThreadDisplayItem, replaceWorkbenchThreadFolderMember, resolveWorkbenchThreadDisplayOrder, sortThreadSidebarEntries } from "workbench-shared/workbench/thread/thread-display-order";
 import { createDraftTitle, type WorkbenchHarnessId, type WorkbenchHomeThreadDisplayOrderSnapshot, type WorkbenchPinnedThreadLayoutSnapshot, type WorkbenchProjectThreadSidebars, type WorkbenchProjectThreadSidebarUpdate, type WorkbenchProjectThreadSummaries, type WorkbenchProjectThreadSummary, type WorkbenchProjectThreadSummaryUpdate, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import ThreadSidebarProjectState from "./ThreadSidebarProjectState";
@@ -48,6 +60,87 @@ export interface ThreadSidebarAcceptedIntent {
   turnId: WorkbenchTurnId;
 }
 
+function isUnsupportedThreadStateOpenVersion(error: unknown) {
+  if (error instanceof WorkbenchDaemonRequestError && (error.code as unknown) === "invalidThreadStateMutation") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return (/unrecognized key/iu.test(message) && /version/iu.test(message))
+    || (/invalid input/iu.test(message) && /expected 2/iu.test(message));
+}
+
+function isCompositeThreadStateOpenResponse(value: unknown): value is { sidebar: unknown } {
+  return typeof value === "object" && value !== null && "sidebar" in value;
+}
+
+export async function openWorkbenchThreadStateObservation({
+  acceptProject,
+  installCatalog,
+  projectId,
+  request,
+}: {
+  acceptProject: (update: WorkbenchProjectStateUpdate) => void;
+  installCatalog: (catalog: WorkbenchProjectsPayload) => void | Promise<unknown>;
+  projectId: string;
+  request: (params: { projectId: string; version?: 2 | 3 | 4 | 5 | 6 }) => Promise<unknown>;
+}) {
+  const acceptComposite = async (response: unknown) => {
+    const parsed = WorkbenchThreadStateOpenResultSchema.safeParse(response);
+    if (!parsed.success) reportClientSchemaError("Repaired Workbench thread-state open response", parsed.error);
+    const conformed = conformWorkbenchThreadStateOpenResult(response, projectId);
+    await installCatalog(conformed.data.catalog);
+    if (conformed.data.project) acceptProject(conformed.data.project);
+    return conformed;
+  };
+  let response: unknown;
+  for (const version of [6, 5, 4, 3, 2, undefined] as const) {
+    try {
+      response = await request(version === undefined ? { projectId } : { projectId, version });
+      break;
+    } catch (error) {
+      if (version === undefined || !isUnsupportedThreadStateOpenVersion(error)) throw error;
+    }
+  }
+  if (!isCompositeThreadStateOpenResponse(response)) {
+    const legacy = WorkbenchThreadSidebarSnapshotSchema.safeParse(response);
+    if (!legacy.success) {
+      reportClientSchemaError("Rejected legacy Workbench thread-state open response", legacy.error);
+      throw new Error("The legacy thread-state open response was invalid.");
+    }
+    return { pinnedThreadLayout: { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" as const },
+      projectThreads: { projects: [] }, sidebar: legacy.data };
+  }
+  const composite = (await acceptComposite(response)).data;
+  return { pinnedThreadLayout: composite.pinnedThreadLayout,
+    projectThreads: composite.projectThreads, sidebar: composite.sidebar };
+}
+
+export async function openWorkbenchGlobalThreadStateObservation({
+  installCatalog,
+  request,
+}: {
+  installCatalog: (catalog: WorkbenchProjectsPayload) => void | Promise<unknown>;
+  request: (version: 4 | 5 | 6 | 7) => Promise<unknown>;
+}) {
+  let response: unknown;
+  for (const version of [7, 6, 5, 4] as const) {
+    try {
+      response = await request(version);
+      break;
+    } catch (error) {
+      const code = error instanceof WorkbenchDaemonRequestError ? error.code as unknown : null;
+      if (version === 4 || code !== "invalidThreadStateMutation") throw error;
+    }
+  }
+  const parsed = WorkbenchGlobalThreadStateOpenResultSchema.safeParse(response);
+  if (!parsed.success) reportClientSchemaError("Repaired Workbench global thread-state open response", parsed.error);
+  const conformed = conformWorkbenchGlobalThreadStateOpenResult(response).data;
+  await installCatalog(conformed.catalog);
+  return {
+    homeThreadDisplayOrder: "homeThreadDisplayOrder" in conformed ? conformed.homeThreadDisplayOrder : null,
+    pinnedThreadLayout: conformed.pinnedThreadLayout,
+    projectSidebars: conformed.projectSidebars,
+  };
+}
+
 interface DraftQueue {
   // Observation can disappear while an originating form still has edits or image reads.
   draft: WorkbenchThreadDraft | null;
@@ -76,6 +169,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   readonly getSnapshot = () => this.projectId ? this.getProjectSnapshot(this.projectId) : null;
   readonly getHomeThreadDisplayOrder = () => this.homeThreadDisplayOrder;
   readonly getHomeThreadDisplayOrderSupported = () => this.homeThreadDisplayOrderSupported;
+  readonly isObservingGlobal = () => this.mode === "global" && this.isOpen;
   readonly getPinnedThreadLayout = () => this.pinnedThreadLayout;
   readonly getProjectSnapshot = (projectId: ProjectId) => this.projectThreadSidebars.projects.find((snapshot) => snapshot.projectId === projectId) ?? null;
   readonly getDraft = (projectId: ProjectId, draftId: DraftId): WorkbenchThreadDraft | null => {
@@ -144,6 +238,35 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       return;
     }
     if (snapshot.projectId === this.projectId) this.install(snapshot);
+  }
+  async refreshGlobal() {
+    if (this.mode === "global") return await this.reopen();
+    await this.openGlobal();
+  }
+  async refreshFor(projectId: ProjectId | null) {
+    if (!projectId) return await this.refreshGlobal();
+    if (this.mode === "project" && this.projectId === projectId) return await this.reopen();
+    if (!await this.open(projectId)) {
+      throw new Error(this.getSnapshot()?.error ?? "Project thread observation could not open.");
+    }
+  }
+  acceptDaemonUpdate(value: unknown, acceptProject: (update: WorkbenchProjectStateUpdate) => void) {
+    if (value && typeof value === "object" && "updateKind" in value && value.updateKind === "threadObservation") return;
+    const parsed = WorkbenchThreadStateSnapshotSchema.safeParse(value);
+    if (!parsed.success) reportClientSchemaError("Repaired workbench thread-state update", parsed.error);
+    const conformed = conformWorkbenchThreadStateSnapshot(value).data;
+    if (!conformed) return;
+    if ("updateKind" in conformed) {
+      if (conformed.updateKind === "project") acceptProject(conformed);
+      else if (conformed.updateKind === "homeThreadDisplayOrder") this.acceptHomeThreadDisplayOrder(conformed);
+      else if (conformed.updateKind === "projectThreadSidebar") this.acceptProjectThreadSidebar(conformed);
+      else if (conformed.updateKind === "projectThreadSummary") this.acceptProjectThreadSummary(conformed);
+      else if (conformed.updateKind === "pinnedThreadLayout") this.acceptPinnedThreadLayout(conformed);
+      else if (conformed.updateKind === "activity") this.acceptActivity(conformed);
+      else if (conformed.updateKind === "threadStateDelta") this.acceptDelta(conformed);
+    } else {
+      this.accept(conformed);
+    }
   }
   acceptProjectThreadSidebar(update: WorkbenchProjectThreadSidebarUpdate) {
     if (this.mode === "global" && this.installProjectSidebar(update.sidebar)) this.publish();
@@ -365,6 +488,19 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     await close.catch((error: unknown) => {
       console.warn("Unable to close the thread sidebar observation.", error);
     });
+  }
+  dispose() {
+    for (const queue of this.queues.values()) {
+      if (queue.timer) clearTimeout(queue.timer);
+      queue.timer = null;
+      queue.retired = true;
+    }
+    this.queues.clear();
+    this.mode = "closed";
+    this.projectId = null;
+    this.isOpen = false;
+    this.clearProjects();
+    this.listeners.clear();
   }
   private install(snapshot: WorkbenchThreadSidebarSnapshot) {
     if (this.installProjectSidebar(snapshot)) this.publish();

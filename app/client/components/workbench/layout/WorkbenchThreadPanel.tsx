@@ -7,9 +7,15 @@
 import { useEffect, useRef, useState, type ComponentProps, type PointerEvent } from "react";
 
 import type { ThreadPayload, ThreadSummary } from "workbench-shared/types";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import ThreadScrollViewport from "../thread-view/ThreadScrollViewport";
 import ThreadView from "../thread-view/ThreadView";
 import { useWorkbenchThread } from "../use-workbench-thread";
+import { useWorkbenchClientController } from "../workbench-client-context";
+import WorkbenchDaemonClientContext, { WorkbenchDaemonAssetOriginContext, useWorkbenchDaemonAssetOrigin, useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
+import WorkbenchWorkingTreeProvider from "../git/WorkbenchWorkingTreeProvider";
+import WorkbenchComposerProfileProvider from "../WorkbenchComposerProfileProvider";
+import type WorkbenchComposerProfileController from "../../../workbench/state/WorkbenchComposerProfileController";
 import resolveThreadActivityTimestampMs from "../thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-formatters";
 import WorkbenchIconButton from "../WorkbenchIconButton";
@@ -31,12 +37,14 @@ interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewpor
   isFocused: boolean;
   isMinimized?: boolean;
   isMinimizedVertical?: boolean;
+  location?: ProjectLocationReference | null;
   onClose?: () => void;
   onCreateDraftThread?: () => ThreadPayload | null;
   onHeaderPointerDragStart?: (event: PointerEvent<HTMLElement>) => void;
   onMinimizeToggle?: () => void;
   onPanelZoomDeltaChange?: (zoomDelta: number) => void;
   panelZoomDelta?: number;
+  profileController: WorkbenchComposerProfileController;
   thread: ThreadPayload | null;
   threadId: string;
 }
@@ -46,26 +54,42 @@ export default function WorkbenchThreadPanel ({
   hasSidebarRestoreInset = false,
   isMinimized = false,
   isMinimizedVertical = false,
+  location = null,
   onClose,
   onCreateDraftThread,
   onHeaderPointerDragStart,
   onMinimizeToggle,
   onPanelZoomDeltaChange,
   panelZoomDelta = 0,
+  profileController,
   thread,
   threadId,
   ...threadViewProps
 }: WorkbenchThreadPanelProps) {
+  const client = useWorkbenchClientController();
+  const outerDaemon = useWorkbenchDaemonClient();
+  const outerAssetOrigin = useWorkbenchDaemonAssetOrigin();
+  const threadContext = threadViewProps.threadTarget?.kind === "provider"
+    || threadViewProps.threadTarget?.kind === "subagent"
+    ? client.mounted?.threadContextFor(threadId) : null;
+  const launchContext = location ? client.mounted?.launchContextFor(location) : null;
+  const panelContext = threadContext ?? launchContext;
+  const ownerMetadata = threadViewProps.threadTarget?.kind === "provider"
+    || threadViewProps.threadTarget?.kind === "subagent"
+    ? client.mounted?.threadOwnerFor(threadId) : null;
   const threadController = useWorkbenchThread(threadViewProps.projectId, threadViewProps.threadTarget, undefined, threadViewProps.routeOwned ? "route" : "summary");
   const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
   const [zoomPreview, setZoomPreview] = useState<number | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
+  const initializedNewRef = useRef(false);
 
   useEffect(() => {
-    if (threadId !== "new" || thread?.id === threadId) {
+    if (threadId !== "new") {
+      initializedNewRef.current = false;
       return;
     }
-
+    if (initializedNewRef.current || thread?.id === threadId) return;
+    initializedNewRef.current = true;
     onCreateDraftThread?.();
   }, [onCreateDraftThread, thread?.id, threadId]);
 
@@ -110,7 +134,9 @@ export default function WorkbenchThreadPanel ({
   }
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+      data-thread-daemon-id={ownerMetadata?.daemonId ?? launchContext?.daemonId}
+      data-thread-project-id={ownerMetadata?.projectId ?? launchContext?.project.id}>
       <header
         className={`sticky top-0 z-10 px-5 py-3 md:px-6${onHeaderPointerDragStart ? " cursor-grab active:cursor-grabbing" : ""}${hasSidebarRestoreInset ? " pl-28 md:pl-28" : ""}${isMinimizedVertical ? " flex h-full items-center justify-center" : ""}`}
         onPointerDown={handleHeaderPointerDown}
@@ -172,13 +198,41 @@ export default function WorkbenchThreadPanel ({
           contentClassName="flex flex-col"
           resetKey={`${thread?.harness ?? "thread"}:${threadViewProps.selectedThreadId ?? thread?.id ?? threadId}`}
         >
-          <ThreadView
-            {...threadViewProps}
-            contained
-            fontSizeRem={effectiveFontSizeRem}
-            scrollViewportRef={scrollViewportRef}
-            thread={thread}
-          />
+          {(threadViewProps.threadTarget?.kind === "provider"
+            || threadViewProps.threadTarget?.kind === "subagent"
+            || location) && !panelContext
+            ? <p className="py-6 text-sm text-fg/muted">
+              Thread owner unavailable.
+              {ownerMetadata ? ` ${ownerMetadata.hostname} \u00b7 ${ownerMetadata.rootPath}` : null}
+            </p>
+            : <WorkbenchDaemonClientContext.Provider value={panelContext?.daemon ?? outerDaemon}>
+            <WorkbenchDaemonAssetOriginContext.Provider value={{
+              origin: panelContext ? panelContext.assetOrigin : outerAssetOrigin ?? null,
+            }}>
+              <WorkbenchWorkingTreeProvider
+                projectId={panelContext?.project.id ?? threadViewProps.projectId}
+                sourceDaemon={panelContext?.daemon ?? outerDaemon}
+                sourceDaemonId={panelContext?.daemonId ?? null}
+              >
+              <WorkbenchComposerProfileProvider controller={profileController}>
+              <ThreadView
+                {...threadViewProps}
+                projectId={panelContext?.project.id ?? threadViewProps.projectId}
+                projectRootPath={panelContext?.project.rootPath ?? threadViewProps.projectRootPath}
+                projectRoots={panelContext?.project.roots ?? threadViewProps.projectRoots}
+                threadOwnerContent={ownerMetadata
+                  ? <span className="truncate font-mono text-fg/muted">
+                    {ownerMetadata.hostname} {" \u00b7 "} {ownerMetadata.rootPath}
+                  </span> : threadViewProps.threadOwnerContent}
+                contained
+                fontSizeRem={effectiveFontSizeRem}
+                scrollViewportRef={scrollViewportRef}
+                thread={thread}
+              />
+              </WorkbenchComposerProfileProvider>
+              </WorkbenchWorkingTreeProvider>
+            </WorkbenchDaemonAssetOriginContext.Provider>
+          </WorkbenchDaemonClientContext.Provider>}
         </ThreadScrollViewport>
       </div>
     </div>

@@ -303,7 +303,7 @@ export default function WorkbenchThreadList({
     const dropTargetIds = rowDragEnabled
       ? [
           ...(onMove ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID] : []),
-          WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID,
+          ...(onSetPriority ? [WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID] : []),
           WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID,
           ...(allowMainPanelDrop ? [WORKBENCH_MAIN_PANEL_DROP_TARGET_ID] : []),
         ]

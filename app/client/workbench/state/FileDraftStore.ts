@@ -40,13 +40,13 @@ export interface FileDraftStore {
 }
 
 function buildPersistedDraftRecord(
-  controller: WorkbenchClientStateController,
+  daemonRegistrationId: string,
   projectId: string,
   filePath: string,
   buffer: DraftBuffer,
 ): FileDraftRecord {
   return {
-    daemonRegistrationId: controller.daemonRegistrationId,
+    daemonRegistrationId,
     kind: "fileDraft",
     projectId,
     path: filePath,
@@ -77,6 +77,7 @@ function FileDraftStore(
   onChange: () => void = () => {},
   clientStateController?: WorkbenchClientStateController,
   onPersistenceError: (message: string) => void = () => {},
+  getDaemonRegistrationId: () => string = () => clientStateController?.daemonRegistrationId ?? "",
 ): FileDraftStore {
   const listeners = new Set<FileDraftStoreListener>();
   let draftBuffers = new Map<string, DraftBuffer>();
@@ -109,7 +110,7 @@ function FileDraftStore(
     }
     const projectId = getProjectId();
     return clientStateController.records("fileDraft").filter((record) => (
-      record.daemonRegistrationId === clientStateController.daemonRegistrationId
+      record.daemonRegistrationId === getDaemonRegistrationId()
       && record.projectId === projectId
     ));
   }
@@ -124,13 +125,14 @@ function FileDraftStore(
 
   function persistDraftBuffer(filePath: string, buffer: DraftBuffer | null) {
     const projectId = getProjectId();
+    const daemonRegistrationId = getDaemonRegistrationId();
     if (!clientStateController) {
       return Promise.resolve();
     }
     return enqueueDraftPersistence(async () => {
       if (!buffer || !buffer.dirty) {
         await clientStateController.delete({
-          daemonRegistrationId: clientStateController.daemonRegistrationId,
+          daemonRegistrationId,
           kind: "fileDraft",
           path: filePath,
           projectId,
@@ -139,7 +141,7 @@ function FileDraftStore(
       }
 
       await clientStateController.put(buildPersistedDraftRecord(
-        clientStateController,
+        daemonRegistrationId,
         projectId,
         filePath,
         buffer,

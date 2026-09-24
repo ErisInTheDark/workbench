@@ -126,6 +126,27 @@ test("catalogue refresh clears a vanished selected project but preserves availab
   }
 });
 
+test("peer project expansion reads and writes only its daemon registration", async () => {
+  const state = new WorkbenchClientStateController({ mode: "memory" });
+  const { transport } = createTransport();
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("same-project");
+  await state.put({ kind: "expandedDirectory", daemonRegistrationId: "memory", projectId, path: "attached" });
+  await state.put({ kind: "expandedDirectory", daemonRegistrationId: "peer-registration", projectId, path: "peer" });
+  const client = WorkbenchProjectClient({
+    transport, clientStateController: state, daemonRegistrationId: "peer-registration",
+  });
+  try {
+    client.beginProjectSelection(projectId);
+    assert.deepEqual(client.getSnapshot().expandedDirectories, ["peer"]);
+    client.toggleDirectory("peer");
+    client.toggleDirectory("new-peer");
+    await new Promise<void>(resolve => queueMicrotask(resolve));
+    assert.deepEqual(state.records("expandedDirectory").map(record => [record.daemonRegistrationId, record.path])
+      .sort((left, right) => String(left[0]).localeCompare(String(right[0]))),
+    [["memory", "attached"], ["peer-registration", "new-peer"]]);
+  } finally { client.dispose(); state.dispose(); }
+});
+
 test("catalogue snapshot distinguishes pending, empty, and configured discovery", async () => {
   const { transport } = createTransport();
   const client = WorkbenchProjectClient({ transport });

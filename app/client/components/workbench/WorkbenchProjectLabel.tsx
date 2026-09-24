@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - default WorkbenchProjectLabel: render one canonical project icon, name, and relative-path label, and own compact/full multi-root path derivation. Keywords: project, icon, name, path, workspace, sidebar, thread.
+ * - default WorkbenchProjectLabel: render identity-level or concrete project labels without inventing a representative folder.
  */
 
-import type { WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
+import { ProjectIcon } from "./workbench-icons";
 
 function getWorkbenchProjectDisplayPath(project: WorkbenchProjectOption) {
   const relativePath = project.relativePath || project.id || ".";
@@ -26,9 +27,19 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
   variant = "card",
 }: {
   active?: boolean;
-  project: WorkbenchProjectOption;
+  project: WorkbenchProjectOption | WorkbenchLogicalProject;
   variant?: "card" | "heading" | "thread";
 }) {
+  if ("matchKey" in project) {
+    return (
+      <span className="flex min-w-0 items-center gap-2" title={project.matchKey}>
+        <ProjectIcon className="shrink-0" size={variant === "heading" ? 20 : 16} />
+        <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate text-text${active ? " font-semibold" : ""}`}>
+          {project.label}
+        </span>
+      </span>
+    );
+  }
   const projectName = `${project.name || project.id}${project.kind === "workspace" ? " workspace" : ""}`;
   if (variant === "thread") {
     return (

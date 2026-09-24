@@ -9,6 +9,10 @@ import {
   createStatsHref,
   createStatsRoute,
   createThreadHref,
+  createLogicalProjectRoute,
+  createLogicalExistingThreadRoute,
+  createLogicalThreadRoute,
+  createWorkbenchHref,
   getWorkbenchMosaicThreadRootIds,
   isWorkbenchRouteOwnerOfThread,
   isWorkbenchThreadTargetSelected,
@@ -38,6 +42,52 @@ test("stats routes round-trip globally and per project", () => {
   assert.deepEqual(parseWorkbenchRouteFromPath("/@/stats"), createStatsRoute(""));
   assert.deepEqual(parseWorkbenchRouteFromPath("/project/path/@/stats"), createStatsRoute("project/path"));
   assert.equal(parseWorkbenchRouteFromPath("/@/stats/nope").view, "invalid");
+});
+
+test("logical project browse targets and new-thread launch targets round-trip", () => {
+  const logicalId = fixtureIdentitySchemas.LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const first = { daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c"),
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("same") };
+  const second = { daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029"),
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("same") };
+  const project = createLogicalProjectRoute(logicalId, first);
+  assert.deepEqual(parseWorkbenchRouteFromPath(createWorkbenchHref(project)), project);
+  const thread = createLogicalExistingThreadRoute(logicalId, { kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId.one });
+  assert.deepEqual(parseWorkbenchRouteFromPath(createWorkbenchHref(thread)), thread);
+  const newThread = createLogicalThreadRoute(logicalId, logicalId, first, { kind: "new" });
+  assert.deepEqual(parseWorkbenchRouteFromPath(createWorkbenchHref(newThread)), newThread);
+  const draft = createLogicalThreadRoute(logicalId, logicalId, null, {
+    kind: "draft", draftId: fixtureIdentitySchemas.DraftIdSchema.parse("123e4567-e89b-42d3-a456-426614174000"),
+  });
+  assert.deepEqual(parseWorkbenchRouteFromPath(createWorkbenchHref(draft)), draft);
+  assert.notEqual(createWorkbenchHref(newThread), createWorkbenchHref(
+    createLogicalThreadRoute(logicalId, logicalId, second, { kind: "new" })));
+  assert.equal(isWorkbenchRouteOwnerOfThread(thread, "one", false, first), true);
+  assert.equal(isWorkbenchRouteOwnerOfThread(thread, "one", false, second), true);
+  assert.equal(parseWorkbenchRouteFromPath(createHomeThreadHref("same", "one")).logical, undefined);
+});
+
+test("existing-thread UUID routes do not name execution sources, while old source URLs retain a verification fence", () => {
+  const logicalId = fixtureIdentitySchemas.LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const daemonId = fixtureIdentitySchemas.DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("same");
+  const location = { daemonId, projectId };
+  const target = { kind: "subagent" as const, parentThreadId: fixtureIdentityValues.WorkbenchThreadId.parent,
+    threadId: fixtureIdentityValues.WorkbenchThreadId.child };
+  const route = createLogicalExistingThreadRoute(logicalId, target);
+  const href = createWorkbenchHref(route);
+  assert.equal(href, `/@/v2/p/${logicalId}/thread/id/parent/sub/child`);
+  assert.deepEqual(parseWorkbenchRouteFromPath(href), route);
+  assert.equal(isWorkbenchRouteOwnerOfThread(route, "parent", false, location), true);
+  const legacy = parseWorkbenchRouteFromPath(
+    `/@/v2/p/${logicalId}/thread/${logicalId}/at/${daemonId}/${projectId}/parent/sub/child`,
+  );
+  assert.equal(legacy.view, "thread");
+  assert.deepEqual(legacy.logical?.legacyOwnerLocation, location);
+  assert.equal(isWorkbenchRouteOwnerOfThread(legacy, "parent", false, location), true);
+  assert.equal(isWorkbenchRouteOwnerOfThread(legacy, "parent", false,
+    { daemonId, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other") }), false);
+  assert.equal(createWorkbenchHref(legacy), href);
 });
 
 test("/@/ is the canonical projectless home route and root remains an alias", () => {
@@ -159,10 +209,10 @@ test("missing or malformed draft routes never fall through to provider identity"
   assert.equal(parseWorkbenchRouteFromPath("/p/@/folder/00000000-0000-4000-8000-000000000010/thread/provider").view, "invalid");
 });
 
-test("mosaic routes preserve parent-owned subagent identity", () => {
+test("mosaic routes canonicalise parent-owned subagents to UUID targets", () => {
   const node = parseWorkbenchMosaicRouteExpression("[thread/parent/sub/child]");
   assert.equal(node.ok, true);
-  if (node.ok) assert.equal(serializeWorkbenchMosaicRouteExpression(node.node), "[thread/parent/sub/child]");
+  if (node.ok) assert.equal(serializeWorkbenchMosaicRouteExpression(node.node), "[thread/id/parent/sub/child]");
 });
 
 test("mosaic materialization projects every durable root and excludes non-provider panels", () => {

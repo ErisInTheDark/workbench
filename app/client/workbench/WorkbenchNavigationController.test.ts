@@ -14,6 +14,7 @@ import {
 } from "workbench-shared/workbench/identity";
 import {
   createHomeRoute,
+  createLogicalProjectRoute,
   type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import type {
@@ -118,6 +119,24 @@ function createPorts(overrides: Partial<WorkbenchNavigationPorts> = {}): Workben
     ...overrides,
   };
 }
+
+test("logical navigation uses its source route instead of legacy attached-project selection", async () => {
+  const route = createLogicalProjectRoute("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  let legacySelections = 0;
+  let logicalSelections = 0;
+  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
+    ensureProject: async () => { legacySelections += 1; return ""; },
+    openLogicalRoute: async selected => {
+      assert.deepEqual(selected.logical, route.logical);
+      logicalSelections += 1;
+      return { ok: true };
+    },
+  }));
+  assert.deepEqual(await controller.applyRoute(route), { ok: true });
+  assert.equal(logicalSelections, 1);
+  assert.equal(legacySelections, 0);
+  assert.deepEqual(controller.getSnapshot().route, route);
+});
 
 test("overlapping thread opens publish only the latest route", async () => {
   const reads = new Map<string, ReturnType<typeof deferred<WorkbenchRouteLoadResult>>>();

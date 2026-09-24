@@ -9,6 +9,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { getWorkbenchProjectIconUrl, workbenchDaemonConnection } from "workbench-shared/workbench/workbench-connection";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { getIdentityAccentHue, type IdentityAccentStyle } from "../../workbench/identity-accent-color";
+import { useWorkbenchDaemonAssetOrigin } from "./WorkbenchDaemonClientContext";
 
 const VARIANT_CLASS_NAMES = {
   card: {
@@ -41,7 +42,7 @@ export default function WorkbenchProjectIcon ({
 }) {
   const assetKey = project.icon ? `${project.id}:${project.icon.rootId}:${project.icon.path}` : project.id;
   useSyncExternalStore(workbenchDaemonConnection.subscribe, workbenchDaemonConnection.getSnapshot, workbenchDaemonConnection.getSnapshot);
-  const assetUrl = getWorkbenchProjectIconUrl(project.id, assetKey);
+  const assetUrl = getWorkbenchProjectIconUrl(project.id, assetKey, useWorkbenchDaemonAssetOrigin());
   const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => setLoadFailed(false), [assetKey, assetUrl]);
   const className = `inline-flex shrink-0 rounded-[0.3rem] items-center justify-center overflow-hidden font-semibold leading-none`;

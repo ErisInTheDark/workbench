@@ -22,7 +22,9 @@ const unavailableActions: WorkbenchThreadController["actions"] = {
 
 export function useWorkbenchThread(projectId: string, target: WorkbenchThreadTarget | null, explicitClient?: WorkbenchClientController, interest: "summary" | "view" | "route" = "summary") {
   const client = useWorkbenchClientController(explicitClient);
-  const owner = projectId && target && target.kind !== "new"
+  const shouldBind = target && (target.kind === "draft"
+    || target.kind !== "new" && (projectId || target.kind === "provider" || target.kind === "subagent"));
+  const owner = shouldBind && target
     ? client.mounted?.getThreadController(projectId, target) ?? null : null;
   const subscribe = useCallback((listener: () => void) => {
     if (!owner) return () => {};

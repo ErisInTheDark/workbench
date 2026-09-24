@@ -17,11 +17,13 @@ import type {
     WorkbenchControls,
     WorkbenchFileOpenTarget,
     WorkbenchHarness,
+    WorkbenchLogicalThreadRow,
     WorkbenchProjectOption,
     WorkbenchSendThreadMessageOptions,
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type FolderId } from "workbench-shared/workbench/identity";
+import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
+import { ProjectLocationReferenceSchema, type ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type {
     WorkbenchDropPlacement,
     WorkbenchMainLayout as WorkbenchMainLayoutState,
@@ -37,6 +39,12 @@ import {
     createHomeHref,
     createHomeRoute,
     createHomeThreadRoute,
+    createLogicalExistingThreadRoute,
+    createLogicalProjectRoute,
+    createLogicalFileRoute,
+    createLogicalGitRoute,
+    createLogicalMosaicRoute,
+    createLogicalThreadRoute,
     createMosaicRoute,
     createPinnedThreadRoute,
     createProjectRoute,
@@ -51,7 +59,7 @@ import {
     type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
-import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
+import type { WorkbenchSearchHit } from "../workbench/search/WorkbenchSearchController";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 import { createDraftTitle, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -71,9 +79,10 @@ import {
     type WorkbenchActionContext,
 } from "../workbench/search/workbench-action-registry";
 import WorkbenchSearchController from "../workbench/search/WorkbenchSearchController";
+import { WorkbenchNetworkClientContext } from "../workbench/app/WorkbenchNetworkClient";
 import { createComposerProfilePersistence, createComposerProfileTargetPersistence } from "../workbench/state/composer-profile-api";
 import {
-    clearComposerDraft, saveComposerDraft, sidebarDraftToInput,
+    clearComposerDraft, presentationDraftToInput, saveComposerDraft, sidebarDraftToInput,
     type ComposerDraftTarget,
 } from "../workbench/state/draft-persistence";
 import {
@@ -115,6 +124,7 @@ import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-act
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
 import ThreadView from "./workbench/thread-view/ThreadView";
+import type DraftSessionController from "./workbench/thread-view/DraftSessionController";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
 import { ImageIcon } from "./workbench/workbench-icons";
 import {
@@ -169,10 +179,11 @@ import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfi
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
-import WorkbenchDaemonClientContext from "./workbench/WorkbenchDaemonClientContext";
+import WorkbenchDaemonClientContext, { WorkbenchDaemonAssetOriginContext } from "./workbench/WorkbenchDaemonClientContext";
 import WorkbenchIconButton from "./workbench/WorkbenchIconButton";
 import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
+import WorkbenchProjectLocationMenu from "./workbench/WorkbenchProjectLocationMenu";
 import WorkbenchSearchDialog from "./workbench/WorkbenchSearchDialog";
 import WorkbenchSearchInput from "./workbench/WorkbenchSearchInput";
 import WorkbenchSettingsView from "./workbench/WorkbenchSettingsView";
@@ -335,7 +346,9 @@ function mosaicContainsThreadTarget (node: WorkbenchMosaicNode | null, threadId:
   }
 
   if (node.type === "target") {
-    return node.target.kind === "thread" && node.target.target.kind === "provider" && node.target.target.threadId === threadId;
+    return node.target.kind === "thread"
+      && (node.target.target.kind === "draft" && node.target.target.draftId === threadId
+        || node.target.target.kind === "provider" && node.target.target.threadId === threadId);
   }
 
   return node.children.some((child) => mosaicContainsThreadTarget(child, threadId));
@@ -390,17 +403,27 @@ const THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 export default function Workbench ({ appRuntime = null }: { appRuntime?: WorkbenchAppRuntimeStore | null }) {
   const clientStateController = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
-  const [composerProfileController] = useState(() => new WorkbenchComposerProfileController());
+  const [composerProfileControllers] = useState(() => new Map<string, WorkbenchComposerProfileController>());
   const initialRoute = new WorkbenchProjectNavigation([], clientStateController.getProjectAliases())
     .readRoute(typeof window === "undefined" ? "/" : window.location.href,
       clientState.records.find(record => record.kind === "lastLaunchTarget")?.projectId);
   const currentRouteRef = useRef<WorkbenchRoute>(initialRoute);
+  const activeDraftSessionRef = useRef<DraftSessionController<WorkbenchComposerInputDraft> | null>(null);
   const workbenchClient = useWorkbenchClientMount({
     clientStateController,
     getDomSurfaces: getWorkbenchDomSurfaces,
     initialRoute,
   });
   const { navigateToRoute, route } = useWorkbenchRoute(workbenchClient);
+  const openQualifiedThread = useCallback((row: WorkbenchLogicalThreadRow,
+    selectedLogicalProjectId: string | null) => {
+    navigateToRoute(row.entry.entryKind === "draft"
+      ? createLogicalThreadRoute(selectedLogicalProjectId, row.logicalProjectId, null,
+        { kind: "draft", draftId: row.entry.draft.draftId })
+      : createLogicalExistingThreadRoute(selectedLogicalProjectId,
+        { kind: "provider", harness: row.entry.identity.harness,
+          threadId: ThreadReferenceSchema.parse(row.entry.identity.threadId) }));
+  }, [navigateToRoute]);
   const navigateToRouteRef = useRef(navigateToRoute);
   navigateToRouteRef.current = navigateToRoute;
   const projectHref = useWorkbenchProjectNavigation(workbenchClient);
@@ -424,12 +447,98 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const [selectionError, setSelectionError] = useState("");
   const [isProjectRotationPending, setIsProjectRotationPending] = useState(false);
   const controls = workbenchClient.controls;
+  const routeExistingThreadId = route.view === "thread" && route.logical
+    && (route.threadTarget?.kind === "provider" || route.threadTarget?.kind === "subagent")
+    ? getWorkbenchThreadTargetRootId(route.threadTarget) : null;
+  const routeThreadContext = routeExistingThreadId
+    ? workbenchClient.mounted?.threadContextFor(routeExistingThreadId) : null;
+  const routeDraftContext = route.view === "thread" && route.logical
+    && route.threadTarget?.kind === "draft"
+    ? workbenchClient.mounted?.draftContextFor(route.threadTarget.draftId) : null;
+  const routeLaunchLocation = route.view === "thread" && route.logical
+    && route.threadTarget?.kind === "draft"
+    ? workbenchClient.mounted?.presentationClient?.draft(route.threadTarget.draftId)?.target
+      ?? route.logical.location
+    : route.logical?.location;
+  const routeOwnerMetadata = routeExistingThreadId
+    ? workbenchClient.mounted?.threadOwnerFor(routeExistingThreadId) : null;
+  const browseLocation = route.logical?.browseLocation ?? route.logical?.location;
+  const browseDaemon = browseLocation
+    ? workbenchClient.mounted?.daemonSessions?.get(browseLocation.daemonId)?.daemon
+      ?? (workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId === browseLocation.daemonId
+        ? controls?.daemon : null)
+    : route.logical ? null : controls?.daemon ?? null;
+  const browseAssetOrigin = browseLocation
+    ? workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId === browseLocation.daemonId
+      ? undefined
+      : workbenchClient.mounted?.daemonSessions?.httpOrigin(browseLocation.daemonId) ?? null
+    : undefined;
+  const selectedDaemon = routeExistingThreadId
+    ? routeThreadContext?.daemon ?? null
+    : routeDraftContext?.daemon ?? (route.view === "thread" && route.logical
+      ? routeLaunchLocation ? workbenchClient.mounted?.launchContextFor(routeLaunchLocation)?.daemon ?? null : null
+      : browseDaemon);
+  const selectedAssetOrigin = routeExistingThreadId
+    ? routeThreadContext?.assetOrigin ?? null
+    : routeDraftContext?.assetOrigin ?? browseAssetOrigin;
+  const profileScopeKey = routeThreadContext?.daemonId ?? routeDraftContext?.daemonId
+    ?? routeLaunchLocation?.daemonId
+    ?? workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId
+    ?? "attached";
+  const profileControllerFor = useCallback((key: string) => {
+    const existing = composerProfileControllers.get(key);
+    if (existing) return existing;
+    const controller = new WorkbenchComposerProfileController();
+    composerProfileControllers.set(key, controller);
+    return controller;
+  }, [composerProfileControllers]);
+  const composerProfileController = profileControllerFor(profileScopeKey);
+  useEffect(() => () => {
+    for (const controller of composerProfileControllers.values()) controller.dispose();
+    composerProfileControllers.clear();
+  }, [composerProfileControllers]);
   useEffect(() => {
-    if (!controls) return;
-    void composerProfileController.initializeTargetPersistence(createComposerProfileTargetPersistence(controls.daemon, controls.flushThreadDraft));
+    if (!controls || selectedDaemon !== controls.daemon) return;
+    void composerProfileController.initializeTargetPersistence(createComposerProfileTargetPersistence(
+      controls.daemon, controls.flushThreadDraft,
+      route.logical ? workbenchClient.mounted?.presentationClient ?? null : false,
+    ));
     void composerProfileController.initializePersistence(createComposerProfilePersistence(controls.daemon));
     return () => { composerProfileController.disconnectPersistence(); };
-  }, [composerProfileController, controls]);
+  }, [composerProfileController, controls, selectedDaemon, workbenchClient.mounted?.presentationClient, Boolean(route.logical)]);
+  useEffect(() => {
+    const sessions = workbenchClient.mounted?.daemonSessions;
+    if (!sessions || !controls) return;
+    const active = new Map<DaemonId, typeof controls.daemon>();
+    const reconcile = () => {
+      const ready = new Map(sessions.list().filter(session => session.getSnapshot().phase === "ready")
+        .map(session => [session.getSnapshot().daemonId, session.daemon] as const));
+      for (const [id, daemon] of active) {
+        if (ready.get(id) === daemon) continue;
+        composerProfileControllers.get(id)?.disconnectPersistence();
+        active.delete(id);
+      }
+      for (const [id, daemon] of ready) {
+        if (active.get(id) === daemon) continue;
+        const controller = profileControllerFor(id);
+        active.set(id, daemon);
+        void controller.initializeTargetPersistence(createComposerProfileTargetPersistence(
+          daemon, controls.flushThreadDraft,
+          workbenchClient.mounted?.presentationClient ?? null,
+        )).catch(error => console.error("Peer profile targets unavailable",
+          error instanceof Error ? error.message.slice(0, 512) : "Profile target loading failed."));
+        void controller.initializePersistence(createComposerProfilePersistence(daemon))
+          .catch(error => console.error("Peer profiles unavailable",
+            error instanceof Error ? error.message.slice(0, 512) : "Profile loading failed."));
+      }
+    };
+    reconcile();
+    const unsubscribe = sessions.subscribe(reconcile);
+    return () => {
+      unsubscribe();
+      for (const id of active.keys()) composerProfileControllers.get(id)?.disconnectPersistence();
+    };
+  }, [composerProfileControllers, controls, profileControllerFor, workbenchClient.mounted]);
   const [harness, setHarness] = useState<WorkbenchHarness>(() => (
     clientStateController.records("globalPreference").find((record) => (
       record.preference.key === "harness"
@@ -494,13 +603,72 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const mobileShellHeaderVisibleRef = useRef(true);
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
   const threadViewInstanceKeysByThreadIdRef = useRef(new Map<string, string>());
-  const searchActivationRef = useRef<(result: WorkbenchSearchResult) => void>(() => undefined);
+  const searchActivationRef = useRef<(result: WorkbenchSearchHit) => void>(() => undefined);
   const searchController = useMemo(() => new WorkbenchSearchController({
     activate: (result) => searchActivationRef.current(result),
-    request: async (request) => controls
-      ? await controls.daemon.search.query(request)
-      : { results: [] },
-  }), [controls]);
+    request: async request => {
+      if (!controls) return { results: [] };
+      const presentation = workbenchClient.mounted?.presentationClient?.snapshot().data;
+      const attachedId = workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId;
+      if (!presentation || !attachedId) return await controls.daemon.search.query(request);
+      const selectedLogical = presentation.projects.find(project => project.id === request.projectId);
+      const targets = [
+        { daemonId: attachedId, daemon: controls.daemon },
+        ...(workbenchClient.mounted?.daemonSessions?.list() ?? [])
+          .filter(session => session.getSnapshot().phase === "ready")
+          .map(session => ({ daemonId: session.getSnapshot().daemonId, daemon: session.daemon })),
+      ];
+      const searches = targets.flatMap(target => {
+        const locations = selectedLogical
+          ? presentation.locations.filter(item => item.logicalProjectId === selectedLogical.id
+            && item.target.daemonId === target.daemonId)
+          : request.projectId ? target.daemonId === attachedId ? presentation.locations.filter(item =>
+            item.target.daemonId === attachedId && item.target.projectId === request.projectId) : []
+          : [null];
+        return locations.map(location => ({
+          ...target, projectId: location?.target.projectId ?? null,
+        }));
+      });
+      const settled = await Promise.allSettled(searches.map(async target => ({
+        target,
+        response: await target.daemon.search.query({ query: request.query, projectId: target.projectId }),
+      })));
+      const locationsBySource = new Map(presentation.locations.map(location => [
+        `${location.target.daemonId}:${location.target.projectId}`, location,
+      ]));
+      const seenProjects = new Set<string>();
+      const results: WorkbenchSearchHit[] = [];
+      for (const result of settled) {
+        if (result.status !== "fulfilled") continue;
+        const { target, response } = result.value;
+        for (const hit of response.results) {
+          if (hit.kind === "action") {
+            if (target.daemonId === attachedId && !results.some(item => item.kind === "action" && item.actionId === hit.actionId)) results.push(hit);
+            continue;
+          }
+          if (hit.kind === "projectSetting" && target.daemonId !== attachedId) continue;
+          const location = locationsBySource.get(`${target.daemonId}:${hit.projectId}`);
+          if (!location) continue;
+          if (hit.kind === "project") {
+            if (seenProjects.has(location.logicalProjectId)) continue;
+            seenProjects.add(location.logicalProjectId);
+          }
+          results.push({
+            ...hit, id: `${target.daemonId}:${hit.id}`,
+            source: location.target, logicalProjectId: location.logicalProjectId,
+            ...(target.daemonId !== attachedId ? {
+              detail: `${presentation.daemons.find(item => item.id === target.daemonId)?.hostname ?? target.daemonId} · ${location.rootPath} · ${hit.detail}`,
+            } : {}),
+          });
+        }
+      }
+      const failures = settled.filter(result => result.status === "rejected").length;
+      if (failures && !results.length) throw new Error(`Search failed on ${failures} daemon${failures === 1 ? "" : "s"}.`);
+      return { results: results.slice(0, 50), ...(failures ? {
+        warning: `Results may be incomplete: ${failures} daemon search${failures === 1 ? "" : "es"} failed.`,
+      } : {}) };
+    },
+  }), [controls, workbenchClient.mounted]);
   const workbenchDragController = useMemo(() => new WorkbenchDragController(), []);
   const workbenchDragActivity = useSyncExternalStore(workbenchDragController.subscribe, workbenchDragController.getActivitySnapshot, workbenchDragController.getActivitySnapshot);
   const activeWorkbenchDrag = workbenchDragActivity.active && workbenchDragActivity.payload
@@ -626,6 +794,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const isMobileMosaicRoute = isMobile && route.view === "mosaic";
   const routeMosaicNodeForControls = isMobileMosaicRoute ? route.mosaicNode : null;
   const routeToApplyToControls = useMemo(() => {
+    if (route.logical) return route;
     if (route.view === "mosaic") {
       const mobileMosaicTarget = getRouteMosaicFallbackTarget(routeMosaicNodeForControls, isMobileMosaicRoute);
       if (mobileMosaicTarget?.kind === "file") {
@@ -705,6 +874,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const modifiedPaths = new Set(explorer.locallyModifiedPaths);
   const currentProject = explorer.projects.find((project) => project.id === explorer.currentProjectId) ?? null;
   const activeProjectId = explorer.currentProjectId || route.projectId;
+  const attachedProjectId = route.logical
+    ? browseLocation && browseLocation.daemonId === workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId
+      ? browseLocation.projectId : ""
+    : activeProjectId;
   const browseSessionController = useMemo(() => new WorkbenchBrowseSessionController({
     mutate: async (action, input) => {
       if (!controls) return {};
@@ -743,12 +916,17 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       parentThreadId,
       threadId: providerTarget.threadId,
     };
+    if (route.logical) {
+      navigateToRoute(createLogicalExistingThreadRoute(route.logical.projectId, target,
+        route.logical.browseLocation ?? null), { replace: true });
+      return;
+    }
     navigateToRoute(!route.projectId
       ? createHomeThreadRoute(ownerProjectId, target)
       : ownerProjectId === route.projectId
         ? createThreadRoute(route.projectId, target)
         : createPinnedThreadRoute(route.projectId, ownerProjectId, target), { replace: true });
-  }, [explorer.subagents, navigateToRoute, route.projectId, route.threadOwnerProjectId, route.threadTarget, route.view]);
+  }, [explorer.subagents, navigateToRoute, route]);
   const projectFileLinkRoots = useMemo(
     () => createProjectFileLinkRoots(explorer.projects, activeProjectId, explorer.roots),
     [activeProjectId, explorer.projects, explorer.roots],
@@ -877,8 +1055,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       || event.altKey
     ) return;
     event.preventDefault();
-    navigateToRoute(createSettingsRoute(activeProjectId, "global"));
-  }, [activeProjectId, navigateToRoute]);
+    navigateToRoute(createSettingsRoute(attachedProjectId, "global"));
+  }, [attachedProjectId, navigateToRoute]);
 
   const openStatsScopeFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string | null) => {
     if (
@@ -914,7 +1092,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     navigateToRoute(createThreadRoute(projectId, threadId));
   }, [navigateToRoute]);
 
-  const selectProjectFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string) => {
+  const selectProjectFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string, logical = false) => {
     if (
       event.button !== 0
       || event.metaKey
@@ -930,27 +1108,38 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
 
     event.preventDefault();
-    if (projectId === explorer.currentProjectId) {
+    if (logical && route.logical?.projectId === projectId || !logical && projectId === explorer.currentProjectId) {
       return;
     }
 
-    navigateToRoute(createProjectRoute(projectId));
-  }, [explorer.currentProjectId, navigateToRoute]);
+    navigateToRoute(logical ? createLogicalProjectRoute(projectId) : createProjectRoute(projectId));
+  }, [explorer.currentProjectId, navigateToRoute, route.logical?.projectId]);
 
-  const openFileInWorkbench = useCallback(async (target: WorkbenchFileOpenTarget) => {
+  const openFileInWorkbench = useCallback(async (target: WorkbenchFileOpenTarget & {
+    location?: ProjectLocationReference;
+  }) => {
     const path = target.path;
     const targetProjectId = target.projectId ?? explorer.currentProjectId ?? route.projectId;
     if (!isWorkbenchOpenableFile(path)) {
       return false;
     }
 
-    if (route.view === "file" && path === route.filePath && route.projectId === targetProjectId) {
+    const targetLocation = target.location ?? browseLocation;
+    if (route.view === "file" && path === route.filePath
+      && (route.logical?.location?.daemonId ?? null) === (targetLocation?.daemonId ?? null)
+      && (route.logical?.location?.projectId ?? route.projectId) === targetProjectId) {
       return true;
     }
 
-    navigateToRoute(createFileRoute(targetProjectId, path));
+    if (targetLocation) {
+      const source = { daemonId: targetLocation.daemonId, projectId: ProjectIdSchema.parse(targetProjectId) };
+      const owner = explorer.logicalProjects?.find(project => project.locations.some(location =>
+        location.target.daemonId === source.daemonId && location.target.projectId === source.projectId));
+      if (!owner) return false;
+      navigateToRoute(createLogicalFileRoute(owner.id, source, path));
+    } else navigateToRoute(createFileRoute(targetProjectId, path));
     return true;
-  }, [explorer.currentProjectId, navigateToRoute, route]);
+  }, [browseLocation, explorer.currentProjectId, explorer.logicalProjects, navigateToRoute, route]);
 
   const openFileInVsCode = useCallback(async (target: WorkbenchFileOpenTarget) => {
     const payload: OpenFileInEditorRequest = {
@@ -962,15 +1151,17 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     };
     if (!controls) return false;
     try {
-      await controls.daemon.nativeFiles.open(payload);
+      await (selectedDaemon ?? controls.daemon).nativeFiles.open(payload);
     } catch (error) {
       console.error(error instanceof Error ? error.message : "Unable to open file in VS Code.");
       return false;
     }
     return true;
-  }, [controls, explorer.currentProjectId, route.projectId]);
+  }, [controls, explorer.currentProjectId, route.projectId, selectedDaemon]);
 
-  const openFileByPolicy = useCallback(async (target: WorkbenchFileOpenTarget) => {
+  const openFileByPolicy = useCallback(async (target: WorkbenchFileOpenTarget & {
+    location?: ProjectLocationReference;
+  }) => {
     const path = target.path;
     if (target.absolutePath) {
       return await openFileInVsCode(target);
@@ -1003,6 +1194,21 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       return true;
     }
 
+    if (route.logical && (target.kind === "provider" || target.kind === "subagent")) {
+      navigateToRoute(createLogicalExistingThreadRoute(route.logical.projectId, target,
+        route.logical.browseLocation ?? null));
+      return true;
+    }
+    if (route.logical?.threadOwnerProjectId && route.logical.location) {
+      const ownerLocation = { daemonId: route.logical.location.daemonId,
+        projectId: ProjectIdSchema.parse(targetProjectId) };
+      const owner = explorer.logicalProjects?.find(project => project.locations.some(location =>
+        location.target.daemonId === ownerLocation.daemonId
+        && location.target.projectId === ownerLocation.projectId));
+      if (!owner) return false;
+      navigateToRoute(createLogicalThreadRoute(route.logical.projectId, owner.id, ownerLocation, target));
+      return true;
+    }
     navigateToRoute(!viewedProjectId
       ? createHomeThreadRoute(targetProjectId, target)
       : targetProjectId === viewedProjectId
@@ -1012,33 +1218,45 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [explorer.currentProjectId, navigateToRoute, route]);
   const searchActionContext = useMemo<WorkbenchActionContext>(() => ({
     createThread: () => {
-      if (activeProjectId) navigateToRoute(createThreadRoute(activeProjectId, { kind: "new" }));
+      if (route.logical?.projectId) navigateToRoute(createLogicalThreadRoute(
+        route.logical.projectId, route.logical.projectId, route.logical.location, { kind: "new" },
+      ));
+      else if (activeProjectId) navigateToRoute(createThreadRoute(activeProjectId, { kind: "new" }));
     },
     getSidebarThreadLinks: () => Array.from(document.querySelector("aside")?.querySelectorAll<HTMLElement>("[data-workbench-sidebar-thread-link='true']") ?? [])
       .filter((link) => !link.closest("[hidden]")),
     hasDesktopSidebar: !isMobile,
-    hasProject: Boolean(activeProjectId),
+    hasProject: Boolean(route.logical?.projectId || activeProjectId),
     home: () => navigateToRoute(createHomeRoute()),
     openSearch: () => searchController.open(),
-    openSettings: () => navigateToRoute(createSettingsRoute(activeProjectId, "global")),
+    openSettings: () => navigateToRoute(createSettingsRoute(attachedProjectId, "global")),
     toggleSidebar: () => {
       if (!isMobile) document.querySelector<HTMLElement>("[aria-label='Hide sidebar'], [aria-label='Show sidebar']")?.click();
     },
     zoomIn: () => updateEditorFontSize(resolvedSettings.editorFontSize + 0.08),
     zoomOut: () => updateEditorFontSize(resolvedSettings.editorFontSize - 0.08),
-  }), [activeProjectId, isMobile, navigateToRoute, resolvedSettings.editorFontSize, searchController, updateEditorFontSize]);
+  }), [activeProjectId, attachedProjectId, isMobile, navigateToRoute, resolvedSettings.editorFontSize,
+    route.logical?.location, route.logical?.projectId, searchController, updateEditorFontSize]);
   searchActivationRef.current = (result) => {
     switch (result.kind) {
       case "action":
         runWorkbenchAction(result.actionId, searchActionContext);
         break;
       case "project":
-        navigateToRoute(createProjectRoute(result.projectId));
+        navigateToRoute(result.logicalProjectId
+          ? createLogicalProjectRoute(result.logicalProjectId)
+          : createProjectRoute(result.projectId));
         break;
       case "projectSetting":
         navigateToRoute(createSettingsRoute(result.projectId, "project"));
         break;
       case "thread":
+        if (result.logicalProjectId) {
+          navigateToRoute(createLogicalExistingThreadRoute(result.logicalProjectId,
+            { kind: "provider", harness: result.harnessId as WorkbenchHarness,
+              threadId: ThreadReferenceSchema.parse(result.threadId) }));
+          break;
+        }
         void openThreadFromExplorer({
           harness: result.harnessId as WorkbenchHarness,
           kind: "provider",
@@ -1046,13 +1264,17 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         }, result.projectId);
         break;
       case "file":
+        if (result.source && result.logicalProjectId) {
+          navigateToRoute(createLogicalFileRoute(result.logicalProjectId, result.source, result.path));
+          break;
+        }
         void openFileByPolicy({ path: result.path, projectId: result.projectId });
         break;
     }
   };
   useEffect(() => {
-    searchController.setProjectId(activeProjectId || null);
-  }, [activeProjectId, searchController]);
+    searchController.setProjectId((route.logical?.projectId ?? activeProjectId) || null);
+  }, [activeProjectId, route.logical?.projectId, searchController]);
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       handleWorkbenchActionShortcut(event, searchActionContext);
@@ -1085,10 +1307,22 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
     event.preventDefault();
     event.stopPropagation();
+    const ownerElement = control.closest("[data-thread-daemon-id][data-thread-project-id]");
+    const ownerLocation = ownerElement instanceof HTMLElement
+      ? ProjectLocationReferenceSchema.safeParse({
+        daemonId: ownerElement.dataset.threadDaemonId,
+        projectId: control.dataset.projectFileProjectId?.trim()
+          || ownerElement.dataset.threadProjectId,
+      }) : null;
+    if (ownerLocation && !ownerLocation.success) {
+      setSelectionError("The thread's file location is invalid.");
+      return;
+    }
     void openFileByPolicy({
       absolutePath: control.dataset.projectFileAbsolutePath?.trim() || null,
       columnNumber: readPositiveIntegerDatasetValue(control.dataset.projectFileColumnNumber),
       lineNumber: readPositiveIntegerDatasetValue(control.dataset.projectFileLineNumber),
+      ...(ownerLocation?.success ? { location: ownerLocation.data } : {}),
       path,
       projectId: control.dataset.projectFileProjectId?.trim() || null,
     });
@@ -1103,12 +1337,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       throw new ThreadMessageNotSentError();
     }
     const submittedRoute = currentRouteRef.current;
+    const sourceContext = workbenchClient.mounted?.threadContextFor(thread.id)
+      ?? workbenchClient.mounted?.draftContextFor(thread.id);
+    const submissionProfiles = sourceContext
+      ? profileControllerFor(sourceContext.daemonId) : composerProfileController;
     if (options?.composerProfileSlot) {
-      await composerProfileController.waitForSelection(options.composerProfileSlot);
+      await submissionProfiles.waitForSelection(options.composerProfileSlot);
       if (options.selectThread !== false && currentRouteRef.current !== submittedRoute) {
         throw new ThreadMessageNotSentError();
       }
-      thread = composerProfileController.resolveThread(options.composerProfileSlot, thread);
+      thread = submissionProfiles.resolveThread(options.composerProfileSlot, thread);
     }
     const createdThreadRef: { current: ThreadPayload | null } = { current: null };
     let didMaterialize = false;
@@ -1124,14 +1362,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         && materializedThread.id !== thread.id
         && mosaicContainsThreadTarget(currentRoute.mosaicNode, thread.id)
       ) {
-        navigateToRoute(createMosaicRoute(
-          currentRoute.projectId,
-          replaceWorkbenchMosaicTarget(
+        const nextNode = replaceWorkbenchMosaicTarget(
             currentRoute.mosaicNode,
-            { kind: "thread", target: { harness: thread.harness, kind: "provider", threadId: ThreadReferenceSchema.parse(thread.id) } },
+            { kind: "thread", target: { kind: "draft", draftId: DraftIdSchema.parse(thread.id) } },
             { kind: "thread", target: { harness: materializedThread.harness, kind: "provider", threadId: ThreadReferenceSchema.parse(materializedThread.id) } },
-          ),
-        ), { replace: true });
+          );
+        navigateToRoute(currentRoute.logical?.projectId
+          ? createLogicalMosaicRoute(currentRoute.logical.projectId, nextNode)
+          : createMosaicRoute(currentRoute.projectId, nextNode), { replace: true });
         return true;
       }
 
@@ -1152,6 +1390,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         return false;
       }
 
+      if (currentRoute.logical) {
+        navigateToRoute(createLogicalExistingThreadRoute(
+          currentRoute.logical.projectId,
+          { kind: "provider", harness: materializedThread.harness,
+            threadId: ThreadReferenceSchema.parse(materializedThread.id) },
+          currentRoute.logical.browseLocation ?? null,
+        ), { replace: true });
+        return true;
+      }
       const ownerProjectId = currentRoute.threadOwnerProjectId || currentRoute.projectId;
       navigateToRoute(!currentRoute.projectId
         ? createHomeThreadRoute(ownerProjectId, materializedThread.id)
@@ -1178,8 +1425,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         },
         onThreadMaterialized: (materializedThread) => {
           didMaterialize = true;
-          if (!materializedThread.isDraft && options?.composerProfileSlot) {
-            void composerProfileController.loadSelection({ kind: "thread", projectId: options.composerProfileSlot.projectId, harness: materializedThread.harness, threadId: materializedThread.id });
+          if (!submittedRoute.logical && !materializedThread.isDraft && options?.composerProfileSlot) {
+            void submissionProfiles.loadSelection({ kind: "thread", projectId: options.composerProfileSlot.projectId, harness: materializedThread.harness, threadId: materializedThread.id });
           }
           options?.onThreadMaterialized?.(materializedThread);
           replaceCurrentDraftThreadRoute(materializedThread, true);
@@ -1198,8 +1445,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       throw error;
     }
     if (payload) {
-      if (thread.isDraft && !payload.isDraft && options?.composerProfileSlot) {
-        await composerProfileController.loadSelection({ kind: "thread", projectId: options.composerProfileSlot.projectId, harness: payload.harness, threadId: payload.id });
+      if (!submittedRoute.logical && thread.isDraft && !payload.isDraft && options?.composerProfileSlot) {
+        await submissionProfiles.loadSelection({ kind: "thread", projectId: options.composerProfileSlot.projectId, harness: payload.harness, threadId: payload.id });
       }
       if (thread.isDraft) {
         replaceCurrentDraftThreadRoute(payload, true);
@@ -1207,7 +1454,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
 
     return payload;
-  }, [composerProfileController, controls, navigateToRoute, workspaceController]);
+  }, [composerProfileController, controls, navigateToRoute, profileControllerFor, workbenchClient.mounted, workspaceController]);
 
   const activeSidebarDraftId = route.view === "thread" && route.threadTarget?.kind === "draft"
     ? route.threadTarget.draftId
@@ -1234,23 +1481,90 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const getThreadComposerDraftForTarget = useCallback((target: WorkbenchThreadTarget | null | undefined): WorkbenchComposerInputDraft | null => {
     if (!target || target.kind === "new") return null;
     if (target.kind === "provider" || target.kind === "subagent") return threadComposerDraftsByThreadId[target.threadId] ?? null;
+    if (route.logical && workbenchClient.mounted?.presentationClient) {
+      return presentationDraftToInput(workbenchClient.mounted.presentationClient, target.draftId);
+    }
     const entry = selectedThreadSidebar?.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === target.draftId);
     return entry?.entryKind === "draft" ? getSidebarDraftComposerInput(entry.draft) : null;
-  }, [getSidebarDraftComposerInput, selectedThreadSidebar, threadComposerDraftsByThreadId]);
+  }, [getSidebarDraftComposerInput, route.logical, selectedThreadSidebar, threadComposerDraftsByThreadId, workbenchClient.mounted]);
 
   const activeThreadComposerDraft = route.view === "thread" && route.threadTarget?.kind === "draft"
-    ? getSidebarDraftComposerInput(activeRouteDraft)
+    ? route.logical && workbenchClient.mounted?.presentationClient
+      ? presentationDraftToInput(workbenchClient.mounted.presentationClient, route.threadTarget.draftId)
+      : getSidebarDraftComposerInput(activeRouteDraft)
     : getThreadComposerDraftForTarget(route.view === "thread" ? route.threadTarget : null);
 
   const getComposerDraftTarget = useCallback((projectId: string, threadId: string, originTarget?: WorkbenchThreadTarget): ComposerDraftTarget => {
     if (!projectId) throw new Error("The composer draft has no project identity.");
     const ownerProjectId = ProjectIdSchema.parse(projectId);
     if (originTarget?.kind !== "new" && originTarget?.kind !== "draft") {
-      return { kind: "thread", daemonRegistrationId: clientState.daemonRegistrationId, projectId: ownerProjectId, threadId: ThreadReferenceSchema.parse(threadId) };
+      const ownerContext = route.logical ? workbenchClient.mounted?.threadContextFor(threadId) : null;
+      const daemonRegistrationId = route.logical
+        ? ownerContext?.registrationId : clientState.daemonRegistrationId;
+      if (!daemonRegistrationId) throw new Error("The thread daemon is not registered in app state.");
+      return { kind: "thread", daemonRegistrationId,
+        projectId: ownerContext?.project.id ?? ownerProjectId,
+        threadId: ThreadReferenceSchema.parse(threadId) };
     }
     const draftId = originTarget.kind === "draft" ? originTarget.draftId : DraftIdSchema.parse(threadId);
     if (!draftId || !controls) throw new Error("The new-thread draft owner is unavailable.");
     const isNew = originTarget.kind === "new";
+    if (route.logical) {
+      const findPaneSource = (node: WorkbenchMosaicNode | null): WorkbenchMosaicPanelTarget["source"] | null => {
+        if (!node) return null;
+        if (node.type === "split") {
+          for (const child of node.children) {
+            const found = findPaneSource(child);
+            if (found) return found;
+          }
+          return null;
+        }
+        return node.target.kind === "thread" && node.target.target.kind === "draft"
+          && node.target.target.draftId === draftId
+          ? node.target.source ?? null : null;
+      };
+      const paneSource = findPaneSource(route.mosaicNode);
+      const logicalProjectId = paneSource?.logicalProjectId ?? route.logical.threadOwnerProjectId;
+      const location = paneSource?.location ?? route.logical.location;
+      const owner = workbenchClient.mounted?.presentationClient;
+      if (!logicalProjectId || !location || !owner) throw new Error("The selected draft location is unavailable.");
+      const draftThread = workspaceController.getSnapshot().draftThreadsById[draftId] ?? currentThread;
+      const draftProfiles = profileControllerFor(location.daemonId);
+      return {
+        kind: "presentation", draftId, isNew, logicalProjectId, location, owner,
+        selection: () => {
+          const slot = isNew
+            ? { kind: "new-thread" as const, projectId: ownerProjectId }
+            : { kind: "draft" as const, projectId: ownerProjectId, draftId,
+              harness: draftThread?.harness ?? defaultProviderKey };
+          const selection = draftProfiles.getSelection(slot);
+          if (selection.kind === "profile" && selection.settings) {
+            return { kind: "profile" as const, profileId: selection.profileId,
+              settings: selection.settings };
+          }
+          if (selection.kind === "custom" && selection.settings) {
+            return { kind: "custom" as const, settings: selection.settings };
+          }
+          return {
+            kind: "custom" as const,
+            settings: {
+              agentPath: draftThread?.agentPath ?? null, agentSource: null,
+              harness: draftThread?.harness ?? defaultProviderKey, model: draftThread?.model ?? "",
+              reasoningEffort: draftThread?.reasoningEffort ?? null,
+              serviceTier: draftThread?.serviceTier === "fast" ? "fast" as const : null,
+              contextWindowTokens: draftThread?.contextWindowTokens ?? null,
+            },
+          };
+        },
+        materialize: () => {
+          if (currentRouteRef.current !== route) return;
+          if (route.view !== "mosaic" || !route.mosaicNode) {
+            navigateToRoute(createLogicalThreadRoute(route.logical?.projectId ?? null,
+              logicalProjectId, null, { draftId, kind: "draft" }), { replace: true });
+          }
+        },
+      };
+    }
     return {
       kind: "sidebar", projectId: ownerProjectId, draftId, isNew,
       ...(originTarget?.kind === "new" && originTarget.folderId ? { folderId: originTarget.folderId } : {}),
@@ -1296,21 +1610,32 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         },
       },
     };
-  }, [clientState.daemonRegistrationId, composerProfileController, controls, currentThread?.harness, navigateToRoute, route, threads, workbenchClient]);
+  }, [clientState.daemonRegistrationId, composerProfileController, controls, currentThread?.harness, navigateToRoute, profileControllerFor, route, threads, workbenchClient, workspaceController]);
 
   const handleThreadComposerDraftChange = useCallback(async (
     projectId: string, threadId: string, update: (draft: WorkbenchComposerInputDraft) => WorkbenchComposerInputDraft,
-    reason: "autosave" | "submission" = "autosave", target?: WorkbenchThreadTarget, detached = false,
+    reason: "autosave" | "submission" | "retarget" = "autosave", target?: WorkbenchThreadTarget, detached = false,
   ) => {
     try {
       const draftTarget = getComposerDraftTarget(projectId, threadId, target);
+      const profiles = draftTarget.kind === "presentation"
+        ? profileControllerFor(draftTarget.location.daemonId) : composerProfileController;
       if (draftTarget.kind === "sidebar" && draftTarget.isNew) await composerProfileController.waitForSelection({ kind: "new-thread", projectId: draftTarget.projectId });
+      if (draftTarget.kind === "presentation" && draftTarget.isNew) {
+        await profiles.waitForSelection({ kind: "new-thread", projectId: draftTarget.location.projectId });
+      }
+      if (draftTarget.kind === "presentation" && !draftTarget.isNew) {
+        await profiles.waitForSelection({
+          kind: "draft", projectId: draftTarget.location.projectId,
+          draftId: draftTarget.draftId, harness: currentThread?.harness ?? defaultProviderKey,
+        });
+      }
       return await saveComposerDraft(clientStateController, draftTarget, update, { reason, detached });
     } catch (error) {
       setSelectionError(error instanceof Error ? error.message : "Unable to save composer draft.");
       throw error;
     }
-  }, [clientStateController, composerProfileController, getComposerDraftTarget]);
+  }, [clientStateController, composerProfileController, currentThread?.harness, getComposerDraftTarget, profileControllerFor]);
 
   const handleThreadComposerDraftClear = useCallback(async (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => {
     try {
@@ -1366,23 +1691,50 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const showSettingsView = route.view === "settings";
   const showStatsView = route.view === "stats";
   const showGitView = route.view === "git";
-  const sidebarCreateProjectId = activeProjectId || firstSidebarProjectGroup[0]?.id || "";
+  const sidebarCreateProjectId = activeProjectId || firstSidebarProjectGroup[0]?.id
+    || explorer.logicalProjects?.flatMap(project => project.locations.filter(location => location.project)
+      .map(location => location.target.projectId))[0] || "";
   const showFullBleedMainView = showMosaicView;
   const createThreadFromSidebar = useCallback((ownerProjectId: string, folderId?: FolderId) => {
     if (showMosaicView || !controls) return;
     const target = folderId ? { folderId, kind: "new" as const } : { kind: "new" as const };
+    if (explorer.logicalProjects?.length) {
+      const selected = route.logical?.projectId
+        ? explorer.logicalProjects.find(project => project.id === route.logical?.projectId)
+        : explorer.logicalProjects.find(project => project.id === ownerProjectId)
+          ?? explorer.logicalProjects.find(project => project.locations.some(location =>
+          location.target.projectId === ownerProjectId
+          && location.daemonId === workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId))
+          ?? explorer.logicalProjects.find(project => project.locations.some(location =>
+            location.target.projectId === ownerProjectId));
+      if (selected) {
+        const location = route.logical?.projectId === selected.id ? route.logical.location
+          : selected.locations.find(item => item.project)?.target
+            ?? selected.locations[0]?.target ?? null;
+        navigateToRoute(createLogicalThreadRoute(route.logical?.projectId ?? null, selected.id, location, target));
+        return;
+      }
+    }
     navigateToRoute(!route.projectId
       ? createHomeThreadRoute(ownerProjectId, target)
       : createThreadRoute(ownerProjectId, target));
-  }, [controls, navigateToRoute, route.projectId, showMosaicView]);
+  }, [controls, explorer.logicalProjects, navigateToRoute, route, showMosaicView, workbenchClient.mounted]);
   const handleThreadSettled = useCallback((settledTarget: WorkbenchThreadTarget, ownerProjectId?: string) => {
     const currentRoute = currentRouteRef.current;
     if (currentRoute.view !== "thread"
-      || (ownerProjectId && (currentRoute.threadOwnerProjectId || currentRoute.projectId) !== ownerProjectId)
+      || (!currentRoute.logical && ownerProjectId
+        && (currentRoute.threadOwnerProjectId || currentRoute.projectId) !== ownerProjectId)
       || !isWorkbenchThreadTargetSelected(settledTarget, currentRoute.threadTarget)) {
       return;
     }
 
+    if (currentRoute.logical) {
+      navigateToRoute(currentRoute.logical.projectId
+        ? createLogicalProjectRoute(currentRoute.logical.projectId,
+          currentRoute.logical.browseLocation ?? null)
+        : createHomeRoute());
+      return;
+    }
     const targetProjectId = ownerProjectId || currentRoute.threadOwnerProjectId || currentRoute.projectId;
     navigateToRoute(!currentRoute.projectId
       ? createHomeThreadRoute(targetProjectId, { kind: "new" })
@@ -1400,7 +1752,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }
   const retainedThread = retainedThreadRef.current;
   const effectiveThreadRoute = effectiveThreadTarget
-    ? route.view === "thread" && !route.projectId && route.threadOwnerProjectId
+    ? route.logical && (effectiveThreadTarget.kind === "provider" || effectiveThreadTarget.kind === "subagent")
+      ? createLogicalExistingThreadRoute(route.logical.projectId, effectiveThreadTarget,
+        route.logical.browseLocation ?? null)
+      : route.view === "thread" && !route.projectId && route.threadOwnerProjectId
       ? createHomeThreadRoute(route.threadOwnerProjectId, effectiveThreadTarget)
       : route.view === "thread" && route.threadOwnerProjectId && route.threadOwnerProjectId !== route.projectId
         ? createPinnedThreadRoute(route.projectId, route.threadOwnerProjectId, effectiveThreadTarget)
@@ -1435,6 +1790,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       ? { harness, kind: "provider" as const, threadId: rootThreadId }
       : { harness, kind: "subagent" as const, parentThreadId: rootThreadId, threadId: ThreadReferenceSchema.parse(selectedThreadId) };
     const ownerProjectId = route.view === "thread" ? route.threadOwnerProjectId || route.projectId : activeProjectId;
+    if (route.logical) {
+      navigateToRoute(createLogicalExistingThreadRoute(route.logical.projectId, target,
+        route.logical.browseLocation ?? null));
+      return;
+    }
     navigateToRoute(!activeProjectId
       ? createHomeThreadRoute(ownerProjectId, target)
       : ownerProjectId === activeProjectId
@@ -1480,9 +1840,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     () => new Set(Object.keys(threadAttentionLabelsById)),
     [threadAttentionLabelsById],
   );
-  const threadProjectId = route.view === "thread" ? route.threadOwnerProjectId || route.projectId : route.projectId || activeProjectId;
-  const threadProject = explorer.projects.find((project) => project.id === threadProjectId) ?? null;
+  const threadProjectId = routeThreadContext?.project.id ?? routeDraftContext?.project.id
+    ?? (route.view === "thread" ? route.threadOwnerProjectId || route.projectId : route.projectId || activeProjectId);
+  const threadProject = routeThreadContext?.project ?? routeDraftContext?.project
+    ?? explorer.projects.find((project) => project.id === threadProjectId) ?? null;
+  const logicalThreadProject = explorer.logicalProjects?.find(project => project.id === route.logical?.threadOwnerProjectId) ?? null;
   const isHomeDraftRoute = route.view === "thread"
+    && !route.logical
     && !route.projectId
     && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft");
   const rotateHomeDraftProject = useCallback(async () => {
@@ -1513,7 +1877,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       project={threadProject}
     />
   ) : null;
-  const isForeignThreadProject = Boolean(threadProjectId && threadProjectId !== activeProjectId);
+  const isForeignThreadProject = Boolean(threadProjectId && (threadProjectId !== activeProjectId
+    || (routeThreadContext ?? routeDraftContext)
+      && browseLocation?.daemonId !== (routeThreadContext ?? routeDraftContext)?.daemonId));
   const threadProjectRoots = isForeignThreadProject ? threadProject?.roots ?? [] : explorer.roots;
   const threadProjectRootPath = isForeignThreadProject ? threadProject?.rootPath ?? "" : explorer.rootPath;
   const threadProjectFileLinkRoots = useMemo(
@@ -1632,27 +1998,59 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     return { kind: "empty" };
   }, [effectiveFilePath, effectiveThreadTarget, settingsScope, showFileView, showSettingsView, showThreadView]);
   const navigateToPanelTarget = useCallback((target: WorkbenchPanelTarget, options?: { replace?: boolean }) => {
+    const browseLocation = route.logical?.browseLocation ?? route.logical?.location;
     if (target.kind === "file") {
-      navigateToRoute(createFileRoute(explorer.currentProjectId || route.projectId, target.filePath), options);
+      navigateToRoute(route.logical?.projectId && browseLocation
+        ? createLogicalFileRoute(route.logical.projectId, browseLocation, target.filePath)
+        : createFileRoute(explorer.currentProjectId || route.projectId, target.filePath), options);
       return;
     }
     if (target.kind === "thread") {
-      navigateToRoute(createThreadRoute(explorer.currentProjectId || route.projectId, target.target), options);
+      navigateToRoute(route.logical?.projectId
+        ? target.target.kind === "provider" || target.target.kind === "subagent"
+          ? createLogicalExistingThreadRoute(route.logical.projectId, target.target, browseLocation ?? null)
+          : createLogicalThreadRoute(route.logical.projectId, route.logical.projectId,
+            route.logical.location, target.target)
+        : createThreadRoute(explorer.currentProjectId || route.projectId, target.target), options);
       return;
     }
     if (target.kind === "settings") {
-      navigateToRoute(createSettingsRoute(explorer.currentProjectId || route.projectId, target.scope), options);
+      navigateToRoute(createSettingsRoute(route.logical ? "" : explorer.currentProjectId || route.projectId,
+        route.logical ? "global" : target.scope), options);
       return;
     }
 
-    navigateToRoute(createProjectRoute(explorer.currentProjectId || route.projectId), options);
-  }, [explorer.currentProjectId, navigateToRoute, route.projectId]);
+    navigateToRoute(route.logical?.projectId
+      ? createLogicalProjectRoute(route.logical.projectId, route.logical.location)
+      : createProjectRoute(explorer.currentProjectId || route.projectId), options);
+  }, [explorer.currentProjectId, explorer.logicalProjects, navigateToRoute, route]);
   const navigateToMosaicNode = useCallback((mosaicNode: WorkbenchMosaicNode, options?: { replace?: boolean }) => {
-    navigateToRoute(createMosaicRoute(explorer.currentProjectId || route.projectId, mosaicNode), options);
-  }, [explorer.currentProjectId, navigateToRoute, route.projectId]);
+    if (!route.logical?.projectId) {
+      navigateToRoute(createMosaicRoute(explorer.currentProjectId || route.projectId, mosaicNode), options);
+      return;
+    }
+    const logicalProjectId = route.logical.projectId;
+    const browseLocation = route.logical.browseLocation ?? route.logical.location;
+    const withTargets = (node: WorkbenchMosaicNode): WorkbenchMosaicNode => {
+      if (node.type === "split") return { ...node, children: node.children.map(withTargets) };
+      if (node.target.kind === "thread"
+        && (node.target.target.kind === "provider" || node.target.target.kind === "subagent")) {
+        return { ...node, target: { ...node.target, source: undefined } };
+      }
+      if (node.target.source) return node;
+      return { ...node, target: { ...node.target, source: {
+        logicalProjectId, location: browseLocation ?? null,
+      } } };
+    };
+    navigateToRoute(createLogicalMosaicRoute(logicalProjectId, withTargets(mosaicNode)), options);
+  }, [explorer.currentProjectId, navigateToRoute, route]);
   workspaceController.setOptions({
     createDraft: (draftHarness) => {
       if (!controls) throw new Error("The Workbench client is not ready.");
+      if (route.logical) {
+        if (!browseLocation) throw new Error("Choose a daemon folder before creating a mosaic draft.");
+        return controls.createThreadDraftAt(browseLocation, draftHarness, { select: false });
+      }
       return controls.createThreadDraft(draftHarness);
     },
     navigateMosaic: navigateToMosaicNode,
@@ -2025,8 +2423,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     };
   }, [controls, explorer.currentProjectId, quickOpenPaths, route.projectId, showEmptyState]);
 
-  const handleHarnessChange = (nextHarness: WorkbenchHarness) => {
-    if (nextHarness === harness && currentThread?.harness === nextHarness) {
+  const handleHarnessChange = (nextHarness: WorkbenchHarness,
+    location?: ProjectLocationReference | null) => {
+    if (!location && nextHarness === harness && currentThread?.harness === nextHarness) {
       return;
     }
 
@@ -2035,7 +2434,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       preference: { key: "harness", value: nextHarness },
     }).catch((error: Error) => setSelectionError(error.message));
     setHarness(nextHarness);
-    controls?.setDraftThreadHarness(nextHarness);
+    if (location) controls?.setDraftThreadHarnessAt(location, nextHarness);
+    else controls?.setDraftThreadHarness(nextHarness);
   };
 
   const handleCreateEntry = async (type: "directory" | "file") => {
@@ -2051,7 +2451,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
       closeCreateDialog();
       if (type === "file") {
-        navigateToRoute(createFileRoute(explorer.currentProjectId || route.projectId, createdPath));
+        navigateToRoute(route.logical?.projectId && browseLocation
+          ? createLogicalFileRoute(route.logical.projectId, browseLocation, createdPath)
+          : createFileRoute(explorer.currentProjectId || route.projectId, createdPath));
       }
     } catch (error) {
       setIsCreatingEntry(false);
@@ -2060,9 +2462,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   };
 
   return (
+    <WorkbenchNetworkClientContext.Provider value={workbenchClient.mounted?.networkClient ?? null}>
     <WorkbenchClientProvider client={workbenchClient}>
     <WorkbenchDaemonClientContext.Provider value={controls?.daemon ?? null}>
-    <WorkbenchWorkingTreeProvider projectId={activeProjectId}>
+    <WorkbenchWorkingTreeProvider projectId={activeProjectId} sourceDaemon={browseDaemon}
+      sourceDaemonId={browseLocation?.daemonId}>
     <WorkbenchComposerProfileProvider controller={composerProfileController}>
       <WorkbenchSidebarPreferencesProvider
         projectId={explorer.currentProjectId || route.projectId}
@@ -2084,6 +2488,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
           <WorkbenchSearchDialog
             controller={searchController}
             projects={explorer.projects}
+            logicalProjects={explorer.logicalProjects}
+            logicalSummaries={explorer.logicalSummaries}
             projectSidebars={projectThreadSidebars}
             projectSummaries={projectThreadSummaries}
           />
@@ -2153,8 +2559,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     as="a"
                     label="Open statistics"
                     display="hover-border"
-                    href={projectHref(createStatsRoute(activeProjectId))}
-                    onClick={(event) => openStatsScopeFromLink(event, activeProjectId)}
+                    href={projectHref(createStatsRoute(attachedProjectId))}
+                    onClick={(event) => openStatsScopeFromLink(event, attachedProjectId)}
                     title="Open statistics"
                   >
                     <StatsIcon size={20} />
@@ -2164,7 +2570,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     as="a"
                     label="Open settings"
                     display="hover-border"
-                    href={projectHref(createSettingsRoute(activeProjectId, "global"))}
+                    href={projectHref(createSettingsRoute(attachedProjectId, "global"))}
                     onClick={openSettingsFromLink}
                     title="Open settings"
                   >
@@ -2187,35 +2593,76 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 </header>
                 <WorkbenchSearchInput onOpen={() => searchController.open()} />
                 <WorkbenchThreadSidebarActionsProvider
-                  controls={controls}
+                  onPresentationDraftDeleted={(draftId, logicalProjectId) => {
+                    const current = currentRouteRef.current;
+                    if (current.view === "thread" && current.threadTarget?.kind === "draft"
+                      && current.threadTarget.draftId === draftId) {
+                      navigateToRoute(current.logical?.projectId
+                        ? createLogicalProjectRoute(current.logical.projectId,
+                          current.logical.browseLocation ?? null)
+                        : createLogicalProjectRoute(logicalProjectId), { replace: true });
+                    }
+                  }}
                   onOpenThread={openThreadFromExplorer}
+                  onOpenQualifiedThread={row => openQualifiedThread(row, route.logical?.projectId ?? null)}
                   onThreadSettled={handleThreadSettled}
                   projectId={explorer.currentProjectId || route.projectId}
-                  threadSummariesById={threadSummariesById}
                 >
                   {activeProjectId ? (
                     <WorkbenchPinnedThreadSidebar
                       activeDragPayload={activeWorkbenchDrag?.payload ?? null}
+                      logicalProjects={explorer.logicalProjects}
+                      logicalThreads={explorer.logicalThreads}
+                      logicalSummaries={explorer.logicalSummaries}
+                      presentation={workbenchClient.mounted?.presentationClient?.snapshot().data}
+                      controls={controls}
+                      attachedDaemonId={workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId}
+                      selectedLogicalProjectId={route.logical?.projectId}
+                      selectedLocation={browseLocation}
+                      onOpenQualifiedThread={row => openQualifiedThread(row, route.logical?.projectId ?? null)}
                       currentTarget={route.view === "thread" ? route.threadTarget : null}
                       onOpenThread={openThreadFromExplorer}
                       projectId={activeProjectId}
                       projects={explorer.projects}
                       selectedProjectPinPlacement={resolvedSettings.selectedProjectPinPlacement}
-                      selectedOwnerProjectId={route.view === "thread" ? route.threadOwnerProjectId || route.projectId : activeProjectId}
+                      selectedOwnerProjectId={route.view === "thread"
+                        ? route.logical?.threadOwnerProjectId ?? (route.threadOwnerProjectId || route.projectId)
+                        : activeProjectId}
                     />
                   ) : null}
                   <ProjectSidebar
-                    activeProjectId={activeProjectId}
+                    activeProjectId={route.logical?.projectId ?? activeProjectId}
+                    logicalProjects={explorer.logicalProjects}
+                    logicalSummaries={explorer.logicalSummaries}
                     onConfigureGitRoots={() => navigateToRoute(createSettingsRoute("", "global"))}
                     onProjectLinkClick={selectProjectFromLink}
                     projects={explorer.projects}
                     showGitRootsSetup={explorer.configuredDiscoveryRootPath === ""}
                   />
-                  {activeProjectId && currentProject ? <WorkbenchCurrentProjectHeading project={currentProject} /> : null}
+                  {activeProjectId && currentProject ? (
+                    <WorkbenchCurrentProjectHeading
+                      project={currentProject}
+                      logicalProject={explorer.logicalProjects?.find(project => project.id === route.logical?.projectId)}
+                      browseLocation={browseLocation}
+                      onBrowseLocationChange={location => {
+                        if (!route.logical?.projectId) return;
+                        if (route.view === "thread" && route.threadTarget
+                          && (route.threadTarget.kind === "provider" || route.threadTarget.kind === "subagent")) {
+                          navigateToRoute(createLogicalExistingThreadRoute(
+                            route.logical.projectId, route.threadTarget, location,
+                          ));
+                        } else {
+                          navigateToRoute(createLogicalProjectRoute(route.logical.projectId, location));
+                        }
+                      }}
+                    />
+                  ) : null}
                   <WorkbenchGitSidebar active={showGitView} onNavigate={event => {
                     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                     event.preventDefault();
-                    navigateToRoute(createGitRoute(activeProjectId));
+                    navigateToRoute(route.logical?.projectId && browseLocation
+                      ? createLogicalGitRoute(route.logical.projectId, browseLocation)
+                      : createGitRoute(activeProjectId));
                   }} />
                   <section className="shrink-0 pb-3">
                     <WorkbenchSidebarSectionDisclosure
@@ -2227,6 +2674,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       {activeProjectId ? (
                         <WorkbenchThreadSidebar
                           activeDragPayload={activeWorkbenchDrag?.payload ?? null}
+                          logicalProject={explorer.logicalProjects?.find(project => project.id === route.logical?.projectId)}
+                          logicalThreads={explorer.logicalThreads}
+                          presentation={workbenchClient.mounted?.presentationClient?.snapshot().data}
+                          controls={controls}
+                          selectedLocation={browseLocation}
+                          onOpenQualifiedThread={row => openQualifiedThread(row, row.logicalProjectId)}
                           attentionLabelsByThreadId={threadAttentionLabelsById}
                           currentTarget={route.view === "thread" ? route.threadTarget : null}
                           harness={harness}
@@ -2241,6 +2694,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       ) : (
                         <WorkbenchAllProjectsThreadSidebar
                           activeDragPayload={activeWorkbenchDrag?.payload ?? null}
+                          logicalProjects={explorer.logicalProjects}
+                          logicalThreads={explorer.logicalThreads}
+                          presentation={workbenchClient.mounted?.presentationClient?.snapshot().data}
+                          controls={controls}
+                          attachedDaemonId={workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId}
+                          onOpenQualifiedThread={row => openQualifiedThread(row, null)}
                           attentionLabelsByThreadId={threadAttentionLabelsById}
                           createProjectId={sidebarCreateProjectId}
                           currentTarget={route.view === "thread" ? route.threadTarget : null}
@@ -2248,7 +2707,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           onOpenThread={openThreadFromExplorer}
                           projects={explorer.projects}
                           renderThreadTooltipDetails={renderThreadTooltipDetails}
-                          selectedOwnerProjectId={route.view === "thread" ? route.threadOwnerProjectId || route.projectId : activeProjectId}
+                          selectedOwnerProjectId={route.view === "thread"
+                            ? route.logical?.threadOwnerProjectId ?? (route.threadOwnerProjectId || route.projectId)
+                            : activeProjectId}
                         />
                       )}
                     </WorkbenchSidebarSectionDisclosure>
@@ -2483,15 +2944,72 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 aria-busy={isSelectionPending}
               >
                 {showThreadView && !shouldRenderMainLayout ? (
+                  <WorkbenchDaemonClientContext.Provider value={selectedDaemon ?? null}>
+                  <WorkbenchDaemonAssetOriginContext.Provider value={selectedAssetOrigin === undefined ? null : { origin: selectedAssetOrigin }}>
+                    <WorkbenchWorkingTreeProvider
+                      projectId={threadProjectId}
+                      sourceDaemon={selectedDaemon}
+                      sourceDaemonId={routeThreadContext?.daemonId ?? route.logical?.location?.daemonId ?? null}
+                    >
+                    <div className="h-full"
+                      data-thread-daemon-id={routeOwnerMetadata?.daemonId ?? route.logical?.location?.daemonId}
+                      data-thread-project-id={routeOwnerMetadata?.projectId ?? route.logical?.location?.projectId}>
                     <ThreadView
                       routeOwned
                       routeError={selectionError}
-                      key={`${threadProjectId}:${threadViewInstanceKey}`}
+                      key={`${route.logical?.location?.daemonId ?? "attached"}:${threadProjectId}:${threadViewInstanceKey}`}
                       thread={threadForThreadView}
                       composerSpellCheck={resolvedSettings.composerSpellCheck}
                       draftLeadingContent={projectRotator}
+                      draftTargetControl={route.logical && logicalThreadProject && threadForThreadView?.isDraft ? (
+                        <WorkbenchProjectLocationMenu
+                          project={logicalThreadProject}
+                          selected={routeLaunchLocation ?? null}
+                          label={`Start thread in ${logicalThreadProject.label} at`}
+                          onSelect={location => {
+                            void (async () => {
+                              const submittedRoute = route;
+                              const destination = logicalThreadProject.locations.find(item =>
+                                item.target.daemonId === location.daemonId && item.target.projectId === location.projectId);
+                              if (!destination?.project) throw new Error("That daemon folder is unavailable.");
+                              if (!controls || !submittedRoute.logical?.threadOwnerProjectId
+                                || !threadForThreadView?.isDraft) return;
+                              const draftSession = activeDraftSessionRef.current;
+                              if (!draftSession || !await draftSession.flush("retarget")) {
+                                throw new Error("Save the draft before changing its folder.");
+                              }
+                              if (currentRouteRef.current !== submittedRoute) return;
+                              const owner = workbenchClient.mounted?.presentationClient;
+                              if (!owner) throw new Error("App presentation state is unavailable.");
+                              const draft = owner.draft(threadForThreadView.id);
+                              if (draft) await controls.retargetPresentationDraft(DraftIdSchema.parse(draft.id), location);
+                              if (currentRouteRef.current !== submittedRoute) return;
+                              navigateToRoute(createLogicalThreadRoute(submittedRoute.logical.projectId,
+                                submittedRoute.logical.threadOwnerProjectId, draft ? null : location,
+                                draft ? { kind: "draft", draftId: DraftIdSchema.parse(draft.id) } : { kind: "new" }), { replace: true });
+                            })().catch(error => setSelectionError(
+                              error instanceof Error ? error.message.slice(0, 500) : "Unable to change draft folder.",
+                            ));
+                          }}
+                        />
+                      ) : null}
+                      onDraftSessionChange={session => { activeDraftSessionRef.current = session; }}
+                      threadOwnerContent={routeOwnerMetadata && !threadForThreadView?.isDraft
+                        ? <span className="truncate font-mono text-fg/muted">
+                          {routeOwnerMetadata.hostname}
+                          {" · "}
+                          {routeOwnerMetadata.rootPath}
+                        </span>
+                        : null}
                       fontSizeRem={displayedEditorFontSize}
-                      getThreadHref={(target) => !activeProjectId
+                      getThreadHref={(target) => route.logical
+                        && (target.kind === "provider" || target.kind === "subagent")
+                        ? projectHref(createLogicalExistingThreadRoute(route.logical.projectId, target,
+                          route.logical.browseLocation ?? null))
+                        : route.logical?.threadOwnerProjectId && route.logical.location
+                        ? projectHref(createLogicalThreadRoute(route.logical.projectId, route.logical.threadOwnerProjectId,
+                          route.logical.location, target))
+                        : !activeProjectId
                         ? projectHref(createHomeThreadRoute(threadProjectId, target))
                         : isForeignThreadProject
                           ? projectHref(createPinnedThreadRoute(activeProjectId, threadProjectId, target))
@@ -2521,23 +3039,33 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                       viewInstanceKey={threadViewInstanceKey}
                     />
+                    </div>
+                    </WorkbenchWorkingTreeProvider>
+                  </WorkbenchDaemonAssetOriginContext.Provider>
+                  </WorkbenchDaemonClientContext.Provider>
                 ) : null}
                 {showSettingsView && !shouldRenderMainLayout ? (
                   <WorkbenchSettingsView
-                    activeProjectId={activeProjectId}
+                    activeProjectId={attachedProjectId}
                     onGitRootsSaved={async () => { await controls?.refreshProjectCatalog(); }}
                     onError={setSelectionError}
                     onNavigate={(scope) => {
-                      navigateToRoute(createSettingsRoute(activeProjectId, scope));
+                      navigateToRoute(createSettingsRoute(attachedProjectId, scope));
                     }}
                     projectLabel={projectTabLabel}
                     scope={settingsScope}
                   />
                 ) : null}
-                {showGitView && !shouldRenderMainLayout ? <WorkbenchWorkingTreeView /> : null}
+                {showGitView && !shouldRenderMainLayout ? (
+                  <WorkbenchDaemonClientContext.Provider value={selectedDaemon ?? null}>
+                    <WorkbenchDaemonAssetOriginContext.Provider value={selectedAssetOrigin === undefined ? null : { origin: selectedAssetOrigin }}>
+                    <WorkbenchWorkingTreeView />
+                    </WorkbenchDaemonAssetOriginContext.Provider>
+                  </WorkbenchDaemonClientContext.Provider>
+                ) : null}
                 {showStatsView && !shouldRenderMainLayout ? (
                   <WorkbenchStatsView
-                    availableProjectId={activeProjectId || null}
+                    availableProjectId={attachedProjectId || null}
                     onNavigate={openStatsScopeFromLink}
                     onNavigateThread={openStatsThreadFromLink}
                     projectId={route.projectId || null}
@@ -2561,9 +3089,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         className={`${workbenchOptionRowClassName} ${workbenchOptionHoverClassName} w-fit border-transparent px-4 py-2 text-[0.84rem] text-text md:py-2`}
                         onClick={() => {
                           if (!controls || !sidebarCreateProjectId) return;
-                          navigateToRoute(!activeProjectId
-                            ? createHomeThreadRoute(sidebarCreateProjectId, { kind: "new" })
-                            : createThreadRoute(activeProjectId, { kind: "new" }));
+                          createThreadFromSidebar(sidebarCreateProjectId);
                         }}
                       >
                         <span className="inline-flex size-4 items-center justify-center text-[1.05em] leading-none">+</span>
@@ -2617,6 +3143,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     onPointerDrop={endWorkbenchPointerDrag}
                     onSplitResize={resizeMosaicSplit}
                     renderPanel={({ isFocused, mosaicPanel, panelId, target }) => {
+                      const mosaicTarget = workspaceController.mosaicTargetForPanel(panelId);
                       const panelZoomDelta = mosaicPanel?.zoomDelta ?? 0;
                       const panelFontSizeRem = clampEditorFontSize(displayedEditorFontSize + panelZoomDelta * 0.08);
                       const isMinimized = Boolean(mosaicPanel?.minimized);
@@ -2642,14 +3169,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             isFocused={isFocused}
                             isMinimized={isMinimized}
                             isMinimizedVertical={isMinimizedVertical}
+                            location={mosaicTarget?.source?.location}
                             onClose={showMosaicView ? () => {
-                              closeMosaicPanel(target);
+                              closeMosaicPanel(mosaicTarget ?? target);
                             } : undefined}
                             onFocus={() => { }}
                             onHeaderPointerDragStart={showMosaicView ? (event) => {
                               beginWorkbenchPointerDrag(event, {
                                 sourcePanelId: panelId,
-                                target,
+                                target: mosaicTarget ?? target,
                                 type: "panel-target",
                               });
                             } : undefined}
@@ -2668,14 +3196,40 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             routeOwned
                             composerSpellCheck={resolvedSettings.composerSpellCheck}
                             fallbackThreadSummary={target.target.kind === "provider" || target.target.kind === "subagent" ? threadSummariesById.get(getWorkbenchThreadTargetRootId(target.target)) ?? null : null}
+                            getThreadHref={threadTarget => route.logical
+                              && (threadTarget.kind === "provider" || threadTarget.kind === "subagent")
+                              ? projectHref(createLogicalExistingThreadRoute(route.logical.projectId, threadTarget,
+                                route.logical.browseLocation ?? null))
+                              : undefined}
                             fontSizeRem={displayedEditorFontSize}
                             hasSidebarRestoreInset={hasSidebarRestoreInset}
                             isFocused={isFocused}
                             isMinimized={isMinimized}
                             isMinimizedVertical={isMinimizedVertical}
-                            onDraftHarnessChange={handleHarnessChange}
+                            onDraftHarnessChange={nextHarness =>
+                              handleHarnessChange(nextHarness, mosaicTarget?.source?.location)}
                             onOpenThread={openThreadFromExplorer}
-                            onCreateDraftThread={() => controls?.createThreadDraft(harness) ?? null}
+                            onCreateDraftThread={() => {
+                              if (!controls || !route.mosaicNode || target.target.kind !== "new") return null;
+                              if (route.logical && !mosaicTarget?.source?.location) {
+                                setSelectionError("Choose a daemon folder before creating this thread.");
+                                return null;
+                              }
+                              const draft = route.logical && mosaicTarget?.source?.location
+                                ? controls.createThreadDraftAt(mosaicTarget.source.location, harness, { select: false })
+                                : controls.createThreadDraft(harness, { select: false });
+                              const nextTarget: WorkbenchMosaicPanelTarget = {
+                                kind: "thread", target: { kind: "draft", draftId: DraftIdSchema.parse(draft.id) },
+                                ...(mosaicTarget?.source ? { source: mosaicTarget.source } : {}),
+                              };
+                              const nextNode = replaceWorkbenchMosaicTarget(
+                                route.mosaicNode, mosaicTarget ?? target, nextTarget,
+                              );
+                              navigateToRoute(route.logical?.projectId
+                                ? createLogicalMosaicRoute(route.logical.projectId, nextNode)
+                                : createMosaicRoute(route.projectId, nextNode), { replace: true });
+                              return draft;
+                            }}
                             onSendMessage={sendThreadMessage}
                             onThreadComposerDraftChange={handleThreadComposerDraftChange}
                             onThreadComposerDraftClear={handleThreadComposerDraftClear}
@@ -2691,9 +3245,17 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                                   ? { harness: target.target.harness, kind: "provider", threadId: rootThreadId }
                                   : { harness: target.target.harness, kind: "subagent", parentThreadId: rootThreadId, threadId: ThreadReferenceSchema.parse(selectedThreadId) },
                               };
-                              navigateToRoute(createMosaicRoute(route.projectId, replaceWorkbenchMosaicTarget(route.mosaicNode, target, nextTarget)));
+                              const nextNode = replaceWorkbenchMosaicTarget(route.mosaicNode, mosaicTarget ?? target, nextTarget);
+                              navigateToRoute(route.logical?.projectId
+                                ? createLogicalMosaicRoute(route.logical.projectId, nextNode)
+                                : createMosaicRoute(route.projectId, nextNode));
                             }}
                             onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
+                            profileController={profileControllerFor(
+                              target.target.kind === "provider" || target.target.kind === "subagent"
+                                ? workbenchClient.mounted?.threadOwnerFor(getWorkbenchThreadTargetRootId(target.target))
+                                  ?.daemonId ?? profileScopeKey
+                                : mosaicTarget?.source?.location?.daemonId ?? profileScopeKey)}
                             projectId={route.projectId}
                             projectFileCandidates={explorer.projectFileCandidates}
                             projectFileIndexId={explorer.projectFileIndexId}
@@ -2705,19 +3267,25 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             threadComposerDraft={getThreadComposerDraftForTarget(target.target)}
                             threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                             onClose={showMosaicView ? () => {
-                              closeMosaicPanel(target);
+                              closeMosaicPanel(mosaicTarget ?? target);
                             } : undefined}
                             onHeaderPointerDragStart={showMosaicView ? (event) => {
                               beginWorkbenchPointerDrag(event, {
                                 sourcePanelId: panelId,
-                                target,
+                                target: mosaicTarget ?? target,
                                 type: "panel-target",
                               });
                             } : undefined}
                             onMinimizeToggle={showMosaicView ? togglePanelMinimized : undefined}
                             onPanelZoomDeltaChange={showMosaicView ? updatePanelZoomDelta : undefined}
                             panelZoomDelta={panelZoomDelta}
-                            thread={target.target.kind === "provider" || target.target.kind === "subagent" ? getThreadDocumentFromSnapshot(threadDocuments, getWorkbenchThreadTargetRootId(target.target)) ?? mosaicDraftThreadsById[getWorkbenchThreadTargetRootId(target.target)] ?? (currentThread?.id === getWorkbenchThreadTargetRootId(target.target) ? currentThread : null) : null}
+                            location={mosaicTarget?.source?.location}
+                            thread={target.target.kind === "provider" || target.target.kind === "subagent"
+                              ? getThreadDocumentFromSnapshot(threadDocuments, getWorkbenchThreadTargetRootId(target.target))
+                                ?? (currentThread?.id === getWorkbenchThreadTargetRootId(target.target) ? currentThread : null)
+                              : target.target.kind === "draft"
+                                ? mosaicDraftThreadsById[target.target.draftId] ?? null
+                                : null}
                             threadId={getWorkbenchThreadTargetRootId(target.target)}
                           />
                         );
@@ -2740,6 +3308,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     editorFontClassName={editorFontClassName}
                     fontSizeRem={displayedEditorFontSize}
                     isFocused
+                    location={route.logical?.location}
                     onFocus={() => { }}
                     path={effectiveFilePath}
                     spellCheck={resolvedSettings.editorSpellCheck}
@@ -3100,5 +3669,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     </WorkbenchWorkingTreeProvider>
     </WorkbenchDaemonClientContext.Provider>
     </WorkbenchClientProvider>
+    </WorkbenchNetworkClientContext.Provider>
   );
 }

@@ -57,6 +57,7 @@ import { ThreadGitArcObservationProvider } from "./ThreadGitArcObservationContex
 import { getThreadVisibleHistoryEntries } from "./thread-visible-history";
 import ThreadAgentTabs from "./ThreadAgentTabs";
 import ThreadComposer from "./ThreadComposer";
+import type DraftSessionController from "./DraftSessionController";
 import type { DraftUpdate } from "./DraftSessionController";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadErrorCard from "./ThreadErrorCard";
@@ -230,6 +231,9 @@ export default memo(function ThreadViewContent ({
   composerSpellCheck,
   contained = false,
   draftLeadingContent = null,
+  draftTargetControl = null,
+  threadOwnerContent = null,
+  onDraftSessionChange,
   mobileFullBleed = false,
   fontSizeRem,
   getThreadHref,
@@ -264,6 +268,9 @@ export default memo(function ThreadViewContent ({
   composerSpellCheck: boolean;
   contained?: boolean;
   draftLeadingContent?: ReactNode;
+  draftTargetControl?: ReactNode;
+  threadOwnerContent?: ReactNode;
+  onDraftSessionChange?: (session: DraftSessionController<WorkbenchComposerInputDraft> | null) => void;
   mobileFullBleed?: boolean;
   fontSizeRem: number;
   getThreadHref?: (target: WorkbenchThreadTarget) => string | undefined;
@@ -278,7 +285,7 @@ export default memo(function ThreadViewContent ({
     input: UserInput[],
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
-  onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
+  onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission" | "retarget", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
   onThreadComposerDraftClear: (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => Promise<void> | void;
   onQuestionnaireError?: (message: string) => void;
   onThreadSettingsChange: (threadId: string, settings: WorkbenchComposerSettings) => void;
@@ -306,7 +313,7 @@ export default memo(function ThreadViewContent ({
   const projectHref = useWorkbenchProjectNavigation();
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const activeThreadId = selectedThreadId ?? thread.id;
-  const threads = useWorkbenchThreads();
+  const threads = useWorkbenchThreads(undefined, thread.id);
   const activeTarget: WorkbenchThreadTarget = activeThreadId === thread.id ? rootTarget
     : { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(thread.id), threadId: ThreadReferenceSchema.parse(activeThreadId) };
   const activeThreadController = useWorkbenchThread(projectId, activeTarget, undefined, "view");
@@ -937,6 +944,7 @@ export default memo(function ThreadViewContent ({
   const composerStatus = activeThread ? (
     <ThreadRateLimits
       harness={resolvedActiveThread?.harness ?? activeThread.harness}
+      leadingContent={!activeThread.isDraft ? threadOwnerContent : null}
       rateLimits={rateLimits}
       trailingContent={(
         <ThreadContextStatus
@@ -950,6 +958,8 @@ export default memo(function ThreadViewContent ({
   ) : null;
   const composer = activeThread ? (
     <ThreadComposer
+      onDraftSessionChange={onDraftSessionChange}
+      targetControl={isDraftThreadView ? draftTargetControl : null}
       canToggleHarness={canSelectHarness}
       key={`${projectId}:${activeThread.id}`}
       composerSpellCheck={composerSpellCheck}

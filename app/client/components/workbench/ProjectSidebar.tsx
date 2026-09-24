@@ -6,8 +6,8 @@
 
 import { useMemo, type MouseEvent } from "react";
 
-import type { WorkbenchProjectOption } from "workbench-shared/types";
-import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./project-sidebar-groups";
+import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchProjectOption } from "workbench-shared/types";
+import { getFirstSidebarProjectGroup, groupLogicalSidebarProjects, groupSidebarProjects, type DisplaySidebarGroups } from "./project-sidebar-groups";
 import { useWorkbenchProjectThreadSummaries } from "./use-workbench-client";
 import { ProjectIcon } from "./workbench-icons";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
@@ -18,38 +18,47 @@ import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButt
 
 export default function ProjectSidebar ({
   activeProjectId,
+  logicalProjects,
+  logicalSummaries,
   onConfigureGitRoots,
   onProjectLinkClick,
   projects,
   showGitRootsSetup,
 }: {
   activeProjectId: string;
+  logicalProjects?: readonly WorkbenchLogicalProject[];
+  logicalSummaries?: Readonly<Record<string, WorkbenchLogicalProjectSummary>>;
   onConfigureGitRoots: () => void;
-  onProjectLinkClick (event: MouseEvent<HTMLAnchorElement>, projectId: string): void;
+  onProjectLinkClick (event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
   projects: readonly WorkbenchProjectOption[];
   showGitRootsSetup: boolean;
 }) {
   const { preferences, setProjectTimeGroupCount } = useWorkbenchSidebarPreferences();
   const summaries = useWorkbenchProjectThreadSummaries();
-  const grouped = useMemo(() => groupSidebarProjects(projects, summaries.projects), [projects, summaries.projects]);
+  const displayedProjects = logicalProjects ?? projects;
+  const grouped = useMemo<DisplaySidebarGroups>(() => logicalProjects
+    ? groupLogicalSidebarProjects(logicalProjects, logicalSummaries ?? {})
+    : groupSidebarProjects(projects, summaries.projects),
+    [logicalProjects, logicalSummaries, projects, summaries.projects]);
   const entriesByProjectId = useMemo(() => new Map(
     [...grouped.alwaysVisibleProjects, ...grouped.timeGroups.flatMap(({ projects: entries }) => entries)]
       .map((entry) => [entry.project.id, entry]),
   ), [grouped]);
-  const otherCounts = useMemo(() => projects.reduce(
+  const otherCounts = useMemo(() => displayedProjects.reduce(
     (counts, project) => {
       if (project.id === activeProjectId) return counts;
       const summary = entriesByProjectId.get(project.id)?.summary;
       const unpinnedCounts = summary
-        ? WorkbenchThreadStatusCounts.subtractCounts(
-          summary.counts,
-          WorkbenchThreadStatusCounts.countPinnedStatuses(summary.pinnedThreads),
-        )
+        ? WorkbenchThreadStatusCounts.subtractCounts(summary.counts,
+          WorkbenchThreadStatusCounts.countPinnedStatuses(
+            logicalProjects ? (summary as WorkbenchLogicalProjectSummary).pinnedThreads.map(item => item.entry)
+              : (summary as typeof summaries.projects[number]).pinnedThreads,
+          ))
         : WorkbenchThreadStatusCounts.emptyCounts;
       return WorkbenchThreadStatusCounts.addCounts(counts, unpinnedCounts);
     },
     WorkbenchThreadStatusCounts.emptyCounts,
-  ), [activeProjectId, entriesByProjectId, projects]);
+  ), [activeProjectId, displayedProjects, entriesByProjectId, logicalProjects, summaries.projects]);
   const firstGroup = getFirstSidebarProjectGroup(grouped);
   const visibleProjects = grouped.alwaysVisibleProjects.length
     ? [...firstGroup, ...grouped.timeGroups.slice(0, preferences.projectTimeGroupCount).flatMap(({ projects: entries }) => entries)]
@@ -94,7 +103,7 @@ export default function ProjectSidebar ({
               Show {grouped.timeGroups[preferences.projectTimeGroupCount]?.label ?? "older projects"}
             </button>
           ) : null}
-          {!projects.length ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">No projects were found.</p> : null}
+          {!displayedProjects.length ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">No projects were found.</p> : null}
         </nav>
       </WorkbenchSidebarSectionDisclosure>
     </section>

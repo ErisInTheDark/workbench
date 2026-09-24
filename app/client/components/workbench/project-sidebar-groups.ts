@@ -1,26 +1,32 @@
 /*
  * Exports:
- * - ProjectSidebarProject/ProjectSidebarTimeGroup/GroupedSidebarProjects: flat project-sidebar visibility and progressive recency contracts. Keywords: project, sidebar, recency, activity.
- * - groupSidebarProjects/getFirstSidebarProjectGroup: promote libraries and unsnoozed unsettled work, bucket remaining projects by activity, and expose the exact first rendered group. Keywords: project, sidebar, grouping, time, status, rotator.
+ * - ProjectSidebarProject/LogicalSidebarProject/DisplaySidebarProject/DisplaySidebarGroups: concrete, identity-level and combined display inputs.
+ * - groupSidebarProjects/groupLogicalSidebarProjects/getFirstSidebarProjectGroup: preserve recency groups across both project views.
  */
 
-import type { WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkbenchProjectThreadSummary } from "workbench-shared/workbench/thread/thread-state";
 
-export interface ProjectSidebarProject {
+export interface ProjectSidebarProject<P = WorkbenchProjectOption, S = WorkbenchProjectThreadSummary> {
   activityAt: number | null;
-  project: WorkbenchProjectOption;
-  summary: WorkbenchProjectThreadSummary | null;
+  project: P;
+  summary: S | null;
 }
 
-export interface ProjectSidebarTimeGroup {
+export type LogicalSidebarProject = ProjectSidebarProject<WorkbenchLogicalProject, WorkbenchLogicalProjectSummary>;
+export type DisplaySidebarProject = ProjectSidebarProject<
+  WorkbenchProjectOption | WorkbenchLogicalProject,
+  WorkbenchProjectThreadSummary | WorkbenchLogicalProjectSummary
+>;
+
+export interface ProjectSidebarTimeGroup<P = WorkbenchProjectOption, S = WorkbenchProjectThreadSummary> {
   label: ProjectRecencyLabel;
-  projects: ProjectSidebarProject[];
+  projects: ProjectSidebarProject<P, S>[];
 }
 
-export interface GroupedSidebarProjects {
-  alwaysVisibleProjects: ProjectSidebarProject[];
-  timeGroups: ProjectSidebarTimeGroup[];
+export interface GroupedSidebarProjects<P = WorkbenchProjectOption, S = WorkbenchProjectThreadSummary> {
+  alwaysVisibleProjects: ProjectSidebarProject<P, S>[];
+  timeGroups: ProjectSidebarTimeGroup<P, S>[];
 }
 
 const PROJECT_RECENCY_DAY_MS = 24 * 60 * 60 * 1000;
@@ -40,41 +46,32 @@ function getProjectRecencyLabel(activityAt: number | null, nowMs: number): Proje
   return PROJECT_RECENCY_BUCKETS.find((bucket) => ageMs <= bucket.maxAgeMs)?.label ?? "ever";
 }
 
-function compareSidebarProjects(
-  left: ProjectSidebarProject,
-  right: ProjectSidebarProject,
+function compareSidebarProjects<P extends { id: string }, S>(
+  left: ProjectSidebarProject<P, S>,
+  right: ProjectSidebarProject<P, S>,
   catalogOrder: ReadonlyMap<string, number>,
 ) {
   return (right.activityAt ?? Number.NEGATIVE_INFINITY) - (left.activityAt ?? Number.NEGATIVE_INFINITY)
     || (catalogOrder.get(left.project.id) ?? 0) - (catalogOrder.get(right.project.id) ?? 0);
 }
 
-export function groupSidebarProjects(
-  projects: readonly WorkbenchProjectOption[],
-  summaries: readonly WorkbenchProjectThreadSummary[] = [],
-  nowMs = Date.now(),
-): GroupedSidebarProjects {
-  const summariesByProjectId = new Map(summaries.map((summary) => [summary.projectId, summary]));
-  const catalogOrder = new Map(projects.map((project, index) => [project.id, index]));
-  const entries = projects.map((project): ProjectSidebarProject => {
-    const summary = summariesByProjectId.get(project.id) ?? null;
-    return {
-      activityAt: summary?.lastThreadUpdateAt ?? project.lastCommitTimeMs,
-      project,
-      summary,
-    };
-  });
+function groupEntries<P extends { id: string }, S extends { unsettledThreads: readonly object[] }>(
+  entries: ProjectSidebarProject<P, S>[],
+  isLibrary: (project: P) => boolean,
+  nowMs: number,
+): GroupedSidebarProjects<P, S> {
+  const catalogOrder = new Map(entries.map((entry, index) => [entry.project.id, index]));
   const alwaysVisibleProjects = entries
     .filter(({ project, summary }) => (
-      project.kind === "workbench-library"
+      isLibrary(project)
       || Boolean(summary?.unsettledThreads.length)
     ))
     .sort((left, right) => (
-      Number(right.project.kind === "workbench-library") - Number(left.project.kind === "workbench-library")
+      Number(isLibrary(right.project)) - Number(isLibrary(left.project))
       || compareSidebarProjects(left, right, catalogOrder)
     ));
   const alwaysVisibleProjectIds = new Set(alwaysVisibleProjects.map(({ project }) => project.id));
-  const timeGroupsByLabel = new Map<ProjectRecencyLabel, ProjectSidebarTimeGroup>();
+  const timeGroupsByLabel = new Map<ProjectRecencyLabel, ProjectSidebarTimeGroup<P, S>>();
 
   for (const entry of entries) {
     if (alwaysVisibleProjectIds.has(entry.project.id)) continue;
@@ -88,15 +85,42 @@ export function groupSidebarProjects(
     alwaysVisibleProjects,
     timeGroups: PROJECT_RECENCY_BUCKETS
       .map(({ label }) => timeGroupsByLabel.get(label))
-      .filter((group): group is ProjectSidebarTimeGroup => Boolean(group))
+      .filter((group): group is ProjectSidebarTimeGroup<P, S> => Boolean(group))
       .map((group) => ({
         ...group,
         projects: group.projects.sort((left, right) => compareSidebarProjects(left, right, catalogOrder)),
       })),
   };
 }
+export type DisplaySidebarGroups = GroupedSidebarProjects<
+  WorkbenchProjectOption | WorkbenchLogicalProject,
+  WorkbenchProjectThreadSummary | WorkbenchLogicalProjectSummary
+>;
 
-export function getFirstSidebarProjectGroup(grouped: GroupedSidebarProjects) {
+export function groupSidebarProjects(
+  projects: readonly WorkbenchProjectOption[],
+  summaries: readonly WorkbenchProjectThreadSummary[] = [],
+  nowMs = Date.now(),
+): GroupedSidebarProjects {
+  const byId = new Map(summaries.map(summary => [summary.projectId, summary]));
+  return groupEntries(projects.map(project => {
+    const summary = byId.get(project.id) ?? null;
+    return { project, summary, activityAt: summary?.lastThreadUpdateAt ?? project.lastCommitTimeMs };
+  }), project => project.kind === "workbench-library", nowMs);
+}
+
+export function groupLogicalSidebarProjects(
+  projects: readonly WorkbenchLogicalProject[],
+  summaries: Readonly<Record<string, WorkbenchLogicalProjectSummary>>,
+  nowMs = Date.now(),
+): GroupedSidebarProjects<WorkbenchLogicalProject, WorkbenchLogicalProjectSummary> {
+  return groupEntries(projects.map(project => {
+    const summary = summaries[project.id] ?? null;
+    return { project, summary, activityAt: summary?.lastThreadUpdateAt ?? null };
+  }), () => false, nowMs);
+}
+
+export function getFirstSidebarProjectGroup<P, S>(grouped: GroupedSidebarProjects<P, S>) {
   return grouped.alwaysVisibleProjects.length
     ? grouped.alwaysVisibleProjects
     : grouped.timeGroups[0]?.projects ?? [];

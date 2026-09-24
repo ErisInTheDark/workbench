@@ -9,10 +9,12 @@ import type {
   WorkbenchClientStateMutation,
   WorkbenchClientStateRecord,
   WorkbenchClientStateResponse,
+  WorkbenchDaemonRegistration,
   WorkbenchProjectRemap,
 } from "workbench-shared/state/workbench-client-state";
 import {
   WORKBENCH_BROWSER_STATE_HEADER,
+  WorkbenchDaemonRegistrationRequestSchema,
   WorkbenchProjectRemapSchema,
   workbenchClientStateMutationPath,
 } from "workbench-shared/state/workbench-client-state";
@@ -29,6 +31,7 @@ export interface WorkbenchClientStateSnapshot {
   daemonRegistrationId: string;
   error: string;
   records: readonly WorkbenchClientStateRecord[];
+  registrations: readonly WorkbenchDaemonRegistration[];
   revision: number;
   schemaVersion: number;
 }
@@ -82,8 +85,9 @@ export default class WorkbenchClientStateController {
   readonly #optimistic = new Map<string, { generation: number; mutation: WorkbenchClientStateMutation }>();
   readonly #pollDelayMs: number;
   readonly #records = new Map<string, WorkbenchClientStateRecord>();
-  readonly #threadAliases = new Map<string, Map<string, string>>();
-  readonly #projectAliases = new Map<string, string>();
+  readonly #registrationRequests = new Map<string, Promise<string>>();
+  readonly #threadAliases = new Map<string, Map<string, Map<string, string>>>();
+  readonly #projectAliases = new Map<string, Map<string, WorkbenchProjectAlias["projectId"]>>();
   #projectRemap: Promise<void> | null = null;
   readonly #schedule: (callback: () => void, delayMs: number) => number;
   readonly #visibility: NonNullable<WorkbenchClientStateControllerOptions["visibility"]>;
@@ -93,12 +97,14 @@ export default class WorkbenchClientStateController {
   #mutationGeneration = 0;
   #polling = false;
   #revision = 0;
+  #registrations: WorkbenchClientStateSnapshot["registrations"] = [];
   #schemaVersion = 0;
   #scheduledPoll: number | null = null;
   #snapshot: WorkbenchClientStateSnapshot = {
     daemonRegistrationId: "memory",
     error: "",
     records: [],
+    registrations: [],
     revision: 0,
     schemaVersion: 0,
   };
@@ -156,25 +162,62 @@ export default class WorkbenchClientStateController {
     return await this.#mutate({ action: "delete", identity: this.#storageIdentity(identity) });
   }
 
-  rememberThreadIdentityAlias(projectId: string, storedThreadId: string, threadId: string) {
+  rememberThreadIdentityAlias(projectId: string, storedThreadId: string, threadId: string, daemonRegistrationId = this.#daemonRegistrationId) {
     if (storedThreadId === threadId) return;
-    projectId = this.resolveProjectId(projectId);
-    const aliases = this.#threadAliases.get(projectId) ?? new Map<string, string>();
+    projectId = this.resolveProjectId(projectId, daemonRegistrationId);
+    const scoped = this.#threadAliases.get(daemonRegistrationId) ?? new Map<string, Map<string, string>>();
+    const aliases = scoped.get(projectId) ?? new Map<string, string>();
     if (aliases.get(storedThreadId) === threadId) return;
     aliases.set(storedThreadId, threadId);
-    this.#threadAliases.set(projectId, aliases);
+    scoped.set(projectId, aliases);
+    this.#threadAliases.set(daemonRegistrationId, scoped);
     this.#publish();
   }
 
-  resolveProjectId(projectId: string) {
-    return this.#projectAliases.get(projectId) ?? projectId;
+  resolveProjectId(projectId: string, daemonRegistrationId = this.#daemonRegistrationId) {
+    return this.#projectAliases.get(daemonRegistrationId)?.get(projectId) ?? projectId;
   }
 
-  getProjectAliases(): readonly WorkbenchProjectAlias[] {
-    return [...this.#projectAliases].map(([alias, projectId]) => ({ alias, projectId: projectId as WorkbenchProjectAlias["projectId"] }));
+  async ensureDaemonRegistration(daemonId: string, attachedLocal: boolean): Promise<string> {
+    const request = WorkbenchDaemonRegistrationRequestSchema.parse({ daemonId, attachedLocal });
+    const existing = this.#registrations.find(item => item.daemonId === request.daemonId);
+    if (existing) return existing.id;
+    if (this.#mode === "memory") throw new Error("A memory app state has no durable daemon registration.");
+    const pending = this.#registrationRequests.get(daemonId);
+    if (pending) return await pending;
+    const operation = (async () => {
+      if (this.#disposed) throw new Error("Workbench app state is disposed.");
+      const response = await this.#fetcher("/api/workbench-client-state/daemon-register", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(this.#browserStateId ? { [WORKBENCH_BROWSER_STATE_HEADER]: this.#browserStateId } : {}),
+        },
+        body: JSON.stringify(request),
+      });
+      if (!response.ok) throw new Error((await response.text()).slice(0, 1_000)
+        || `Daemon registration failed with HTTP ${response.status}.`);
+      const state = await this.#request("GET", "/api/workbench-client-state");
+      if (this.#disposed) throw new Error("Workbench app state was disposed during daemon registration.");
+      if (state.kind !== "snapshot") throw new Error("Daemon registration did not return a complete app state.");
+      this.#apply(state);
+      const registered = this.#registrations.find(item => item.daemonId === daemonId);
+      if (!registered) throw new Error("Registered daemon is missing from app state.");
+      this.#setError("");
+      return registered.id;
+    })().catch((error: unknown) => {
+      if (!this.#disposed) this.#setError(error instanceof Error ? error.message : "Daemon registration failed.");
+      throw error;
+    }).finally(() => { this.#registrationRequests.delete(daemonId); });
+    this.#registrationRequests.set(daemonId, operation);
+    return await operation;
   }
 
-  async adoptProjectAliases(aliases: readonly WorkbenchProjectAlias[]) {
+  getProjectAliases(daemonRegistrationId = this.#daemonRegistrationId): readonly WorkbenchProjectAlias[] {
+    return [...(this.#projectAliases.get(daemonRegistrationId) ?? [])].map(([alias, projectId]) => ({ alias, projectId }));
+  }
+
+  async adoptProjectAliases(aliases: readonly WorkbenchProjectAlias[], daemonRegistrationId = this.#daemonRegistrationId) {
     if (!aliases.length) return;
     const prior = this.#projectRemap;
     const writes = [...this.#mutationQueues.values()];
@@ -182,16 +225,16 @@ export default class WorkbenchClientStateController {
       await prior;
       await Promise.all(writes);
       if (this.#disposed) throw new Error("Workbench app state is disposed.");
-      const request = WorkbenchProjectRemapSchema.parse({ daemonRegistrationId: this.#daemonRegistrationId, aliases });
-      const composed = composeProjectAliases(this.getProjectAliases(), request.aliases);
+      const request = WorkbenchProjectRemapSchema.parse({ daemonRegistrationId, aliases });
+      const composed = composeProjectAliases(this.getProjectAliases(daemonRegistrationId), request.aliases);
       const additions = composed.changes;
       if (!additions.length) return;
       const mapping = new Map(composed.aliases.map(item => [item.alias, item.projectId]));
-      this.#remappedThreadAliases(mapping);
+      this.#remappedThreadAliases(mapping, daemonRegistrationId);
       if (this.#mode === "memory") {
         const keys = new Set<string>();
         for (const record of this.#records.values()) {
-          const next = "projectId" in record && record.daemonRegistrationId === this.#daemonRegistrationId
+          const next = "projectId" in record && record.daemonRegistrationId === daemonRegistrationId
             ? { ...record, projectId: mapping.get(record.projectId) ?? record.projectId } : record;
           const key = identityKey(workbenchClientStateRecordIdentity(next));
           if (keys.has(key)) throw new Error("Project adoption conflicts with existing saved state.");
@@ -203,16 +246,15 @@ export default class WorkbenchClientStateController {
         : null;
       if (this.#disposed) throw new Error("Workbench app state was disposed during project adoption.");
       // Thread identities may arrive while the app server is persisting the remap.
-      const threadAliases = this.#remappedThreadAliases(mapping);
+      const threadAliases = this.#remappedThreadAliases(mapping, daemonRegistrationId);
       if (response) {
         if (response.kind !== "snapshot") throw new Error("Project adoption did not return a complete snapshot.");
         this.#apply(response, false);
       }
-      for (const alias of additions) {
-        this.#projectAliases.set(alias.alias, alias.projectId);
-      }
-      this.#threadAliases.clear();
-      for (const [projectId, threads] of threadAliases) this.#threadAliases.set(projectId, threads);
+      const scopedAliases = this.#projectAliases.get(daemonRegistrationId) ?? new Map<string, WorkbenchProjectAlias["projectId"]>();
+      for (const alias of additions) scopedAliases.set(alias.alias, alias.projectId);
+      this.#projectAliases.set(daemonRegistrationId, scopedAliases);
+      this.#threadAliases.set(daemonRegistrationId, threadAliases);
       const records = [...this.#records.values()].map(record => this.#canonicalProject(record));
       this.#records.clear();
       for (const record of records) this.#records.set(identityKey(workbenchClientStateRecordIdentity(record)), record);
@@ -234,14 +276,14 @@ export default class WorkbenchClientStateController {
   }
 
   #canonicalProject<T extends WorkbenchClientStateIdentity | WorkbenchClientStateRecord>(identity: T): T {
-    return "projectId" in identity && identity.daemonRegistrationId === this.#daemonRegistrationId
-      ? { ...identity, projectId: this.resolveProjectId(identity.projectId) }
+    return "projectId" in identity
+      ? { ...identity, projectId: this.resolveProjectId(identity.projectId, identity.daemonRegistrationId) }
       : identity;
   }
 
-  #remappedThreadAliases(mapping: ReadonlyMap<string, string>) {
+  #remappedThreadAliases(mapping: ReadonlyMap<string, string>, daemonRegistrationId: string) {
     const result = new Map<string, Map<string, string>>();
-    for (const [projectId, threads] of this.#threadAliases) {
+    for (const [projectId, threads] of this.#threadAliases.get(daemonRegistrationId) ?? []) {
       const destination = mapping.get(projectId) ?? projectId;
       const canonical = result.get(destination) ?? new Map<string, string>();
       for (const [stored, current] of threads) {
@@ -256,7 +298,7 @@ export default class WorkbenchClientStateController {
   #projectIdentity<T extends WorkbenchClientStateIdentity | WorkbenchClientStateRecord>(identity: T): T {
     identity = this.#canonicalProject(identity);
     if (identity.kind !== "composerDraft" && identity.kind !== "questionnaireDraft") return identity;
-    const threadId = this.#threadAliases.get(identity.projectId)?.get(identity.threadId);
+    const threadId = this.#threadAliases.get(identity.daemonRegistrationId)?.get(identity.projectId)?.get(identity.threadId);
     return threadId ? { ...identity, threadId } : identity;
   }
 
@@ -397,6 +439,7 @@ export default class WorkbenchClientStateController {
       throw new Error("Workbench app-state daemon registration changed during this browser session.");
     }
     this.#daemonRegistrationId = response.daemonRegistrationId;
+    if (response.registrations) this.#registrations = response.registrations;
     this.#schemaVersion = response.schemaVersion ?? 0;
     if (response.kind === "snapshot") this.#records.clear();
     for (const change of projectWorkbenchClientStateRows(response.rows)) {
@@ -438,6 +481,7 @@ export default class WorkbenchClientStateController {
       daemonRegistrationId: this.#daemonRegistrationId,
       error: this.#error,
       records: [...projectedRecords.values()].map((record) => this.#projectIdentity(record)),
+      registrations: this.#registrations,
       revision: this.#revision,
       schemaVersion: this.#schemaVersion,
     };

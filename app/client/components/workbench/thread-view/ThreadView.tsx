@@ -31,13 +31,14 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
   const active = useWorkbenchThread(props.projectId, selectedId && selectedId !== rootId
     ? thread.state.status === "ready" ? { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(rootId), threadId: ThreadReferenceSchema.parse(selectedId), harness: child?.harness } : null
     : target, undefined, selectedId !== rootId ? "view" : interest);
-  const error = thread.state.error ?? active.state.error ?? ((!target || target.kind === "new") ? routeError : "");
+  const error = thread.state.error ?? active.state.error ?? (!thread.state.document ? routeError : "");
   if (error) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center px-6 py-8">
         <div role="alert" className="flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger bg-danger/10 px-5 py-4 text-left">
           <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open thread</p>
           <p className="m-0 break-words text-sm text-text">{error}</p>
+          {props.threadOwnerContent ? <p className="m-0 text-sm">{props.threadOwnerContent}</p> : null}
         </div>
       </div>
     );

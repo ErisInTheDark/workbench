@@ -79,7 +79,7 @@ test("audio retention is browser-memory opt-in, independent of shared settings",
 test("old app schemas keep voice usable but reject unsupported preference writes", async context => {
   context.mock.method(console, "warn", () => {});
   const h = fixture();
-  h.preferences.getSnapshot = () => ({ daemonRegistrationId: "memory", error: "", records: [], revision: 0, schemaVersion: 12 });
+  h.preferences.getSnapshot = () => ({ daemonRegistrationId: "memory", error: "", records: [], registrations: [], revision: 0, schemaVersion: 12 });
   const controller = new VoiceSettingsController(h.port, h.preferences);
   context.after(() => controller.dispose());
   await controller.ready;

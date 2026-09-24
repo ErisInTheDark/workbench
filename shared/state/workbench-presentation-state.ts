@@ -29,6 +29,12 @@ const folder = z.object({
   id: uuid, scope: layoutScope, logicalProjectId: LogicalProjectIdSchema.nullable(),
   title: z.string(), position: revision,
 }).strict();
+const layoutInput = z.object({
+  scope: layoutScope,
+  logicalProjectId: LogicalProjectIdSchema.nullable(),
+  folders: z.array(folder),
+  members: z.array(member),
+}).strict();
 export const PresentationDraftInputSchema = z.object({
   id: uuid,
   logicalProjectId: LogicalProjectIdSchema,
@@ -41,6 +47,8 @@ export type PresentationDraftInput = z.infer<typeof PresentationDraftInputSchema
 const draft = PresentationDraftInputSchema.extend({
   revision,
   phase: z.enum(["importing", "unsent", "submitting", "accepted", "deleted"]),
+  pinned: z.boolean().default(false),
+  snoozed: z.boolean().default(false),
   launchId: uuid.nullable(),
   acceptedThreadId: z.string().nullable(),
   attachments: z.array(z.object({
@@ -85,6 +93,10 @@ export const PresentationMutationSchema = z.discriminatedUnion("kind", [
     kind: z.literal("deleteDraft"), draftId: uuid, expectedRevision: revision,
   }).strict(),
   z.object({
+    kind: z.literal("setDraftPriority"), draftId: uuid, expectedRevision: revision,
+    pinned: z.boolean(), snoozed: z.boolean(),
+  }).strict(),
+  z.object({
     kind: z.literal("deleteAttachment"), draftId: uuid,
     attachmentId: z.string().min(1), expectedRevision: revision,
   }).strict(),
@@ -94,13 +106,15 @@ export const PresentationMutationSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("completeLaunch"), draftId: uuid, launchId: uuid, threadId: z.string().min(1),
   }).strict(),
+  layoutInput.extend({ kind: z.literal("saveLayout"), expectedRevision: revision }).strict(),
   z.object({
-    kind: z.literal("saveLayout"), scope: layoutScope, logicalProjectId: LogicalProjectIdSchema.nullable(),
-    expectedRevision: revision, folders: z.array(folder), members: z.array(member),
+    kind: z.literal("saveLayouts"), expectedRevision: revision,
+    layouts: z.array(layoutInput).min(1).max(2),
   }).strict(),
   z.object({
     kind: z.literal("importDraft"), daemonId: DaemonIdSchema, sourceId: z.string().min(1),
     sourceRevision: revision, draft: PresentationDraftInputSchema,
+    pinned: z.boolean().default(false), snoozed: z.boolean().default(false),
     attachments: z.array(z.object({
       id: z.string().min(1), mediaType: z.string().min(1), contentHash: z.string().min(1),
     }).strict()),

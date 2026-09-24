@@ -146,6 +146,10 @@ function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClien
     explorer: {} as WorkbenchClientController["explorer"],
     mounted: store ? {
       getThreadController: () => { throw new Error("Unexpected thread view during command rendering."); },
+      threadOwnerFor: () => null,
+      threadContextFor: () => null,
+      launchContextFor: () => null,
+      draftContextFor: () => null,
       controls: {} as NonNullable<WorkbenchClientController["mounted"]>["controls"],
       dispose: () => undefined,
       threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],

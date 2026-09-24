@@ -7,7 +7,7 @@
  */
 
 import type { ThreadPayload, WorkbenchHarness } from "workbench-shared/types";
-import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { DraftIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchMainLayout, {
   type WorkbenchDropPlacement,
   type WorkbenchMainLayout as WorkbenchMainLayoutState,
@@ -16,6 +16,7 @@ import WorkbenchMainLayout, {
 import {
   createWorkbenchMosaicSplit,
   createWorkbenchMosaicTarget,
+  type WorkbenchMosaicPanelTarget,
   type WorkbenchMosaicNode,
 } from "workbench-shared/workbench/navigation/workbench-mosaic-route";
 import type { WorkbenchDragPayload } from "./workbench-drag";
@@ -101,6 +102,17 @@ export default class WorkbenchWorkspaceController {
   constructor(private options: WorkbenchWorkspaceControllerOptions) {}
 
   getSnapshot = () => this.snapshot;
+  mosaicTargetForPanel(panelId: string): WorkbenchMosaicPanelTarget | null {
+    const path = this.snapshot.routeProjection?.panelPathsById[panelId];
+    let node = this.snapshot.selection.mosaicNode;
+    if (!path || !node) return null;
+    for (const index of path) {
+      if (node.type !== "split") return null;
+      node = node.children[index] ?? null;
+      if (!node) return null;
+    }
+    return node.type === "target" ? node.target : null;
+  }
 
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -164,8 +176,8 @@ export default class WorkbenchWorkspaceController {
       target = {
         kind: "thread",
         target: {
-          kind: "provider",
-          threadId: ThreadReferenceSchema.parse(draft.id),
+          kind: "draft",
+          draftId: DraftIdSchema.parse(draft.id),
         },
       };
     }

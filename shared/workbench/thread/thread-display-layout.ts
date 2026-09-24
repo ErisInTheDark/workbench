@@ -59,7 +59,7 @@ export function getThreadDisplayDraftKey(draftId: DraftId) {
   return ThreadDisplayKeySchema.parse(`draft:${draftId}`);
 }
 
-export function getProjectQualifiedThreadDisplayKey(projectId: ProjectId, threadKey: ThreadDisplayKey) {
+export function getProjectQualifiedThreadDisplayKey(projectId: string, threadKey: ThreadDisplayKey) {
   return ProjectThreadDisplayKeySchema.parse(`${encodeURIComponent(projectId)}/${encodeURIComponent(threadKey)}`);
 }
 

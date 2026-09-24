@@ -2,7 +2,7 @@
  * Exports:
  * - TableMigration/TableVersion/TableHistory: typed table migration history.
  * - SubsystemSchemaHistory/WorkbenchDatabaseSchema: assembled schema contracts.
- * - tableVersion/createTable/addColumns/createIndexes/rebuildTable/deleteRows: migration declarations.
+ * - tableVersion/createTable/addColumns/createIndexes/rebuildTable/deleteRows/sqlData: migration declarations.
  * - copyDistinctValues: admit retained column values into a unique reference key before a rebuild.
  * - defineTableHistory/retireTableHistory/defineSubsystemHistory: table lifecycle declarations.
  * - defineWorkbenchDatabaseSchema: validate and assemble global schema history.
@@ -72,6 +72,11 @@ interface DeleteRowsMigration {
   readonly where: string;
 }
 
+interface SqlDataMigration {
+  readonly kind: "sqlData";
+  readonly statements: readonly string[];
+}
+
 interface CopyDistinctValuesMigration {
   readonly kind: "copyDistinctValues";
   readonly from: TableDefinition;
@@ -87,7 +92,7 @@ interface DropTableMigration {
 
 export type TableMigration =
   | CreateTableMigration | AddColumnsMigration | CreateIndexesMigration | RebuildTableMigration
-  | DeleteRowsMigration | DropTableMigration | CopyDistinctValuesMigration;
+  | DeleteRowsMigration | DropTableMigration | CopyDistinctValuesMigration | SqlDataMigration;
 
 export interface TableVersion<Table extends TableDefinition = TableDefinition> {
   readonly schemaVersion: number;
@@ -246,6 +251,13 @@ export function deleteRows(tableName: string, where: SqlFragment<boolean>): Dele
   return Object.freeze({ kind: "deleteRows", tableName, where: where.text });
 }
 
+export function sqlData(statements: readonly string[]): SqlDataMigration {
+  if (!statements.length || statements.some(statement => !statement.trim())) {
+    throw new Error("SQL data migration requires non-empty statements");
+  }
+  return Object.freeze({ kind: "sqlData", statements: Object.freeze([...statements]) });
+}
+
 function sameNames(left: readonly string[], right: readonly string[]) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -274,7 +286,7 @@ function validateTransition(previous: TableDefinition, version: TableVersion) {
   const operations = version.migration;
   for (const operation of operations) {
     if (operation.kind === "createTable") throw new Error(`Existing table ${version.table.name} cannot use createTable again`);
-    if (operation.kind === "deleteRows") continue;
+    if (operation.kind === "deleteRows" || operation.kind === "sqlData") continue;
     if (operation.kind === "copyDistinctValues") {
       if (operation.from !== previous) throw new Error("Distinct-value copy must read the preceding table version");
       continue;
@@ -287,7 +299,8 @@ function validateTransition(previous: TableDefinition, version: TableVersion) {
   const rebuild = operations.filter((operation) => operation.kind === "rebuildTable");
   if (rebuild.length > 0) {
     if (rebuild.length !== 1 || operations.at(-1) !== rebuild[0]
-      || operations.some(operation => operation.kind !== "deleteRows" && operation.kind !== "copyDistinctValues" && operation.kind !== "rebuildTable")) {
+      || operations.some(operation => operation.kind !== "deleteRows" && operation.kind !== "copyDistinctValues"
+        && operation.kind !== "sqlData" && operation.kind !== "rebuildTable")) {
       throw new Error(`Rebuild of ${version.table.name}@${version.schemaVersion} may accompany only row deletions and distinct-value copies`);
     }
     return;
@@ -508,6 +521,10 @@ function executeRebuild(database: Database.Database, operation: RebuildTableMigr
 }
 
 function executeMigration(database: Database.Database, operation: TableMigration, schemaVersion: number) {
+  if (operation.kind === "sqlData") {
+    for (const statement of operation.statements) database.exec(statement);
+    return;
+  }
   if (operation.kind === "copyDistinctValues") {
     const source = quoteIdentifier(operation.sourceColumn);
     const target = quoteIdentifier(operation.targetColumn);

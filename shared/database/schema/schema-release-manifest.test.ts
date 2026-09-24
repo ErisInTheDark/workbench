@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { check, defineTable, index, integer, sql, text } from "./schema-definition.ts";
 import {
   copyDistinctValues, createTable, defineSubsystemHistory, defineTableHistory, defineWorkbenchDatabaseSchema,
-  rebuildTable, tableVersion, type WorkbenchDatabaseSchema,
+  rebuildTable, sqlData, tableVersion, type WorkbenchDatabaseSchema,
 } from "./schema-history.ts";
 import {
   assertSchemaReleaseManifest, fingerprintSchemaReleases, inspectSchemaReleases, type SchemaReleaseRegistry,
@@ -54,6 +54,20 @@ function fixture(options: {
 function seal(schema: WorkbenchDatabaseSchema): SchemaReleaseRegistry {
   return Object.fromEntries(fingerprintSchemaReleases(schema).map(release => [`release${release.version}`, release]));
 }
+
+test("sealed SQL data conversion rejects a changed operation", () => {
+  const build = (value: string) => {
+    const table = defineTable("data_conversion", { id: integer().primaryKey(), value: text().notNull() });
+    return defineWorkbenchDatabaseSchema({ subsystems: [defineSubsystemHistory([
+      defineTableHistory({ current: table, versions: [
+        tableVersion({ schemaVersion: 1, table, migration: createTable(table) }),
+        tableVersion({ schemaVersion: 2, table,
+          migration: sqlData([`UPDATE data_conversion SET value = '${value}'`]) }),
+      ] }),
+    ])] });
+  };
+  assert.throws(() => assertSchemaReleaseManifest(build("changed"), seal(build("original")), "fixture"), /changed/u);
+});
 
 test("changing a reference backfill changes only its own release fingerprint", () => {
   const providers = defineTable("providers", { id: text().primaryKey() });

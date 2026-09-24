@@ -2,13 +2,16 @@
  * Exports:
  * - default WorkbenchWorkingTreeProvider: bind one working-tree owner to the selected project.
  * - useWorkingTree/useWorkingTreeSnapshot: consume domain state without prop transport.
+ * - useWorkingTreeDaemonId: identify the concrete daemon owning Git thread links.
  */
 "use client";
 import { createContext, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import WorkbenchWorkingTreeState from "../../../workbench/git/WorkbenchWorkingTreeState";
 import WorkbenchDaemonClientContext from "../WorkbenchDaemonClientContext";
+import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 
 const Context = createContext<WorkbenchWorkingTreeState | null>(null);
+const DaemonIdContext = createContext<string | null>(null);
 export function useWorkingTree() {
   const state = useContext(Context);
   if (!state) throw new Error("Working-tree provider is required.");
@@ -18,11 +21,25 @@ export function useWorkingTreeSnapshot() {
   const state = useWorkingTree();
   return useSyncExternalStore(state.subscribe, state.getSnapshot, state.getSnapshot);
 }
-export default function WorkbenchWorkingTreeProvider({ projectId, children }: { projectId: string; children: ReactNode }) {
-  const daemon = useContext(WorkbenchDaemonClientContext);
-  const state = useMemo(() => new WorkbenchWorkingTreeState(projectId, daemon?.git.workingTree ?? null), [daemon, projectId]);
+export function useWorkingTreeDaemonId() {
+  return useContext(DaemonIdContext);
+}
+export default function WorkbenchWorkingTreeProvider({ projectId, children, sourceDaemon, sourceDaemonId }: {
+  projectId: string; children: ReactNode; sourceDaemon?: WorkbenchDaemonClient | null;
+  sourceDaemonId?: string | null;
+}) {
+  const inheritedDaemon = useContext(WorkbenchDaemonClientContext);
+  const inheritedState = useContext(Context);
+  const inheritedDaemonId = useContext(DaemonIdContext);
+  const daemon = sourceDaemon === undefined ? inheritedDaemon : sourceDaemon;
+  const reuse = Boolean(inheritedState && inheritedState.projectId === projectId
+    && inheritedDaemonId === (sourceDaemonId ?? null)
+    && daemon === inheritedDaemon);
+  const state = useMemo(() => reuse && inheritedState
+    ? inheritedState : new WorkbenchWorkingTreeState(projectId, daemon?.git.workingTree ?? null),
+  [daemon, inheritedState, projectId, reuse]);
   useEffect(() => {
-    if (!daemon) return;
+    if (!daemon || reuse) return;
     state.activate();
     const visibility = () => state.setVisible(!document.hidden);
     const focus = () => { if (!document.hidden) void state.refresh(); };
@@ -36,6 +53,9 @@ export default function WorkbenchWorkingTreeProvider({ projectId, children }: { 
       unsubscribe();
       state.dispose();
     };
-  }, [daemon, state]);
-  return <Context.Provider value={state}>{children}</Context.Provider>;
+  }, [daemon, reuse, state]);
+  if (reuse) return <>{children}</>;
+  return <DaemonIdContext.Provider value={sourceDaemonId ?? null}>
+    <Context.Provider value={state}>{children}</Context.Provider>
+  </DaemonIdContext.Provider>;
 }

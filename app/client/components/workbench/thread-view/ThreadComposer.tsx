@@ -45,6 +45,7 @@ import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./m
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
 import StickyComposerSurface from "./StickyComposerSurface";
 import ThreadProfileQuickPicker from "./ThreadProfileQuickPicker";
+import type DraftSessionController from "./DraftSessionController";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
 import ThreadLightboxImage from "./ThreadLightboxImage";
@@ -97,6 +98,8 @@ export default function ThreadComposer ({
   highlightSources,
   thread,
   threadTarget,
+  targetControl,
+  onDraftSessionChange,
 }: {
   children?: ReactNode | ((state: { isProfilePickerOpen: boolean }) => ReactNode);
   canToggleHarness?: boolean;
@@ -112,7 +115,7 @@ export default function ThreadComposer ({
     options?: { activatedSkillPaths?: string[] },
   ) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
-  onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
+  onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission" | "retarget", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
   onThreadComposerDraftClear: (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => Promise<void> | void;
   onQuestionnaireError?: (message: string) => void;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
@@ -135,6 +138,8 @@ export default function ThreadComposer ({
   highlightSources: InlineMentionHighlightSources;
   thread: ThreadPayload;
   threadTarget?: WorkbenchThreadTarget | null;
+  targetControl?: ReactNode;
+  onDraftSessionChange?: (session: DraftSessionController<WorkbenchComposerInputDraft> | null) => void;
 }) {
   const daemon = useWorkbenchDaemonClient();
   const questionnaire = useWorkbenchQuestionnaire(projectId, thread.isDraft ? null
@@ -193,6 +198,10 @@ export default function ThreadComposer ({
   const isShiftPressed = useNonTextInputShiftKey({
     allowWhileTextInputFocused: showQuestionnairePanel && isQuestionnaireActionsHovered,
   });
+  useEffect(() => {
+    onDraftSessionChange?.(editing.session);
+    return () => onDraftSessionChange?.(null);
+  }, [editing.session, onDraftSessionChange]);
   const stopControlState = getThreadComposerStopControlState({
     hasPendingUserInputRequest, isActiveThread, isCommentMode, isStopping,
     canSnoozeQuestionnaire: sidebarEntry?.entryKind === "thread" && !sidebarEntry.metadata.archived && !isApprovalBlocked,
@@ -656,6 +665,7 @@ export default function ThreadComposer ({
                       />
                     ) :
                     <ThreadComposerRibbon
+                      targetControl={thread.isDraft ? targetControl : null}
                       key={`${projectId}:${thread.id}`}
                       modelId={thread.model}
                       agentLabel={agentButtonLabel}

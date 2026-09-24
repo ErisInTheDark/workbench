@@ -7,6 +7,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import Database from "better-sqlite3";
+import { DATABASE_LOG_PREFIX } from "workbench-shared/database/database-log-format";
+import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
+import { presentationSchema } from "workbench-shared/state/workbench-presentation-schema";
+import { captureTestOutput } from "../../../test/capture-test-output.mts";
 import { DaemonIdSchema, ProjectIdSchema, ProjectIdentityKeySchema } from "workbench-shared/workbench/identity";
 import WorkbenchPresentationRepository from "./WorkbenchPresentationRepository";
 
@@ -62,6 +67,112 @@ test("one remote groups locations but drafts retain a concrete daemon target acr
   }
 });
 
+test("equal path identities share one project without losing concrete daemon targets", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-path-"));
+  const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
+  const identityKey = ProjectIdentityKeySchema.parse("local://C:/repo/.git");
+  try {
+    await repository.start();
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop",
+      catalog: catalog("C:/repo", identityKey) });
+    repository.mutate({ kind: "registerLocations", daemonId: second, hostname: "laptop",
+      catalog: catalog("C:/repo", identityKey) });
+    const snapshot = repository.read();
+    assert.equal(snapshot.projects.length, 1);
+    assert.equal(snapshot.projects[0]?.matchKey, identityKey);
+    assert.deepEqual(snapshot.locations.map(location => location.target.daemonId), [first, second]);
+  } finally {
+    await repository.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("v1 path duplicates converge transactionally without losing saved owners or layout order", async context => {
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-v1-"));
+  const databasePath = path.join(root, "presentation.sqlite3");
+  const oldIds = [
+    "112f7e1e-81b6-4c30-bdc0-f83475981001",
+    "a12f7e1e-81b6-4c30-bdc0-f83475981002",
+  ] as const;
+  const orphanId = "b12f7e1e-81b6-4c30-bdc0-f83475981003";
+  const folderIds = [
+    "112f7e1e-81b6-4c30-bdc0-f83475982001",
+    "a12f7e1e-81b6-4c30-bdc0-f83475982002",
+  ] as const;
+  const memberIds = [
+    "112f7e1e-81b6-4c30-bdc0-f83475983001",
+    "a12f7e1e-81b6-4c30-bdc0-f83475983002",
+  ] as const;
+  const savedDraftIds = [
+    "112f7e1e-81b6-4c30-bdc0-f83475984001",
+    "a12f7e1e-81b6-4c30-bdc0-f83475984002",
+  ] as const;
+  const database = new Database(databasePath);
+  try {
+    database.pragma("foreign_keys = ON");
+    applyWorkbenchDatabaseSchema(database, presentationSchema, { targetVersion: 1 });
+    const identity = "local://C:/repo/.git";
+    const daemons = [first, second] as const;
+    for (const [index, daemonId] of daemons.entries()) {
+      const logicalId = oldIds[index]!;
+      database.prepare("INSERT INTO presentation_daemons VALUES (?, ?, ?)").run(daemonId, `host-${index}`, 1);
+      database.prepare("INSERT INTO presentation_projects VALUES (?, ?, ?)").run(
+        logicalId, `${daemonId}:${identity}`, "C:/repo");
+      database.prepare("INSERT INTO presentation_locations VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+        daemonId, projectId, logicalId, identity, "repo", "C:/repo", 1);
+      database.prepare("INSERT INTO presentation_drafts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+        savedDraftIds[index], logicalId, daemonId, projectId, "saved", JSON.stringify(selection),
+        index === 0 ? "unsent" : "accepted", null, index === 0 ? null : "thread-second", 1, 1);
+      database.prepare("INSERT INTO presentation_folders VALUES (?, ?, ?, ?, ?, ?)").run(
+        folderIds[index], "project", logicalId, `folder-${index}`, index === 0 ? 1 : 0, 1);
+      database.prepare("INSERT INTO presentation_layout_members VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+        memberIds[index], "project", logicalId, folderIds[index], "thread", null,
+        daemonId, projectId, `thread-${index}`, index === 0 ? 1 : 0, 1);
+      database.prepare("INSERT INTO presentation_import_receipts VALUES (?, ?, ?, ?, ?)").run(
+        daemonId, "layout", `source-${index}`, logicalId, 1);
+    }
+    database.prepare("INSERT INTO presentation_projects VALUES (?, ?, ?)").run(
+      orphanId, `612902c0-9512-40be-bb06-c65d86ef2029:${identity}`, "orphan");
+  } finally {
+    database.close();
+  }
+  const repository = new WorkbenchPresentationRepository({ databasePath });
+  try {
+    await repository.start();
+    const backupDirectory = path.join(root, "backups", "presentation.sqlite3");
+    const backups = await fs.readdir(backupDirectory);
+    assert.equal(backups.length, 1);
+    const backup = new Database(path.join(backupDirectory, backups[0]!), { readonly: true });
+    try {
+      assert.equal(backup.pragma("user_version", { simple: true }), 1);
+      assert.equal((backup.prepare("SELECT count(*) FROM presentation_projects").pluck().get() as number), 3);
+    } finally {
+      backup.close();
+    }
+    const snapshot = repository.read();
+    assert.deepEqual(snapshot.projects.map(project => [project.id, project.matchKey]), [[oldIds[0], "local://C:/repo/.git"]]);
+    assert.deepEqual(snapshot.locations.map(location => location.logicalProjectId), [oldIds[0], oldIds[0]]);
+    const upgraded = new Database(databasePath, { readonly: true });
+    try {
+      for (const table of ["presentation_drafts", "presentation_folders", "presentation_layout_members"]) {
+        assert.deepEqual((upgraded.prepare(`SELECT DISTINCT logical_project_id FROM ${table}`).all() as
+          Array<{ logical_project_id: string }>).map(row => row.logical_project_id), [oldIds[0]]);
+      }
+      assert.deepEqual((upgraded.prepare("SELECT target_id FROM presentation_import_receipts ORDER BY daemon_id")
+        .all() as Array<{ target_id: string }>).map(row => row.target_id), [oldIds[0], oldIds[0]]);
+      assert.deepEqual(snapshot.folders.map(folder => folder.id), folderIds);
+      assert.deepEqual(snapshot.members.map(member => member.id), memberIds);
+      assert.deepEqual(snapshot.members.map(member => member.position), [0, 1]);
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    await repository.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("incomplete imported attachments stay hidden and receipt blocks resurrection after deletion", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-import-"));
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
@@ -74,7 +185,8 @@ test("incomplete imported attachments stay hidden and receipt blocks resurrectio
     const draft = { id: draftId, logicalProjectId,
       target: { daemonId: first, projectId }, prompt: "attached", selection, updatedAt: 1 };
     const staged = { kind: "importDraft" as const, daemonId: first, sourceId: "old-draft",
-      sourceRevision: 3, draft, attachments: [{ id: "old-image", mediaType: "image/png", contentHash }] };
+      sourceRevision: 3, draft, pinned: false, snoozed: false,
+      attachments: [{ id: "old-image", mediaType: "image/png", contentHash }] };
     repository.mutate(staged);
     assert.equal(repository.read().drafts.length, 0);
     assert.deepEqual(repository.read().sourceMappings, [{
@@ -137,6 +249,7 @@ test("equal legacy draft and folder ids from two daemons map to independent app 
         kind: "importDraft", daemonId: item.daemonId, sourceId: "same-draft", sourceRevision: 1,
         draft: { id: item.draftId, logicalProjectId,
           target: { daemonId: item.daemonId, projectId }, prompt: "retained", selection, updatedAt: 1 },
+        pinned: false, snoozed: false,
         attachments: [],
       });
       if (item.daemonId === first) {
@@ -144,6 +257,7 @@ test("equal legacy draft and folder ids from two daemons map to independent app 
           kind: "importDraft", daemonId: item.daemonId, sourceId: "same-draft", sourceRevision: 2,
           draft: { id: item.draftId, logicalProjectId,
             target: { daemonId: item.daemonId, projectId }, prompt: "retained", selection, updatedAt: 1 },
+          pinned: false, snoozed: false,
           attachments: [],
         }), /revision/u);
       }

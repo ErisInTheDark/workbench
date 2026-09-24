@@ -9,7 +9,7 @@
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchPanelTarget } from "workbench-shared/workbench/layout/workbench-layout";
 import type { WorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
-import type { ProjectId, ThreadDisplayKey } from "workbench-shared/workbench/identity";
+import type { ThreadDisplayKey } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 
 type SidebarThreadTarget = Extract<WorkbenchPanelTarget, { kind: "thread" }> & { target: WorkbenchThreadTarget };
@@ -36,7 +36,7 @@ export type WorkbenchDragPayload =
     readonly type: "new-thread";
   }
   | {
-    readonly ownerProjectId: ProjectId;
+    readonly ownerProjectId: string;
     readonly projectSourceKey: ThreadDisplayKey;
     readonly section: WorkbenchThreadDragSection;
     readonly sourceKey: string;
@@ -49,7 +49,7 @@ export type WorkbenchDragPayload =
     readonly type: "thread-folder";
   }
   | {
-    readonly ownerProjectId: ProjectId;
+    readonly ownerProjectId: string;
     readonly projectSourceKey: ThreadDisplayKey;
     readonly section: WorkbenchThreadDragSection;
     readonly sourceKey: string;
@@ -57,7 +57,7 @@ export type WorkbenchDragPayload =
     readonly type: "home-thread-row";
   }
   | {
-    readonly ownerProjectId: ProjectId;
+    readonly ownerProjectId: string;
     readonly section: WorkbenchThreadDisplaySection;
     readonly sourceKey: string;
     readonly type: "home-thread-folder";

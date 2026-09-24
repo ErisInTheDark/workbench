@@ -26,12 +26,36 @@ import {
   defineWorkbenchDatabaseSchema,
   rebuildTable,
   retireTableHistory,
+  sqlData,
   tableVersion,
 } from "./schema-history.ts";
 
 interface TableInfoRow {
   name: string;
 }
+
+test("a failed SQL data conversion rolls back every row and its schema version", () => {
+  const table = defineTable("conversion_records", { id: integer().primaryKey(), value: text().notNull() });
+  const schema = defineWorkbenchDatabaseSchema({ subsystems: [defineSubsystemHistory([
+    defineTableHistory({ current: table, versions: [
+      tableVersion({ schemaVersion: 1, table, migration: createTable(table) }),
+      tableVersion({ schemaVersion: 2, table, migration: sqlData([
+        "UPDATE conversion_records SET value = 'changed'",
+        "UPDATE missing_conversion_table SET value = 'boom'",
+      ]) }),
+    ] }),
+  ])] });
+  const database = new Database(":memory:");
+  try {
+    applyWorkbenchDatabaseSchema(database, schema, { targetVersion: 1 });
+    database.exec("INSERT INTO conversion_records VALUES (1, 'original')");
+    assert.throws(() => applyWorkbenchDatabaseSchema(database, schema), /missing_conversion_table/u);
+    assert.equal(database.pragma("user_version", { simple: true }), 1);
+    assert.deepEqual(database.prepare("SELECT * FROM conversion_records").all(), [{ id: 1, value: "original" }]);
+  } finally {
+    database.close();
+  }
+});
 
 test("retiring linked tables is atomic and restores foreign-key enforcement", () => {
   for (const fail of [false, true]) {

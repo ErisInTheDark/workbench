@@ -293,10 +293,13 @@ export function useWorkbenchPinnedThreadLayout(explicitClient?: WorkbenchClientC
   );
 }
 
-export function useWorkbenchThreads(explicitClient?: WorkbenchClientController) {
+export function useWorkbenchThreads(explicitClient?: WorkbenchClientController, threadId?: string) {
   const client = useWorkbenchClientController(explicitClient);
   const controls = client.controls;
-  const store = client.mounted?.threadRuntime;
+  const scoped = threadId
+    ? (client.mounted?.threadContextFor(threadId)
+      ?? client.mounted?.draftContextFor(threadId))?.threads : null;
+  const store = scoped ?? client.mounted?.threadRuntime;
   const runtime = useSyncExternalStore(
     store?.subscribe ?? EMPTY_SUBSCRIBE,
     store?.getSnapshot ?? (() => EMPTY_THREAD_RUNTIME_SNAPSHOT),
@@ -310,8 +313,8 @@ export function useWorkbenchThreads(explicitClient?: WorkbenchClientController) 
     harness: WorkbenchHarness,
     options?: Parameters<WorkbenchControls["listModels"]>[1],
   ) => (
-    await controls?.listModels(harness, options) ?? []
-  ), [controls]);
+    await (scoped?.listModels(harness, options) ?? controls?.listModels(harness, options)) ?? []
+  ), [controls, scoped]);
   const pendingQuestionnaire = useCallback(
     (threadId: string) => runtime.pendingUserInputRequestsByThreadId[threadId] ?? null,
     [runtime.pendingUserInputRequestsByThreadId],
@@ -321,26 +324,29 @@ export function useWorkbenchThreads(explicitClient?: WorkbenchClientController) 
     harness?: WorkbenchHarness,
     options?: WorkbenchReadThreadOptions,
   ) => (
-    await controls?.readThread(threadId, harness, options) ?? null
-  ), [controls]);
+    await (scoped?.readThread(threadId, harness, options)
+      ?? controls?.readThread(threadId, harness, options)) ?? null
+  ), [controls, scoped]);
   const submitQuestionnaire = useCallback(async (
     threadId: string,
     response: WorkbenchUserInputResponse,
     options?: WorkbenchSubmitUserInputRequestOptions,
   ) => {
     if (!controls) throw new Error("Workbench controls are not ready.");
-    await controls.submitPendingUserInputRequest(threadId, response, options);
-  }, [controls]);
+    if (scoped) await scoped.submitPendingUserInputRequest(threadId, response, options);
+    else await controls.submitPendingUserInputRequest(threadId, response, options);
+  }, [controls, scoped]);
   const updateState = useCallback(async (request: WorkbenchThreadStateRequest) => {
     if (!controls) throw new Error("Workbench controls are not ready.");
-    await controls.updateThreadState(request);
-  }, [controls]);
+    if (scoped) await scoped.requestWorkbench(request.method, request);
+    else await controls.updateThreadState(request);
+  }, [controls, scoped]);
 
   return useMemo(() => ({
     current: runtime.currentThread,
     document,
     documents: runtime.threadDocuments,
-    goals: controls?.threadGoals ?? null,
+    goals: scoped?.threadGoals ?? controls?.threadGoals ?? null,
     listModels,
     pendingQuestionnaire,
     pendingQuestionnairesByThreadId: runtime.pendingUserInputRequestsByThreadId,
@@ -350,6 +356,7 @@ export function useWorkbenchThreads(explicitClient?: WorkbenchClientController) 
     updateState,
   }), [
     controls?.threadGoals,
+    scoped,
     document,
     listModels,
     pendingQuestionnaire,

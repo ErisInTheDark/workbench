@@ -4,9 +4,13 @@
  */
 "use client";
 
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
-import type { WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchControls, WorkbenchLogicalProject, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
+import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
+import {
+  projectLogicalHomeDisplayOrder, projectLogicalThreadDisplayOrder,
+} from "../../workbench/WorkbenchProjectProjection";
 import {
   canMoveWorkbenchThreadRowToSection,
   isWorkbenchThreadRowDragPayload,
@@ -15,21 +19,26 @@ import {
   WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID,
   type WorkbenchDragPayload,
   type WorkbenchThreadDragSection,
+  type WorkbenchThreadRowDragPayload,
 } from "../../workbench/layout/workbench-drag";
-import { createHomeThreadRoute, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
+import { createHomeThreadRoute, createLogicalExistingThreadRoute, createLogicalThreadRoute, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import {
   getWorkbenchHomeFolderKey,
+  getWorkbenchHomeThreadKey,
+  moveWorkbenchHomeThreadDisplayItem,
   projectWorkbenchHomeThreadList,
   type WorkbenchHomeThreadDisplayItem,
   type WorkbenchHomeThreadEntry,
 } from "workbench-shared/workbench/thread/home-thread-display-order";
 import {
   getWorkbenchThreadDisplayKey,
+  getWorkbenchThreadDisplaySection,
+  findWorkbenchThreadFolder,
   type WorkbenchThreadDisplaySection,
 } from "workbench-shared/workbench/thread/thread-display-order";
 import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
-import type { FolderId, ProjectThreadDisplayKey } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, type FolderId, type ProjectThreadDisplayKey } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadPriority, WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import {
   mergeContextMenuPlacementEntries,
@@ -106,19 +115,34 @@ export default function WorkbenchHomeThreadList({
   projects,
   renderThreadTooltipDetails,
   selectedOwnerProjectId,
+  logicalProjects,
+  logicalThreads,
+  presentation,
+  controls,
+  attachedDaemonId,
+  onOpenQualifiedThread,
 }: {
   actions: HomeThreadActions;
   activeDragPayload: WorkbenchDragPayload | null;
   attentionLabelsByThreadId: Record<string, string | undefined>;
-  createProject: WorkbenchProjectOption;
+  createProject: WorkbenchProjectOption | WorkbenchLogicalProject;
   currentTarget: WorkbenchThreadTarget | null;
   onCreateThread: (ownerProjectId: string, folderId?: FolderId) => void;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   projects: readonly WorkbenchProjectOption[];
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
   selectedOwnerProjectId: string;
+  logicalProjects?: readonly WorkbenchLogicalProject[];
+  logicalThreads?: readonly WorkbenchLogicalThreadRow[];
+  presentation?: PresentationSnapshot | null;
+  controls?: WorkbenchControls | null;
+  attachedDaemonId?: string | null;
+  onOpenQualifiedThread?: (row: WorkbenchLogicalThreadRow) => void;
 }) {
   const isShiftPressed = useNonTextInputShiftKey();
+  const [layoutError, setLayoutError] = useState("");
+  const homeDisplayOrderSupported = Boolean(logicalProjects && presentation && controls)
+    || actions.homeDisplayOrderSupported;
   const projectHref = useWorkbenchProjectNavigation();
   const {
     preferences,
@@ -126,11 +150,145 @@ export default function WorkbenchHomeThreadList({
     setFolderOpen,
     setSettledThreadItemLimit,
   } = useWorkbenchSidebarPreferences();
-  const projectsById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
+  const projectsById = useMemo(() => new Map<string, WorkbenchProjectOption | WorkbenchLogicalProject>(
+    (logicalProjects ?? projects).map(project => [project.id, project] as const),
+  ), [logicalProjects, projects]);
   const currentList = useMemo(() => projectWorkbenchHomeThreadList(
-    actions.projectThreadSidebars,
-    actions.homeDisplayOrder,
-  ), [actions.homeDisplayOrder, actions.projectThreadSidebars]);
+    logicalProjects && presentation ? {
+      projects: logicalProjects.map(project => ({
+        projectId: project.id,
+        entries: (logicalThreads ?? []).filter(row => row.logicalProjectId === project.id).map(row => row.entry),
+        displayOrder: projectLogicalThreadDisplayOrder(project.id, logicalThreads ?? [], presentation),
+      })),
+    } : actions.projectThreadSidebars,
+    logicalProjects && presentation
+      ? projectLogicalHomeDisplayOrder(logicalThreads ?? [], presentation)
+      : actions.homeDisplayOrder,
+  ), [actions.homeDisplayOrder, actions.projectThreadSidebars, logicalProjects, logicalThreads, presentation]);
+  const qualifiedFor = (homeEntry: WorkbenchHomeThreadEntry) => logicalProjects
+    ? logicalThreads?.find(row => row.logicalProjectId === homeEntry.projectId
+      && getWorkbenchThreadDisplayKey(row.entry) === getWorkbenchThreadDisplayKey(homeEntry.entry))
+    : attachedDaemonId ? logicalThreads?.find(row => row.location.daemonId === attachedDaemonId
+      && row.location.projectId === homeEntry.projectId
+      && getWorkbenchThreadDisplayKey(row.entry) === getWorkbenchThreadDisplayKey(homeEntry.entry)) : null;
+  const rowForPayload = (payload: WorkbenchThreadRowDragPayload) => logicalThreads?.find(row =>
+    getWorkbenchThreadDisplayKey(row.entry) === payload.projectSourceKey
+    && (row.logicalProjectId === payload.ownerProjectId
+      || row.location.projectId === payload.ownerProjectId));
+  const homeKeyForPayload = (payload: WorkbenchThreadRowDragPayload) => {
+    if (payload.type === "home-thread-row") return payload.sourceKey;
+    if (!logicalProjects) return getProjectQualifiedThreadDisplayKey(
+      payload.ownerProjectId, payload.projectSourceKey,
+    );
+    const row = rowForPayload(payload);
+    return row ? getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry) : null;
+  };
+  const moveHome = async (
+    sourceKey: string, section: WorkbenchThreadDisplaySection,
+    destinationFolderKey: string | null, beforeKey: string | null,
+  ) => {
+    if (!logicalProjects || !presentation || !controls || !logicalThreads) {
+      actions.onHomeMove(sourceKey, section, destinationFolderKey, beforeKey);
+      return;
+    }
+    try {
+      const allItems = [...currentList.pinnedItems, ...currentList.snoozedItems, ...currentList.settledItems];
+      const sourceItem = allItems.find(item => homeItemKey(item) === sourceKey);
+      const sourceKeys = sourceItem?.itemKind === "folder" ? sourceItem.threadKeys : [sourceKey];
+      const sourceRow = logicalThreads.find(row =>
+        getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry) === sourceKey);
+      const destination = destinationFolderKey
+        ? allItems.find(item => item.itemKind === "folder"
+          && homeItemKey(item) === destinationFolderKey) : null;
+      if (destinationFolderKey && (!destination || destination.itemKind !== "folder")) {
+        throw new Error("That folder is unavailable.");
+      }
+      if (destination?.itemKind === "folder"
+        && (!sourceRow || sourceRow.logicalProjectId !== destination.projectId)) {
+        throw new Error("That folder belongs to another project.");
+      }
+      const sourceSection = sourceRow && getWorkbenchThreadDisplaySection(sourceRow.entry);
+      if (sourceRow && sourceSection !== section) {
+        if (section === "settled" || sourceRow.entry.entryKind === "subagent"
+          || sourceRow.entry.metadata.archived) {
+          throw new Error("This thread cannot move to that section.");
+        }
+        const priority = section === "pinned" ? "pinned" : "snoozed";
+        if (sourceRow.entry.entryKind === "draft") {
+          await controls.setPresentationDraftPriority(sourceRow.entry.draft.draftId, {
+            pinned: priority === "pinned", snoozed: priority === "snoozed",
+          });
+        } else {
+          const accepted = await controls.threadAction(sourceRow.entry.identity.threadId,
+            { kind: "priority", priority });
+          if (!accepted) throw new Error("The source daemon rejected this priority change.");
+        }
+      }
+      const rows: WorkbenchLogicalThreadRow[] = logicalThreads.map(row => row !== sourceRow || sourceSection === section
+        || row.entry.entryKind === "subagent" ? row : {
+        ...row, entry: {
+          ...row.entry, metadata: {
+            archived: false as const, pinned: section === "pinned", snoozed: section === "snoozed",
+          },
+        },
+      } satisfies WorkbenchLogicalThreadRow);
+      const layoutEntries = rows.flatMap(row => {
+        const itemSection = getWorkbenchThreadDisplaySection(row.entry);
+        return itemSection ? [{
+          key: getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry), section: itemSection,
+        }] : [];
+      });
+      const nextHome = moveWorkbenchHomeThreadDisplayItem(
+        layoutEntries, currentList.displayOrder, section, sourceKeys, beforeKey,
+      );
+      if (!nextHome) throw new Error("The home position is no longer available.");
+      if (sourceRow) {
+        const projectOrder = projectLogicalThreadDisplayOrder(
+          sourceRow.logicalProjectId, logicalThreads, presentation,
+        );
+        const localKey = getWorkbenchThreadDisplayKey(sourceRow.entry);
+        const sourceFolder = findWorkbenchThreadFolder(projectOrder, localKey);
+        const destinationFolder = destination?.itemKind === "folder" ? destination.folder : null;
+        if (destinationFolder || sourceFolder) {
+          const beforeRow = beforeKey ? rows.find(row =>
+            getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry) === beforeKey) : null;
+          await controls.updatePresentationProjectLayout(
+            sourceRow.logicalProjectId, rows, {
+              kind: "move", section, sourceKey: localKey,
+              destinationFolderId: destinationFolder?.folderId ?? null,
+              beforeKey: beforeRow?.logicalProjectId === sourceRow.logicalProjectId
+                ? getWorkbenchThreadDisplayKey(beforeRow.entry) : null,
+            }, nextHome,
+          );
+        } else {
+          await controls.savePresentationHomeLayout(rows, nextHome);
+        }
+      } else {
+        await controls.savePresentationHomeLayout(rows, nextHome);
+      }
+      setLayoutError("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message.slice(0, 500) : "Home layout could not be saved.";
+      setLayoutError(message);
+      console.error("Home layout move failed", message);
+    }
+  };
+  const updateProjectLayout = async (
+    logicalProjectId: WorkbenchLogicalProject["id"],
+    intent: Parameters<WorkbenchControls["updatePresentationProjectLayout"]>[2],
+  ) => {
+    if (!controls || !logicalThreads) return false;
+    try {
+      await controls.updatePresentationProjectLayout(logicalProjectId, logicalThreads, intent);
+      setLayoutError("");
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message.slice(0, 500) : "Project folder could not be saved.";
+      setLayoutError(message);
+      console.error("Project folder update failed", message);
+      return false;
+    }
+  };
   const placementList = useContextMenuPlacementSnapshot("thread-list", currentList);
   const currentEntries = homeListEntries(currentList);
   const list = {
@@ -177,6 +335,9 @@ export default function WorkbenchHomeThreadList({
     const project = projectsById.get(projectId);
     if (!project) return null;
     const target = targetForEntry(entry);
+    const qualified = qualifiedFor(homeEntry);
+    const logicalProject = qualified && logicalProjects?.find(item => item.id === qualified.logicalProjectId);
+    const sourceProjectId = qualified?.location.projectId ?? ProjectIdSchema.parse(projectId);
     const projectSourceKey = getWorkbenchThreadDisplayKey(entry);
     const frozenSection = placementSection ?? reorderSection ?? (entry.metadata.pinned ? "pinned" : "main");
     const dragSection: WorkbenchThreadDragSection = frozenSection === "archived" ? "main" : frozenSection;
@@ -197,10 +358,43 @@ export default function WorkbenchHomeThreadList({
         activePayload={activeDragPayload}
         folderLabel={placementFolder ? `add to ${placementFolder.title}` : "create folder"}
         onFolderDrop={folderDropEnabled && reorderSection
-          ? (payload) => actions.onProjectFolderDrop(payload, projectId, projectSourceKey, reorderSection, placementFolder?.folderId ?? null)
+          ? (payload) => {
+            if (logicalProjects && qualified) {
+              const source = rowForPayload(payload);
+              if (source?.logicalProjectId !== qualified.logicalProjectId) {
+                setLayoutError("A folder cannot combine different project identities.");
+                return;
+              }
+              void updateProjectLayout(qualified.logicalProjectId, {
+                kind: "drop", section: reorderSection, sourceKey: payload.projectSourceKey,
+                targetKey: projectSourceKey, destinationFolderId: placementFolder?.folderId ?? null,
+              });
+            } else if (!logicalProjects) {
+              actions.onProjectFolderDrop(
+                payload, sourceProjectId, projectSourceKey, reorderSection, placementFolder?.folderId ?? null,
+              );
+            }
+          }
           : undefined}
         onSnoozeUntilDrop={targetIdentity && !targetReady
-          ? (payload) => actions.onSnoozeUntil(payload, projectId, targetIdentity)
+          ? (payload) => {
+            if (!logicalProjects) {
+              actions.onSnoozeUntil(payload, sourceProjectId, targetIdentity);
+              return;
+            }
+            const source = rowForPayload(payload);
+            if (!source || !qualified || payload.target.target.kind !== "provider") {
+              setLayoutError("Dependent snooze needs two existing threads.");
+              return;
+            }
+            void controls?.threadAction(payload.target.target.threadId, {
+              kind: "snoozeUntil", targetThreadId: targetIdentity.threadId,
+            }).catch(error => {
+              const message = error instanceof Error ? error.message.slice(0, 500) : "Dependent snooze failed.";
+              setLayoutError(message);
+              console.error("Dependent snooze failed", message);
+            });
+          }
           : undefined}
         targetIdentity={targetIdentity}
         targetProjectId={projectId}
@@ -215,21 +409,31 @@ export default function WorkbenchHomeThreadList({
       <WorkbenchThreadListItem
         attentionLabel={entry.entryKind === "draft" ? "" : attentionLabelsByThreadId[entry.identity.threadId]}
         compact={false}
-        contextMenu={actions.getThreadContextMenu(entry, projectId, "project")}
+        contextMenu={qualified
+          ? actions.getThreadContextMenuFor(entry, "project")
+          : logicalProjects ? null : actions.getThreadContextMenu(entry, sourceProjectId, "project")}
         draggable={draggable}
         dragTargets={dragTargets}
         entry={entry}
-        href={projectHref(createHomeThreadRoute(projectId, target))}
+        href={projectHref(qualified
+          ? target.kind === "provider"
+            ? createLogicalExistingThreadRoute(null, target)
+            : createLogicalThreadRoute(null, qualified.logicalProjectId, qualified.location, target)
+          : createHomeThreadRoute(projectId, target))}
         isDragActive={isDragActive}
         isShiftPressed={isShiftPressed}
         key={threadKey}
         nowMs={actions.nowMs}
-        onAction={(action) => actions.onAction(entry, action, projectId)}
-        onActivate={(activatedTarget) => onOpenThread(activatedTarget, projectId)}
+        onAction={(action) => qualified
+          ? actions.onActionFor(entry, action)
+          : actions.onAction(entry, action, sourceProjectId)}
+        onActivate={(activatedTarget) => qualified
+          ? onOpenQualifiedThread?.(qualified) : onOpenThread(activatedTarget, sourceProjectId)}
         onDragStart={onDragStart}
         onPointerDown={onPointerDown}
-        project={project}
-        projectId={projectId}
+        project={logicalProject ?? project}
+        projectId={sourceProjectId}
+        ownerLabel={qualified ? `${qualified.hostname} · ${qualified.rootPath}` : undefined}
         selected={projectId === selectedOwnerProjectId && isWorkbenchThreadTargetSelected(target, currentTarget)}
         showActions
         showPinPriorityIcon
@@ -240,7 +444,7 @@ export default function WorkbenchHomeThreadList({
       <Draggable
         disabled={archived}
         dropTargetIds={[
-          ...(actions.homeDisplayOrderSupported ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID] : []),
+          ...(homeDisplayOrderSupported ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID] : []),
           WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID,
           WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID,
         ]}
@@ -266,7 +470,7 @@ export default function WorkbenchHomeThreadList({
     section: WorkbenchThreadDisplaySection,
     destinationFolderKey: string | null,
     destinationProjectId: string | null,
-  ) => actions.homeDisplayOrderSupported ? (
+  ) => homeDisplayOrderSupported ? (
     <DropTarget
       as="li"
       className="m-0 list-none"
@@ -284,13 +488,11 @@ export default function WorkbenchHomeThreadList({
           && destinationFolderKey === null}
       onDrop={(payload) => {
         if (isWorkbenchThreadRowDragPayload(payload)) {
-          actions.onHomeMove(
-            getProjectQualifiedThreadDisplayKey(payload.ownerProjectId, payload.projectSourceKey),
-            section,
-            destinationFolderKey,
-            beforeKey,
-          );
-        } else if (payload.type === "home-thread-folder") actions.onHomeMove(payload.sourceKey, section, destinationFolderKey, beforeKey);
+          const key = homeKeyForPayload(payload);
+          if (key) void moveHome(key, section, destinationFolderKey, beforeKey);
+        } else if (payload.type === "home-thread-folder") {
+          void moveHome(payload.sourceKey, section, destinationFolderKey, beforeKey);
+        }
       }}
       preview={(payload) => isWorkbenchThreadRowDragPayload(payload) && section !== "settled"
         ? { action: section, label: `move to ${section}` }
@@ -305,18 +507,25 @@ export default function WorkbenchHomeThreadList({
       {item.entries.map((homeEntry) => {
         const project = projectsById.get(homeEntry.projectId);
         if (!project) return null;
+        const qualified = qualifiedFor(homeEntry);
         const target = targetForEntry(homeEntry.entry);
         return (
           <WorkbenchThreadListItem
             compact={false}
             dimmedOverride={false}
             entry={homeEntry.entry}
-            href={projectHref(createHomeThreadRoute(homeEntry.projectId, target))}
+            href={projectHref(qualified
+              ? target.kind === "provider"
+                ? createLogicalExistingThreadRoute(null, target)
+                : createLogicalThreadRoute(null, qualified.logicalProjectId, qualified.location, target)
+              : createHomeThreadRoute(homeEntry.projectId, target))}
             key={`tooltip:${homeEntry.threadKey}`}
             nowMs={actions.nowMs}
-            onActivate={(activatedTarget) => onOpenThread(activatedTarget, homeEntry.projectId)}
+            onActivate={(activatedTarget) => qualified
+              ? onOpenQualifiedThread?.(qualified)
+              : onOpenThread(activatedTarget, homeEntry.projectId)}
             project={project}
-            projectId={homeEntry.projectId}
+            projectId={qualified?.location.projectId ?? ProjectIdSchema.parse(homeEntry.projectId)}
             showPinPriorityIcon
             showTooltip={false}
             tabIndex={-1}
@@ -343,10 +552,15 @@ export default function WorkbenchHomeThreadList({
 
   const renderFolderCreateThread = (item: Extract<WorkbenchHomeThreadDisplayItem, { itemKind: "folder" }>) => {
     const target = { folderId: item.folder.folderId, kind: "new" as const };
+    const logicalProject = logicalProjects?.find(project => project.id === item.projectId);
+    const location = logicalProject?.locations.find(candidate => candidate.project)?.target
+      ?? logicalProject?.locations[0]?.target ?? null;
     const selected = selectedOwnerProjectId === item.projectId && isWorkbenchThreadTargetSelected(target, currentTarget);
     return (
       <a
-        href={projectHref(createHomeThreadRoute(item.projectId, target))}
+        href={projectHref(logicalProject
+          ? createLogicalThreadRoute(null, logicalProject.id, location, target)
+          : createHomeThreadRoute(item.projectId, target))}
         title="Create new thread"
         aria-current={selected ? "page" : undefined}
         className={`
@@ -397,13 +611,22 @@ export default function WorkbenchHomeThreadList({
               nowMs={actions.nowMs}
               onAutoFocusComplete={actions.onAutoFocusFolderComplete}
               onOpenChange={(open) => setFolderOpen("threads", key, open)}
-              onPrependThread={(payload) => actions.onHomeMove(
-                getProjectQualifiedThreadDisplayKey(payload.ownerProjectId, payload.projectSourceKey),
-                section,
-                key,
-                item.entries[0]?.threadKey ?? null,
-              )}
-              onRename={(title) => actions.onRenameFolder(item.folder.folderId, title, item.projectId)}
+              onPrependThread={(payload) => {
+                const sourceKey = homeKeyForPayload(payload);
+                if (sourceKey) void moveHome(sourceKey, section, key, item.entries[0]?.threadKey ?? null);
+              }}
+              onRename={async (title) => {
+                if (!logicalProjects) {
+                  return await actions.onRenameFolder(
+                    item.folder.folderId, title, ProjectIdSchema.parse(item.projectId),
+                  );
+                }
+                const project = logicalProjects.find(candidate => candidate.id === item.projectId);
+                if (!project || !await updateProjectLayout(project.id, {
+                  kind: "rename", folderId: item.folder.folderId, title,
+                })) throw new Error("Project folder rename could not be saved.");
+                return title.trim();
+              }}
               open={preferences.threadFolderIds.includes(key)}
               project={project}
               tooltip={renderFolderTooltip(item)}
@@ -421,16 +644,44 @@ export default function WorkbenchHomeThreadList({
   const priorityTarget = (priority: WorkbenchThreadPriority) => (
     <WorkbenchThreadPriorityDropZone
       activePayload={activeDragPayload}
-      onDrop={(payload) => actions.onSetPriority(payload, priority)}
+      onDrop={(payload) => {
+        if (!logicalProjects || !controls || !logicalThreads) {
+          actions.onSetPriority(payload, priority);
+          return;
+        }
+        const row = rowForPayload(payload);
+        if (!row) return;
+        const key = getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry);
+        if (priority !== "main") {
+          void moveHome(key, priority, null, null);
+          return;
+        }
+        const mutation = row.entry.entryKind === "draft"
+          ? controls.setPresentationDraftPriority(row.entry.draft.draftId, {
+            pinned: false, snoozed: false,
+          })
+          : controls.threadAction(row.entry.identity.threadId, { kind: "priority", priority });
+        void mutation.catch(error => {
+          const message = error instanceof Error ? error.message.slice(0, 500) : "Thread priority could not be saved.";
+          setLayoutError(message);
+          console.error("Thread priority failed", message);
+        });
+      }}
       priority={priority}
     />
   );
 
-  const blankThreadSelected = selectedOwnerProjectId === createProject.id && isWorkbenchThreadTargetSelected({ kind: "new" }, currentTarget);
+  const createLocation = "matchKey" in createProject
+    ? createProject.locations.find(location => location.project)?.target ?? null : null;
+  const createProjectId = createLocation?.projectId ?? createProject.id;
+  const blankThreadSelected = selectedOwnerProjectId === createProject.id
+    && isWorkbenchThreadTargetSelected({ kind: "new" }, currentTarget);
   return (
     <DropTargetBoundary className="space-y-1">
       <a
-        href={projectHref(createHomeThreadRoute(createProject.id, { kind: "new" }))}
+        href={projectHref("matchKey" in createProject
+          ? createLogicalThreadRoute(null, createProject.id, createLocation, { kind: "new" })
+          : createHomeThreadRoute(createProject.id, { kind: "new" }))}
         title="Create new thread"
         aria-current={blankThreadSelected ? "page" : undefined}
         className={`
@@ -440,7 +691,7 @@ export default function WorkbenchHomeThreadList({
         onClick={(event) => {
           if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
           event.preventDefault();
-          onCreateThread(createProject.id);
+          onCreateThread(createProjectId);
         }}
       >
         <span className="inline-flex min-w-0 items-center gap-2">
@@ -484,6 +735,7 @@ export default function WorkbenchHomeThreadList({
           </ThreadDisclosure>
         ) : null}
       </div>
+      {layoutError ? <p role="alert" className="m-0 pr-2 text-[0.84rem] leading-6 text-danger">{layoutError}</p> : null}
     </DropTargetBoundary>
   );
 }

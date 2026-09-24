@@ -157,10 +157,21 @@ test("a socket that errors before opening is closed before replacement", async (
   } as unknown as typeof WebSocket;
   try {
     const client = new WorkbenchSocketClient();
+    let opens = 0;
+    let reconnects = 0;
+    client.onConnectionOpen(() => { opens += 1; });
+    client.onReconnect(() => { reconnects += 1; });
     await assert.rejects(client.connectSocket("ws://test"), /Failed to connect/u);
     assert.equal(sockets[0]?.closeCalls, 1);
+    assert.equal(opens, 0);
     await client.connectSocket("ws://test");
     assert.equal(sockets.length, 2);
+    assert.equal(opens, 1);
+    assert.equal(reconnects, 0);
+    sockets[1]!.close();
+    await client.connectSocket("ws://test");
+    assert.equal(opens, 2);
+    assert.equal(reconnects, 1);
     client.close();
   } finally {
     globalThis.WebSocket = originalWebSocket;

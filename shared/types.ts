@@ -76,6 +76,8 @@
  * - WorkbenchSkillDefinition: resolved skill definition.
  * - WorkbenchProjectIcon: selected project icon asset descriptor.
  * - WorkbenchProjectOption: selectable project option.
+ * - WorkbenchLogicalProject/WorkbenchLogicalProjectLocation: display identity and qualified execution locations.
+ * - WorkbenchLogicalProjectSummary/WorkbenchLogicalThreadRow: source-qualified status and sidebar projections.
  * - WorkbenchProjectRoot: project-root contract.
  * - WorkbenchProjectsPayload: project-list payload.
  * - WorkbenchProjectAlias: retained address for a canonical project.
@@ -158,7 +160,12 @@
 
 import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "./workbench/provider/provider-account.ts";
 import type { WorkbenchModelOption } from "./workbench/provider/provider-model.ts";
-import type { DraftId, FolderId, ProjectId, WorkbenchThreadId } from "./workbench/identity.ts";
+import type { DaemonId, DraftId, FolderId, LogicalProjectId, ProjectId, ThreadDisplayKey, WorkbenchThreadId } from "./workbench/identity.ts";
+import type { ProjectLocationReference } from "./workbench/project/project-location.ts";
+import type {
+  WorkbenchPinnedThreadSummaryEntry, WorkbenchProjectThreadSummaryCounts,
+  WorkbenchProjectThreadSummaryEntry,
+} from "./workbench/thread/thread-state.ts";
 import type { CommandAction } from "./workbench/thread/workbench-thread-items.ts";
 import type { WorkbenchProviderGoal as ThreadGoal } from "./workbench/provider/provider-goal.ts";
 import type { ThreadTokenUsage } from "./workbench/thread/thread-context-usage.ts";
@@ -170,7 +177,7 @@ import type { DaemonReloadResponse, DaemonReloadScope } from "./workbench/daemon
 import type { WorkbenchReloadDirtSnapshot as SharedWorkbenchReloadDirtSnapshot, WorkbenchReloadDirtScope as SharedWorkbenchReloadDirtScope, WorkbenchReloadResponse, WorkbenchReloadScope } from "./reload/workbench-reload.ts";
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex.ts";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline.ts";
-import type { WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state.ts";
+import type { WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state.ts";
 import type { WorkbenchFrontendGeneration } from "./frontend-generation.ts";
 
 export type { ProviderKey as WorkbenchHarness } from "./workbench/provider/provider-key.ts";
@@ -707,6 +714,37 @@ export interface WorkbenchProjectOption {
   workspacePath?: string;
 }
 
+export interface WorkbenchLogicalProjectLocation {
+  target: ProjectLocationReference;
+  daemonId: DaemonId;
+  hostname: string;
+  name: string;
+  rootPath: string;
+  project: WorkbenchProjectOption | null;
+}
+
+export interface WorkbenchLogicalProject {
+  id: LogicalProjectId;
+  matchKey: string;
+  label: string;
+  locations: WorkbenchLogicalProjectLocation[];
+}
+
+export interface WorkbenchLogicalProjectSummary {
+  counts: WorkbenchProjectThreadSummaryCounts;
+  lastThreadUpdateAt: number | null;
+  pinnedThreads: Array<{ location: ProjectLocationReference; entry: WorkbenchPinnedThreadSummaryEntry }>;
+  unsettledThreads: Array<{ location: ProjectLocationReference; entry: WorkbenchProjectThreadSummaryEntry }>;
+}
+
+export interface WorkbenchLogicalThreadRow {
+  logicalProjectId: LogicalProjectId;
+  location: ProjectLocationReference;
+  hostname: string;
+  rootPath: string;
+  entry: WorkbenchThreadSidebarEntry;
+}
+
 export interface WorkbenchProjectRoot {
   id: string;
   isPrimary: boolean;
@@ -1077,6 +1115,9 @@ export interface ExplorerSnapshot {
   configuredDiscoveryRootPath: string | null;
   currentProjectId: ProjectId | "";
   projects: WorkbenchProjectOption[];
+  logicalProjects?: WorkbenchLogicalProject[];
+  logicalSummaries?: Record<string, WorkbenchLogicalProjectSummary>;
+  logicalThreads?: WorkbenchLogicalThreadRow[];
   root: string;
   rootPath: string;
   roots: WorkbenchProjectRoot[];
@@ -1134,11 +1175,21 @@ export interface WorkbenchRouteLoadResult {
   ok: boolean;
 }
 
+export type WorkbenchThreadIntent =
+  | { kind: "priority"; priority: "pinned" | "main" | "snoozed" }
+  | { kind: "snoozeUntil"; targetThreadId: WorkbenchThreadId }
+  | { kind: "pin"; pinned: boolean }
+  | { kind: "snooze"; snoozed: boolean }
+  | { kind: "archive"; archived: boolean }
+  | { kind: "status"; status: "needsAttention" | "completed" | "stopped" }
+  | { kind: "restore" | "settle" | "stop" };
 
 export interface WorkbenchControls {
   daemon: WorkbenchDaemonClient;
   applyRoute: (route: WorkbenchRoute) => Promise<WorkbenchRouteLoadResult>;
   createThreadDraft: (harness: WorkbenchHarness, options?: { select?: boolean; threadId?: DraftId }) => ThreadPayload<DraftId>;
+  createThreadDraftAt: (location: ProjectLocationReference, harness: WorkbenchHarness,
+    options?: { select?: boolean; threadId?: DraftId }) => ThreadPayload<DraftId>;
   getSelectedThreadDraft: () => WorkbenchThreadDraft | null;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   daemonRuntime: WorkbenchDaemonRuntimeStore;
@@ -1153,6 +1204,7 @@ export interface WorkbenchControls {
   ) => Promise<ThreadPayload | null>;
   compactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  threadAction: (threadId: WorkbenchThreadId, intent: WorkbenchThreadIntent) => Promise<boolean>;
   setThreadTitle: (request: WorkbenchThreadTitleRequest) => Promise<string>;
   threadGoals: WorkbenchThreadGoalControls;
   submitPendingUserInputRequest: (
@@ -1172,9 +1224,50 @@ export interface WorkbenchControls {
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   deleteThreadDraft: (draftId: DraftId, projectId?: ProjectId) => Promise<void>;
+  deletePresentationDraft: (draftId: DraftId) => Promise<void>;
+  retargetPresentationDraft: (draftId: DraftId, location: ProjectLocationReference) => Promise<void>;
+  setPresentationDraftPriority: (
+    draftId: DraftId, priority: { pinned: boolean; snoozed: boolean },
+  ) => Promise<void>;
+  savePresentationProjectLayout: (
+    logicalProjectId: LogicalProjectId,
+    rows: readonly WorkbenchLogicalThreadRow[],
+    displayOrder: import("./workbench/thread/thread-display-order.ts").WorkbenchThreadDisplayOrder,
+  ) => Promise<void>;
+  savePresentationHomeLayout: (
+    rows: readonly WorkbenchLogicalThreadRow[],
+    displayOrder: import("./workbench/thread/home-thread-display-order.ts").WorkbenchHomeThreadDisplayOrder,
+  ) => Promise<void>;
+  savePresentationHomeAndProjectLayouts: (
+    logicalProjectId: LogicalProjectId,
+    rows: readonly WorkbenchLogicalThreadRow[],
+    projectOrder: import("./workbench/thread/thread-display-order.ts").WorkbenchThreadDisplayOrder,
+    homeOrder: import("./workbench/thread/home-thread-display-order.ts").WorkbenchHomeThreadDisplayOrder,
+  ) => Promise<void>;
+  updatePresentationProjectLayout: (
+    logicalProjectId: LogicalProjectId,
+    rows: readonly WorkbenchLogicalThreadRow[],
+    intent:
+      | { kind: "move"; section: import("./workbench/thread/thread-display-order.ts").WorkbenchThreadDisplaySection;
+        sourceKey: ThreadDisplayKey; destinationFolderId: string | null; beforeKey: string | null }
+      | { kind: "drop"; section: import("./workbench/thread/thread-display-order.ts").WorkbenchThreadDisplaySection;
+        sourceKey: ThreadDisplayKey; targetKey: ThreadDisplayKey; destinationFolderId: string | null;
+        folderId?: string }
+      | { kind: "rename"; folderId: string; title: string },
+    homeOrder?: import("./workbench/thread/home-thread-display-order.ts").WorkbenchHomeThreadDisplayOrder,
+  ) => Promise<void>;
+  updatePresentationPinnedLayout: (
+    rows: readonly WorkbenchLogicalThreadRow[],
+    intent:
+      | { kind: "move"; sourceKey: string; destinationFolderId: string | null; beforeKey: string | null }
+      | { kind: "drop"; sourceKey: string; targetKey: string; destinationFolderId: string | null;
+        folderId?: string }
+      | { kind: "rename"; folderId: string; title: string },
+  ) => Promise<void>;
   editThreadDraft: (draft: WorkbenchThreadDraft, options?: { folderId?: FolderId }) => void;
   flushThreadDraft: (projectId: ProjectId, draftId: DraftId) => Promise<void>;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
+  setDraftThreadHarnessAt: (location: ProjectLocationReference, harness: WorkbenchHarness) => void;
 }
 
 export interface WorkbenchThreadGoalSnapshot {

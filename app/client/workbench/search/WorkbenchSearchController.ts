@@ -8,14 +8,21 @@ import type {
   WorkbenchSearchResponse,
   WorkbenchSearchResult,
 } from "workbench-shared/workbench/search/workbench-search";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+
+export type WorkbenchSearchHit = WorkbenchSearchResult & {
+  logicalProjectId?: string;
+  source?: ProjectLocationReference;
+};
 
 export interface WorkbenchSearchSnapshot {
   error: string | null;
+  warning: string | null;
   isLoading: boolean;
   isOpen: boolean;
   projectId: string | null;
   query: string;
-  results: readonly WorkbenchSearchResult[];
+  results: readonly WorkbenchSearchHit[];
   selectedIndex: number;
 }
 
@@ -29,6 +36,7 @@ export default class WorkbenchSearchController {
   private timer: SearchTimer | null = null;
   private snapshot: WorkbenchSearchSnapshot = {
     error: null,
+    warning: null,
     isLoading: false,
     isOpen: false,
     projectId: null,
@@ -38,9 +46,12 @@ export default class WorkbenchSearchController {
   };
 
   constructor(private readonly options: {
-    activate?(result: WorkbenchSearchResult): void;
+    activate?(result: WorkbenchSearchHit): void;
     clearTimeout?(timer: SearchTimer): void;
-    request(request: { projectId: string | null; query: string }): Promise<WorkbenchSearchResponse>;
+    request(request: { projectId: string | null; query: string }): Promise<WorkbenchSearchResponse & {
+      results: WorkbenchSearchHit[];
+      warning?: string;
+    }>;
     setTimeout?(callback: () => void, delay: number): SearchTimer;
   }) {}
 
@@ -53,7 +64,7 @@ export default class WorkbenchSearchController {
   open() {
     if (this.disposed || this.snapshot.isOpen) return;
     this.generation += 1;
-    this.update({ error: null, isLoading: true, isOpen: true, results: [], selectedIndex: 0 });
+    this.update({ error: null, warning: null, isLoading: true, isOpen: true, results: [], selectedIndex: 0 });
     this.schedule();
   }
 
@@ -67,14 +78,14 @@ export default class WorkbenchSearchController {
   setQuery(query: string) {
     if (this.disposed || query === this.snapshot.query) return;
     this.generation += 1;
-    this.update({ error: null, isLoading: this.snapshot.isOpen, query, results: [], selectedIndex: 0 });
+    this.update({ error: null, warning: null, isLoading: this.snapshot.isOpen, query, results: [], selectedIndex: 0 });
     this.schedule();
   }
 
   setProjectId(projectId: string | null) {
     if (this.disposed || projectId === this.snapshot.projectId) return;
     this.generation += 1;
-    this.update({ error: null, isLoading: this.snapshot.isOpen, projectId, results: [], selectedIndex: 0 });
+    this.update({ error: null, warning: null, isLoading: this.snapshot.isOpen, projectId, results: [], selectedIndex: 0 });
     if (this.snapshot.isOpen) this.schedule();
   }
 
@@ -90,7 +101,7 @@ export default class WorkbenchSearchController {
     return true;
   }
 
-  activate(result: WorkbenchSearchResult) {
+  activate(result: WorkbenchSearchHit) {
     if (this.disposed || !this.snapshot.isOpen || !this.snapshot.results.includes(result)) return;
     this.close();
     this.options.activate?.(result);
@@ -121,7 +132,7 @@ export default class WorkbenchSearchController {
     try {
       const response = await this.options.request(request);
       if (this.disposed || generation !== this.generation || !this.snapshot.isOpen) return;
-      this.update({ isLoading: false, results: response.results, selectedIndex: 0 });
+      this.update({ isLoading: false, results: response.results, warning: response.warning ?? null, selectedIndex: 0 });
     } catch (error) {
       if (this.disposed || generation !== this.generation || !this.snapshot.isOpen) return;
       this.update({

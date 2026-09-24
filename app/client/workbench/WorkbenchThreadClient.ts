@@ -131,6 +131,7 @@ export interface WorkbenchAcceptedIntent {
 }
 
 export interface WorkbenchThreadClientOptions {
+  resolveDaemonUrl?: () => Promise<string>;
   updateThreadStateWithAcceptance?: WorkbenchControls["updateThreadStateWithAcceptance"];
   getProjectById?: (projectId: string) => WorkbenchProjectOption | undefined;
   clientStateController?: WorkbenchClientStateController;
@@ -141,6 +142,7 @@ export interface WorkbenchThreadClientOptions {
 }
 
 interface WorkbenchThreadClient {
+  connect: () => Promise<void>;
   threadObservations: ThreadObservationController;
   getThreadController: (projectId: string, target: ThreadControllerTarget) => WorkbenchThreadController;
   recoverThreadControllers: () => Promise<void>;
@@ -159,6 +161,7 @@ interface WorkbenchThreadClient {
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   openThread: (threadId: string, options?: { harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload"; isCurrent?: () => boolean }) => Promise<ThreadPayloadFetchOutcome>;
   onReconnect: (listener: () => void) => () => void;
+  onConnectionOpen: (listener: () => void) => () => void;
   onDisconnect: (listener: () => void) => () => void;
   setAppAvailable: (available: boolean) => void;
   onWorkbenchNotification: (listener: (notification: {
@@ -540,7 +543,9 @@ function WorkbenchThreadClient(
   options: WorkbenchThreadClientOptions = {},
   lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchThreadClient {
-  const socket = new WorkbenchSocketClient();
+  const socket = new WorkbenchSocketClient({
+    ...(options.resolveDaemonUrl ? { resolveUrl: options.resolveDaemonUrl } : {}),
+  });
 
   async function requestWorkbench<TResponse>(method: string, params: unknown) {
     const response = await socket.sendRequest<TResponse>({ method, params });
@@ -4936,6 +4941,7 @@ function WorkbenchThreadClient(
       }
     },
     applyAcceptedThreadTitle,
+    connect: () => socket.connectSocket(),
     clearThreadSelection,
     createThread,
     dispose,
@@ -4947,6 +4953,7 @@ function WorkbenchThreadClient(
     listModels,
     openThread,
     onReconnect,
+    onConnectionOpen: listener => socket.onConnectionOpen(listener),
     onDisconnect: listener => socket.onConnectionClose(listener),
     onWorkbenchNotification,
     refreshCurrentThread,

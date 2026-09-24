@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 
 import type { WorkbenchControls } from "workbench-shared/types";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { WorkbenchFilePanelClient, WorkbenchFilePanelClientOptions, WorkbenchFilePanelSnapshot } from "../../../workbench/WorkbenchFilePanelClient";
 import type { WorkbenchEditorDomSurfaces } from "../../../workbench/workbench-dom";
 import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE } from "../../../workbench/state/workbench-settings";
@@ -29,7 +30,7 @@ import {
 } from "../workbench-icons";
 
 interface WorkbenchFilePanelProps {
-  clientOptions?: Partial<Omit<WorkbenchFilePanelClientOptions, "clearThreadSelection" | "draftStore" | "emitExplorerStateChange" | "expandProjectPath" | "getProjectChangeSummary" | "getProjectId" | "refreshProject" | "surfaces">>;
+  clientOptions?: Partial<Omit<WorkbenchFilePanelClientOptions, "clearThreadSelection" | "draftStore" | "emitExplorerStateChange" | "expandProjectPath" | "fileTransport" | "getProjectChangeSummary" | "getProjectId" | "refreshProject" | "surfaces">>;
   contained?: boolean;
   controls: WorkbenchControls | null;
   editorFontClassName: string;
@@ -39,6 +40,7 @@ interface WorkbenchFilePanelProps {
   isFocused: boolean;
   isMinimized?: boolean;
   isMinimizedVertical?: boolean;
+  location?: ProjectLocationReference | null;
   onFocus: () => void;
   onClose?: () => void;
   onHeaderPointerDragStart?: (event: PointerEvent<HTMLElement>) => void;
@@ -63,6 +65,7 @@ export default function WorkbenchFilePanel ({
   isFocused,
   isMinimized = false,
   isMinimizedVertical = false,
+  location = null,
   onClose,
   onFocus,
   onHeaderPointerDragStart,
@@ -102,6 +105,9 @@ export default function WorkbenchFilePanel ({
   const [snapshot, setSnapshot] = useState<WorkbenchFilePanelSnapshot | null>(null);
 
   const panelIdSuffix = useMemo(() => path.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 48) || "file", [path]);
+  const panelLocation = useMemo(() => location
+    ? { daemonId: location.daemonId, projectId: location.projectId } : null,
+  [location?.daemonId, location?.projectId]);
 
   useEffect(() => {
     if (
@@ -138,7 +144,9 @@ export default function WorkbenchFilePanel ({
     }
 
     const panelControls = controls as WorkbenchControls & {
-      createFilePanelClient: (surfaces: WorkbenchEditorDomSurfaces, options?: WorkbenchFilePanelProps["clientOptions"]) => WorkbenchFilePanelClient;
+      createFilePanelClient: (surfaces: WorkbenchEditorDomSurfaces, options?: WorkbenchFilePanelProps["clientOptions"] & {
+        location?: ProjectLocationReference;
+      }) => WorkbenchFilePanelClient;
     };
 
     const surfaces: WorkbenchEditorDomSurfaces = {
@@ -181,7 +189,9 @@ export default function WorkbenchFilePanel ({
       },
     };
 
-    const client = panelControls.createFilePanelClient(surfaces, clientOptions);
+    const client = panelControls.createFilePanelClient(surfaces, {
+      ...clientOptions, ...(panelLocation ? { location: panelLocation } : {}),
+    });
     clientRef.current = client;
     client.setFontSize(fontSizeRem, { persist: false });
     const unsubscribe = client.subscribe((nextSnapshot) => {
@@ -199,7 +209,7 @@ export default function WorkbenchFilePanel ({
       setSnapshot(null);
       onSnapshotChange?.(null);
     };
-  }, [clientOptions, controls, onSnapshotChange, path]);
+  }, [clientOptions, controls, onSnapshotChange, panelLocation, path]);
 
   useEffect(() => {
     clientRef.current?.setFontSize(fontSizeRem, { persist: false });

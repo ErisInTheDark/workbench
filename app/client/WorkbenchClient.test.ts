@@ -11,6 +11,8 @@ import type { WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/
 import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { WorkbenchClient, areExplorerSnapshotsEquivalent, describeGlobalThreadStateOpenFailure, openWorkbenchGlobalThreadStateObservation, openWorkbenchThreadStateObservation } from "./WorkbenchClient.ts";
 import { createHomeRoute, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { createLogicalExistingThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { appStateClientTables } from "workbench-shared/state/workbench-app-state-schema";
 import type ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
 import WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -280,7 +282,9 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
           view: "thread", threadId: target.draftId, threadTarget: target,
         });
         assert.equal(failed.ok, false);
-        assert.equal(client.getThreadController(projectId, target).getSnapshot().status, "failed");
+        const controller = client.getThreadController(projectId, target);
+        assert.ok(controller);
+        assert.equal(controller.getSnapshot().status, "failed");
         return;
       }
       const first = client.controls.applyRoute(route(firstId));
@@ -301,6 +305,14 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
         await Promise.all([first, second]);
         assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, secondId);
         assert.equal(pageReads, 2);
+        if (order === "winner-first") {
+          const owner = client.getThreadController(projectId, {
+            kind: "provider", harness: "codex",
+            threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse(secondId),
+          });
+          assert.ok(owner, "an attached thread page must remain bound to its controller");
+          assert.equal(owner.getSnapshot().status, "ready");
+        }
       }
     } finally {
       await (client?.threadSidebar as ThreadSidebarClient | undefined)?.close();
@@ -315,6 +327,196 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
     }
   });
 }
+
+test("a logical UUID route admits a readable thread to its rendered controller", async () => {
+  const originalWindow = globalThis.window;
+  const originalDocument = globalThis.document;
+  const originalWebSocket = globalThis.WebSocket;
+  const originalEventSource = globalThis.EventSource;
+  const originalFetch = globalThis.fetch;
+  const originalDaemonUrl = process.env.WORKBENCH_CODEX_APP_SERVER_URL;
+  const daemonId = fixtureIdentitySchemas.DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029");
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("b597a4b6-7af9-41f1-83ea-a53aed6f3b0a");
+  const logicalProjectId = fixtureIdentitySchemas.LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const threadId = fixtureIdentitySchemas.ThreadReferenceSchema.parse(crypto.randomUUID());
+  const rootPath = "C:/repo";
+  const project = {
+    id: projectId, kind: "git", name: "repo", relativePath: "repo", rootPath,
+    lastCommitTimeMs: null, roots: [{ id: "repo", isPrimary: true, name: "repo", relativePath: ".", rootPath }],
+  };
+  const catalog = { data: [project], aliases: [], rootPath };
+  let catalogAvailable = true;
+  const identityKey = "remote://example.test/team/repo";
+  const locations = { data: [{ identityKey, rootIdentityKeys: [identityKey], project }] };
+  const presentation = {
+    revision: 1, daemons: [{ id: daemonId, hostname: "desktop" }],
+    projects: [{ id: logicalProjectId, matchKey: identityKey, label: "team/repo" }],
+    locations: [{ target: { daemonId, projectId }, logicalProjectId, identityKey, name: "repo", rootPath }],
+    defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const rows = Object.fromEntries(Object.keys(appStateClientTables).map(name => [name, []]));
+  const requests: string[] = [];
+  const exportRequested = Promise.withResolvers<void>();
+  let releaseExport = () => {};
+  const network = {
+    configuration: {
+      mode: "localhost", hostServe: { enabled: false, port: 8080 }, members: [],
+      privateAccess: { role: "authority", label: "desktop", enabled: false },
+    },
+    runtime: {
+      hostServe: { phase: "ready", message: null, url: null },
+      privateAccess: {
+        phase: "ready", message: null, url: null, hostname: null, nodeId: null,
+        keyFingerprint: null, loginUrl: null, addresses: [], rootCertificate: null,
+        rootFingerprint: null, certificateExpiresAt: null, pending: [],
+      },
+    },
+    executable: { available: true, message: null }, hostPlatform: "win32",
+    busy: false, failure: null,
+    daemon: { protocol: 1, daemonId, hostname: "desktop", state: "ready", wakeEnabled: true },
+  };
+  class Socket extends EventTarget {
+    static OPEN = 1;
+    readyState = 1;
+    constructor() {
+      super();
+      queueMicrotask(() => this.dispatchEvent(new Event("open")));
+    }
+    close() {
+      this.readyState = 3;
+      this.dispatchEvent(new Event("close"));
+    }
+    send(raw: string) {
+      const request = JSON.parse(raw) as { id?: number; method: string; params?: Record<string, unknown> };
+      if (request.id === undefined) return;
+      requests.push(request.method);
+      const params = request.params ?? {};
+      if (request.method === "thread/presentation/export") {
+        exportRequested.resolve();
+        releaseExport = () => queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
+          data: JSON.stringify({
+            id: request.id,
+            result: { projectId, sourceRevision: 1, drafts: [], nextCursor: null },
+          }),
+        })));
+        return;
+      }
+      const entry = {
+        entryKind: "thread", title: "thread", activityAt: 1,
+        identity: { harness: "codex", threadId },
+        metadata: { archived: false, pinned: false, snoozed: false },
+        lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+      };
+      const result = request.method === "initialize" ? {}
+        : request.method === "voice/configuration/read" ? { selection: null }
+        : request.method === "project/catalog/read" ? catalogAvailable ? catalog : { data: [], aliases: [], rootPath }
+        : request.method === "project/locations/read" ? catalogAvailable ? locations : { data: [] }
+        : request.method === "thread/presentation/layout/read" ? (() => {
+          const value = params.scope === "project" ? { displayOrder: {} } : {};
+          const bytes = Buffer.from(JSON.stringify(value));
+          return { sourceRevision: 0, bytes: bytes.toString("base64"),
+            totalBytes: bytes.length, nextOffset: null };
+        })()
+        : request.method === "workbench/daemon/reload-dirt/read" ? { revision: 1, snapshot: { dirtyScopes: [], pendingScopes: [], error: null } }
+        : request.method === "workbench/thread-state/global/open" ? {
+          version: 7, catalog,
+          homeThreadDisplayOrder: { displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder" },
+          pinnedThreadLayout: { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" },
+          projectSidebars: { projects: [{ entries: [entry], error: null, freshness: "fresh", projectId, revision: 1 }] },
+        }
+        : request.method === "workbench/thread-state/observe" ? {
+          observation: {
+            ...params, entries: [entry], revision: 1, freshness: "fresh", error: null,
+            updateKind: "threadObservation",
+          },
+        }
+        : request.method === "thread/identity/resolve" ? { data: {
+          threadId: String(params.threadId), harness: "codex", projectId,
+        } }
+        : request.method === "thread/page/read" ? {
+          thread: {
+            ...thread(threadId, 1), cwd: rootPath, status: "idle", turns: [], turnHistory: [],
+            isDraft: false, model: null, reasoningEffort: null, serviceTier: null, agentPath: null, tokenUsage: null,
+          },
+          nextCursor: null, browseResultEntries: [], questionnaireEntries: [], steerEntries: [],
+        }
+        : request.method === "thread/reconcile" ? { turnIds: [], exhausted: false }
+        : request.method === "account/limits/read" ? {
+          rateLimits: { limitId: null, limitName: null, primary: null, secondary: null, credits: null, planType: null },
+          rateLimitsByLimitId: null,
+        }
+        : { accepted: true, data: [] };
+      queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
+        data: JSON.stringify({ id: request.id, result }),
+      })));
+    }
+  }
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url === "/api/workbench-client-state") return Response.json({
+      kind: "snapshot", daemonRegistrationId: "attached-registration",
+      registrations: [{ id: "attached-registration", kind: "local", daemonId }],
+      oldestAvailableRevision: 0, revision: 1, schemaVersion: 1, rows,
+    });
+    if (url.startsWith("/api/workbench-network")) return Response.json(network);
+    if (url.startsWith("/api/workbench-presentation")) return Response.json(presentation);
+    return new Response(null, { status: 404 });
+  };
+  globalThis.EventSource = class {
+    onmessage = null;
+    onerror = null;
+    close() {}
+  } as unknown as typeof EventSource;
+  globalThis.WebSocket = Socket as unknown as typeof WebSocket;
+  globalThis.document = new EventTarget() as Document;
+  globalThis.window = {
+    location: { href: "http://workbench.test/", origin: "http://workbench.test" },
+    setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout,
+    requestAnimationFrame: (callback: FrameRequestCallback) => setImmediate(() => callback(performance.now())),
+    cancelAnimationFrame: clearImmediate,
+  } as unknown as Window & typeof globalThis;
+  process.env.WORKBENCH_CODEX_APP_SERVER_URL = "ws://workbench.test";
+  const clientStateController = new WorkbenchClientStateController({
+    mode: "http", visibility: { hidden: () => true, subscribe: () => () => {} },
+  });
+  let client: Awaited<ReturnType<typeof WorkbenchClient>> | undefined;
+  try {
+    await clientStateController.bootstrap();
+    const route = createLogicalExistingThreadRoute(logicalProjectId,
+      { kind: "provider", threadId });
+    client = await WorkbenchClient({ clientStateController, initialRoute: route });
+    await exportRequested.promise;
+    assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, threadId,
+      `initial route did not read the thread: ${requests.join(", ")}`);
+    const home = await client.controls.applyRoute(createHomeRoute());
+    assert.equal(home.ok, true, home.error ?? "home route did not complete");
+    const reopened = await client.controls.applyRoute(route);
+    assert.equal(reopened.ok, true, reopened.error ?? requests.join(", "));
+    const controller = client.getThreadController(projectId, { kind: "provider", threadId });
+    assert.ok(controller, "the mounted UUID route must expose its concrete thread owner");
+    assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, threadId, requests.join(", "));
+    assert.equal(controller.getSnapshot().status, "ready");
+    assert.equal(controller.getSnapshot().document?.id, threadId);
+    catalogAvailable = false;
+    await client.controls.refreshProjectCatalog();
+    const missing = await client.controls.applyRoute(createLogicalExistingThreadRoute(logicalProjectId, {
+      kind: "provider", threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse(crypto.randomUUID()),
+    }));
+    assert.equal(missing.ok, false);
+    assert.match(missing.error ?? "", /unavailable/iu);
+  } finally {
+    releaseExport();
+    client?.dispose();
+    clientStateController.dispose();
+    globalThis.window = originalWindow;
+    globalThis.document = originalDocument;
+    globalThis.WebSocket = originalWebSocket;
+    globalThis.EventSource = originalEventSource;
+    globalThis.fetch = originalFetch;
+    if (originalDaemonUrl === undefined) delete process.env.WORKBENCH_CODEX_APP_SERVER_URL;
+    else process.env.WORKBENCH_CODEX_APP_SERVER_URL = originalDaemonUrl;
+  }
+});
 
 test("thread-state open negotiates incremental delivery with a complete bootstrap", async () => {
   const requests: Array<{ projectId: string; version?: 2 | 3 | 4 | 5 | 6 }> = [];

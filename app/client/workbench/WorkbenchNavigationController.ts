@@ -47,6 +47,7 @@ export interface WorkbenchNavigationPorts {
   guardNavigation: (apply: () => Promise<void>) => Promise<void>;
   hydrateSidebar: (route: WorkbenchRoute, generation: number) => void;
   openFile: (filePath: string) => Promise<boolean>;
+  openLogicalRoute?: (route: WorkbenchRoute, isCurrent: () => boolean) => Promise<WorkbenchRouteLoadResult>;
   openThread: (
     threadId: string,
     options: {
@@ -120,7 +121,7 @@ export default class WorkbenchNavigationController {
       generation = this.snapshot.generation + 1;
       result = await this.applyRouteOwned(route);
     });
-    if (route.view === "thread" && this.snapshot.generation === generation && !result.ok && result.error) {
+    if (route.view === "thread" && !route.logical && this.snapshot.generation === generation && !result.ok && result.error) {
       const target = route.threadTarget ?? {
         kind: "provider" as const,
         threadId: ThreadReferenceSchema.parse(route.threadId),
@@ -185,6 +186,12 @@ export default class WorkbenchNavigationController {
     if (route.view === "invalid") {
       this.ports.clearSelection();
       return { error: route.error || "Invalid route.", ok: false };
+    }
+
+    if (route.logical) {
+      if (!this.ports.openLogicalRoute) return { error: "Logical project navigation is unavailable.", ok: false };
+      const result = await this.ports.openLogicalRoute(route, () => this.isCurrent(route, generation));
+      return this.isCurrent(route, generation) ? result : { ok: false };
     }
 
     const projectError = await this.ports.ensureProject(route);

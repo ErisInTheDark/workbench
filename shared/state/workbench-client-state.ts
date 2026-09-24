@@ -40,6 +40,7 @@ export const WorkbenchDaemonRegistrationSchema = z.object({
   daemonId: DaemonIdSchema.nullable(),
   kind: z.enum(["local", "remote"]),
 }).strict();
+export type WorkbenchDaemonRegistration = z.infer<typeof WorkbenchDaemonRegistrationSchema>;
 
 export const WorkbenchProjectRemapSchema = z.object({
   daemonRegistrationId: z.string().min(1).max(256),

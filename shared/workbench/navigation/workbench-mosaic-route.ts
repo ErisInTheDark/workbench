@@ -8,11 +8,15 @@
 
 import type { WorkbenchPanelTarget } from "../layout/workbench-layout.ts";
 import { z } from "zod";
+import { LogicalProjectIdSchema, type LogicalProjectId } from "../identity.ts";
+import { ProjectLocationReferenceSchema, type ProjectLocationReference } from "../project/project-location.ts";
 import { WorkbenchThreadRouteTargetSchema, type WorkbenchThreadRouteTarget } from "../thread/thread-state.ts";
 
 const RouteThreadReferenceSchema = z.string().brand<"ThreadReference">();
 
-export type WorkbenchMosaicPanelTarget = Extract<WorkbenchPanelTarget, { readonly kind: "file" } | { readonly kind: "thread" }>;
+export type WorkbenchMosaicPanelTarget = Extract<WorkbenchPanelTarget, { readonly kind: "file" } | { readonly kind: "thread" }> & {
+  readonly source?: { logicalProjectId: LogicalProjectId; location: ProjectLocationReference | null };
+};
 
 export interface WorkbenchMosaicNodeOptions {
   readonly minimized?: boolean;
@@ -52,6 +56,13 @@ type MosaicNodeParseResult =
   };
 
 export function createWorkbenchMosaicTarget(target: WorkbenchMosaicPanelTarget, options: WorkbenchMosaicNodeOptions = {}): WorkbenchMosaicNode {
+  if (target.source) {
+    LogicalProjectIdSchema.parse(target.source.logicalProjectId);
+    if (target.source.location) ProjectLocationReferenceSchema.parse(target.source.location);
+    if (target.kind === "file" && !target.source.location) {
+      throw new Error("A file mosaic pane needs a daemon location.");
+    }
+  }
   return {
     ...options,
     target,
@@ -87,9 +98,7 @@ function encodeMosaicValue(value: string) {
   return encodeURIComponent(value);
 }
 
-function parseMosaicTarget(rawValue: string): WorkbenchMosaicPanelTarget | null {
-  if (rawValue.startsWith("thread/")) {
-    const rawThread = rawValue.slice("thread/".length);
+function parseMosaicThreadTarget(rawThread: string): WorkbenchThreadRouteTarget | null {
     const rawSegments = rawThread.split("/");
     let target: WorkbenchThreadRouteTarget | null = null;
     if (rawSegments[0] === "new") {
@@ -107,6 +116,43 @@ function parseMosaicTarget(rawValue: string): WorkbenchMosaicPanelTarget | null 
       const threadId = decodeMosaicValue(rawThread);
       if (threadId) target = { kind: "provider", threadId: RouteThreadReferenceSchema.parse(threadId) };
     }
+    return target;
+}
+
+function parseMosaicTarget(rawValue: string): WorkbenchMosaicPanelTarget | null {
+  if (rawValue.startsWith("thread/id/")) {
+    const target = parseMosaicThreadTarget(rawValue.slice("thread/id/".length));
+    return target?.kind === "provider" || target?.kind === "subagent"
+      ? { kind: "thread", target } : null;
+  }
+  if (rawValue.startsWith("file/at/") || rawValue.startsWith("thread/at/")) {
+    const parts = rawValue.split("/");
+    if (parts.length < 6) return null;
+    const logicalProjectId = LogicalProjectIdSchema.safeParse(decodeMosaicValue(parts[2] ?? ""));
+    const location = ProjectLocationReferenceSchema.safeParse({
+      daemonId: decodeMosaicValue(parts[3] ?? ""), projectId: decodeMosaicValue(parts[4] ?? ""),
+    });
+    if (!logicalProjectId.success || !location.success) return null;
+    const source = { logicalProjectId: logicalProjectId.data, location: location.data };
+    if (parts[0] === "file" && parts.length === 6) {
+      const filePath = decodeMosaicValue(parts[5] ?? "");
+      return filePath ? { kind: "file", filePath, source } : null;
+    }
+    if (parts[0] === "thread") {
+      const target = parseMosaicThreadTarget(parts.slice(5).join("/"));
+      return target ? { kind: "thread", target, source } : null;
+    }
+    return null;
+  }
+  if (rawValue.startsWith("thread/logical/")) {
+    const parts = rawValue.split("/");
+    const logicalProjectId = LogicalProjectIdSchema.safeParse(decodeMosaicValue(parts[2] ?? ""));
+    const target = parseMosaicThreadTarget(parts.slice(3).join("/"));
+    if (!logicalProjectId.success || !target || target.kind === "provider" || target.kind === "subagent") return null;
+    return { kind: "thread", target, source: { logicalProjectId: logicalProjectId.data, location: null } };
+  }
+  if (rawValue.startsWith("thread/")) {
+    const target = parseMosaicThreadTarget(rawValue.slice("thread/".length));
     return target ? { kind: "thread", target } : null;
   }
 
@@ -342,6 +388,10 @@ function serializeWorkbenchMosaicNode(node: WorkbenchMosaicNode): string {
   }
 
   if (node.target.kind === "file") {
+    if (node.target.source?.location) {
+      const { logicalProjectId, location } = node.target.source;
+      return `${weightPrefix}[file/at/${encodeMosaicValue(logicalProjectId)}/${encodeMosaicValue(location.daemonId)}/${encodeMosaicValue(location.projectId)}/${encodeMosaicValue(node.target.filePath)}]${options}`;
+    }
     return `${weightPrefix}[file/${encodeMosaicValue(node.target.filePath)}]${options}`;
   }
 
@@ -353,6 +403,15 @@ function serializeWorkbenchMosaicNode(node: WorkbenchMosaicNode): string {
       : threadTarget.kind === "subagent"
         ? `${encodeMosaicValue(threadTarget.parentThreadId)}/sub/${encodeMosaicValue(threadTarget.threadId)}`
         : encodeMosaicValue(threadTarget.threadId);
+  if ((threadTarget.kind === "provider" || threadTarget.kind === "subagent") && !node.target.source) {
+    return `${weightPrefix}[thread/id/${serializedThread}]${options}`;
+  }
+  if (node.target.source) {
+    const { logicalProjectId, location } = node.target.source;
+    return location
+      ? `${weightPrefix}[thread/at/${encodeMosaicValue(logicalProjectId)}/${encodeMosaicValue(location.daemonId)}/${encodeMosaicValue(location.projectId)}/${serializedThread}]${options}`
+      : `${weightPrefix}[thread/logical/${encodeMosaicValue(logicalProjectId)}/${serializedThread}]${options}`;
+  }
   return `${weightPrefix}[thread/${serializedThread}]${options}`;
 }
 

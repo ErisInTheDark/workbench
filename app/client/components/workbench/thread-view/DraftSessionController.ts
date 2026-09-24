@@ -17,7 +17,7 @@ export type DraftUpdate<Draft> = (current: Draft) => Draft;
 
 export interface DraftSaveOptions {
   detached: boolean;
-  reason: "autosave" | "submission";
+  reason: "autosave" | "submission" | "retarget";
 }
 
 export interface DraftSessionPorts<Draft> {
@@ -83,11 +83,11 @@ export default class DraftSessionController<Draft extends DraftSessionContent> {
     this.#scheduleSave();
   }
 
-  async flush(): Promise<boolean> {
+  async flush(reason: DraftSaveOptions["reason"] = "autosave"): Promise<boolean> {
     this.#cancelSave();
     if (this.#saving) {
       if (!await this.#saving) return false;
-      return await this.flush();
+      return await this.flush(reason);
     }
     if (!this.#pending.length || this.#submitted || this.#snapshot.isSubmitting) return true;
     const edits = this.#pending;
@@ -96,7 +96,7 @@ export default class DraftSessionController<Draft extends DraftSessionContent> {
     const update = (draft: Draft) => edits.reduce((current, edit) => edit(current), draft);
     const operation = Promise.resolve().then(async () => {
       try {
-        const savedDraft = await this.#ports.save(update, { detached: !this.#attached, reason: "autosave" });
+        const savedDraft = await this.#ports.save(update, { detached: !this.#attached, reason });
         if (savedDraft === null) {
           this.#pending = [...edits, ...this.#pending];
           return false;

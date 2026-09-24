@@ -96,25 +96,26 @@ export interface WorkbenchProjectTransport {
 
 export interface WorkbenchProjectClientOptions {
   clientStateController?: WorkbenchClientStateController;
+  daemonRegistrationId?: string;
   onError?: (message: string) => void;
   transport: WorkbenchProjectTransport;
 }
 
-function readExpandedDirectories(controller: WorkbenchClientStateController | undefined, projectId = "") {
+function readExpandedDirectories(controller: WorkbenchClientStateController | undefined, daemonRegistrationId: string, projectId = "") {
   if (!controller || !projectId) return [];
   return controller.records("expandedDirectory").flatMap((record) => (
-    record.daemonRegistrationId === controller.daemonRegistrationId && record.projectId === projectId
+    record.daemonRegistrationId === daemonRegistrationId && record.projectId === projectId
       ? [record.path]
       : []
   ));
 }
 
-function createInitialProjectState(controller: WorkbenchClientStateController | undefined): WorkbenchProjectState {
+function createInitialProjectState(controller: WorkbenchClientStateController | undefined, daemonRegistrationId: string): WorkbenchProjectState {
   return {
     changes: {},
     configuredDiscoveryRootPath: null,
     currentProjectId: "",
-    expandedDirectories: new Set(readExpandedDirectories(controller)),
+    expandedDirectories: new Set(readExpandedDirectories(controller, daemonRegistrationId)),
     fileIndex: ProjectTreeFileIndex.empty,
     hasLoadedProject: false,
     isLoading: false,
@@ -129,11 +130,12 @@ function createInitialProjectState(controller: WorkbenchClientStateController | 
 
 function WorkbenchProjectClient({
   clientStateController,
+  daemonRegistrationId = clientStateController?.daemonRegistrationId ?? "",
   onError = () => undefined,
   transport,
 }: WorkbenchProjectClientOptions): WorkbenchProjectClient {
   const listeners = new Set<WorkbenchProjectListener>();
-  const state = createInitialProjectState(clientStateController);
+  const state = createInitialProjectState(clientStateController, daemonRegistrationId);
   let projectRevision = -1;
   let snapshotDirty = true;
   let snapshot: WorkbenchProjectSnapshot | null = null;
@@ -142,20 +144,20 @@ function WorkbenchProjectClient({
     if (!clientStateController || !state.currentProjectId) return;
     const desired = new Set(state.expandedDirectories);
     const current = clientStateController.records("expandedDirectory").filter((record) => (
-      record.daemonRegistrationId === clientStateController.daemonRegistrationId
+      record.daemonRegistrationId === daemonRegistrationId
       && record.projectId === state.currentProjectId
     ));
     const operations: Promise<unknown>[] = [];
     for (const record of current) {
       if (!desired.delete(record.path)) operations.push(clientStateController.delete({
-        daemonRegistrationId: clientStateController.daemonRegistrationId,
+        daemonRegistrationId,
         kind: "expandedDirectory",
         path: record.path,
         projectId: state.currentProjectId,
       }));
     }
     for (const path of desired) operations.push(clientStateController.put({
-      daemonRegistrationId: clientStateController.daemonRegistrationId,
+      daemonRegistrationId,
       kind: "expandedDirectory",
       path,
       projectId: state.currentProjectId,
@@ -286,7 +288,7 @@ function WorkbenchProjectClient({
   }
 
   function beginProjectSelection(projectId: string) {
-    const nextProjectId = clientStateController?.resolveProjectId(projectId.trim()) ?? projectId.trim();
+    const nextProjectId = clientStateController?.resolveProjectId(projectId.trim(), daemonRegistrationId) ?? projectId.trim();
     if (!nextProjectId || state.currentProjectId === nextProjectId) return null;
     const previousState = captureProjectState();
     const previousProjectRevision = projectRevision;
@@ -304,7 +306,7 @@ function WorkbenchProjectClient({
       state.isLoading = true;
       projectRevision = -1;
     }
-    state.expandedDirectories = new Set(readExpandedDirectories(clientStateController, nextProjectId));
+    state.expandedDirectories = new Set(readExpandedDirectories(clientStateController, daemonRegistrationId, nextProjectId));
     emit();
     return () => {
       if (state.currentProjectId !== nextProjectId) return;
@@ -364,13 +366,13 @@ function WorkbenchProjectClient({
     const catalog = conformToZodSchema(WorkbenchProjectsPayloadSchema, payload, { data: [], rootPath: "" }).data;
     if (catalog.aliases?.length) {
       if (!clientStateController) throw new Error("Project identity adoption requires the app-state owner.");
-      await clientStateController.adoptProjectAliases(catalog.aliases);
+      await clientStateController.adoptProjectAliases(catalog.aliases, daemonRegistrationId);
     }
     const previousId = state.currentProjectId;
-    const canonicalId = clientStateController?.resolveProjectId(previousId) ?? previousId;
+    const canonicalId = clientStateController?.resolveProjectId(previousId, daemonRegistrationId) ?? previousId;
     if (canonicalId !== previousId) {
       state.currentProjectId = ProjectIdSchema.parse(canonicalId);
-      state.expandedDirectories = new Set(readExpandedDirectories(clientStateController, canonicalId));
+      state.expandedDirectories = new Set(readExpandedDirectories(clientStateController, daemonRegistrationId, canonicalId));
     }
     const didChange = applyCatalog(catalog) || canonicalId !== previousId;
     if (didChange) emit();
@@ -465,7 +467,7 @@ function WorkbenchProjectClient({
     const rollbackSelection = beginProjectSelection(projectId);
 
     const didRefreshProjectsChange = await refreshProjects();
-    projectId = clientStateController?.resolveProjectId(projectId) ?? projectId;
+    projectId = clientStateController?.resolveProjectId(projectId, daemonRegistrationId) ?? projectId;
     const project = state.projects.find((candidate) => candidate.id === projectId);
     if (!project) {
       rollbackSelection?.();
@@ -489,7 +491,7 @@ function WorkbenchProjectClient({
     const initialProject = state.projects.find((project) => project.id === state.currentProjectId) ?? state.projects[0] ?? null;
     if (!state.currentProjectId && initialProject) {
       applyProjectOption(initialProject, { loading: true });
-      state.expandedDirectories = new Set(readExpandedDirectories(clientStateController, state.currentProjectId));
+      state.expandedDirectories = new Set(readExpandedDirectories(clientStateController, daemonRegistrationId, state.currentProjectId));
       emit();
     } else if (didRefreshProjectsChange) {
       emit();

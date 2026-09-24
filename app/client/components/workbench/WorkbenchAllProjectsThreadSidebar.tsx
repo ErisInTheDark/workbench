@@ -6,7 +6,8 @@
 
 import { memo, useMemo, type ReactNode } from "react";
 
-import type { WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchControls, WorkbenchLogicalProject, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
+import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { FolderId } from "workbench-shared/workbench/identity";
 import type { WorkbenchDragPayload } from "../../workbench/layout/workbench-drag";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
@@ -24,6 +25,12 @@ interface WorkbenchAllProjectsThreadSidebarProps {
   projects: readonly WorkbenchProjectOption[];
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
   selectedOwnerProjectId: string;
+  logicalProjects?: readonly WorkbenchLogicalProject[];
+  logicalThreads?: readonly WorkbenchLogicalThreadRow[];
+  presentation?: PresentationSnapshot | null;
+  controls?: WorkbenchControls | null;
+  attachedDaemonId?: string | null;
+  onOpenQualifiedThread?: (row: WorkbenchLogicalThreadRow) => void;
 }
 
 export default memo(function WorkbenchAllProjectsThreadSidebar({
@@ -36,9 +43,17 @@ export default memo(function WorkbenchAllProjectsThreadSidebar({
   projects,
   renderThreadTooltipDetails,
   selectedOwnerProjectId,
+  logicalProjects,
+  logicalThreads,
+  presentation,
+  controls,
+  attachedDaemonId,
+  onOpenQualifiedThread,
 }: WorkbenchAllProjectsThreadSidebarProps) {
   const actions = WorkbenchThreadSidebarActionsProvider.useActions();
-  const createProject = projects.find(({ id }) => id === createProjectId) ?? null;
+  const createProject = logicalProjects?.find(project => project.locations.some(location =>
+    location.target.projectId === createProjectId && location.project))
+    ?? projects.find(({ id }) => id === createProjectId) ?? null;
   const errors = useMemo(
     () => [...new Set(actions.projectThreadSidebars.projects.map(({ error }) => error).filter(Boolean))],
     [actions.projectThreadSidebars.projects],
@@ -59,6 +74,12 @@ export default memo(function WorkbenchAllProjectsThreadSidebar({
           projects={projects}
           renderThreadTooltipDetails={renderThreadTooltipDetails}
           selectedOwnerProjectId={selectedOwnerProjectId}
+          logicalProjects={logicalProjects}
+          logicalThreads={logicalThreads}
+          presentation={presentation}
+          controls={controls}
+          attachedDaemonId={attachedDaemonId}
+          onOpenQualifiedThread={onOpenQualifiedThread}
         />
       ) : null}
       {errors.map((error) => (

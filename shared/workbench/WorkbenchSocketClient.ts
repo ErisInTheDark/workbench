@@ -68,6 +68,7 @@ export default class WorkbenchSocketClient {
   private readonly pendingResponses = new Map<number, PendingResponseHandler>();
   private readonly workbenchNotificationListeners = new Set<(notification: WorkbenchNotification) => void>();
   private readonly connectionCloseListeners = new Set<() => void>();
+  private readonly connectionOpenListeners = new Set<() => void>();
   private readonly reconnectListeners = new Set<() => void>();
   private readonly nextRequestId = createWorkbenchRequestIdGenerator();
   private socketPromise: Promise<void> | null = null;
@@ -168,6 +169,7 @@ export default class WorkbenchSocketClient {
     const reconnected = this.hasOpenedSocket;
     this.hasOpenedSocket = true;
     this.reconnectAttempt = 0;
+    for (const listener of this.connectionOpenListeners) listener();
     if (reconnected) {
       for (const listener of this.reconnectListeners) listener();
     }
@@ -239,6 +241,11 @@ export default class WorkbenchSocketClient {
   onConnectionClose(listener: () => void) {
     this.connectionCloseListeners.add(listener);
     return () => this.connectionCloseListeners.delete(listener);
+  }
+
+  onConnectionOpen(listener: () => void) {
+    this.connectionOpenListeners.add(listener);
+    return () => this.connectionOpenListeners.delete(listener);
   }
 
   onReconnect(listener: () => void) {

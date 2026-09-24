@@ -62,7 +62,11 @@ function createMosaicTargetLayoutNodeId(target: WorkbenchMosaicPanelTarget) {
       : target.target.kind === "subagent"
         ? `${target.target.parentThreadId}-sub-${target.target.threadId}`
         : target.target.kind === "draft" ? `new-${target.target.draftId}` : "new";
-  const stableKey = `${target.kind}:${targetValue}`;
+  const source = target.source?.location;
+  const sourceKey = source && (target.kind === "file"
+    || target.target.kind === "new" || target.target.kind === "draft")
+    ? `${source.daemonId}/${source.projectId}` : "";
+  const stableKey = `${target.kind}:${targetValue}:${sourceKey}`;
   return `mosaic-panel-${target.kind}-${createStableLayoutHash(stableKey)}-${sanitizeLayoutIdPart(targetValue).slice(0, 32)}`;
 }
 
@@ -84,10 +88,16 @@ function targetsEqual(left: WorkbenchMosaicPanelTarget, right: WorkbenchMosaicPa
   }
 
   if (left.kind === "file" && right.kind === "file") {
-    return left.filePath === right.filePath;
+    return left.filePath === right.filePath
+      && left.source?.location?.daemonId === right.source?.location?.daemonId
+      && left.source?.location?.projectId === right.source?.location?.projectId;
   }
 
-  return left.kind === "thread" && right.kind === "thread" && areDeeplyEqual(left.target, right.target);
+  if (left.kind !== "thread" || right.kind !== "thread"
+    || !areDeeplyEqual(left.target, right.target)) return false;
+  if (left.target.kind === "provider" || left.target.kind === "subagent") return true;
+  return left.source?.location?.daemonId === right.source?.location?.daemonId
+    && left.source?.location?.projectId === right.source?.location?.projectId;
 }
 
 function containsTarget(node: WorkbenchMosaicNode, target: WorkbenchMosaicPanelTarget): boolean {

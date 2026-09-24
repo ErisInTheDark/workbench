@@ -8,7 +8,7 @@
 
 import type { ComponentType, DragEventHandler, KeyboardEvent as ReactKeyboardEvent, MouseEvent, PointerEvent, ReactNode, Ref } from "react";
 
-import type { WorkbenchHarness, WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchHarness, WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import {
   getThreadSidebarGroup,
@@ -155,6 +155,7 @@ export default function WorkbenchThreadListItem({
   onDragStart,
   onKeyDown,
   onPointerDown,
+  ownerLabel,
   project,
   presentation = "row",
   projectId,
@@ -187,7 +188,8 @@ export default function WorkbenchThreadListItem({
   onDragStart?: DragEventHandler<HTMLAnchorElement>;
   onKeyDown?: (event: ReactKeyboardEvent<HTMLAnchorElement>) => void;
   onPointerDown?: (event: PointerEvent<HTMLAnchorElement>) => void;
-  project?: WorkbenchProjectOption;
+  ownerLabel?: string;
+  project?: WorkbenchProjectOption | WorkbenchLogicalProject;
   presentation?: "row" | "disclosure-summary";
   projectId: ProjectId;
   role?: "tab" | "option";
@@ -260,7 +262,8 @@ export default function WorkbenchThreadListItem({
   const priority = group === "snoozed" ? "snoozed" : showPinPriorityIcon && pinned ? "pinned" : null;
   const PriorityIcon = priority === "snoozed" ? SnoozedThreadIcon : priority === "pinned" ? PinIcon : null;
   const actionDisplay = action ? THREAD_ACTIONS[action] : null;
-  const projectName = project ? `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
+  const projectName = project ? "matchKey" in project ? `${project.label}, `
+    : `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
   const rowName = `${projectName}${entry.title}${hasDraftImages ? ", includes image" : ""}, ${status}${claimedFileCount ? `, ${claimedFileCount} ${stashed ? "stashed" : "claimed"} ${claimedFileCount === 1 ? "file" : "files"}` : ""}${showComposerDraft ? ", unsent draft" : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
   const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled" || archived));
   const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
@@ -389,7 +392,12 @@ export default function WorkbenchThreadListItem({
             </>
           )}
           contextMenu={Boolean(contextMenu)}
-          eyebrow={project ? <WorkbenchProjectLabel project={project} variant="thread" /> : undefined}
+          eyebrow={project || ownerLabel ? (
+            <span className="flex min-w-0 items-center gap-2">
+              {project ? <WorkbenchProjectLabel project={project} variant="thread" /> : null}
+              {ownerLabel ? <span className="min-w-0 truncate font-mono text-[0.68rem] text-fg/muted">{ownerLabel}</span> : null}
+            </span>
+          ) : undefined}
           metadata={(
             <span className="grid items-center">
               {claimedFileCount ? (

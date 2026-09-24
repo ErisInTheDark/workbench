@@ -42,6 +42,7 @@ function operationShape(operation: TableMigration) {
     case "addColumns": return [operation.kind, tableShape(operation.from), tableShape(operation.to), operation.columns];
     case "createIndexes": return [operation.kind, tableShape(operation.from), tableShape(operation.to), operation.names];
     case "deleteRows": return [operation.kind, operation.tableName, operation.where];
+    case "sqlData": return [operation.kind, operation.statements];
     case "dropTable": return [operation.kind, tableShape(operation.table)];
     case "copyDistinctValues": return [
       operation.kind, tableShape(operation.from), operation.sourceColumn,

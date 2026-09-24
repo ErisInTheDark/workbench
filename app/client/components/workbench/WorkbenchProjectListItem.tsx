@@ -5,9 +5,9 @@
 "use client";
 
 import type { MouseEvent } from "react";
-import { createProjectRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { createLogicalProjectRoute, createProjectRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
-import type { ProjectSidebarProject } from "./project-sidebar-groups";
+import type { DisplaySidebarProject, LogicalSidebarProject, ProjectSidebarProject } from "./project-sidebar-groups";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
 import { getWorkbenchThreadStatusClassName } from "./workbench-thread-status-colors";
@@ -18,21 +18,31 @@ function getProjectActivityLabel(activityAt: number | null, nowMs: number) {
   return activityAt === null ? "" : formatThreadRelativeTimestamp(activityAt / 1000, nowMs);
 }
 
-function ProjectTooltipContent({ entry, nowMs }: { entry: ProjectSidebarProject; nowMs: number }) {
+function ProjectTooltipContent({ entry, nowMs }: { entry: DisplaySidebarProject; nowMs: number }) {
   const { project, summary } = entry;
-  const unsettledThreads = summary?.unsettledThreads ?? [];
+  const logical = "matchKey" in project;
+  const unsettledThreads = logical
+    ? (summary as LogicalSidebarProject["summary"])?.unsettledThreads.map(item => ({
+      entry: item.entry, source: item.location,
+    })) ?? []
+    : (summary as ProjectSidebarProject["summary"])?.unsettledThreads.map(item => ({
+      entry: item, source: null,
+    })) ?? [];
   return (
     <div className="flex max-h-full min-w-0 max-w-[min(30rem,calc(100vw-2rem))] flex-col gap-2">
       <div className="min-w-0">
-        <p className="m-0 break-words text-[0.9rem] font-medium leading-[1.45] text-text">{project.name || project.id}</p>
-        <p className="m-0 whitespace-pre-wrap break-all font-mono text-[0.72rem] leading-[1.45] text-fg/muted">{WorkbenchProjectLabel.getFullPath(project)}</p>
+        <p className="m-0 break-words text-[0.9rem] font-medium leading-[1.45] text-text">{logical ? project.label : project.name || project.id}</p>
+        <p className="m-0 whitespace-pre-wrap break-all font-mono text-[0.72rem] leading-[1.45] text-fg/muted">
+          {logical ? project.locations.map(location => `${location.hostname}: ${location.rootPath}`).join("\n")
+            : WorkbenchProjectLabel.getFullPath(project)}
+        </p>
       </div>
       <div className="scrollbar-hover-reveal flex max-h-64 min-h-0 flex-col gap-1 overflow-y-auto">
-        {unsettledThreads.map((thread) => {
+        {unsettledThreads.map(({ entry: thread, source }) => {
           const status = WorkbenchThreadStatusCounts.itemsByKey.get(thread.status) ?? WorkbenchThreadStatusCounts.items.at(-1)!;
           const threadTimestamp = new Date(thread.activityAt);
           return (
-            <div className="flex min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-1 text-[0.76rem]" key={`${thread.identity.harness}:${thread.identity.threadId}`}>
+            <div className="flex min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-1 text-[0.76rem]" key={`${source ? `${source.daemonId}:${source.projectId}:` : ""}${thread.identity.harness}:${thread.identity.threadId}`}>
               <span aria-label={status.label} className="inline-flex shrink-0" title={status.label}>
                 <status.Icon className={`size-3.5 ${getWorkbenchThreadStatusClassName(status.tone)}`} />
               </span>
@@ -63,10 +73,10 @@ export default function WorkbenchProjectListItem({
 }: {
   active?: boolean;
   compact?: boolean;
-  entry: ProjectSidebarProject;
+  entry: DisplaySidebarProject;
   id?: string;
   nowMs: number;
-  onProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, projectId: string): void;
+  onProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
   role?: "option";
   selected?: boolean;
   showTooltip?: boolean;
@@ -78,7 +88,8 @@ export default function WorkbenchProjectListItem({
   const dominantStatus = WorkbenchThreadStatusCounts.items.find(({ key }) => (counts[key] ?? 0) > 0) ?? null;
   const statusClassName = dominantStatus ? getWorkbenchThreadStatusClassName(dominantStatus.tone) : "text-fg/muted";
   const timestamp = activityAt === null ? null : new Date(activityAt);
-  const compact = compactOverride ?? (project.kind === "workbench-library" || !dominantStatus);
+  const logical = "matchKey" in project;
+  const compact = compactOverride ?? (!logical && project.kind === "workbench-library" || !dominantStatus);
   const projectTitle = <WorkbenchProjectLabel active={active} project={project} />;
   const content = compact || !dominantStatus ? (
     <div className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-0">
@@ -146,12 +157,12 @@ export default function WorkbenchProjectListItem({
         </svg>
         {!active || role === "option" ? (
           <a
-            aria-label={`Open ${project.name || project.id}`}
+            aria-label={`Open ${logical ? project.label : project.name || project.id}`}
             aria-selected={role === "option" ? selected : undefined}
             className="absolute inset-0 z-20 cursor-pointer rounded-[0.8rem] border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-            href={projectHref(createProjectRoute(project.id))}
+            href={projectHref(logical ? createLogicalProjectRoute(project.id) : createProjectRoute(project.id))}
             id={id}
-            onClick={(event) => onProjectLinkClick(event, project.id)}
+            onClick={(event) => onProjectLinkClick(event, project.id, logical)}
             role={role}
             tabIndex={tabIndex}
           />

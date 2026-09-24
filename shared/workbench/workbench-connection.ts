@@ -48,14 +48,14 @@ export function getWorkbenchDaemonHealthUrl() {
   return origin ? `${origin}/healthz` : null;
 }
 
-export function getWorkbenchTranscriptAssetUrl(value: string) {
+export function getWorkbenchTranscriptAssetUrl(value: string, sourceOrigin?: string | null) {
   const assetUrl = value.trim();
   if (!assetUrl.startsWith("/api/transcript-assets/")) return value;
-  const origin = getWorkbenchDaemonHttpOrigin();
+  const origin = sourceOrigin === undefined ? getWorkbenchDaemonHttpOrigin() : sourceOrigin;
   return origin ? `${origin}/daemon/transcript-assets/${assetUrl.slice("/api/transcript-assets/".length)}` : null;
 }
 
-export function getWorkbenchProjectIconUrl(projectId: string, assetKey: string) {
-  const origin = getWorkbenchDaemonHttpOrigin();
+export function getWorkbenchProjectIconUrl(projectId: string, assetKey: string, sourceOrigin?: string | null) {
+  const origin = sourceOrigin === undefined ? getWorkbenchDaemonHttpOrigin() : sourceOrigin;
   return origin ? `${origin}/daemon/project-icons/${encodeURIComponent(projectId)}?asset=${encodeURIComponent(assetKey)}` : null;
 }
