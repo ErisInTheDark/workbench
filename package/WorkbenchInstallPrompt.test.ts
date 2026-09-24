@@ -46,6 +46,8 @@ test("the automatic suffix never enters the editable input", async () => {
   assert.equal(await result, "/projectsx/wb");
   assert.equal(io.input.isRaw, false);
   assert.equal(io.input.listenerCount("keypress"), 0);
+  assert.ok(io.frames.join("").includes("\u001b[?1049h"));
+  assert.ok(io.frames.join("").includes("\u001b[?1049l"));
   assert.ok(io.frames.some((frame) => frame.includes("\u001b[2m/wb\u001b[22m")));
 });
 
@@ -70,6 +72,8 @@ test("choices are visible together and navigation accepts the highlighted choice
   assert.equal(await result, "Cancel");
   assert.equal(io.input.isRaw, false);
   assert.equal(io.input.listenerCount("keypress"), 0);
+  assert.ok(io.frames.join("").includes("\u001b[?1049h"));
+  assert.ok(io.frames.join("").includes("\u001b[?1049l"));
 });
 
 test("cancellation restores terminal state and never accepts installation", async () => {
@@ -80,6 +84,16 @@ test("cancellation restores terminal state and never accepts installation", asyn
   await assert.rejects(result, { name: "AbortError" });
   assert.equal(io.input.isRaw, false);
   assert.equal(io.input.listenerCount("keypress"), 0);
+  assert.ok(io.frames.join("").includes("\u001b[?1049l"));
+});
+
+test("a prompt rendering failure restores the terminal", async () => {
+  const io = terminal();
+  const prompt = new WorkbenchInstallPrompt(io);
+  await assert.rejects(prompt.interact(() => { throw new Error("render failed"); }, () => {}), /render failed/);
+  assert.equal(io.input.isRaw, false);
+  assert.equal(io.input.listenerCount("keypress"), 0);
+  assert.ok(io.frames.join("").includes("\u001b[?1049l"));
 });
 
 test("noninteractive prompts refuse implicit consent", async () => {

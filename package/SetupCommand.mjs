@@ -81,7 +81,11 @@ export default class SetupCommand {
           process.off("SIGTERM", terminate);
           process.off("SIGHUP", hangup);
         }
-        if (failure) reject(failure);
+        if (failure?.code === "ENOENT") {
+          reject(Object.assign(new Error(`Cannot start ${command}: executable not found. Install it and make it available on PATH, then retry.`, { cause: failure }), {
+            code: "ENOENT",
+          }));
+        } else if (failure) reject(failure);
         else if (code === 0) resolve();
         else reject(Object.assign(new Error(`${command} failed with ${exitSignal ? `signal ${exitSignal}` : `status ${code ?? "unknown"}`}.`), { exitCode: code ?? 1 }));
       });

@@ -61,6 +61,19 @@ export default class WorkbenchBootstrap {
     await fs.rename(candidate, this.registry);
   }
 
+  async requireTool(command, cwd) {
+    try {
+      await this.commands.run(command, ["--version"], {
+        cwd,
+        output: { write() {} },
+        errorOutput: { write() {} },
+      });
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      throw new Error(`${command} is required to install Workbench. Install it and make it available on PATH, then retry.`, { cause: error });
+    }
+  }
+
   async run(args) {
     const managed = this.environment.WORKBENCH_THREAD_ID || this.environment.CODEX_THREAD_ID;
     const view = args[0] === "view" && (args.length === 1 || args.length === 2 && ["daemon", "app"].includes(args[1]));
@@ -80,6 +93,9 @@ export default class WorkbenchBootstrap {
     if (managed || !(args.length === 0 || (args.length === 1 && args[0] === "connect"))) {
       throw new Error("Workbench is not installed. Run wb or wb connect in an interactive terminal first.");
     }
+    const checkoutPresent = installed && await this.checkoutExists(installed.root);
+    if (!checkoutPresent && (!installed || installed.phase === "cloning")) await this.requireTool("git");
+    await this.requireTool("bash");
     let record = installed;
     if (!record) {
       const choice = await this.prompt.choose(
@@ -87,6 +103,9 @@ export default class WorkbenchBootstrap {
         ["Let's go!", "Cancel"],
       );
       if (choice !== "Let's go!") throw new DOMException("Setup cancelled.", "AbortError");
+    }
+    await this.requireTool("pnpm", checkoutPresent ? installed.root : undefined);
+    if (!record) {
       const defaultRoot = process.platform === "win32"
         ? path.join(this.environment.LOCALAPPDATA || path.join(this.home, "AppData", "Local"), "Programs", "inthedark", "wb")
         : path.join(this.home, ".local", "lib", "inthedark", "wb");

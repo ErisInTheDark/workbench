@@ -6,6 +6,13 @@ import path from "node:path";
 import os from "node:os";
 import { emitKeypressEvents } from "node:readline";
 
+const banner = [
+  "   _______________",
+  "  |  WORKBENCH    |",
+  "  |______________|",
+  "    |          |",
+].join("\r\n");
+
 export default class WorkbenchInstallPrompt {
   constructor({
     input = process.stdin,
@@ -78,7 +85,6 @@ export default class WorkbenchInstallPrompt {
     if (!choices.length) return Promise.reject(new Error("A setup choice needs options."));
     let selected = 0;
     let rendered = false;
-    this.output.write(`${label}\n`);
     return this.interact(
       () => {
         if (rendered && choices.length > 1) this.output.write(`\r\u001b[${choices.length - 1}A`);
@@ -92,10 +98,11 @@ export default class WorkbenchInstallPrompt {
         else if (key.name === "down" || key.name === "tab") selected = (selected + 1) % choices.length;
         else if (key.name === "return") accept(choices[selected]);
       },
+      label,
     );
   }
 
-  interact(render, handle) {
+  interact(render, handle, label = "") {
     if (!this.input.isTTY || !this.output.isTTY) {
       return Promise.reject(new Error("Workbench setup needs an interactive terminal; no changes were accepted."));
     }
@@ -106,16 +113,28 @@ export default class WorkbenchInstallPrompt {
     emitKeypressEvents(this.input);
     return new Promise((resolve, reject) => {
       let settled = false;
+      let screenActive = false;
+      const restoreScreen = () => {
+        if (!screenActive) return;
+        screenActive = false;
+        this.output.write("\u001b[0m\u001b[?1049l");
+      };
       const finish = (error, value) => {
         if (settled) return;
         settled = true;
         this.input.removeListener("keypress", onKey);
         this.input.removeListener("end", onEnd);
         this.input.removeListener("error", onError);
-        this.input.setRawMode(Boolean(wasRaw));
-        if (wasPaused) this.input.pause();
+        process.removeListener("exit", restoreScreen);
+        try {
+          this.input.setRawMode(Boolean(wasRaw));
+          if (wasPaused) this.input.pause();
+        } catch (cleanupError) {
+          error ??= cleanupError;
+        }
+        try { restoreScreen(); }
+        catch (cleanupError) { error ??= cleanupError; }
         this.active = false;
-        this.output.write("\u001b[0m\n");
         if (error) reject(error);
         else resolve(value);
       };
@@ -136,9 +155,16 @@ export default class WorkbenchInstallPrompt {
       this.input.on("keypress", onKey);
       this.input.once("end", onEnd);
       this.input.once("error", onError);
-      this.input.setRawMode(true);
-      this.input.resume();
-      render();
+      try {
+        this.input.setRawMode(true);
+        this.input.resume();
+        screenActive = true;
+        process.once("exit", restoreScreen);
+        this.output.write(`\u001b[?1049h\u001b[2J\u001b[H${banner}\r\n\r\n${label ? `${label}\r\n` : ""}`);
+        render();
+      } catch (error) {
+        finish(error);
+      }
     });
   }
 }
