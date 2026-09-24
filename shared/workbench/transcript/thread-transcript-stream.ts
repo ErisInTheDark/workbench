@@ -169,20 +169,37 @@ export function applyTranscriptStructure(
     const payload = items.get(entry.itemId);
     return payload ? [{ ...entry, payload }] : [];
   });
+  const itemsByTurn = new Map<string, WorkbenchProjectedTranscriptItem[]>();
+  for (const { turnId, payload } of orderedItems) {
+    const turnItems = itemsByTurn.get(turnId);
+    if (turnItems) turnItems.push(payload);
+    else itemsByTurn.set(turnId, [payload]);
+  }
+  const previousTurns = new Map((retained?.turns ?? []).map(turn => [turn.id, turn]));
   const projectedTurns = layout.turns.flatMap(id => {
     const turn = turns.get(id);
     if (!turn) return [];
-    const turnItems = orderedItems.filter(item => item.turnId === id).map(item => item.payload);
+    const turnItems = itemsByTurn.get(id) ?? [];
+    const itemTimeline = turnItems.flatMap(item => {
+      const entry = timelines.get(item.id);
+      return entry ? [entry] : [];
+    });
+    const previousTurn = previousTurns.get(id);
+    if (turn === previousTurn
+      && previousTurn.items.length === turnItems.length
+      && previousTurn.items.every((item, index) => item === turnItems[index])
+      && previousTurn.itemTimeline.length === itemTimeline.length
+      && previousTurn.itemTimeline.every((entry, index) => entry === itemTimeline[index])) {
+      return [previousTurn];
+    }
     return [{
       ...turn,
       items: turnItems,
-      itemTimeline: turnItems.flatMap(item => {
-        const entry = timelines.get(item.id);
-        return entry ? [entry] : [];
-      }),
+      itemTimeline,
     }];
   });
   const loaded = new Map(projectedTurns.map(turn => [turn.id, turn]));
+  const previousSegments = new Map((retained?.display.segments ?? []).map(segment => [segment.id, segment]));
   return {
     thread: incoming.thread,
     hasPreviousTurns: update.hasPreviousTurns,
@@ -199,9 +216,20 @@ export function applyTranscriptStructure(
     }),
     display: {
       orderedItems,
-      segments: layout.segments.map(({ offset, count, ...segment }) => ({
-        ...segment, items: orderedItems.slice(offset, offset + count).map(item => item.payload),
-      })),
+      segments: layout.segments.map(({ offset, count, ...segment }) => {
+        const segmentItems = orderedItems.slice(offset, offset + count).map(item => item.payload);
+        const previousSegment = previousSegments.get(segment.id);
+        return previousSegment
+          && previousSegment.kind === segment.kind
+          && previousSegment.turnId === segment.turnId
+          && previousSegment.isFirstForTurn === segment.isFirstForTurn
+          && previousSegment.isLastForTurn === segment.isLastForTurn
+          && previousSegment.ownsCanonicalTerminal === segment.ownsCanonicalTerminal
+          && previousSegment.items.length === segmentItems.length
+          && previousSegment.items.every((item, index) => item === segmentItems[index])
+          ? previousSegment
+          : { ...segment, items: segmentItems };
+      }),
     },
   };
 }

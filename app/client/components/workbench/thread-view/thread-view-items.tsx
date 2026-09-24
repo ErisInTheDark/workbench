@@ -2012,7 +2012,7 @@ interface ThreadTranscriptItemsDetailsProps {
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
-export function ThreadTranscriptItemsDetails ({
+export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsDetails({
   initialInactiveItemIds,
   initialUserItemId = null,
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
@@ -2170,7 +2170,7 @@ export function ThreadTranscriptItemsDetails ({
       newestActivityAt={activity.some(time => time === null) ? null : Math.max(...activity as number[])}
     >{children}</ThreadWorkedRun>;
   })}</div>;
-}
+});
 
 export function ThreadTranscriptItemDetails ({
   item,

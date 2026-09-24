@@ -66,6 +66,23 @@ function timelineEntryMatchesItemId(entry: WorkbenchThreadItemTimelineEntry, ite
   return itemIds.has(entry.itemId) || Boolean(entry.aliases?.some((alias) => itemIds.has(alias)));
 }
 
+const timelineIndex = new WeakMap<readonly WorkbenchThreadItemTimelineEntry[], Map<string, WorkbenchThreadItemTimelineEntry[]>>();
+
+function getTimelineIndex(itemTimeline: readonly WorkbenchThreadItemTimelineEntry[]) {
+  const cached = timelineIndex.get(itemTimeline);
+  if (cached) return cached;
+  const index = new Map<string, WorkbenchThreadItemTimelineEntry[]>();
+  for (const entry of itemTimeline) {
+    for (const id of new Set([entry.itemId, ...(entry.aliases ?? [])])) {
+      const matches = index.get(id);
+      if (matches) matches.push(entry);
+      else index.set(id, [entry]);
+    }
+  }
+  timelineIndex.set(itemTimeline, index);
+  return index;
+}
+
 export function findWorkbenchThreadItemTimelineEntry(
   itemId: string,
   itemTimeline: readonly WorkbenchThreadItemTimelineEntry[] | null | undefined,
@@ -74,8 +91,7 @@ export function findWorkbenchThreadItemTimelineEntry(
     return null;
   }
 
-  const itemIds = new Set([itemId]);
-  return itemTimeline.find((entry) => timelineEntryMatchesItemId(entry, itemIds)) ?? null;
+  return getTimelineIndex(itemTimeline).get(itemId)?.[0] ?? null;
 }
 
 function getEarliestTimestamp(left: number | null, right: number | null) {
@@ -180,18 +196,15 @@ export function getThreadItemTimelineDurationMs(
     return null;
   }
 
-  const itemIdSet = new Set(Array.from(itemIds).filter(Boolean));
-  if (!itemIdSet.size) {
-    return null;
+  const index = getTimelineIndex(itemTimeline);
+  const matches = new Set<WorkbenchThreadItemTimelineEntry>();
+  for (const id of itemIds) {
+    if (!id) continue;
+    for (const entry of index.get(id) ?? []) matches.add(entry);
   }
-
   let startedAt: number | null = null;
   let completedAt: number | null = null;
-  for (const entry of itemTimeline) {
-    if (!timelineEntryMatchesItemId(entry, itemIdSet)) {
-      continue;
-    }
-
+  for (const entry of matches) {
     const entryStart = getEntryStartMs(entry);
     const entryEnd = getEntryEndMs(entry);
     if (entryStart !== null) {
