@@ -77,9 +77,16 @@ export default class WorkbenchInstallPrompt {
   choose(label, choices) {
     if (!choices.length) return Promise.reject(new Error("A setup choice needs options."));
     let selected = 0;
+    let rendered = false;
     this.output.write(`${label}\n`);
     return this.interact(
-      () => this.output.write(`\r\u001b[2K> ${choices[selected]} (${selected + 1}/${choices.length}, up/down to choose)`),
+      () => {
+        if (rendered && choices.length > 1) this.output.write(`\r\u001b[${choices.length - 1}A`);
+        this.output.write(choices.map((choice, index) =>
+          `\r\u001b[2K${index === selected ? `> \u001b[7m${choice}\u001b[27m` : `  ${choice}`}`,
+        ).join("\n"));
+        rendered = true;
+      },
       (_text, key, accept) => {
         if (key.name === "up") selected = (selected + choices.length - 1) % choices.length;
         else if (key.name === "down" || key.name === "tab") selected = (selected + 1) % choices.length;

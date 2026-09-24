@@ -58,6 +58,20 @@ test("explicit workbench destination remains editable without a duplicate suffix
   assert.ok(!io.frames.some((frame) => frame.includes("\u001b[2m/wb")));
 });
 
+test("choices are visible together and navigation accepts the highlighted choice", async () => {
+  const io = terminal();
+  const prompt = new WorkbenchInstallPrompt(io);
+  const result = prompt.choose("Install?", ["Let's go!", "Cancel"]);
+  const initial = io.frames.join("");
+  assert.ok(initial.includes("Let's go!"));
+  assert.ok(initial.includes("Cancel"));
+  io.input.emit("keypress", "", { name: "down" });
+  io.input.emit("keypress", "", { name: "return" });
+  assert.equal(await result, "Cancel");
+  assert.equal(io.input.isRaw, false);
+  assert.equal(io.input.listenerCount("keypress"), 0);
+});
+
 test("cancellation restores terminal state and never accepts installation", async () => {
   const io = terminal();
   const prompt = new WorkbenchInstallPrompt(io);
