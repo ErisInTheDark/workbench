@@ -6,18 +6,15 @@ import path from "node:path";
 import test from "node:test";
 import WorkbenchSetup from "./WorkbenchSetup.mjs";
 
-function fixture(answers = [], tailscale = false) {
+function fixture(answers = [], tailscale = false, nodeVersion = process.versions.node) {
   const calls = [];
   const prompts = [];
   const output = [];
-  const root = path.resolve("test-checkout");
+  const root = path.resolve(import.meta.dirname, "..");
   const setup = new WorkbenchSetup({
     root,
-    commands: { run: async (command, args) => { calls.push({ command, args }); } },
-    shellInstall: {
-      preflight: async () => {},
-      install: async () => { calls.push({ command: "shell-install", args: [] }); },
-    },
+    nodeVersion,
+    commands: { run: async (command, args, config) => { calls.push({ command, args, config }); } },
     prompt: { choose: async (question, choices) => { prompts.push(question); return answers.shift() ?? choices.at(-1); } },
     detectTailscale: async () => tailscale,
     write: text => output.push(text),
@@ -25,13 +22,33 @@ function fixture(answers = [], tailscale = false) {
   return { setup, calls, prompts, output, root };
 }
 
-test("repository setup builds frontend but never requires native artifacts", async () => {
+test("repository setup uses vp for dependencies, frontend and global CLI in order", async () => {
   const f = fixture();
   await f.setup.prepare();
-  assert.ok(f.calls.some(call => call.command === "pnpm" && call.args[0] === "install"));
-  assert.ok(f.calls.some(call => call.args.includes("build:app")));
+  assert.deepEqual(f.calls.map(({ command, args }) => [command, ...args]), [
+    ["vp", "install"],
+    ["vp", "run", "build:app"],
+    ["vp", "install", "-g", path.join(f.root, "package")],
+  ]);
   assert.ok(!f.calls.some(call => ["cargo", "go"].includes(call.command)));
   assert.equal(f.prompts.length, 0);
+});
+
+test("native tool failure remains visible and does not register the CLI", async () => {
+  const f = fixture();
+  f.setup.commands.run = async (command, args, config) => {
+    f.calls.push({ command, args, config });
+    config?.onOutput?.("gyp ERR! find Python Could not find any Python installation to use");
+    throw new Error("vp failed with status 1.");
+  };
+  await assert.rejects(f.setup.prepare(), /Python/);
+  assert.equal(f.calls.length, 1);
+});
+
+test("an incorrect checkout Node stops before dependency scripts", async () => {
+  const f = fixture([], false, "24.21.0");
+  await assert.rejects(f.setup.prepare(), /26\.9\.0.*24\.21\.0/);
+  assert.equal(f.calls.length, 0);
 });
 
 test("first launch can skip wake and shortcut independently", async () => {

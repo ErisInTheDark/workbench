@@ -19,12 +19,14 @@ export default class WorkbenchBootstrap {
     environment = process.env,
     prompt = new WorkbenchInstallPrompt(),
     commands = new SetupCommand(),
+    write = text => process.stdout.write(text),
   } = {}) {
     this.home = home;
     this.packageRoot = packageRoot;
     this.environment = environment;
     this.prompt = prompt;
     this.commands = commands;
+    this.write = write;
     this.registry = path.join(home, ".workbench", "installation.json");
   }
 
@@ -74,6 +76,47 @@ export default class WorkbenchBootstrap {
     }
   }
 
+  async discardIncomplete(record) {
+    const root = path.resolve(record.root);
+    if (root !== record.root || !["wb", "workbench"].includes(path.basename(root).toLowerCase())) {
+      throw new Error(`Cannot verify failed install destination ${record.root}; it was preserved.`);
+    }
+    let stat;
+    try { stat = await fs.lstat(root); }
+    catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      await fs.unlink(this.registry);
+      return;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(`Failed install destination ${root} is not an ordinary directory; it was preserved.`);
+    }
+    if (await fs.realpath(root) !== root) {
+      throw new Error(`Failed install destination ${root} resolves elsewhere; it was preserved.`);
+    }
+    if ((await fs.readdir(root)).length) {
+      if (!await this.checkoutExists(root)) {
+        throw new Error(`Failed install destination ${root} is not a complete Workbench checkout; it was preserved.`);
+      }
+      const git = await fs.lstat(path.join(root, ".git")).catch(error => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (!git?.isDirectory() || git.isSymbolicLink()) {
+        throw new Error(`Failed install destination ${root} is not a regular Git clone; it was preserved.`);
+      }
+      let changes = "";
+      await this.commands.run("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+        cwd: root,
+        output: { write: bytes => { changes += bytes.toString(); } },
+        errorOutput: { write() {} },
+      });
+      if (changes.trim()) throw new Error(`Failed install destination ${root} has changes; it was preserved.`);
+    }
+    await fs.rm(root, { recursive: true });
+    await fs.unlink(this.registry);
+  }
+
   async run(args) {
     const managed = this.environment.WORKBENCH_THREAD_ID || this.environment.CODEX_THREAD_ID;
     const view = args[0] === "view" && (args.length === 1 || args.length === 2 && ["daemon", "app"].includes(args[1]));
@@ -93,26 +136,20 @@ export default class WorkbenchBootstrap {
     if (managed || !(args.length === 0 || (args.length === 1 && args[0] === "connect"))) {
       throw new Error("Workbench is not installed. Run wb or wb connect in an interactive terminal first.");
     }
-    const checkoutPresent = installed && await this.checkoutExists(installed.root);
-    if (!checkoutPresent && (!installed || installed.phase === "cloning")) await this.requireTool("git");
+    await this.requireTool("git");
     await this.requireTool("bash");
-    let record = installed;
-    if (!record) {
-      const choice = await this.prompt.choose(
-        "Workbench is not installed. This command will clone the repository and run build commands. It may take 1-2 minutes. Continue?",
-        ["Let's go!", "Cancel"],
-      );
-      if (choice !== "Let's go!") throw new DOMException("Setup cancelled.", "AbortError");
-    }
-    await this.requireTool("pnpm", checkoutPresent ? installed.root : undefined);
-    if (!record) {
-      const defaultRoot = process.platform === "win32"
-        ? path.join(this.environment.LOCALAPPDATA || path.join(this.home, "AppData", "Local"), "Programs", "inthedark", "wb")
-        : path.join(this.home, ".local", "lib", "inthedark", "wb");
-      const root = path.resolve(await this.prompt.location("Install location", defaultRoot));
-      await this.requireEmptyDestination(root);
-      record = { version: 1, root, phase: "cloning" };
-    }
+    await this.requireTool("vp");
+    const warning = installed ? `\nNote: Incomplete install attempt at ${installed.root} will be removed.` : "";
+    const choice = await this.prompt.choose(
+      `Workbench is not installed. This command will clone the repository and run build commands. It may take 1-2 minutes. Continue?${warning}`,
+      ["Let's go!", "Cancel"],
+    );
+    if (choice !== "Let's go!") throw new DOMException("Setup cancelled.", "AbortError");
+    const defaultRoot = installed?.root ?? (process.platform === "win32"
+      ? path.join(this.environment.LOCALAPPDATA || path.join(this.home, "AppData", "Local"), "Programs", "inthedark", "wb")
+      : path.join(this.home, ".local", "lib", "inthedark", "wb"));
+    const root = path.resolve(await this.prompt.location("Install location", defaultRoot));
+    this.write(`Installing Workbench at ${root}\n`);
     await fs.mkdir(path.dirname(this.registry), { recursive: true });
     const lockPath = `${this.registry}.lock.sqlite3`;
     const lock = new DatabaseSync(lockPath);
@@ -129,20 +166,28 @@ export default class WorkbenchBootstrap {
       // Another invocation may have finished while this one was accepting input.
       const latest = await this.readInstallation();
       if (latest?.phase === "ready") return await this.delegate(latest.root, args, humanCommand);
-      if (latest && latest.root !== record.root) throw new Error("The selected Workbench installation changed while setup was open. Run wb again.");
-      record = latest || record;
-      if (record.phase === "cloning") {
-        if (!await this.checkoutExists(record.root)) {
-          await this.requireEmptyDestination(record.root);
-          await this.writeInstallation(record);
-          await this.commands.run("git", ["clone", "--progress", "--branch", "main", "--single-branch",
-            "https://github.com/ErisInTheDark/workbench.git", record.root]);
-        }
-        if (!await this.checkoutExists(record.root)) throw new Error("Clone did not produce a Workbench checkout.");
+      if (latest?.root !== installed?.root || latest?.phase !== installed?.phase) {
+        throw new Error("The selected Workbench installation changed while setup was open. Run wb again.");
+      }
+      if (latest) await this.discardIncomplete(latest);
+      await this.requireEmptyDestination(root);
+      let record = { version: 1, root, phase: "cloning" };
+      await this.writeInstallation(record);
+      try {
+        await this.commands.run("git", ["clone", "--progress", "--branch", "main", "--single-branch",
+          "https://github.com/ErisInTheDark/workbench.git", root]);
+        if (!await this.checkoutExists(root)) throw new Error("Clone did not produce a Workbench checkout.");
         record = { ...record, phase: "setup" };
         await this.writeInstallation(record);
+        await this.commands.run("vp", ["env", "install"], { cwd: root });
+        await this.commands.run("vp", ["node", path.join(root, "package", "setup.mjs"), "--prepare"], { cwd: root });
+      } catch (error) {
+        try { await this.discardIncomplete(record); }
+        catch (cleanupError) {
+          throw new Error(`${error.message} Incomplete checkout was preserved at ${root}: ${cleanupError.message}`, { cause: error });
+        }
+        throw error;
       }
-      await this.commands.run(process.execPath, [path.join(record.root, "package", "setup.mjs"), "--prepare"], { cwd: record.root });
       record = { ...record, phase: "ready" };
       await this.writeInstallation(record);
     } finally {
@@ -152,8 +197,8 @@ export default class WorkbenchBootstrap {
     }
     // Persist readiness before optional platform actions: missing native artifacts
     // must not turn a usable source installation into an endless setup loop.
-    await this.commands.run(process.execPath, [path.join(record.root, "package", "setup.mjs"),
-      args[0] === "connect" ? "--connect" : "--welcome"], { cwd: record.root });
+    await this.commands.run("vp", ["node", path.join(root, "package", "setup.mjs"),
+      args[0] === "connect" ? "--connect" : "--welcome"], { cwd: root });
   }
 
   async delegate(root, args, humanCommand) {

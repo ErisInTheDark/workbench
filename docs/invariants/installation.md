@@ -1,3 +1,4 @@
 - Keep npm bootstrap limited to locating/cloning and checkout handoff. Clone current main only for installation; never update existing source implicitly.
+- Incomplete installs never resume. Show the failed checkout in the existing consent prompt; cancel preserves it. Clean only the recorded, safely owned checkout and preserve user changes. Use Vite+ for the pinned checkout runtime, dependencies and global CLI registration.
 - Keep native binaries committed. Missing platform artifacts must not prevent repository installation or trigger automatic native builds.
 - Preserve ordinary daemon CLI shell dispatch. Managed threads cannot install or launch the app.

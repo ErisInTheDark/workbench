@@ -5,7 +5,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import WorkbenchInstallPrompt from "./WorkbenchInstallPrompt.mjs";
-import WorkbenchShellInstall from "./WorkbenchShellInstall.mjs";
 import SetupCommand from "./SetupCommand.mjs";
 
 export default class WorkbenchSetup {
@@ -13,27 +12,45 @@ export default class WorkbenchSetup {
     root,
     commands = new SetupCommand(),
     prompt = new WorkbenchInstallPrompt(),
-    shellInstall,
     detectTailscale,
+    nodeVersion = process.versions.node,
     write = text => process.stdout.write(text),
   }) {
     this.root = root;
     this.commands = commands;
     this.prompt = prompt;
-    this.shellInstall = shellInstall ?? new WorkbenchShellInstall({ root, commands });
     this.detectTailscale = detectTailscale ?? (() => this.hasTailscale());
+    this.nodeVersion = nodeVersion;
     this.write = write;
   }
 
   async prepare() {
-    await this.shellInstall.preflight();
+    const manifest = JSON.parse(await fs.readFile(path.join(this.root, "package.json"), "utf8"));
+    const expectedNode = manifest.devEngines?.runtime?.version;
+    if (!expectedNode || this.nodeVersion !== expectedNode) {
+      throw new Error(`Workbench checkout requires Node ${expectedNode || "from devEngines.runtime"}; received ${this.nodeVersion}. Vite+ must use the project's pinned runtime.`);
+    }
     this.write("Building dependencies...\n");
-    await this.commands.run("pnpm", ["install"], { cwd: this.root });
+    let installOutput = "";
+    let missingPython = false;
+    try {
+      await this.commands.run("vp", ["install"], {
+        cwd: this.root,
+        onOutput: text => {
+          installOutput = `${installOutput}${text}`.slice(-4096);
+          missingPython ||= /Could not find any Python installation|Python is not set from environment variable PYTHON/u.test(installOutput);
+        },
+      });
+    } catch (error) {
+      if (missingPython) {
+        throw new Error("Dependency build needs Python on PATH. Install the required native build tools for this system, then retry the fresh install.", { cause: error });
+      }
+      throw error;
+    }
     this.write("Building frontend...\n");
-    await this.commands.run("pnpm", ["build:app"], { cwd: this.root });
+    await this.commands.run("vp", ["run", "build:app"], { cwd: this.root });
     this.write("Installing Workbench CLI...\n");
-    await this.commands.run("npm", ["install", "--global", path.join(this.root, "package")], { cwd: this.root });
-    await this.shellInstall.install();
+    await this.commands.run("vp", ["install", "-g", path.join(this.root, "package")], { cwd: this.root });
     this.write("Setup complete.\n");
   }
 
