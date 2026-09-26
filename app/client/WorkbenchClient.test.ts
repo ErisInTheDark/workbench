@@ -473,13 +473,23 @@ test("an old-shape UUID URL keeps its thread owner and the sole browse folder th
           rateLimits: { limitId: null, limitName: null, primary: null, secondary: null, credits: null, planType: null },
           rateLimitsByLimitId: null,
         }
+        : request.method === "models/list" ? { data: [{
+          id: "test-model", displayName: "Test model", description: "", hidden: false, isDefault: true,
+          supportsPersonality: false, supportsReasoningEffort: false, supportedReasoningEfforts: [],
+          defaultReasoningEffort: null, supportsVision: false, supportsFastMode: false,
+          inputModalities: ["text"], maxContextWindowTokens: null, additionalSpeedTiers: [],
+          policyState: null, billingMultiplier: null,
+        }] }
+        : request.method === "thread/launch" ? {
+          phase: "accepted", launchId: params.launchId, threadId, turnId: "turn",
+        }
         : { accepted: true, data: [] };
       queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
         data: JSON.stringify({ id: request.id, result }),
       })));
     }
   }
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init) => {
     const url = String(input);
     const appStateUrl = new URL(url, "http://workbench.test");
     if (appStateUrl.pathname === "/api/workbench-client-state"
@@ -490,6 +500,29 @@ test("an old-shape UUID URL keeps its thread owner and the sole browse folder th
     });
     if (url.startsWith("/api/workbench-network")) return Response.json(network);
     if (url.startsWith("/api/workbench-presentation")) {
+      if (url.endsWith("/mutate") && storedDraft) {
+        const mutation = JSON.parse(String(init?.body)) as {
+          kind: string;
+          draft?: Partial<typeof storedDraft>;
+          launchId?: string;
+          threadId?: string;
+        };
+        if (mutation.kind === "putDraft" && mutation.draft) {
+          storedDraft = { ...storedDraft, ...mutation.draft, revision: ++presentationRevision };
+        }
+        if (mutation.kind === "reserveLaunch" && mutation.launchId) {
+          storedDraft = {
+            ...storedDraft, phase: "submitting", launchId: mutation.launchId,
+            revision: ++presentationRevision,
+          };
+        }
+        if (mutation.kind === "completeLaunch" && mutation.threadId) {
+          storedDraft = {
+            ...storedDraft, phase: "accepted", acceptedThreadId: mutation.threadId,
+            revision: ++presentationRevision,
+          };
+        }
+      }
       if (holdFirstPresentation) {
         holdFirstPresentation = false;
         await releaseFirstPresentation.promise;
@@ -505,11 +538,14 @@ test("an old-shape UUID URL keeps its thread owner and the sole browse folder th
     }
     return new Response(null, { status: 404 });
   };
-  globalThis.EventSource = class {
-    onmessage = null;
-    onerror = null;
+  class NetworkEvents {
+    static latest: NetworkEvents | null = null;
+    onmessage: ((event: MessageEvent) => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor() { NetworkEvents.latest = this; }
     close() {}
-  } as unknown as typeof EventSource;
+  }
+  globalThis.EventSource = NetworkEvents as unknown as typeof EventSource;
   globalThis.WebSocket = Socket as unknown as typeof WebSocket;
   globalThis.document = new EventTarget() as Document;
   globalThis.window = {
@@ -764,6 +800,38 @@ test("an old-shape UUID URL keeps its thread owner and the sole browse folder th
     }));
     assert.equal(observedOnly.ok, true,
       observedOnly.error ?? "an observed thread should open before its presentation location is stored");
+    registeredLocationsVisible = true;
+    storedDraft = {
+      ...storedDraft!, phase: "unsent", launchId: null, acceptedThreadId: null,
+      revision: ++presentationRevision,
+    };
+    await client.presentationClient?.refresh();
+    const launchDraftId = fixtureIdentitySchemas.DraftIdSchema.parse(storedDraft.id);
+    const launchRoute = createLogicalThreadRoute(null, logicalProjectId, null, {
+      kind: "draft", draftId: launchDraftId,
+    });
+    assert.equal((await client.controls.applyRoute(launchRoute)).ok, true);
+    const launchDraft = client.threadRuntime.getSnapshot().currentThread;
+    assert.ok(launchDraft?.isDraft);
+    const otherDaemonId = fixtureIdentitySchemas.DaemonIdSchema.parse("f8b969e9-25d9-4d50-981c-0d75a151e56b");
+    NetworkEvents.latest?.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({ ...network, daemon: { ...network.daemon, daemonId: otherDaemonId } }),
+    }));
+    assert.equal(client.networkClient?.snapshot().snapshot?.daemon?.daemonId, otherDaemonId);
+    const modelReadsBeforeMismatch = requests.filter(method => method === "models/list").length;
+    await assert.rejects(client.controls.retargetPresentationDraft(launchDraftId, { daemonId, projectId }));
+    assert.equal(requests.filter(method => method === "models/list").length, modelReadsBeforeMismatch,
+      "a conflicting network identity must not send the draft to the attached daemon");
+    NetworkEvents.latest?.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({ ...network, daemon: undefined }),
+    }));
+    assert.equal(client.networkClient?.snapshot().snapshot?.daemon, undefined);
+    await client.controls.retargetPresentationDraft(launchDraftId, { daemonId, projectId });
+    const launched = await client.controls.sendThreadMessage(launchDraft, [{
+      text: "start local thread", text_elements: [], type: "text",
+    }]);
+    assert.equal(launched?.id, threadId);
+    assert.equal(requests.filter(method => method === "thread/launch").length, 1);
   } finally {
     releaseFirstPresentation.resolve();
     const lastSocket = Socket.latest;

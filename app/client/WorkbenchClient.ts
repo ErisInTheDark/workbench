@@ -288,6 +288,13 @@ export function WorkbenchClient(
   let presentationClient: WorkbenchPresentationClient | undefined;
   let daemonSessions: WorkbenchDaemonSessions | undefined;
   let attachedSession: WorkbenchDaemonSession | undefined;
+  const resolveAttachedDaemonId = () => {
+    const registeredId = workbenchBindings.clientStateController?.getSnapshot().registrations
+      .find(registration => registration.kind === "local")?.daemonId;
+    const networkId = networkClient?.snapshot().snapshot?.daemon?.daemonId;
+    if (registeredId && networkId && registeredId !== networkId) return null;
+    return registeredId ?? networkId ?? null;
+  };
   const projectSourceErrorListeners = new Set<() => void>();
   const getProjectSourceError = () => [
     attachedSession, ...(daemonSessions?.list() ?? []),
@@ -369,9 +376,7 @@ export function WorkbenchClient(
     presentation: () => presentationClient?.snapshot().data ?? null,
     rows: () => getLogicalProjection()?.threads ?? [],
     daemons: () => {
-      const attachedId = networkClient?.snapshot().snapshot?.daemon?.daemonId
-        ?? workbenchBindings.clientStateController?.getSnapshot().registrations
-          .find(registration => registration.kind === "local")?.daemonId;
+      const attachedId = resolveAttachedDaemonId();
       return [
         ...(attachedId ? [{
           daemonId: DaemonIdSchema.parse(attachedId), daemon, threads: threadClient,
@@ -1132,9 +1137,7 @@ export function WorkbenchClient(
     }
     if (outcome.kind === "superseded") return { ok: false };
 
-    const attachedDaemonId = networkClient?.snapshot().snapshot?.daemon?.daemonId
-      ?? workbenchBindings.clientStateController?.getSnapshot().registrations
-        .find(registration => registration.kind === "local")?.daemonId;
+    const attachedDaemonId = resolveAttachedDaemonId();
     const ownerProjectId = project?.id ?? projectClient.getSnapshot().currentProjectId;
     if (attachedDaemonId && ownerProjectId) {
       threadRouter.rememberRead({
@@ -1212,7 +1215,7 @@ export function WorkbenchClient(
         || presentation.draft(thread.id)?.target.projectId !== location.projectId) {
         throw new ThreadMessageNotSentError();
       }
-      const attachedId = networkClient?.snapshot().snapshot?.daemon?.daemonId;
+      const attachedId = resolveAttachedDaemonId();
       const launch = new ThreadLaunchController({
         presentation,
         daemon: target => {
@@ -1363,7 +1366,7 @@ export function WorkbenchClient(
       : available.length === 1 ? available[0]!.target
         : available.length === 0 && registered.length === 1 ? registered[0]!.target : null;
     const currentProjectId = activeProjectClient.getSnapshot().currentProjectId;
-    const attachedId = networkClient?.snapshot().snapshot?.daemon?.daemonId;
+    const attachedId = resolveAttachedDaemonId();
     const current = currentProjectId
       ? { daemonId: activeBrowsePeerSession?.getSnapshot().daemonId ?? attachedId,
         projectId: currentProjectId } : null;
@@ -1457,8 +1460,7 @@ export function WorkbenchClient(
       return { ok: false, error: "The browse folder does not belong to the selected project." };
     }
     const availableSource = async (target: { daemonId: DaemonId; projectId: string }) => {
-      const attachedId = networkClient?.snapshot().snapshot?.daemon?.daemonId
-        ?? workbenchBindings.clientStateController?.getSnapshot().registrations.find(item => item.kind === "local")?.daemonId;
+      const attachedId = resolveAttachedDaemonId();
       if (target.daemonId === attachedId) {
         if (!attachedSession) return null;
         await attachedSession.start();
@@ -1916,7 +1918,7 @@ export function WorkbenchClient(
     if (registered?.logicalProjectId !== logicalProjectId) {
       throw new Error("That folder belongs to another project identity.");
     }
-    const attachedId = networkClient?.snapshot().snapshot?.daemon?.daemonId;
+    const attachedId = resolveAttachedDaemonId();
     const peer = daemonSessions?.get(target.daemonId);
     const destination = target.daemonId === attachedId ? daemon
       : peer?.getSnapshot().phase === "ready" ? peer.daemon : null;
@@ -2553,7 +2555,7 @@ export function WorkbenchClient(
         && item.target.daemonId === location.daemonId
         && item.target.projectId === location.projectId);
       if (!registered) throw new Error("The selected folder does not belong to this project.");
-      const attachedId = networkClient?.snapshot().snapshot?.daemon?.daemonId;
+      const attachedId = resolveAttachedDaemonId();
       const session = location.daemonId === attachedId ? null : daemonSessions?.get(location.daemonId);
       if (session) {
         await session.start();
