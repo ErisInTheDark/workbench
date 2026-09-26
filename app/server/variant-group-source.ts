@@ -122,7 +122,7 @@ function expandToken(token: string, prefix = ""): string {
   if (!token.endsWith(")") || opening === 0) {
     throw new Error(`Invalid Tailwind variant group: ${token}`);
   }
-  const nestedPrefix = `${prefix}${token.slice(0, opening)}:`;
+  const nestedPrefix = `${prefix}${normalizeBracketWhitespace(token.slice(0, opening))}:`;
   const inner = token.slice(opening + 2, -1);
   const children = classTokens(inner);
   if (!children.length) throw new Error(`Empty Tailwind variant group: ${token}`);

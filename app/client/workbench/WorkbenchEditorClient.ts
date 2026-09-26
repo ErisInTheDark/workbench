@@ -631,7 +631,7 @@ function createDiffMarkerIcon(symbol: DiffMarkerSymbol) {
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("class", [
     "relative z-1 block size-[1.1rem] overflow-visible",
-    "[filter:drop-shadow(0_0.08rem_0.18rem_color-mix(in_srgb,var(--shadow)_35%,transparent))]",
+    "[filter: drop-shadow(0 0.08rem 0.18rem color-mix(in srgb, var(--shadow) 35%, transparent))]",
     "[@media(max-width:767px)]:size-[0.82rem]",
   ].join(" "));
 

@@ -247,7 +247,7 @@ export default function WorkbenchThreadFolder({
     <WorkbenchTooltip content={tooltip} enabled={!isDragActive} interactive>
       <div className="min-w-0">
         {project ? fullSummary : open ? (
-          <div className="grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-0">
+          <div className="grid min-h-11 min-w-0 grid-cols-[auto minmax(0, 1fr) auto] items-center py-1 pr-2 pl-2 md:min-h-0">
             <FolderOpenIcon className="mr-1.5 shrink-0" size={14} />
             {titleInput}
             {errorLabel}
@@ -289,7 +289,11 @@ export default function WorkbenchThreadFolder({
           />
           <ThreadDisclosure
             chevronClassName="hidden"
-            className={`relative z-10 rounded-[0.8rem] transition-[background-color,opacity] open:bg-[color-mix(in_srgb,var(--text)_4%,transparent)]${folder.section === "snoozed" ? " opacity-50 hover:opacity-100 open:opacity-100" : ""}`}
+            className={`
+              relative z-10 rounded-[0.8rem] transition-[background-color,opacity]
+              open:bg-[color-mix(in srgb, var(--text) 4%, transparent)]
+              ${folder.section === "snoozed" ? "opacity-50 hover:opacity-100 open:opacity-100" : ""}
+            `}
             open={open}
             onToggle={(event) => onOpenChange(event.currentTarget.open)}
             summary={summary}

@@ -32,15 +32,16 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-const baseClassName = [
-  "relative isolate inline-flex enabled:cursor-pointer items-center justify-center overflow-visible bg-transparent font-medium [color:var(--text)]",
-  "transition duration-150 ease-out",
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:color-mix(in_srgb,var(--text)_22%,transparent)]",
-  "disabled:cursor-not-allowed",
-  "[--primary-button-bg:color-mix(in_srgb,white_14%,var(--shell-fade-bg)_86%)]",
-  "disabled:[--primary-button-bg:color-mix(in_srgb,white_7%,var(--shell-fade-bg)_93%)]",
-  "[--fg-bg:var(--primary-button-bg)]",
-].join(" ");
+const baseClassName = `
+  relative isolate inline-flex enabled:cursor-pointer items-center justify-center
+  overflow-visible bg-transparent font-medium [color: var(--text)]
+  transition duration-150 ease-out
+  focus-visible:(outline-none ring-2 ring-[color: color-mix(in srgb, var(--text) 22%, transparent)])
+  disabled:cursor-not-allowed
+  [--primary-button-bg: color-mix(in srgb, white 14%, var(--app-bg-solid) 86%)]
+  disabled:[--primary-button-bg: color-mix(in srgb, white 7%, var(--app-bg-solid) 93%)]
+  [--fg-bg: var(--primary-button-bg)]
+`;
 
 const shapeClassNames: Record<PrimaryButtonShape, string> = {
   circle: "size-10 shrink-0 rounded-full",
@@ -49,15 +50,21 @@ const shapeClassNames: Record<PrimaryButtonShape, string> = {
 
 const toneClassNames: Record<PrimaryButtonTone, string> = {
   default: "enabled:hover:[--primary-button-bg:var(--color-button-hover)]",
-  danger: [
-    "enabled:hover:[--primary-button-bg:color-mix(in_srgb,var(--danger)_48%,var(--shell-fade-bg)_52%)]",
-    "enabled:hover:[color:var(--text)]",
-    "enabled:focus-visible:[--primary-button-bg:color-mix(in_srgb,var(--danger)_48%,var(--shell-fade-bg)_52%)]",
-    "enabled:focus-visible:[color:var(--text)]",
-    "enabled:focus-visible:ring-[color:color-mix(in_srgb,var(--danger)_48%,transparent)]",
-    "data-[confirming=true]:[--primary-button-bg:color-mix(in_srgb,var(--danger)_72%,var(--shell-fade-bg)_28%)]",
-    "data-[confirming=true]:[color:var(--text)]",
-  ].join(" "),
+  danger: `
+    enabled:hover:(
+      [--primary-button-bg: color-mix(in srgb, var(--danger) 48%, var(--app-bg-solid) 52%)]
+      [color: var(--text)]
+    )
+    enabled:focus-visible:(
+      [--primary-button-bg: color-mix(in srgb, var(--danger) 48%, var(--app-bg-solid) 52%)]
+      [color: var(--text)]
+      ring-[color: color-mix(in srgb, var(--danger) 48%, transparent)]
+    )
+    data-[confirming=true]:(
+      [--primary-button-bg: color-mix(in srgb, var(--danger) 72%, var(--app-bg-solid) 28%)]
+      [color: var(--text)]
+    )
+  `,
 };
 
 function isConfirmationKey (key: string) {

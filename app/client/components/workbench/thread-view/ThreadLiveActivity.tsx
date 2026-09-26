@@ -93,7 +93,7 @@ export default function ThreadLiveActivity({
         summary={<span aria-live="polite">{title}</span>}
       >
         {showReasoning ? (
-          <ThreadScrollViewport resetKey={`${threadId}:${turnId}:reasoning`} className="flex-[0_1_auto] max-h-[30%] overscroll-contain border-b border-fg-alpha/16 [&_[data-thread-scroll-end=true]]:[scroll-margin-block-start:0]" contentClassName="px-3 py-2">
+          <ThreadScrollViewport resetKey={`${threadId}:${turnId}:reasoning`} className="flex-[0 1 auto] max-h-[30%] overscroll-contain border-b border-fg-alpha/16 [& [data-thread-scroll-end=true]]:[scroll-margin-block-start: 0]" contentClassName="px-3 py-2">
             {reasoningDisplay?.body ? <ThreadMarkdown
               className="text-[0.8em] text-fg/muted"
               inlineMentionSources={inlineMentionSources}

@@ -2566,7 +2566,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         <div
           className={`relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:items-start${isEffectiveDesktopSidebarCollapsed
             ? " md:grid-cols-[minmax(0,1fr)]"
-            : " md:grid-cols-[minmax(16rem,21rem)_1fr]"
+            : " md:grid-cols-[minmax(16rem, 21rem) 1fr]"
             }`}
           onClick={handleWorkbenchProjectFileLinkClick}
         >
@@ -2625,7 +2625,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden pr-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:pr-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
                         <DropTargetBoundary className="scrollbar-hover-reveal flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto pt-3 pb-[calc(0.75rem+min(0.75rem,var(--workbench-safe-area-bottom,0px)))] pr-2">
-                <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto_auto] items-center gap-1 pb-2">
+                <header className="-mr-2 grid shrink-0 grid-cols-[1fr auto auto auto auto] items-center gap-1 pb-2">
                   <span className="min-w-0 truncate pl-5 text-xl font-semibold leading-tight text-text">workbench</span>
                   <WorkbenchIconButton
                     as="a"
@@ -2921,7 +2921,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               >
                 <div
                   aria-hidden="true"
-                  className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to_bottom,var(--shell-fade-bg)_calc(100%-var(--spacing)*6),transparent)] md:backdrop-blur-none"
+                  className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)] md:backdrop-blur-none"
                 />
                 <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                   <div className="order-2 min-w-0 w-full flex-1 md:order-1">
@@ -3167,7 +3167,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : null}
                 {showRouteError && !shouldRenderMainLayout ? (
                   <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
-                    <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_94%,var(--app-bg-solid))] px-5 py-4 text-left">
+                    <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color: color-mix(in srgb, var(--bg) 94%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 94%, var(--app-bg-solid))] px-5 py-4 text-left">
                       <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">Route</p>
                       <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open route</p>
                       <p className="m-0 break-all text-[0.84rem] leading-6 text-fg/muted">{selectionError}</p>
@@ -3208,7 +3208,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             <button
                               key={path}
                               type="button"
-                              className="flex w-full items-start justify-between gap-4 rounded-[1.15rem] px-4 py-3 text-left transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
+                              className="flex w-full items-start justify-between gap-4 rounded-[1.15rem] px-4 py-3 text-left transition hover:bg-[color-mix(in srgb, var(--text) 4%, transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
                               onClick={() => {
                                 void openFileFromExplorer(path);
                               }}
@@ -3401,7 +3401,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
                       return (
                         <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
-                          <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_94%,var(--app-bg-solid))] px-5 py-4 text-left">
+                          <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in srgb, var(--text) 10%, transparent)] bg-[color: color-mix(in srgb, var(--bg) 94%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 94%, var(--app-bg-solid))] px-5 py-4 text-left">
                             <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-fg/muted uppercase">Workbench</p>
                             <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Drop a file or thread here</p>
                           </div>
@@ -3424,7 +3424,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : null}
                 {showFileView && selectionError ? (
                   <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
-                    <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_94%,var(--app-bg-solid))] px-5 py-4 text-left">
+                    <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color: color-mix(in srgb, var(--bg) 94%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 94%, var(--app-bg-solid))] px-5 py-4 text-left">
                       <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">File</p>
                       <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open file</p>
                       <p className="m-0 break-all text-[0.84rem] leading-6 text-fg/muted">{selectionError}</p>
@@ -3433,7 +3433,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : null}
                 {showFileView && !selectionError && !isFileViewReady ? (
                   <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
-                    <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color:color-mix(in_srgb,var(--bg)_94%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_94%,var(--app-bg-solid))] px-5 py-4 text-left">
+                    <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in srgb, var(--text) 10%, transparent)] bg-[color: color-mix(in srgb, var(--bg) 94%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 94%, var(--app-bg-solid))] px-5 py-4 text-left">
                       <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-fg/muted uppercase">File</p>
                       <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Loading file...</p>
                       <p className="m-0 break-all text-[0.84rem] leading-6 text-fg/muted">{effectiveFilePath}</p>
@@ -3631,7 +3631,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         setCreateDialogError("");
                       }
                     }}
-                    className="mt-2 w-full rounded-xl bg-[color-mix(in_srgb,var(--bg)_86%,transparent)] px-3 py-2 text-base outline-none ring-0 transition focus:bg-[color-mix(in_srgb,var(--bg)_94%,transparent)]"
+                    className="mt-2 w-full rounded-xl bg-[color-mix(in srgb, var(--bg) 86%, transparent)] px-3 py-2 text-base outline-none ring-0 transition focus:bg-[color-mix(in srgb, var(--bg) 94%, transparent)]"
                     placeholder="chapter-notes"
                   />
                   {createDialogError ? (

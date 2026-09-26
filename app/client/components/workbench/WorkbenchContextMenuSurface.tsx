@@ -114,7 +114,7 @@ export default function WorkbenchContextMenuSurface({
         ref={backdropRef}
         type="button"
         aria-label="Close context menu"
-        className="pointer-events-none fixed inset-0 z-50 cursor-default border-0 bg-transparent p-0 coarse-touch:pointer-events-auto coarse-touch:[background:color-mix(in_srgb,var(--shell-fade-bg),transparent_10%)]"
+        className="pointer-events-none fixed inset-0 z-50 cursor-default border-0 bg-transparent p-0 coarse-touch:pointer-events-auto coarse-touch:[background: color-mix(in srgb, var(--app-bg-solid), transparent 10%)]"
         tabIndex={-1}
         onClick={(event) => {
           event.preventDefault();

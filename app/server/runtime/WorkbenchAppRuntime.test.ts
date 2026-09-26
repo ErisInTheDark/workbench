@@ -143,7 +143,6 @@ test("separates reloadable imports, stable process imports and external build in
   assert.deepEqual(owners("app/server/state/WorkbenchAppStateController.ts"), ["client:state"]);
   assert.deepEqual(owners("app/server/runtime/WorkbenchAppHttpRouter.ts"), ["client:http"]);
   assert.deepEqual(owners("app/server/WorkbenchFrontendCompiler.ts"), ["client:compiler"]);
-  assert.deepEqual(owners("app/client/globals.css"), []);
   assert.deepEqual(owners("app/client/tailwind.css"), []);
   assert.deepEqual(owners("app/server/runtime/AppHttpNode.ts"), ["client:http", "client:topology"]);
   assert.deepEqual(owners("app/server/index.ts"), ["client:process"]);

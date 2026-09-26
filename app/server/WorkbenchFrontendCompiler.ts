@@ -324,7 +324,6 @@ export default class WorkbenchFrontendCompiler {
           ].join("\n"),
           loader: "js",
           watchFiles: [
-            path.join(this.appDirectoryPath, "globals.css"),
             path.join(this.appDirectoryPath, "tailwind.css"),
             path.join(this.repositoryRootPath, "shared", "frontend-generation.ts"),
           ],

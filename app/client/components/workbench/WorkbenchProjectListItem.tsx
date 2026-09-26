@@ -92,7 +92,7 @@ export default function WorkbenchProjectListItem({
   const compact = compactOverride ?? (!logical && project.kind === "workbench-library" || !dominantStatus);
   const projectTitle = <WorkbenchProjectLabel active={active} project={project} />;
   const content = compact || !dominantStatus ? (
-    <div className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-0">
+    <div className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[auto minmax(0, 1fr) auto] items-center py-1 pr-2 pl-2 md:min-h-0">
       {dominantStatus ? <dominantStatus.Icon className={`mr-1.5 size-3.5 ${statusClassName}`} /> : null}
       <span className={dominantStatus ? "col-start-2 min-w-0" : "col-span-2 col-start-1 min-w-0"}>{projectTitle}</span>
       <span className="col-start-3 row-start-1 ml-2 text-[0.72rem] text-fg/muted">
@@ -105,10 +105,10 @@ export default function WorkbenchProjectListItem({
     </div>
   ) : (
     <div className="pointer-events-none relative z-10 min-w-0 pr-2">
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] pt-1.5 pl-2">
+      <div className="grid min-w-0 grid-cols-[minmax(0, 1fr) auto] pt-1.5 pl-2">
         {projectTitle}
       </div>
-      <div className="mt-0.5 grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 pb-1.5 pl-2 text-[0.72rem] text-fg/muted">
+      <div className="mt-0.5 grid min-w-0 grid-cols-[auto minmax(0, 1fr) auto] items-center gap-1.5 pb-1.5 pl-2 text-[0.72rem] text-fg/muted">
         <dominantStatus.Icon className={`size-3.5 ${statusClassName}`} />
         <span className="flex min-w-0 items-center gap-1.5">
           <span className={`inline-flex min-w-0 items-center gap-1 ${statusClassName}`}>

@@ -11,7 +11,7 @@ import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 
 export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never>()({
   access: "operator",
-  boundarySources: "app/client/browser-entry.tsx\napp/client/globals.css",
+  boundarySources: "app/client/browser-entry.tsx\napp/client/tailwind.css",
   children: [],
   create: (context, build) => {
     const logger = build.get("logger");

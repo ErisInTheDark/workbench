@@ -75,6 +75,11 @@
   --fg: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), transparent);
 }
 
+@utility bg-overlay-glass {
+  background-color: color-mix(in srgb, black 5%, color-mix(in srgb, var(--app-bg-solid), transparent 20%));
+  --fg-bg: color-mix(in srgb, black 5%, var(--app-bg-solid));
+}
+
 /* Hue degrees: text-hue-210, border-hue-300/35, bg-hue-(--identity-hue)/22.
  * Set --hue-chroma to a percentage to override 90%; lightness follows the theme.
  * Keep each colour local so text, border, and background can use different hues.

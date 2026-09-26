@@ -61,9 +61,9 @@ const SVG_PREVIEW_SRC_DOC_STYLE = [
 ].join("");
 const CODE_BLOCK_HEADER_FILE_LINK_PATTERN = /(^|\s)#\[([^\]\r\n]+)\](?=\s|$)/;
 const DIFF_CODE_BLOCK_LINE_CLASS_NAMES = {
-  addition: "bg-[color-mix(in_srgb,var(--success)_12%,transparent)]",
+  addition: "bg-[color-mix(in srgb, var(--success) 12%, transparent)]",
   context: "",
-  deletion: "bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]",
+  deletion: "bg-[color-mix(in srgb, var(--danger) 12%, transparent)]",
   note: "",
 } satisfies Record<UnifiedDiffDisplayLine["type"], string>;
 const THREAD_TABLE_CELL_CLASS = "min-w-0 max-w-[60cqw] [overflow-wrap:anywhere]";
@@ -80,7 +80,7 @@ function areNumberArraysEqual(left: readonly number[], right: readonly number[])
 function renderAppendReveal(children: ReactNode, key: string) {
   return (
     <span
-      className="relative animate-slide-reveal motion-reduce:animate-none motion-reduce:filter-none motion-reduce:opacity-100 motion-reduce:top-0"
+      className="relative animate-slide-reveal motion-reduce:(animate-none filter-none opacity-100 top-0)"
       data-thread-markdown-append-reveal="true"
       key={key}
     >
@@ -157,7 +157,7 @@ function renderThreadInlineNodes (
       case "delete":
         return (
           <del
-            className="-mx-[0.04em] rounded-[0.2em] bg-[color-mix(in_srgb,var(--danger)_16%,transparent)] px-[0.08em] text-inherit decoration-current decoration-[0.08em]"
+            className="-mx-[0.04em] rounded-[0.2em] bg-[color-mix(in srgb, var(--danger) 16%, transparent)] px-[0.08em] text-inherit decoration-current decoration-[0.08em]"
             key={key}
           >
             {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
@@ -166,7 +166,7 @@ function renderThreadInlineNodes (
       case "insert":
         return (
           <ins
-            className="-mx-[0.04em] rounded-[0.2em] bg-[color-mix(in_srgb,var(--success)_16%,transparent)] px-[0.08em] text-inherit no-underline"
+            className="-mx-[0.04em] rounded-[0.2em] bg-[color-mix(in srgb, var(--success) 16%, transparent)] px-[0.08em] text-inherit no-underline"
             key={key}
           >
             {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
@@ -195,7 +195,7 @@ function renderThreadInlineNodes (
       case "inlineComment":
         return (
           <span
-            className="rounded-[0.35rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--comment-fg-bg:color-mix(in_srgb,var(--text)_6%,var(--fg-bg,var(--bg)))] px-[0.34em] py-[0.08em] text-[color:color-mix(in_srgb,var(--text)_60%,var(--comment-fg-bg))]"
+            className="rounded-[0.35rem] bg-[color-mix(in srgb, var(--text) 6%, transparent)] [--comment-fg-bg: color-mix(in srgb, var(--text) 6%, var(--fg-bg, var(--bg)))] px-[0.34em] py-[0.08em] text-[color: color-mix(in srgb, var(--text) 60%, var(--comment-fg-bg))]"
             data-inline-comment="true"
             key={key}
           >
@@ -355,7 +355,11 @@ function renderThreadSingleItemOrderedStep (
 function renderThreadStateChange (mode: string, keyPrefix: string) {
   return (
     <div
-      className="my-[0.85em] flex items-center gap-2 font-sans leading-none text-fg/muted last:mb-0 before:block before:h-px before:flex-1 before:bg-[color-mix(in_srgb,var(--text)_10%,transparent)] before:content-[''] after:block after:h-px after:flex-1 after:bg-[color-mix(in_srgb,var(--text)_10%,transparent)] after:content-['']"
+      className={`
+        my-[0.85em] flex items-center gap-2 font-sans leading-none text-fg/muted last:mb-0
+        before:(block h-px flex-1 bg-[color-mix(in srgb, var(--text) 10%, transparent)] content-[''])
+        after:(block h-px flex-1 bg-[color-mix(in srgb, var(--text) 10%, transparent)] content-[''])
+      `}
       data-thread-state-change="true"
       data-thread-state-mode={mode}
       key={keyPrefix}
@@ -384,7 +388,7 @@ function renderThreadPlanBlock (block: Extract<ParsedBlock, { type: "plan" }>, o
       summaryClassName="text-[0.92em] font-medium leading-[1.6]"
     >
       <ThreadPreviewFrame
-        backgroundClassName="before:bg-[linear-gradient(to_right,transparent,#8882_10%,#8882_90%,transparent)]"
+        backgroundClassName="before:bg-[linear-gradient(to right, transparent, #8882 10%, #8882 90%, transparent)]"
         contentClassName="mb-8 px-4 py-8"
         edgeBleed="wide"
         edgeOffset="none"
@@ -424,13 +428,13 @@ function renderThreadTableBlock (
 ) {
   return (
     <div
-      className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`}
+      className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in srgb, var(--text) 4%, transparent)]`}
       key={keyPrefix}
     >
       <div className="max-w-full overflow-x-auto [container-type:inline-size]">
         <table className="w-max min-w-full border-collapse font-sans text-[0.92em] leading-[1.45]">
           <thead>
-            <tr className="border-b-2 border-[color-mix(in_srgb,var(--text)_16%,transparent)] bg-[color-mix(in_srgb,var(--text)_5%,transparent)]">
+            <tr className="border-b-2 border-[color-mix(in srgb, var(--text) 16%, transparent)] bg-[color-mix(in srgb, var(--text) 5%, transparent)]">
               {block.header.map((cell, index) => (
                 <th
                   className={`${getThreadTableCellAlignClassName(block.alignments[index] ?? null)} ${THREAD_TABLE_CELL_CLASS} px-[0.65rem] py-[0.48rem] text-[0.82em] font-semibold text-text align-top`}
@@ -445,7 +449,7 @@ function renderThreadTableBlock (
           <tbody>
             {block.rows.map((row, rowIndex) => (
               <tr
-                className="border-t border-[color-mix(in_srgb,var(--text)_7%,transparent)] first:border-t-0"
+                className="border-t border-[color-mix(in srgb, var(--text) 7%, transparent)] first:border-t-0"
                 key={`${keyPrefix}-row-${rowIndex}`}
               >
                 {block.header.map((_, columnIndex) => {
@@ -575,11 +579,11 @@ function ThreadCodeBlock ({
 
   return (
     <div
-      className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)]`}
+      className={`${BLOCK_SPACING_CLASS} max-w-full overflow-hidden rounded-[0.75rem] bg-[color-mix(in srgb, var(--text) 4%, transparent)]`}
       data-thread-codeblock="true"
       data-thread-codeblock-diff={isDiffCodeBlock ? "true" : undefined}
     >
-      <div className="flex min-h-[2.05rem] items-center justify-between gap-2 border-b border-[color-mix(in_srgb,var(--text)_8%,transparent)] px-[0.65rem] py-[0.28rem]">
+      <div className="flex min-h-[2.05rem] items-center justify-between gap-2 border-b border-[color-mix(in srgb, var(--text) 8%, transparent)] px-[0.65rem] py-[0.28rem]">
         <span className="flex min-w-0 items-center gap-1.5 pl-[0.15rem] font-mono text-[0.72em] leading-none text-fg/muted">
           <span className="min-w-0 truncate">{language || "code"}</span>
           {header.fileLink ? renderThreadInlineNodes([header.fileLink], `${keyPrefix}-header-file`, options) : null}
@@ -690,7 +694,7 @@ function renderThreadBlock (
     case "blockquote":
       return (
         <blockquote
-          className={`${BLOCK_SPACING_CLASS} border-l-[0.18rem] [border-left-color:color-mix(in_srgb,var(--text)_14%,transparent)] pl-[0.9rem] text-fg/muted`}
+          className={`${BLOCK_SPACING_CLASS} border-l-[0.18rem] [border-left-color: color-mix(in srgb, var(--text) 14%, transparent)] pl-[0.9rem] text-fg/muted`}
           key={keyPrefix}
         >
           {renderThreadInlineMarkdown(block.text, options, keyPrefix, appendTarget)}
@@ -703,7 +707,7 @@ function renderThreadBlock (
     case "comment":
       return (
         <p
-          className={`${BLOCK_SPACING_CLASS} mx-0 rounded-[0.6rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--comment-fg-bg:color-mix(in_srgb,var(--text)_6%,var(--fg-bg,var(--bg)))] px-[0.75rem] py-[0.55rem] text-[0.9em] text-[color:color-mix(in_srgb,var(--text)_60%,var(--comment-fg-bg))]`}
+          className={`${BLOCK_SPACING_CLASS} mx-0 rounded-[0.6rem] bg-[color-mix(in srgb, var(--text) 6%, transparent)] [--comment-fg-bg: color-mix(in srgb, var(--text) 6%, var(--fg-bg, var(--bg)))] px-[0.75rem] py-[0.55rem] text-[0.9em] text-[color: color-mix(in srgb, var(--text) 60%, var(--comment-fg-bg))]`}
           data-block-comment="true"
           key={keyPrefix}
         >
@@ -717,7 +721,7 @@ function renderThreadBlock (
         ? renderThreadSingleItemOrderedStep(block, options, keyPrefix)
         : renderThreadListBlock(block, options, keyPrefix);
     case "hr":
-      return <hr className="[margin-inline:10%] my-8 [border-color:color-mix(var(--text),var(--shell-fade-bg)_70%)]" key={keyPrefix} />;
+      return <hr className="[margin-inline: 10%] my-8 [border-color: color-mix(in srgb, var(--text), var(--app-bg-solid) 70%)]" key={keyPrefix} />;
     case "code":
       return <ThreadCodeBlock block={block} key={keyPrefix} keyPrefix={keyPrefix} options={options} />;
     case "table":

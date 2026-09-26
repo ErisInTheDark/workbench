@@ -24,7 +24,7 @@ export default function WorkbenchGitDiffView () {
   const loading = snapshot.contentStatus === "loading" || (snapshot.contentStatus === "ready" && !snapshot.preview && !snapshot.contentError && (image || effectiveMode === "markdown"));
   return <section className="min-w-0" aria-busy={loading}>
     <div className="sticky top-0 z-10 flex flex-col gap-2 pb-3 text-sm">
-      <span className="pointer-events-none absolute -inset-x-2 inset-y-0 -z-10 bg-[linear-gradient(to_bottom,var(--shell-fade-bg)_70%,transparent)]" aria-hidden="true" />
+      <span className="pointer-events-none absolute -inset-x-2 inset-y-0 -z-10 bg-[linear-gradient(to bottom, var(--app-bg-solid) 70%, transparent)]" aria-hidden="true" />
       <span className="min-w-0 truncate text-fg/muted" title={file?.path}>{file?.path ?? "Changes"}</span>
       {!image ? <div className="flex flex-wrap items-center justify-between gap-2">
         <WorkbenchModeRow ariaLabel="Diff layout" value={effectiveMode} onChange={setMode} options={[

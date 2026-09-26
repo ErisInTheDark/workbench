@@ -119,7 +119,7 @@ export function ThreadTooltipContent({
       </div>
       {extraDetails}
       {!stashed && claimedPaths.length ? (
-        <div className="scrollbar-hover-reveal flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--thread-files-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] p-2">
+        <div className="scrollbar-hover-reveal flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in srgb, var(--text) 4%, transparent)] [--thread-files-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))] p-2">
           <div className="contents [--fg-bg:var(--thread-files-bg)]">
             <span className="inline-flex size-5 shrink-0 items-center justify-center text-fg/muted" aria-hidden="true">
               <FlagIcon size={14} />
@@ -360,7 +360,7 @@ export default function WorkbenchThreadListItem({
         <div
           className={`
             pointer-events-none relative z-10 grid min-h-11 min-w-0
-            grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-0
+            grid-cols-[auto minmax(0, 1fr) auto] items-center py-1 pr-2 pl-2 md:min-h-0
             ${contextMenu ? "coarse-touch:pr-12" : ""}
           `}
         >

@@ -292,7 +292,7 @@ function ActiveThreadScrollViewport ({
         "scrollbar-hover-reveal flex min-h-0 flex-col overflow-x-hidden overflow-y-auto",
         "[--thread-scroll-inline-padding:1.25rem] md:[--thread-scroll-inline-padding:1.5rem]",
         "[--thread-scroll-snap-distance:var(--thread-scroll-near-end-distance)] [overflow-anchor:none] snap-none",
-        "data-[thread-scroll-direction=down]:[scroll-snap-type:y_proximity]",
+        "data-[thread-scroll-direction=down]:[scroll-snap-type: y proximity]",
         "[&[data-thread-scroll-direction=down][data-thread-scroll-proximity=near]]:[--thread-scroll-snap-distance:calc(100dvh-1px)]",
         className,
       )}

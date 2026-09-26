@@ -31,7 +31,7 @@ test("grouped classes appear in browser output and generated Tailwind CSS", asyn
   await mkdir(path.join(clientDirectoryPath, "workbench", "voice"), { recursive: true });
   await writeFile(path.join(clientDirectoryPath, "static", "index.html"), "<div></div>");
   await writeFile(path.join(clientDirectoryPath, "browser-entry.tsx"), [
-    'document.body.className = "hover:(bg-red-500 text-white)";',
+    'document.body.className = "hover:(bg-red-500 text-white) [& li > details > summary]:(flex cursor-pointer)";',
     "document.body.classList.add(`[transition:",
     "  opacity .3s,",
     "  transform .5s",
@@ -54,8 +54,11 @@ test("grouped classes appear in browser output and generated Tailwind CSS", asyn
   const stylesheet = await readFile(path.join(compiler.outputDirectoryPath, "assets", "app.css"), "utf8");
   assert.match(stylesheet, /hover\\:bg-red-500/u);
   assert.match(stylesheet, /hover\\:text-white/u);
+  assert.match(stylesheet, /li > details > summary\s*\{\s*display:\s*flex/u);
+  assert.match(stylesheet, /li > details > summary\s*\{\s*cursor:\s*pointer/u);
   assert.match(stylesheet, /transition:\s*opacity\s+\.3s,\s*transform\s+\.5s/u);
   assert.match(javascript, /hover:bg-red-500 hover:text-white/u);
+  assert.match(javascript, /\[&_li_>_details_>_summary\]:flex \[&_li_>_details_>_summary\]:cursor-pointer/u);
   assert.match(javascript, /\[transition:opacity_\.3s,_transform_\.5s\]/u);
   const sourceMap = JSON.parse(await readFile(path.join(compiler.outputDirectoryPath, "assets", "app.js.map"), "utf8")) as {
     sources: string[];

@@ -399,7 +399,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
             onClick={() => {
               resetAnswers();
             }}
-            className="rounded-full border border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-2 text-[0.76em] font-medium text-text transition hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+            className="rounded-full border border-[color-mix(in srgb, var(--text) 10%, transparent)] px-3 py-2 text-[0.76em] font-medium text-text transition hover:bg-[color-mix(in srgb, var(--text) 4%, transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
           >
             Clear answers
               </button>
@@ -555,7 +555,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           <PlaintextEditable
                             id={`${request.id}:${question.id}:custom`}
                             ariaLabel={`${headerText} answer`}
-                            className={`${threadPlaintextEditableClassName} min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none`}
+                            className={`${threadPlaintextEditableClassName} min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in srgb, var(--text) 4%, transparent)] [--editable-fg-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none`}
                             readOnly
                             spellCheck={false}
                             highlights={customValueHighlights}
@@ -571,14 +571,14 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                         )
                       ) : compact && isLastQuestion ? (
                         <div
-                          className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 [&:has([data-empty=false])]:grid-cols-1"
+                          className="grid grid-cols-[minmax(0, 1fr) auto] items-end gap-2 [&:has([data-empty=false])]:grid-cols-1"
                           data-thread-questionnaire-custom-layout="compact-flow"
                         >
                           <PlaintextEditable
                             id={`${request.id}:${question.id}:custom`}
                             ariaLabel={`${headerText} answer`}
                             autoFocus={isSoleFreeformQuestion || isQuickResponseCustomInputRequested}
-                            className={`${threadPlaintextEditableClassName} min-h-8 w-full rounded-lg bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none`}
+                            className={`${threadPlaintextEditableClassName} min-h-8 w-full rounded-lg bg-[color-mix(in srgb, var(--text) 4%, transparent)] [--editable-fg-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))] px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none`}
                             placeholder={isSoleFreeformQuestion ? "Write a response" : undefined}
                             spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
                             highlights={customValueHighlights}
@@ -608,10 +608,18 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           className={joinClasses(
                             `${threadPlaintextEditableClassName} min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition`,
                             customValue || isSoleFreeformQuestion
-                              ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] py-3 mt-1 mb-3"
+                              ? "bg-[color-mix(in srgb, var(--text) 4%, transparent)] [--editable-fg-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))] py-3 mt-1 mb-3"
                               : `
-                              hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:[--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] hover:py-3 hover:mb-3
-                              focus-visible:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] focus-visible:[--editable-fg-bg:color-mix(in_srgb,var(--text)_4%,var(--fg-bg,var(--bg)))] focus-visible:py-3 focus-visible:mt-1 focus-visible:mb-3
+                              hover:(
+                                bg-[color-mix(in srgb, var(--text) 4%, transparent)]
+                                [--editable-fg-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))]
+                                py-3 mb-3
+                              )
+                              focus-visible:(
+                                bg-[color-mix(in srgb, var(--text) 4%, transparent)]
+                                [--editable-fg-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))]
+                                py-3 mt-1 mb-3
+                              )
                             `,
                           )}
                           placeholder={isSoleFreeformQuestion ? "Write a response" : undefined}
@@ -658,7 +666,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                       disabled={isSubmitting}
                       aria-label={`Remove questionnaire attached image ${index + 1}`}
                       title="Remove attached image"
-                      className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                      className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in srgb, var(--bg) 82%, transparent)] text-text shadow-sm transition hover:bg-[color-mix(in srgb, var(--bg) 92%, transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                       onClick={() => {
                         editing.session.edit((draft) => ({
                           ...draft,

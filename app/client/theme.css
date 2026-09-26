@@ -3,7 +3,7 @@
   --animate-shimmer: shimmer 1.45s linear infinite;
   --animate-slide-reveal: slide-reveal 180ms cubic-bezier(0.22, 0.82, 0.28, 1) both;
   --animate-tick: tick 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  --color-button-hover: color-mix(in srgb, white 20%, var(--shell-fade-bg) 80%);
+  --color-button-hover: color-mix(in srgb, white 20%, var(--app-bg-solid) 80%);
   --container-content: 56rem;
 
   @keyframes blink {
@@ -50,6 +50,30 @@
       opacity: 1;
       transform: translateY(0);
     }
+  }
+}
+
+@keyframes sticky-composer-enter {
+  from {
+    opacity: 0.72;
+    transform: translateY(0.6rem) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes workbench-spinning-border-first {
+  to {
+    offset-distance: 100%;
+  }
+}
+
+@keyframes workbench-spinning-border-second {
+  to {
+    offset-distance: 150%;
   }
 }
 
@@ -100,7 +124,6 @@
   --fg-bg: var(--app-bg-solid);
   --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 26rem), var(--bg);
   --edge-fade: color-mix(in srgb, var(--text) 12%, transparent);
-  --shell-fade-bg: var(--app-bg-solid);
   --attention: #7a5b00;
   --attention-soft: color-mix(in srgb, #d0ad12 18%, transparent);
 }
@@ -122,7 +145,6 @@
   --app-bg-solid: color-mix(in srgb, var(--bg) 94%, var(--accent) 6%);
   --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 24rem), var(--app-bg-solid);
   --edge-fade: color-mix(in srgb, var(--accent) 15%, transparent);
-  --shell-fade-bg: var(--app-bg-solid);
   --attention: #9f246f;
   --attention-soft: color-mix(in srgb, #ffb7e5 32%, transparent);
   --font-sans: "Sour Gummy", "Aptos", "Segoe UI Variable Text", "Segoe UI", sans-serif;
@@ -146,7 +168,6 @@
   --app-bg-solid: color-mix(in srgb, var(--bg) 94%, var(--accent) 6%);
   --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 24rem), var(--app-bg-solid);
   --edge-fade: color-mix(in srgb, var(--accent) 17%, transparent);
-  --shell-fade-bg: var(--app-bg-solid);
   --attention: #52678f;
   --attention-soft: color-mix(in srgb, #becbf1 44%, transparent);
 }
@@ -169,7 +190,6 @@
     --app-bg-solid: var(--bg);
     --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 26rem), var(--bg);
     --edge-fade: color-mix(in srgb, var(--text) 14%, transparent);
-    --shell-fade-bg: var(--app-bg-solid);
     --attention: #ffd84d;
     --attention-soft: color-mix(in srgb, #ffd84d 18%, transparent);
   }
@@ -191,7 +211,6 @@
     --app-bg-solid: color-mix(in srgb, var(--bg) 90%, var(--accent) 10%);
     --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 24rem), var(--app-bg-solid);
     --edge-fade: color-mix(in srgb, var(--accent) 18%, transparent);
-    --shell-fade-bg: var(--app-bg-solid);
     --attention: #ffd1f0;
     --attention-soft: color-mix(in srgb, #ff86d5 22%, transparent);
   }
@@ -213,7 +232,6 @@
     --app-bg-solid: color-mix(in srgb, var(--bg) 90%, var(--accent) 10%);
     --app-bg-image: radial-gradient(circle at top left, var(--bg-soft), transparent 24rem), var(--app-bg-solid);
     --edge-fade: color-mix(in srgb, var(--accent) 18%, transparent);
-    --shell-fade-bg: var(--app-bg-solid);
     --attention: #dceeff;
     --attention-soft: color-mix(in srgb, #9bcaff 22%, transparent);
   }

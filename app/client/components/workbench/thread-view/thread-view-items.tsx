@@ -206,12 +206,12 @@ export function ThreadTurnLoadingSkeleton ({
   isLoading?: boolean;
 }) {
   return (
-    <section className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3" data-thread-turn-load-state={entry.loadState}>
+    <section className="border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] py-3" data-thread-turn-load-state={entry.loadState}>
       <div className="space-y-2" aria-busy={isLoading ? "true" : undefined}>
-        <div className="h-3 w-28 animate-pulse rounded bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" />
+        <div className="h-3 w-28 animate-pulse rounded bg-[color-mix(in srgb, var(--text) 10%, transparent)]" />
         <div className="space-y-1.5">
-          <div className="h-3 w-[82%] animate-pulse rounded bg-[color-mix(in_srgb,var(--text)_8%,transparent)]" />
-          <div className="h-3 w-[64%] animate-pulse rounded bg-[color-mix(in_srgb,var(--text)_7%,transparent)]" />
+          <div className="h-3 w-[82%] animate-pulse rounded bg-[color-mix(in srgb, var(--text) 8%, transparent)]" />
+          <div className="h-3 w-[64%] animate-pulse rounded bg-[color-mix(in srgb, var(--text) 7%, transparent)]" />
         </div>
       </div>
     </section>
@@ -227,14 +227,14 @@ export function ThreadTurnLoadFailure({
 }) {
   return (
     <section
-      className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3"
+      className="border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] py-3"
       data-thread-turn-load-state={entry.loadState}
     >
       <div className="flex items-center justify-between gap-3 text-[0.88em] leading-[1.5] text-fg/muted" role="status">
         <span>Could not load this previous turn.</span>
         <button
           type="button"
-          className="shrink-0 rounded px-2 py-1 font-medium text-text transition-colors hover:bg-[color-mix(in_srgb,var(--text)_8%,transparent)]"
+          className="shrink-0 rounded px-2 py-1 font-medium text-text transition-colors hover:bg-[color-mix(in srgb, var(--text) 8%, transparent)]"
           onClick={onRetry}
         >
           Retry
@@ -532,10 +532,10 @@ function ThreadUserMessageItem ({
       ? " relative isolate overflow-hidden rounded-[1.4rem] px-0.5 py-0.5"
       : "";
   const decoratedInputSurfaceClass = isPending
-    ? " relative z-10 rounded-[1.4rem] border-[3px] border-transparent bg-[color:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] [clip-path:padding-box] px-4 py-3"
+    ? " relative z-10 rounded-[1.4rem] border-[3px] border-transparent bg-[color: color-mix(in srgb, var(--text) 6%, var(--app-bg-solid))] [--fg-bg: color-mix(in srgb, var(--text) 6%, var(--app-bg-solid))] [clip-path: padding-box] px-4 py-3"
     : isDecoratedInput
-      ? " relative z-10 rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] px-4 py-3"
-      : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] px-4 py-3";
+      ? " relative z-10 rounded-[1.15rem] bg-[color-mix(in srgb, var(--text) 6%, transparent)] [--fg-bg: color-mix(in srgb, var(--text) 6%, var(--app-bg-solid))] px-4 py-3"
+      : " rounded-[1.15rem] bg-[color-mix(in srgb, var(--text) 6%, transparent)] [--fg-bg: color-mix(in srgb, var(--text) 6%, var(--app-bg-solid))] px-4 py-3";
   return (
     <section
       className="flex flex-col items-end py-2"
@@ -548,7 +548,14 @@ function ThreadUserMessageItem ({
             <>
               <span
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-0 -z-20 rounded-[inherit] bg-[radial-gradient(circle_at_22%_18%,color-mix(in_srgb,#f97316_38%,transparent),transparent_32%),radial-gradient(circle_at_82%_72%,color-mix(in_srgb,#ef4444_30%,transparent),transparent_34%),linear-gradient(135deg,color-mix(in_srgb,#f97316_42%,transparent),color-mix(in_srgb,#ef4444_30%,transparent))] opacity-[0.46]"
+                className={`
+                  pointer-events-none absolute inset-0 -z-20 rounded-[inherit]
+                  bg-[
+                    radial-gradient(circle at 22% 18%, color-mix(in srgb, #f97316 38%, transparent), transparent 32%),
+                    radial-gradient(circle at 82% 72%, color-mix(in srgb, #ef4444 30%, transparent), transparent 34%),
+                    linear-gradient(135deg, color-mix(in srgb, #f97316 42%, transparent), color-mix(in srgb, #ef4444 30%, transparent))
+                  ] opacity-[0.46]
+                `}
               />
               <span aria-hidden="true" className="pointer-events-none absolute inset-0.5 -z-10 rounded-[inherit] bg-canvas" />
             </>
@@ -762,7 +769,7 @@ function ThreadReasoningSequence ({
       {visibleItems.map((item, index) => (
         <ThreadReasoningItem
           key={item.id}
-          className={index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4" : undefined}
+          className={index ? "border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] pt-4" : undefined}
           item={item}
           presentationSource={presentationSource}
           inlineMentionSources={inlineMentionSources}
@@ -2441,7 +2448,7 @@ function ThreadTurnDetailsComponent ({
     };
 
     return (
-      <section className={hideTopBorder ? "py-3" : "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3"}>
+      <section className={hideTopBorder ? "py-3" : "border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] py-3"}>
         {isCompleted && flattenCompletedWork ? (
           <div className="space-y-2">
             {primaryUserBlock ? renderBlock(primaryUserBlock, 0, primaryUserBlocks, primaryUserBlock) : null}
@@ -2494,7 +2501,7 @@ function ThreadTurnDetailsComponent ({
     };
 
     return (
-      <section className={hideTopBorder ? "py-3" : "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3"}>
+      <section className={hideTopBorder ? "py-3" : "border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] py-3"}>
         <div className="space-y-2">
           {primaryUserBlock ? renderBlock(primaryUserBlock, 0, primaryUserBlocks, primaryUserBlock) : null}
           <ThreadDisclosure
@@ -2524,7 +2531,7 @@ function ThreadTurnDetailsComponent ({
   }
 
   return (
-    <section className={hideTopBorder ? "py-3" : "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-3"}>
+    <section className={hideTopBorder ? "py-3" : "border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] py-3"}>
       {isCompleted && flattenCompletedWork ? (
         <div className="space-y-2">
           {primaryUserBlock ? renderBlock(primaryUserBlock, 0, blocks, primaryUserBlock) : null}

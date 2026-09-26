@@ -249,7 +249,7 @@ export default function WorkbenchFilePanel ({
       >
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to_bottom,var(--shell-fade-bg)_calc(100%-var(--spacing)*6),transparent)] md:backdrop-blur-none"
+          className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)] md:backdrop-blur-none"
         />
         <div className={`flex flex-col gap-2 md:flex-row md:items-start md:justify-between${isMinimizedVertical ? " rotate-90 whitespace-nowrap" : ""}`}>
           <div className="order-2 min-w-0 md:order-1">
@@ -330,7 +330,7 @@ export default function WorkbenchFilePanel ({
       </header>
 
       <div className="relative min-h-0 flex-1" hidden={isMinimized}>
-        <div className="editor-shell relative mx-auto grid w-[calc(100%+1.25rem)] md:w-full grid-cols-[0.72rem_minmax(0,1fr)] gap-[0.53rem] md:max-w-[calc(var(--container-content)+2.5rem)] md:grid-cols-[1.25rem_minmax(0,var(--container-content))] md:gap-3 -ml-5 md:ml-auto">
+        <div className="editor-shell relative mx-auto grid w-[calc(100%+1.25rem)] md:w-full grid-cols-[0.72rem minmax(0, 1fr)] gap-[0.53rem] md:max-w-[calc(var(--container-content)+2.5rem)] md:grid-cols-[1.25rem minmax(0, var(--container-content))] md:gap-3 -ml-5 md:ml-auto">
           <div
             ref={diffGutterRef}
             className={workbenchDiffGutterClassName}
@@ -343,42 +343,51 @@ export default function WorkbenchFilePanel ({
               pb-16 ${editorFontClassName} text-[1.08rem] leading-[1.72] whitespace-normal outline-none
               data-[custom-caret-visible=true]:caret-transparent
               empty:before:(text-fg/muted content-[attr(data-placeholder)])
-              [&_:is(p,blockquote,ul,ol,pre,h1,h2,h3,h4,h5,h6)]:(m-0 mb-4 text-justify)
-              [&_:is(h1,h2,h3,h4,h5,h6)]:(font-sans font-semibold leading-[1.15])
-              [&_h1]:text-[2.05em] [&_h2]:text-[1.55em] [&_h3]:text-[1.25em]
-              [&_:is(ul,ol)]:(list-outside pl-[1.3rem])
-              [&_ul]:list-disc [&_ul_ul]:list-[circle] [&_ul_ul_ul]:list-[square]
-              [&_ol]:list-decimal
-              [&_blockquote]:text-fg/muted
-              [&_a]:(text-inherit decoration-accent decoration-[0.08em])
-              [&_code]:(font-mono text-[0.94em] bg-fg-alpha/7 rounded-[0.35rem] px-[0.34em] py-[0.08em])
-              [&_pre]:(overflow-x-auto whitespace-pre-wrap)
-              [&_pre[data-language]:not([data-language=""])]:before:(
+              [& :is(p, blockquote, ul, ol, pre, h1, h2, h3, h4, h5, h6)]:(m-0 mb-4 text-justify)
+              [& :is(h1, h2, h3, h4, h5, h6)]:(font-sans font-semibold leading-[1.15])
+              [& h1]:text-[2.05em] [& h2]:text-[1.55em] [& h3]:text-[1.25em]
+              [& :is(ul, ol)]:(list-outside pl-[1.3rem])
+              [& ul]:list-disc [& ul ul]:list-[circle] [& ul ul ul]:list-[square]
+              [& ol]:list-decimal
+              [& blockquote]:text-fg/muted
+              [& a]:(text-inherit decoration-accent decoration-[0.08em])
+              [& code]:(font-mono text-[0.94em] bg-fg-alpha/7 rounded-[0.35rem] px-[0.34em] py-[0.08em])
+              [& pre]:(overflow-x-auto whitespace-pre-wrap)
+              [& pre[data-language]:not([data-language=""])]:before:(
                 content-[attr(data-language)] block
                 -mx-[0.15rem] -mt-[0.2rem] mb-[0.65rem]
                 border-b border-fg-alpha/8 pb-[0.45rem]
                 font-mono text-[0.72em] leading-none text-fg/muted
               )
-              [&_pre_code]:(block bg-transparent rounded-none p-0)
-              [&_:is(ins,del)]:(rounded-[0.2em] text-inherit -mx-[0.04em] px-[0.08em])
-              [&_ins]:(bg-success/16 [font-weight:inherit] no-underline)
-              [&_ins[data-revision-hover-active=true]]:bg-success/24
-              [&_del]:(bg-danger/16 decoration-current decoration-[0.08em])
-              [&_del[data-revision-hover-active=true]]:bg-danger/24
-              [&_p:has(+_:where(br,[data-single-break=true])+[data-block-comment=true])]:mb-0
-              [&_p:has(+_[data-block-comment=true])]:mb-[-0.1rem]
-              [&_[data-block-comment=true]+:where(br,[data-single-break=true])]:mb-0
-              [&_:is([data-block-comment=true],[data-inline-comment=true])]:(
-                [--comment-fg-bg:color-mix(in_srgb,var(--text)_6%,var(--fg-bg,var(--bg)))]
+              [& pre code]:(block bg-transparent rounded-none p-0)
+              [& :is(ins, del)]:(rounded-[0.2em] text-inherit -mx-[0.04em] px-[0.08em])
+              [& ins]:(bg-success/16 [font-weight:inherit] no-underline)
+              [& ins[data-revision-hover-active=true]]:bg-success/24
+              [& del]:(bg-danger/16 decoration-current decoration-[0.08em])
+              [& del[data-revision-hover-active=true]]:bg-danger/24
+              [& p:has(+ :where(br, [data-single-break=true]) + [data-block-comment=true])]:mb-0
+              [& p:has(+ [data-block-comment=true])]:mb-[-0.1rem]
+              [& [data-block-comment=true] + :where(br, [data-single-break=true])]:mb-0
+              [& :is([data-block-comment=true], [data-inline-comment=true])]:(
+                [--comment-fg-bg: color-mix(in srgb, var(--text) 6%, var(--fg-bg, var(--bg)))]
                 bg-fg-alpha/6
-                text-[color:color-mix(in_srgb,var(--text)_60%,var(--comment-fg-bg))]
+                text-[color: color-mix(in srgb, var(--text) 60%, var(--comment-fg-bg))]
               )
-              [&_[data-block-comment=true]]:(
+              [& [data-block-comment=true]]:(
                 rounded-[0.45rem] px-3 py-[0.45rem] my-0 -mx-3
                 whitespace-pre-wrap font-sans text-[0.85em]
               )
-              [&_[data-inline-comment=true]]:(rounded-[0.35rem] px-[0.34em] py-[0.08em])
-              [&_:is([data-block-comment=true],[data-inline-comment=true])[data-revision-hover-active=true]]:bg-fg-alpha/12
+              [& [data-inline-comment=true]]:(rounded-[0.35rem] px-[0.34em] py-[0.08em])
+              [& :is([data-block-comment=true], [data-inline-comment=true])[data-revision-hover-active=true]]:bg-fg-alpha/12
+              [& li > details]:block
+              [& li > details > summary]:(flex [list-style: none] cursor-pointer)
+              [& li > details > summary > span]:cursor-text
+              [& li > details > summary]:after:(
+                content-[''] inline-block size-[0.36em] mx-[0.42em] shrink-0 self-center
+                border-r-[0.1em] border-b-[0.1em] border-current rotate-[-45deg]
+                transition-transform duration-[160ms] ease-[ease]
+              )
+              [& li > details[open] > summary]:after:rotate-45
             `}
             contentEditable
             suppressContentEditableWarning
@@ -389,14 +398,14 @@ export default function WorkbenchFilePanel ({
             ref={customCaretRef}
             className="
               pointer-events-none absolute top-0 left-0 z-20 min-h-[1em] w-[2px] origin-center rounded-full
-              bg-text [box-shadow:0_0_0.35rem_color-mix(in_srgb,var(--shadow)_28%,transparent)]
+              bg-text [box-shadow: 0 0 0.35rem color-mix(in srgb, var(--shadow) 28%, transparent)]
               transform-[translate3d(0,0,0)] animate-blink
-              data-[caret-kind=code]:bg-[color-mix(in_srgb,var(--text)_56%,var(--bg)_44%)]
-              data-[caret-kind=comment]:bg-[color-mix(in_srgb,var(--text)_42%,var(--bg)_58%)]
+              data-[caret-kind=code]:bg-[color-mix(in srgb, var(--text) 56%, var(--bg) 44%)]
+              data-[caret-kind=comment]:bg-[color-mix(in srgb, var(--text) 42%, var(--bg) 58%)]
               data-[caret-kind=del]:bg-danger data-[caret-kind=ins]:bg-success
               data-[caret-bold=true]:w-[2.8px]
               data-[caret-italic=true]:transform-[skew(-10deg)]
-              data-[caret-bold=true]:data-[caret-italic=true]:transform-[skew(-10deg)_scaleX(1.22)]
+              data-[caret-bold=true]:data-[caret-italic=true]:transform-[skew(-10deg) scaleX(1.22)]
             "
             aria-hidden="true"
             hidden

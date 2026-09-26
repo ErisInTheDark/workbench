@@ -79,7 +79,7 @@ export default function ReloadNecessary ({
   return (
     <section className="sticky bottom-0 z-20 mt-auto ml-3">
       <div
-        className="rounded-[1.15rem] border border-[color-mix(in_srgb,var(--text)_20%,transparent)] bg-[color:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--shell-fade-bg))] p-2.5 backdrop-blur-md"
+        className="rounded-[1.15rem] border border-[color-mix(in srgb, var(--text) 20%, transparent)] bg-[color: color-mix(in srgb, var(--text) 4%, var(--app-bg-solid))] [--fg-bg: color-mix(in srgb, var(--text) 4%, var(--app-bg-solid))] p-2.5 backdrop-blur-md"
         data-reload-necessary="true"
       >
         <div

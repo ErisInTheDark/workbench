@@ -1089,7 +1089,7 @@ export default memo(function ThreadViewContent ({
             "mx-auto min-h-full w-full min-w-0 max-w-content overflow-x-clip md:overflow-x-visible",
             isDraftThreadView
               ? "flex flex-col"
-              : "grid grid-cols-1 grid-rows-[1fr_auto_auto]",
+              : "grid grid-cols-1 grid-rows-[1fr auto auto]",
             mobileFullBleed ? "px-5 pb-[min(0.75rem,var(--workbench-safe-area-bottom,0px))]" : contained ? "pb-8" : "pb-16",
           )}
           onClick={handleThreadViewClick}
@@ -1216,7 +1216,7 @@ export default memo(function ThreadViewContent ({
               />
             )
           ) : (
-            <div className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] py-4">
+            <div className="border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] py-4">
               <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">Loading subagent thread...</p>
             </div>
           )}

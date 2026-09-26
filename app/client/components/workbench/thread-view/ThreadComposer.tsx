@@ -90,6 +90,7 @@ const stickyComposerContentClassName = `
     [padding-bottom: min(0.75rem, var(--workbench-safe-area-bottom, 0px))]
     pr-[0.15rem] [scrollbar-gutter: stable]
   )
+  motion-reduce:(animate-none transition-none)
 `;
 
 export default function ThreadComposer ({
@@ -542,8 +543,8 @@ export default function ThreadComposer ({
       className={joinClasses(
         "inline-flex size-10 items-center justify-center rounded-full border transition",
         showQuestionnairePanel
-          ? "border-[color-mix(in_srgb,var(--text)_18%,transparent)] bg-[color-mix(in_srgb,var(--text)_8%,transparent)] text-text"
-          : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_96%,var(--composer-surface-bg))] text-fg/muted hover:text-text",
+          ? "border-[color-mix(in srgb, var(--text) 18%, transparent)] bg-[color-mix(in srgb, var(--text) 8%, transparent)] text-text"
+          : "border-[color-mix(in srgb, var(--text) 12%, transparent)] bg-[color-mix(in srgb, var(--bg) 96%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 96%, var(--composer-surface-bg))] text-fg/muted hover:text-text",
       )}
       onClick={() => {
         setIsQuestionnaireActionsHovered(false);
@@ -577,13 +578,13 @@ export default function ThreadComposer ({
       <form
         className={joinClasses(
           layout === "thread" && !stickyMode
-            ? "mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] pt-4"
+            ? "mt-6 border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] pt-4"
             : "m-0",
         )}
         onSubmit={handleSubmit}
       >
         <div className={effectiveSurface === "card"
-          ? "rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--composer-surface-bg:color-mix(in_srgb,var(--text)_4%,var(--app-bg-solid))] [--fg-bg:var(--composer-surface-bg)] p-3"
+          ? "rounded-[1.15rem] bg-[color-mix(in srgb, var(--text) 4%, transparent)] [--composer-surface-bg: color-mix(in srgb, var(--text) 4%, var(--app-bg-solid))] [--fg-bg: var(--composer-surface-bg)] p-3"
           : "[--composer-surface-bg:var(--app-bg-solid)] [--fg-bg:var(--composer-surface-bg)] p-0"}>
           {header ? (
             <div className="mb-3 px-1">
@@ -594,12 +595,13 @@ export default function ThreadComposer ({
             {visiblePendingUserInputRequest ? (
               <div
                 aria-hidden={!isQuestionnairePanelActive}
-                className={`${modePanelClassName} ${modePanelTransitionClassName} thread-composer-sticky-questionnaire-frame`}
+                className={`${modePanelClassName} ${modePanelTransitionClassName}`}
                 data-active={isQuestionnairePanelActive ? "true" : "false"}
                 inert={!isQuestionnairePanelActive}
               >
                 <ThreadUserInputRequest
                   key={`${projectId}:${thread.id}:${questionnaireRequestKey}`}
+                  contentClassName={stickyMode ? stickyComposerContentClassName : undefined}
                   actions={stopButton}
                   draft={threadQuestionnaireDraft}
                   highlightSources={highlightSources}
@@ -676,7 +678,7 @@ export default function ThreadComposer ({
                             type="button"
                             aria-label={`Remove attached image ${index + 1}`}
                             title="Remove attached image"
-                            className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text shadow-sm transition hover:bg-[color-mix(in_srgb,var(--bg)_92%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                            className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in srgb, var(--bg) 82%, transparent)] text-text shadow-sm transition hover:bg-[color-mix(in srgb, var(--bg) 92%, transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                             onClick={() => {
                               editing.session.edit((draft) => ({
                                 ...draft,
@@ -809,7 +811,7 @@ export default function ThreadComposer ({
             </span>
           ))}
           {hiddenAttachmentCount ? (
-            <span className="inline-flex size-10 items-center justify-center rounded-[0.75rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--composer-surface-bg))] text-[0.76em] font-medium text-fg/muted">
+            <span className="inline-flex size-10 items-center justify-center rounded-[0.75rem] bg-[color-mix(in srgb, var(--text) 6%, transparent)] [--fg-bg: color-mix(in srgb, var(--text) 6%, var(--composer-surface-bg))] text-[0.76em] font-medium text-fg/muted">
               +{hiddenAttachmentCount}
             </span>
           ) : null}

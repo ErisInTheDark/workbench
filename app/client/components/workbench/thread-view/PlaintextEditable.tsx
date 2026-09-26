@@ -23,13 +23,14 @@ import type { VoiceSelection } from "workbench-shared/workbench/voice/voice-docu
 
 export interface PlaintextEditableHandle { focus(offset?: number): void }
 
-export const threadPlaintextEditableClassName = [
-  "block whitespace-pre-wrap wrap-anywhere [word-break:break-word]",
-  "coarse-touch:text-[max(1rem,1em)]",
-  "data-[empty=true]:before:content-[attr(data-placeholder)]",
-  "data-[empty=true]:before:pointer-events-none",
-  "data-[empty=true]:before:text-[color:color-mix(in_srgb,var(--text)_var(--muted-strength),var(--editable-fg-bg,var(--fg-bg,var(--bg))))]",
-].join(" ");
+export const threadPlaintextEditableClassName = `
+  block whitespace-pre-wrap wrap-anywhere [word-break: break-word]
+  coarse-touch:text-[max(1rem,1em)]
+  data-[empty=true]:before:(
+    content-[attr(data-placeholder)] pointer-events-none
+    text-[color: color-mix(in srgb, var(--text) var(--muted-strength), var(--editable-fg-bg, var(--fg-bg, var(--bg))))]
+  )
+`;
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -164,7 +165,7 @@ function InlineMentionSuggestionsPopup ({
   return (
     <div
       ref={containerRef}
-      className="scrollbar-hover-reveal grid grid-cols-[auto_1fr] max-h-56 overflow-y-auto rounded-[0.85rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-[color-mix(in_srgb,var(--bg)_96%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_96%,var(--app-bg-solid))] p-1.5 shadow-lg backdrop-blur"
+      className="scrollbar-hover-reveal grid grid-cols-[auto 1fr] max-h-56 overflow-y-auto rounded-[0.85rem] border border-[color-mix(in srgb, var(--text) 10%, transparent)] bg-[color-mix(in srgb, var(--bg) 96%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 96%, var(--app-bg-solid))] p-1.5 shadow-lg backdrop-blur"
       role="listbox"
     >
       {suggestions.map((suggestion, index) => {
@@ -432,7 +433,7 @@ export default function PlaintextEditable ({
             "pointer-events-none absolute inset-0 z-20 !text-transparent",
             "!m-0",
             "whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
-            "[&_*]:!text-transparent",
+            "[& *]:!text-transparent",
             highlights.length === 0 && "hidden",
             voice.visible && "pr-[calc(var(--voice-field-font-size)*2)]",
           )}
