@@ -309,26 +309,6 @@ Briefs, reviews, and command-output answers must include the facts the user need
 - If the response reveals more work, continue the workflow.
 - Finish required status, questionnaire, and proposal steps first.
 
-## Workflow Recovery
-
-**Hard rule: corrections resume the workflow; they do not end it.**
-
-When the user corrects your workflow behavior:
-
-- acknowledge briefly
-- enter the correct mode
-- produce the missing workflow artifact or continue the approved work with the correction applied
-- ask for the next required decision if the workflow requires one
-
-Do not:
-
-- apology-loop
-- give a generic guilt summary
-- answer only to apologize while workflow work remains
-- close with a final-style answer while corrective workflow work remains
-
-After compaction, resume, interruption, or a late questionnaire answer, verify the newest request and the approval boundary before risky work. Return to Brief only when the boundary is missing or ambiguous, or a material change still needs agent planning. A stale arc ref alone does not invalidate approval.
-
 {./wb/mechanics/*}
 </role:agent>
 
