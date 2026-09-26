@@ -27,6 +27,44 @@ test("longer remote addresses resolve to one project and canonicalise to its sho
   }
 });
 
+test("local discovery paths canonicalise to their shortest unique suffix", () => {
+  const firstId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const secondId = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const daemonId = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
+  const localProject = (id: typeof firstId, projectId: string, relativePath: string, rootPath: string) => ({
+    id, matchKey: `local://${rootPath}/.git`, label: rootPath,
+    locations: [{
+      target: { daemonId, projectId: ProjectIdSchema.parse(projectId) }, daemonId,
+      hostname: "desktop", name: "bak", rootPath,
+      project: {
+        id: ProjectIdSchema.parse(projectId), kind: "git" as const, name: "bak",
+        relativePath, rootPath, roots: [], lastCommitTimeMs: null,
+      },
+    }],
+  });
+  const bak = localProject(firstId, "app/bak", "app/bak", "C:/git/app/bak");
+  const other = localProject(secondId, "other/bak", "other/bak", "C:/git/other/bak");
+  const single = new WorkbenchProjectNavigation([], [], [bak]);
+  assert.equal(single.href(createLogicalProjectRoute(firstId)), "/bak");
+  assert.equal(single.readRoute("/app/bak").logical?.projectId, firstId);
+  assert.equal(single.href(single.readRoute("/C%3A/git/app/bak")), "/bak");
+
+  const collision = new WorkbenchProjectNavigation([], [], [bak, other]);
+  assert.equal(collision.readRoute("/bak").view, "invalid");
+  assert.equal(collision.href(createLogicalProjectRoute(firstId)), "/app/bak");
+  assert.equal(collision.href(createLogicalProjectRoute(secondId)), "/other/bak");
+
+  const thirdId = LogicalProjectIdSchema.parse("b12f7e1e-81b6-4c30-bdc0-f83475981003");
+  const sameRelativePath = new WorkbenchProjectNavigation([], [], [
+    bak, localProject(thirdId, "another/app/bak", "app/bak", "D:/git/app/bak"),
+  ]);
+  assert.equal(sameRelativePath.readRoute("/app/bak").view, "invalid");
+  assert.equal(sameRelativePath.href(createLogicalProjectRoute(firstId)), "/c/git/app/bak");
+  assert.equal(sameRelativePath.href(createLogicalProjectRoute(thirdId)), "/d/git/app/bak");
+  assert.equal(sameRelativePath.readRoute("/c/git/app/bak").logical?.projectId, firstId);
+  assert.equal(sameRelativePath.href(sameRelativePath.readRoute("/C%3A/git/app/bak")), "/c/git/app/bak");
+});
+
 test("a concrete project address keeps its logical selection when opening a thread", () => {
   const logicalId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
   const projectId = ProjectIdSchema.parse("b597a4b6-7af9-41f1-83ea-a53aed6f3b0a");
@@ -89,6 +127,7 @@ test("a local name collision cannot steal a former remote short link", () => {
   ]);
   assert.equal(navigation.readRoute("/repo").view, "invalid");
   const localHref = navigation.href(createLogicalProjectRoute(localId));
+  assert.equal(localHref, `/${localId}`);
   assert.equal(navigation.readRoute(localHref!).logical?.projectId, localId);
   assert.equal(navigation.href(createLogicalProjectRoute(remoteId)), "/team/repo");
 });

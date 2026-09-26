@@ -30,6 +30,7 @@ export default class WorkbenchProjectNavigation {
       add(project.matchKey, project);
       for (const address of this.remoteAddresses(project)) add(address, project);
       if (!project.matchKey.startsWith("remote://")) {
+        for (const address of this.localAddresses(project)) add(address, project);
         add(project.storedLabel ?? project.label, project);
       }
       for (const location of project.locations) {
@@ -147,11 +148,24 @@ export default class WorkbenchProjectNavigation {
     ];
   }
 
+  private localAddresses(project: WorkbenchLogicalProject) {
+    const relative = project.locations.flatMap(location => {
+      const parts = location.project?.relativePath.replace(/\\/gu, "/").split("/").filter(Boolean) ?? [];
+      return parts.map((_, index) => parts.slice(index).join("/")).reverse();
+    });
+    const absolute = [...project.locations.map(location => location.rootPath), project.label, project.storedLabel ?? ""]
+      .flatMap(value => {
+        const match = /^([a-z]):[/\\](.+)$/iu.exec(value);
+        return match ? [`${match[1]!.toLowerCase()}/${match[2]!.replace(/\\/gu, "/")}`] : [];
+      });
+    return [...relative, ...absolute];
+  }
+
   private canonicalAddress(project: WorkbenchLogicalProject) {
     const candidates = project.matchKey.startsWith("remote://")
       ? this.remoteAddresses(project)
-      : [project.label, project.storedLabel ?? "", ...project.locations.flatMap(location =>
-        location.project ? [location.project.relativePath] : [])];
+      : [...this.localAddresses(project), ...[project.label, project.storedLabel ?? ""]
+        .filter(address => !address.includes("://") && !/^[a-z]:[/\\]/iu.test(address)), project.id];
     return candidates.find(address => this.addressOwners.get(address)?.size === 1
       && this.addressOwners.get(address)?.has(project)) ?? project.matchKey;
   }
