@@ -4,7 +4,41 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { parseInlineMarkdown } from "./markdown-parse";
+import { parseBlocks, parseInlineMarkdown } from "./markdown-parse";
+
+test("thread disclosures pair nested tags and leave fenced examples untouched", () => {
+  const blocks = parseBlocks([
+    "<details open><summary>outer **reason**</summary>",
+    "before",
+    "<details><summary>inner</summary>",
+    "```md",
+    "</details>",
+    "```",
+    "inside",
+    "</details>",
+    "after",
+    "</details>",
+  ].join("\n"), { profile: "thread" });
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.type, "details");
+  if (blocks[0]?.type !== "details") return;
+  assert.equal(blocks[0].open, true);
+  assert.equal(blocks[0].summary, "outer **reason**");
+  assert.match(blocks[0].text, /<details>\n<summary>inner<\/summary>/u);
+  assert.match(blocks[0].text, /after$/u);
+  assert.equal(parseBlocks("<details><summary>plain</summary>\nbody\n</details>")[0]?.type, "paragraph");
+});
+
+test("incomplete and unsupported thread disclosures remain literal", () => {
+  for (const markdown of [
+    "<details><summary>unfinished</summary>\nbody",
+    '<details onclick="alert(1)"><summary>unsafe</summary>\nbody\n</details>',
+    "<details>\nbody\n</details>",
+  ]) {
+    assert.equal(parseBlocks(markdown, { profile: "thread" }).some((block) => block.type === "details"), false);
+  }
+});
 
 test("thread emphasis closes before punctuation without consuming the next phrase", () => {
   assert.deepEqual(

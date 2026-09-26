@@ -245,6 +245,8 @@ function renderBlockHtml(block: ParsedBlock, options: MarkdownParseOptions = {})
       return renderChildBlocks(parseBlocks(block.text, options), options);
     case "notice":
       return `<p>${escapeHtml(block.source).replaceAll("\n", "<br>")}</p>`;
+    case "details":
+      return `<p>${escapeHtml(block.source).replaceAll("\n", "<br>")}</p>`;
     case "table":
       return renderTableBlock(block, options);
     case "paragraph":

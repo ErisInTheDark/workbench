@@ -51,6 +51,7 @@ export type ParsedBlock =
   | { type: "blockquote"; text: string }
   | { type: "plan"; text: string }
   | { type: "notice"; color: string; source: string; text: string; title: string }
+  | { type: "details"; open: boolean; source: string; summary: string; text: string }
   | { type: "ul"; items: ParsedListItem[] }
   | { type: "ol"; items: ParsedListItem[] }
   | { type: "list-break"; count: number }
@@ -104,12 +105,14 @@ const THREAD_STATE_CHANGE_TAG_PATTERN = /^<set-state\s+mode=(["'])((?:(?!\1).)*)
 const THREAD_STATE_CHANGE_BOUNDARY_PATTERN = /<set-state\s+mode=(["'])((?:(?!\1).)*)\1\s*\/>/g;
 const THREAD_NOTICE_OPEN_TAG_BOUNDARY_PATTERN = /<notice title="[^"\r\n]*" color="[a-z][a-z0-9-]*">/;
 const THREAD_NOTICE_CLOSE_TAG_BOUNDARY_PATTERN = /<\/notice>/;
+const THREAD_DETAILS_TAG_BOUNDARY_PATTERN = /<\/?details(?: open)?>/;
 const THREAD_BLOCK_TAG_BOUNDARY_PATTERN = new RegExp(
   [
     THREAD_STATE_CHANGE_BOUNDARY_PATTERN.source,
     "<\\/?[Pp][Ll][Aa][Nn]>",
     THREAD_NOTICE_OPEN_TAG_BOUNDARY_PATTERN.source,
     THREAD_NOTICE_CLOSE_TAG_BOUNDARY_PATTERN.source,
+    THREAD_DETAILS_TAG_BOUNDARY_PATTERN.source,
   ].join("|"),
   "g",
 );
@@ -1241,6 +1244,56 @@ function parseThreadNoticeBlock(lines: string[], startIndex: number, options: Ma
   return null;
 }
 
+const THREAD_DETAILS_OPEN_LINE_PATTERN = /^<details( open)?>$/;
+const THREAD_DETAILS_CLOSE_LINE_PATTERN = /^<\/details>$/;
+const THREAD_DETAILS_SUMMARY_LINE_PATTERN = /^<summary>(.*?)<\/summary>$/;
+
+function parseThreadDetailsBlock(lines: string[], startIndex: number, options: MarkdownParseOptions) {
+  if ((options.profile ?? "editor") !== "thread") return null;
+
+  const openingMatch = THREAD_DETAILS_OPEN_LINE_PATTERN.exec(lines[startIndex].trim());
+  if (!openingMatch) return null;
+
+  let summaryIndex = startIndex + 1;
+  while (summaryIndex < lines.length && !lines[summaryIndex].trim()) summaryIndex += 1;
+  const summaryMatch = THREAD_DETAILS_SUMMARY_LINE_PATTERN.exec(lines[summaryIndex]?.trim() ?? "");
+  if (!summaryMatch || !summaryMatch[1].trim()) return null;
+
+  let depth = 1;
+  let codeFenceOpener: ParsedCodeFenceOpenLine | null = null;
+  for (let index = summaryIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (codeFenceOpener) {
+      if (isCodeFenceCloseLine(line, codeFenceOpener)) codeFenceOpener = null;
+      continue;
+    }
+    const fenceOpener = parseCodeFenceOpenLine(line);
+    if (fenceOpener) {
+      codeFenceOpener = fenceOpener;
+      continue;
+    }
+    if (THREAD_DETAILS_OPEN_LINE_PATTERN.test(line.trim())) {
+      depth += 1;
+      continue;
+    }
+    if (!THREAD_DETAILS_CLOSE_LINE_PATTERN.test(line.trim())) continue;
+    depth -= 1;
+    if (depth !== 0) continue;
+    return {
+      block: {
+        open: Boolean(openingMatch[1]),
+        source: lines.slice(startIndex, index + 1).join("\n"),
+        summary: summaryMatch[1].trim(),
+        text: lines.slice(summaryIndex + 1, index).join("\n").trim(),
+        type: "details" as const,
+      },
+      nextIndex: index + 1,
+    };
+  }
+
+  return null;
+}
+
 function isThreadStateChangeLine(line: string, options: MarkdownParseOptions) {
   return parseThreadStateChangeMode(line, options) !== null;
 }
@@ -1425,6 +1478,16 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
       continue;
     }
 
+    const detailsBlock = parseThreadDetailsBlock(lines, index, options);
+    if (detailsBlock) {
+      maybePushCommentBreak(blocks, blankLineCount, "details");
+      maybePushStandardBreak(blocks, blankLineCount, "details");
+      blankLineCount = 0;
+      blocks.push(detailsBlock.block);
+      index = detailsBlock.nextIndex;
+      continue;
+    }
+
     if (isBlockCommentLine(line)) {
       maybePushCommentBreak(blocks, blankLineCount, "comment");
       blankLineCount = 0;
@@ -1521,6 +1584,7 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
       && !isThreadPlanOpenLine(lines[index], options)
       && !isThreadPlanCloseLine(lines[index])
       && !isThreadNoticeOpenLine(lines[index], options)
+      && !((options.profile ?? "editor") === "thread" && THREAD_DETAILS_OPEN_LINE_PATTERN.test(lines[index].trim()))
       && !parseCodeFenceOpenLine(lines[index])
       && !/^(#{1,6})\s+/.test(lines[index])
       && !/^>\s?/.test(lines[index])

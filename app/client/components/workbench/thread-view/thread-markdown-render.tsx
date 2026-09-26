@@ -400,6 +400,21 @@ function renderThreadPlanBlock (block: Extract<ParsedBlock, { type: "plan" }>, o
   );
 }
 
+function renderThreadDetailsBlock (block: Extract<ParsedBlock, { type: "details" }>, options: MarkdownParseOptions, keyPrefix: string) {
+  return (
+    <div className={BLOCK_SPACING_CLASS} key={keyPrefix}>
+      <ThreadDisclosure
+        contentClassName="mt-[0.25em] pl-[1.625rem]"
+        initialOpen={block.open}
+        summary={renderThreadInlineMarkdown(block.summary, options, `${keyPrefix}-summary`)}
+        summaryClassName="font-semibold !text-text"
+      >
+        {renderThreadMarkdownBlocks(block.text, options, `${keyPrefix}-content`)}
+      </ThreadDisclosure>
+    </div>
+  );
+}
+
 function getThreadTableCellAlignClassName (alignment: ParsedTableAlignment) {
   switch (alignment) {
     case "center":
@@ -702,6 +717,8 @@ function renderThreadBlock (
       );
     case "plan":
       return renderThreadPlanBlock(block, options, keyPrefix);
+    case "details":
+      return renderThreadDetailsBlock(block, options, keyPrefix);
     case "notice":
       return renderThreadNoticeBlock(block, options, keyPrefix);
     case "comment":

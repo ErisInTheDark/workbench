@@ -157,6 +157,52 @@ test("unsupported, empty, unclosed, and code-contained notices remain literal te
   assert.match(html, /&lt;notice title=&quot;Source&quot; color=&quot;green&quot;&gt;body&lt;\/notice&gt;/u);
 });
 
+test("thread disclosures render an interactive summary and nested markdown body", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    "<details open><summary>why **this** changed</summary>",
+    "",
+    "## reasons",
+    "- [owner](https://example.com/owner)",
+    "<details open><summary>more</summary>",
+    "`nested` answer",
+    "</details>",
+    "</details>",
+  ].join("\n"))));
+
+  assert.equal(Array.from(html.matchAll(/<details\b/gu)).length, 2);
+  assert.match(html, /<details[^>]*open=""/u);
+  assert.match(html, /<summary[^>]*>.*why <strong>this<\/strong> changed/u);
+  assert.match(html, /<h2[^>]*>reasons<\/h2>/u);
+  assert.match(html, /href="https:\/\/example\.com\/owner"/u);
+  assert.match(html, /<code[^>]*>nested<\/code> answer/u);
+});
+
+test("thread disclosures start closed unless marked open", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
+    "<details><summary>context</summary>\n**hidden body**\n</details>",
+  )));
+
+  assert.match(html, /<details\b/u);
+  assert.doesNotMatch(html, /<details[^>]*open=/u);
+  assert.match(html, /<summary[^>]*>.*context/u);
+  assert.doesNotMatch(html, /hidden body/u);
+});
+
+test("malformed and fenced disclosure tags render as escaped text", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    "<details><summary>unfinished</summary>",
+    "body",
+    "",
+    "```md",
+    "<details><summary>example</summary></details>",
+    "```",
+  ].join("\n"))));
+
+  assert.doesNotMatch(html, /<details\b/u);
+  assert.match(html, /&lt;details&gt;/u);
+  assert.match(html, /&lt;summary&gt;example&lt;\/summary&gt;/u);
+});
+
 test("append presentation isolates the semantic suffix without duplicating text", () => {
   const textAppend = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
     "Hello world",

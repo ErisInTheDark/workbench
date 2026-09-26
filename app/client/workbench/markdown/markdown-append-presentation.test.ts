@@ -32,6 +32,7 @@ test("fails closed for semantic, structural, divergent, and reduced-motion updat
     ["```ts\nconst value = 1;", "```ts\nconst value = 1;\n```"],
     ["- one", "- one\n- two"],
     ["<set-state mode=\"Brief\"", "<set-state mode=\"Brief\" />"],
+    ["<details><summary>why</summary>\nbody", "<details><summary>why</summary>\nbody\n</details>"],
     ["Hello", "Goodbye"],
     ["Hello world", "Hello"],
   ]) {
