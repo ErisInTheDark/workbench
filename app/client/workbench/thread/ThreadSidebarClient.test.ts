@@ -652,6 +652,29 @@ test("accepted intent immediately revives a stopped thread and a newer snapshot 
   if (authoritative?.entryKind === "thread") assert.equal(authoritative.lifecycle.kind, "completed");
 });
 
+test("accepted first message replaces only a neutral optimistic sidebar label", async () => {
+  const neutral = {
+    activityAt: 1,
+    entryKind: "thread" as const,
+    identity: { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("neutral") },
+    lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: false },
+    metadata: { archived: false as const, pinned: false, snoozed: false },
+    title: "New thread",
+  };
+  const named = { ...neutral, identity: { ...neutral.identity, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("named") }, title: "Chosen name" };
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    transport: { close: async () => undefined, deleteDraft: async () => undefined, open: async () => ({ ...snapshot(1), entries: [neutral, named] }), upsertDraft: async () => undefined },
+  });
+  await client.open(fixtureIdentitySchemas.ProjectIdSchema.parse("project"));
+  for (const entry of [neutral, named]) {
+    await client.acceptIntent({ identity: entry.identity, title: "First user message", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") });
+  }
+  const entries = client.getSnapshot()?.entries ?? [];
+  assert.equal(entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "neutral")?.title, "First user message");
+  assert.equal(entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "named")?.title, "Chosen name");
+});
+
 test("failed navigation flush preserves the route and re-enters the same debounced edit path", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   let navigated = false;

@@ -1509,11 +1509,13 @@ export default class WorkbenchThreadStateController {
       if (!state.entries.has(key)) continue;
       await this.enqueue(`${projectId}:thread:${key}`, async () => {
         const entry = state.entries.get(key);
-        if (!entry || entry.entryKind === "draft" || entry.title === label) return;
+        if (!entry || entry.entryKind === "draft") return;
         // A recorded explicit title owns display, so a provider label can never cover it.
         if (currentThreadTitleName(entry.titleHistory ?? [])) return;
+        const title = resolveWorkbenchThreadTitle({ id: threadId, name: label, preview: entry.title });
+        if (entry.title === title) return;
         const beforePublication = new Map(state.entries);
-        state.entries.set(key, parseWorkbenchThreadStateEntry({ ...entry, title: label }));
+        state.entries.set(key, parseWorkbenchThreadStateEntry({ ...entry, title }));
         await this.persist(projectId, state, [key]);
         this.publish(projectId, state, state.entries.get(key), beforePublication);
       });

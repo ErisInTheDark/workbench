@@ -2657,6 +2657,22 @@ test("project changes retain daemon account limits while connection reset fences
   assert.equal(client.getSnapshot().rateLimits, null);
 }));
 
+test("a neutral sidebar label cannot erase an open thread's first-message preview", async () => withClient(async (client) => {
+  const original = { ...activeThread("codex", "thread"), name: "New thread", preview: "First user message" };
+  client.selectThreadPayload(original);
+  client.installThreadStateSources({
+    activeProjectSnapshot: {
+      entries: [{
+        activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: original.id },
+        lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+        metadata: { archived: false, pinned: false, snoozed: false }, title: "New thread",
+      }],
+      error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision: 1,
+    },
+  });
+  assert.equal(client.getSnapshot().currentThread?.preview, "First user message");
+}));
+
 test("project changes during draft materialization prevent stale dispatch without list polling", async () => withClient(async (client, socket) => {
   const draft = { ...activeThread("codex", "draft", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("draft"), isDraft: true as const, source: "draft" };
   client.selectThreadPayload(draft);

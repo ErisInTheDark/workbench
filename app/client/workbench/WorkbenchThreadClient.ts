@@ -19,7 +19,7 @@ import type { ThreadActiveFlag } from "workbench-shared/workbench/thread/workben
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { DraftIdSchema, PendingTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchTurnIdSchema, type DraftId, type PendingTurnId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
-import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import { resolveWorkbenchThreadTitle, type WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { createWorkbenchTextInput as createTextInput } from "workbench-shared/workbench/provider/provider-input";
@@ -1315,8 +1315,10 @@ function WorkbenchThreadClient(
       if (entry.entryKind !== "thread") continue;
       const thread = { harness: entry.identity.harness, id: entry.identity.threadId };
       const source = threadSources.get(getThreadSourceKey(thread));
-      if (!source || (source.name === entry.title && source.preview === entry.title)) continue;
-      updateThreadSourceFields(thread, { name: entry.title, preview: entry.title });
+      if (!source) continue;
+      const displayTitle = resolveWorkbenchThreadTitle({ id: thread.id, name: entry.title, preview: source.preview });
+      if (source.name === entry.title && source.preview === displayTitle) continue;
+      updateThreadSourceFields(thread, { name: entry.title, preview: displayTitle });
     }
     state.threadsError = activeProjectSnapshot.error ?? "";
     state.hasLoadedThreads = activeProjectSnapshot.freshness !== "loading";

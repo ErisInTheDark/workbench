@@ -3545,6 +3545,10 @@ test("accepted intent replaces only a neutral headless provider title with the f
   const snapshot = await controller.getSnapshot(fixtureProjectIds["project"]);
   assert.equal(snapshot.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "neutral")?.title, "First user message");
   assert.equal(snapshot.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "named")?.title, "Meaningful provider title");
+  await controller.observeDisplayLabel("codex", fixtureThreadIds["neutral"], "New thread", fixtureProjectIds["project"]);
+  const retained = await controller.getCanonicalThreadEntry(fixtureProjectIds["project"], fixtureThreadIds["neutral"]);
+  assert.equal(retained?.title, "First user message");
+  assert.deepEqual(retained?.entryKind === "thread" ? retained.titleHistory : null, []);
   assert.equal(published.filter((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "neutral").at(-1)?.title, "First user message");
   const stored = await readProjectState<{ records: Array<{ identity: { threadId: string }; title: string }> }>(root, "project");
   assert.equal(stored.records.find((entry) => entry.identity.threadId === "neutral")?.title, "First user message");

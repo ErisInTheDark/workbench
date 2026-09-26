@@ -21,7 +21,7 @@ import conformWorkbenchThreadStateOpenResult, {
   conformWorkbenchThreadStateSnapshot,
 } from "./browser-thread-state-conformance";
 import { findWorkbenchThreadFolder, moveWorkbenchThreadDisplayItem, replaceWorkbenchThreadFolderMember, resolveWorkbenchThreadDisplayOrder, sortThreadSidebarEntries } from "workbench-shared/workbench/thread/thread-display-order";
-import { createDraftTitle, type WorkbenchHarnessId, type WorkbenchHomeThreadDisplayOrderSnapshot, type WorkbenchPinnedThreadLayoutSnapshot, type WorkbenchProjectThreadSidebars, type WorkbenchProjectThreadSidebarUpdate, type WorkbenchProjectThreadSummaries, type WorkbenchProjectThreadSummary, type WorkbenchProjectThreadSummaryUpdate, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { createDraftTitle, resolveWorkbenchThreadTitle, type WorkbenchHarnessId, type WorkbenchHomeThreadDisplayOrderSnapshot, type WorkbenchPinnedThreadLayoutSnapshot, type WorkbenchProjectThreadSidebars, type WorkbenchProjectThreadSidebarUpdate, type WorkbenchProjectThreadSummaries, type WorkbenchProjectThreadSummary, type WorkbenchProjectThreadSummaryUpdate, type WorkbenchThreadActivityUpdate, type WorkbenchThreadDraft, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import ThreadSidebarProjectState from "./ThreadSidebarProjectState";
 import type { DraftId, FolderId, ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import { getThreadDisplayDraftKey, getThreadDisplayThreadKey } from "workbench-shared/workbench/thread/thread-display-layout";
@@ -363,7 +363,9 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
             : { archived: false as const, pinned: existing.metadata.pinned, snoozed: false as const }
           : { archived: false as const, pinned: sourceDraft?.entryKind === "draft" ? sourceDraft.metadata.pinned : false, snoozed: false },
         orderAt: activityAt,
-        title: existing?.entryKind === "thread" ? existing.title : intent.title,
+        title: existing?.entryKind === "thread"
+          ? resolveWorkbenchThreadTitle({ id: intent.identity.threadId, name: existing.title, preview: intent.title })
+          : intent.title,
       };
       const displayOrder = intent.draftId
         ? replaceWorkbenchThreadFolderMember(current.displayOrder, getThreadDisplayDraftKey(intent.draftId), getThreadDisplayThreadKey(intent.identity.harness, intent.identity.threadId))
