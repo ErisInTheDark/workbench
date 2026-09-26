@@ -72,9 +72,10 @@ function runtime() {
   } as unknown as WorkbenchFrontendCompiler;
   const database = {
     databasePath: path.join(os.tmpdir(), "workbench-source-ownership", "app-state.sqlite3"),
+    configureDiagnostics() {},
     close: async () => {},
     start: async () => "registration",
-  } as WorkbenchAppStateRepository;
+  } as unknown as WorkbenchAppStateRepository;
   return new WorkbenchAppRuntime({
     appPort: {
       read: () => ({
@@ -129,9 +130,10 @@ test("compiler replacement commits before its first build completes", async () =
   }
 });
 
-test("stable process imports cannot be repaired by only replacing a reloadable node", () => {
+test("compiler source changes require only its reloadable node", () => {
   const target = runtime();
-  assert.ok(target.getReloadScopesForPaths(["app/server/WorkbenchFrontendCompiler.ts"]).includes("client:process"));
+  assert.deepEqual(target.getReloadScopesForPaths(["app/server/WorkbenchFrontendCompiler.ts"]), ["client:compiler"]);
+  assert.deepEqual(target.getReloadScopesForPaths(["app/server/variant-group-source.ts"]), ["client:compiler"]);
 });
 
 test("separates reloadable imports, stable process imports and external build inputs", () => {
@@ -140,7 +142,7 @@ test("separates reloadable imports, stable process imports and external build in
   assert.deepEqual(owners("app/server/state/WorkbenchAppStateRepository.ts"), ["client:database", "client:state"]);
   assert.deepEqual(owners("app/server/state/WorkbenchAppStateController.ts"), ["client:state"]);
   assert.deepEqual(owners("app/server/runtime/WorkbenchAppHttpRouter.ts"), ["client:http"]);
-  assert.deepEqual(owners("app/server/WorkbenchFrontendCompiler.ts"), ["client:compiler", "client:process"]);
+  assert.deepEqual(owners("app/server/WorkbenchFrontendCompiler.ts"), ["client:compiler"]);
   assert.deepEqual(owners("app/client/globals.css"), []);
   assert.deepEqual(owners("app/client/tailwind.css"), []);
   assert.deepEqual(owners("app/server/runtime/AppHttpNode.ts"), ["client:http", "client:topology"]);
@@ -156,7 +158,7 @@ test("separates reloadable imports, stable process imports and external build in
   assert.deepEqual(owners("shared/state/workbench-app-state-schema.ts"), ["client:database", "client:state"]);
   assert.deepEqual(owners("shared/state/workbench-app-state-releases.ts"), ["client:database", "client:state"]);
   assert.deepEqual(owners("shared/workbench-data-root.ts"), ["client:database", "client:network", "client:process", "client:state"]);
-  assert.deepEqual(owners("app/server/workbench-runtime-root.ts"), ["client:process"]);
+  assert.deepEqual(owners("app/server/workbench-runtime-root.ts"), ["client:compiler", "client:process"]);
   assert.equal(owners("shared/reload/ReloadableNodeHost.ts").includes("client:process"), true);
   assert.deepEqual(owners("shared/package.json"), ["client:process"]);
   assert.deepEqual(owners("app/tray/src/main.rs"), ["client:process"]);

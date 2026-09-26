@@ -9,10 +9,10 @@ import resolveWorkbenchDataRoot from "../../shared/workbench-data-root.ts";
 import WorkbenchApp from "./WorkbenchApp.ts";
 import WorkbenchAppControl from "./WorkbenchAppControl.ts";
 import WorkbenchAppProcessProtocol from "./WorkbenchAppProcessProtocol.ts";
-import WorkbenchFrontendCompiler from "./WorkbenchFrontendCompiler.ts";
 import WorkbenchFrontendServer from "./WorkbenchFrontendServer.ts";
 import { readWorkbenchAppCommandLine } from "./app-command-line.ts";
 import WorkbenchAppRuntime from "./runtime/WorkbenchAppRuntime.ts";
+import resolveWorkbenchRuntimeRoot from "./workbench-runtime-root.ts";
 
 const processLogger = new WorkbenchProcessLogger();
 
@@ -25,16 +25,7 @@ async function main() {
   }
   const repositoryRootPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const desktopProtocolEnabled = process.env.WORKBENCH_DESKTOP_PROTOCOL === "1";
-  const createCompiler = (
-    logger: WorkbenchProcessLogger,
-    readReactDevelopmentMode: () => boolean,
-  ) => new WorkbenchFrontendCompiler({
-    logger,
-    onDiagnostic: (message) => logger.error("app", `tailwind ${message}`),
-    readReactDevelopmentMode,
-    repositoryRootPath,
-  });
-  const outputDirectoryPath = createCompiler(processLogger, () => false).outputDirectoryPath;
+  const outputDirectoryPath = path.join(resolveWorkbenchRuntimeRoot(repositoryRootPath), "frontend");
   let protocol: WorkbenchAppProcessProtocol | null = null;
   const control = new WorkbenchAppControl({
     endpointPath: path.join(resolveWorkbenchDataRoot(), "app", "runtime.json"),
@@ -50,7 +41,6 @@ async function main() {
   const app = new WorkbenchApp({
     createRuntime: (appPort) => new WorkbenchAppRuntime({
       appPort,
-      createCompiler,
       createDatabase: (Repository) => new Repository(),
       logger: processLogger,
       outputDirectoryPath,

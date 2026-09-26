@@ -32,7 +32,7 @@ const requiredRegistrations = [
 
 export interface WorkbenchAppRuntimeOptions {
   appPort: WorkbenchAppPortControl;
-  createCompiler(logger: WorkbenchProcessLogger, readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
+  createCompiler?(logger: WorkbenchProcessLogger, readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
   createDatabase(Repository: typeof WorkbenchAppStateRepository): WorkbenchAppStateRepository;
   createNetwork?: AppProcessContext["createNetwork"];
   daemonEndpointPath?: string;
@@ -95,10 +95,11 @@ export default class WorkbenchAppRuntime {
     const context: AppProcessContext = {
       daemonEndpointPath: options.daemonEndpointPath ?? path.join(resolveWorkbenchDataRoot(), "daemon", "runtime.json"),
       appPort: options.appPort,
-      createCompiler: (logger, readReactDevelopmentMode) => options.createCompiler(logger, () => {
-        this.appliedReactDevelopmentMode ??= readReactDevelopmentMode();
+      captureReactDevelopmentMode: readRequested => {
+        this.appliedReactDevelopmentMode ??= readRequested();
         return this.appliedReactDevelopmentMode;
-      }),
+      },
+      createCompiler: options.createCompiler,
       createDatabase: options.createDatabase,
       createNetwork: options.createNetwork,
       executeReloadScopes: async (scopes) => {

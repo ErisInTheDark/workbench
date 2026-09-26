@@ -13,7 +13,8 @@ import type WorkbenchNetworkController from "../network/WorkbenchNetworkControll
 export interface AppProcessContext {
   daemonEndpointPath: string;
   appPort: WorkbenchAppPortControl;
-  createCompiler(logger: WorkbenchProcessLogger, readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
+  captureReactDevelopmentMode(readRequested: () => boolean): boolean;
+  createCompiler?(logger: WorkbenchProcessLogger, readReactDevelopmentMode: () => boolean): WorkbenchFrontendCompiler;
   createDatabase(Repository: typeof WorkbenchAppStateRepository): WorkbenchAppStateRepository;
   createNetwork?: (options: ConstructorParameters<typeof WorkbenchNetworkController>[0]) => WorkbenchNetworkController;
   executeReloadScopes(scopes: WorkbenchReloadScope[]): Promise<WorkbenchReloadScope[]>;

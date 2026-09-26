@@ -5,6 +5,7 @@
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 import type { WorkbenchFrontendGeneration } from "workbench-shared/frontend-generation";
 
+import WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 
@@ -15,10 +16,17 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   create: (context, build) => {
     const logger = build.get("logger");
     const state = build.get("state");
-    const compiler = context.createCompiler(
-      logger,
+    const readReactDevelopmentMode = () => context.captureReactDevelopmentMode(
       () => state.readGlobalPreference("reactDevelopmentMode") === true,
     );
+    const compiler = context.createCompiler?.(logger, readReactDevelopmentMode)
+      ?? new WorkbenchFrontendCompiler({
+        logger,
+        onDiagnostic: message => logger.error("app", `tailwind ${message}`),
+        outputDirectoryPath: context.outputDirectoryPath,
+        readReactDevelopmentMode,
+        repositoryRootPath: context.repositoryRootPath,
+      });
     const previous = build.handoffState as { generation: WorkbenchFrontendGeneration | null } | undefined;
     if (previous) compiler.retainPublishedGeneration(previous.generation);
     const detach = async () => {
