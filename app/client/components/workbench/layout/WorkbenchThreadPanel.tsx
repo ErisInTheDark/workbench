@@ -55,6 +55,7 @@ interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewpor
 export default function WorkbenchThreadPanel ({
   fallbackThreadSummary = null,
   hasSidebarRestoreInset = false,
+  isFocused,
   isMinimized = false,
   isMinimizedVertical = false,
   location = null,
@@ -218,6 +219,7 @@ export default function WorkbenchThreadPanel ({
               <WorkbenchComposerProfileProvider controller={profileController}>
               <ThreadView
                 {...threadViewProps}
+                isFocused={isFocused && !isMinimized}
                 projectId={panelContext?.project.id ?? threadViewProps.projectId}
                 projectRootPath={panelContext?.project.rootPath ?? threadViewProps.projectRootPath}
                 projectRoots={panelContext?.project.roots ?? threadViewProps.projectRoots}

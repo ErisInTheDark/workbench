@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
 import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
@@ -40,7 +40,7 @@ import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbe
 import PrimaryButton from "../PrimaryButton";
 import { PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
-import PlaintextEditable, { threadPlaintextEditableClassName } from "./PlaintextEditable";
+import PlaintextEditable, { threadPlaintextEditableClassName, type PlaintextEditableHandle } from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
 import StickyComposerSurface from "./StickyComposerSurface";
@@ -93,6 +93,7 @@ const stickyComposerContentClassName = `
 `;
 
 export default function ThreadComposer ({
+  autoFocusOnEntry = false,
   children,
   canToggleHarness = false,
   composerSpellCheck,
@@ -129,6 +130,7 @@ export default function ThreadComposer ({
   targetControl,
   onDraftSessionChange,
 }: {
+  autoFocusOnEntry?: boolean;
   children?: ReactNode | ((state: { isProfilePickerOpen: boolean }) => ReactNode);
   canToggleHarness?: boolean;
   composerSpellCheck: boolean;
@@ -212,6 +214,7 @@ export default function ThreadComposer ({
   const hasVisiblePendingUserInputRequest = visiblePendingUserInputRequest !== null;
   const questionnaireRequestKey = pendingUserInputRequest?.requestKey ?? "";
   const showQuestionnairePanel = hasVisiblePendingUserInputRequest && isQuestionnaireVisible;
+  const composerInputRef = useRef<PlaintextEditableHandle>(null);
   useEffect(() => {
     setIsQuestionnaireActionsHovered(false);
   }, [questionnaireRequestKey]);
@@ -223,6 +226,12 @@ export default function ThreadComposer ({
   const profileWriteState = profileSlot ? composerProfileController.selectionWriteState(profileSlot) : "ready";
   const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(thread, threadLifecycle, hasPendingUserInputRequest, controlsMode);
   const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken;
+  useLayoutEffect(() => {
+    if (autoFocusOnEntry && !isInputDisabled && !showQuestionnairePanel
+      && !isStickyComposerCollapsed && !isMobileTextInputEnvironment()) {
+      composerInputRef.current?.focus();
+    }
+  }, []);
   const isSendDisabled = isInputDisabled || isProviderUnavailable
     || (!isActiveThread && (!hasEffectiveProfile || profileWriteState !== "ready"));
   const isShiftPressed = useNonTextInputShiftKey({
@@ -625,6 +634,7 @@ export default function ThreadComposer ({
             >
               <span className="sr-only">{isCommentMode ? "Write comment" : "Message thread"}</span>
               <PlaintextEditable
+                ref={composerInputRef}
                 id={`thread-composer:${thread.id}`}
                 ariaLabel={isCommentMode ? "Write comment" : "Message thread"}
                 className={`${threadPlaintextEditableClassName} min-h-[5.75rem] w-full border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none`}

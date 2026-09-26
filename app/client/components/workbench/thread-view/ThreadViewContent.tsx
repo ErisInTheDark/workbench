@@ -240,6 +240,7 @@ export default memo(function ThreadViewContent ({
   hideFinalAgentMessage = false,
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = true,
+  isFocused = true,
   onDraftHarnessChange,
   onThreadCodeBlockWrapChange,
   onOpenThread,
@@ -278,6 +279,7 @@ export default memo(function ThreadViewContent ({
   hideFinalAgentMessage?: boolean;
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
+  isFocused?: boolean;
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onThreadCodeBlockWrapChange: (nextValue: boolean) => void;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
@@ -970,6 +972,7 @@ export default memo(function ThreadViewContent ({
     </p> : null;
   const composer = activeThread ? (
     <ThreadComposer
+      autoFocusOnEntry={isFocused}
       onDraftSessionChange={onDraftSessionChange}
       targetControl={isDraftThreadView ? draftTargetControl : null}
       canToggleHarness={canSelectHarness}
