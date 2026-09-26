@@ -8,6 +8,7 @@ import type { WorkbenchLogicalProject } from "workbench-shared/types";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import WorkbenchPressDragMenu from "./WorkbenchPressDragMenu";
 import WorkbenchProjectLocationLabel from "./WorkbenchProjectLocationLabel";
+import { ProjectIcon } from "./workbench-icons";
 
 export default function WorkbenchProjectLocationMenu({
   project, selected, onSelect, label,
@@ -41,6 +42,7 @@ export default function WorkbenchProjectLocationMenu({
         if (location) onSelect(location.target);
       }}
     >
+      <ProjectIcon className="shrink-0" size={16} />
       <span className="min-w-0 max-w-52 truncate" title={current?.rootPath}>
         {current ? <WorkbenchProjectLocationLabel
           displayPath={current.displayPath ?? `${current.hostname}:${current.rootPath}`}

@@ -602,8 +602,12 @@ test("an old-shape UUID URL keeps its thread owner and the sole browse folder th
     assert.equal(homeRuntimePublications, 0,
       "a global layout update must not reset the projectless selected-thread runtime");
     stopHomeRuntime();
+    await client.controls.refreshRateLimits();
+    const rateReadsBeforeReopen = requests.filter(method => method === "account/limits/read").length;
     const reopened = await client.controls.applyRoute(route);
     assert.equal(reopened.ok, true, reopened.error ?? requests.join(", "));
+    assert.equal(requests.filter(method => method === "account/limits/read").length, rateReadsBeforeReopen,
+      "returning to a thread on the same daemon should reuse freshly read account limits");
     const controller = client.getThreadController(projectId, { kind: "provider", threadId });
     assert.ok(controller, "the mounted UUID route must expose its concrete thread owner");
     assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, threadId, requests.join(", "));
@@ -679,6 +683,26 @@ test("an old-shape UUID URL keeps its thread owner and the sole browse folder th
     assert.equal(explorerSnapshots.at(-1)?.currentProjectId, "",
       "a Home draft's launch folder must not become the viewed project");
     assert.equal(explorerSnapshots.at(-1)?.browseLocation, null);
+    secondAvailable = true;
+    presentationRevision += 1;
+    await client.controls.refreshProjectCatalog();
+    await client.presentationClient?.refresh();
+    const secondFolderRoute = createLogicalThreadRoute(null, logicalProjectId,
+      { daemonId, projectId: secondProjectId }, { kind: "new" });
+    assert.equal((await client.controls.applyRoute(secondFolderRoute)).ok, true);
+    const secondFolderDraft = client.threadRuntime.getSnapshot().currentThread;
+    assert.ok(secondFolderDraft?.isDraft);
+    assert.deepEqual(client.draftLocationFor(secondFolderDraft.id), { daemonId, projectId: secondProjectId },
+      "one folder choice must move the draft's execution location, not only its route");
+    assert.equal((await client.controls.applyRoute(createLogicalThreadRoute(null, logicalProjectId,
+      { daemonId, projectId }, { kind: "new" }))).ok, true);
+    const firstFolderDraft = client.threadRuntime.getSnapshot().currentThread;
+    assert.ok(firstFolderDraft?.isDraft);
+    assert.deepEqual(client.draftLocationFor(firstFolderDraft.id), { daemonId, projectId });
+    secondAvailable = false;
+    presentationRevision += 1;
+    await client.controls.refreshProjectCatalog();
+    await client.presentationClient?.refresh();
     const editingDraft = client.threadRuntime.getSnapshot().currentThread;
     assert.ok(editingDraft?.isDraft);
     storedDraft = {

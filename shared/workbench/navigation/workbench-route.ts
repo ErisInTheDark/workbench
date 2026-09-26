@@ -7,7 +7,7 @@
  * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse URL state without changing history.
  * - createWorkbenchHref/createHomeHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createHomeThreadHref/createSettingsHref/createStatsHref/createMosaicHref: build hrefs.
- * - isSameWorkbenchRoute/routeHasSelection/isWorkbenchRouteOwnerOfThread: compare and fence route-owned transitions.
+ * - isSameWorkbenchRoute/isSameDraftRouteIntent/routeHasSelection/isWorkbenchRouteOwnerOfThread: compare and fence route-owned transitions.
  */
 
 import {
@@ -19,7 +19,7 @@ import { type WorkbenchMosaicNode } from "./workbench-mosaic-route.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 import { z } from "zod";
 import { WorkbenchThreadRouteTargetSchema, type WorkbenchThreadRouteTarget } from "../thread/thread-state.ts";
-import { LogicalProjectIdSchema, type LogicalProjectId, type ProjectId } from "../identity.ts";
+import { DraftIdSchema, LogicalProjectIdSchema, type LogicalProjectId, type ProjectId } from "../identity.ts";
 import { ProjectLocationReferenceSchema, type ProjectLocationReference } from "../project/project-location.ts";
 
 export const WORKBENCH_ROUTE_MARKER = "@";
@@ -629,6 +629,17 @@ export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute
     && areDeeplyEqual(left.logical, right.logical)
     && areDeeplyEqual(left.threadTarget, right.threadTarget)
     && left.error === right.error;
+}
+
+export function isSameDraftRouteIntent(before: WorkbenchRoute, current: WorkbenchRoute, draftId: string) {
+  if (before === current) return true;
+  if (before.view !== "thread" || before.threadTarget?.kind !== "new" || !before.logical) return false;
+  return isSameWorkbenchRoute({
+    ...before,
+    threadId: draftId,
+    threadTarget: { kind: "draft", draftId: DraftIdSchema.parse(draftId) },
+    logical: { ...before.logical, location: null },
+  }, current);
 }
 
 export function routeHasSelection(route: WorkbenchRoute) {

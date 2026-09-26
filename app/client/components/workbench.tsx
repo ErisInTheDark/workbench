@@ -1,10 +1,10 @@
-"use client";
-
 /*
  * Exports:
  * - default Workbench: stable shell composition, providers, explorer/file dialogs, responsive chrome, and DOM surfaces.
  * Local helpers: route, title, drag, editor, file, and thread UI transformations.
  */
+"use client";
+
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 
@@ -22,7 +22,7 @@ import type {
     WorkbenchSendThreadMessageOptions,
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
 import { ProjectLocationReferenceSchema, type ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type {
     WorkbenchDropPlacement,
@@ -55,6 +55,7 @@ import {
     getWorkbenchThreadTargetRootId,
     getWorkbenchThreadTargetSelectedId,
     isWorkbenchRouteOwnerOfThread,
+    isSameDraftRouteIntent,
     isWorkbenchThreadTargetSelected,
     type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
@@ -528,6 +529,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     void composerProfileController.initializeTargetPersistence(createComposerProfileTargetPersistence(
       controls.daemon, controls.flushThreadDraft,
       route.logical ? workbenchClient.mounted?.presentationClient ?? null : false,
+      DaemonIdSchema.safeParse(profileScopeKey).data ?? null,
     ));
     void composerProfileController.initializePersistence(createComposerProfilePersistence(controls.daemon));
     return () => { composerProfileController.disconnectPersistence(); };
@@ -551,6 +553,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         void controller.initializeTargetPersistence(createComposerProfileTargetPersistence(
           daemon, controls.flushThreadDraft,
           workbenchClient.mounted?.presentationClient ?? null,
+          id,
         )).catch(error => console.error("Peer profile targets unavailable",
           error instanceof Error ? error.message.slice(0, 512) : "Profile target loading failed."));
         void controller.initializePersistence(createComposerProfilePersistence(daemon))
@@ -3052,12 +3055,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                               if (!draftSession || !await draftSession.flush("retarget")) {
                                 throw new Error("Save the draft before changing its folder.");
                               }
-                              if (currentRouteRef.current !== submittedRoute) return;
+                              if (!isSameDraftRouteIntent(submittedRoute, currentRouteRef.current, threadForThreadView.id)) return;
                               const owner = workbenchClient.mounted?.presentationClient;
                               if (!owner) throw new Error("App presentation state is unavailable.");
                               const draft = owner.draft(threadForThreadView.id);
                               if (draft) await controls.retargetPresentationDraft(DraftIdSchema.parse(draft.id), location);
-                              if (currentRouteRef.current !== submittedRoute) return;
+                              if (!isSameDraftRouteIntent(submittedRoute, currentRouteRef.current, threadForThreadView.id)) return;
                               const nextRoute = createLogicalThreadRoute(submittedRoute.logical.projectId,
                                 submittedRoute.logical.threadOwnerProjectId, draft ? null : location,
                                 draft ? { kind: "draft", draftId: DraftIdSchema.parse(draft.id) } : { kind: "new" });

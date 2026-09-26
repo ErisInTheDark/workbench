@@ -3,12 +3,12 @@
  * - ComposerProfilePersistence: typed browser boundary for daemon-owned composer profiles.
  * - ComposerProfileTargetPersistence: typed browser boundary for daemon-owned target profile snapshots.
  * - createComposerProfilePersistence: create the daemon-backed composer-profile persistence adapter.
- * - createComposerProfileTargetPersistence: use app-owned selections for unsent drafts, daemon targets otherwise.
+ * - createComposerProfileTargetPersistence: read daemon targets, app drafts, and same-daemon folder-default fallbacks.
  */
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileMutation, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection } from "workbench-shared/types";
 import type { WorkbenchComposerProfileSlot } from "workbench-shared/types";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import type { DraftId, ProjectId } from "workbench-shared/workbench/identity";
+import type { DaemonId, DraftId, ProjectId } from "workbench-shared/workbench/identity";
 import type WorkbenchPresentationClient from "./WorkbenchPresentationClient";
 
 export interface ComposerProfilePersistence {
@@ -34,6 +34,7 @@ export function createComposerProfileTargetPersistence(
   daemon: Pick<WorkbenchDaemonClient, "profiles">,
   flushDraft: (projectId: ProjectId, draftId: DraftId) => Promise<void>,
   appDrafts: WorkbenchPresentationClient | null | false = false,
+  daemonId: DaemonId | null = null,
 ): ComposerProfileTargetPersistence {
   return {
     read: async (slot) => {
@@ -42,7 +43,35 @@ export function createComposerProfileTargetPersistence(
         return appDrafts.draft(slot.draftId)?.selection ?? null;
       }
       if (slot.kind === "draft") await flushDraft(slot.projectId, slot.draftId);
-      return (await daemon.profiles.target.read({ slot })).selection;
+      const own = (await daemon.profiles.target.read({ slot })).selection;
+      if (own || slot.kind !== "new-thread" || !appDrafts || !daemonId) return own;
+      const presentation = appDrafts.snapshot().data ?? await appDrafts.refresh();
+      const location = presentation.locations.find(item =>
+        item.target.daemonId === daemonId && item.target.projectId === slot.projectId);
+      if (!location) return null;
+      const ownDefault = presentation.defaults.find(item =>
+        item.target.daemonId === daemonId && item.target.projectId === slot.projectId);
+      if (ownDefault) return ownDefault.selection;
+      const source = presentation.defaults
+        .filter(item => item.target.daemonId === location.target.daemonId
+          && presentation.locations.some(candidate =>
+            candidate.logicalProjectId === location.logicalProjectId
+            && candidate.target.daemonId === item.target.daemonId
+            && candidate.target.projectId === item.target.projectId))
+        .sort((left, right) => right.revision - left.revision)[0];
+      if (!source) return null;
+      const selection = source.selection;
+      if (selection.kind === "custom") {
+        return selection.settings.agentSource === "project"
+          ? { kind: "custom", settings: { ...selection.settings, agentPath: null, agentSource: null } }
+          : selection;
+      }
+      const profile = (await daemon.profiles.read()).profiles.find(item => item.id === selection.profileId);
+      return profile?.scope.kind === "global" ? selection
+        : { kind: "custom", settings: {
+          ...selection.settings,
+          ...(selection.settings.agentSource === "project" ? { agentPath: null, agentSource: null } : {}),
+        } };
     },
     write: async (slot, selection) => {
       if (slot.kind === "draft" && appDrafts !== false) {

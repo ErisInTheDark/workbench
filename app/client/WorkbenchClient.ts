@@ -1778,8 +1778,9 @@ export function WorkbenchClient(
     if (currentDraft?.isDraft && previous.view === "thread" && route.view === "thread"
       && previous.logical && route.logical) {
       const owner = threadRouter.known(currentDraft.id);
-      const newRoute = previous.threadTarget?.kind === "new" ? previous
-        : route.threadTarget?.kind === "new" ? route : null;
+      // A new-to-new switch must check the requested folder, not reuse the prior one.
+      const newRoute = route.threadTarget?.kind === "new" ? route
+        : previous.threadTarget?.kind === "new" ? previous : null;
       const newLocation = newRoute && owner?.kind === "draft"
         ? newRoute.logical?.location ?? owner.location : null;
       const saved = presentationClient?.draft(currentDraft.id);
@@ -1799,7 +1800,7 @@ export function WorkbenchClient(
       : null;
     const result = await navigation.applyRoute(route);
     if (result.ok && route.view === "thread") {
-      void refreshRateLimits().catch(error => reportStatusMessage(
+      void activeThreadClient.refreshRateLimitsIfStale().catch(error => reportStatusMessage(
         error instanceof Error ? error.message.slice(0, 512) : "Rate limits could not refresh.",
       ));
     }

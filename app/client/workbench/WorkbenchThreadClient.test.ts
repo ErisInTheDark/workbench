@@ -2619,7 +2619,7 @@ test("thread selection reuses cached rate limits while automatic reads are throt
   );
 }));
 
-test("project reset fences a late rate-limit success from the previous project", async () => withClient(async (client, socket) => {
+test("project changes retain daemon account limits while connection reset fences late reads", async () => withClient(async (client, socket) => {
   const pendingRequests: SocketRequest[] = [];
   FakeWebSocket.intercept = (_target, request) => {
     if (request.method === "account/limits/read") {
@@ -2632,13 +2632,8 @@ test("project reset fences a late rate-limit success from the previous project",
   await waitForRequest(socket, "account/limits/read", 1);
   client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
   client.selectThreadPayload(activeThread());
-  const currentRefresh = client.refreshRateLimits();
-  await waitForRequest(socket, "account/limits/read", 2);
-  socket.fail(pendingRequests[1]!.id, "new project rate limits unavailable");
-  await currentRefresh;
-
   const staleSnapshot = {
-    credits: null, individualLimit: null, limitId: "codex", limitName: "stale", planType: null,
+    credits: null, individualLimit: null, limitId: "codex", limitName: "same account", planType: null,
     primary: null, rateLimitReachedType: null, secondary: null,
   };
   socket.respond(pendingRequests[0]!.id, {
@@ -2647,6 +2642,18 @@ test("project reset fences a late rate-limit success from the previous project",
     rateLimitsByLimitId: { codex: staleSnapshot },
   });
   await staleRefresh;
+  assert.equal(client.getSnapshot().rateLimits?.limitName, "same account");
+  await client.refreshRateLimitsIfStale();
+  assert.equal(pendingRequests.length, 1);
+  const lateRefresh = client.refreshRateLimits();
+  await waitForCondition(() => pendingRequests.length === 2, "Expected explicit refresh after folder change.");
+  client.resetConnectionState();
+  socket.respond(pendingRequests[1]!.id, {
+    rateLimitResetCredits: null,
+    rateLimits: { ...staleSnapshot, limitName: "disconnected" },
+    rateLimitsByLimitId: { codex: { ...staleSnapshot, limitName: "disconnected" } },
+  });
+  await lateRefresh;
   assert.equal(client.getSnapshot().rateLimits, null);
 }));
 

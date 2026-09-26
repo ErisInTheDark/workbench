@@ -175,6 +175,7 @@ interface WorkbenchThreadClient {
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   selectThreadPayload: (thread: ThreadPayload) => void;
   refreshRateLimits: () => Promise<void>;
+  refreshRateLimitsIfStale: () => Promise<void>;
   sendThreadMessage: (
     thread: ThreadPayload,
     input: UserInput[],
@@ -982,8 +983,6 @@ function WorkbenchThreadClient(
     }
     messageAdmissionIntentRevision += 1;
 
-    account.reset();
-
     state.subagents = [];
     state.threads = [];
     state.currentThread = null;
@@ -1023,6 +1022,7 @@ function WorkbenchThreadClient(
   }
 
   function resetConnectionState() {
+    account.reset();
     resetProjectThreadState();
   }
 
@@ -2902,6 +2902,10 @@ function WorkbenchThreadClient(
 
   async function refreshRateLimits(harness = state.currentThread?.harness ?? defaultProviderKey) {
     await account.refresh(harness);
+  }
+
+  async function refreshRateLimitsIfStale(harness = state.currentThread?.harness ?? defaultProviderKey) {
+    await account.refreshIfStale(harness);
   }
 
   function normalizeThreadMessageInput(input: UserInput[] | string) {
@@ -4975,6 +4979,7 @@ function WorkbenchThreadClient(
     resetConnectionState,
     selectThreadPayload,
     refreshRateLimits,
+    refreshRateLimitsIfStale,
     sendThreadMessage,
     compactThread,
     stopThread,
