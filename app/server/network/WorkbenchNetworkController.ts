@@ -54,7 +54,7 @@ export default class WorkbenchNetworkController {
     ensure(signal: AbortSignal): Promise<void>;
     readTarget: () => { appOrigin: string } | null;
     wakeLocal: boolean;
-    appPort?: Pick<WorkbenchAppPortControl, "read" | "update">;
+    appPort?: Pick<WorkbenchAppPortControl, "read" | "current" | "update">;
     warn: (message: string) => void;
     privateIssue?: () => string | null;
     createClient?: () => ServiceClient;
@@ -103,7 +103,7 @@ export default class WorkbenchNetworkController {
       configuration: this.configuration, runtime: this.runtime, executable: this.executable,
       hostPlatform: process.platform, busy: this.operation !== null, failure: this.failure,
       localUrl: target ? new URL("/launch", target.appOrigin).href : null,
-      ...(this.options.appPort ? { localPort: this.options.appPort.read() } : {}),
+      ...(this.options.appPort?.current?.() ? { localPort: this.options.appPort.current() ?? undefined } : {}),
       change: this.change ? {
         phase: this.change.phase, sourceOrigin: this.change.sourceOrigin, destinationOrigin: this.change.destinationOrigin,
       } : null,
