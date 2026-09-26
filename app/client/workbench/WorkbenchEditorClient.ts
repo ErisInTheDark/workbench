@@ -608,12 +608,17 @@ function resolveDeletedMarkerTop(
 
 function createDiffMarker(symbol: DiffMarkerSymbol, top: number, bottom?: number) {
   const marker = document.createElement("span");
-  marker.className = "editor-diff-marker";
+  marker.className = [
+    "absolute left-1/2 top-0 transform-[translate(-50%,-50%)]",
+    "data-[marker-type=insert]:text-success data-[marker-type=modify]:text-[color:var(--attention)] data-[marker-type=delete]:text-danger",
+  ].join(" ");
   marker.dataset.markerType = symbol === "+" ? "insert" : symbol === "-" ? "delete" : "modify";
   marker.style.top = `${Math.max(0, top)}px`;
   if (typeof bottom === "number" && bottom > top) {
-    marker.dataset.markerRange = "true";
-    marker.style.setProperty("--editor-diff-marker-span", `${bottom - top}px`);
+    const rangeBar = document.createElement("span");
+    rangeBar.className = "absolute left-1/2 top-1/2 w-[0.13rem] transform-[translateX(-50%)] rounded-full bg-current opacity-[0.58]";
+    rangeBar.style.height = `${bottom - top}px`;
+    marker.append(rangeBar);
   }
   marker.append(createDiffMarkerIcon(symbol));
   return marker;
@@ -624,7 +629,11 @@ function createDiffMarkerIcon(symbol: DiffMarkerSymbol) {
   svg.setAttribute("viewBox", "0 0 20 20");
   svg.setAttribute("fill", "none");
   svg.setAttribute("aria-hidden", "true");
-  svg.classList.add("editor-diff-marker-icon");
+  svg.setAttribute("class", [
+    "relative z-1 block size-[1.1rem] overflow-visible",
+    "[filter:drop-shadow(0_0.08rem_0.18rem_color-mix(in_srgb,var(--shadow)_35%,transparent))]",
+    "[@media(max-width:767px)]:size-[0.82rem]",
+  ].join(" "));
 
   if (symbol === "*") {
     const asterisk = document.createElementNS("http://www.w3.org/2000/svg", "path");

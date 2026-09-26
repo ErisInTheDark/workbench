@@ -8,6 +8,11 @@
 
 @custom-variant coarse-touch (@media (hover: none) and (pointer: coarse));
 @custom-variant code-wrap (&:where([data-thread-codeblock-wrap=true] *));
+@custom-variant stuck {
+  &:where([data-sticky-stuck="true"] *) {
+    @slot;
+  }
+}
 
 @source "./";
 

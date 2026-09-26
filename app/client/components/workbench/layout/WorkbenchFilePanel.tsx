@@ -338,7 +338,48 @@ export default function WorkbenchFilePanel ({
           />
           <div
             ref={editorRef}
-            className={`editor-content ${contained ? "min-h-[18rem]" : "min-h-[calc(100vh-6rem)]"} pb-16 ${editorFontClassName} text-[1.08rem] leading-[1.72] whitespace-normal outline-none`}
+            className={`
+              editor-content ${contained ? "min-h-[18rem]" : "min-h-[calc(100vh-6rem)]"}
+              pb-16 ${editorFontClassName} text-[1.08rem] leading-[1.72] whitespace-normal outline-none
+              data-[custom-caret-visible=true]:caret-transparent
+              empty:before:(text-fg/muted content-[attr(data-placeholder)])
+              [&_:is(p,blockquote,ul,ol,pre,h1,h2,h3,h4,h5,h6)]:(m-0 mb-4 text-justify)
+              [&_:is(h1,h2,h3,h4,h5,h6)]:(font-sans font-semibold leading-[1.15])
+              [&_h1]:text-[2.05em] [&_h2]:text-[1.55em] [&_h3]:text-[1.25em]
+              [&_:is(ul,ol)]:(list-outside pl-[1.3rem])
+              [&_ul]:list-disc [&_ul_ul]:list-[circle] [&_ul_ul_ul]:list-[square]
+              [&_ol]:list-decimal
+              [&_blockquote]:text-fg/muted
+              [&_a]:(text-inherit decoration-accent decoration-[0.08em])
+              [&_code]:(font-mono text-[0.94em] bg-fg-alpha/7 rounded-[0.35rem] px-[0.34em] py-[0.08em])
+              [&_pre]:(overflow-x-auto whitespace-pre-wrap)
+              [&_pre[data-language]:not([data-language=""])]:before:(
+                content-[attr(data-language)] block
+                -mx-[0.15rem] -mt-[0.2rem] mb-[0.65rem]
+                border-b border-fg-alpha/8 pb-[0.45rem]
+                font-mono text-[0.72em] leading-none text-fg/muted
+              )
+              [&_pre_code]:(block bg-transparent rounded-none p-0)
+              [&_:is(ins,del)]:(rounded-[0.2em] text-inherit -mx-[0.04em] px-[0.08em])
+              [&_ins]:(bg-success/16 [font-weight:inherit] no-underline)
+              [&_ins[data-revision-hover-active=true]]:bg-success/24
+              [&_del]:(bg-danger/16 decoration-current decoration-[0.08em])
+              [&_del[data-revision-hover-active=true]]:bg-danger/24
+              [&_p:has(+_:where(br,[data-single-break=true])+[data-block-comment=true])]:mb-0
+              [&_p:has(+_[data-block-comment=true])]:mb-[-0.1rem]
+              [&_[data-block-comment=true]+:where(br,[data-single-break=true])]:mb-0
+              [&_:is([data-block-comment=true],[data-inline-comment=true])]:(
+                [--comment-fg-bg:color-mix(in_srgb,var(--text)_6%,var(--fg-bg,var(--bg)))]
+                bg-fg-alpha/6
+                text-[color:color-mix(in_srgb,var(--text)_60%,var(--comment-fg-bg))]
+              )
+              [&_[data-block-comment=true]]:(
+                rounded-[0.45rem] px-3 py-[0.45rem] my-0 -mx-3
+                whitespace-pre-wrap font-sans text-[0.85em]
+              )
+              [&_[data-inline-comment=true]]:(rounded-[0.35rem] px-[0.34em] py-[0.08em])
+              [&_:is([data-block-comment=true],[data-inline-comment=true])[data-revision-hover-active=true]]:bg-fg-alpha/12
+            `}
             contentEditable
             suppressContentEditableWarning
             spellCheck={spellCheck}
@@ -346,7 +387,17 @@ export default function WorkbenchFilePanel ({
           />
           <div
             ref={customCaretRef}
-            className="editor-custom-caret"
+            className="
+              pointer-events-none absolute top-0 left-0 z-20 min-h-[1em] w-[2px] origin-center rounded-full
+              bg-text [box-shadow:0_0_0.35rem_color-mix(in_srgb,var(--shadow)_28%,transparent)]
+              transform-[translate3d(0,0,0)] animate-blink
+              data-[caret-kind=code]:bg-[color-mix(in_srgb,var(--text)_56%,var(--bg)_44%)]
+              data-[caret-kind=comment]:bg-[color-mix(in_srgb,var(--text)_42%,var(--bg)_58%)]
+              data-[caret-kind=del]:bg-danger data-[caret-kind=ins]:bg-success
+              data-[caret-bold=true]:w-[2.8px]
+              data-[caret-italic=true]:transform-[skew(-10deg)]
+              data-[caret-bold=true]:data-[caret-italic=true]:transform-[skew(-10deg)_scaleX(1.22)]
+            "
             aria-hidden="true"
             hidden
           />

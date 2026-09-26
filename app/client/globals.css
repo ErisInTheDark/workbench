@@ -1,45 +1,4 @@
-@custom-variant stuck {
-  &:where([data-sticky-composer-stuck="true"] *) {
-    @slot;
-  }
-}
-
 @layer components {
-  .sticky-composer-shell {
-    --sticky-composer-motion-duration: 220ms;
-    --sticky-composer-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
-    --fg-bg: var(--shell-fade-bg);
-    align-self: end;
-    background: color-mix(in srgb, var(--shell-fade-bg), transparent 20%);
-    border-radius: 1.15rem;
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
-    flex-shrink: 0;
-    grid-column: 1;
-    grid-row: 2;
-    margin-top: 1.5rem;
-    min-width: 0;
-    position: sticky;
-    z-index: 20;
-  }
-
-  .sticky-composer-flow-reserver {
-    align-self: end;
-    flex-shrink: 0;
-    grid-column: 1;
-    grid-row: 2;
-    height: 0;
-    pointer-events: none;
-    position: relative;
-    width: 100%;
-  }
-
-  .sticky-composer-origin-marker {
-    bottom: 0;
-    height: 1px;
-    position: absolute;
-    width: 100%;
-  }
-
   @keyframes sticky-composer-enter {
     from {
       opacity: 0.72;
@@ -70,44 +29,6 @@
     }
   }
 
-  .thread-composer-mode-stack {
-    display: grid;
-    interpolate-size: allow-keywords;
-    position: relative;
-  }
-
-  .thread-composer-mode-panel {
-    display: none;
-    grid-area: 1 / 1;
-    inset: 0;
-    min-width: 0;
-    opacity: 0;
-    overflow: clip;
-    position: absolute;
-    transform: translateY(0.45rem) scale(0.985);
-    transition:
-      opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-      transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-      display var(--sticky-composer-motion-duration) allow-discrete;
-    transition-behavior: allow-discrete;
-  }
-
-  .thread-composer-mode-panel[data-active="true"] {
-    display: block;
-    inset: auto;
-    opacity: 1;
-    position: relative;
-    transform: translateY(0) scale(1);
-  }
-
-  @starting-style {
-    .thread-composer-mode-panel[data-active="true"] {
-      opacity: 0;
-      transform: translateY(0.45rem) scale(0.985);
-    }
-
-  }
-
   .sticky-composer-expanded {
     display: grid;
     gap: 0.75rem;
@@ -125,14 +46,6 @@
     }
   }
 
-  .sticky-composer-collapse-button-slot {
-    display: none;
-
-    @variant stuck {
-      display: block;
-    }
-  }
-
   .sticky-composer-collapsed {
     display: none;
     grid-area: 1 / 1;
@@ -145,31 +58,13 @@
     transition-behavior: allow-discrete;
   }
 
-  .sticky-composer-collapsed-text {
-    display: -webkit-box;
-    min-width: 0;
-    overflow: hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-  }
-
-  .sticky-composer-collapsed-text[data-preview-kind="placeholder"] {
-    color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
-  }
-
-  .sticky-composer-collapsed-accessory {
-    display: inline-flex;
-    flex-shrink: 0;
-    flex-wrap: nowrap;
-    gap: 0.35rem;
-  }
-
-  .sticky-composer-surface .thread-composer-sticky-form-content,
   .sticky-composer-surface .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
     transition:
       max-height var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
       opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease);
+  }
 
+  .sticky-composer-surface .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
     @variant stuck {
       max-height: min(52dvh, calc(100dvh - env(safe-area-inset-bottom, 0px) - 11rem));
       overflow-y: auto;
@@ -234,186 +129,6 @@
     }
   }
 
-  .sticky-composer-collapsed-chevron {
-    color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 2.25rem;
-  }
-
-  .editor-content:empty::before {
-    color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
-    content: attr(data-placeholder);
-  }
-
-  .editor-content[data-custom-caret-visible="true"] {
-    caret-color: transparent;
-  }
-
-  .editor-custom-caret {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 2px;
-    min-height: 1em;
-    border-radius: 999px;
-    background: var(--text);
-    pointer-events: none;
-    transform: translate3d(0, 0, 0);
-    transform-origin: center;
-    z-index: 20;
-    box-shadow: 0 0 0.35rem color-mix(in srgb, var(--shadow) 28%, transparent);
-    animation: editor-caret-blink 1.08s steps(1, end) infinite;
-  }
-
-  .editor-custom-caret[data-caret-kind="code"] {
-    background: color-mix(in srgb, var(--text) 56%, var(--bg) 44%);
-  }
-
-  .editor-custom-caret[data-caret-kind="comment"] {
-    background: color-mix(in srgb, var(--text) 42%, var(--bg) 58%);
-  }
-
-  .editor-custom-caret[data-caret-kind="del"] {
-    background: var(--danger);
-  }
-
-  .editor-custom-caret[data-caret-kind="ins"] {
-    background: var(--success);
-  }
-
-  .editor-custom-caret[data-caret-bold="true"] {
-    width: 2.8px;
-  }
-
-  .editor-custom-caret[data-caret-italic="true"] {
-    transform: skew(-10deg);
-  }
-
-  .editor-custom-caret[data-caret-bold="true"][data-caret-italic="true"] {
-    transform: skew(-10deg) scaleX(1.22);
-  }
-
-  @keyframes editor-caret-blink {
-    0%, 48% {
-      opacity: 1;
-    }
-
-    50%, 100% {
-      opacity: 0;
-    }
-  }
-
-  .editor-diff-marker {
-    left: 50%;
-    position: absolute;
-    top: 0;
-    transform: translate(-50%, -50%);
-  }
-
-  .editor-diff-marker[data-marker-range="true"]::before {
-    background: currentColor;
-    border-radius: 999px;
-    content: "";
-    height: var(--editor-diff-marker-span, 0px);
-    left: 50%;
-    opacity: 0.58;
-    position: absolute;
-    top: 50%;
-    transform: translateX(-50%);
-    width: 0.13rem;
-  }
-
-  .editor-diff-marker[data-marker-type="insert"] {
-    color: var(--success);
-  }
-
-  .editor-diff-marker[data-marker-type="modify"] {
-    color: var(--attention);
-  }
-
-  .editor-diff-marker[data-marker-type="delete"] {
-    color: var(--danger);
-  }
-
-  .editor-diff-marker-icon {
-    display: block;
-    filter: drop-shadow(0 0.08rem 0.18rem color-mix(in srgb, var(--shadow) 35%, transparent));
-    height: 1.1rem;
-    overflow: visible;
-    position: relative;
-    width: 1.1rem;
-    z-index: 1;
-  }
-
-  @media (max-width: 767px) {
-    .editor-diff-marker-icon {
-      width: 0.82rem;
-      height: 0.82rem;
-    }
-  }
-
-  .editor-content p,
-  .editor-content blockquote,
-  .editor-content ul,
-  .editor-content ol,
-  .editor-content pre,
-  .editor-content h1,
-  .editor-content h2,
-  .editor-content h3,
-  .editor-content h4,
-  .editor-content h5,
-  .editor-content h6 {
-    margin: 0 0 1rem;
-    text-align: justify;
-  }
-
-  .editor-content h1,
-  .editor-content h2,
-  .editor-content h3,
-  .editor-content h4,
-  .editor-content h5,
-  .editor-content h6 {
-    font-family: var(--font-sans);
-    font-weight: 600;
-    line-height: 1.15;
-  }
-
-  .editor-content h1 {
-    font-size: 2.05em;
-  }
-
-  .editor-content h2 {
-    font-size: 1.55em;
-  }
-
-  .editor-content h3 {
-    font-size: 1.25em;
-  }
-
-  .editor-content ul,
-  .editor-content ol {
-    list-style-position: outside;
-    padding-left: 1.3rem;
-  }
-
-  .editor-content ul {
-    list-style-type: disc;
-  }
-
-  .editor-content ul ul {
-    list-style-type: circle;
-  }
-
-  .editor-content ul ul ul {
-    list-style-type: square;
-  }
-
-  .editor-content ol {
-    list-style-type: decimal;
-  }
-
   .editor-content li > details {
     display: block;
   }
@@ -445,115 +160,6 @@
 
   .editor-content li > details[open] > summary::after {
     transform: rotate(90deg);
-  }
-
-  .editor-content blockquote {
-    color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
-  }
-
-  .editor-content a {
-    color: inherit;
-    text-decoration-color: var(--accent);
-    text-decoration-thickness: 0.08em;
-  }
-
-  .editor-content code {
-    font-family: var(--font-mono);
-    font-size: 0.94em;
-    background: color-mix(in srgb, var(--text) 7%, transparent);
-    border-radius: 0.35rem;
-    padding: 0.08em 0.34em;
-  }
-
-  .editor-content pre {
-    overflow-x: auto;
-    white-space: pre-wrap;
-  }
-
-  .editor-content pre[data-language]:not([data-language=""])::before {
-    content: attr(data-language);
-    display: block;
-    margin: -0.2rem -0.15rem 0.65rem;
-    border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
-    padding: 0 0 0.45rem;
-    font-family: var(--font-mono);
-    font-size: 0.72em;
-    line-height: 1;
-    color: color-mix(in srgb, var(--text) var(--muted-strength), var(--fg-bg, var(--bg)));
-  }
-
-  .editor-content pre code {
-    display: block;
-    background: transparent;
-    border-radius: 0;
-    padding: 0;
-  }
-
-  .editor-content p:has(+ :where(br, [data-single-break="true"]) + [data-block-comment="true"]) {
-    margin-bottom: 0;
-  }
-  
-  .editor-content p:has(+ [data-block-comment="true"]) {
-    margin-bottom: -0.1rem;
-  }
-  
-  .editor-content [data-block-comment="true"] + :where(br, [data-single-break="true"]) {
-    margin-bottom: 0;
-  }
-
-  .editor-content [data-block-comment="true"] {
-    --comment-fg-bg: color-mix(in srgb, var(--text) 6%, var(--fg-bg, var(--bg)));
-    background: color-mix(in srgb, var(--text) 6%, transparent);
-    border-radius: 0.45rem;
-    padding: 0.45rem 0.75rem;
-    margin-block: 0;
-    margin-inline: -0.75rem;
-    white-space: pre-wrap;
-    font-family: var(--font-sans);
-    color: color-mix(in srgb, var(--text) 60%, var(--comment-fg-bg));
-    font-size: 0.85em;
-  }
-
-  .editor-content [data-inline-comment="true"] {
-    --comment-fg-bg: color-mix(in srgb, var(--text) 6%, var(--fg-bg, var(--bg)));
-    background: color-mix(in srgb, var(--text) 6%, transparent);
-    border-radius: 0.35rem;
-    color: color-mix(in srgb, var(--text) 60%, var(--comment-fg-bg));
-    padding: 0.08em 0.34em;
-  }
-
-  .editor-content [data-block-comment="true"][data-revision-hover-active="true"],
-  .editor-content [data-inline-comment="true"][data-revision-hover-active="true"] {
-    background: color-mix(in srgb, var(--text) 12%, transparent);
-  }
-
-  .editor-content ins {
-    background: color-mix(in srgb, var(--success) 16%, transparent);
-    border-radius: 0.2em;
-    color: inherit;
-    font-weight: inherit;
-    margin-inline: -0.04em;
-    padding-inline: 0.08em;
-    text-decoration: none;
-  }
-
-  .editor-content ins[data-revision-hover-active="true"] {
-    background: color-mix(in srgb, var(--success) 24%, transparent);
-  }
-
-  .editor-content del {
-    background: color-mix(in srgb, var(--danger) 16%, transparent);
-    border-radius: 0.2em;
-    color: inherit;
-    font-weight: inherit;
-    margin-inline: -0.04em;
-    padding-inline: 0.08em;
-    text-decoration-color: currentColor;
-    text-decoration-thickness: 0.08em;
-  }
-
-  .editor-content del[data-revision-hover-active="true"] {
-    background: color-mix(in srgb, var(--danger) 24%, transparent);
   }
 
   .workbench-spinning-border-host {
@@ -650,40 +256,6 @@
     }
   }
 
-  .thread-unsent-steer-message {
-    position: relative;
-    isolation: isolate;
-    overflow: hidden;
-  }
-
-  .thread-unsent-steer-message {
-    border-radius: 1.4rem;
-  }
-
-  .thread-unsent-steer-message::before,
-  .thread-unsent-steer-message::after {
-    content: "";
-    position: absolute;
-    pointer-events: none;
-    border-radius: inherit;
-  }
-
-  .thread-unsent-steer-message::before {
-    inset: 0;
-    z-index: -2;
-    background:
-      radial-gradient(circle at 22% 18%, color-mix(in srgb, #f97316 38%, transparent), transparent 32%),
-      radial-gradient(circle at 82% 72%, color-mix(in srgb, #ef4444 30%, transparent), transparent 34%),
-      linear-gradient(135deg, color-mix(in srgb, #f97316 42%, transparent), color-mix(in srgb, #ef4444 30%, transparent));
-    opacity: 0.46;
-  }
-
-  .thread-unsent-steer-message::after {
-    inset: calc(var(--spacing) * 0.5);
-    z-index: -1;
-    background: var(--shell-fade-bg);
-  }
-
   @keyframes workbench-spinning-border-first {
     to {
       offset-distance: 100%;
@@ -702,12 +274,9 @@
       background-position: 50% 50%;
     }
 
-    .sticky-composer-shell,
     .sticky-composer-surface,
-    .thread-composer-mode-panel,
     .sticky-composer-expanded,
     .sticky-composer-collapsed,
-    .thread-composer-sticky-form-content,
     .thread-composer-sticky-questionnaire-frame .thread-user-input-request-content {
       animation: none;
       transition: none;
@@ -715,10 +284,6 @@
   }
 
   @media (hover: none) and (pointer: coarse) {
-    .sticky-composer-shell {
-      bottom: 0;
-    }
-
     .sticky-composer-surface {
       @variant stuck {
         margin-inline: calc(0px - var(--thread-scroll-inline-padding, 0px));

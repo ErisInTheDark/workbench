@@ -529,10 +529,10 @@ function ThreadUserMessageItem ({
   const inputMessageClass = isPending
     ? " relative isolate overflow-hidden rounded-[1.4rem]"
     : steerState === "unsent"
-      ? " thread-unsent-steer-message px-0.5 py-0.5"
+      ? " relative isolate overflow-hidden rounded-[1.4rem] px-0.5 py-0.5"
       : "";
   const decoratedInputSurfaceClass = isPending
-    ? " relative z-10 rounded-[1.4rem] border-[3px] border-transparent bg-[color:color-mix(in_srgb,var(--text)_6%,var(--shell-fade-bg))] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--shell-fade-bg))] [clip-path:padding-box] px-4 py-3"
+    ? " relative z-10 rounded-[1.4rem] border-[3px] border-transparent bg-[color:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] [clip-path:padding-box] px-4 py-3"
     : isDecoratedInput
       ? " relative z-10 rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] px-4 py-3"
       : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] px-4 py-3";
@@ -544,6 +544,15 @@ function ThreadUserMessageItem ({
       <div className="group/thread-bubble relative w-fit max-w-[min(100%,42rem)]">
         <div className={isDecoratedInput ? inputMessageClass : undefined}>
           {isPending ? <WorkbenchSpinningBorder radius="1.4rem" /> : null}
+          {steerState === "unsent" ? (
+            <>
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 -z-20 rounded-[inherit] bg-[radial-gradient(circle_at_22%_18%,color-mix(in_srgb,#f97316_38%,transparent),transparent_32%),radial-gradient(circle_at_82%_72%,color-mix(in_srgb,#ef4444_30%,transparent),transparent_34%),linear-gradient(135deg,color-mix(in_srgb,#f97316_42%,transparent),color-mix(in_srgb,#ef4444_30%,transparent))] opacity-[0.46]"
+              />
+              <span aria-hidden="true" className="pointer-events-none absolute inset-0.5 -z-10 rounded-[inherit] bg-canvas" />
+            </>
+          ) : null}
           <div className={`space-y-2 text-left${decoratedInputSurfaceClass}`}>
             {displayContent.length ? displayContent.map((content, index) => (
               <ThreadUserInputLine

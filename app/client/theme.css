@@ -1,9 +1,20 @@
 @theme {
+  --animate-blink: blink 1.08s steps(1, end) infinite;
   --animate-shimmer: shimmer 1.45s linear infinite;
   --animate-slide-reveal: slide-reveal 180ms cubic-bezier(0.22, 0.82, 0.28, 1) both;
   --animate-tick: tick 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
   --color-button-hover: color-mix(in srgb, white 20%, var(--shell-fade-bg) 80%);
   --container-content: 56rem;
+
+  @keyframes blink {
+    0%, 48% {
+      opacity: 1;
+    }
+
+    50%, 100% {
+      opacity: 0;
+    }
+  }
 
   @keyframes slide-reveal {
     from {
@@ -47,6 +58,7 @@
   --opacity-muted-grid: calc(var(--muted-strength) * 0.18);
   --opacity-muted-soft: calc(var(--muted-strength) * 0.6);
   --color-bg: var(--bg);
+  --color-canvas: var(--app-bg-solid);
   --color-bg-soft: var(--bg-soft);
   --color-text: var(--text);
   --color-accent: var(--accent);

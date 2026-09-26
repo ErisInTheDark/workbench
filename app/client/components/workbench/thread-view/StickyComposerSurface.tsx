@@ -63,8 +63,8 @@ export default function StickyComposerSurface({
       const stuck = shellRect.bottom + marginBlockEnd
         < flowReserver.getBoundingClientRect().bottom - 0.5;
       const stuckValue = stuck ? "true" : "false";
-      if (shell.dataset.stickyComposerStuck !== stuckValue) {
-        shell.dataset.stickyComposerStuck = stuckValue;
+      if (shell.dataset.stickyStuck !== stuckValue) {
+        shell.dataset.stickyStuck = stuckValue;
       }
       if (stuck) return;
       const marginBlockStart = Number.parseFloat(shellStyle.marginTop);
@@ -86,19 +86,22 @@ export default function StickyComposerSurface({
       resizeObserver.disconnect();
       viewport.removeEventListener("scroll", syncFlowReserver);
       flowReserver.style.height = "";
-      delete shell.dataset.stickyComposerStuck;
+      delete shell.dataset.stickyStuck;
     };
   }, [getViewport, threadScrollViewport]);
 
   return (
     <>
-      <div ref={shellRef} className="sticky-composer-shell">
+      <div
+        ref={shellRef}
+        className="sticky bottom-[calc(env(safe-area-inset-bottom,0px)+0.75rem)] z-20 col-start-1 row-start-2 mt-6 min-w-0 shrink-0 self-end rounded-[1.15rem] bg-canvas/80 [--fg-bg:var(--app-bg-solid)] [--sticky-composer-motion-duration:220ms] [--sticky-composer-motion-ease:cubic-bezier(0.16,1,0.3,1)] coarse-touch:bottom-0"
+      >
         <div
           className="sticky-composer-surface"
           data-collapsed={collapsed ? "true" : "false"}
         >
           <div className="sticky-composer-expanded">
-            <div className="sticky-composer-collapse-button-slot">
+            <div className="hidden stuck:block">
               <button
                 aria-expanded={!collapsed}
                 aria-label={collapseControlLabel}
@@ -122,24 +125,24 @@ export default function StickyComposerSurface({
             role="button"
             tabIndex={0}
           >
-            <span className="sticky-composer-collapsed-chevron" aria-hidden="true">
+            <span className="inline-flex w-9 items-center justify-center text-fg/muted" aria-hidden="true">
               <ChevronIcon className="rotate-180" size={16} />
             </span>
-            <span className="sticky-composer-collapsed-text" data-preview-kind={collapsedPreviewKind}>
+            <span className="min-w-0 line-clamp-2 data-[preview-kind=placeholder]:text-fg/muted" data-preview-kind={collapsedPreviewKind}>
               {collapsedContent}
             </span>
-            {collapsedAccessory ? <span className="sticky-composer-collapsed-accessory">{collapsedAccessory}</span> : null}
+            {collapsedAccessory ? <span className="inline-flex shrink-0 flex-nowrap gap-[0.35rem]">{collapsedAccessory}</span> : null}
           </div>
         </div>
       </div>
       <div
         ref={flowReserverRef}
         aria-hidden="true"
-        className="sticky-composer-flow-reserver"
+        className="pointer-events-none relative col-start-1 row-start-2 h-0 w-full shrink-0 self-end"
       >
         <span
           ref={originMarkerRef}
-          className="sticky-composer-origin-marker"
+          className="absolute bottom-0 h-px w-full"
         />
       </div>
     </>

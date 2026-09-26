@@ -64,6 +64,34 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
+const modePanelClassName = `
+  hidden absolute inset-0 col-start-1 row-start-1 min-w-0 overflow-clip opacity-0
+  transform-[translateY(0.45rem) scale(0.985)]
+  [transition-behavior: allow-discrete]
+  data-[active=true]:(block relative inset-auto opacity-100 transform-[translateY(0) scale(1)])
+  starting:data-[active=true]:(opacity-0 transform-[translateY(0.45rem) scale(0.985)])
+  motion-reduce:(animate-none transition-none)
+`;
+
+const modePanelTransitionClassName = `[transition:
+  opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+  transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+  display var(--sticky-composer-motion-duration) allow-discrete
+]`;
+
+const stickyComposerContentClassName = `
+  [transition:
+    max-height var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+    opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)
+  ]
+  stuck:(
+    [max-height: min(52dvh, calc(100dvh - env(safe-area-inset-bottom, 0px) - 11rem))]
+    overflow-y-auto overscroll-contain
+    [padding-bottom: min(0.75rem, var(--workbench-safe-area-bottom, 0px))]
+    pr-[0.15rem] [scrollbar-gutter: stable]
+  )
+`;
+
 export default function ThreadComposer ({
   children,
   canToggleHarness = false,
@@ -553,11 +581,11 @@ export default function ThreadComposer ({
               {header}
             </div>
           ) : null}
-          <div className="thread-composer-mode-stack" data-active-mode={activeComposerMode}>
+          <div className="relative grid [interpolate-size: allow-keywords]" data-active-mode={activeComposerMode}>
             {visiblePendingUserInputRequest ? (
               <div
                 aria-hidden={!isQuestionnairePanelActive}
-                className="thread-composer-mode-panel thread-composer-sticky-questionnaire-frame"
+                className={`${modePanelClassName} ${modePanelTransitionClassName} thread-composer-sticky-questionnaire-frame`}
                 data-active={isQuestionnairePanelActive ? "true" : "false"}
                 inert={!isQuestionnairePanelActive}
               >
@@ -591,7 +619,7 @@ export default function ThreadComposer ({
             ) : null}
             <div
               aria-hidden={!isComposerPanelActive}
-              className="thread-composer-mode-panel thread-composer-sticky-form-content"
+              className={`${modePanelClassName} ${stickyMode ? stickyComposerContentClassName : modePanelTransitionClassName}`}
               data-active={isComposerPanelActive ? "true" : "false"}
               inert={!isComposerPanelActive}
             >
