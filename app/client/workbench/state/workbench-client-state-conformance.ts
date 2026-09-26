@@ -35,6 +35,7 @@ export function conformWorkbenchClientStateResponse(
   const repairedPaths: DatabaseConformancePath[] = [];
   const issues: DatabaseConformanceIssue[] = [];
   const knownRootKeys = new Set([
+    "attachmentsAsUrls",
     "daemonRegistrationId",
     "kind",
     "oldestAvailableRevision",
@@ -76,6 +77,9 @@ export function conformWorkbenchClientStateResponse(
     reportClientSchemaError("Rejected Workbench daemon registrations", registrations.error);
     issues.push(invalidValue(["registrations"]));
   }
+  if (value.attachmentsAsUrls !== undefined && typeof value.attachmentsAsUrls !== "boolean") {
+    issues.push(invalidValue(["attachmentsAsUrls"]));
+  }
 
   const rowsValue = isRecord(value.rows) ? value.rows : {};
   if (!isRecord(value.rows)) issues.push(invalidValue(["rows"]));
@@ -99,6 +103,7 @@ export function conformWorkbenchClientStateResponse(
   if (issues.length) return { issues, repairedPaths, success: false };
   return {
     data: {
+      attachmentsAsUrls: value.attachmentsAsUrls === true,
       daemonRegistrationId: value.daemonRegistrationId as string,
       kind: kind as "delta" | "snapshot",
       oldestAvailableRevision: oldestAvailableRevision as number,

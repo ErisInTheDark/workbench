@@ -1468,7 +1468,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       : submittedOptions;
     let payload: ThreadPayload | null;
     try {
-      payload = await controls.sendThreadMessage(thread, input, materializedOptions);
+      const resolvedInput = await Promise.all(input.map(async item => item.type === "image"
+        ? { ...item, url: await clientStateController.resolveDraftAttachmentUrl(item.url) }
+        : item));
+      payload = await controls.sendThreadMessage(thread, resolvedInput, materializedOptions);
     } catch (error) {
       const currentRoute = currentRouteRef.current;
       const createdThread = createdThreadRef.current;
@@ -1487,7 +1490,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
 
     return payload;
-  }, [composerProfileController, controls, navigateToRoute, profileControllerFor, workbenchClient.mounted, workspaceController]);
+  }, [clientStateController, composerProfileController, controls, navigateToRoute, profileControllerFor, workbenchClient.mounted, workspaceController]);
 
   const activeSidebarDraftId = route.view === "thread" && route.threadTarget?.kind === "draft"
     ? route.threadTarget.draftId

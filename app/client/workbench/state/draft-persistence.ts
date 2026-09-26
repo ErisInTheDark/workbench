@@ -92,9 +92,34 @@ export async function saveComposerDraft(
       record.daemonRegistrationId === daemonRegistrationId && record.projectId === projectId && record.threadId === threadId
     ))?.value ?? sidebarDraftToInput(null);
     const draft = { ...update(current), updatedAt: Date.now() };
-    if (draft.text.trim() || draft.attachments.length) await state.put({ ...identity, value: draft });
-    else await state.delete(identity);
-    return draft;
+    if (!draft.text.trim() && !draft.attachments.length) {
+      await state.delete(identity);
+      return draft;
+    }
+    if (!state.supportsAttachmentUrls()) {
+      await state.put({ ...identity, value: draft });
+      return draft;
+    }
+    const savedIds = new Set(current.attachments.map(item => item.id));
+    await state.put({
+      ...identity,
+      value: {
+        ...draft,
+        attachments: draft.attachments.filter(item => savedIds.has(item.id)),
+      },
+    });
+    const uploadedUrls = new Map<string, string>();
+    for (const attachment of draft.attachments) {
+      if (savedIds.has(attachment.id)) continue;
+      uploadedUrls.set(attachment.id,
+        await state.uploadDraftAttachment(identity, attachment.id, attachment.url));
+    }
+    return {
+      ...draft,
+      attachments: draft.attachments.map(item => ({
+        ...item, url: uploadedUrls.get(item.id) ?? item.url,
+      })),
+    };
   }
   if (target.kind === "presentation") {
     const existing = target.owner.draft(target.draftId);
@@ -178,9 +203,34 @@ export async function saveQuestionnaireDraft(
   const hasContent = draft.attachments.length
     || Object.values(draft.customValues).some((value) => value.trim())
     || Object.values(draft.selectedValues).some((values) => values.some((value) => value.trim()));
-  if (hasContent) await state.put({ kind: "questionnaireDraft", ...identity, value: draft });
-  else await clearQuestionnaireDraft(state, () => identity);
-  return draft;
+  if (!hasContent) {
+    await clearQuestionnaireDraft(state, () => identity);
+    return draft;
+  }
+  if (!state.supportsAttachmentUrls()) {
+    await state.put({ kind: "questionnaireDraft", ...identity, value: draft });
+    return draft;
+  }
+  const savedIds = new Set(current.attachments.map(item => item.id));
+  await state.put({
+    kind: "questionnaireDraft", ...identity,
+    value: {
+      ...draft,
+      attachments: draft.attachments.filter(item => savedIds.has(item.id)),
+    },
+  });
+  const uploadedUrls = new Map<string, string>();
+  for (const attachment of draft.attachments) {
+    if (savedIds.has(attachment.id)) continue;
+    uploadedUrls.set(attachment.id, await state.uploadDraftAttachment(
+      { kind: "questionnaireDraft", ...identity }, attachment.id, attachment.url));
+  }
+  return {
+    ...draft,
+    attachments: draft.attachments.map(item => ({
+      ...item, url: uploadedUrls.get(item.id) ?? item.url,
+    })),
+  };
 }
 
 export async function clearQuestionnaireDraft(

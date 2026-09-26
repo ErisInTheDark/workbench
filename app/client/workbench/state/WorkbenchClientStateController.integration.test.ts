@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createServer } from "node:http";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchAppStateRepository from "../../../server/state/WorkbenchAppStateRepository";
 import WorkbenchBrowserStateRegistry from "../../../server/state/WorkbenchBrowserStateRegistry";
 import WorkbenchAppStateRoutes from "../../../server/state/workbench-app-state-routes";
@@ -20,6 +20,84 @@ import { WORKBENCH_BROWSER_STATE_HEADER } from "workbench-shared/state/workbench
 
 import { conformWorkbenchClientStateResponse } from "./workbench-client-state-conformance";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
+import { saveComposerDraft, saveQuestionnaireDraft } from "./draft-persistence";
+
+test("large composer and questionnaire image drafts save individually and recover after an upload failure", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-draft-images-"));
+  const repository = new WorkbenchAppStateRepository({ databasePath: path.join(directory, "state.sqlite3") });
+  await repository.start();
+  const registry = new WorkbenchBrowserStateRegistry(repository);
+  registry.start();
+  const routes = new WorkbenchAppStateRoutes(registry);
+  const server = createServer((request, response) => {
+    void routes.handle(request, response, new URL(request.url!, "http://localhost"));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const origin = `http://127.0.0.1:${address.port}`;
+  const image = `data:image/png;base64,${Buffer.alloc(600_000, 42).toString("base64")}`;
+  const browserStateId = "b67fc086-6f5d-46eb-aede-081027e43b72";
+  let failSecond = true;
+  const requestBodies: number[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input), origin);
+    if (init?.method === "PUT" && url.pathname.endsWith("/composer-draft")) {
+      requestBodies.push(String(init.body).length);
+    }
+    if (init?.method === "PUT" && url.pathname.endsWith("/attachment")
+      && url.searchParams.get("attachmentId") === "second" && failSecond) {
+      failSecond = false;
+      return Response.json({ error: "injected upload failure" }, { status: 500 });
+    }
+    return fetch(url, init);
+  };
+  const state = new WorkbenchClientStateController({
+    browserStateId, fetcher, mode: "http", schedule: () => 1, cancelSchedule: () => {},
+  });
+  try {
+    await state.bootstrap();
+    const identity = {
+      daemonRegistrationId: state.daemonRegistrationId,
+      projectId: ProjectIdSchema.parse("project"), threadId: ThreadReferenceSchema.parse("thread"),
+    };
+    const target = { ...identity, kind: "thread" as const };
+    const attachments = [
+      { id: "first", url: image },
+      { id: "second", url: image },
+    ];
+    const update = () => ({ text: "send both", attachments, updatedAt: 1 });
+    await assert.rejects(saveComposerDraft(state, target, update, {
+      reason: "autosave", detached: false,
+    }), /injected upload failure/u);
+    assert.equal(state.records("composerDraft")[0]?.value.attachments.length, 1);
+    const saved = await saveComposerDraft(state, target, update, {
+      reason: "autosave", detached: false,
+    });
+    assert.equal(saved?.attachments.length, 2);
+    assert.ok(requestBodies.every(bytes => bytes < 1_000_000));
+    const savedUrl = saved?.attachments[1]?.url;
+    assert.ok(savedUrl?.startsWith("/api/workbench-client-state/attachment?"));
+    assert.equal(await state.resolveDraftAttachmentUrl(savedUrl), image);
+    const questionnaire = {
+      ...identity, requestKey: "question",
+    };
+    const answer = await saveQuestionnaireDraft(state, () => questionnaire, current => ({
+      ...current, attachments: [{ id: "answer", url: image }],
+    }));
+    assert.equal(await state.resolveDraftAttachmentUrl(answer.attachments[0]!.url), image);
+    await state.bootstrap();
+    assert.equal(state.records("composerDraft")[0]?.value.attachments.length, 2);
+    assert.equal(state.records("questionnaireDraft")[0]?.value.attachments.length, 1);
+  } finally {
+    state.dispose();
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    await registry.close();
+    await repository.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("real app-state remapping orders pending and later saves without losing edits across a failed retry", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-remap-"));

@@ -105,6 +105,45 @@ test("project remapping preserves draft attachments and launch selection across 
   } finally { await restarted.close(); }
 });
 
+test("binary draft images follow composer and questionnaire owners through project remap", async context => {
+  const fixture = await controllerFixture(context);
+  const projectId = ProjectIdSchema.parse("remote://example.test/owner/repo");
+  const image = new Uint8Array([1, 2, 3, 4]);
+  const identities = [
+    { kind: "composerDraft" as const, daemonRegistrationId: fixture.daemonRegistrationId, projectId: "old", threadId: "thread" },
+    { kind: "questionnaireDraft" as const, daemonRegistrationId: fixture.daemonRegistrationId, projectId: "old", threadId: "thread", requestKey: "question" },
+  ];
+  try {
+    for (const identity of identities) {
+      if (identity.kind === "composerDraft") {
+        await fixture.controller.mutate({ action: "put", record: {
+          ...identity, value: { attachments: [], text: "saved", updatedAt: 1 },
+        } });
+      } else {
+        await fixture.controller.mutate({ action: "put", record: {
+          ...identity, value: { attachments: [], customValues: { answer: "saved" }, selectedValues: {}, updatedAt: 1 },
+        } });
+      }
+      await fixture.controller.putAttachment(identity, "image", "image/png", image);
+    }
+    await fixture.controller.remapProjects({
+      daemonRegistrationId: fixture.daemonRegistrationId, aliases: [{ alias: "old", projectId }],
+    });
+    for (const identity of identities) {
+      const stored = fixture.controller.readAttachment({ ...identity, projectId }, "image");
+      assert.deepEqual(stored?.content, Buffer.from(image));
+      assert.equal(stored?.mediaType, "image/png");
+    }
+  } finally { await fixture.controller.close(); }
+  const restarted = fixture.create();
+  try {
+    await restarted.start();
+    for (const identity of identities) {
+      assert.deepEqual(restarted.readAttachment({ ...identity, projectId }, "image")?.content, Buffer.from(image));
+    }
+  } finally { await restarted.close(); }
+});
+
 test("project remap conflicts roll back records and aliases without losing either draft", async context => {
   const fixture = await controllerFixture(context);
   const projectId = ProjectIdSchema.parse("remote://example.test/owner/repo");

@@ -138,6 +138,38 @@ test("model preferences upgrade v6 without losing existing preferences or the ba
   } finally { await repository.close(); }
 });
 
+test("v15 draft rows survive binary image table upgrade with a retained rollback backup", async context => {
+  const databasePath = await temporaryDatabase(context);
+  const old = new Database(databasePath);
+  applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 15 });
+  old.prepare("INSERT INTO daemon_registrations(id,kind,created_at,revision) VALUES ('retained','local',0,1)").run();
+  old.prepare("INSERT INTO composer_drafts(daemon_registration_id,project_id,thread_id,text,updated_at,deleted,revision) VALUES ('retained','project','thread','saved',1,0,2)").run();
+  old.prepare("INSERT INTO composer_draft_attachments(daemon_registration_id,project_id,thread_id,id,url) VALUES ('retained','project','thread','image','data:image/png;base64,YQ==')").run();
+  old.close();
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  try {
+    await repository.start();
+    assert.equal(repository.query(selectRows(appStateTables.composerDraftAttachments))[0]?.url,
+      "data:image/png;base64,YQ==");
+    assert.deepEqual(repository.query(selectRows(appStateTables.composerDraftImageContent)), []);
+    repository.commit(() => [insertRow(appStateTables.composerDraftImageContent, {
+      daemon_registration_id: "retained", project_id: "project", thread_id: "thread",
+      attachment_id: "image", media_type: "image/png", content: new Uint8Array([1, 2, 3]),
+    })]);
+    assert.deepEqual(repository.query(selectRows(appStateTables.composerDraftImageContent))[0]?.content,
+      Buffer.from([1, 2, 3]));
+    const backups = path.join(path.dirname(databasePath), "backups", path.basename(databasePath));
+    const files = await fs.readdir(backups);
+    assert.equal(files.length, 1);
+    const backup = new Database(path.join(backups, files[0]!), { readonly: true });
+    try {
+      assert.equal(backup.pragma("user_version", { simple: true }), 15);
+      assert.equal((backup.prepare("SELECT url FROM composer_draft_attachments WHERE id='image'").get() as { url: string } | undefined)?.url,
+        "data:image/png;base64,YQ==");
+    } finally { backup.close(); }
+  } finally { await repository.close(); }
+});
+
 test("app startup preserves its pre-upgrade database even when closed during opening", async (context) => {
   const databasePath = await temporaryDatabase(context);
   const old = new Database(databasePath);

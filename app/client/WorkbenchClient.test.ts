@@ -494,7 +494,7 @@ test("an old-shape UUID URL keeps its thread owner and the sole browse folder th
     const url = String(input);
     const appStateUrl = new URL(url, "http://workbench.test");
     if (appStateUrl.pathname === "/api/workbench-client-state"
-      && appStateUrl.searchParams.get("capabilities") === "2") return Response.json({
+      && appStateUrl.searchParams.get("capabilities") === "3") return Response.json({
       kind: "snapshot", daemonRegistrationId: "attached-registration",
       registrations: [{ id: "attached-registration", kind: "local", daemonId }],
       oldestAvailableRevision: 0, revision: 1, schemaVersion: 1, rows,

@@ -15,6 +15,8 @@
  * - WorkbenchClientStateRecord: persisted browser state variants.
  * - WorkbenchClientStateIdentity: browser state addresses.
  * - WorkbenchClientStateMutation: put/delete intents.
+ * - WorkbenchClientStateAttachmentIdentity: composer or questionnaire image owner.
+ * - workbenchClientStateAttachmentUrl: browser-scoped image URL for one saved attachment.
  * - WorkbenchClientStateRows: schema-derived wire rows.
  * - WorkbenchClientStateResponse: versioned snapshots and deltas.
  * - WORKBENCH_BROWSER_STATE_HEADER: browser namespace header.
@@ -167,6 +169,7 @@ export type WorkbenchClientStateRows = {
 };
 
 interface WorkbenchClientStateVersion {
+  attachmentsAsUrls?: boolean;
   daemonRegistrationId: string;
   registrations?: z.infer<typeof WorkbenchDaemonRegistrationSchema>[];
   oldestAvailableRevision: number;
@@ -181,6 +184,28 @@ export type WorkbenchClientStateResponse =
 export type WorkbenchClientStateMutation =
   | { action: "put"; record: WorkbenchClientStateRecord }
   | { action: "delete"; identity: WorkbenchClientStateIdentity };
+
+export type WorkbenchClientStateAttachmentIdentity = Extract<
+  WorkbenchClientStateIdentity,
+  { kind: "composerDraft" | "questionnaireDraft" }
+>;
+
+export function workbenchClientStateAttachmentUrl(
+  browserStateId: string,
+  identity: WorkbenchClientStateAttachmentIdentity,
+  attachmentId: string,
+) {
+  const query = new URLSearchParams({
+    attachmentId,
+    browserStateId,
+    daemonRegistrationId: identity.daemonRegistrationId,
+    kind: identity.kind,
+    projectId: identity.projectId,
+    threadId: identity.threadId,
+    ...("requestKey" in identity ? { requestKey: identity.requestKey } : {}),
+  });
+  return `/api/workbench-client-state/attachment?${query}`;
+}
 
 export const WORKBENCH_BROWSER_STATE_HEADER = "x-workbench-browser-state-id";
 const WORKBENCH_BROWSER_STATE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;

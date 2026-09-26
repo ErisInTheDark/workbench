@@ -3,9 +3,11 @@
  * - default WorkbenchAppStateRoutes: own app-state HTTP routes and bounded mutation/remap admission.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { z } from "zod";
 
 import {
   WORKBENCH_BROWSER_STATE_HEADER,
+  isWorkbenchBrowserStateId,
   WorkbenchDaemonRegistrationRequestSchema,
   WorkbenchProjectRemapSchema,
   workbenchClientStateMutationKinds,
@@ -17,6 +19,27 @@ import {
 import WorkbenchBrowserStateRegistry from "./WorkbenchBrowserStateRegistry.ts";
 
 const MAX_BODY_BYTES = 1_000_000;
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const attachmentInput = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("composerDraft"),
+    browserStateId: z.string().min(1),
+    daemonRegistrationId: z.string().min(1),
+    projectId: z.string().min(1),
+    threadId: z.string().min(1),
+    attachmentId: z.string().min(1).max(256),
+  }),
+  z.object({
+    kind: z.literal("questionnaireDraft"),
+    browserStateId: z.string().min(1),
+    daemonRegistrationId: z.string().min(1),
+    projectId: z.string().min(1),
+    threadId: z.string().min(1),
+    requestKey: z.string().min(1),
+    attachmentId: z.string().min(1).max(256),
+  }),
+]);
+const mediaType = z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
 function sendJson(response: ServerResponse, status: number, value: object) {
   response.writeHead(status, {
@@ -27,8 +50,10 @@ function sendJson(response: ServerResponse, status: number, value: object) {
 }
 
 function negotiatedState(value: WorkbenchClientStateResponse, url: URL) {
-  if (url.searchParams.get("capabilities") === "2") return value;
-  const { registrations: _registrations, ...legacy } = value;
+  if (url.searchParams.get("capabilities") === "3") return value;
+  const { attachmentsAsUrls: _attachmentsAsUrls, ...previous } = value;
+  if (url.searchParams.get("capabilities") === "2") return previous;
+  const { registrations: _registrations, ...legacy } = previous;
   return legacy;
 }
 
@@ -42,6 +67,19 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
     chunks.push(buffer);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function readImage(request: IncomingMessage) {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (bytes > MAX_IMAGE_BYTES) throw new Error("Draft image exceeds its size limit.");
+    chunks.push(buffer);
+  }
+  if (!bytes) throw new Error("Draft image is empty.");
+  return Buffer.concat(chunks);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -58,10 +96,11 @@ export default class WorkbenchAppStateRoutes {
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL) {
     const isReadRoute = url.pathname === "/api/workbench-client-state";
+    const isAttachmentRoute = url.pathname === "/api/workbench-client-state/attachment";
     const isRemapRoute = url.pathname === "/api/workbench-client-state/project-remap";
     const isRegistrationRoute = url.pathname === "/api/workbench-client-state/daemon-register";
     const mutationKinds = workbenchClientStateMutationKinds(url.pathname);
-    if (!isReadRoute && !isRemapRoute && !isRegistrationRoute && !mutationKinds) {
+    if (!isReadRoute && !isAttachmentRoute && !isRemapRoute && !isRegistrationRoute && !mutationKinds) {
       if (!url.pathname.startsWith("/api/workbench-client-state/")) return false;
       sendJson(response, 404, { error: "Unknown Workbench app-state route." });
       return true;
@@ -70,6 +109,43 @@ export default class WorkbenchAppStateRoutes {
       const rawBrowserStateId = request.headers[WORKBENCH_BROWSER_STATE_HEADER];
       if (Array.isArray(rawBrowserStateId)) throw new Error("Workbench browser state ID is invalid.");
       const browserStateId = rawBrowserStateId || undefined;
+      if (isAttachmentRoute && (request.method === "GET" || request.method === "PUT")) {
+        const parsed = attachmentInput.parse(Object.fromEntries(url.searchParams));
+        if (parsed.browserStateId !== "shared" && !isWorkbenchBrowserStateId(parsed.browserStateId)) {
+          throw new Error("Browser state ID is invalid.");
+        }
+        const owner = parsed.kind === "composerDraft"
+          ? {
+            kind: parsed.kind, daemonRegistrationId: parsed.daemonRegistrationId,
+            projectId: parsed.projectId, threadId: parsed.threadId,
+          }
+          : {
+            kind: parsed.kind, daemonRegistrationId: parsed.daemonRegistrationId,
+            projectId: parsed.projectId, threadId: parsed.threadId, requestKey: parsed.requestKey,
+          };
+        const imageBrowser = parsed.browserStateId === "shared" ? undefined : parsed.browserStateId;
+        if (request.method === "GET") {
+          const image = await this.#registry.readBrowserAttachment(imageBrowser, owner, parsed.attachmentId);
+          if (!image) {
+            sendJson(response, 404, { error: "Draft image is unavailable." });
+            return true;
+          }
+          response.writeHead(200, {
+            "Cache-Control": "private, no-store",
+            "Content-Type": image.mediaType,
+            "Content-Length": image.content.length,
+            "X-Content-Type-Options": "nosniff",
+          });
+          response.end(image.content);
+          return true;
+        }
+        if (browserStateId !== imageBrowser) throw new Error("Draft image belongs to another browser.");
+        const type = mediaType.parse(request.headers["content-type"]?.split(";")[0]?.trim());
+        const content = await readImage(request);
+        sendJson(response, 200, await this.#registry.putBrowserAttachment(
+          imageBrowser, owner, parsed.attachmentId, type, content));
+        return true;
+      }
       if (isRegistrationRoute && request.method === "POST") {
         const input = WorkbenchDaemonRegistrationRequestSchema.safeParse(await readJson(request));
         if (!input.success || input.data.attachedLocal && !this.verifyAttachedDaemon(input.data.daemonId)) {
@@ -97,7 +173,8 @@ export default class WorkbenchAppStateRoutes {
           sendJson(response, 400, { error: "sinceRevision must be a non-negative integer." });
           return true;
         }
-        sendJson(response, 200, negotiatedState(await this.#registry.readBrowser(browserStateId, sinceRevision), url));
+        sendJson(response, 200, negotiatedState(await this.#registry.readBrowser(
+          browserStateId, sinceRevision, url.searchParams.get("capabilities") === "3"), url));
         return true;
       }
       if (mutationKinds && (request.method === "PUT" || request.method === "DELETE")) {
@@ -109,7 +186,8 @@ export default class WorkbenchAppStateRoutes {
         const mutation = request.method === "PUT"
           ? { action: "put" as const, record: value as WorkbenchClientStateRecord }
           : { action: "delete" as const, identity: value as WorkbenchClientStateIdentity };
-        sendJson(response, 200, negotiatedState(await this.#registry.mutateBrowser(browserStateId, mutation), url));
+        sendJson(response, 200, negotiatedState(await this.#registry.mutateBrowser(
+          browserStateId, mutation, url.searchParams.get("capabilities") === "3"), url));
         return true;
       }
       response.writeHead(405, { Allow: isReadRoute ? "GET" : isRemapRoute || isRegistrationRoute ? "POST" : "DELETE, PUT" });

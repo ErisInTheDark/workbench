@@ -61,8 +61,17 @@ export default function useWorkbenchQuestionnaire(projectId: string, target: Wor
   const submit = useCallback(async (response: WorkbenchUserInputResponse, options?: WorkbenchSubmitUserInputRequestOptions) => {
     if (!request) throw new Error("The questionnaire is no longer available.");
     const source = thread.state.document ?? await thread.actions.read();
-    await thread.actions.submitQuestionnaire(response, { ...buildPendingUserInputRequestSubmissionOptions(source, request), ...options });
-  }, [request, thread.state.document, thread.actions.read, thread.actions.submitQuestionnaire]);
+    const supplementalInput = options?.supplementalInput
+      ? await Promise.all(options.supplementalInput.map(async item => item.type === "image"
+        ? { ...item, url: await store.resolveDraftAttachmentUrl(item.url) }
+        : item))
+      : undefined;
+    await thread.actions.submitQuestionnaire(response, {
+      ...buildPendingUserInputRequestSubmissionOptions(source, request),
+      ...options,
+      ...(supplementalInput ? { supplementalInput } : {}),
+    });
+  }, [request, store, thread.state.document, thread.actions.read, thread.actions.submitQuestionnaire]);
   return {
     thread,
     request,

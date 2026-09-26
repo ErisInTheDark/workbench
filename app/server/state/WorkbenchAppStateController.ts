@@ -9,10 +9,12 @@ import {
   type WorkbenchClientStateRecord,
   type WorkbenchClientStateResponse,
   type WorkbenchClientStateRows,
+  type WorkbenchClientStateAttachmentIdentity,
   type WorkbenchGlobalPreference,
   type WorkbenchProjectPreference,
   type WorkbenchSidebarPreference,
 } from "workbench-shared/state/workbench-client-state";
+import { workbenchClientStateAttachmentUrl } from "workbench-shared/state/workbench-client-state";
 import { isDeepStrictEqual } from "node:util";
 import { projectWorkbenchClientStateRows, workbenchClientStateRecordIdentity as recordIdentity } from "workbench-shared/state/workbench-client-state-projection";
 import {
@@ -28,6 +30,9 @@ import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
 import { appStateClientTables, appStateSchema, appStateTables } from "workbench-shared/state/workbench-app-state-schema";
 
 type ScalarPreference = WorkbenchGlobalPreference | WorkbenchProjectPreference | WorkbenchSidebarPreference;
+const STORED_IMAGE = "workbench:stored-image";
+type ImageMediaType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+type BrowserProjection = { browserStateId: string; attachmentsAsUrls: boolean };
 type GlobalPreferenceForKey<TKey extends WorkbenchGlobalPreference["key"]> = Extract<
   WorkbenchGlobalPreference,
   { key: TKey }
@@ -64,16 +69,17 @@ export default class WorkbenchAppStateController {
     return this.#repository.close();
   }
 
-  read(sinceRevision?: number): WorkbenchClientStateResponse {
+  read(sinceRevision?: number, projection?: BrowserProjection): WorkbenchClientStateResponse {
     const version = this.#repository.currentVersion();
     const canUseDelta = sinceRevision !== undefined
       && sinceRevision >= version.oldestAvailableRevision
       && sinceRevision <= version.revision;
     return {
+      ...(projection?.attachmentsAsUrls ? { attachmentsAsUrls: true } : {}),
       daemonRegistrationId: this.daemonRegistrationId,
       registrations: this.#repository.readDaemonRegistrations(),
       kind: canUseDelta ? "delta" : "snapshot",
-      rows: this.#readRows(canUseDelta ? sinceRevision : -1),
+      rows: this.#readRows(canUseDelta ? sinceRevision : -1, projection),
       schemaVersion: appStateSchema.currentVersion,
       ...version,
     };
@@ -85,7 +91,12 @@ export default class WorkbenchAppStateController {
   readGlobalPreference(
     key: WorkbenchGlobalPreference["key"],
   ): WorkbenchGlobalPreference["value"] | null {
-    for (const change of projectWorkbenchClientStateRows(this.read().rows)) {
+    // Keep scalar preference reads from expanding stored draft images.
+    const rows = this.#readRows(this.#repository.currentVersion().revision);
+    rows.globalPreferences = this.#repository.query(selectRows(appStateClientTables.globalPreferences, {
+      where: { key }, limit: 1,
+    }));
+    for (const change of projectWorkbenchClientStateRows(rows)) {
       if (
         change.change === "upsert"
         && change.record.kind === "globalPreference"
@@ -97,16 +108,100 @@ export default class WorkbenchAppStateController {
     return null;
   }
 
-  mutate(mutation: WorkbenchClientStateMutation) {
+  mutate(mutation: WorkbenchClientStateMutation, projection?: BrowserProjection) {
     const operation = this.#mutationQueue.then(() => {
       const canonical = mutation.action === "put"
         ? { ...mutation, record: this.#canonicalProject(mutation.record) }
         : { ...mutation, identity: this.#canonicalProject(mutation.identity) };
       const revision = this.#repository.commit((nextRevision) => this.#buildMutation(canonical, nextRevision));
-      return this.read(revision - 1);
+      return this.read(revision - 1, projection);
     });
     this.#mutationQueue = operation.then(() => undefined, () => undefined);
     return operation;
+  }
+
+  readAttachment(identity: WorkbenchClientStateAttachmentIdentity, attachmentId: string) {
+    return this.#readImage(this.#canonicalProject(identity), attachmentId);
+  }
+
+  putAttachment(
+    identity: WorkbenchClientStateAttachmentIdentity,
+    attachmentId: string,
+    mediaType: ImageMediaType,
+    content: Uint8Array,
+    projection?: BrowserProjection,
+  ) {
+    const operation = this.#mutationQueue.then(() => {
+      const owner = this.#canonicalProject(identity);
+      const composer = owner.kind === "composerDraft";
+      const ownerWhere = {
+        daemon_registration_id: owner.daemonRegistrationId,
+        project_id: owner.projectId,
+        thread_id: owner.threadId,
+        ...(!composer ? { request_key: owner.requestKey } : {}),
+      };
+      const parent = this.#repository.query(selectRows(
+        composer ? appStateTables.composerDrafts : appStateTables.questionnaireDrafts,
+        { where: ownerWhere, limit: 1 },
+      ))[0];
+      if (!parent || parent.deleted) throw new Error("The image draft is unavailable.");
+      const revision = this.#repository.commit(nextRevision => composer
+        ? [
+          upsertRow(appStateTables.composerDraftAttachments, {
+            ...ownerWhere, id: attachmentId, owner_deleted: 0, url: STORED_IMAGE,
+          }, { conflictColumns: ["daemon_registration_id", "project_id", "thread_id", "id"],
+            updateColumns: ["url"] }),
+          upsertRow(appStateTables.composerDraftImageContent, {
+            ...ownerWhere, attachment_id: attachmentId, media_type: mediaType, content,
+          }, { conflictColumns: ["daemon_registration_id", "project_id", "thread_id", "attachment_id"],
+            updateColumns: ["media_type", "content"] }),
+          updateRows(appStateTables.composerDrafts, { revision: nextRevision }, ownerWhere),
+        ]
+        : [
+          upsertRow(appStateTables.questionnaireDraftAttachments, {
+            ...ownerWhere, request_key: "requestKey" in owner ? owner.requestKey : "",
+            key: attachmentId, owner_deleted: 0, url: STORED_IMAGE,
+          }, { conflictColumns: ["daemon_registration_id", "project_id", "thread_id", "request_key", "key"],
+            updateColumns: ["url"] }),
+          upsertRow(appStateTables.questionnaireDraftImageContent, {
+            ...ownerWhere, request_key: "requestKey" in owner ? owner.requestKey : "",
+            attachment_id: attachmentId, media_type: mediaType, content,
+          }, { conflictColumns: ["daemon_registration_id", "project_id", "thread_id", "request_key", "attachment_id"],
+            updateColumns: ["media_type", "content"] }),
+          updateRows(appStateTables.questionnaireDrafts, { revision: nextRevision }, ownerWhere),
+        ]);
+      return this.read(revision - 1, projection);
+    });
+    this.#mutationQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  #readImage(identity: WorkbenchClientStateAttachmentIdentity, attachmentId: string) {
+    const composer = identity.kind === "composerDraft";
+    const ownerWhere = {
+      daemon_registration_id: identity.daemonRegistrationId,
+      project_id: identity.projectId,
+      thread_id: identity.threadId,
+      ...(!composer ? { request_key: identity.requestKey } : {}),
+    };
+    const attachment = this.#repository.query(selectRows(
+      composer ? appStateTables.composerDraftAttachments : appStateTables.questionnaireDraftAttachments,
+      { where: { ...ownerWhere, ...(composer ? { id: attachmentId } : { key: attachmentId }) }, limit: 1 },
+    ))[0];
+    if (!attachment) return null;
+    if (attachment.url === STORED_IMAGE) {
+      const row = this.#repository.query(selectRows(
+        composer ? appStateTables.composerDraftImageContent : appStateTables.questionnaireDraftImageContent,
+        { where: { ...ownerWhere, attachment_id: attachmentId }, limit: 1 },
+      ))[0];
+      if (!row) throw new Error("Saved draft image content is missing.");
+      return { content: row.content, mediaType: row.media_type };
+    }
+    const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]*={0,2})$/u.exec(attachment.url);
+    return match ? {
+      content: Buffer.from(match[2]!, "base64"),
+      mediaType: match[1]! as ImageMediaType,
+    } : null;
   }
 
   readProjectAliases() {
@@ -151,6 +246,54 @@ export default class WorkbenchAppStateController {
           }
           moved.push(identity);
           mutations.push(...this.#put({ ...change.record, projectId } as WorkbenchClientStateRecord, revision));
+          if (value.kind === "composerDraft") {
+            const images = this.#repository.query(selectRows(appStateTables.composerDraftImageContent, {
+              where: {
+                daemon_registration_id: value.daemonRegistrationId,
+                project_id: value.projectId,
+                thread_id: value.threadId,
+              },
+            }));
+            for (const image of images) {
+              const where = {
+                daemon_registration_id: image.daemon_registration_id,
+                project_id: projectId,
+                thread_id: image.thread_id,
+              };
+              mutations.push(updateRows(appStateTables.composerDraftAttachments, { url: STORED_IMAGE }, {
+                ...where, id: image.attachment_id,
+              }));
+              mutations.push(insertRow(appStateTables.composerDraftImageContent, {
+                ...where, attachment_id: image.attachment_id,
+                media_type: image.media_type, content: image.content,
+              }));
+            }
+          }
+          if (value.kind === "questionnaireDraft") {
+            const images = this.#repository.query(selectRows(appStateTables.questionnaireDraftImageContent, {
+              where: {
+                daemon_registration_id: value.daemonRegistrationId,
+                project_id: value.projectId,
+                thread_id: value.threadId,
+                request_key: value.requestKey,
+              },
+            }));
+            for (const image of images) {
+              const where = {
+                daemon_registration_id: image.daemon_registration_id,
+                project_id: projectId,
+                thread_id: image.thread_id,
+                request_key: image.request_key,
+              };
+              mutations.push(updateRows(appStateTables.questionnaireDraftAttachments, { url: STORED_IMAGE }, {
+                ...where, key: image.attachment_id,
+              }));
+              mutations.push(insertRow(appStateTables.questionnaireDraftImageContent, {
+                ...where, attachment_id: image.attachment_id,
+                media_type: image.media_type, content: image.content,
+              }));
+            }
+          }
           mutations.push(...this.#delete(recordIdentity(change.record), revision));
         }
         return mutations;
@@ -166,13 +309,37 @@ export default class WorkbenchAppStateController {
     return { ...value, projectId: this.#repository.resolveProjectId(value.daemonRegistrationId, value.projectId) };
   }
 
-  #readRows(sinceRevision: number): WorkbenchClientStateRows {
+  #readRows(sinceRevision: number, projection?: BrowserProjection): WorkbenchClientStateRows {
     const changed = <Row extends { revision: number }>(rows: Row[]) => (
       rows.filter((row) => row.revision > sinceRevision)
     );
+    const composerDrafts = changed(this.#repository.query(selectRows(appStateClientTables.composerDrafts)));
+    const questionnaireDrafts = changed(this.#repository.query(selectRows(appStateClientTables.questionnaireDrafts)));
+    const imageUrl = (identity: WorkbenchClientStateAttachmentIdentity, id: string, stored: string) => {
+      if (projection?.attachmentsAsUrls
+        && (stored === STORED_IMAGE || /^data:image\/(?:png|jpeg|webp|gif);base64,/u.test(stored))) {
+        return workbenchClientStateAttachmentUrl(projection.browserStateId, identity, id);
+      }
+      if (stored !== STORED_IMAGE) return stored;
+      const image = this.#readImage(identity, id);
+      if (!image) throw new Error("Saved draft image content is missing.");
+      return `data:${image.mediaType};base64,${Buffer.from(image.content).toString("base64")}`;
+    };
     return {
-      composerDraftAttachments: this.#repository.query(selectRows(appStateClientTables.composerDraftAttachments)),
-      composerDrafts: changed(this.#repository.query(selectRows(appStateClientTables.composerDrafts))),
+      composerDraftAttachments: composerDrafts.flatMap(draft => this.#repository.query(selectRows(
+        appStateClientTables.composerDraftAttachments, {
+          where: {
+            daemon_registration_id: draft.daemon_registration_id,
+            project_id: draft.project_id,
+            thread_id: draft.thread_id,
+          },
+        }))).map(row => ({
+          ...row, url: imageUrl({
+            kind: "composerDraft", daemonRegistrationId: row.daemon_registration_id,
+            projectId: row.project_id, threadId: row.thread_id,
+          }, row.id, row.url),
+        })),
+      composerDrafts,
       fileDrafts: changed(this.#repository.query(selectRows(appStateClientTables.fileDrafts))),
       globalPreferences: changed(this.#repository.query(selectRows(appStateClientTables.globalPreferences))),
       modelPreferences: changed(this.#repository.query(selectRows(appStateClientTables.modelPreferences))),
@@ -182,9 +349,22 @@ export default class WorkbenchAppStateController {
       projectSidebarFolders: changed(this.#repository.query(selectRows(appStateClientTables.projectSidebarFolders))),
       projectSidebarPreferences: changed(this.#repository.query(selectRows(appStateClientTables.projectSidebarPreferences))),
       questionnaireDraftAnswers: this.#repository.query(selectRows(appStateClientTables.questionnaireDraftAnswers)),
-      questionnaireDraftAttachments: this.#repository.query(selectRows(appStateClientTables.questionnaireDraftAttachments)),
+      questionnaireDraftAttachments: questionnaireDrafts.flatMap(draft => this.#repository.query(selectRows(
+        appStateClientTables.questionnaireDraftAttachments, {
+          where: {
+            daemon_registration_id: draft.daemon_registration_id,
+            project_id: draft.project_id,
+            thread_id: draft.thread_id,
+            request_key: draft.request_key,
+          },
+        }))).map(row => ({
+          ...row, url: imageUrl({
+            kind: "questionnaireDraft", daemonRegistrationId: row.daemon_registration_id,
+            projectId: row.project_id, threadId: row.thread_id, requestKey: row.request_key,
+          }, row.key, row.url),
+        })),
       questionnaireDraftSelections: this.#repository.query(selectRows(appStateClientTables.questionnaireDraftSelections)),
-      questionnaireDrafts: changed(this.#repository.query(selectRows(appStateClientTables.questionnaireDrafts))),
+      questionnaireDrafts,
     };
   }
 
@@ -258,13 +438,7 @@ export default class WorkbenchAppStateController {
           revision,
         }, { conflictColumns: ["daemon_registration_id", "project_id", "path"], updateColumns: ["baseline_content", "content", "expected_mtime_ms", "head_content", "mode", "deleted", "revision"] })];
       case "composerDraft": {
-        const identity = recordIdentity(record);
         return [
-          deleteRows(appStateTables.composerDraftAttachments, {
-            daemon_registration_id: record.daemonRegistrationId,
-            project_id: record.projectId,
-            thread_id: record.threadId,
-          }),
           upsertRow(appStateTables.composerDrafts, {
             daemon_registration_id: record.daemonRegistrationId,
             deleted: 0,
@@ -274,19 +448,12 @@ export default class WorkbenchAppStateController {
             thread_id: record.threadId,
             updated_at: record.value.updatedAt,
           }, { conflictColumns: ["daemon_registration_id", "project_id", "thread_id"], updateColumns: ["text", "updated_at", "deleted", "revision"] }),
-          ...record.value.attachments.map((attachment) => insertRow(appStateTables.composerDraftAttachments, {
-            daemon_registration_id: record.daemonRegistrationId,
-            id: attachment.id,
-            owner_deleted: 0,
-            project_id: record.projectId,
-            thread_id: record.threadId,
-            url: attachment.url,
-          })),
+          ...this.#replaceComposerAttachments(record),
         ];
       }
       case "questionnaireDraft":
         return [
-          ...this.#deleteQuestionnaireChildren(record),
+          ...this.#deleteQuestionnaireChildren(record, false),
           upsertRow(appStateTables.questionnaireDrafts, {
             daemon_registration_id: record.daemonRegistrationId,
             deleted: 0,
@@ -304,10 +471,7 @@ export default class WorkbenchAppStateController {
             daemon_registration_id: record.daemonRegistrationId, key, owner_deleted: 0,
             project_id: record.projectId, request_key: record.requestKey, thread_id: record.threadId, value,
           }))),
-          ...record.value.attachments.map((attachment) => insertRow(appStateTables.questionnaireDraftAttachments, {
-            daemon_registration_id: record.daemonRegistrationId, key: attachment.id, owner_deleted: 0,
-            project_id: record.projectId, request_key: record.requestKey, thread_id: record.threadId, url: attachment.url,
-          })),
+          ...this.#replaceQuestionnaireAttachments(record),
         ];
     }
   }
@@ -369,7 +533,7 @@ export default class WorkbenchAppStateController {
   #deleteQuestionnaireChildren(identity: Extract<
     WorkbenchClientStateIdentity | WorkbenchClientStateRecord,
     { kind: "questionnaireDraft" }
-  >): WorkbenchDatabaseMutation[] {
+  >, includeAttachments = true): WorkbenchDatabaseMutation[] {
     const where = {
       daemon_registration_id: identity.daemonRegistrationId,
       project_id: identity.projectId,
@@ -379,7 +543,70 @@ export default class WorkbenchAppStateController {
     return [
       deleteRows(appStateTables.questionnaireDraftAnswers, where),
       deleteRows(appStateTables.questionnaireDraftSelections, where),
-      deleteRows(appStateTables.questionnaireDraftAttachments, where),
+      ...(includeAttachments ? [deleteRows(appStateTables.questionnaireDraftAttachments, where)] : []),
     ];
+  }
+
+  #replaceComposerAttachments(record: Extract<WorkbenchClientStateRecord, { kind: "composerDraft" }>) {
+    const where = {
+      daemon_registration_id: record.daemonRegistrationId,
+      project_id: record.projectId,
+      thread_id: record.threadId,
+    };
+    const existing = this.#repository.query(selectRows(appStateTables.composerDraftAttachments, { where }));
+    const next = new Map(record.value.attachments.map(item => [item.id, item.url]));
+    const mutations: WorkbenchDatabaseMutation[] = [];
+    for (const row of existing) {
+      if (next.has(row.id)) continue;
+      mutations.push(deleteRows(appStateTables.composerDraftAttachments, { ...where, id: row.id }));
+    }
+    for (const [id, url] of next) {
+      const current = existing.find(row => row.id === id);
+      if (url.startsWith("/api/workbench-client-state/attachment?")) {
+        if (!current) throw new Error("The saved draft image reference is unavailable.");
+        continue;
+      }
+      if (current?.url === url) continue;
+      if (current?.url === STORED_IMAGE) {
+        mutations.push(deleteRows(appStateTables.composerDraftImageContent, { ...where, attachment_id: id }));
+      }
+      mutations.push(upsertRow(appStateTables.composerDraftAttachments, {
+        ...where, id, owner_deleted: 0, url,
+      }, { conflictColumns: ["daemon_registration_id", "project_id", "thread_id", "id"],
+        updateColumns: ["url"] }));
+    }
+    return mutations;
+  }
+
+  #replaceQuestionnaireAttachments(record: Extract<WorkbenchClientStateRecord, { kind: "questionnaireDraft" }>) {
+    const where = {
+      daemon_registration_id: record.daemonRegistrationId,
+      project_id: record.projectId,
+      thread_id: record.threadId,
+      request_key: record.requestKey,
+    };
+    const existing = this.#repository.query(selectRows(appStateTables.questionnaireDraftAttachments, { where }));
+    const next = new Map(record.value.attachments.map(item => [item.id, item.url]));
+    const mutations: WorkbenchDatabaseMutation[] = [];
+    for (const row of existing) {
+      if (next.has(row.key)) continue;
+      mutations.push(deleteRows(appStateTables.questionnaireDraftAttachments, { ...where, key: row.key }));
+    }
+    for (const [key, url] of next) {
+      const current = existing.find(row => row.key === key);
+      if (url.startsWith("/api/workbench-client-state/attachment?")) {
+        if (!current) throw new Error("The saved draft image reference is unavailable.");
+        continue;
+      }
+      if (current?.url === url) continue;
+      if (current?.url === STORED_IMAGE) {
+        mutations.push(deleteRows(appStateTables.questionnaireDraftImageContent, { ...where, attachment_id: key }));
+      }
+      mutations.push(upsertRow(appStateTables.questionnaireDraftAttachments, {
+        ...where, key, owner_deleted: 0, url,
+      }, { conflictColumns: ["daemon_registration_id", "project_id", "thread_id", "request_key", "key"],
+        updateColumns: ["url"] }));
+    }
+    return mutations;
   }
 }

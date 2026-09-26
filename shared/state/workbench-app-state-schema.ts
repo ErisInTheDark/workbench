@@ -9,6 +9,7 @@
 import appStateReleases from "./workbench-app-state-releases.ts";
 import { workbenchNetworkHistory, workbenchNetworkTables } from "./workbench-network-state-schema.ts";
 import {
+  blob,
   booleanInteger,
   check,
   defineTable,
@@ -614,6 +615,32 @@ const composerDraftAttachmentsHistory = initialHistory(defineTable("composer_dra
   ],
 })));
 
+const composerDraftImageContent = defineTable("composer_draft_image_content", {
+  daemon_registration_id: text().notNull(),
+  project_id: text().notNull(),
+  thread_id: text().notNull(),
+  attachment_id: text().notNull(),
+  media_type: enumText("image/png", "image/jpeg", "image/webp", "image/gif").notNull(),
+  content: blob().notNull(),
+}, table => ({
+  constraints: [
+    primaryKey([table.daemon_registration_id, table.project_id, table.thread_id, table.attachment_id]),
+    foreignKey([table.daemon_registration_id, table.project_id, table.thread_id, table.attachment_id], {
+      columns: ["daemon_registration_id", "project_id", "thread_id", "id"],
+      onDelete: "CASCADE",
+      table: "composer_draft_attachments",
+    }),
+  ],
+}));
+const composerDraftImageContentHistory = defineTableHistory({
+  current: composerDraftImageContent,
+  versions: [tableVersion({
+    migration: createTable(composerDraftImageContent),
+    schemaVersion: appStateReleases.draftImageContent.version,
+    table: composerDraftImageContent,
+  })],
+});
+
 const questionnaireDraftsHistory = initialHistory(defineTable("questionnaire_drafts", {
   daemon_registration_id: registrationForeignKey(),
   project_id: text().notNull(),
@@ -694,6 +721,33 @@ const questionnaireDraftAttachmentsHistory = initialHistory(defineTable("questio
   ],
 })));
 
+const questionnaireDraftImageContent = defineTable("questionnaire_draft_image_content", {
+  daemon_registration_id: text().notNull(),
+  project_id: text().notNull(),
+  thread_id: text().notNull(),
+  request_key: text().notNull(),
+  attachment_id: text().notNull(),
+  media_type: enumText("image/png", "image/jpeg", "image/webp", "image/gif").notNull(),
+  content: blob().notNull(),
+}, table => ({
+  constraints: [
+    primaryKey([table.daemon_registration_id, table.project_id, table.thread_id, table.request_key, table.attachment_id]),
+    foreignKey([table.daemon_registration_id, table.project_id, table.thread_id, table.request_key, table.attachment_id], {
+      columns: ["daemon_registration_id", "project_id", "thread_id", "request_key", "key"],
+      onDelete: "CASCADE",
+      table: "questionnaire_draft_attachments",
+    }),
+  ],
+}));
+const questionnaireDraftImageContentHistory = defineTableHistory({
+  current: questionnaireDraftImageContent,
+  versions: [tableVersion({
+    migration: createTable(questionnaireDraftImageContent),
+    schemaVersion: appStateReleases.draftImageContent.version,
+    table: questionnaireDraftImageContent,
+  })],
+});
+
 const modelPreferences = defineTable("model_preferences", {
   harness: enumText("codex", "copilot", "opencode").notNull(),
   model_id: text().notNull(),
@@ -765,10 +819,12 @@ const histories = [
   fileDraftsHistory,
   composerDraftsHistory,
   composerDraftAttachmentsHistory,
+  composerDraftImageContentHistory,
   questionnaireDraftsHistory,
   questionnaireDraftAnswersHistory,
   questionnaireDraftSelectionsHistory,
   questionnaireDraftAttachmentsHistory,
+  questionnaireDraftImageContentHistory,
 ] as const;
 
 export const appStateClientTables = Object.freeze({
@@ -790,6 +846,8 @@ export const appStateClientTables = Object.freeze({
 
 export const appStateTables = Object.freeze({
   ...workbenchNetworkTables,
+  composerDraftImageContent: composerDraftImageContentHistory.current,
+  questionnaireDraftImageContent: questionnaireDraftImageContentHistory.current,
   projectAliases: projectAliasesHistory.current,
   workbenchHarnesses: workbenchHarnessesHistory.current,
   appStateMetadata: appStateMetadataHistory.current,

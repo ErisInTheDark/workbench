@@ -23,6 +23,7 @@ const appStateReleases = Object.freeze({
   voiceInputEnabled: release(13, "93d7f16abf2f83c17a099780dc0a5624013239863433245e35ee7f57d06454bf"),
   threadCodeDetails: release(14, "ce63bff82b2e4dfae3ac5db5d250431f9472f2380a32c2c254ffe81d36372146"),
   durableDaemonRegistrations: release(15, "b593abd418c048f3249ac01a65acde30e87136214323814062e58cd32ea38a48"),
+  draftImageContent: release(16, "7d51fa91521ddd7760c1d5d09e29a8aa10089b697a19c259e46206a806ffdc59"),
 });
 
 export default appStateReleases;

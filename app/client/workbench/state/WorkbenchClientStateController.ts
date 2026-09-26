@@ -9,6 +9,7 @@ import type {
   WorkbenchClientStateMutation,
   WorkbenchClientStateRecord,
   WorkbenchClientStateResponse,
+  WorkbenchClientStateAttachmentIdentity,
   WorkbenchDaemonRegistration,
   WorkbenchProjectRemap,
 } from "workbench-shared/state/workbench-client-state";
@@ -17,6 +18,7 @@ import {
   WorkbenchDaemonRegistrationRequestSchema,
   WorkbenchProjectRemapSchema,
   workbenchClientStateMutationPath,
+  workbenchClientStateAttachmentUrl,
 } from "workbench-shared/state/workbench-client-state";
 import {
   projectWorkbenchClientStateRows,
@@ -26,8 +28,10 @@ import {
 import { conformWorkbenchClientStateResponse } from "./workbench-client-state-conformance";
 import type { WorkbenchProjectAlias } from "workbench-shared/types";
 import { composeProjectAliases } from "workbench-shared/workbench/project/project-aliases";
+import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 
 export interface WorkbenchClientStateSnapshot {
+  attachmentsAsUrls: boolean;
   daemonRegistrationId: string;
   error: string;
   records: readonly WorkbenchClientStateRecord[];
@@ -99,8 +103,11 @@ export default class WorkbenchClientStateController {
   #revision = 0;
   #registrations: WorkbenchClientStateSnapshot["registrations"] = [];
   #schemaVersion = 0;
+  #attachmentsAsUrls = false;
+  #requestCapabilities: "2" | "3" = "3";
   #scheduledPoll: number | null = null;
   #snapshot: WorkbenchClientStateSnapshot = {
+    attachmentsAsUrls: false,
     daemonRegistrationId: "memory",
     error: "",
     records: [],
@@ -138,7 +145,13 @@ export default class WorkbenchClientStateController {
 
   async bootstrap() {
     if (this.#mode === "memory") return this.#snapshot;
-    const response = await this.#request("GET", "/api/workbench-client-state");
+    let response = await this.#request("GET", "/api/workbench-client-state");
+    if (!response.registrations
+      && (response.schemaVersion ?? 0) >= appStateReleases.durableDaemonRegistrations.version
+      && this.#requestCapabilities === "3") {
+      this.#requestCapabilities = "2";
+      response = await this.#request("GET", "/api/workbench-client-state");
+    }
     if (response.kind !== "snapshot") throw new Error("Workbench app state bootstrap did not return a complete snapshot.");
     this.#apply(response);
     this.#unsubscribeVisibility = this.#visibility.subscribe(() => {
@@ -160,6 +173,59 @@ export default class WorkbenchClientStateController {
   async delete(identity: WorkbenchClientStateIdentity) {
     if (this.#projectRemap) await this.#projectRemap;
     return await this.#mutate({ action: "delete", identity: this.#storageIdentity(identity) });
+  }
+
+  supportsAttachmentUrls() {
+    return this.#attachmentsAsUrls && this.#mode === "http";
+  }
+
+  async uploadDraftAttachment(
+    identity: WorkbenchClientStateAttachmentIdentity,
+    attachmentId: string,
+    sourceUrl: string,
+  ) {
+    if (!this.supportsAttachmentUrls()) throw new Error("App draft image uploads are unavailable.");
+    if (this.#projectRemap) await this.#projectRemap;
+    const owner = this.#storageIdentity(identity);
+    const source = await this.#fetcher(sourceUrl);
+    if (!source.ok) throw new Error("The pasted draft image could not be read.");
+    const mediaType = source.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
+    if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mediaType)) {
+      throw new Error("Draft image type is unsupported.");
+    }
+    const content = await source.arrayBuffer();
+    if (!content.byteLength || content.byteLength > 20 * 1024 * 1024) {
+      throw new Error("Draft image exceeds its size limit.");
+    }
+    const url = workbenchClientStateAttachmentUrl(this.#browserStateId ?? "shared", owner, attachmentId);
+    const response = await this.#fetcher(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": mediaType,
+        ...(this.#browserStateId ? { [WORKBENCH_BROWSER_STATE_HEADER]: this.#browserStateId } : {}),
+      },
+      body: content,
+    });
+    if (!response.ok) throw new Error((await response.text()).slice(0, 1_000)
+      || `Draft image upload failed with HTTP ${response.status}.`);
+    this.#apply(this.#parseResponse(await response.json()));
+    return url;
+  }
+
+  async resolveDraftAttachmentUrl(url: string) {
+    if (!url.startsWith("/api/workbench-client-state/attachment?")) return url;
+    const response = await this.#fetcher(url);
+    if (!response.ok) throw new Error("The saved draft image is unavailable.");
+    const mediaType = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
+    if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mediaType)) {
+      throw new Error("The saved draft image type is unsupported.");
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const parts: string[] = [];
+    for (let offset = 0; offset < bytes.length; offset += 32_768) {
+      parts.push(String.fromCharCode(...bytes.subarray(offset, offset + 32_768)));
+    }
+    return `data:${mediaType};base64,${btoa(parts.join(""))}`;
   }
 
   rememberThreadIdentityAlias(projectId: string, storedThreadId: string, threadId: string, daemonRegistrationId = this.#daemonRegistrationId) {
@@ -380,7 +446,11 @@ export default class WorkbenchClientStateController {
     this.#polling = true;
     try {
       const response = await this.#request("GET", `/api/workbench-client-state?sinceRevision=${this.#revision}`);
-      this.#apply(response);
+      if (this.#requestCapabilities === "2" && response.schemaVersion !== undefined
+        && response.schemaVersion >= appStateReleases.draftImageContent.version) {
+        this.#requestCapabilities = "3";
+        this.#apply(await this.#request("GET", "/api/workbench-client-state"));
+      } else this.#apply(response);
       this.#setError("");
     } catch (error) {
       this.#setError(error instanceof Error ? error.message : "Workbench app state polling failed.");
@@ -409,7 +479,7 @@ export default class WorkbenchClientStateController {
       ? "action" in mutation ? mutation.action === "put" ? mutation.record : mutation.identity : mutation
       : undefined;
     const requestUrl = new URL(url, "http://workbench.local");
-    requestUrl.searchParams.set("capabilities", "2");
+    requestUrl.searchParams.set("capabilities", this.#requestCapabilities);
     const response = await this.#fetcher(`${requestUrl.pathname}${requestUrl.search}`, {
       ...(body ? { body: JSON.stringify(body) } : {}),
       headers: {
@@ -422,7 +492,11 @@ export default class WorkbenchClientStateController {
       const message = await response.text();
       throw new Error(message.slice(0, 1_000) || `Workbench app state request failed with ${response.status}.`);
     }
-    const conformed = conformWorkbenchClientStateResponse(await response.json());
+    return this.#parseResponse(await response.json());
+  }
+
+  #parseResponse(value: unknown) {
+    const conformed = conformWorkbenchClientStateResponse(value);
     if (conformed.repairedPaths.length || !conformed.success) {
       console.warn("Workbench app-state response required schema conformance.", {
         issues: "data" in conformed ? [] : conformed.issues.slice(0, 20),
@@ -443,6 +517,7 @@ export default class WorkbenchClientStateController {
     this.#daemonRegistrationId = response.daemonRegistrationId;
     if (response.registrations) this.#registrations = response.registrations;
     this.#schemaVersion = response.schemaVersion ?? 0;
+    this.#attachmentsAsUrls = response.attachmentsAsUrls === true;
     if (response.kind === "snapshot") this.#records.clear();
     for (const change of projectWorkbenchClientStateRows(response.rows)) {
       if (response.kind === "delta" && change.revision <= this.#revision) continue;
@@ -480,6 +555,7 @@ export default class WorkbenchClientStateController {
       else projectedRecords.delete(key);
     }
     this.#snapshot = {
+      attachmentsAsUrls: this.#attachmentsAsUrls,
       daemonRegistrationId: this.#daemonRegistrationId,
       error: this.#error,
       records: [...projectedRecords.values()].map((record) => this.#projectIdentity(record)),

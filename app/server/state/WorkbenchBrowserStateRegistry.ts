@@ -13,6 +13,7 @@ import {
   type WorkbenchClientStateIdentity,
   type WorkbenchClientStateMutation,
   type WorkbenchClientStateRecord,
+  type WorkbenchClientStateAttachmentIdentity,
 } from "workbench-shared/state/workbench-client-state";
 
 import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
@@ -120,14 +121,18 @@ export default class WorkbenchBrowserStateRegistry {
     return this.#sharedController.mutate(mutation);
   }
 
-  async readBrowser(browserStateId: string | undefined, sinceRevision?: number) {
+  async readBrowser(browserStateId: string | undefined, sinceRevision?: number, attachmentsAsUrls = false) {
     const controller = await this.#controllerFor(browserStateId);
-    return controller.read(sinceRevision);
+    return controller.read(sinceRevision, {
+      attachmentsAsUrls, browserStateId: browserStateId ?? "shared",
+    });
   }
 
-  async mutateBrowser(browserStateId: string | undefined, mutation: WorkbenchClientStateMutation) {
+  async mutateBrowser(browserStateId: string | undefined, mutation: WorkbenchClientStateMutation, attachmentsAsUrls = false) {
     const controller = await this.#controllerFor(browserStateId);
-    const response = await controller.mutate(mutation);
+    const response = await controller.mutate(mutation, {
+      attachmentsAsUrls, browserStateId: browserStateId ?? "shared",
+    });
     const registrationId = mutation.action === "put"
       ? "daemonRegistrationId" in mutation.record ? mutation.record.daemonRegistrationId : null
       : "daemonRegistrationId" in mutation.identity ? mutation.identity.daemonRegistrationId : null;
@@ -136,6 +141,21 @@ export default class WorkbenchBrowserStateRegistry {
       this.#enqueueSeedMutation(mutation);
     }
     return response;
+  }
+
+  async readBrowserAttachment(browserStateId: string | undefined,
+    identity: WorkbenchClientStateAttachmentIdentity, attachmentId: string) {
+    const controller = await this.#controllerFor(browserStateId);
+    return controller.readAttachment(identity, attachmentId);
+  }
+
+  async putBrowserAttachment(browserStateId: string | undefined,
+    identity: WorkbenchClientStateAttachmentIdentity, attachmentId: string,
+    mediaType: "image/png" | "image/jpeg" | "image/webp" | "image/gif", content: Uint8Array) {
+    const controller = await this.#controllerFor(browserStateId);
+    return controller.putAttachment(identity, attachmentId, mediaType, content, {
+      attachmentsAsUrls: true, browserStateId: browserStateId ?? "shared",
+    });
   }
 
   async registerBrowserDaemon(browserStateId: string | undefined, daemonId: string, attachedLocal: boolean) {

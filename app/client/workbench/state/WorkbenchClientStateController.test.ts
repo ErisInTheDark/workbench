@@ -24,7 +24,7 @@ test("peer registration resolves a browser-private owner distinct from its durab
     }
     return Response.json({
       kind: "snapshot", daemonRegistrationId: "attached-registration",
-      ...(new URL(url, "http://app.test").searchParams.get("capabilities") === "2" ? { registrations: registered ? [
+      ...(new URL(url, "http://app.test").searchParams.get("capabilities") === "3" ? { registrations: registered ? [
         { id: "attached-registration", kind: "local", daemonId: null },
         { id: registrationId, kind: "remote", daemonId },
       ] : [{ id: "attached-registration", kind: "local", daemonId: null }] } : {}),
@@ -43,13 +43,58 @@ test("peer registration resolves a browser-private owner distinct from its durab
     ]), [registrationId, registrationId]);
     assert.equal(state.getSnapshot().registrations.find(item => item.daemonId === daemonId)?.id, registrationId);
     assert.deepEqual(requests, [
-      "GET /api/workbench-client-state?capabilities=2",
+      "GET /api/workbench-client-state?capabilities=3",
       "POST /api/workbench-client-state/daemon-register",
-      "GET /api/workbench-client-state?capabilities=2",
+      "GET /api/workbench-client-state?capabilities=3",
     ]);
   } finally {
     state.dispose();
   }
+});
+
+test("new browser code keeps old-server registrations and upgrades image reads after server reload", async () => {
+  const rows = Object.fromEntries(Object.keys(appStateClientTables).map(name => [name, []]));
+  const requests: string[] = [];
+  const scheduled: Array<() => void> = [];
+  let upgraded = false;
+  const state = new WorkbenchClientStateController({
+    mode: "http",
+    schedule: callback => { scheduled.push(callback); return scheduled.length; },
+    cancelSchedule: () => {},
+    fetcher: async input => {
+      const url = new URL(String(input), "http://app.test");
+      const capability = url.searchParams.get("capabilities")!;
+      requests.push(capability);
+      return Response.json({
+        kind: "snapshot", daemonRegistrationId: "attached-registration",
+        ...(capability === "2" || upgraded ? {
+          registrations: [{ id: "attached-registration", kind: "local", daemonId: null }],
+        } : {}),
+        ...(capability === "3" && upgraded ? { attachmentsAsUrls: true } : {}),
+        oldestAvailableRevision: 0, revision: upgraded ? 2 : 1,
+        schemaVersion: upgraded ? 16 : 15, rows,
+      });
+    },
+    visibility: { hidden: () => false, subscribe: () => () => {} },
+  });
+  try {
+    await state.bootstrap();
+    assert.deepEqual(requests, ["3", "2"]);
+    assert.equal(state.getSnapshot().registrations[0]?.id, "attached-registration");
+    assert.equal(state.supportsAttachmentUrls(), false);
+    upgraded = true;
+    const ready = new Promise<void>(resolve => {
+      const unsubscribe = state.subscribe(() => {
+        if (!state.supportsAttachmentUrls()) return;
+        unsubscribe();
+        resolve();
+      });
+    });
+    scheduled[0]!();
+    await ready;
+    assert.deepEqual(requests, ["3", "2", "2", "3"]);
+    assert.equal(state.getSnapshot().registrations[0]?.id, "attached-registration");
+  } finally { state.dispose(); }
 });
 
 test("conversion flattens retained project aliases while preserving drafts and later edits", async () => {
