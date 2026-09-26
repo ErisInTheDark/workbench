@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { once } from "node:events";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -18,6 +19,8 @@ import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLog
 import type WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
 import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
 import WorkbenchNetworkController from "../network/WorkbenchNetworkController.ts";
+import WorkbenchFrontendServer from "../WorkbenchFrontendServer.ts";
+import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 import WorkbenchAppRuntime from "./WorkbenchAppRuntime.ts";
 import AppCompilerNode from "./AppCompilerNode.ts";
@@ -287,10 +290,26 @@ test("reloads the database with a fresh repository constructor and no process re
   });
 
   let started = false;
+  let frontend: WorkbenchFrontendServer | null = null;
+  let lifetimeSocket: WebSocket | null = null;
   const lifetimeResponse = new TestResponse();
   try {
     await target.start();
     started = true;
+    frontend = new WorkbenchFrontendServer({
+      hostname: "127.0.0.1",
+      requests: {
+        handleRequest: (request, response) => target.handleRequest(request, response),
+        handleUpgrade: (request, socket, head) => target.handleUpgrade(request, socket, head),
+      },
+    });
+    const address = await frontend.start();
+    lifetimeSocket = new WebSocket(
+      `${address.url.replace(/^http/u, "ws")}/api/workbench-app-lifetime/socket`,
+      { origin: address.url },
+    );
+    const [ready] = await once(lifetimeSocket, "message");
+    assert.deepEqual(JSON.parse(ready.toString()), { kind: "ready" });
     const lifetimeRequest = localRequest([]);
     lifetimeRequest.method = "GET";
     lifetimeRequest.url = "/api/workbench-app-lifetime";
@@ -331,6 +350,8 @@ test("reloads the database with a fresh repository constructor and no process re
     assert.equal(response.statusCode, 202);
     await reloaded;
     assert.equal(lifetimeResponse.writableFinished, false, "scoped reload must not end app lifetime");
+    assert.equal(lifetimeSocket.readyState, WebSocket.OPEN,
+      "scoped reload must not end the stable app lifetime socket");
 
     assert.equal(constructors.length, 2);
     assert.deepEqual(compilerModes, [false, false]);
@@ -379,6 +400,8 @@ test("reloads the database with a fresh repository constructor and no process re
     });
   } finally {
     if (started) await target.close();
+    lifetimeSocket?.terminate();
+    await frontend?.close();
   }
   assert.equal(lifetimeResponse.writableFinished, true);
 });

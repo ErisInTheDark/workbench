@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchSocketClient: persistent WB WebSocket transport with fenced reconnects.
+ * - default WorkbenchSocketClient: daemon notification and receipt adapter over shared WebSocket transport.
  * - WorkbenchClientNotification: provider-translated WB transcript messages.
  */
 import type { WorkbenchHarness } from "../types.ts";
@@ -16,15 +16,10 @@ import {
 } from "../workbench/websocket-stream.ts";
 import type { WorkbenchTranscriptNotification } from "../workbench/provider/provider-observation.ts";
 import { workbenchDaemonConnection } from "./workbench-connection.ts";
-import { createWorkbenchRequestIdGenerator, type WorkbenchRpcResponse } from "./workbench-rpc.ts";
-
-type PendingResponseHandler = {
-  reject: (reason?: unknown) => void;
-  resolve: (value: WorkbenchRpcResponse<unknown>) => void;
-};
+import type { WorkbenchRpcResponse } from "./workbench-rpc.ts";
+import WorkbenchRpcSocketClient from "./WorkbenchRpcSocketClient.ts";
 
 export type WorkbenchClientNotification = WorkbenchTranscriptNotification;
-type WorkbenchIncomingMessage = WorkbenchRpcResponse<unknown> | WorkbenchClientNotification;
 type WorkbenchNotification = {
   method:
     | "voice/event"
@@ -55,37 +50,21 @@ function isWorkbenchPublicNotification(message: unknown): message is WorkbenchCl
     && !("id" in message);
 }
 
-function isWorkbenchRpcResponse(message: unknown): message is WorkbenchRpcResponse<unknown> {
-  return !!message && typeof message === "object" && "id" in message && ("result" in message || "error" in message);
-}
-
 export default class WorkbenchSocketClient {
   private readonly cancelEventStreamAck: (timer: Timer) => void;
   private readonly notificationListeners = new Set<(
     notification: WorkbenchClientNotification,
     harness: WorkbenchHarness,
   ) => void>();
-  private readonly pendingResponses = new Map<number, PendingResponseHandler>();
   private readonly workbenchNotificationListeners = new Set<(notification: WorkbenchNotification) => void>();
   private readonly connectionCloseListeners = new Set<() => void>();
   private readonly connectionOpenListeners = new Set<() => void>();
   private readonly reconnectListeners = new Set<() => void>();
-  private readonly nextRequestId = createWorkbenchRequestIdGenerator();
-  private socketPromise: Promise<void> | null = null;
-  private hasOpenedSocket = false;
+  private readonly transport: WorkbenchRpcSocketClient;
   private lastConsumedEventStreamSequence = 0;
-  private disposed = false;
-  private suspended = false;
-  private connectionGeneration = 0;
-  private reconnectAttempt = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private eventStreamAckTimer: Timer | null = null;
   private pendingEventStreamAckSequence: number | null = null;
   private readonly scheduleEventStreamAck: (callback: () => void, delayMs: number) => Timer;
-  private explicitUrl: string | null = null;
-  private readonly resolveUrl: () => Promise<string>;
-  private socket: WebSocket | null = null;
-
   constructor({
     clearEventStreamAckTimeout: cancelEventStreamAck = (timer) => globalThis.clearTimeout(timer),
     setEventStreamAckTimeout: scheduleEventStreamAck = (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
@@ -97,140 +76,38 @@ export default class WorkbenchSocketClient {
   } = {}) {
     this.cancelEventStreamAck = cancelEventStreamAck;
     this.scheduleEventStreamAck = scheduleEventStreamAck;
-    this.resolveUrl = resolveUrl;
+    this.transport = new WorkbenchRpcSocketClient(resolveUrl, "Workbench");
+    this.transport.onMessage(message => this.handleIncomingMessage(message));
+    this.transport.onOpen(reconnected => {
+      for (const listener of this.connectionOpenListeners) listener();
+      if (reconnected) for (const listener of this.reconnectListeners) listener();
+    });
+    this.transport.onClose(() => {
+      this.clearEventStreamReceiptState();
+      for (const listener of this.connectionCloseListeners) listener();
+    });
   }
 
   async connect(url?: string) {
-    await this.connectSocket(url);
+    await this.transport.connect(url);
   }
 
   async connectSocket(url?: string) {
-    if (this.disposed) throw new Error("Workbench socket client is disposed.");
-    if (this.suspended) throw new Error("Workbench app is unavailable.");
-    if (url !== undefined) this.explicitUrl = url;
-    if (this.socket?.readyState === WebSocket.OPEN) return;
-    if (this.socketPromise) return await this.socketPromise;
-    const socketPromise = this.openResolvedSocket();
-    this.socketPromise = socketPromise;
-    try {
-      await socketPromise;
-    } catch (error) {
-      if (!this.disposed && !this.suspended && this.socketPromise === socketPromise) this.scheduleReconnect();
-      throw error;
-    } finally {
-      if (this.socketPromise === socketPromise) this.socketPromise = null;
-    }
-  }
-
-  private async openResolvedSocket() {
-    const generation = this.connectionGeneration;
-    const url = this.explicitUrl ?? await this.resolveUrl();
-    if (this.disposed) throw new Error("Workbench socket client is disposed.");
-    if (this.suspended || generation !== this.connectionGeneration) throw new Error("Workbench app connection was suspended.");
-    await this.openSocket(url);
-  }
-
-  private async openSocket(url: string) {
-    const socket = new WebSocket(url);
-    this.socket = socket;
-
-    socket.addEventListener("message", (event) => {
-      if (this.socket !== socket) return;
-      this.handleIncomingMessage(event.data);
-    });
-
-    socket.addEventListener("close", () => {
-      if (!this.retireSocket(socket, new Error("Workbench connection closed."))) return;
-      if (!this.disposed) this.scheduleReconnect();
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      let opened = false;
-      socket.addEventListener("open", () => {
-        opened = true;
-        resolve();
-      }, { once: true });
-      socket.addEventListener("error", () => {
-        if (opened) return;
-        if (this.socket === socket) this.socket = null;
-        socket.close();
-        reject(new Error("Failed to connect to Workbench."));
-      }, {
-        once: true,
-      });
-      socket.addEventListener("close", () => {
-        if (!opened) reject(new Error("Failed to connect to Workbench."));
-      }, { once: true });
-    });
-
-    if (this.socket !== socket) {
-      throw new Error("Workbench connection was replaced before opening.");
-    }
-    const reconnected = this.hasOpenedSocket;
-    this.hasOpenedSocket = true;
-    this.reconnectAttempt = 0;
-    for (const listener of this.connectionOpenListeners) listener();
-    if (reconnected) {
-      for (const listener of this.reconnectListeners) listener();
-    }
-  }
-
-  private scheduleReconnect() {
-    if (this.reconnectTimer || this.disposed || this.suspended) return;
-    const delay = Math.min(30_000, 250 * 2 ** Math.min(this.reconnectAttempt, 7));
-    this.reconnectAttempt += 1;
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      void this.connectSocket().catch(() => this.scheduleReconnect());
-    }, delay);
+    await this.transport.connect(url);
   }
 
   setSuspended(suspended: boolean) {
-    if (this.disposed || this.suspended === suspended) return;
-    this.suspended = suspended;
-    if (!suspended) {
-      void this.connectSocket().catch(() => this.scheduleReconnect());
-      return;
-    }
-    this.connectionGeneration++;
-    this.socketPromise = null;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-    const socket = this.socket;
-    if (socket) {
-      this.retireSocket(socket, new Error("Workbench app is unavailable."));
-      socket.close();
-    }
+    this.transport.setSuspended(suspended);
   }
 
   close(code?: number, reason?: string) {
-    this.disposed = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-    const socket = this.socket;
-    if (socket) {
-      this.retireSocket(socket, new Error("Workbench socket client closed."));
-      socket.close(code, reason);
-    } else {
-      for (const pending of this.pendingResponses.values()) pending.reject(new Error("Workbench socket client closed."));
-      this.pendingResponses.clear();
-      this.clearEventStreamReceiptState();
-    }
+    this.transport.close(code, reason);
+    this.clearEventStreamReceiptState();
   }
 
   dispose() {
-    this.disposed = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-    const socket = this.socket;
-    if (socket) {
-      this.retireSocket(socket, new Error("Workbench socket client disposed."));
-      socket.close();
-    } else {
-      for (const pending of this.pendingResponses.values()) pending.reject(new Error("Workbench socket client disposed."));
-      this.pendingResponses.clear();
-      this.clearEventStreamReceiptState();
-    }
+    this.transport.dispose();
+    this.clearEventStreamReceiptState();
   }
 
   onWorkbenchNotification(listener: (notification: WorkbenchNotification) => void) {
@@ -264,48 +141,18 @@ export default class WorkbenchSocketClient {
   }
 
   send(message: object) {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      throw new Error("Workbench socket is not connected.");
-    }
-
-    this.socket.send(JSON.stringify(message));
+    this.transport.send(message);
   }
 
   async sendRequest<TResponse = unknown>(
     message: { id?: number; method: string; params?: unknown } & Record<string, unknown>,
     options: { socketOnly?: boolean } = {},
   ): Promise<WorkbenchRpcResponse<TResponse>> {
-    if (this.socket?.readyState !== WebSocket.OPEN) await this.connectSocket();
-    const requestId = message.id ?? this.nextRequestId();
-    const request = {
-      ...message,
-      id: requestId,
-    };
-
-    const responsePromise = new Promise<WorkbenchRpcResponse<TResponse>>((resolve, reject) => {
-      this.pendingResponses.set(requestId, {
-        resolve: (value) => resolve(value as WorkbenchRpcResponse<TResponse>),
-        reject,
-      });
-    });
-
-    try {
-      this.send(request);
-    } catch (error) {
-      this.pendingResponses.delete(requestId);
-      throw error;
-    }
-    return responsePromise;
+    return this.transport.sendRequest<TResponse>(message);
   }
 
-  private handleIncomingMessage(payload: string | ArrayBufferLike | Blob | ArrayBufferView) {
-    if (typeof payload !== "string") {
-      return;
-    }
-
-    const parsed = JSON.parse(payload) as WorkbenchIncomingMessage;
-
-    const workbenchMessage = parsed as unknown as { method?: string };
+  private handleIncomingMessage(parsed: unknown) {
+    const workbenchMessage = parsed as { method?: string };
     if (workbenchMessage.method === "workbench/thread-state/updated"
       || workbenchMessage.method === "voice/event"
       || workbenchMessage.method === "workbench/thread-state/reset"
@@ -329,15 +176,6 @@ export default class WorkbenchSocketClient {
       }
     }
 
-    if (isWorkbenchRpcResponse(parsed) && typeof parsed.id === "number") {
-      const handler = this.pendingResponses.get(parsed.id);
-      if (!handler) {
-        return;
-      }
-
-      this.pendingResponses.delete(parsed.id);
-      handler.resolve(parsed);
-    }
     // Unused provider notifications still consume their shared transport sequence.
     const sequence = (parsed as unknown as Record<string, unknown>)[WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD];
     if (typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence > 0) {
@@ -359,7 +197,7 @@ export default class WorkbenchSocketClient {
       this.eventStreamAckTimer = null;
       const pendingSequence = this.pendingEventStreamAckSequence;
       this.pendingEventStreamAckSequence = null;
-      if (pendingSequence === null || !this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+      if (pendingSequence === null || !this.transport.isOpen) return;
       this.send({ method: WORKBENCH_EVENT_STREAM_ACK_METHOD, params: { sequence: pendingSequence } });
     }, EVENT_STREAM_ACK_BATCH_MS);
   }
@@ -371,13 +209,4 @@ export default class WorkbenchSocketClient {
     this.pendingEventStreamAckSequence = null;
   }
 
-  private retireSocket(socket: WebSocket, error: Error) {
-    if (this.socket !== socket) return false;
-    this.socket = null;
-    this.clearEventStreamReceiptState();
-    for (const pending of this.pendingResponses.values()) pending.reject(error);
-    this.pendingResponses.clear();
-    for (const listener of this.connectionCloseListeners) listener();
-    return true;
-  }
 }

@@ -62,6 +62,7 @@ async function main() {
         handleRequest: async (request, response) => {
           if (!control.handle(request, response)) await runtime.handleRequest(request, response);
         },
+        handleUpgrade: async (request, socket, head) => await runtime.handleUpgrade(request, socket, head),
       },
     }),
     environmentPort: commandLine.port,

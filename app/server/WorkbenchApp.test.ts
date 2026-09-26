@@ -31,7 +31,7 @@ test("closing during runtime startup reaches the owner and prevents listener pub
     createRuntime: () => ({
       start: async () => { enter(); await pending; },
       close: async () => { runtimeClosed = true; release(); },
-      handleRequest: async () => {}, readAppPort: () => null, writeAppPort: async () => {},
+      handleRequest: async () => {}, handleUpgrade: async () => {}, readAppPort: () => null, writeAppPort: async () => {},
     }),
     createServer: () => {
       listenerCreated = true;
@@ -125,6 +125,7 @@ function fixture(options: {
       if (options.failRuntimeClose) throw new Error("runtime close failed");
     },
     handleRequest: async () => {},
+    handleUpgrade: async () => {},
     readAppPort: () => savedPort,
     start: async () => {
       events.push("runtime:start");
@@ -317,7 +318,7 @@ test("listener subscriptions observe readiness and committed moves without guess
           unsubscribe = control.subscribe(async () => { observed.push(control.current?.()?.currentPort ?? null); });
         },
         close: async () => { unsubscribe?.(); },
-        handleRequest: async () => {}, readAppPort: () => null, writeAppPort: async () => {},
+        handleRequest: async () => {}, handleUpgrade: async () => {}, readAppPort: () => null, writeAppPort: async () => {},
       };
     },
     createServer: () => ({
@@ -360,7 +361,7 @@ test("shutdown cancels network forwarding before waiting for an in-flight port n
         }); },
         stopNetwork: async () => { stopped = true; release(); },
         close: async () => {},
-        handleRequest: async () => {}, readAppPort: () => null, writeAppPort: async () => {},
+        handleRequest: async () => {}, handleUpgrade: async () => {}, readAppPort: () => null, writeAppPort: async () => {},
       };
     },
     createServer: () => ({

@@ -150,7 +150,10 @@ export default class WorkbenchProjectNavigation {
 
   private localAddresses(project: WorkbenchLogicalProject) {
     const relative = project.locations.flatMap(location => {
-      const parts = location.project?.relativePath.replace(/\\/gu, "/").split("/").filter(Boolean) ?? [];
+      const root = location.rootPath.replace(/\\/gu, "/");
+      const absoluteParts = root.replace(/^[a-z]:\//iu, "").split("/").filter(Boolean);
+      const parts = location.project?.relativePath.replace(/\\/gu, "/").split("/").filter(Boolean)
+        ?? absoluteParts;
       return parts.map((_, index) => parts.slice(index).join("/")).reverse();
     });
     const absolute = [...project.locations.map(location => location.rootPath), project.label, project.storedLabel ?? ""]

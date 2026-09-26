@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import type { Socket } from "node:net";
+import { once } from "node:events";
+import WebSocket, { WebSocketServer } from "ws";
 
 import WorkbenchFrontendServer from "./WorkbenchFrontendServer.ts";
 
@@ -45,6 +47,31 @@ test("keeps one bound port while delegating every request to the runtime owner",
   assert.equal(await (await fetch(`${address.url}/one`)).text(), "runtime");
   assert.equal(await (await fetch(`${address.url}/two`)).text(), "runtime");
   assert.deepEqual(paths, ["/one", "/two"]);
+});
+
+test("forwards upgrades to the current runtime and closes upgraded sockets on shutdown", async context => {
+  const upgrades = new WebSocketServer({ noServer: true });
+  const server = new WorkbenchFrontendServer({
+    hostname: "127.0.0.1",
+    requests: {
+      handleRequest: async (_request, response) => { response.end(); },
+      handleUpgrade: async (request, socket, head) => {
+        upgrades.handleUpgrade(request, socket, head, connection => connection.send("ready"));
+      },
+    },
+  });
+  context.after(async () => {
+    await server.close();
+    upgrades.close();
+  });
+  const address = await server.start();
+  const client = new WebSocket(address.url.replace(/^http/u, "ws"));
+  context.after(() => client.terminate());
+  const [message] = await once(client, "message");
+  assert.equal(message.toString(), "ready");
+  const closed = once(client, "close");
+  await server.close();
+  await closed;
 });
 
 test("disposal releases the stable listener", async () => {

@@ -22,4 +22,5 @@ export interface AppProcessContext {
   processLogger: WorkbenchProcessLogger;
   readAppliedReactDevelopmentMode(): boolean;
   repositoryRootPath: string;
+  supportsAppWebSockets?: true;
 }

@@ -4,11 +4,13 @@
  * - WorkbenchFrontendServerOptions/default WorkbenchFrontendServer: own bind-first app listener moves, draining, and disposal. Keywords: app, socket, port, lifecycle.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 
 import HttpServer, { type HttpServerAddress } from "workbench-shared/http/HttpServer";
 
 export interface WorkbenchFrontendRequestOwner {
   handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void>;
+  handleUpgrade?(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void>;
 }
 
 export interface WorkbenchFrontendServerOptions {
@@ -39,6 +41,9 @@ export default class WorkbenchFrontendServer {
   private createServer(port: number | undefined) {
     return new HttpServer({
       handleRequest: async (request, response) => await this.options.requests.handleRequest(request, response),
+      handleUpgrade: this.options.requests.handleUpgrade
+        ? async (request, socket, head) => await this.options.requests.handleUpgrade!(request, socket, head)
+        : undefined,
       hostname: this.options.hostname,
       onError: (error) => this.onDiagnostic(`Workbench frontend HTTP failure: ${error.message}`),
       port,

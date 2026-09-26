@@ -32,11 +32,11 @@ test("an enrolled node still connecting never offers duplicate preparation or ne
     id: "67e323d5-949a-4c41-956f-1fa28905f034", revision: 1,
     ownerNodeId: "node", dnsNodeId: "node", access: "all", grants: [],
   };
-  snapshot.capabilities = { manageApp: true, manageNetwork: true, trustHost: true };
+  snapshot.capabilities = { manageApp: true, manageNetwork: true, trustHost: true, appEventsWebSocket: false };
   assert.equal(privateAccessStep(snapshot, "checking", false), "checking", "do not prescribe setup before the automatic check finishes");
   assert.equal(privateAccessStep(snapshot, "failed", false), "dns");
   assert.equal(privateAccessStep(snapshot, "failed", true), "trust");
-  snapshot.capabilities = { manageApp: false, manageNetwork: false, trustHost: false };
+  snapshot.capabilities = { manageApp: false, manageNetwork: false, trustHost: false, appEventsWebSocket: false };
   assert.equal(privateAccessStep(snapshot, "failed", false), "trust", "another browsing device needs trust, not repeated network-wide DNS setup");
   snapshot.busy = true;
   assert.equal(privateAccessStep(snapshot, "verified", true), "ready", "an unrelated pending operation must not reset verified setup");

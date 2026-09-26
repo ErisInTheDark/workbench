@@ -14,6 +14,8 @@ import {
   type WorkbenchPresentationImportStatus,
 } from "workbench-shared/state/workbench-presentation-state";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
+import { WORKBENCH_APP_NETWORK_SOCKET_PATH, WorkbenchAppNetworkEventSchema } from "workbench-shared/http/workbench-app-events";
+import WorkbenchRpcSocketClient from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 import { z } from "zod";
 import { consumeNetworkHandoff, networkNavigationUrl, type NetworkHandoff, type NetworkUpgrade } from "./workbench-network-navigation";
 import { readWorkbenchBrowserStateTransferId } from "../state/workbench-browser-state-identity";
@@ -38,6 +40,7 @@ export default class WorkbenchNetworkClient {
   private readonly presentationImportListeners = new Set<(status: WorkbenchPresentationImportStatus) => void>();
   private readonly requests = new Set<AbortController>();
   private events: Pick<EventSource, "close" | "onmessage" | "onerror"> & Partial<Pick<EventSource, "addEventListener">> | null = null;
+  private socket: WorkbenchRpcSocketClient | null = null;
   private closed = false;
   private upgrade: NetworkUpgrade | null = null;
   private verificationRequest: AbortController | null = null;
@@ -45,6 +48,7 @@ export default class WorkbenchNetworkClient {
   constructor(private readonly options: {
     fetcher?: typeof fetch;
     events?: (url: string) => Pick<EventSource, "close" | "onmessage" | "onerror"> & Partial<Pick<EventSource, "addEventListener">>;
+    socket?: (url: string) => WebSocket;
   } = {}) {}
 
   readonly subscribe = (listener: () => void) => {
@@ -66,13 +70,68 @@ export default class WorkbenchNetworkClient {
     const controller = new AbortController();
     this.requests.add(controller);
     try {
-      const response = await (this.options.fetcher ?? fetch)(`${WORKBENCH_NETWORK_PATH}?capabilities=4`, { cache: "no-store", signal: controller.signal });
+      const response = await (this.options.fetcher ?? fetch)(`${WORKBENCH_NETWORK_PATH}?capabilities=6`, { cache: "no-store", signal: controller.signal });
       if (this.closed) return;
       if (response.status === 404) throw new Error("Restart the Workbench app to load network settings.");
       if (!response.ok) throw new Error(`Network settings could not be read (HTTP ${response.status}).`);
       const value: unknown = await response.json();
       if (this.closed) return;
       this.receive(value);
+      if (this.state.snapshot?.capabilities?.appEventsWebSocket) {
+        const socket = new WorkbenchRpcSocketClient(
+          async () => new URL(WORKBENCH_APP_NETWORK_SOCKET_PATH, window.location.href).href.replace(/^http/u, "ws"),
+          "Workbench app network",
+          this.options.socket,
+        );
+        this.socket?.dispose();
+        this.socket = socket;
+        socket.onMessage(message => {
+          if (this.closed || this.socket !== socket) return;
+          const parsed = WorkbenchAppNetworkEventSchema.safeParse(message);
+          if (!parsed.success) {
+            reportClientSchemaError("Rejected Workbench app event", parsed.error);
+            return;
+          }
+          if (parsed.data.kind === "network") this.receive(parsed.data.snapshot);
+          if (parsed.data.kind === "presentation") {
+            for (const listener of this.presentationListeners) listener(parsed.data.event.revision);
+          }
+          if (parsed.data.kind === "presentation-import") {
+            for (const listener of this.presentationImportListeners) listener(parsed.data.status);
+          }
+        });
+        socket.onClose(() => {
+          if (!this.closed && this.socket === socket) this.update({
+            ...this.state, error: "Network progress disconnected; the browser is reconnecting.",
+          });
+        });
+        void socket.connect().catch(error => {
+          if (!this.closed && this.socket === socket) this.update({
+            ...this.state, error: error instanceof Error ? error.message.slice(0, 512) : "Network socket could not connect.",
+          });
+        });
+      } else this.startLegacyEvents();
+      if (typeof window !== "undefined") {
+        const consumed = consumeNetworkHandoff(window.location.href);
+        if (consumed.receipt || consumed.upgrade) {
+          window.history.replaceState(window.history.state, "", consumed.href);
+        }
+        if (consumed.receipt) {
+          this.update({ ...this.state, handoff: consumed.receipt });
+          if (!consumed.receipt.manual) await this.finishSettings(consumed.receipt.returning);
+        } else if (consumed.upgrade && this.state.snapshot && workbenchNetworkMode(this.state.snapshot.configuration) === consumed.upgrade) {
+          this.beginUpgrade(consumed.upgrade);
+        }
+      }
+    } catch (error) {
+      if (!this.closed) this.update({
+        ...this.state, loading: false,
+        error: error instanceof Error ? error.message.slice(0, 512) : "Network settings could not be read.",
+      });
+    } finally { this.requests.delete(controller); }
+  }
+
+  private startLegacyEvents() {
       const eventsUrl = `${WORKBENCH_NETWORK_PATH}/events?capabilities=4`;
       const events = this.options.events?.(eventsUrl) ?? new EventSource(eventsUrl);
       this.events?.close();
@@ -116,24 +175,6 @@ export default class WorkbenchNetworkClient {
         if (this.closed || this.events !== events) return;
         this.update({ ...this.state, error: "Network progress disconnected; the browser is reconnecting." });
       };
-      if (typeof window !== "undefined") {
-        const consumed = consumeNetworkHandoff(window.location.href);
-        if (consumed.receipt || consumed.upgrade) {
-          window.history.replaceState(window.history.state, "", consumed.href);
-        }
-        if (consumed.receipt) {
-          this.update({ ...this.state, handoff: consumed.receipt });
-          if (!consumed.receipt.manual) await this.finishSettings(consumed.receipt.returning);
-        } else if (consumed.upgrade && this.state.snapshot && workbenchNetworkMode(this.state.snapshot.configuration) === consumed.upgrade) {
-          this.beginUpgrade(consumed.upgrade);
-        }
-      }
-    } catch (error) {
-      if (!this.closed) this.update({
-        ...this.state, loading: false,
-        error: error instanceof Error ? error.message.slice(0, 512) : "Network settings could not be read.",
-      });
-    } finally { this.requests.delete(controller); }
   }
 
   async action(input: WorkbenchNetworkAction): Promise<WorkbenchNetworkResult> {
@@ -231,6 +272,8 @@ export default class WorkbenchNetworkClient {
     this.verificationRequest = null;
     this.events?.close();
     this.events = null;
+    this.socket?.dispose();
+    this.socket = null;
     for (const controller of this.requests) controller.abort();
     this.requests.clear();
     this.listeners.clear();

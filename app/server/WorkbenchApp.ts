@@ -5,6 +5,7 @@
  * - default WorkbenchApp: own listener readiness, moves and reload runtime behind one launch lease.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import path from "node:path";
 import type { HttpServerAddress } from "workbench-shared/http/HttpServer";
 import type { WorkbenchAppPortSnapshot } from "workbench-shared/http/workbench-app-port";
@@ -25,6 +26,7 @@ export interface WorkbenchAppLease {
 export interface WorkbenchAppRuntime {
   close(): Promise<void>;
   handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void>;
+  handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void>;
   readAppPort(): number | null;
   start(): Promise<void>;
   stopNetwork?(): Promise<void>;

@@ -133,6 +133,7 @@ export const WorkbenchNetworkSnapshotSchema = z.object({
   capabilities: z.object({
     manageApp: z.boolean(), manageNetwork: z.boolean(), trustHost: z.boolean().default(false),
     localConnection: z.boolean().default(false).optional(), settingsApply: z.boolean().default(false).optional(),
+    appEventsWebSocket: z.boolean().default(false),
   }).strict().optional(),
 }).strict();
 

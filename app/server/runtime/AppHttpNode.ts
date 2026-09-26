@@ -21,6 +21,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       readAppliedReactDevelopmentMode: context.readAppliedReactDevelopmentMode,
       state: build.get("state"),
       presentation: build.get("presentation"),
+      supportsAppWebSockets: context.supportsAppWebSockets === true,
     });
     return {
       dispose: () => router.close(),
@@ -37,6 +38,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   sources: [
     "app/server/runtime/AppHttpNode.ts",
     "app/server/runtime/WorkbenchAppHttpRouter.ts",
+    "app/server/runtime/WorkbenchAppEventSocketController.ts",
     "app/server/state/WorkbenchPresentationImportController.ts",
     "shared/state/workbench-presentation-legacy-layout.ts",
     "app/server/runtime/WorkbenchAppPortRoutes.ts",
@@ -44,6 +46,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
     "app/server/state/workbench-app-state-routes.ts",
     "app/server/state/workbench-presentation-routes.ts",
     "shared/http/workbench-app-port.ts",
+    "shared/http/workbench-app-events.ts",
     "shared/http/workbench-app-settings.ts",
     "shared/http/StaticHttpRequestController.ts",
     "shared/http/loopback-connection.ts",

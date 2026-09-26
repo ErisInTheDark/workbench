@@ -41,3 +41,49 @@ test("only an absent old-server endpoint allows compatibility transport", async 
     owner.dispose();
   }
 });
+
+test("advertised app lifetime socket gates availability and closes with its owner", async context => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    location: { href: "http://127.0.0.1:4200/workbench" },
+  } });
+  context.after(() => {
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  });
+  class Socket extends EventTarget {
+    readyState: number = WebSocket.CONNECTING;
+    open() { this.readyState = WebSocket.OPEN; this.dispatchEvent(new Event("open")); }
+    send() {}
+    close() { this.readyState = WebSocket.CLOSED; this.dispatchEvent(new Event("close")); }
+    publish(kind: "ready" | "stopped") {
+      this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ kind }) }));
+    }
+  }
+  const created = Promise.withResolvers<Socket>();
+  const availability: boolean[] = [];
+  const owner = new WorkbenchAppLifetimeClient({
+    available: value => availability.push(value), status: () => {},
+    fetcher: async () => new Response(null, {
+      status: 200, headers: { "x-workbench-app-lifetime-socket": "1" },
+    }),
+    open: () => { throw new Error("Unexpected EventSource"); },
+    socket: () => {
+      const socket = new Socket();
+      created.resolve(socket);
+      return socket as unknown as WebSocket;
+    },
+  });
+  context.after(() => owner.dispose());
+  const started = owner.start();
+  const socket = await created.promise;
+  socket.open();
+  assert.deepEqual(availability, [false]);
+  socket.publish("ready");
+  await started;
+  socket.publish("stopped");
+  socket.publish("ready");
+  assert.deepEqual(availability, [false, true, false, true]);
+  owner.dispose();
+  assert.equal(socket.readyState, WebSocket.CLOSED);
+});

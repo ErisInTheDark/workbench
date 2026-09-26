@@ -38,6 +38,9 @@ test("presentation changes share the existing app network stream", async context
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
+  const unsupported = await (await fetch(`http://127.0.0.1:${address.port}/api/workbench-network?capabilities=6`)).json();
+  assert.equal(unsupported.capabilities.appEventsWebSocket, false,
+    "a reloadable route cannot advertise an upgrade before the stable listener supports it");
   const cancellation = new AbortController();
   const response = await fetch(`http://127.0.0.1:${address.port}/api/workbench-network/events`, {
     signal: cancellation.signal,
@@ -89,7 +92,7 @@ test("cross-origin actions are rejected; admitted actions do not pin route dispo
     snapshot: () => ({ configuration: { privateAccess: null } }) as WorkbenchNetworkSnapshot,
     subscribe: () => () => {},
     action: async () => { calls++; if (!trustHost) return { kind: "ok" }; enter(); return await pending; },
-  });
+  }, undefined, undefined, true);
   let handled!: () => void;
   const returned = new Promise<void>(resolve => { handled = resolve; });
   const server = createServer((request, response) => {
@@ -120,6 +123,9 @@ test("cross-origin actions are rejected; admitted actions do not pin route dispo
   assert.equal("endpoints" in compatible.discovery.peers[0], false);
   const modern = await (await fetch(`${origin}/api/workbench-network?capabilities=5`)).json();
   assert.equal(modern.discovery.peers[0].endpoints.secureOrigin, "https://peer.wb.inthedark.boo:52739");
+  const sockets = await (await fetch(`${origin}/api/workbench-network?capabilities=6`)).json();
+  assert.equal(sockets.capabilities.appEventsWebSocket, true);
+  assert.equal(sockets.discovery.peers[0].endpoints.secureOrigin, "https://peer.wb.inthedark.boo:52739");
   for (const action of [{ action: "mode", mode: "localhost" }, { action: "tailnet-port", port: 8089 }, { action: "private-access", enabled: false }]) {
     const unsafe = await fetch(`${origin}/api/workbench-network`, {
       method: "POST", headers: { Origin: origin, "Content-Type": "application/json", "X-Workbench-Network-Request": "1" },

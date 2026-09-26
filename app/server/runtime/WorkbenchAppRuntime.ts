@@ -1,11 +1,13 @@
 /*
  * Exports:
  * - WorkbenchAppRuntimeOptions: process-owned compiler, database, logging, and port configuration.
- * - default WorkbenchAppRuntime: own the stable graph host and reload ingress while leasing requests.
+ * - default WorkbenchAppRuntime: own the stable graph host, lifetime upgrades and reload ingress.
  */
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
+import { WORKBENCH_APP_LIFETIME_SOCKET_PATH } from "workbench-shared/http/workbench-app-events";
 
 import ReloadableNodeHost from "workbench-shared/reload/ReloadableNodeHost";
 import { createReloadableNodeModuleLoader } from "workbench-shared/reload/reloadable-node-loader";
@@ -86,11 +88,12 @@ async function readReloadScopes(request: IncomingMessage) {
 }
 
 export default class WorkbenchAppRuntime {
-  private readonly lifetime = new WorkbenchAppLifetime();
+  private readonly lifetime: WorkbenchAppLifetime;
   private appliedReactDevelopmentMode: boolean | null = null;
   private readonly host: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
 
   constructor(private readonly options: WorkbenchAppRuntimeOptions) {
+    this.lifetime = new WorkbenchAppLifetime(options.logger);
     let host!: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
     const context: AppProcessContext = {
       daemonEndpointPath: options.daemonEndpointPath ?? path.join(resolveWorkbenchDataRoot(), "daemon", "runtime.json"),
@@ -125,6 +128,7 @@ export default class WorkbenchAppRuntime {
         return this.appliedReactDevelopmentMode;
       },
       repositoryRootPath: options.repositoryRootPath,
+      supportsAppWebSockets: true,
     };
     const require = createRequire(import.meta.url);
     const loader = createReloadableNodeModuleLoader<AppProcessContext, AppRuntimeObjects, never>(
@@ -300,5 +304,20 @@ export default class WorkbenchAppRuntime {
       async (router) => await router.handle(request, response),
       `app HTTP: ${request.method ?? "UNKNOWN"} ${url.pathname}`,
     );
+  }
+
+  async handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer) {
+    const url = new URL(request.url ?? "/", "http://workbench.local");
+    if (url.pathname === WORKBENCH_APP_LIFETIME_SOCKET_PATH) {
+      if (!this.host.get("http").admitConnection(request)) {
+        this.options.logger.error("app", "WS lifetime upgrade rejected: app ingress unavailable.");
+        socket.destroy();
+        return;
+      }
+      this.lifetime.handleUpgrade(request, socket, head);
+      return;
+    }
+    await this.host.run("http", router => router.handleUpgrade(request, socket, head),
+      `app WS: ${url.pathname}`);
   }
 }

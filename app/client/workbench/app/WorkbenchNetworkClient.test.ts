@@ -61,6 +61,53 @@ test("presentation revision notices ride the network stream without replacing ne
   }
 });
 
+test("advertised app socket carries network and presentation updates without opening EventSource", async context => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    location: { href: "http://127.0.0.1:4200/settings", origin: "http://127.0.0.1:4200" },
+    history: { state: null, replaceState: () => {} },
+  } });
+  context.after(() => {
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  });
+  const snapshot: WorkbenchNetworkSnapshot = {
+    configuration: { mode: "localhost", hostServe: { enabled: false, port: 8080 }, members: [], privateAccess: null },
+    runtime: {
+      hostServe: { phase: "off", message: null, url: null },
+      privateAccess: {
+        phase: "off", message: null, url: null, hostname: null, nodeId: null,
+        keyFingerprint: null, loginUrl: null, addresses: [], rootCertificate: null,
+        rootFingerprint: null, certificateExpiresAt: null, pending: [],
+      },
+    },
+    executable: { available: true, message: null }, hostPlatform: "win32", busy: false, failure: null,
+    capabilities: { manageApp: true, manageNetwork: true, trustHost: false, appEventsWebSocket: true },
+  };
+  class Socket extends EventTarget {
+    readyState: number = WebSocket.OPEN;
+    constructor() { super(); queueMicrotask(() => this.dispatchEvent(new Event("open"))); }
+    send() {}
+    close() { this.readyState = WebSocket.CLOSED; this.dispatchEvent(new Event("close")); }
+    publish(value: object) { this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(value) })); }
+  }
+  const socket = new Socket();
+  let streams = 0;
+  const client = new WorkbenchNetworkClient({
+    fetcher: async () => Response.json(snapshot),
+    events: () => { streams++; throw new Error("Unexpected EventSource"); },
+    socket: () => socket as unknown as WebSocket,
+  });
+  context.after(() => client.close());
+  await client.start();
+  const revisions: number[] = [];
+  client.subscribePresentation(revision => revisions.push(revision));
+  socket.publish({ kind: "presentation", event: { revision: 9 } });
+  assert.deepEqual(revisions, [9]);
+  assert.equal(streams, 0);
+  assert.equal(client.snapshot().snapshot?.capabilities?.appEventsWebSocket, true);
+});
+
 test("ready HTTPS checks automatically from HTTP and only retries after trust changes or explicit intent", async context => {
   const snapshot: WorkbenchNetworkSnapshot = {
     configuration: { mode: "tailnet-service", hostServe: { enabled: true, port: 8080 }, members: [],

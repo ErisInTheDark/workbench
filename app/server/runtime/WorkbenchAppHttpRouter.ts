@@ -1,8 +1,9 @@
 /*
  * Exports:
- * - default WorkbenchAppHttpRouter: own network admission, app routes, client diagnostics and static SPA resolution.
+ * - default WorkbenchAppHttpRouter: own network admission, app routes/upgrades, client diagnostics and static SPA resolution.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 
 import StaticHttpRequestController from "workbench-shared/http/StaticHttpRequestController";
 import { isLoopbackConnection } from "workbench-shared/http/loopback-connection";
@@ -19,6 +20,7 @@ import WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
 import WorkbenchAppSettingsRoutes from "./WorkbenchAppSettingsRoutes.ts";
 import type WorkbenchNetworkController from "../network/WorkbenchNetworkController.ts";
 import WorkbenchNetworkRoutes from "../network/WorkbenchNetworkRoutes.ts";
+import WorkbenchAppEventSocketController from "./WorkbenchAppEventSocketController.ts";
 
 const CLIENT_LOG_PATH = "/api/workbench-client-log";
 const MAX_CLIENT_LOG_BODY_BYTES = 128_000;
@@ -87,6 +89,7 @@ export default class WorkbenchAppHttpRouter {
   private readonly presentationRoutes: WorkbenchPresentationRoutes | null;
   private readonly staticRequests: StaticHttpRequestController;
   private readonly networkRoutes: WorkbenchNetworkRoutes | null;
+  private readonly eventSockets: WorkbenchAppEventSocketController | null;
   private readonly importController: WorkbenchPresentationImportController | null;
 
   constructor(private readonly options: {
@@ -97,13 +100,20 @@ export default class WorkbenchAppHttpRouter {
     readAppliedReactDevelopmentMode?: () => boolean;
     state: WorkbenchBrowserStateRegistry;
     presentation?: WorkbenchPresentationController;
+    supportsAppWebSockets?: boolean;
   }) {
     this.importController = options.network && options.presentation
       ? new WorkbenchPresentationImportController({
           network: options.network, presentation: options.presentation, logger: options.logger,
         }) : null;
     this.networkRoutes = options.network
-      ? new WorkbenchNetworkRoutes(options.network, options.presentation, this.importController ?? undefined) : null;
+      ? new WorkbenchNetworkRoutes(options.network, options.presentation, this.importController ?? undefined,
+          options.supportsAppWebSockets === true) : null;
+    this.eventSockets = options.network && this.networkRoutes
+      ? new WorkbenchAppEventSocketController({
+          logger: options.logger, network: options.network, routes: this.networkRoutes,
+          presentation: options.presentation, presentationImport: this.importController ?? undefined,
+        }) : null;
     this.portRoutes = new WorkbenchAppPortRoutes({
       appPort: {
         read: () => options.appPort.read(),
@@ -151,6 +161,7 @@ export default class WorkbenchAppHttpRouter {
   }
 
   async close() {
+    this.eventSockets?.close();
     await this.importController?.close();
     await this.presentationRoutes?.close();
     this.networkRoutes?.close();
@@ -158,10 +169,7 @@ export default class WorkbenchAppHttpRouter {
   }
 
   async admitHttp(request: IncomingMessage, response: ServerResponse) {
-    const nativeHeaders = Object.keys(request.headers).some(key => key.startsWith("x-workbench-network-")
-      && key !== "x-workbench-network-request");
-    if (isLoopbackConnection(request.socket)
-      && (!nativeHeaders || this.options.network?.ingress(request.headers))) return true;
+    if (this.admitConnection(request)) return true;
     response.setHeader("Connection", "close");
     sendJson(response, 403, { error: "Workbench is available only through localhost or Tailscale." });
     return false;
@@ -186,6 +194,22 @@ export default class WorkbenchAppHttpRouter {
     if (stream && response.headersSent && !recorded && !response.writableEnded) {
       this.options.logger.line("app", `${method} ${kind} ${response.statusCode} open`);
     }
+  }
+
+  admitConnection(request: IncomingMessage) {
+    const nativeHeaders = Object.keys(request.headers).some(key => key.startsWith("x-workbench-network-")
+      && key !== "x-workbench-network-request");
+    return Boolean(isLoopbackConnection(request.socket)
+      && (!nativeHeaders || this.options.network?.ingress(request.headers)));
+  }
+
+  handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer) {
+    if (!this.admitConnection(request) || !this.eventSockets) {
+      this.options.logger.error("app", "WS network upgrade rejected: app ingress unavailable.");
+      socket.destroy();
+      return;
+    }
+    this.eventSockets.handleUpgrade(request, socket, head);
   }
 
   private async route(request: IncomingMessage, response: ServerResponse) {

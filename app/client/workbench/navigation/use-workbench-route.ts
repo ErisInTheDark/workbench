@@ -96,7 +96,8 @@ export function useWorkbenchRouteIntent(
     route: WorkbenchRoute;
   } | null>(null);
   navigate.current = navigateToRoute;
-  const logicalReady = !intent.logical || Boolean(
+  const needsProject = Boolean(intent.projectId || intent.threadOwnerProjectId || intent.logical);
+  const logicalReady = !needsProject || Boolean(
     client.mounted?.presentationClient?.snapshot().data && client.explorer.logicalProjects,
   );
   useEffect(() => {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchNetworkRoutes: own bounded same-origin network actions and disposable progress responses.
+ * - default WorkbenchNetworkRoutes: own network actions, shared grant-filtered projection and legacy progress streams.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
@@ -17,6 +17,7 @@ export default class WorkbenchNetworkRoutes {
     private readonly controller: Pick<WorkbenchNetworkController, "snapshot" | "subscribe" | "action" | "connection" | "ingress" | "discovery">,
     private readonly presentation?: Pick<WorkbenchPresentationController, "subscribe" | "revision">,
     private readonly presentationImport?: Pick<WorkbenchPresentationImportController, "snapshot" | "subscribe">,
+    private readonly supportsAppWebSockets = false,
   ) {}
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
@@ -31,28 +32,7 @@ export default class WorkbenchNetworkRoutes {
       this.send(response, 403, { error: "Authenticated network ingress is required." });
       return true;
     }
-    const snapshot = () => {
-      const current = this.controller.ingress(request.headers);
-      const { localPort, change, daemon, discovery: _discovery, ...legacy } = this.controller.snapshot();
-      const version = url.searchParams.get("capabilities");
-      const discovery = current ? this.controller.discovery(current.deviceNodeId) : { refreshing: false, peers: [] };
-      const visibleDiscovery = version === "5" ? discovery : {
-        ...discovery,
-        peers: discovery.peers.map(peer => {
-          if (peer.phase !== "verified") return peer;
-          const { endpoints: _endpoints, ...legacyPeer } = peer;
-          return legacyPeer;
-        }),
-      };
-      return { ...legacy,
-        ...(["3", "4", "5"].includes(version ?? "") ? { localPort, change } : {}),
-        ...(["4", "5"].includes(version ?? "") ? { daemon, discovery: visibleDiscovery } : {}),
-        capabilities: {
-          manageApp: current?.manageApp ?? false, manageNetwork: current?.manageNetwork ?? false,
-          ...(["2", "3", "4", "5"].includes(version ?? "") ? { trustHost: current?.trustHost ?? false } : {}),
-          ...(["3", "4", "5"].includes(version ?? "") ? { localConnection: current?.deviceNodeId === null, settingsApply: true } : {}),
-        } };
-    };
+    const snapshot = () => this.snapshotFor(request, url);
     if (request.method === "GET" && !progress) {
       if (url.searchParams.get("connection") === "1") {
         this.send(response, 200, this.controller.connection());
@@ -151,6 +131,34 @@ export default class WorkbenchNetworkRoutes {
       else this.send(response, 503, { error: "Network settings are reloading." });
     }
     this.responses.clear();
+  }
+
+  admitSocket(request: IncomingMessage) {
+    return !this.closed && Boolean(this.controller.ingress(request.headers)) && this.sameOrigin(request);
+  }
+
+  snapshotFor(request: IncomingMessage, url: URL) {
+    const current = this.controller.ingress(request.headers);
+    const { localPort, change, daemon, discovery: _discovery, ...legacy } = this.controller.snapshot();
+    const version = url.searchParams.get("capabilities");
+    const discovery = current ? this.controller.discovery(current.deviceNodeId) : { refreshing: false, peers: [] };
+    const visibleDiscovery = version === "5" || version === "6" ? discovery : {
+      ...discovery,
+      peers: discovery.peers.map(peer => {
+        if (peer.phase !== "verified") return peer;
+        const { endpoints: _endpoints, ...legacyPeer } = peer;
+        return legacyPeer;
+      }),
+    };
+    return { ...legacy,
+      ...(["3", "4", "5", "6"].includes(version ?? "") ? { localPort, change } : {}),
+      ...(["4", "5", "6"].includes(version ?? "") ? { daemon, discovery: visibleDiscovery } : {}),
+      capabilities: {
+        manageApp: current?.manageApp ?? false, manageNetwork: current?.manageNetwork ?? false,
+        ...(["2", "3", "4", "5", "6"].includes(version ?? "") ? { trustHost: current?.trustHost ?? false } : {}),
+        ...(["3", "4", "5", "6"].includes(version ?? "") ? { localConnection: current?.deviceNodeId === null, settingsApply: true } : {}),
+        ...(version === "6" ? { appEventsWebSocket: this.supportsAppWebSockets } : {}),
+      } };
   }
 
   private own(response: ServerResponse, unsubscribe: () => void) {

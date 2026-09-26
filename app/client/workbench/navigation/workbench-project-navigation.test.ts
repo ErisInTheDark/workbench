@@ -65,6 +65,28 @@ test("local discovery paths canonicalise to their shortest unique suffix", () =>
   assert.equal(sameRelativePath.href(sameRelativePath.readRoute("/C%3A/git/app/bak")), "/c/git/app/bak");
 });
 
+test("a local route resolves from presentation before its daemon catalogue attaches", () => {
+  const firstId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const secondId = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const daemonId = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
+  const local = (id: typeof firstId, rootPath: string) => ({
+    id, matchKey: `local://${rootPath}/.git`, label: rootPath,
+    locations: [{
+      target: { daemonId, projectId: ProjectIdSchema.parse(id) },
+      daemonId, hostname: "desktop", name: "bak", rootPath, project: null,
+    }],
+  });
+  const bak = local(firstId, "C:/git/app/bak");
+  const single = new WorkbenchProjectNavigation([], [], [bak]);
+  assert.equal(single.readRoute("/bak/@/thread/example").logical?.projectId, firstId);
+  assert.equal(single.href(createLogicalProjectRoute(firstId)), "/bak");
+
+  const collision = new WorkbenchProjectNavigation([], [], [bak, local(secondId, "C:/git/other/bak")]);
+  assert.equal(collision.readRoute("/bak").view, "invalid");
+  assert.equal(collision.href(createLogicalProjectRoute(firstId)), "/app/bak");
+  assert.equal(collision.href(createLogicalProjectRoute(secondId)), "/other/bak");
+});
+
 test("a concrete project address keeps its logical selection when opening a thread", () => {
   const logicalId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
   const projectId = ProjectIdSchema.parse("b597a4b6-7af9-41f1-83ea-a53aed6f3b0a");
