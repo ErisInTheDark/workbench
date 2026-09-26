@@ -53,6 +53,14 @@ test("interrupted Workbench state overrides stale active provider status for con
   assert.doesNotMatch(stopped, /disabled=""/u);
   assert.match(stopped, /aria-label="Compact thread context"/u);
 
+  const noActiveTurn = render({
+    kind: "needsAttention",
+    reason: "noActiveTurn",
+    settled: false,
+  });
+  assert.doesNotMatch(noActiveTurn, /disabled=""/u);
+  assert.match(noActiveTurn, /aria-label="Compact thread context"/u);
+
   const working = render({
     agent: { agentStatus: "working" },
     kind: "working",
