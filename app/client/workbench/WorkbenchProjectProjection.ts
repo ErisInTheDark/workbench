@@ -300,12 +300,18 @@ export function projectLogicalProjects(
   }
   const hostnames = new Map(presentation.daemons.map(daemon => [daemon.id, daemon.hostname]));
   const pathSuffixCounts = new Map<string, number>();
-  const pathParts = (path: string) => path.replace(/\\/gu, "/").split("/").filter(Boolean);
+  const pathParts = (path: string) => {
+    const parts = path.replace(/\\/gu, "/").split("/").filter(Boolean);
+    const worktreeIndex = parts.findIndex((part, index) =>
+      part === ".workbench" && parts[index + 1] === "worktrees" && index + 3 === parts.length);
+    if (worktreeIndex >= 0) parts[parts.length - 1] = `+${parts[parts.length - 1]}`;
+    return parts;
+  };
   const displayLocationPath = (hostname: string, rootPath: string) => {
     const parts = pathParts(rootPath);
     const suffix = parts.map((_, index) => parts.slice(-(index + 1)).join("/"))
       .find(value => pathSuffixCounts.get(`${hostname.toLowerCase()}:/${value.toLowerCase()}`) === 1);
-    return suffix ? `${hostname}:/${suffix}` : `${hostname}:${rootPath}`;
+    return suffix ? `/${suffix}` : rootPath;
   };
   for (const location of presentation.locations) {
     const hostname = hostnames.get(location.target.daemonId) ?? location.target.daemonId;
@@ -365,6 +371,11 @@ export function projectLogicalProjects(
       left.hostname.localeCompare(right.hostname)
       || left.rootPath.localeCompare(right.rootPath)
       || left.daemonId.localeCompare(right.daemonId));
+    const showDaemon = new Set(projectLocations.map(location => location.daemonId)).size > 1;
+    for (const location of projectLocations) {
+      if (showDaemon) location.displayPath = `${location.hostname}:${location.displayPath}`;
+      else if (location.displayPath?.startsWith("/")) location.displayPath = location.displayPath.slice(1);
+    }
     const preferred = projectLocations.find(location => location.project) ?? projectLocations[0];
     const displayPath = preferred?.displayPath ?? null;
     return {

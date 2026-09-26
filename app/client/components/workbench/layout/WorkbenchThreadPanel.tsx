@@ -20,6 +20,7 @@ import resolveThreadActivityTimestampMs from "../thread-view/thread-activity-tim
 import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-formatters";
 import WorkbenchIconButton from "../WorkbenchIconButton";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
+import WorkbenchProjectLocationLabel from "../WorkbenchProjectLocationLabel";
 import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE } from "../../../workbench/state/workbench-settings";
 import {
   PanelCloseIcon,
@@ -220,7 +221,10 @@ export default function WorkbenchThreadPanel ({
                 projectRoots={panelContext?.project.roots ?? threadViewProps.projectRoots}
                 threadOwnerContent={ownerMetadata
                   ? <span className="truncate text-fg/muted" title={`${ownerMetadata.hostname}: ${ownerMetadata.rootPath}`}>
-                    {ownerMetadata.displayPath}
+                    <WorkbenchProjectLocationLabel
+                      displayPath={ownerMetadata.displayPath}
+                      hostname={ownerMetadata.hostname}
+                    />
                   </span> : threadViewProps.threadOwnerContent}
                 contained
                 fontSizeRem={effectiveFontSizeRem}

@@ -7,6 +7,7 @@
 import type { WorkbenchLogicalProject } from "workbench-shared/types";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import WorkbenchPressDragMenu from "./WorkbenchPressDragMenu";
+import WorkbenchProjectLocationLabel from "./WorkbenchProjectLocationLabel";
 
 export default function WorkbenchProjectLocationMenu({
   project, selected, onSelect, label,
@@ -26,9 +27,11 @@ export default function WorkbenchProjectLocationMenu({
         id: String(index),
         checked: location === current,
         content: (
-          <span className="flex min-w-0 flex-col text-left">
-            <span className="truncate">{location.hostname}</span>
-            <span className="truncate font-mono text-[0.72em] text-fg/muted">{location.rootPath}</span>
+          <span className="flex min-w-0 flex-col text-left" title={location.rootPath}>
+            <WorkbenchProjectLocationLabel
+              displayPath={location.displayPath ?? `${location.hostname}:${location.rootPath}`}
+              hostname={location.hostname}
+            />
             {!location.project ? <span className="text-[0.72em] text-danger">Unavailable</span> : null}
           </span>
         ),
@@ -38,8 +41,11 @@ export default function WorkbenchProjectLocationMenu({
         if (location) onSelect(location.target);
       }}
     >
-      <span className="min-w-0 max-w-52 truncate">
-        {current ? `${current.hostname} · ${current.rootPath}` : "Choose folder"}
+      <span className="min-w-0 max-w-52 truncate" title={current?.rootPath}>
+        {current ? <WorkbenchProjectLocationLabel
+          displayPath={current.displayPath ?? `${current.hostname}:${current.rootPath}`}
+          hostname={current.hostname}
+        /> : "Choose folder"}
       </span>
     </WorkbenchPressDragMenu>
   );

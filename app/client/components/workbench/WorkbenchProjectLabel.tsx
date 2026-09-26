@@ -9,6 +9,7 @@ import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
 import { ProjectIcon } from "./workbench-icons";
 import WorkbenchClientContext from "./workbench-client-context";
+import WorkbenchProjectLocationLabel from "./WorkbenchProjectLocationLabel";
 
 function getWorkbenchProjectDisplayPath(project: WorkbenchProjectOption) {
   const relativePath = project.relativePath || project.id || ".";
@@ -43,9 +44,8 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
           origin: client?.mounted?.daemonSessions?.httpOrigin(location.daemonId) ?? null }
         : undefined;
     const name = project.displayName ?? project.label;
-    const secondary = project.matchKey.startsWith("remote://")
-      ? project.label === name ? null : project.label
-      : project.displayPath ?? null;
+    const hasDistinctRemoteLabel = project.matchKey.startsWith("remote://") && project.label !== name;
+    const secondary = hasDistinctRemoteLabel ? project.label : project.displayPath ?? null;
     return (
       <span className="flex min-w-0 items-center gap-2" title={[
         ...project.locations, ...(project.observedLocations ?? []),
@@ -57,7 +57,10 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
           <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate text-text${active || variant === "heading" ? " font-semibold" : ""}`}>
             {name}
           </span>
-          {secondary ? <span className="min-w-0 flex-1 truncate text-[0.72rem] font-normal text-fg/muted">{secondary}</span> : null}
+          {secondary && secondary !== name ? <span className="min-w-0 flex-1 text-[0.72rem] font-normal text-fg/muted">
+            {hasDistinctRemoteLabel ? secondary
+              : <WorkbenchProjectLocationLabel displayPath={secondary} hostname={location?.hostname ?? ""} />}
+          </span> : null}
         </span>
       </span>
     );

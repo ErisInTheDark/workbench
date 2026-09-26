@@ -86,7 +86,53 @@ test("a local project's name stays separate from its shortest daemon folder addr
   };
   const project = projectLogicalProjects(snapshot, new Map([[first, [catalog("C:/git/app/bak")]]]))[0]!;
   assert.equal(project.displayName, "bak");
-  assert.equal(project.displayPath, "tower-of-floof:/bak");
+  assert.equal(project.displayPath, "bak");
+});
+
+test("one-daemon worktree locations use distinct short names without a redundant host", () => {
+  const root = "C:/git/web/workbench";
+  const worktree = `${root}/.workbench/worktrees/convex-lab`;
+  const snapshot: PresentationSnapshot = {
+    revision: 1, daemons: [{ id: first, hostname: "tower-of-floof" }],
+    projects: [{ id: localId, matchKey: "remote://example.test/workbench", label: "workbench" }],
+    locations: [root, worktree].map((rootPath, index) => ({
+      target: { daemonId: first, projectId: ProjectIdSchema.parse(`folder-${index}`) },
+      logicalProjectId: localId, identityKey: "remote://example.test/workbench",
+      name: index ? "convex-lab" : "workbench", rootPath,
+    })),
+    defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const project = projectLogicalProjects(snapshot, new Map());
+  assert.deepEqual(project[0]?.locations.map(location => location.displayPath), ["workbench", "+convex-lab"]);
+
+  const secondHost = {
+    ...snapshot,
+    daemons: [...snapshot.daemons, { id: second, hostname: "laptop" }],
+    locations: [...snapshot.locations, {
+      ...snapshot.locations[0]!,
+      target: { daemonId: second, projectId: ProjectIdSchema.parse("laptop-folder") },
+      rootPath: "/home/workbench",
+    }],
+  };
+  const qualified = projectLogicalProjects(secondHost, new Map())[0]!;
+  assert.deepEqual(qualified.locations.map(location => location.displayPath), [
+    "laptop:/workbench", "tower-of-floof:/workbench", "tower-of-floof:/+convex-lab",
+  ]);
+});
+
+test("duplicate worktree names keep an unambiguous folder address", () => {
+  const snapshot: PresentationSnapshot = {
+    revision: 1, daemons: [{ id: first, hostname: "tower-of-floof" }],
+    projects: [{ id: localId, matchKey: "remote://example.test/workbench", label: "workbench" }],
+    locations: ["C:/first/.workbench/worktrees/lab", "C:/second/.workbench/worktrees/lab"].map((rootPath, index) => ({
+      target: { daemonId: first, projectId: ProjectIdSchema.parse(`folder-${index}`) },
+      logicalProjectId: localId, identityKey: "remote://example.test/workbench", name: "lab", rootPath,
+    })),
+    defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const paths = projectLogicalProjects(snapshot, new Map())[0]!.locations.map(location => location.displayPath);
+  assert.equal(new Set(paths).size, 2);
+  assert(paths.every(path => path?.includes("+lab")));
 });
 
 test("remote project labels use the shortest unambiguous repository suffix", () => {
