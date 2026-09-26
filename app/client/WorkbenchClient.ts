@@ -1354,12 +1354,14 @@ export function WorkbenchClient(
       return;
     }
     const project = getLogicalProjection()?.projects.find(item => item.id === logicalProjectId);
-    const available = project?.locations.filter(location => location.project) ?? [];
+    const registered = project?.locations ?? [];
+    const available = registered.filter(location => location.project);
     const target = route.logical.browseLocation
-      ? available.find(location =>
+      ? registered.find(location =>
         location.target.daemonId === route.logical?.browseLocation?.daemonId
         && location.target.projectId === route.logical?.browseLocation?.projectId)?.target ?? null
-      : available.length === 1 ? available[0]!.target : null;
+      : available.length === 1 ? available[0]!.target
+        : available.length === 0 && registered.length === 1 ? registered[0]!.target : null;
     const currentProjectId = activeProjectClient.getSnapshot().currentProjectId;
     const attachedId = networkClient?.snapshot().snapshot?.daemon?.daemonId;
     const current = currentProjectId

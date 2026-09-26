@@ -556,6 +556,17 @@ test("an old-shape UUID URL keeps its thread owner and the sole browse folder th
     assert.equal(explorerSnapshots.at(-1)?.currentProjectId, projectId);
     assert.equal(explorerSnapshots.at(-1)?.logicalThreads?.length, 1);
     assert.deepEqual(explorerSnapshots.at(-1)?.browseLocation, { daemonId, projectId });
+    catalogAvailable = false;
+    await client.controls.refreshProjectCatalog();
+    assert.equal(explorerSnapshots.at(-1)?.logicalProjects?.[0]?.locations[0]?.project, null);
+    await client.controls.applyRoute(createHomeRoute());
+    catalogAvailable = true;
+    const recovered = await client.controls.applyRoute(createLogicalProjectRoute(logicalProjectId));
+    assert.equal(recovered.ok, true, recovered.error ?? "registered folder route did not open");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(explorerSnapshots.at(-1)?.currentProjectId, projectId,
+      "a sole registered folder must be validated and selected when its catalogue arrives");
+    assert.deepEqual(explorerSnapshots.at(-1)?.browseLocation, { daemonId, projectId });
     const multiple = Promise.withResolvers<void>();
     observeBrowse = snapshot => {
       if (snapshot.logicalProjects?.[0]?.locations.filter(item => item.project).length === 2

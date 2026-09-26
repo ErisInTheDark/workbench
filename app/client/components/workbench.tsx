@@ -894,11 +894,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         location.target.daemonId === browseLocation.daemonId
         && location.target.projectId === browseLocation.projectId)
       ? browseLocation.projectId : ""
-    : activeProjectId;
+    : explorer.currentProjectId;
   const attachedProjectId = route.logical
     ? browseProjectId && browseLocation?.daemonId === workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId
       ? browseProjectId : ""
-    : activeProjectId;
+    : browseProjectId;
   const browseSessionController = useMemo(() => new WorkbenchBrowseSessionController({
     mutate: async (action, input) => {
       if (!controls) return {};
