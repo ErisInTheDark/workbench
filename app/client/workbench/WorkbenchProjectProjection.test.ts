@@ -5,9 +5,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
-import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import { preferredLogicalLaunchLocation, projectLogicalProjects, projectLogicalSummaries, projectLogicalThreadRows } from "./WorkbenchProjectProjection";
-import type { WorkbenchProjectThreadSidebars } from "workbench-shared/workbench/thread/thread-state";
+import { groupWorkbenchThreadSidebarEntries, type WorkbenchProjectThreadSidebars, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 
 const first = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
 const second = DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029");
@@ -217,6 +217,72 @@ test("one logical project includes thread rows from both daemon folders", () => 
     row.entry.entryKind === "thread" ? row.entry.identity.threadId : null]), [
     [remoteId, first, "first-thread"], [remoteId, second, "second-thread"],
   ]);
+});
+
+test("merged project rows keep priority and lifecycle layers across daemon folders", () => {
+  const snapshot: PresentationSnapshot = {
+    revision: 1,
+    daemons: [{ id: first, hostname: "desktop" }, { id: second, hostname: "laptop" }],
+    projects: [{ id: remoteId, matchKey: "remote://example.test/team/repo", label: "repo" }],
+    locations: [first, second].map(daemonId => ({
+      target: { daemonId, projectId: concrete }, logicalProjectId: remoteId,
+      identityKey: "remote://example.test/team/repo", name: "repo", rootPath: "C:/repo",
+    })),
+    defaults: [], drafts: [{
+      id: DraftIdSchema.parse("00000000-0000-4000-8000-000000000001"),
+      logicalProjectId: remoteId, target: { daemonId: second, projectId: concrete },
+      prompt: "draft", selection: { kind: "custom", settings: {
+        agentPath: null, agentSource: null, harness: "codex", model: "",
+        reasoningEffort: null, serviceTier: null,
+      } },
+      updatedAt: 2, revision: 1, phase: "unsent", pinned: false, snoozed: false,
+      launchId: null, acceptedThreadId: null, attachments: [],
+    }], folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const completed: WorkbenchThreadLifecycle = { kind: "completed", reason: "providerInactive", settled: false };
+  const attention: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "noActiveTurn", settled: false };
+  const working: WorkbenchThreadLifecycle = {
+    kind: "working", reason: "acceptedIntent", settled: false,
+    agent: { agentStatus: "working", turnId: WorkbenchTurnIdSchema.parse("turn") },
+  };
+  const thread = (
+    id: string, activityAt: number, lifecycle: WorkbenchThreadLifecycle,
+    options: { claimed?: boolean; pinned?: boolean; snoozed?: boolean } = {},
+  ): WorkbenchThreadSidebarEntry => ({
+    entryKind: "thread", title: id, activityAt,
+    identity: { harness: "codex", threadId: WorkbenchThreadIdSchema.parse(id) },
+    lifecycle,
+    metadata: { archived: false, pinned: options.pinned ?? false, snoozed: options.snoozed ?? false },
+    ...(options.claimed ? { gitArc: {
+      checkpointCommit: "a".repeat(40), claimedPaths: ["src/file.ts"], intentDescription: "",
+      intentName: id, phase: "active" as const, proposals: [], updatedAt: "2026-08-25T00:00:00.000Z",
+    } } : {}),
+  });
+  const sources: ReadonlyMap<typeof first, WorkbenchProjectThreadSidebars> = new Map([
+    [first, { projects: [{ projectId: concrete, revision: 1, error: null, freshness: "fresh", entries: [
+      thread("attention", 3, attention),
+      thread("claimed", 1, completed, { claimed: true }),
+      thread("pinned", 1, completed, { pinned: true }),
+      thread("settled", 11, { ...completed, settled: true }),
+    ] }] }],
+    [second, { projects: [{ projectId: concrete, revision: 1, error: null, freshness: "fresh", entries: [
+      thread("complete", 9, completed),
+      thread("working", 4, working),
+      thread("snoozed", 10, attention, { snoozed: true }),
+    ] }] }],
+  ]);
+  const rows = projectLogicalThreadRows(projectLogicalProjects(snapshot, new Map()), sources, snapshot);
+  const title = (entry: WorkbenchThreadSidebarEntry) => entry.title;
+  assert.deepEqual(rows.map(row => title(row.entry)), [
+    "pinned", "claimed", "draft", "attention", "working", "complete", "snoozed", "settled",
+  ]);
+  const grouped = groupWorkbenchThreadSidebarEntries(rows.map(row => row.entry));
+  assert.deepEqual(grouped.mainEntries.map(title), ["claimed", "draft", "attention", "working", "complete"]);
+  assert.deepEqual(grouped.pinnedEntries.map(title), ["pinned"]);
+  assert.deepEqual(grouped.snoozedEntries.map(title), ["snoozed"]);
+  assert.deepEqual(grouped.settledEntries.map(title), ["settled"]);
+  assert.equal(rows.find(row => row.entry.title === "working")?.location.daemonId, second);
+  assert.equal(rows.find(row => row.entry.title === "claimed")?.location.daemonId, first);
 });
 
 test("observed daemon facts show Home rows without becoming persisted launch targets", () => {

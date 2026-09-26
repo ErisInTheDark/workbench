@@ -5,7 +5,7 @@
  * - moveWorkbenchThreadDisplayOrder: move a thread at a section root.
  * - WorkbenchThreadDisplayOrderSchema/WorkbenchThreadDisplayOrder/WorkbenchThreadFolder: strict project-level user layout with one-level folders.
  * - getWorkbenchThreadDisplayKey/getWorkbenchThreadDisplaySection/getWorkbenchThreadFolderKey: stable row, section, and folder identity.
- * - normalizeWorkbenchThreadDisplayOrder/sortThreadSidebarEntries/resolveWorkbenchThreadDisplayOrder: decode legacy state and resolve layered automatic plus user order.
+ * - normalizeWorkbenchThreadDisplayOrder/compareThreadSidebarEntries/sortThreadSidebarEntries/resolveWorkbenchThreadDisplayOrder: decode legacy state and resolve layered automatic plus user order.
  * - reconcileWorkbenchThreadDisplayOrder/createWorkbenchThreadFolder/renameWorkbenchThreadFolder/moveWorkbenchThreadDisplayItem/replaceWorkbenchThreadFolderMember: validate, prune, create, rename, move, and materialize layout state.
  * - projectWorkbenchThreadDisplaySection/findWorkbenchThreadFolder: project mixed root items and folder membership for rendering.
  * - isWorkbenchThreadDisplayOrderEmpty: identify layouts that do not need persistence.
@@ -128,7 +128,7 @@ function compareThreadIdentity(left: WorkbenchThreadSidebarEntry, right: Workben
   return leftHarness.localeCompare(rightHarness) || getWorkbenchThreadDisplayKey(left).localeCompare(getWorkbenchThreadDisplayKey(right));
 }
 
-function compareNaturalThreadOrder(left: WorkbenchThreadSidebarEntry, right: WorkbenchThreadSidebarEntry) {
+export function compareThreadSidebarEntries(left: WorkbenchThreadSidebarEntry, right: WorkbenchThreadSidebarEntry) {
   return (
     threadSettleSort(left) - threadSettleSort(right)
     || threadPrioritySort(left) - threadPrioritySort(right)
@@ -140,7 +140,7 @@ function compareNaturalThreadOrder(left: WorkbenchThreadSidebarEntry, right: Wor
 }
 
 export function sortThreadSidebarEntries(entries: readonly WorkbenchThreadSidebarEntry[]) {
-  return [...entries].sort(compareNaturalThreadOrder);
+  return [...entries].sort(compareThreadSidebarEntries);
 }
 
 function projectLayoutEntries(entries: readonly WorkbenchThreadSidebarEntry[]) {

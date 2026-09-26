@@ -15,7 +15,7 @@ import type {
 import { createDraftTitle, WorkbenchThreadDraftSchema } from "workbench-shared/workbench/thread/thread-state";
 import { getThreadSidebarGroup } from "workbench-shared/workbench/thread/thread-state";
 import {
-  getWorkbenchThreadDisplayKey, getWorkbenchThreadDisplaySection,
+  compareThreadSidebarEntries, getWorkbenchThreadDisplayKey, getWorkbenchThreadDisplaySection,
   type WorkbenchThreadDisplayOrder,
 } from "workbench-shared/workbench/thread/thread-display-order";
 import { getWorkbenchThreadFolderKey } from "workbench-shared/workbench/thread/thread-display-order";
@@ -196,7 +196,7 @@ export function projectLogicalThreadRows(
         },
       };
     });
-  return [...materialized, ...drafts].sort((left, right) => right.entry.activityAt - left.entry.activityAt
+  return [...materialized, ...drafts].sort((left, right) => compareThreadSidebarEntries(left.entry, right.entry)
     || left.location.daemonId.localeCompare(right.location.daemonId)
     || left.location.projectId.localeCompare(right.location.projectId));
 }
