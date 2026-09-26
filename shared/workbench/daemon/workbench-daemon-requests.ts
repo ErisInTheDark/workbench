@@ -119,6 +119,7 @@ export const WORKBENCH_GIT_ARC_ACTION_BY_METHOD = {
   "git/arc/restore": "restore",
   "git/arc/stash": "arcStash",
   "git/arc/unstash": "arcUnstash",
+  "git/arc/stash/discard": "arcDiscardStash",
 } as const satisfies Record<string, GitCheckpointRequest["action"]>;
 
 export type WorkbenchDaemonGitArcMethod = keyof typeof WORKBENCH_GIT_ARC_ACTION_BY_METHOD;
@@ -178,6 +179,7 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "git/arc/restore": { params: GitArcParams<"restore">; result: WorkbenchGitArcSuccess };
   "git/arc/stash": { params: GitArcParams<"arcStash">; result: GitArcStashResult };
   "git/arc/unstash": { params: GitArcParams<"arcUnstash">; result: GitArcStashResult };
+  "git/arc/stash/discard": { params: GitArcParams<"arcDiscardStash">; result: WorkbenchGitArcSuccess };
   "local-capabilities/read": { params: object; result: WorkbenchLocalCapabilitySettingsResponse };
   "local-capabilities/update": { params: WorkbenchLocalCapabilitySettingsUpdateRequest; result: WorkbenchLocalCapabilitySettingsResponse };
   "native/file/link-roots": { params: ResolveExternalFileLinkRootsRequest; result: ResolveExternalFileLinkRootsResponse };

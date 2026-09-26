@@ -69,13 +69,13 @@ export interface WorkbenchThreadStateFeatureContext {
   database: WorkbenchThreadStateStoreDatabase;
   gitArcs: {
     findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcActiveClaim | null>;
-    hasLiveClaims?(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<boolean>;
+    blocksThreadSettlement?(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<boolean>;
     findLifecycleState?(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<GitArcLifecycleState | null>;
     findPlanState?(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<GitArcPlanState | null>;
     listActiveClaims(cwd: string): Promise<WorkbenchGitArcActiveClaim[]>;
     listLifecycleStates?(cwd: string): Promise<Array<GitArcLifecycleState>>;
     listPlanStates?(cwd: string): Promise<Array<GitArcPlanState>>;
-    pruneThreadHistories?(cwd: string, identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>): Promise<unknown>;
+    pruneThreadHistories?(cwd: string, identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>): Promise<{ deferredIdentities: Array<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }> }>;
   };
   getProjectCatalog(): WorkbenchProjectsPayload;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
@@ -194,7 +194,9 @@ export default class WorkbenchThreadStateFeature {
       ...(context.gitArcs.pruneThreadHistories ? {
         pruneExpiredGitState: async (projectId, identities) => {
           const project = await context.resolveProjectById(projectId);
-          await context.gitArcs.pruneThreadHistories!(project.rootPath, identities);
+          const result = await context.gitArcs.pruneThreadHistories!(project.rootPath, identities);
+          const deferred = new Set(result.deferredIdentities.map(({ harness, threadId }) => `${harness}:${threadId}`));
+          return identities.filter(({ harness, threadId }) => deferred.has(`${harness}:${threadId}`));
         },
       } : {}),
       reconcileProject: (projectId, signal, acceptProviderSnapshot, acceptGitArcSnapshot) => this.reconcileProject(projectId, signal, acceptProviderSnapshot, acceptGitArcSnapshot),
@@ -218,15 +220,15 @@ export default class WorkbenchThreadStateFeature {
         const state = await context.gitArcs.findPlanState(project.rootPath, harness, threadId);
         return projectGitArcPlan(state ?? undefined);
       },
-      hasLiveGitArcClaims: async (projectId, harness, threadId) => {
+      hasGitArcBlockingSettlement: async (projectId, harness, threadId) => {
         const project = await context.resolveProjectById(projectId);
-        if (context.gitArcs.hasLiveClaims) {
-          return await context.gitArcs.hasLiveClaims(project.rootPath, harness, threadId);
+        if (context.gitArcs.blocksThreadSettlement) {
+          return await context.gitArcs.blocksThreadSettlement(project.rootPath, harness, threadId);
         }
         const state = context.gitArcs.findLifecycleState
           ? await context.gitArcs.findLifecycleState(project.rootPath, harness, threadId)
           : await context.gitArcs.findActiveClaim(project.rootPath, harness, threadId);
-        return Boolean(state && state.claimedPaths.length);
+        return Boolean(state && (state.claimedPaths.length || ("phase" in state && state.phase === "stashed")));
       },
       runGitArcReadTransition: async (projectId, operation) => {
         const project = await context.resolveProjectById(projectId);

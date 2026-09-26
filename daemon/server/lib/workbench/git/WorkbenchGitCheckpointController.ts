@@ -400,6 +400,15 @@ export default class WorkbenchGitCheckpointController {
     return { active, checkpoint, harness, plan, registry, repository };
   }
 
+  private async requireDiscardableStash(input: ControllerInput) {
+    const state = await this.requireStashedArc(input);
+    const lossStore = new GitArcClaimLossStore(state.repository, this.resolveThreadIdentity);
+    const prepared = await lossStore.prepareDeleteFrozen(
+      { harness: state.harness, threadId: input.threadId }, state.active.claimedPaths,
+    );
+    return { ...state, ...prepared };
+  }
+
   private async replaceWorktreePaths(
     repository: WorkbenchGitRepository,
     source: string | null,
@@ -481,6 +490,45 @@ export default class WorkbenchGitCheckpointController {
         scopePaths: [],
         stashedPaths: paths,
       };
+    });
+  }
+
+  async discardStashedArc(input: ControllerInput) {
+    return await GitObjectReadSession.run(async () => {
+      const { active, deletions, registry, repository } = await this.requireDiscardableStash(input);
+      const next = active.retainedArc
+        ? { ...active, claimedPaths: [], phase: "plan" as const, proposalId: null, proposalIds: [], retainedArc: null }
+        : { ...active, claimedPaths: [], phase: "resolved" as const };
+      const mutation = await registry.prepareSet(next, active.checkpointCommit);
+      await repository.updateRefs(mutation.updates, deletions);
+      return { previous: active, snapshots: deletions };
+    });
+  }
+
+  async assertArcDiscardable(input: ControllerInput) {
+    await GitObjectReadSession.run(async () => {
+      await this.requireDiscardableStash(input);
+    });
+  }
+
+  async undoDiscardedStash(input: ControllerInput, discarded: Awaited<ReturnType<WorkbenchGitCheckpointController["discardStashedArc"]>>) {
+    await GitObjectReadSession.run(async () => {
+      const repository = await WorkbenchGitRepository.open(input.cwd);
+      const registry = this.registry(repository);
+      const current = await registry.find({ harness: normalizeHarness(input.harness), threadId: input.threadId });
+      if (!current || current.checkpointCommit !== discarded.previous.checkpointCommit
+        || current.phase !== (discarded.previous.retainedArc ? "plan" : "resolved")) {
+        throw new Error("The discarded Git arc changed before rollback.");
+      }
+      const mutation = await registry.prepareSet(discarded.previous, current.checkpointCommit);
+      await repository.updateRefs(
+        [
+          ...mutation.updates,
+          ...discarded.snapshots.map(({ oldValue, ref }) => ({
+            newValue: oldValue, oldValue: "0".repeat(40), ref,
+          })),
+        ],
+      );
     });
   }
 
@@ -802,6 +850,14 @@ export default class WorkbenchGitCheckpointController {
     });
   }
 
+  async blocksThreadSettlementAtRepoRoot({ cwd, harness: rawHarness, threadId }: ControllerInput) {
+    return await GitObjectReadSession.run(async () => {
+      const harness = normalizeHarness(rawHarness);
+      const entry = await this.registry(new WorkbenchGitRepository(cwd)).find({ harness, threadId });
+      return Boolean(entry && (getGitArcLiveClaimPaths(entry).length || entry.phase === "stashed"));
+    });
+  }
+
   async listPlanStates({ cwd }: { cwd: string }): Promise<GitArcPlanState[]> {
     return await GitObjectReadSession.run(() => this.plans.listPlanStates({ cwd }));
   }
@@ -883,6 +939,12 @@ export default class WorkbenchGitCheckpointController {
       cwd,
       harness: normalizeHarness(rawHarness),
       threadId,
+    }));
+  }
+
+  async canPruneThreadHistory({ cwd, harness: rawHarness, threadId }: ControllerInput) {
+    return await GitObjectReadSession.run(() => new GitArcRetentionController(this.resolveThreadIdentity).canPruneThread({
+      cwd, harness: normalizeHarness(rawHarness), threadId,
     }));
   }
 

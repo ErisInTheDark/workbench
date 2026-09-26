@@ -2,7 +2,8 @@
 - Git arc read endpoints do not fetch remotes or update refs. They derive presentation state from local repository state. Mutations revalidate before changing refs or history.
 - Git history rewrites preserve checkpoint state only within declared scope.
 - One Git arc inspection request owns one worktree snapshot per repository. Compare, diff, and unclaimed-dirt projection reuse it.
-- Thread settlement checks only live claimed paths under the worktree Git transition. It does not hydrate proposal details.
+- Thread settlement checks live claims and stashed arcs under the worktree Git transition, without hydrating proposal details. Plan-only arcs may settle and archive.
+- Discarding a stash deletes its frozen work snapshot, leaves worktree content unchanged, and retains any pending plan. Settled plan-only history may expire; stashed history waits for explicit resolution.
 - Git arc storage writes canonical Workbench thread IDs. Reads resolve legacy provider IDs through admitted identity; unresolved owners are orphaned, inactive, and omitted from normal projections.
 - Proposal summaries do not require diff hydration. Full proposal diffs hydrate on demand through bounded Git work; completed immutable projections may be reused only by exact tree-and-path identity.
 - Every new Workbench Git ref must be handled explicitly by the history rewriter and covered across replacement history.

@@ -122,6 +122,9 @@ class FakeLocalGitArcController {
   readonly stashCalls: string[] = [];
   readonly unstashCalls: string[] = [];
   readonly restashCalls: string[] = [];
+  readonly discardFailureRoots = new Set<string>();
+  readonly discardCalls: string[] = [];
+  readonly undoDiscardCalls: string[] = [];
   readonly startCalls: string[] = [];
   private nextProposal = 0;
   private readonly plans = new Map<string, { checkpointCommit: string; harness: string; intentDescription: string; intentName: string; scopePaths: string[]; threadId: string; updatedAt: string }>();
@@ -255,12 +258,36 @@ class FakeLocalGitArcController {
     if (!this.states.has(input.cwd)) throw new Error("This thread does not own any live Git arc claims.");
   }
 
+  async blocksThreadSettlementAtRepoRoot(input: { cwd: string; harness: string; threadId: string }) {
+    const state = this.states.get(input.cwd);
+    return Boolean(state && state.harness === input.harness && state.threadId === input.threadId
+      && (state.claimedPaths.length || state.phase === "stashed"));
+  }
+
   async assertArcStashable(input: { cwd: string }) {
     if (this.states.get(input.cwd)?.phase !== "active") throw new Error("This thread does not own an active Git arc.");
   }
 
   async assertArcUnstashable(input: { cwd: string }) {
     if (this.states.get(input.cwd)?.phase !== "stashed") throw new Error("This thread does not own a stashed Git arc.");
+  }
+
+  async assertArcDiscardable(input: { cwd: string }) {
+    if (this.states.get(input.cwd)?.phase !== "stashed") throw new Error("This thread does not own a stashed Git arc.");
+  }
+
+  async discardStashedArc(input: { cwd: string }) {
+    this.discardCalls.push(input.cwd);
+    if (this.discardFailureRoots.has(input.cwd)) throw new Error("discard failed");
+    const previous = this.states.get(input.cwd);
+    if (!previous || previous.phase !== "stashed") throw new Error("This thread does not own a stashed Git arc.");
+    this.states.delete(input.cwd);
+    return { previous };
+  }
+
+  async undoDiscardedStash(input: { cwd: string }, discarded: Awaited<ReturnType<FakeLocalGitArcController["discardStashedArc"]>>) {
+    this.undoDiscardCalls.push(input.cwd);
+    this.states.set(input.cwd, discarded.previous);
   }
 
   async stashArc(input: { cwd: string }) {
@@ -1012,10 +1039,42 @@ test("workspace stash and unstash compensate completed members when a later repo
   assert.deepEqual(local.restashCalls.map(path.normalize), [path.resolve("C:/repo/api")].map(path.normalize));
   assert.equal((await controller.findLifecycleState(project, "codex", identity.threadId))?.phase, "stashed");
   assert.equal((await controller.execute(project, { ...identity, action: "arcScope" }) as { members: Array<{ phase: string }> }).members[0]?.phase, "stashed");
+  assert.equal(await controller.hasLiveClaims(project, "codex", identity.threadId), false);
+  assert.equal(await controller.blocksThreadSettlement(project, "codex", identity.threadId), true);
+  local.discardFailureRoots.add("C:/repo/web");
+  await assert.rejects(controller.execute(project, { ...identity, action: "arcDiscardStash" }), /discard failed/u);
+  assert.deepEqual(local.undoDiscardCalls.map(path.normalize), [path.resolve("C:/repo/api")]);
+  assert.equal((await controller.findLifecycleState(project, "codex", identity.threadId))?.phase, "stashed");
+  local.discardFailureRoots.clear();
   local.unstashFailureRoots.clear();
   const restored = await controller.execute(project, { ...identity, action: "arcUnstash" });
   assert.match(renderGitArcOutput({
     method: "POST", path: "/api/git/arc/unstash", responseKind: "git-arc-unstash",
   }, restored as Record<string, unknown>), /^arc unstash plan$/mu);
   assert.equal((await controller.execute(project, { ...identity, action: "arcScope" }) as { members: Array<{ phase: string }> }).members[0]?.phase, "plan");
+});
+
+test("workspace retention defers a whole thread before pruning any repository member", async () => {
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const pruned: string[] = [];
+  const controller = new WorkbenchWorkspaceGitArcController({
+    canPruneThreadHistory: async ({ cwd, harness, threadId }: { cwd: string; harness: string; threadId: string }) => (
+      harness !== "codex" || threadId !== "deferred" || cwd.endsWith("api")
+    ),
+    pruneThreadHistory: async ({ cwd, harness, threadId }: { cwd: string; harness: string; threadId: string }) => {
+      pruned.push(`${cwd}:${harness}:${threadId}`);
+      return { prunedRefCount: 1, registryEntryRemoved: true };
+    },
+  } as unknown as WorkbenchGitCheckpointController, new WorkbenchThreadTransitionCoordinator(), async root => root);
+  const result = await controller.pruneThreadHistories(project, [
+    { harness: "codex", threadId: "deferred" },
+    { harness: "codex", threadId: "eligible" },
+    { harness: "opencode", threadId: "deferred" },
+  ]);
+  assert.deepEqual(result.deferredIdentities, [{ harness: "codex", threadId: "deferred" }]);
+  assert.deepEqual(pruned, [
+    "C:/repo/api:codex:eligible", "C:/repo/web:codex:eligible",
+    "C:/repo/api:opencode:deferred", "C:/repo/web:opencode:deferred",
+  ]);
+  assert.equal(result.prunedRefCount, 4);
 });

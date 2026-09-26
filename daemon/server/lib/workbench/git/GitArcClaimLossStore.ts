@@ -73,4 +73,18 @@ export default class GitArcClaimLossStore {
     if ((stored.parents[0] ?? null) !== metadata.head || stored.parents.length > 1) throw new Error("Invalid claim-loss snapshot parent.");
     return { ...metadata, commit, ref, tree: stored.tree };
   }
+
+  async prepareDeleteFrozen(identity: Identity, expectedPaths: readonly string[]) {
+    const snapshot = await this.read(identity);
+    if (!snapshot?.frozen || snapshot.paths.length !== expectedPaths.length
+      || snapshot.paths.some((path, index) => path !== expectedPaths[index])) {
+      throw new Error("The frozen Git arc stash snapshot does not match its saved paths.");
+    }
+    const refs = gitArcThreadStorageIds(await this.identity(identity))
+      .map(threadId => this.ref({ ...identity, threadId }));
+    const deletions = (await Promise.all(refs.map(async ref => ({
+      ref, value: await this.repository.readRef(ref),
+    })))).flatMap(({ ref, value }) => value === snapshot.commit ? [{ oldValue: value, ref }] : []);
+    return { deletions };
+  }
 }

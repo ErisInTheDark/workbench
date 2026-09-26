@@ -204,7 +204,7 @@ test("Git arc mutations and state callbacks share the canonical Workbench owner"
     const pruned: string[] = [];
     registry.pruneThreadHistories = async (_project, identities) => {
       pruned.push(...identities.map(identity => identity.threadId));
-      return { prunedRefCount: 0, registryEntryRemoved: false };
+      return { deferredIdentities: [], prunedRefCount: 0, registryEntryRemoved: false };
     };
     assert.equal((await feature.findLifecycleState(native.nativeLocation, "codex", parent.threadId))?.threadId, parent.threadId);
     assert.equal((await feature.findPlanState(native.nativeLocation, "codex", parent.threadId))?.threadId, parent.threadId);

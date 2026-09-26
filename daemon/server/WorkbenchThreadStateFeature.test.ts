@@ -1339,7 +1339,10 @@ test("expired settled threads reach repository retention through the feature bou
       findActiveClaim: async () => null,
       listActiveClaims: async () => [],
       listLifecycleStates: async () => [],
-      pruneThreadHistories: async (cwd, identities) => { pruned.push({ cwd, identities }); },
+      pruneThreadHistories: async (cwd, identities) => {
+        pruned.push({ cwd, identities });
+        return { deferredIdentities: [] };
+      },
     },
     harnesses: createHarnesses(async (_harness, request) => ({ id: request.id ?? null, result: { data: [], nextCursor: null } })),
     listSubagents: async () => ({ subagents: [] }),

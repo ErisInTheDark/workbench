@@ -13,6 +13,7 @@ import { GitArcStashResultSchema } from "workbench-shared/workbench/git/checkpoi
 
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
 import {
   CHECKPOINT_OPERATIONS_FIXTURE,
@@ -943,4 +944,28 @@ test("Git checkpoint controller operations", { concurrency: true }, async (conte
   await Promise.all(scheduledCases.map(async ({ name, run }) => (
     await context.test(name, { concurrency: true }, async (childContext) => await run(fixture, childContext))
   )));
+});
+
+test("discard drops frozen work without changing the worktree and keeps an inactive successor plan", async (context) => {
+  const fixture = await fixtureCache.copyFresh(CHECKPOINT_OPERATIONS_FIXTURE);
+  context.after(fixture.dispose);
+  for (const [key, expectedPhase] of [["stash", "resolved"], ["stashPlan", "plan"]] as const) {
+    const { root: repoRoot, state } = branchFixture(fixture, key);
+    const identity = { cwd: repoRoot, threadId: state.threadId };
+    await write(repoRoot, "selected.txt", "saved only in stash\n");
+    if (key === "stashPlan") {
+      await controller.createPlan({ ...identity, intentName: "keep successor", paths: ["selected.txt", "future.txt"] });
+    }
+    await controller.stashArc(identity);
+    assert.equal(await controller.blocksThreadSettlementAtRepoRoot(identity), true);
+    const before = await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8");
+    const discarded = await controller.discardStashedArc(identity);
+    assert.equal(await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8"), before);
+    assert.equal((await controller.readScope(identity))?.phase, expectedPhase);
+    assert.equal(await controller.blocksThreadSettlementAtRepoRoot(identity), false);
+    assert.equal(await new GitArcClaimLossStore(new WorkbenchGitRepository(repoRoot)).read({ harness: "codex", threadId: state.threadId }), null);
+    await controller.undoDiscardedStash(identity, discarded);
+    assert.equal((await controller.readScope(identity))?.phase, "stashed");
+    assert.equal(await controller.blocksThreadSettlementAtRepoRoot(identity), true);
+  }
 });

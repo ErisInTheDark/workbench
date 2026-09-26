@@ -89,8 +89,8 @@ const fixtureThreadIds = {
   "working": WorkbenchThreadIdSchema.parse("working"),
 };
 
-type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveProjectId" | "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">
-  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveProjectId" | "hasLiveGitArcClaims" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">>
+type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolveProjectId" | "hasGitArcBlockingSettlement" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">
+  & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveProjectId" | "hasGitArcBlockingSettlement" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">>
   & {
     storageRoot: string;
   };
@@ -747,7 +747,7 @@ class WorkbenchThreadStateController extends WorkbenchThreadStateControllerOwner
     } = options;
     super({
       resolveProjectId: id => id,
-      hasLiveGitArcClaims: async () => false,
+      hasGitArcBlockingSettlement: async () => false,
       resolveGitArc: async () => null,
       resolveGitArcPlan: async () => null,
       runGitArcReadTransition: async (_projectId, operation) => await operation(),
@@ -3058,6 +3058,7 @@ test("continuous settlement prunes once per durable epoch, retries failures, and
   let now = 1_000;
   const pruned: Array<Array<{ harness: string; threadId: string }>> = [];
   let rejectNextPrune = false;
+  let deferNextPrune = false;
   const providerEntry: WorkbenchThreadSidebarEntry = {
     activityAt: 1,
     entryKind: "thread",
@@ -3071,6 +3072,10 @@ test("continuous settlement prunes once per durable epoch, retries failures, and
     now: () => now,
     projectState: projectState(),
     pruneExpiredGitState: async (_projectId, identities) => {
+      if (deferNextPrune) {
+        deferNextPrune = false;
+        return identities;
+      }
       if (rejectNextPrune) {
         rejectNextPrune = false;
         throw new Error("Retention cleanup failed.");
@@ -3111,6 +3116,12 @@ test("continuous settlement prunes once per durable epoch, retries failures, and
     identity: providerEntry.identity, method: "workbench/thread-state/settle", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   });
   now += 14 * 24 * 60 * 60 * 1_000 + 1;
+  deferNextPrune = true;
+  await controller.refresh(fixtureProjectIds["project"]);
+  await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["project"])).freshness === "fresh", "Deferred retention did not reconcile.");
+  stored = await readProjectState<{ records: Array<{ gitHistoryCleanedAt?: number | null }> }>(root, "project");
+  assert.equal(stored.records[0]?.gitHistoryCleanedAt, null);
+  assert.equal((await controller.getSnapshot(fixtureProjectIds["project"])).error, null);
   await controller.refresh(fixtureProjectIds["project"]);
   await waitFor(() => pruned.length === 1, "Expired settlement did not trigger Git retention cleanup.");
   assert.deepEqual(pruned[0], [providerEntry.identity]);
@@ -4960,7 +4971,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
   };
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    hasLiveGitArcClaims: async (_projectId, _harness, threadId) => {
+    hasGitArcBlockingSettlement: async (_projectId, _harness, threadId) => {
       assert.equal(insideGitArcTransition, true);
       return terminalHasGitArc && !terminalGitArcResolved && threadId === "terminal";
     },

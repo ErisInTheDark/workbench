@@ -176,6 +176,7 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   }),
   z.object({ action: z.literal("arcStash"), ...checkpointBaseRequest }).strict(),
   z.object({ action: z.literal("arcUnstash"), ...checkpointBaseRequest }).strict(),
+  z.object({ action: z.literal("arcDiscardStash"), ...checkpointBaseRequest }).strict(),
   z.object({
     action: z.literal("arcMove"),
     move: GitArcMoveRequestSchema,

@@ -581,21 +581,21 @@ test("retention prunes repository-bound threads without rejecting unrelated unbo
   const received: string[][] = [];
   const internal = feature as unknown as {
     workspaceController: {
-      pruneThreadHistories: (_project: object, owners: Array<{ threadId: string }>) => Promise<{ prunedRefCount: number; registryEntryRemoved: boolean }>;
+      pruneThreadHistories: (_project: object, owners: Array<{ harness: string; threadId: string }>) => Promise<{ deferredIdentities: Array<{ harness: string; threadId: string }>; prunedRefCount: number; registryEntryRemoved: boolean }>;
     };
   };
   internal.workspaceController.pruneThreadHistories = async (_project, owners) => {
     received.push(owners.map(owner => owner.threadId));
-    return { prunedRefCount: owners.length, registryEntryRemoved: false };
+    return { deferredIdentities: owners, prunedRefCount: 0, registryEntryRemoved: false };
   };
   const bound = { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(wbThreadId("codex", "thread-one")) };
   const unbound = { harness: "opencode" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(wbThreadId("opencode", "unbound")) };
 
   assert.deepEqual(await feature.pruneThreadHistories("C:/Git/Project", [unbound, bound]), {
-    prunedRefCount: 1, registryEntryRemoved: false,
+    deferredIdentities: [bound], prunedRefCount: 0, registryEntryRemoved: false,
   });
   assert.deepEqual(await feature.pruneThreadHistories("C:/Git/Project", [unbound]), {
-    prunedRefCount: 0, registryEntryRemoved: false,
+    deferredIdentities: [], prunedRefCount: 0, registryEntryRemoved: false,
   });
   assert.deepEqual(received, [[bound.threadId]]);
 });

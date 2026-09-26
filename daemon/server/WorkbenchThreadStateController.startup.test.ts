@@ -34,7 +34,7 @@ function controller(database: ReturnType<typeof createThreadStateTestDatabase>) 
         lastCommitTimeMs: null }],
       rootPath: "/",
     }),
-    hasLiveGitArcClaims: async () => false,
+    hasGitArcBlockingSettlement: async () => false,
     resolveGitArc: async () => null,
     resolveGitArcPlan: async () => null,
     runGitArcReadTransition: async (_projectId, operation) => await operation(),

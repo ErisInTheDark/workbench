@@ -3,7 +3,7 @@
  * - default GitArcRetentionController: expire one settled thread's canonical and compatible refs without touching live work.
  * - GitArcRetentionResult: exact thread-namespace cleanup result.
  */
-import GitArcRegistry from "./GitArcRegistry";
+import GitArcRegistry, { getGitArcLiveClaimPaths } from "./GitArcRegistry";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import {
   checkpointNamespace,
@@ -30,6 +30,15 @@ export default class GitArcRetentionController {
     private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
   ) {}
 
+  async canPruneThread({ cwd, harness, threadId }: { cwd: string; harness: GitArcHarness; threadId: string }) {
+    const repository = await WorkbenchGitRepository.tryOpen(cwd);
+    if (!repository) return true;
+    const registry = new GitArcRegistry(repository, this.resolveThreadIdentity);
+    const entry = await registry.find({ harness, threadId });
+    return !entry || entry.phase === "resolved"
+      || (entry.phase === "plan" && !getGitArcLiveClaimPaths(entry).length);
+  }
+
   async pruneThread({
     cwd,
     harness,
@@ -45,8 +54,9 @@ export default class GitArcRetentionController {
     if (!identity) throw new Error("The Git arc owner identity is unavailable.");
     const registry = new GitArcRegistry(repository, this.resolveThreadIdentity);
     const entry = await registry.find({ harness, threadId });
-    if (entry && entry.phase !== "resolved") {
-      throw new Error("Git arc history cannot expire while the thread owns an active arc or plan.");
+    if (entry && entry.phase !== "resolved"
+      && !(entry.phase === "plan" && !getGitArcLiveClaimPaths(entry).length)) {
+      throw new Error("Git arc history cannot expire while the thread owns live or stashed work.");
     }
     const prefixes = [...new Set(gitArcThreadStorageIds(identity).flatMap(storageId => [
       threadNamespace(checkpointNamespace(harness, storageId)),

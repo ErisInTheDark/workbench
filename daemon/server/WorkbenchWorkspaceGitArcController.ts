@@ -87,6 +87,12 @@ export interface WorkspaceGitArcMemberState extends GitArcLifecycleState {
   proposals: Array<GitArcLifecycleState["proposals"][number] & { rootId: string }>;
 }
 
+class WorkspaceGitArcRetentionDeferredError extends Error {
+  constructor() {
+    super("Git arc history still owns live or stashed work.");
+  }
+}
+
 export interface WorkspaceGitArcLifecycleState extends GitArcLifecycleState {
   members: WorkspaceGitArcMemberState[];
   proposals: Array<GitArcLifecycleState["proposals"][number] & { rootId: string }>;
@@ -332,19 +338,37 @@ export default class WorkbenchWorkspaceGitArcController {
   async pruneThreadHistories(
     project: AgentEndpointProjectResolution,
     identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: string }>,
-  ): Promise<GitArcRetentionResult> {
+  ): Promise<GitArcRetentionResult & { deferredIdentities: Array<{ harness: WorkbenchHarness; threadId: string }> }> {
     const members = await this.resolveRepoMembers(project);
-    const values = await this.runMembers(members, async (member) => {
-      const results = [];
-      for (const identity of identities) {
-        results.push(await this.local.pruneThreadHistory({ cwd: member.repoRoot, ...identity }));
+    const result = {
+      deferredIdentities: [] as Array<{ harness: WorkbenchHarness; threadId: string }>,
+      prunedRefCount: 0, registryEntryRemoved: false,
+    };
+    for (const identity of identities) {
+      try {
+        const values = await this.runMembers(
+          members,
+          async (member) => await this.local.pruneThreadHistory({ cwd: member.repoRoot, ...identity }),
+          async (member) => {
+            if (!await this.local.canPruneThreadHistory({ cwd: member.repoRoot, ...identity })) {
+              throw new WorkspaceGitArcRetentionDeferredError();
+            }
+          },
+        );
+        for (const { result: memberResult } of values) {
+          result.prunedRefCount += memberResult.prunedRefCount;
+          result.registryEntryRemoved ||= memberResult.registryEntryRemoved;
+        }
+      } catch (error) {
+        if (error instanceof WorkspaceGitArcMemberError
+          && error.cause instanceof WorkspaceGitArcRetentionDeferredError) {
+          result.deferredIdentities.push(identity);
+          continue;
+        }
+        throw error;
       }
-      return results;
-    });
-    return values.flatMap(({ result }) => result).reduce((total, result) => ({
-      prunedRefCount: total.prunedRefCount + result.prunedRefCount,
-      registryEntryRemoved: total.registryEntryRemoved || result.registryEntryRemoved,
-    }), { prunedRefCount: 0, registryEntryRemoved: false });
+    }
+    return result;
   }
 
   async execute(
@@ -405,6 +429,7 @@ export default class WorkbenchWorkspaceGitArcController {
       case "arcRelease": return await this.executeRelease(project, members, request);
       case "arcStash":
       case "arcUnstash": return await this.executeStash(project, members, request);
+      case "arcDiscardStash": return await this.executeDiscardStash(project, members, request);
       case "arcStart":
       case "arcContinue": return await this.executeRefOperation(project, members, request);
       case "arcWait": return await this.findPlanClaimCollisions(project, request);
@@ -794,6 +819,14 @@ export default class WorkbenchWorkspaceGitArcController {
     return this.aggregateResults(project, values);
   }
 
+  async blocksThreadSettlement(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string) {
+    const members = await this.resolveRepoMembers(project);
+    const blocked = await Promise.all(members.map(async (member) => (
+      await this.local.blocksThreadSettlementAtRepoRoot({ cwd: member.repoRoot, harness, threadId })
+    )));
+    return blocked.some(Boolean);
+  }
+
   private async runReversibleMembers<T>(
     selected: readonly RepoMember[],
     operation: (member: RepoMember) => Promise<T>,
@@ -870,6 +903,32 @@ export default class WorkbenchWorkspaceGitArcController {
       { harness: request.harness, project, threadId: request.threadId },
     );
     return this.aggregateResults(project, values);
+  }
+
+  private async executeDiscardStash(
+    project: AgentEndpointProjectResolution,
+    members: readonly RepoMember[],
+    request: Extract<GitCheckpointRequest, { action: "arcDiscardStash" }>,
+  ) {
+    const lifecycle = await this.findLifecycleStateInMembers(project, members, request.harness, request.threadId);
+    const selectedRoots = new Set(lifecycle?.members
+      .filter(({ phase }) => phase === "stashed")
+      .map(({ repoRoot }) => repoRoot));
+    const selected = members.filter((member) => selectedRoots.has(member.repoRoot));
+    await this.runReversibleMembers(
+      selected,
+      async (member) => await this.local.discardStashedArc({
+        cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
+      }),
+      async (member, discarded) => await this.local.undoDiscardedStash({
+        cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
+      }, discarded),
+      async (member) => await this.local.assertArcDiscardable({
+        cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
+      }),
+      { harness: request.harness, project, threadId: request.threadId },
+    );
+    return { ok: true as const };
   }
 
   private async executeRefOperation(

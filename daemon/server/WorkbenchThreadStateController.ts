@@ -199,7 +199,7 @@ export interface WorkbenchThreadStateControllerOptions {
   recordComposerProfileUsage?: (profileId: string, at: number) => Promise<void>;
   getProjectCatalog: () => WorkbenchProjectsPayload;
   getReloadDirt?: () => WorkbenchReloadDirtSnapshot;
-  hasLiveGitArcClaims: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<boolean>;
+  hasGitArcBlockingSettlement: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<boolean>;
   log?: (message: string) => void;
   publishAgentContext?: (harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, text: string) => Promise<void>;
   now?: () => number;
@@ -209,7 +209,7 @@ export interface WorkbenchThreadStateControllerOptions {
     observe: (projectId: ProjectId, publish: (update: WorkbenchProjectStateUpdate) => void) => () => void;
   };
   publish: (connectionId: string, snapshot: WorkbenchThreadStateSnapshot) => void;
-  pruneExpiredGitState?: (projectId: ProjectId, identities: Array<{ harness: WorkbenchHarnessId; threadId: WorkbenchThreadId }>) => Promise<void>;
+  pruneExpiredGitState?: (projectId: ProjectId, identities: Array<{ harness: WorkbenchHarnessId; threadId: WorkbenchThreadId }>) => Promise<ReadonlyArray<{ harness: WorkbenchHarnessId; threadId: WorkbenchThreadId }> | void>;
   renameThread?: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, title: string) => Promise<string>;
   interruptQuestionnaire?: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, questionnaire: WorkbenchDurableQuestionnaire) => Promise<boolean>;
   reconcileProject: (
@@ -2066,10 +2066,12 @@ export default class WorkbenchThreadStateController {
         const expiredRecords = this.expiredSettledRecords(state);
         if (expiredRecords.length && this.options.pruneExpiredGitState) {
           try {
-            await this.options.pruneExpiredGitState(projectId, expiredRecords.map(({ identity }) => identity));
+            const deferred = await this.options.pruneExpiredGitState(projectId, expiredRecords.map(({ identity }) => identity));
+            const deferredKeys = new Set((Array.isArray(deferred) ? deferred : []).map(({ harness, threadId }) => `${harness}:${threadId}`));
             const gitHistoryCleanedAt = this.now();
-            let cleaned = false;
+            const cleanedKeys: string[] = [];
             for (const expired of expiredRecords) {
+              if (deferredKeys.has(expired.key)) continue;
               const current = state.entries.get(expired.key);
               if (
                 !current
@@ -2078,9 +2080,9 @@ export default class WorkbenchThreadStateController {
                 || current.settledAt !== expired.settledAt
               ) continue;
               state.entries.set(expired.key, { ...current, gitHistoryCleanedAt });
-              cleaned = true;
+              cleanedKeys.push(expired.key);
             }
-            if (cleaned) await this.persist(projectId, state, expiredRecords.map(record => record.key));
+            if (cleanedKeys.length) await this.persist(projectId, state, cleanedKeys);
           } catch (error) {
             retentionFailure = `git-retention: ${sanitizeError(error)}`;
             this.options.log?.(`Git retention failed project=${sanitizeLogValue(projectId)} error=${sanitizeError(error)}`);
@@ -3070,7 +3072,7 @@ export default class WorkbenchThreadStateController {
       }
       if (
         request.method === "workbench/thread-state/settle"
-        && await this.options.hasLiveGitArcClaims(request.projectId, entry.identity.harness, entry.identity.threadId)
+        && await this.options.hasGitArcBlockingSettlement(request.projectId, entry.identity.harness, entry.identity.threadId)
       ) {
         return { accepted: false, revision: state.revision };
       }

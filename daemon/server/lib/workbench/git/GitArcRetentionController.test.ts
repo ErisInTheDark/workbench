@@ -15,7 +15,7 @@ import type { GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
 
 const fixtureCache = new GitTestFixtureCache();
 
-test("expired thread cleanup removes pending proposals from both resolved thread namespaces", async (context) => {
+test("expired plan-only thread cleanup removes its refs without touching another owner", async (context) => {
   const fixture = await fixtureCache.copy(CONTROLLER_PARTIAL_READY_FIXTURE);
   context.after(fixture.dispose);
   const repository = await WorkbenchGitRepository.open(fixture.root);
@@ -30,6 +30,9 @@ test("expired thread cleanup removes pending proposals from both resolved thread
   const registry = new GitArcRegistry(repository);
   const active = await registry.find({ harness: "codex", threadId: nativeThreadId });
   assert.ok(active);
+  assert.equal(await controller.canPruneThreadHistory({
+    cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
+  }), false);
   const proposalId = "pending-retention";
   const baseCommit = await repository.currentHead();
   const metadata: ProposalMetadata = {
@@ -59,10 +62,14 @@ test("expired thread cleanup removes pending proposals from both resolved thread
   await registry.set({
     ...active,
     claimedPaths: [],
-    phase: "resolved",
+    phase: "plan",
     proposalId,
     proposalIds: [...active.proposalIds, proposalId],
+    retainedArc: null,
   }, active.checkpointCommit);
+  assert.equal(await controller.canPruneThreadHistory({
+    cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
+  }), true);
 
   const ownerRefsBefore = await repository.listRefs(`refs/worktree/agents/codex/${nativeThreadId}`);
   assert.ok(ownerRefsBefore.length > 0);

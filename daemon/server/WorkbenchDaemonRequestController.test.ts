@@ -691,7 +691,7 @@ for (const harness of ["codex", "copilot", "opencode"] as const) {
           ...settings, id: selection.profileId, name: "Selected profile",
           scope: { kind: "global" }, createdAt: 1, updatedAt: 1,
         }] }),
-        hasLiveGitArcClaims: async () => false,
+        hasGitArcBlockingSettlement: async () => false,
         projectState: {
           getCurrentUpdate: () => null,
           handleRequest: async () => { throw new Error("Unexpected project request."); },
@@ -861,6 +861,19 @@ test("Git arc dispatch returns domain data and preserves structured failure data
   })).result, unstashResult);
   assert.deepEqual(unstash.gitArcRequests, [{
     action: "arcUnstash",
+    cwd: "C:/git/web/workbench",
+    harness: "codex",
+    threadId: "thread",
+  }]);
+
+  const discard = createController();
+  assert.deepEqual((await discard.controller.handle({
+    id: 5,
+    method: "git/arc/stash/discard",
+    params: { cwd: "C:/git/web/workbench", harness: "codex", threadId: "thread" },
+  })).result, { ok: true });
+  assert.deepEqual(discard.gitArcRequests, [{
+    action: "arcDiscardStash",
     cwd: "C:/git/web/workbench",
     harness: "codex",
     threadId: "thread",

@@ -157,6 +157,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "git/arc/release":
     case "git/arc/remove":
     case "git/arc/restore": return z.object({ ok: z.literal(true) }).strict();
+    case "git/arc/stash/discard": return z.object({ ok: z.literal(true) }).strict();
     case "git/arc/stash":
     case "git/arc/unstash": return GitArcStashResultSchema;
     default: throw new Error(`No response schema is registered for ${method}.`);
@@ -342,6 +343,7 @@ class WorkbenchDaemonClient {
       restore: (params: WorkbenchDaemonParams<"git/arc/restore">) => this.requestGitArc("git/arc/restore", params),
       stash: (params: WorkbenchDaemonParams<"git/arc/stash">) => this.requestGitArc("git/arc/stash", params),
       unstash: (params: WorkbenchDaemonParams<"git/arc/unstash">) => this.requestGitArc("git/arc/unstash", params),
+      discardStash: (params: WorkbenchDaemonParams<"git/arc/stash/discard">) => this.requestGitArc("git/arc/stash/discard", params),
       diffArtifact: (params: WorkbenchDaemonParams<"git/arc/diff-artifact/read">) => this.requestGitArc("git/arc/diff-artifact/read", params),
       proposal: {
         read: (params: WorkbenchDaemonParams<"git/arc/proposal/read">) => this.requestGitArc("git/arc/proposal/read", params),

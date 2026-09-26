@@ -71,7 +71,7 @@ export type WorkbenchGitArcActiveClaim = PublicGitOwner<GitArcActiveClaim>;
 
 const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
   "planClaims", "arcClaims",
-  "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRelease", "arcRemove", "arcStart", "arcStash", "arcUnstash", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
+  "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRelease", "arcRemove", "arcStart", "arcStash", "arcUnstash", "arcDiscardStash", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "proposalCommit", "proposalCreate", "proposalRescind", "restore",
 ]);
 const COALESCED_CARD_READ_ACTIONS = new Set<GitCheckpointRequest["action"]>(["compare", "proposalState"]);
@@ -206,7 +206,7 @@ export default class WorkbenchGitArcFeature {
   }
 
   async pruneThreadHistories(cwd: string, identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>) {
-    if (!identities.length) return { prunedRefCount: 0, registryEntryRemoved: false };
+    if (!identities.length) return { deferredIdentities: [] as Array<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>, prunedRefCount: 0, registryEntryRemoved: false };
     const project = await this.resolveProject(cwd);
     const resolved = await Promise.all(identities.map(async ({ harness, threadId }) => {
       const identity = await this.options.identities.resolveGitArcThreadIdentity({
@@ -215,8 +215,15 @@ export default class WorkbenchGitArcFeature {
       return identity ? { harness, threadId: WorkbenchThreadIdSchema.parse(identity.threadId) } : null;
     }));
     const owners = resolved.filter((owner): owner is NonNullable<typeof owner> => owner !== null);
-    if (!owners.length) return { prunedRefCount: 0, registryEntryRemoved: false };
-    return await this.workspaceController.pruneThreadHistories(project, owners);
+    if (!owners.length) return { deferredIdentities: [] as Array<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>, prunedRefCount: 0, registryEntryRemoved: false };
+    const result = await this.workspaceController.pruneThreadHistories(project, owners);
+    const deferred = new Set(result.deferredIdentities.map(({ harness, threadId }) => `${harness}:${threadId}`));
+    return {
+      ...result,
+      deferredIdentities: identities.flatMap((identity, index) => (
+        resolved[index] && deferred.has(`${resolved[index]!.harness}:${resolved[index]!.threadId}`) ? [identity] : []
+      )),
+    };
   }
 
   async findLifecycleState(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcLifecycleState | null> {
@@ -238,6 +245,12 @@ export default class WorkbenchGitArcFeature {
     const project = await this.resolveProject(cwd);
     const owner = await this.gitThreadIdentity(project, harness, threadId);
     return await this.workspaceController.hasLiveClaims(project, owner.harness, owner.threadId);
+  }
+
+  async blocksThreadSettlement(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
+    const project = await this.resolveProject(cwd);
+    const owner = await this.gitThreadIdentity(project, harness, threadId);
+    return await this.workspaceController.blocksThreadSettlement(project, owner.harness, owner.threadId);
   }
 
   async listLifecycleStates(cwd: string): Promise<WorkbenchGitArcLifecycleState[]> {
@@ -734,6 +747,9 @@ export default class WorkbenchGitArcFeature {
       case "arcRelease": return Response.json(await this.controller.releaseArc({ ...common, disown: input.disown }));
       case "arcStash": return Response.json(await this.controller.stashArc(common));
       case "arcUnstash": return Response.json(await this.controller.unstashArc(common));
+      case "arcDiscardStash":
+        await this.controller.discardStashedArc(common);
+        return Response.json({ ok: true });
       case "compare": {
         const inspection = await this.controller.createInspectionSnapshot(input.cwd);
         const [result, unclaimedDirtPaths] = await Promise.all([

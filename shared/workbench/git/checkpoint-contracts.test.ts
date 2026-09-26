@@ -61,7 +61,7 @@ test("only status and diff reads retain another thread target", () => {
 
 test("stash actions are whole-arc requests without path filters", () => {
   const common = { cwd: "C:/repo", threadId: "thread-one" };
-  for (const action of ["arcStash", "arcUnstash"] as const) {
+  for (const action of ["arcStash", "arcUnstash", "arcDiscardStash"] as const) {
     assert.equal(GitCheckpointRequestSchema.safeParse({ action, ...common }).success, true);
     assert.equal(GitCheckpointRequestSchema.safeParse({ action, paths: ["src/a.ts"], ...common }).success, false);
   }
