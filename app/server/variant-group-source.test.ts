@@ -30,6 +30,20 @@ test("leaves ordinary source and template interpolation boundaries alone", () =>
   assert.equal(expandVariantGroupsInSource(source, "Button.tsx").code, source);
 });
 
+test("turns whitespace inside bracket classes into one class without joining neighbours", () => {
+  const source = [
+    "const classes = `px-2 [transition:",
+    "  opacity .3s,",
+    "  transform .5s",
+    "] hover:([mask-type: alpha] text-white) ${active ? 'ring-2' : ''}`;",
+  ].join("\n");
+
+  const { code } = expandVariantGroupsInSource(source, "Button.tsx");
+
+  assert.match(code, /px-2 \[transition:opacity_\.3s,_transform_\.5s\] hover:\[mask-type:alpha\] hover:text-white \$\{active/u);
+  assert.match(code, /active \? 'ring-2' : ''/u);
+});
+
 test("rejects an incomplete group instead of building an unstyled class", () => {
   assert.throws(() => expandVariantGroupsInSource('const classes = "hover:(bg-accent";', "Button.tsx"));
 });

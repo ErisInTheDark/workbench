@@ -80,9 +80,45 @@ function groupOpening(token: string) {
   return -1;
 }
 
+function normalizeBracketWhitespace(token: string) {
+  let brackets = 0;
+  let opening = -1;
+  let cursor = 0;
+  let result = "";
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < token.length; index++) {
+    const char = token[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "[" && brackets++ === 0) opening = index;
+    else if (char === "]" && brackets > 0 && --brackets === 0) {
+      const body = token.slice(opening + 1, index);
+      const value = body.trim().replace(/^([\w-]+):\s+/u, "$1:").replace(/\s+/gu, "_");
+      result += token.slice(cursor, opening + 1) + value + "]";
+      cursor = index + 1;
+    }
+  }
+  return result + token.slice(cursor);
+}
+
 function expandToken(token: string, prefix = ""): string {
   const opening = groupOpening(token);
-  if (opening < 0) return `${prefix}${token}`;
+  if (opening < 0) return `${prefix}${normalizeBracketWhitespace(token)}`;
   if (!token.endsWith(")") || opening === 0) {
     throw new Error(`Invalid Tailwind variant group: ${token}`);
   }
@@ -117,7 +153,7 @@ function literalContentRange(node: ts.Node, sourceFile: ts.SourceFile) {
 }
 
 export function expandVariantGroupsInSource(source: string, filePath: string) {
-  if (!source.includes(":(")) return { code: source, map: null };
+  if (!source.includes(":(") && !source.includes("[")) return { code: source, map: null };
   const scriptKind = /\.tsx$/u.test(filePath) ? ts.ScriptKind.TSX
     : /\.jsx$/u.test(filePath) ? ts.ScriptKind.JSX
       : /\.js$/u.test(filePath) ? ts.ScriptKind.JS
@@ -129,7 +165,7 @@ export function expandVariantGroupsInSource(source: string, filePath: string) {
     const range = literalContentRange(node, sourceFile);
     if (range) {
       const original = source.slice(range.start, range.end);
-      if (original.includes(":(")) {
+      if (original.includes(":(") || original.includes("[")) {
         const expanded = expandClasses(original);
         if (expanded !== original) {
           output.overwrite(range.start, range.end, expanded);
