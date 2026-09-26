@@ -167,6 +167,7 @@ import {
     FolderOpenIcon,
     GearIcon,
     HomeIcon,
+    ProjectIcon,
     SaveIcon,
     SidebarCollapseIcon,
     SidebarExpandIcon,
@@ -185,6 +186,8 @@ import WorkbenchDaemonClientContext, { WorkbenchDaemonAssetOriginContext } from 
 import WorkbenchIconButton from "./workbench/WorkbenchIconButton";
 import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
+import WorkbenchProjectIcon from "./workbench/WorkbenchProjectIcon";
+import WorkbenchProjectLocationLabel from "./workbench/WorkbenchProjectLocationLabel";
 import WorkbenchProjectLocationMenu from "./workbench/WorkbenchProjectLocationMenu";
 import WorkbenchSearchDialog from "./workbench/WorkbenchSearchDialog";
 import WorkbenchSearchInput from "./workbench/WorkbenchSearchInput";
@@ -3036,6 +3039,19 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       routeError={selectionError}
                       key={`${routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? "attached"}:${threadProjectId}:${threadViewInstanceKey}`}
                       thread={threadForThreadView}
+                      threadOwnerContent={routeOwnerMetadata ? (
+                        <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 text-fg/muted" title={`${routeOwnerMetadata.hostname}: ${routeOwnerMetadata.rootPath}`}>
+                          {routeThreadContext?.project
+                            ? <WorkbenchProjectIcon project={routeThreadContext.project} variant="thread" />
+                            : <ProjectIcon className="shrink-0" size={16} />}
+                          <span className="min-w-0 truncate">
+                            <WorkbenchProjectLocationLabel
+                              displayPath={routeOwnerMetadata.displayPath}
+                              hostname={routeOwnerMetadata.hostname}
+                            />
+                          </span>
+                        </span>
+                      ) : null}
                       composerSpellCheck={resolvedSettings.composerSpellCheck}
                       draftLeadingContent={projectRotator}
                       draftTargetControl={route.logical && logicalThreadProject && threadForThreadView?.isDraft ? (

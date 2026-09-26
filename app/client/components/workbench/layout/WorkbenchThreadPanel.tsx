@@ -20,12 +20,14 @@ import resolveThreadActivityTimestampMs from "../thread-view/thread-activity-tim
 import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-formatters";
 import WorkbenchIconButton from "../WorkbenchIconButton";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
+import WorkbenchProjectIcon from "../WorkbenchProjectIcon";
 import WorkbenchProjectLocationLabel from "../WorkbenchProjectLocationLabel";
 import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE } from "../../../workbench/state/workbench-settings";
 import {
   PanelCloseIcon,
   PanelExpandIcon,
   PanelMinimizeIcon,
+  ProjectIcon,
 } from "../workbench-icons";
 
 type ThreadViewProps = ComponentProps<typeof ThreadView>;
@@ -220,11 +222,16 @@ export default function WorkbenchThreadPanel ({
                 projectRootPath={panelContext?.project.rootPath ?? threadViewProps.projectRootPath}
                 projectRoots={panelContext?.project.roots ?? threadViewProps.projectRoots}
                 threadOwnerContent={ownerMetadata
-                  ? <span className="truncate text-fg/muted" title={`${ownerMetadata.hostname}: ${ownerMetadata.rootPath}`}>
-                    <WorkbenchProjectLocationLabel
-                      displayPath={ownerMetadata.displayPath}
-                      hostname={ownerMetadata.hostname}
-                    />
+                  ? <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 text-fg/muted" title={`${ownerMetadata.hostname}: ${ownerMetadata.rootPath}`}>
+                    {panelContext?.project
+                      ? <WorkbenchProjectIcon project={panelContext.project} variant="thread" />
+                      : <ProjectIcon className="shrink-0" size={16} />}
+                    <span className="min-w-0 truncate">
+                      <WorkbenchProjectLocationLabel
+                        displayPath={ownerMetadata.displayPath}
+                        hostname={ownerMetadata.hostname}
+                      />
+                    </span>
                   </span> : threadViewProps.threadOwnerContent}
                 contained
                 fontSizeRem={effectiveFontSizeRem}
