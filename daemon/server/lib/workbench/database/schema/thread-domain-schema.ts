@@ -7,7 +7,7 @@ import {
   primaryKey, sql, text, unique, type TableDefinition,
 } from "workbench-shared/database/schema/schema-definition";
 import {
-  addColumns, createTable, defineSubsystemHistory, defineTableHistory, tableVersion, retireTableHistory,
+  addColumns, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion, retireTableHistory,
 } from "workbench-shared/database/schema/schema-history";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { ownProjectReferences } from "workbench-shared/workbench/database/schema/project-schema";
@@ -100,13 +100,34 @@ export function defineThreadDomainSchema(schemaVersion: number) {
     })],
   })));
 
-  const snoozeDependencies = install(defineTable("workbench_thread_snooze_dependencies", {
+  const snoozeDependenciesV1 = defineTable("workbench_thread_snooze_dependencies", {
     source_thread_id: text().primaryKey().references("workbench_top_level_thread_states", "thread_id", { onDelete: "CASCADE" }),
     target_thread_id: text().notNull().references("workbench_top_level_thread_states", "thread_id"),
   }, (table) => ({
     constraints: [check(sql`${table.source_thread_id} <> ${table.target_thread_id}`)],
     indexes: [index("workbench_thread_snooze_dependencies_target_idx", [table.target_thread_id])],
-  })));
+  }));
+  const snoozeDependenciesV2 = defineTable("workbench_thread_snooze_dependencies", {
+    source_thread_id: text().notNull().references("workbench_top_level_thread_states", "thread_id", { onDelete: "CASCADE" }),
+    target_thread_id: text().notNull().references("workbench_top_level_thread_states", "thread_id"),
+  }, (table) => ({
+    constraints: [
+      primaryKey([table.source_thread_id, table.target_thread_id]),
+      check(sql`${table.source_thread_id} <> ${table.target_thread_id}`),
+    ],
+    indexes: [index("workbench_thread_snooze_dependencies_target_idx", [table.target_thread_id])],
+  }));
+  const snoozeDependencies = defineTableHistory({
+    current: snoozeDependenciesV2,
+    versions: [
+      tableVersion({ schemaVersion, table: snoozeDependenciesV1, migration: createTable(snoozeDependenciesV1) }),
+      tableVersion({
+        schemaVersion: databaseReleases.dependentSnoozeTargets.version,
+        table: snoozeDependenciesV2,
+        migration: rebuildTable({ from: snoozeDependenciesV1, to: snoozeDependenciesV2 }),
+      }),
+    ],
+  });
 
   const profiles = installProfile(defineTable("workbench_thread_profiles", {
     thread_id: text().primaryKey().references("workbench_thread_states", "thread_id", { onDelete: "CASCADE" }),

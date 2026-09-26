@@ -61,6 +61,7 @@ const databaseReleases = Object.freeze({
   projectDiscoveryRoots: release(51, "c5bcd7883dfbf164e28e4e5dc8ba451c44e11d69317cc9f6c64f3accda47778f"),
   projectLocations: release(52, "5fa7586730e94b00f397c99cc653ef62ca60d1530228cdc80a1f246b3734e722"),
   threadLaunches: release(53, "3fbac49ded45d93265dfc55752a4f73ee139c16658f52c326a5bc12ac8bef826"),
+  dependentSnoozeTargets: release(54, "bff62be420c02fcf29d14b0ec61fc4455621dff246188f99b82b8a0bc15c0751"),
 });
 
 export default databaseReleases;

@@ -17,7 +17,7 @@ import type { WorkbenchClientController } from "./workbench-client-context";
 import WorkbenchContextMenuProvider from "./WorkbenchContextMenuProvider";
 import WorkbenchThreadTooltipDetails from "./WorkbenchThreadTooltipDetails";
 import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
-import ThreadGitArcConflictList from "./thread-view/ThreadGitArcConflictList";
+import WorkbenchThreadReferenceList from "./WorkbenchThreadReferenceList";
 import { getWorkbenchThreadClaimIntersections } from "workbench-shared/workbench/thread/thread-state";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
@@ -365,12 +365,31 @@ test("planned-work tooltips keep active intersection navigation and omit planned
     planStore,
   );
   assert.match(fullHtml, /<details/u);
-  const plannedHtml = renderWithClient(createElement(ThreadGitArcConflictList, {
-    entries: getWorkbenchThreadClaimIntersections(planSnapshot.entries, planOwner.identity, "plan").plannedEntries,
+  const plannedHtml = renderWithClient(createElement(WorkbenchThreadReferenceList, {
+    references: getWorkbenchThreadClaimIntersections(planSnapshot.entries, planOwner.identity, "plan").plannedEntries.map(({ entry, paths }) => ({
+      entry, identity: entry.identity, paths, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), title: entry.title,
+    })),
     onOpenThread: () => undefined,
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   }), planStore);
   assert.match(plannedHtml, /data-project-file-relative-path="src\/feature\/other.ts"/u);
+});
+
+test("waiting references reuse compact rows and keep unloaded targets navigable", () => {
+  const html = renderWithClient(createElement(WorkbenchThreadReferenceList, {
+    references: [{
+      entry: activeIntersection,
+      identity: activeIntersection.identity,
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+      title: "stale title",
+    }, {
+      identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("missing wait") },
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"),
+      title: "Missing wait",
+    }],
+  }), planStore);
+  assert.match(html, /active intersection/u);
+  assert.doesNotMatch(html, /stale title/u);
+  assert.match(html, /href="[^"]*\/thread\/missing%20wait"[^>]*>Missing wait</u);
 });
 
 test("Git arc waits show active claim owners without planned-only intersections", () => {
@@ -414,7 +433,7 @@ test("stashed tooltips identify live claim owners without listing paths or plann
     sidebarStore: { ...planStore, getProjectSnapshot: () => ({ ...snapshot, entries: [stashedOwner] }) },
   });
   assert.match(clearHtml, /data-thread-git-arc-intersection-card="stashed"/u);
-  assert.doesNotMatch(clearHtml, /data-thread-git-arc-conflict-list=/u);
+  assert.doesNotMatch(clearHtml, /data-thread-reference-list=/u);
 
   const busyHtml = await renderDetails(false, "C:/workspace", true, { sidebarStore: store });
   const cardStart = busyHtml.indexOf('data-thread-git-arc-intersection-card="stashed"');

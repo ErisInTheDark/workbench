@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { WorkbenchThreadObservationSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import ThreadObservationController from "./ThreadObservationController";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
@@ -16,7 +17,7 @@ const fixtureIdentityValues = {
 const target = { kind: "provider" as const, harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };
 
 function fixture(releaseRequest: () => Promise<unknown> = async () => ({ accepted: true })) {
-  const opens: Array<{ projectId: string; subscriptionId: string; target: typeof target; resolve: (value: object) => Promise<void>; reject: (error: Error) => Promise<void> }> = [];
+  const opens: Array<{ projectId: string; subscriptionId: string; target: typeof target; version: 1 | 2; resolve: (value: object) => Promise<void>; reject: (error: Error) => Promise<void> }> = [];
   const releases: string[] = [];
   const owner = new ThreadObservationController({
     request: (method, params) => {
@@ -44,7 +45,7 @@ function fixture(releaseRequest: () => Promise<unknown> = async () => ({ accepte
         metadata: { archived: false, pinned: true, snoozed: false },
         lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
       }] : [],
-      revision, version: 1, updateKind: "threadObservation", freshness: "fresh", error: null,
+      revision, version: open.version, updateKind: "threadObservation", freshness: "fresh", error: null,
     };
   }
   return { owner, opens, releases, snapshot };
@@ -67,6 +68,31 @@ test("root and child consumers share a subscription until the final lease releas
   child.release();
   assert.equal(releases.length, 1);
   assert.equal(owner.getSnapshot(root.key).status, "idle");
+  owner.dispose();
+});
+
+test("new observations fall back only when an older daemon rejects their version", async () => {
+  const { owner, opens, snapshot } = fixture();
+  const lease = owner.acquire("project", target);
+  assert.equal(opens[0]?.version, 2);
+  await opens[0]!.reject(new WorkbenchDaemonRequestError(
+    "Unsupported observation version", "invalidThreadStateMutation" as never,
+  ));
+  assert.equal(opens[1]?.version, 1);
+  await opens[1]!.resolve({ observation: snapshot(1, 1) });
+  assert.equal(owner.getSnapshot(lease.key).status, "ready");
+  owner.dispose();
+});
+
+test("an invalid observation target does not masquerade as an older protocol", async t => {
+  t.mock.method(console, "warn", () => {});
+  const { owner, opens } = fixture();
+  const lease = owner.acquire("project", target);
+  await opens[0]!.reject(new WorkbenchDaemonRequestError(
+    "Invalid observation target", "invalidThreadStateMutation" as never,
+  ));
+  assert.equal(opens.length, 1);
+  assert.equal(owner.getSnapshot(lease.key).status, "failed");
   owner.dispose();
 });
 

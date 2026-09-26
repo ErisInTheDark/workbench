@@ -22,7 +22,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-state";
 
 type WorkbenchProviderSidebarEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
-type WithoutProjections<TValue> = TValue extends unknown ? Omit<TValue, "waitingFor" | "previousTitles"> : never;
+type WithoutProjections<TValue> = TValue extends unknown ? Omit<TValue, "waitingFor" | "waitingOnThreads" | "previousTitles"> : never;
 type WorkbenchProviderThreadEntry = WithoutProjections<WorkbenchProviderSidebarEntry>;
 
 export type WorkbenchThreadStateRecord = WorkbenchProviderThreadEntry & {
@@ -32,7 +32,7 @@ export type WorkbenchThreadStateRecord = WorkbenchProviderThreadEntry & {
   profile: WorkbenchComposerProfileSelectionState | null;
   providerObserved: boolean;
   settledAt: number | null;
-  snoozedUntil: WorkbenchThreadSnoozeTarget | null;
+  snoozedUntil: { targets: WorkbenchThreadSnoozeTarget[] } | null;
 };
 
 export type WorkbenchThreadStateEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> | WorkbenchThreadStateRecord;
@@ -42,6 +42,7 @@ export interface WorkbenchThreadSnoozeTarget {
     threadId: WorkbenchThreadId;
   };
   projectId: ProjectId;
+  title: string;
 }
 
 export type StoredWorkbenchThreadStateRecordConformance =
@@ -55,7 +56,26 @@ const ThreadIdentitySchema = z.object({
 const WorkbenchThreadSnoozeTargetSchema = z.object({
   identity: ThreadIdentitySchema,
   projectId: ProjectIdSchema,
+  title: z.string(),
 }).strict();
+
+function dependentSnooze(value: Record<string, unknown>): { targets: WorkbenchThreadSnoozeTarget[] } | null {
+  const stored = recordValue(value.snoozedUntil);
+  const candidates = Array.isArray(stored.targets) ? stored.targets
+    : value.snoozedUntil ? [value.snoozedUntil] : [];
+  const targets = new Map<string, WorkbenchThreadSnoozeTarget>();
+  for (const candidate of candidates) {
+    const raw = recordValue(candidate);
+    const identity = recordValue(raw.identity);
+    const parsed = WorkbenchThreadSnoozeTargetSchema.safeParse({
+      ...raw, title: raw.title ?? identity.threadId,
+    });
+    if (!parsed.success) continue;
+    const target = parsed.data;
+    targets.set(`${target.projectId}\0${target.identity.harness}\0${target.identity.threadId}`, target);
+  }
+  return targets.size ? { targets: [...targets.values()] } : null;
+}
 
 const StoredRecordLocatorSchema = z.discriminatedUnion("entryKind", [
   z.object({
@@ -143,7 +163,6 @@ function internalFields(value: unknown) {
   }
   const record = value as Record<string, unknown>;
   const profile = WorkbenchComposerProfileSelectionSchema.safeParse(record.profile);
-  const snoozedUntil = WorkbenchThreadSnoozeTargetSchema.safeParse(record.snoozedUntil);
   const titleHistory = z.array(WorkbenchThreadTitleHistoryEntrySchema).safeParse(record.titleHistory);
   return {
     ...(titleHistory.success ? { titleHistory: titleHistory.data } : {}),
@@ -158,7 +177,7 @@ function internalFields(value: unknown) {
     settledAt: typeof record.settledAt === "number" && Number.isFinite(record.settledAt) && record.settledAt >= 0
       ? Math.trunc(record.settledAt)
       : null,
-    snoozedUntil: snoozedUntil.success ? snoozedUntil.data : null,
+    snoozedUntil: dependentSnooze(record),
   };
 }
 
@@ -166,11 +185,15 @@ export function safeParseWorkbenchThreadStateEntry(value: unknown):
   | { data: WorkbenchThreadStateEntry; success: true }
   | { error: unknown; success: false } {
   const publicCandidate = value && typeof value === "object" && !Array.isArray(value)
-    ? (({ titleHistory: _titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)
+    ? (({ titleHistory: _titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, waitingFor: _waitingFor, waitingOnThreads: _waitingOnThreads, ...candidate }) => candidate)(value as Record<string, unknown>)
     : value;
   const parsed = WorkbenchThreadSidebarEntrySchema.safeParse(publicCandidate);
   if (!parsed.success) return { error: parsed.error, success: false };
   if (parsed.data.entryKind === "draft") return { data: parsed.data, success: true };
+  if (parsed.data.entryKind === "thread") {
+    const { previousTitles: _previousTitles, waitingFor: _waitingFor, waitingOnThreads: _waitingOnThreads, ...persistent } = parsed.data;
+    return { data: { ...persistent, ...internalFields(value) }, success: true };
+  }
   const { previousTitles: _previousTitles, waitingFor: _waitingFor, ...persistent } = parsed.data;
   return { data: { ...persistent, ...internalFields(value) }, success: true };
 }
@@ -186,7 +209,7 @@ export function conformStoredWorkbenchThreadStateRecord(
   projectId: ProjectId,
 ): StoredWorkbenchThreadStateRecordConformance {
   const publicCandidate = value && typeof value === "object" && !Array.isArray(value)
-    ? (({ titleHistory: _titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, waitingFor: _waitingFor, ...candidate }) => candidate)(value as Record<string, unknown>)
+    ? (({ titleHistory: _titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, waitingFor: _waitingFor, waitingOnThreads: _waitingOnThreads, ...candidate }) => candidate)(value as Record<string, unknown>)
     : value;
   const locator = StoredRecordLocatorSchema.safeParse(publicCandidate);
   if (!locator.success) return { error: locator.error, success: false };
@@ -199,7 +222,9 @@ export function conformStoredWorkbenchThreadStateRecord(
   if (conformed.data.entryKind === "draft") {
     return { error: new z.ZodError([{ code: "custom", message: "A stored provider record cannot be a draft.", path: ["entryKind"] }]), success: false };
   }
-  const { previousTitles: _previousTitles, waitingFor: _waitingFor, ...persistent } = conformed.data;
+  const persistent = conformed.data.entryKind === "thread"
+    ? (({ previousTitles: _previousTitles, waitingFor: _waitingFor, waitingOnThreads: _waitingOnThreads, ...record }) => record)(conformed.data)
+    : (({ previousTitles: _previousTitles, waitingFor: _waitingFor, ...record }) => record)(conformed.data);
   return {
     data: { ...persistent, ...internalFields(value) },
     repairedPaths: conformed.repairedPaths,
@@ -211,11 +236,12 @@ export function projectWorkbenchThreadStateEntry(entry: WorkbenchThreadStateEntr
   if (entry.entryKind === "draft") return entry;
   // Provider omission cannot hide Workbench-owned top-level records.
   if (entry.entryKind === "subagent" && !entry.providerObserved) return null;
-  const { titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil: _snoozedUntil, ...projected } = entry;
+  const { titleHistory, gitHistoryCleanedAt: _gitHistoryCleanedAt, mcpGeneration: _mcpGeneration, profile: _profile, providerObserved: _providerObserved, settledAt: _settledAt, snoozedUntil, ...projected } = entry;
   // The recorded explicit title owns display; the stored title is only the provider display label.
   const displayTitle = currentThreadTitleName(titleHistory ?? []) ?? entry.title;
   return WorkbenchThreadSidebarEntrySchema.parse({
     ...projected, title: displayTitle, ...(entry.profile ? { profile: entry.profile } : {}),
     previousTitles: previousThreadTitles(titleHistory ?? [], displayTitle),
+    ...(entry.entryKind === "thread" ? { waitingOnThreads: snoozedUntil?.targets ?? [] } : {}),
   });
 }

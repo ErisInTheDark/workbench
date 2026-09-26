@@ -35,8 +35,12 @@ test("internal MCP freshness and Git retention timing never leak into the sideba
   assert.equal(record.entryKind === "thread" ? record.gitHistoryCleanedAt : null, 456);
   assert.equal(record.entryKind === "thread" ? record.mcpGeneration : null, "epoch:2");
   assert.equal(record.entryKind === "thread" ? record.settledAt : null, 123);
-  assert.deepEqual(record.entryKind === "thread" ? record.snoozedUntil : null, snoozedUntil);
-  assert.deepEqual(projectWorkbenchThreadStateEntry(record), { ...entry, previousTitles: [] });
+  assert.deepEqual(record.entryKind === "thread" ? record.snoozedUntil : null, {
+    targets: [{ ...snoozedUntil, title: "target" }],
+  });
+  assert.deepEqual(projectWorkbenchThreadStateEntry(record), {
+    ...entry, previousTitles: [], waitingOnThreads: [{ ...snoozedUntil, title: "target" }],
+  });
 });
 
 test("provider omission preserves saved top-level visibility and placement", () => {
@@ -90,7 +94,7 @@ test("stored-record conformance preserves lifecycle truth when an optional proje
 
   assert.equal(conformed.success, true);
   if (!conformed.success) return;
-  assert.deepEqual(projectWorkbenchThreadStateEntry(conformed.data), { ...entry, previousTitles: [] });
+  assert.deepEqual(projectWorkbenchThreadStateEntry(conformed.data), { ...entry, previousTitles: [], waitingOnThreads: [] });
   assert.deepEqual(conformed.repairedPaths, [["gitArc"]]);
 });
 
@@ -125,4 +129,20 @@ test("stored dependent snooze defaults safely and repairs malformed targets", ()
   assert.equal(malformed.success, true);
   if (!malformed.success) return;
   assert.equal(malformed.data.snoozedUntil, null);
+});
+
+test("stored dependent snooze repairs legacy targets into one deduplicated set", () => {
+  const target = {
+    identity: { harness: "codex", threadId: "target" },
+    projectId: "project",
+  };
+  const conformed = conformStoredWorkbenchThreadStateRecord({
+    ...entry,
+    snoozedUntil: { targets: [target, target, { ...target, identity: { harness: "codex", threadId: "" } }] },
+  }, fixtureIdentityValues.ProjectId["project"]);
+  assert.equal(conformed.success, true);
+  if (!conformed.success) return;
+  assert.deepEqual(conformed.data.snoozedUntil, { targets: [{ ...target, title: "target" }] });
+  const projected = projectWorkbenchThreadStateEntry(conformed.data);
+  assert.equal(projected?.entryKind === "thread" && "snoozedUntil" in projected, false);
 });

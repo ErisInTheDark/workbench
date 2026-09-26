@@ -220,8 +220,7 @@ export default function WorkbenchThreadListItem({
     <span className="truncate">{entry.title}</span>
   </span>;
   const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
-  const waiting = entry.entryKind !== "draft" && Boolean(entry.waitingFor)
-    && !(entry.entryKind === "thread" && entry.metadata.snoozed && lifecycle?.kind === "needsAttention");
+  const waiting = entry.entryKind !== "draft" && Boolean(entry.waitingFor);
   const showProposedCommit = !waiting && lifecycle?.kind === "completed" && hasProposedCommit;
   const archived = entry.entryKind === "thread" && group === "archived";
   const status = waiting

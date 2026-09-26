@@ -13,7 +13,8 @@ import {
   type WorkbenchThreadRowDragPayload,
 } from "../../workbench/layout/workbench-drag";
 import type { WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
-import { FolderInputIcon, SnoozedThreadIcon } from "./workbench-icons";
+import { FolderInputIcon } from "./workbench-icons";
+import { GitArcWaitIcon } from "./thread-view/GitArcIcon";
 import DropTarget from "./drag/DropTarget";
 
 interface ThreadIdentity {
@@ -75,6 +76,7 @@ export default function WorkbenchThreadDragTargets({
   onSnoozeUntilDrop,
   targetIdentity,
   targetProjectId,
+  targetReady = false,
   targetTitle,
 }: {
   activePayload: WorkbenchDragPayload | null;
@@ -86,6 +88,7 @@ export default function WorkbenchThreadDragTargets({
   onSnoozeUntilDrop?: (payload: WorkbenchThreadRowDragPayload) => void;
   targetIdentity: ThreadIdentity | null;
   targetProjectId?: string;
+  targetReady?: boolean;
   targetTitle: string;
 }) {
   if (!activePayload || !isWorkbenchThreadRowDragPayload(activePayload)) return null;
@@ -93,14 +96,14 @@ export default function WorkbenchThreadDragTargets({
   const sameTarget = Boolean(
     draggedIdentity
     && targetIdentity
-    && targetProjectId
-    && activePayload.ownerProjectId === targetProjectId
     && draggedIdentity.harness === targetIdentity.harness
     && draggedIdentity.threadId === targetIdentity.threadId,
   );
   if (sameTarget) return null;
   const showFolder = Boolean(onFolderDrop);
-  const showSnooze = Boolean(onSnoozeUntilDrop && draggedIdentity && targetIdentity);
+  const alreadyWaiting = Boolean(targetIdentity && activePayload.waitingOnThreadIds?.includes(targetIdentity.threadId));
+  const showSnooze = Boolean(onSnoozeUntilDrop && draggedIdentity && targetIdentity && (alreadyWaiting || !targetReady));
+  const waitLabel = `${alreadyWaiting ? "stop waiting for" : "wait for"} ${targetTitle}`;
   if (!showFolder && !showSnooze) return null;
 
   return (
@@ -132,12 +135,12 @@ export default function WorkbenchThreadDragTargets({
           dropTargetId={WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID}
           enabled={(payload) => isWorkbenchThreadRowDragPayload(payload) && Boolean(sourceIdentity(payload))}
           onDrop={(payload) => { if (isWorkbenchThreadRowDragPayload(payload)) onSnoozeUntilDrop?.(payload); }}
-          preview={() => ({ action: "snoozed", label: `wait for ${targetTitle}` })}
+          preview={() => ({ action: "wait", label: waitLabel })}
           selectionPriority={100}
         >
           {({ selected }) => (
-            <TargetCard hoverScope={hoverScope} kind="dependent-snooze" label={`Snooze until ${targetTitle} is completed without claims`} selected={selected} targetProjectId={targetProjectId}>
-              <SnoozedThreadIcon size={16} />
+            <TargetCard hoverScope={hoverScope} kind="dependent-snooze" label={waitLabel} selected={selected} targetProjectId={targetProjectId}>
+              <GitArcWaitIcon size={16} />
             </TargetCard>
           )}
         </DropTarget>

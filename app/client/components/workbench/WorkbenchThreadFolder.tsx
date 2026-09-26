@@ -27,7 +27,7 @@ import {
   getWorkbenchThreadStatusClassName,
   type WorkbenchThreadStatusTone,
 } from "./workbench-thread-status-colors";
-import { CompletedThreadIcon, DraftThreadIcon, FolderClosedIcon, FolderOpenIcon, NeedsAttentionThreadIcon, ProposedCommitThreadIcon, StoppedThreadIcon, WorkingThreadIcon, type IconProps } from "./workbench-icons";
+import { CompletedThreadIcon, DraftThreadIcon, FolderClosedIcon, FolderOpenIcon, NeedsAttentionThreadIcon, PinIcon, ProposedCommitThreadIcon, SnoozedThreadIcon, StoppedThreadIcon, WorkingThreadIcon, type IconProps } from "./workbench-icons";
 import WorkbenchTooltip from "./WorkbenchTooltip";
 import Draggable from "./drag/Draggable";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
@@ -45,9 +45,9 @@ type FolderStatusIcon = ComponentType<IconProps>;
 
 function folderStatusRank(entry: FolderEntry) {
   if (entry.entryKind === "draft") return 5;
-  if (entry.lifecycle.kind === "needsAttention") return 0;
-  if (entry.lifecycle.kind === "working" && !entry.waitingFor) return 1;
-  if (entry.waitingFor) return 2;
+  if (entry.waitingFor) return 0;
+  if (entry.lifecycle.kind === "needsAttention") return 1;
+  if (entry.lifecycle.kind === "working") return 2;
   if (entry.lifecycle.kind === "stopped") return 3;
   return 4;
 }
@@ -55,7 +55,7 @@ function folderStatusRank(entry: FolderEntry) {
 function getFolderStatus(entries: readonly FolderEntry[], attentionLabelsByThreadId: Record<string, string | undefined>) {
   const entry = [...entries].sort((left, right) => folderStatusRank(left) - folderStatusRank(right))[0]!;
   if (entry.entryKind === "draft") return { dashed: true, Icon: DraftThreadIcon as FolderStatusIcon, label: "Draft", statusClassName: "text-fg/muted", strokeOpacity: 0.24 };
-  const waiting = Boolean(entry.waitingFor) && !(entry.metadata.snoozed && entry.lifecycle.kind === "needsAttention");
+  const waiting = Boolean(entry.waitingFor);
   const proposed = !waiting && entry.lifecycle.kind === "completed" && Boolean(entry.gitArc?.proposals.some(({ status }) => status === "proposed"));
   const tone: WorkbenchThreadStatusTone = waiting
     ? "waiting"
@@ -200,6 +200,8 @@ export default function WorkbenchThreadFolder({
     && canPrependThread?.(activeDragPayload),
   );
   const StatusIcon = status.Icon;
+  const PriorityIcon = folder.section === "pinned" ? PinIcon : folder.section === "snoozed" ? SnoozedThreadIcon : null;
+  const priorityMarker = PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={folder.section} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon size={14} /></span> : null;
   const titleInput = (
     <input
       ref={inputRef}
@@ -234,6 +236,7 @@ export default function WorkbenchThreadFolder({
       eyebrow={project ? <WorkbenchProjectLabel project={project} variant="thread" /> : undefined}
       statusIcon={<StatusIcon className={status.statusClassName} size={14} />}
       statusLabel={<span className={`truncate ${status.statusClassName}`}>{status.label}</span>}
+      metadata={priorityMarker}
       timestamp={<time dateTime={latestTimestamp.toISOString()} title={latestTimestamp.toLocaleString()}>{formatThreadRelativeTimestamp(latestActivityAt / 1000, nowMs)}</time>}
       title={(
         <span className="flex min-w-0 items-center gap-1.5">
@@ -250,7 +253,7 @@ export default function WorkbenchThreadFolder({
           <div className="grid min-h-11 min-w-0 grid-cols-[auto minmax(0, 1fr) auto] items-center py-1 pr-2 pl-2 md:min-h-0">
             <FolderOpenIcon className="mr-1.5 shrink-0" size={14} />
             {titleInput}
-            {errorLabel}
+            <span className="inline-flex items-center gap-1">{priorityMarker}{errorLabel}</span>
           </div>
         ) : (
           fullSummary

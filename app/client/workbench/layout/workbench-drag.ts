@@ -18,7 +18,7 @@ export const WORKBENCH_MAIN_PANEL_DROP_TARGET_ID = "workbench/main-panel";
 export const WORKBENCH_THREAD_ORDER_DROP_TARGET_ID = "workbench/thread-order";
 export const WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID = "workbench/thread-priority";
 export const WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID = "workbench/thread-row-action";
-export type WorkbenchThreadDragAction = "folder" | "main" | "pinned" | "snoozed";
+export type WorkbenchThreadDragAction = "folder" | "main" | "pinned" | "snoozed" | "wait";
 export interface WorkbenchThreadDragPreview {
   action: WorkbenchThreadDragAction;
   label: string;
@@ -42,6 +42,7 @@ export type WorkbenchDragPayload =
     readonly sourceKey: string;
     readonly target: SidebarThreadTarget;
     readonly type: "thread-row";
+    readonly waitingOnThreadIds?: readonly string[];
   }
   | {
     readonly section: WorkbenchThreadDisplaySection;
@@ -55,6 +56,7 @@ export type WorkbenchDragPayload =
     readonly sourceKey: string;
     readonly target: SidebarThreadTarget;
     readonly type: "home-thread-row";
+    readonly waitingOnThreadIds?: readonly string[];
   }
   | {
     readonly ownerProjectId: string;

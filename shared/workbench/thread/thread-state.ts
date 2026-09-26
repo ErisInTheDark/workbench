@@ -6,6 +6,7 @@
  * - WorkbenchGitArcLifecycleStateSchema/WorkbenchGitArcLifecycleState: active, stashed, and resolved Git work.
  * - WorkbenchDurableQuestionnaire/WorkbenchQuestionnaireHistoryEntryState: saved pending and answered questions.
  * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
+ * - WorkbenchThreadWaitTargetSchema/WorkbenchThreadWaitTarget: project-qualified dependent-wait references.
  * - WorkbenchThreadSidebarSnapshot/WorkbenchProjectThreadSidebars: project and aggregate sidebar types.
  * - WorkbenchReloadDirtSnapshotSchema: reload ownership and pending-scope diagnostics.
  * - WorkbenchProjectThreadSummaryCounts/WorkbenchProjectThreadSummaryEntry/WorkbenchPinnedThreadSummaryEntry/WorkbenchProjectThreadSummary: summary projection types.
@@ -13,7 +14,7 @@
  * - WorkbenchPinnedThreadLayoutSnapshotSchema/WorkbenchPinnedThreadLayoutSnapshot: revisioned global pin layout.
  * - WorkbenchHomeThreadDisplayOrderSchema/WorkbenchHomeThreadDisplayOrder/WorkbenchHomeThreadDisplayOrderSnapshot: folder-free home order and revision.
  * - WorkbenchThreadStateOpenResultV2/WorkbenchThreadStateOpenResult: project bootstrap types.
- * - WorkbenchGlobalThreadStateOpenResultV4Schema/WorkbenchGlobalThreadStateOpenResultV5Schema/WorkbenchGlobalThreadStateOpenResultV6Schema/WorkbenchGlobalThreadStateOpenResultV7Schema/WorkbenchGlobalThreadStateOpenResultV8Schema/WorkbenchGlobalThreadStateOpenResult: versioned global bootstrap variants.
+ * - WorkbenchGlobalThreadStateOpenResultV4Schema/WorkbenchGlobalThreadStateOpenResultV5Schema/WorkbenchGlobalThreadStateOpenResultV6Schema/WorkbenchGlobalThreadStateOpenResultV7Schema/WorkbenchGlobalThreadStateOpenResultV8Schema/WorkbenchGlobalThreadStateOpenResultV9Schema/WorkbenchGlobalThreadStateOpenResult: versioned global bootstrap variants.
  * - WorkbenchPinnedThreadContextResult: admitted pinned-thread context.
  * - WorkbenchObservedThreadTargetSchema/WorkbenchObservedThreadTarget: provider and subagent observation targets.
  * - WorkbenchThreadObservationSnapshotSchema/WorkbenchThreadObservationSnapshot: revisioned full thread-family observation.
@@ -101,6 +102,14 @@ const ThreadIdentitySchema = z.object({
   harness: WorkbenchHarnessSchema,
   threadId: WorkbenchThreadIdSchema,
 }).strict();
+export const WorkbenchThreadWaitTargetSchema = z.object({
+  identity: ThreadIdentitySchema,
+  projectId: ProjectIdSchema,
+  title: z.string(),
+}).strict();
+export type WorkbenchThreadWaitTarget = z.infer<typeof WorkbenchThreadWaitTargetSchema>;
+const DefaultedWaitTargetsSchema = z.array(WorkbenchThreadWaitTargetSchema).optional()
+  .overwrite(value => value ?? []);
 
 export const WorkbenchComposerSettingsSchema = z.object({
   contextWindowTokens: z.number().int().positive().nullable().optional(),
@@ -416,6 +425,7 @@ const TopLevelEntrySchema = SidebarCommonSchema.extend({
   pendingQuestionnaire: WorkbenchDurableQuestionnaireSchema.nullable().optional(),
   questionnaireHistory: z.array(WorkbenchQuestionnaireHistoryEntrySchema).optional(),
   waitingFor: z.enum(["subagents", "other"]).optional(),
+  waitingOnThreads: DefaultedWaitTargetsSchema,
 }).strict();
 const SubagentEntrySchema = SidebarCommonSchema.extend({
   profile: WorkbenchComposerProfileSelectionSchema.nullable().optional(),
@@ -505,6 +515,7 @@ const PinnedTopLevelSummaryEntrySchema = SidebarCommonSchema.extend({
   metadata: PinnedMetadataSchema,
   status: WorkbenchProjectThreadSummaryStatusSchema,
   waitingFor: z.enum(["subagents", "other"]).optional(),
+  waitingOnThreads: DefaultedWaitTargetsSchema,
 }).strict();
 export const WorkbenchPinnedThreadSummaryEntrySchema = z.discriminatedUnion("entryKind", [
   PinnedDraftSummaryEntrySchema,
@@ -582,7 +593,12 @@ export const WorkbenchGlobalThreadStateOpenResultV8Schema = WorkbenchGlobalThrea
   homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
   version: z.literal(8),
 }).strict();
+export const WorkbenchGlobalThreadStateOpenResultV9Schema = WorkbenchGlobalThreadStateOpenResultV4Schema.extend({
+  homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
+  version: z.literal(9),
+}).strict();
 export const WorkbenchGlobalThreadStateOpenResultSchema = z.union([
+  WorkbenchGlobalThreadStateOpenResultV9Schema,
   WorkbenchGlobalThreadStateOpenResultV8Schema,
   WorkbenchGlobalThreadStateOpenResultV7Schema,
   WorkbenchGlobalThreadStateOpenResultV6Schema,
@@ -609,7 +625,7 @@ export const WorkbenchThreadObservationSnapshotSchema = z.object({
   subscriptionId: CanonicalUuidSchema,
   target: WorkbenchObservedThreadTargetSchema,
   updateKind: z.literal("threadObservation"),
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
 }).strict().superRefine((observation, context) => {
   if (!observation.entries.length) return;
   const rootId = observation.target.kind === "subagent" ? observation.target.parentThreadId : observation.target.threadId;
@@ -720,11 +736,11 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
     method: z.literal("workbench/thread-state/observe"),
     subscriptionId: CanonicalUuidSchema,
     target: WorkbenchObservedThreadTargetSchema,
-    version: z.literal(1),
+    version: z.union([z.literal(1), z.literal(2)]),
   }),
   z.object({ method: z.literal("workbench/thread-state/release"), subscriptionId: CanonicalUuidSchema }).strict(),
-  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)]).optional() }),
-  z.object({ method: z.literal("workbench/thread-state/global/open"), version: z.union([z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8)]) }).strict(),
+  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7)]).optional() }),
+  z.object({ method: z.literal("workbench/thread-state/global/open"), version: z.union([z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9)]) }).strict(),
   z.object({ method: z.literal("workbench/thread-state/global/close") }).strict(),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/close") }),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/refresh") }),
@@ -1153,6 +1169,7 @@ export function createWorkbenchProjectThreadSummary(
         title: entry.title,
         previousTitles: entry.previousTitles ?? [],
         ...(entry.waitingFor ? { waitingFor: entry.waitingFor } : {}),
+        ...(entry.waitingOnThreads?.length ? { waitingOnThreads: entry.waitingOnThreads } : {}),
       }];
     });
   const lastThreadUpdateAt = entries.reduce<number | null>(

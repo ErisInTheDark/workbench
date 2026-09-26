@@ -394,6 +394,13 @@ test("thread rows expose waiting as a neutral working-icon status", () => {
   const html = renderThreadItem({ ...createThreadEntry({ threadId: "waiting", title: "Waiting work" }), waitingFor: "other" });
   assert.match(html, /aria-label="Waiting work, Waiting,/u);
   assert.match(html, /data-thread-status-tone="waiting"/u);
+  const snoozedAttention = renderThreadItem({
+    ...createThreadEntry({ threadId: "waiting-attention", title: "Waiting attention" }),
+    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: true },
+    waitingFor: "other",
+  });
+  assert.match(snoozedAttention, /data-thread-status-tone="waiting"/u);
 });
 
 test("thread rows project resolved Git arcs without treating them as live file claims", () => {

@@ -52,6 +52,7 @@ import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosu
 import WorkbenchThreadDragTargets from "./WorkbenchThreadDragTargets";
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
+import WorkbenchThreadReferenceList from "./WorkbenchThreadReferenceList";
 import WorkbenchThreadPriorityDropZone from "./WorkbenchThreadPriorityDropZone";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
@@ -287,7 +288,7 @@ export default function WorkbenchPinnedThreadList ({
             });
           }
           : undefined}
-        onSnoozeUntilDrop={targetIdentity && !targetReady
+        onSnoozeUntilDrop={targetIdentity
           ? (payload) => {
             if (!logicalProjects) {
               actions.onSnoozeUntil(payload, sourceProjectId, targetIdentity);
@@ -309,6 +310,7 @@ export default function WorkbenchPinnedThreadList ({
           : undefined}
         targetIdentity={targetIdentity}
         targetProjectId={project.id}
+        targetReady={targetReady}
         targetTitle={entry.title}
       />
     );
@@ -328,6 +330,8 @@ export default function WorkbenchPinnedThreadList ({
           sourceKey: key,
           target: { kind: "thread", target },
           type: "thread-row",
+          waitingOnThreadIds: entry.entryKind === "thread"
+            ? entry.waitingOnThreads?.map(wait => wait.identity.threadId) ?? [] : [],
         }}
       >
         {({ draggable, onDragStart, onPointerDown }) => (
@@ -353,6 +357,8 @@ export default function WorkbenchPinnedThreadList ({
             projectId={sourceProjectId}
             selected={project.id === selectedOwnerProjectId && isWorkbenchThreadTargetSelected(target, currentTarget)}
             showActions={logicalProjects ? true : project.id === projectId || entry.entryKind !== "draft"}
+            tooltipDetails={entry.entryKind === "thread" && entry.waitingOnThreads?.length
+              ? <WorkbenchThreadReferenceList label="Waiting for" references={entry.waitingOnThreads} /> : undefined}
           />
         )}
       </Draggable>

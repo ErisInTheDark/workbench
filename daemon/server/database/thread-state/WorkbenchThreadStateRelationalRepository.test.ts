@@ -222,7 +222,7 @@ test("relational batches roll back invalid references and preserve valid draft p
 test("affected-record writes preserve unchanged caches and roll back an entire failed batch", () => {
   const database = openDatabase();
   try {
-    const [firstId, secondId] = seedIdentities(database, "project", "first", "second");
+    const [firstId, secondId, thirdId] = seedIdentities(database, "project", "first", "second", "third");
     const record = (threadId: string, title: string): WorkbenchThreadStateRecord => ({
       entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) }, title, activityAt: 1,
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
@@ -236,11 +236,16 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
     });
     const first = record(firstId!, "first");
     const second = record(secondId!, "second");
+    const third = record(thirdId!, "third");
+    second.titleHistory = [{ title: "Renamed second", usedAt: 2 }];
     const retainedAddress = fixtureIdentitySchemas.ProjectIdSchema.parse("old-project");
     database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?)").run(retainedAddress, fixtureIdentityValues.ProjectId.project);
-    first.snoozedUntil = { projectId: retainedAddress, identity: second.identity };
+    first.snoozedUntil = { targets: [
+      { projectId: retainedAddress, identity: second.identity, title: second.title },
+      { projectId: retainedAddress, identity: third.identity, title: third.title },
+    ] };
     const repository = new WorkbenchThreadStateRelationalRepository(database);
-    repository.writeRecords([first, second]);
+    repository.writeRecords([first, second, third]);
     database.exec(`
       CREATE TEMP TRIGGER reject_cache_rewrite BEFORE UPDATE ON workbench_thread_git_observations
       BEGIN SELECT RAISE(ABORT, 'unchanged cache rewritten'); END
@@ -253,7 +258,17 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
     const loaded = repository.readRecords({ selection: "threads", threadIds: [firstId!] })[0]!;
     assert.equal(loaded.title, "updated");
     assert.deepEqual(loaded.gitArcPlan, first.gitArcPlan);
-    assert.deepEqual(loaded.snoozedUntil, { identity: second.identity, projectId: fixtureIdentityValues.ProjectId.project });
+    assert.deepEqual(new Set(loaded.snoozedUntil?.targets.map(target => target.identity.threadId)),
+      new Set([second.identity.threadId, third.identity.threadId]));
+    assert.deepEqual(new Set(loaded.snoozedUntil?.targets.map(target => target.title)),
+      new Set(["Renamed second", third.title]));
+    assert.deepEqual(repository.readSnoozeSources(third.identity.threadId), [{
+      projectId: fixtureIdentityValues.ProjectId.project, threadId: first.identity.threadId,
+    }]);
+    repository.commit({ projectId: fixtureIdentityValues.ProjectId.project, records: [{
+      ...first, title: "updated", snoozedUntil: { targets: [first.snoozedUntil!.targets[0]!] },
+    }] });
+    assert.equal(repository.readSnoozeSources(third.identity.threadId).length, 0);
     assert.deepEqual(loaded.titleHistory, first.titleHistory);
     assert.throws(() => repository.writeRecords([
       { ...first, title: "rolled back" }, { ...second, title: "reject" },

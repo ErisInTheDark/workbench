@@ -11,7 +11,7 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import ProjectFileLinkList from "../ProjectFileLinkList";
 import { GitArcConflictIcon } from "./GitArcIcon";
-import ThreadGitArcConflictList from "./ThreadGitArcConflictList";
+import WorkbenchThreadReferenceList from "../WorkbenchThreadReferenceList";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadGitArcCommitList from "./ThreadGitArcCommitList";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
@@ -98,10 +98,12 @@ export default function ThreadGitArcFailure({
               <ThreadGitArcCommitList commits={failure.commits} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
             ) : null}
             {canRenderLiveThreads ? (
-              <ThreadGitArcConflictList
-                entries={liveEntries.map((entry) => ({ entry, paths: [] }))}
+              <WorkbenchThreadReferenceList
+                references={liveEntries.map((entry) => ({
+                  entry, identity: entry.identity, paths: [], projectId: ProjectIdSchema.parse(resolvedProjectId!),
+                  title: entry.title,
+                }))}
                 onOpenThread={presentationContext!.onOpenThread!}
-                projectId={resolvedProjectId!}
               />
             ) : null}
             {missingOwners.length ? (

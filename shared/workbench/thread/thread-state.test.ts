@@ -82,7 +82,7 @@ test("observations carry a complete entry without admitting a different thread f
     target: { kind: "provider", harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
     entries: [entry], error: null, freshness: "fresh", revision: 1, updateKind: "threadObservation", version: 1,
   };
-  assert.deepEqual(WorkbenchThreadObservationSnapshotSchema.parse(observation).entries, [entry]);
+  assert.deepEqual(WorkbenchThreadObservationSnapshotSchema.parse(observation).entries, [{ ...entry, waitingOnThreads: [] }]);
   assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse({ ...observation, entries: [] }).success, true);
   assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse({
     ...observation, target: { ...observation.target, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("another") },
@@ -1031,6 +1031,10 @@ test("project summaries expose ordered unsnoozed pins without draft bodies", () 
     lifecycle: { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
     metadata: { archived: false, pinned: true, snoozed: false },
     title: "Pinned provider",
+    waitingOnThreads: [{
+      identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("target") },
+      projectId: fixtureIdentityValues.ProjectId["project"], title: "Target",
+    }],
   };
   const summary = createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], [
     {
@@ -1065,6 +1069,13 @@ test("project summaries expose ordered unsnoozed pins without draft bodies", () 
   });
 
   assert.deepEqual(summary.pinnedThreads.map((entry) => entry.title), ["Pinned provider", "Pinned draft"]);
+  const projectedThread = summary.pinnedThreads.find((entry) => entry.entryKind === "thread");
+  assert.deepEqual(projectedThread?.waitingOnThreads, pinnedThread.waitingOnThreads);
+  const parsedOldPin = WorkbenchPinnedThreadSummaryEntrySchema.parse({
+    ...projectedThread, waitingOnThreads: undefined,
+  });
+  assert.equal(parsedOldPin.entryKind, "thread");
+  if (parsedOldPin.entryKind === "thread") assert.deepEqual(parsedOldPin.waitingOnThreads, []);
   assert.equal(summary.pinnedThreads.some((entry) => entry.title === "Snoozed pin"), false);
   const projectedDraft = summary.pinnedThreads.find((entry) => entry.entryKind === "draft");
   assert.deepEqual(projectedDraft, {

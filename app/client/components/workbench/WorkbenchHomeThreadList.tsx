@@ -55,6 +55,7 @@ import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadDragTargets from "./WorkbenchThreadDragTargets";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
+import WorkbenchThreadReferenceList from "./WorkbenchThreadReferenceList";
 import WorkbenchThreadPriorityDropZone from "./WorkbenchThreadPriorityDropZone";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
@@ -381,7 +382,7 @@ export default function WorkbenchHomeThreadList({
             }
           }
           : undefined}
-        onSnoozeUntilDrop={targetIdentity && !targetReady
+        onSnoozeUntilDrop={targetIdentity
           ? (payload) => {
             if (!logicalProjects) {
               actions.onSnoozeUntil(payload, sourceProjectId, targetIdentity);
@@ -403,6 +404,7 @@ export default function WorkbenchHomeThreadList({
           : undefined}
         targetIdentity={targetIdentity}
         targetProjectId={projectId}
+        targetReady={targetReady}
         targetTitle={entry.title}
       />
     );
@@ -441,7 +443,11 @@ export default function WorkbenchHomeThreadList({
         selected={projectId === selectedOwnerProjectId && isWorkbenchThreadTargetSelected(target, currentTarget)}
         showActions={!qualified?.observedOnly}
         showPinPriorityIcon
-        tooltipDetails={renderThreadTooltipDetails?.(entry)}
+        tooltipDetails={<>
+          {renderThreadTooltipDetails?.(entry)}
+          {entry.entryKind === "thread" && entry.waitingOnThreads?.length
+            ? <WorkbenchThreadReferenceList label="Waiting for" references={entry.waitingOnThreads} /> : null}
+        </>}
       />
     );
     return (
@@ -461,6 +467,8 @@ export default function WorkbenchHomeThreadList({
           sourceKey: threadKey,
           target: { kind: "thread", target },
           type: "home-thread-row",
+          waitingOnThreadIds: entry.entryKind === "thread"
+            ? entry.waitingOnThreads?.map(wait => wait.identity.threadId) ?? [] : [],
         }}
       >
         {renderRow}

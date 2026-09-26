@@ -10,7 +10,7 @@
 | thread priority | Sidebar placement state: pinned, main, or snoozed. Settled is lifecycle, not priority. |
 | thread attention | Amber when unsnoozed; purple when snoozed. Existing snooze wake rules apply. |
 | thread display order | Durable manual ordering for pinned, snoozed, and settled sidebar sections. Main remains automatically ordered by claims, lifecycle, and activity. |
-| dependent snooze | Durable thread state that wakes only when its target thread is completed and has no live Git claims. |
+| dependent snooze | Durable thread state containing one or more target threads. Each target clears only after completion with no live Git claims. The source wakes when none remain. |
 | profile | Composer settings plus optional stored-profile id. Saved settings provide a fallback, not a frozen composer preview |
 | stored profile | Named reusable settings. Linked composers and new turns resolve its current definition |
 | profile ribbon | The composer controls immediately to the left of the send button, regardless of their visual treatment |

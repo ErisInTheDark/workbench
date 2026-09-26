@@ -584,7 +584,7 @@ function WorkbenchThreadSidebarActionsProvider({
         method: "workbench/thread-state/snooze/until",
         projectId: ProjectIdSchema.parse(payload.ownerProjectId),
         target: { identity: targetIdentity, projectId: ProjectIdSchema.parse(targetProjectId) },
-      }, "Unable to snooze the dragged thread until its target completes.");
+      }, "Unable to change the dragged thread's wait target.");
     },
     onHomeMove: (sourceKey, section, destinationFolderKey, beforeKey) => {
       void controls?.updateThreadStateWithAcceptance({

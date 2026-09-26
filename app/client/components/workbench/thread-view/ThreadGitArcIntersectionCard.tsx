@@ -13,7 +13,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-state";
 import ThreadDisclosure from "./ThreadDisclosure";
 import { GitArcConflictIcon, GitArcWaitIcon } from "./GitArcIcon";
-import ThreadGitArcConflictList from "./ThreadGitArcConflictList";
+import WorkbenchThreadReferenceList from "../WorkbenchThreadReferenceList";
 import { useWorkbenchProjectThreadSidebar } from "../use-workbench-client";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 
@@ -53,6 +53,10 @@ export default function ThreadGitArcIntersectionCard({
     activePlannedThreadCount ? formatThreadCount(activePlannedThreadCount, "active") : null,
     snoozedPlannedThreadCount ? formatThreadCount(snoozedPlannedThreadCount, "snoozed") : null,
   ].filter(Boolean).join(" and ");
+  const references = (entries: typeof intersections.activeEntries, withPaths: boolean) => entries.map(({ entry, paths }) => ({
+    entry, identity: entry.identity, projectId: ProjectIdSchema.parse(projectId),
+    title: entry.title, paths: withPaths ? paths : [],
+  }));
 
   return (
     <section
@@ -70,14 +74,14 @@ export default function ThreadGitArcIntersectionCard({
               : activeThreadCount ? "Planned changes overlap active threads" : "No active work intersects this plan."}
         </span>
       </h2>
-      <ThreadGitArcConflictList entries={intersections.activeEntries} onOpenThread={onOpenThread} projectId={projectId} showPaths={!stashed} />
+      <WorkbenchThreadReferenceList references={references(intersections.activeEntries, !stashed)} onOpenThread={onOpenThread} />
       {!waiting && !compact && plannedThreadCount ? (
         <ThreadDisclosure
           contentClassName="pb-1"
           summary={`Also intersecting planned work in ${plannedThreadSummary}`}
           summaryClassName="px-3 py-2 text-[0.78em] font-medium leading-[1.45]"
         >
-          <ThreadGitArcConflictList entries={intersections.plannedEntries} onOpenThread={onOpenThread} projectId={projectId} />
+          <WorkbenchThreadReferenceList references={references(intersections.plannedEntries, true)} onOpenThread={onOpenThread} />
         </ThreadDisclosure>
       ) : null}
     </section>

@@ -2,3 +2,4 @@
 - Composer questionnaire snooze interrupts the turn but retains the question. Stop dismisses it, clears snooze, and marks the thread stopped.
 - Settled and archived are placement, not status. Preserve lifecycle presentation.
 - Unpinned settled sidebar threads archive after 14 days without activity, including existing records.
+- A dependent-snooze source owns its target set. Target readiness removes one membership. Only an empty set wakes the source.

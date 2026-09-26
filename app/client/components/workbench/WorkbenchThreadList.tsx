@@ -51,6 +51,7 @@ import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadDragTargets from "./WorkbenchThreadDragTargets";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
+import WorkbenchThreadReferenceList from "./WorkbenchThreadReferenceList";
 import WorkbenchThreadPriorityDropZone from "./WorkbenchThreadPriorityDropZone";
 import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
 import Draggable from "./drag/Draggable";
@@ -259,11 +260,12 @@ export default function WorkbenchThreadList({
         onFolderDrop={folderDropEnabled && reorderSection && onProjectFolderDrop
           ? (payload) => onProjectFolderDrop(payload, displayKey, reorderSection, folder?.folderId ?? null)
           : undefined}
-        onSnoozeUntilDrop={targetIdentity && !targetReady && onSnoozeUntil
+        onSnoozeUntilDrop={targetIdentity && onSnoozeUntil
           ? (payload) => onSnoozeUntil(payload, targetIdentity)
           : undefined}
         targetIdentity={targetIdentity}
         targetProjectId={projectId}
+        targetReady={targetReady}
         targetTitle={entry.title}
       />
     );
@@ -289,7 +291,12 @@ export default function WorkbenchThreadList({
         selected,
         showActions: !readOnly,
         showPinPriorityIcon: showPinnedThreadsInMain,
-        tooltipDetails: renderThreadTooltipDetails?.(entry),
+        tooltipDetails: <>
+          {renderThreadTooltipDetails?.(entry)}
+          {entry.entryKind === "thread" && entry.waitingOnThreads?.length
+            ? <WorkbenchThreadReferenceList label="Waiting for" references={entry.waitingOnThreads} />
+            : null}
+        </>,
       };
       return asTab ? (
         <WorkbenchThreadListItem
@@ -336,6 +343,8 @@ export default function WorkbenchThreadList({
               sourceKey: displayKey,
               target: { kind: "thread", target },
               type: "thread-row",
+              waitingOnThreadIds: entry.entryKind === "thread"
+                ? entry.waitingOnThreads?.map(wait => wait.identity.threadId) ?? [] : [],
             }
           : { target: { kind: "thread", target }, type: "panel-target" }}
       >

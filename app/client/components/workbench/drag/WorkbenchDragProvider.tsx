@@ -9,6 +9,7 @@ import { useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react"
 import WorkbenchDragController from "../../../workbench/layout/WorkbenchDragController";
 import type { WorkbenchThreadDragAction } from "../../../workbench/layout/workbench-drag";
 import { FolderInputIcon, OpenThreadIcon, PinIcon, SnoozedThreadIcon } from "../workbench-icons";
+import { GitArcWaitIcon } from "../thread-view/GitArcIcon";
 import { WorkbenchDragContext } from "./workbench-drag-context";
 
 const ACTION_ICONS = {
@@ -16,6 +17,7 @@ const ACTION_ICONS = {
   main: OpenThreadIcon,
   pinned: PinIcon,
   snoozed: SnoozedThreadIcon,
+  wait: GitArcWaitIcon,
 } satisfies Record<WorkbenchThreadDragAction, typeof PinIcon>;
 
 export default function WorkbenchDragProvider ({ children, controller: suppliedController }: { children: ReactNode; controller?: WorkbenchDragController }) {

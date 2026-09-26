@@ -7,6 +7,7 @@
  */
 import { WorkbenchThreadObservationResultSchema, WorkbenchThreadObservationSnapshotSchema, type WorkbenchThreadRouteTarget, type WorkbenchThreadObservationSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
+import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { z } from "zod";
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 
@@ -145,9 +146,19 @@ export default class ThreadObservationController {
     observation.state = { ...observation.state, status: "loading", error: null };
     this.emit(observation);
     try {
-      const response = await this.transport.request("workbench/thread-state/observe", {
-        projectId: observation.projectId, target: observation.target, subscriptionId, version: 1,
+      const request = (version: 1 | 2) => this.transport.request("workbench/thread-state/observe", {
+        projectId: observation.projectId, target: observation.target, subscriptionId, version,
       });
+      let response: unknown;
+      try {
+        response = await request(2);
+      } catch (error) {
+        if (!(error instanceof WorkbenchDaemonRequestError)
+          || (error.code as unknown) !== "invalidThreadStateMutation"
+          || !/version|expected 1/iu.test(error.message)) throw error;
+        if (!this.isCurrent(observation, subscriptionId)) return;
+        response = await request(1);
+      }
       if (!this.isCurrent(observation, subscriptionId)) return;
       const parsed = WorkbenchThreadObservationResultSchema.safeParse(response);
       if (!parsed.success) {

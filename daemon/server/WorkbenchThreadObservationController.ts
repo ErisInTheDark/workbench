@@ -13,6 +13,7 @@ export interface ThreadObservationRequest {
   projectId: ProjectId;
   subscriptionId: string;
   target: WorkbenchObservedThreadTarget;
+  version?: 1 | 2;
 }
 
 interface Observation {
