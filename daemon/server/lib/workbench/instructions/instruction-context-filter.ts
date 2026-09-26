@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings.
  * - stripWorkbenchInstructionHtmlComments: remove source comments outside Markdown fences while preserving line structure.
- * - filterWorkbenchInstructionContent: strip comments and apply role, harness, model, shell and capability selectors.
+ * - filterWorkbenchInstructionContent: strip comments and apply role, harness, exact/regex model, shell and capability selectors.
  * - formatWorkbenchInstructionFilterWarning: render one bounded source diagnostic with ANSI emphasis.
  */
 
@@ -37,13 +37,22 @@ export interface WorkbenchInstructionFilterWarning {
   source: string;
 }
 
-interface SelectorControl { axis: SelectorAxis; closing: boolean; neutral: boolean; value: string }
+interface SelectorControl {
+  axis: SelectorAxis;
+  closing: boolean;
+  matchMode: "exact" | "regex";
+  neutral: boolean;
+  pattern: RegExp | null;
+  value: string;
+}
 interface Fence { include?: boolean; marker: "`" | "~"; size: number }
 
 const SELECTOR_LINE = /^\s*<(\/)?(available|harness|model|shell|role):([^<>]+)>\s*$/u;
+const MODEL_REGEX_LINE = /^\s*<(\/)?model matches="([^"\n]+)">\s*$/u;
 const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|harness|model|shell|role)(?::|\s|>)/u;
 const AVAILABLE_VALUE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
 const MODEL_VALUE = /^[^\s<>]{1,200}$/u;
+const MAX_MODEL_REGEX_LENGTH = 200;
 const KNOWN_AVAILABLE_VALUES = new Set([
   "browse",
   "browse-raw",
@@ -157,7 +166,12 @@ function isKnownValue(axis: SelectorAxis, value: string) {
 function matches(control: SelectorControl, context: WorkbenchInstructionFilterContext) {
   if (control.axis === "role") return control.value === (context.role ?? "agent");
   if (control.axis === "harness") return control.value === context.harness;
-  if (control.axis === "model") return control.value === context.model;
+  if (control.axis === "model") {
+    if (context.model === null) return false;
+    return control.matchMode === "regex"
+      ? control.pattern?.test(context.model) ?? false
+      : control.value === context.model;
+  }
   if (control.axis === "shell") return control.value === context.shell;
   return context.available.has(control.value);
 }
@@ -322,14 +336,22 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
     if (fence) { if (closesFence(line, fence)) fence = null; return; }
     const openedFence = readFence(line);
     if (openedFence) { fence = openedFence; return; }
-    const match = SELECTOR_LINE.exec(line);
+    const regexMatch = MODEL_REGEX_LINE.exec(line);
+    const match = regexMatch ?? SELECTOR_LINE.exec(line);
     if (!match) {
       if (SELECTOR_LOOKALIKE.test(line)) {
         warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "malformed", line);
       }
       return;
     }
-    const control: SelectorControl = { axis: match[2] as SelectorAxis, closing: Boolean(match[1]), neutral: false, value: match[3]?.trim() ?? "" };
+    const control: SelectorControl = {
+      axis: regexMatch ? "model" : match[2] as SelectorAxis,
+      closing: Boolean(match[1]),
+      matchMode: regexMatch ? "regex" : "exact",
+      neutral: false,
+      pattern: null,
+      value: regexMatch ? regexMatch[2] ?? "" : match[3]?.trim() ?? "",
+    };
     controls.set(lineIndex, control);
     const valueColumn = control.value ? line.indexOf(control.value) : Math.max(0, line.indexOf(":") + 1);
     const detail = {
@@ -338,7 +360,14 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
       length: Math.max(1, control.value.length),
       value: control.value,
     };
-    if (!isKnownValue(control.axis, control.value)) {
+    let valid = control.matchMode === "regex"
+      ? control.value.length <= MAX_MODEL_REGEX_LENGTH
+      : isKnownValue(control.axis, control.value);
+    if (valid && control.matchMode === "regex") {
+      try { control.pattern = new RegExp(control.value, "u"); }
+      catch { valid = false; }
+    }
+    if (!valid) {
       control.neutral = true;
       warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "malformed", line, detail);
       return;
@@ -346,7 +375,7 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
     if (!control.closing) { openLines.push(lineIndex); return; }
     const matchingStackIndex = findLastMatchingIndex(openLines, (openLine) => {
       const opened = controls.get(openLine);
-      return opened?.axis === control.axis && opened.value === control.value;
+      return opened?.axis === control.axis && opened.matchMode === control.matchMode && opened.value === control.value;
     });
     if (matchingStackIndex < 0) {
       control.neutral = true;
@@ -384,7 +413,7 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
     const control = controls.get(lineIndex);
     if (control) {
       if (!control.closing && control.value) active.push(control);
-      else if (control.closing) { const index = findLastMatchingIndex(active, (opened) => opened.axis === control.axis && opened.value === control.value); if (index >= 0) active.splice(index, 1); }
+      else if (control.closing) { const index = findLastMatchingIndex(active, (opened) => opened.axis === control.axis && opened.matchMode === control.matchMode && opened.value === control.value); if (index >= 0) active.splice(index, 1); }
       return;
     }
     if (active.every((opened) => opened.neutral || matches(opened, context))) output.push(line);

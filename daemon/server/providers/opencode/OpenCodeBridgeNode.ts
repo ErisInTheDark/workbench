@@ -116,5 +116,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/providers/opencode/OpenCodeThreadWindowLoader.ts",
     "daemon/server/providers/opencode/OpenCodeManagedSessionController.ts",
     "daemon/server/providers/opencode/OpenCodeTranscriptAdapter.ts",
+    "daemon/server/lib/workbench/instructions/instruction-context-filter.ts",
   ].join("\n"),
 });

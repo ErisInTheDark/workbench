@@ -65,7 +65,7 @@ Keep workflow-specific process in workflow files instead of AGENTS.md.
 
 ## Control-Flow Selectors
 
-Workbench sources and packs support standalone `<role:agent>` / `<role:voice-to-text>`, `<harness:provider-id>`, `<model:model-id>`, `<shell:pwsh>` / `<shell:bash>` and `<available:mechanic-id>` blocks. Close with the identical axis/value. Roles default to agent; model IDs match exactly. Final-payload filtering removes controls before delivery.
+Workbench sources and packs support standalone `<role:agent>` / `<role:voice-to-text>`, `<harness:provider-id>`, `<model:model-id>` / `<model matches="regex">`, `<shell:pwsh>` / `<shell:bash>` and `<available:mechanic-id>` blocks. Close with the identical tag. Roles default to agent; model IDs match exactly, while regex patterns test the model slug without implicit anchors or flags. For all GPT models, use `<model matches="^gpt-">` and `</model matches="^gpt-">`. Final-payload filtering removes controls before delivery.
 
 Use selectors only for role, harness, model, shell or available-mechanic differences. Nested selectors must all match. Keep ordinary policy/mechanics inside role:agent; retain selected agent and workflow for both roles.
 

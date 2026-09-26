@@ -62,6 +62,44 @@ test("model selectors require the exact configured model", () => {
   assert.equal(filter(value, "codex", "pwsh", new Set(), null).output, "");
 });
 
+test("regex model selectors match configured slugs alongside exact and nested selectors", () => {
+  const value = [
+    "before",
+    '<model matches="^gpt-">',
+    "<harness:codex>",
+    "gpt family",
+    "</harness:codex>",
+    '</model matches="^gpt-">',
+    "<model:gpt-6-astra>",
+    "exact",
+    "</model:gpt-6-astra>",
+    "after",
+  ].join("\n");
+  assert.equal(filter(value).output, "before\ngpt family\nexact\nafter");
+  assert.equal(filter(value, "codex", "pwsh", new Set(), "gpt-6-preview").output, "before\ngpt family\nafter");
+  assert.equal(filter(value, "codex", "pwsh", new Set(), "other-gpt-6").output, "before\nafter");
+  assert.equal(filter(value, "opencode").output, "before\nexact\nafter");
+  assert.equal(filter(value, "codex", "pwsh", new Set(), null).output, "before\nafter");
+});
+
+test("regex model selector examples stay literal and invalid patterns preserve the body with warnings", () => {
+  const example = '```md\n<model matches="^gpt-">\nexample\n</model matches="^gpt-">\n```';
+  assert.equal(filter(example).output, example);
+
+  const invalid = '<model matches="[">\nbody\n</model matches="[">';
+  const result = filter(`before\n${invalid}\nafter`);
+  assert.equal(result.output, "before\nbody\nafter");
+  assert.equal(result.warnings.length, 2);
+  assert.equal(result.warnings[0]?.recovery, "malformed");
+});
+
+test("regex model selector closing patterns must match their opener", () => {
+  const value = '<model matches="^gpt-">\nbody\n</model matches="^claude-">';
+  const result = filter(value);
+  assert.equal(result.output, "body");
+  assert.deepEqual(result.warnings.map((warning) => warning.recovery), ["unmatched", "unclosed"]);
+});
+
 test("fenced selector examples remain literal", () => {
   const value = "```md\n<harness:copilot>\nexample\n</harness:copilot>\n```";
   assert.equal(filter(value).output, value);
