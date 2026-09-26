@@ -13,7 +13,6 @@ import {
 } from "react";
 
 import {
-  createDefaultWorkbenchProjectSidebarPreferences,
   readWorkbenchGlobalSidebarPreferences,
   readWorkbenchProjectSidebarPreferences,
   setWorkbenchProjectSidebarFolderOpen,
@@ -50,9 +49,9 @@ export default function WorkbenchSidebarPreferencesProvider({
   const [pendingDisclosure, setPendingDisclosure] = useState<Partial<Record<WorkbenchSidebarDisclosurePreferenceKey, boolean>>>({});
   const disclosureGeneration = useRef(new Map<WorkbenchSidebarDisclosurePreferenceKey, number>());
   const persistedPreferences = useMemo(() => {
-    const projectPreferences = projectId
-      ? readWorkbenchProjectSidebarPreferences(clientState.daemonRegistrationId, projectId, clientState.records)
-      : createDefaultWorkbenchProjectSidebarPreferences();
+    const projectPreferences = readWorkbenchProjectSidebarPreferences(
+      clientState.daemonRegistrationId, projectId, clientState.records,
+    );
     return {
       ...projectPreferences,
       ...readWorkbenchGlobalSidebarPreferences(clientState.daemonRegistrationId, clientState.records),
@@ -116,7 +115,7 @@ export default function WorkbenchSidebarPreferencesProvider({
   );
   const setFolderOpen = useCallback<WorkbenchSidebarPreferencesValue["setFolderOpen"]>((scope, folderId, open) => {
     const key = scope === "pinned" ? "pinnedFolderIds" : "threadFolderIds";
-    if (!projectId || preferences[key].includes(folderId) === open) return;
+    if (preferences[key].includes(folderId) === open) return;
     const storedScope = scope === "pinned" ? "pinned" : "thread";
     const operation = async () => {
       if (open && preferences[key].length >= 500) {

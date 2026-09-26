@@ -2556,7 +2556,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       sourceDaemonId={browseLocation?.daemonId}>
     <WorkbenchComposerProfileProvider controller={composerProfileController}>
       <WorkbenchSidebarPreferencesProvider
-        projectId={browseProjectId}
+        projectId={viewedProjectId}
       >
         {({ preferences: sidebarPreferences, setSidebarCollapsed }) => {
           const isEffectiveDesktopSidebarCollapsed = usesDesktopSidebarCollapse && sidebarPreferences.sidebarCollapsed;
