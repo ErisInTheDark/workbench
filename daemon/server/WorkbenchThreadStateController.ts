@@ -797,6 +797,16 @@ export default class WorkbenchThreadStateController {
     else await this.close(connectionId);
   }
 
+  private acceptedIntentEntry(input: { harness: WorkbenchHarnessId; threadId: WorkbenchThreadId; title: string; turnId: WorkbenchTurnId; pinned?: boolean }): WorkbenchThreadSidebarEntry {
+    const activityAt = this.now();
+    return {
+      activityAt, entryKind: "thread", identity: { harness: input.harness, threadId: input.threadId },
+      lifecycle: { agent: { agentStatus: "working", turnId: input.turnId }, kind: "working", reason: "acceptedIntent", settled: false },
+      metadata: { archived: false, pinned: input.pinned ?? false, snoozed: false },
+      orderAt: activityAt, title: input.title,
+    };
+  }
+
   async acceptIntent(connectionId: string, input: { draftId?: DraftId; harness: WorkbenchHarness; projectId: ProjectId; threadId: WorkbenchThreadId; title?: string; turnId: WorkbenchTurnId }) {
     input = { ...input, projectId: this.canonicalProjectId(input.projectId) };
     const authorizedThreadId = input.draftId ? `draft:${input.draftId}` : input.threadId;
@@ -823,12 +833,10 @@ export default class WorkbenchThreadStateController {
       state.drafts.delete(input.draftId);
       state.entries.delete(draftKey);
     }
-    const acceptedAt = this.now();
-    const providerEntry: WorkbenchThreadSidebarEntry = {
-      activityAt: acceptedAt, entryKind: "thread", identity: { harness: input.harness, threadId: input.threadId },
-      lifecycle: { agent: { agentStatus: "working", turnId: input.turnId }, kind: "working", reason: "acceptedIntent", settled: false },
-      metadata: { archived: false, pinned: draftPinned, snoozed: false }, orderAt: acceptedAt, title: input.title?.trim() || input.threadId,
-    };
+    const providerEntry = this.acceptedIntentEntry({
+      harness: input.harness, threadId: input.threadId, turnId: input.turnId,
+      pinned: draftPinned, title: input.title?.trim() || input.threadId,
+    });
     const entry = await this.applyLifecycle(input.projectId, input.harness, input.threadId, { kind: "acceptedIntent", turnId: input.turnId }, providerEntry, undefined, profile, input.draftId);
     if (!entry) throw new Error("The accepted intent does not identify a known provider thread.");
     return { accepted: true, revision: (await this.getSnapshot(input.projectId)).revision };
@@ -870,8 +878,12 @@ export default class WorkbenchThreadStateController {
     }
   }
 
-  async acceptProviderIntent(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, turnId: WorkbenchTurnId) {
-    return await this.applyLifecycle(projectId, harness, threadId, { kind: "acceptedIntent", turnId });
+  async acceptProviderIntent(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, firstMessagePreview?: string) {
+    const providerEntry = this.acceptedIntentEntry({
+      harness, threadId, turnId,
+      title: resolveWorkbenchThreadTitle({ id: threadId, name: null, preview: firstMessagePreview }),
+    });
+    return await this.applyLifecycle(projectId, harness, threadId, { kind: "acceptedIntent", turnId }, providerEntry);
   }
 
   async reportRecoveryFailed(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {

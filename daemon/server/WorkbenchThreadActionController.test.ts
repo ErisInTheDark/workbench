@@ -182,6 +182,27 @@ test("accepted messages retain WB identity and are not resent when state settlem
   assert.equal(f.messages[0].threadId, "wb-thread");
 });
 
+test("new-turn admission passes the first non-empty user text as display fallback", async () => {
+  const f = fixture();
+  const fallbacks: Array<string | undefined> = [];
+  f.provider.threads.submit = async () => ({ kind: "started", turn: { id: "wb-turn" } as never });
+  f.owners.state.acceptProviderIntent = async (_project, _harness, _threadId, _turnId, fallback?: string) => {
+    fallbacks.push(fallback);
+    return null;
+  };
+  const input = [
+    { type: "text", text: "  ", text_elements: [] },
+    { type: "text", text: "First user message", text_elements: [] },
+  ];
+  await f.controller.handle("thread/message/submit", {
+    threadId: "wb-thread", clientMessageId: "launch:one", input, intent: "newTurn",
+  });
+  await f.controller.handle("thread/message/submit", {
+    threadId: "wb-thread", clientMessageId: "steer", input, intent: "steer", expectedTurnId: "wb-turn",
+  });
+  assert.deepEqual(fallbacks, ["First user message", undefined]);
+});
+
 test("message admission ignores browser steer classification", async () => {
   const f = fixture();
   await f.controller.handle("thread/message/submit", {

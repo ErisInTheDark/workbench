@@ -3556,6 +3556,48 @@ test("accepted intent replaces only a neutral headless provider title with the f
   await controller.dispose();
 });
 
+test("provider admission keeps a first-message display fallback separate from explicit titles", async () => {
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    projectState: projectState(),
+    publish: () => undefined,
+    reconcileProject: async () => [],
+    storageRoot: "launch-display-fallback",
+    threadStateStore: new MemoryThreadStatePersistence(),
+  });
+  try {
+    await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, fixtureTurnIds.turn, "First user message");
+    let entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, fixtureThreadIds.thread);
+    assert.equal(entry?.title, "First user message");
+    assert.deepEqual(entry?.entryKind === "thread" ? entry.titleHistory : null, []);
+
+    await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, fixtureTurnIds.turn, "Later message");
+    entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, fixtureThreadIds.thread);
+    assert.equal(entry?.title, "First user message");
+
+    await controller.setTitle(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, "Explicit title");
+    await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, fixtureTurnIds.turn, "Even later message");
+    entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, fixtureThreadIds.thread);
+    assert.equal(entry?.title, "Explicit title");
+    assert.equal(entry?.entryKind === "thread" ? entry.titleHistory?.[0]?.title : null, "Explicit title");
+
+    await controller.ensureProviderEntry(fixtureProjectIds.project, {
+      activityAt: 1,
+      entryKind: "thread",
+      identity: { harness: "codex", threadId: fixtureThreadIds.child },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      title: "Provider name",
+    });
+    await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.child, fixtureTurnIds.turn, "First child message");
+    entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, fixtureThreadIds.child);
+    assert.equal(entry?.title, "Provider name");
+    assert.deepEqual(entry?.entryKind === "thread" ? entry.titleHistory : null, []);
+  } finally {
+    await controller.dispose();
+  }
+});
+
 test("successful user input wakes snoozed threads without changing questionnaire turn order", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-user-input-wake-"));
   let discovered = false;

@@ -205,7 +205,13 @@ export default class WorkbenchThreadActionController {
     const result = await provider.threads.submit(providerInput);
     try {
       const turnId = WorkbenchTurnIdSchema.parse(result.kind === "started" ? result.turn.id : result.turnId);
-      await this.owners.state.acceptProviderIntent(identity.projectId, harness, identity.threadId, turnId);
+      const firstText = input.intent === "newTurn"
+        ? input.input.find(item => item.type === "text" && item.text.trim())
+        : undefined;
+      await this.owners.state.acceptProviderIntent(
+        identity.projectId, harness, identity.threadId, turnId,
+        firstText?.type === "text" ? firstText.text : undefined,
+      );
     } catch {
       const warning = "Your message was accepted, but Workbench could not update its thread state. Do not resend it.";
       this.owners.warn(warning);
