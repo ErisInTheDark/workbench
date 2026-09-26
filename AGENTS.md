@@ -46,6 +46,11 @@ CRITICAL INSTRUCTION EDITING RULES:
 - Treat the reloadable projects as dependency graphs. Parents provide registrations to direct children, and reloading a node replaces its dependant closure. Put each subsystem at the lowest reloadable ancestor that spans its dependants; do not move cross-branch lifecycle into the projects' `index.ts` entrypoints or other non-reloadable imports.
 - Avoid introducing or modifying non-reloadable daemon or app code. If you must, explicitly call out that the user will need to perform a full-process restart (of whichever process must be restarted).
 
+## Extra Tailwind features
+- nested variant grouping motion-reduce:(transition-none stuck:(animate-none hover:bg-red-500))`
+- any whitespace within square brackets [] converts to standard tailwind `_`, allowing multiline `transition`/`transform`/gradients
+- these features combine correctly too
+
 ## Commands and Permission Boundaries
 
 Run `wb test` and `pnpm typecheck` from the repository root.
