@@ -4,8 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
-import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
-import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import { DaemonIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchPresentationClient from "./WorkbenchPresentationClient";
 
 const daemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
@@ -17,40 +16,28 @@ function snapshot(revision: number): PresentationSnapshot {
   };
 }
 
-test("cancelled daemon import cannot fetch another page or mutate presentation state", async () => {
-  const projectId = ProjectIdSchema.parse("b597a4b6-7af9-41f1-83ea-a53aed6f3b0a");
-  const logicalProjectId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
-  const pageRequested = Promise.withResolvers<void>();
-  const releasePage = Promise.withResolvers<{
-    projectId: typeof projectId; sourceRevision: number; drafts: []; nextCursor: string;
-  }>();
-  let pages = 0;
-  let mutations = 0;
-  const daemon = {
-    presentationExport: {
-      project: () => {
-        pages++;
-        pageRequested.resolve();
-        return releasePage.promise;
-      },
-    },
-  } as unknown as WorkbenchDaemonClient;
-  const client = new WorkbenchPresentationClient({ fetcher: async (_input, options) => {
-    if (options?.method === "POST") mutations++;
-    return Response.json(snapshot(1));
+test("burst presentation notices share one read and retain the newest revision", async () => {
+  const release = Promise.withResolvers<Response>();
+  let reads = 0;
+  const client = new WorkbenchPresentationClient({ fetcher: async () => {
+    reads++;
+    return reads === 1 ? Response.json(snapshot(1)) : await release.promise;
   } });
-  const cancellation = new AbortController();
   try {
     await client.refresh();
-    const importing = client.importProject(daemonId, projectId, logicalProjectId, daemon, cancellation.signal);
-    await pageRequested.promise;
-    cancellation.abort();
-    releasePage.resolve({ projectId, sourceRevision: 1, drafts: [], nextCursor: "next" });
-    await assert.rejects(importing, { name: "AbortError" });
-    assert.equal(pages, 1);
-    assert.equal(mutations, 0);
+    const updated = Promise.withResolvers<void>();
+    const unsubscribe = client.subscribe(() => {
+      if (client.snapshot().data?.revision === 3) updated.resolve();
+    });
+    client.noticeRevision(2);
+    client.noticeRevision(3);
+    assert.equal(reads, 2);
+    release.resolve(Response.json(snapshot(3)));
+    await updated.promise;
+    unsubscribe();
+    assert.equal(reads, 2);
   } finally {
-    releasePage.resolve({ projectId, sourceRevision: 1, drafts: [], nextCursor: "next" });
+    release.resolve(Response.json(snapshot(3)));
     client.dispose();
   }
 });

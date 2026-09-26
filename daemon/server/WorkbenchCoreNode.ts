@@ -359,6 +359,7 @@ function createWorkbenchCoreFeature(
       setComposerProfileTarget: async (slot, selection) => await threadState.controller.setComposerProfileTarget(slot, selection),
     },
     projects: projectCatalog,
+    projectSnapshot,
     questionnaireResponses,
     search,
     settings,

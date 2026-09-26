@@ -100,6 +100,30 @@ async function createController(initialProfiles: WorkbenchComposerProfile[] = []
   return { controller, persistence, targets };
 }
 
+test("a new-turn profile write exposes pending and failed state before Send", async (context) => {
+  const { controller, targets } = await createController();
+  context.after(() => controller.dispose());
+  const slot: WorkbenchComposerProfileSlot = {
+    kind: "new-thread", projectId: fixtureIdentityValues.ProjectId["project-a"],
+  };
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  targets.write = async () => {
+    entered.resolve();
+    await release.promise;
+    throw new Error("Daemon rejected the target mutation.");
+  };
+  const writing = controller.selectCustom(slot, CODEX_SETTINGS);
+  await entered.promise;
+  assert.equal(controller.selectionWriteState(slot), "pending");
+  release.resolve();
+  assert.equal(await writing, false);
+  assert.equal(controller.selectionWriteState(slot), "failed");
+  assert.equal(controller.selectionWriteState({
+    kind: "new-thread", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("another-project"),
+  }), "ready");
+});
+
 test("catalogue refresh coalesces without overwriting edits or surviving disconnect", async (context) => {
   const { controller, persistence } = await createController([profile()]);
   context.after(() => controller.dispose());

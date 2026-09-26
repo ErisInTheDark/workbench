@@ -20,6 +20,8 @@ export default function ProjectSidebar ({
   activeProjectId,
   logicalProjects,
   logicalSummaries,
+  logicalError,
+  logicalLoading,
   onConfigureGitRoots,
   onProjectLinkClick,
   projects,
@@ -28,6 +30,8 @@ export default function ProjectSidebar ({
   activeProjectId: string;
   logicalProjects?: readonly WorkbenchLogicalProject[];
   logicalSummaries?: Readonly<Record<string, WorkbenchLogicalProjectSummary>>;
+  logicalError?: string | null;
+  logicalLoading?: boolean;
   onConfigureGitRoots: () => void;
   onProjectLinkClick (event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
   projects: readonly WorkbenchProjectOption[];
@@ -103,7 +107,10 @@ export default function ProjectSidebar ({
               Show {grouped.timeGroups[preferences.projectTimeGroupCount]?.label ?? "older projects"}
             </button>
           ) : null}
-          {!displayedProjects.length ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">No projects were found.</p> : null}
+          {logicalError ? <p role="alert" className="m-0 px-2 text-[0.8rem] leading-5 text-danger">{logicalError}</p> : null}
+          {!displayedProjects.length && !logicalError ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">
+            {logicalLoading ? "Loading projects..." : "No projects were found."}
+          </p> : null}
         </nav>
       </WorkbenchSidebarSectionDisclosure>
     </section>

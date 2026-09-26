@@ -13,7 +13,7 @@
  * - WorkbenchPinnedThreadLayoutSnapshotSchema/WorkbenchPinnedThreadLayoutSnapshot: revisioned global pin layout.
  * - WorkbenchHomeThreadDisplayOrderSchema/WorkbenchHomeThreadDisplayOrder/WorkbenchHomeThreadDisplayOrderSnapshot: folder-free home order and revision.
  * - WorkbenchThreadStateOpenResultV2/WorkbenchThreadStateOpenResult: project bootstrap types.
- * - WorkbenchGlobalThreadStateOpenResultV4Schema/WorkbenchGlobalThreadStateOpenResultV5Schema/WorkbenchGlobalThreadStateOpenResultV6Schema/WorkbenchGlobalThreadStateOpenResultV7Schema/WorkbenchGlobalThreadStateOpenResult: versioned global bootstrap variants.
+ * - WorkbenchGlobalThreadStateOpenResultV4Schema/WorkbenchGlobalThreadStateOpenResultV5Schema/WorkbenchGlobalThreadStateOpenResultV6Schema/WorkbenchGlobalThreadStateOpenResultV7Schema/WorkbenchGlobalThreadStateOpenResultV8Schema/WorkbenchGlobalThreadStateOpenResult: versioned global bootstrap variants.
  * - WorkbenchPinnedThreadContextResult: admitted pinned-thread context.
  * - WorkbenchObservedThreadTargetSchema/WorkbenchObservedThreadTarget: provider and subagent observation targets.
  * - WorkbenchThreadObservationSnapshotSchema/WorkbenchThreadObservationSnapshot: revisioned full thread-family observation.
@@ -578,7 +578,12 @@ export const WorkbenchGlobalThreadStateOpenResultV7Schema = WorkbenchGlobalThrea
   homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
   version: z.literal(7),
 }).strict();
+export const WorkbenchGlobalThreadStateOpenResultV8Schema = WorkbenchGlobalThreadStateOpenResultV4Schema.extend({
+  homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
+  version: z.literal(8),
+}).strict();
 export const WorkbenchGlobalThreadStateOpenResultSchema = z.union([
+  WorkbenchGlobalThreadStateOpenResultV8Schema,
   WorkbenchGlobalThreadStateOpenResultV7Schema,
   WorkbenchGlobalThreadStateOpenResultV6Schema,
   WorkbenchGlobalThreadStateOpenResultV5Schema,
@@ -719,7 +724,7 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
   }),
   z.object({ method: z.literal("workbench/thread-state/release"), subscriptionId: CanonicalUuidSchema }).strict(),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)]).optional() }),
-  z.object({ method: z.literal("workbench/thread-state/global/open"), version: z.union([z.literal(4), z.literal(5), z.literal(6), z.literal(7)]) }).strict(),
+  z.object({ method: z.literal("workbench/thread-state/global/open"), version: z.union([z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8)]) }).strict(),
   z.object({ method: z.literal("workbench/thread-state/global/close") }).strict(),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/close") }),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/refresh") }),

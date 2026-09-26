@@ -118,10 +118,10 @@ export async function openWorkbenchGlobalThreadStateObservation({
   request,
 }: {
   installCatalog: (catalog: WorkbenchProjectsPayload) => void | Promise<unknown>;
-  request: (version: 4 | 5 | 6 | 7) => Promise<unknown>;
+  request: (version: 4 | 5 | 6 | 7 | 8) => Promise<unknown>;
 }) {
   let response: unknown;
-  for (const version of [7, 6, 5, 4] as const) {
+  for (const version of [8, 7, 6, 5, 4] as const) {
     try {
       response = await request(version);
       break;

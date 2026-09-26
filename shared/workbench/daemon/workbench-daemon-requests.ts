@@ -156,6 +156,10 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
     params: import("../thread/thread-presentation-export").WorkbenchPresentationExportRequest;
     result: import("../thread/thread-presentation-export").WorkbenchPresentationExportPage;
   };
+  "thread/presentation/manifest/read": {
+    params: import("../thread/thread-presentation-export").WorkbenchPresentationManifestRequest;
+    result: import("../thread/thread-presentation-export").WorkbenchPresentationManifestPage;
+  };
   "thread/presentation/attachment/read": {
     params: import("../thread/thread-presentation-export").WorkbenchPresentationAttachmentChunkRequest;
     result: import("../thread/thread-presentation-export").WorkbenchPresentationAttachmentChunk;
@@ -185,6 +189,10 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "profiles/target/set": { params: { selection: WorkbenchComposerProfileTargetSelection; slot: WorkbenchComposerProfileSlot }; result: { ok: true } };
   "profiles/upsert": { params: { profile: WorkbenchComposerProfile; changes?: WorkbenchComposerProfileChanges }; result: WorkbenchComposerProfileStorePayload };
   "project/catalog/read": { params: object; result: WorkbenchProjectsPayload };
+  "project/file-index/read": {
+    params: import("../project/project-file-index").WorkbenchProjectFileIndexRequest;
+    result: import("../project/project-file-index").WorkbenchProjectFileIndexResponse;
+  };
   "project/file/read": { params: { path: string; projectId: string }; result: FilePayload };
   "project/file/reset": { params: { expectedMtimeMs: number; force?: boolean; path: string; projectId: string }; result: WorkbenchFileWriteResult };
   "project/file/save": { params: { content: string; expectedMtimeMs: number; force?: boolean; path: string; projectId: string }; result: WorkbenchFileWriteResult };

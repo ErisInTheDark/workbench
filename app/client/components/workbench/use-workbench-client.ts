@@ -11,6 +11,7 @@
  * - useWorkbenchHomeThreadDisplayOrderSupported: read global home ordering capability.
  * - useWorkbenchPinnedThreadLayout: read global pinned thread layout.
  * - useWorkbenchThreadTextPresentationField: subscribe to one exact streaming text field.
+ * - useWorkbenchThreadFileIndex: read the owning daemon folder's file suggestions without selecting browse state.
  */
 "use client";
 
@@ -53,6 +54,41 @@ import WorkbenchClientContext, { useWorkbenchClientController, type WorkbenchCli
 import ThreadTextPresentationContext from "./ThreadTextPresentationContext";
 import { useWorkbenchThread } from "./use-workbench-thread";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { WorkbenchProjectFileIndexSnapshot } from "../../workbench/project/WorkbenchProjectFileIndexStore";
+
+const MISSING_THREAD_FILE_INDEX: WorkbenchProjectFileIndexSnapshot = {
+  candidates: [], paths: [], id: "project-files:missing-owner",
+  status: "error", error: "The thread's daemon folder is unavailable for file suggestions.",
+};
+
+export function useWorkbenchThreadFileIndex(threadId: string, enabled: boolean) {
+  const client = useWorkbenchClientController();
+  const store = client.mounted?.projectFileIndexStore ?? null;
+  const context = enabled
+    ? client.mounted?.threadContextFor(threadId) ?? client.mounted?.draftContextFor(threadId)
+    : null;
+  const daemonId = context?.daemonId ?? null;
+  const projectId = context?.project.id ?? null;
+  const target = useMemo(() => daemonId && projectId ? { daemonId, projectId } : null,
+    [daemonId, projectId]);
+  const subscribe = useCallback((listener: () => void) =>
+    store?.subscribe(target, listener) ?? (() => undefined), [store, target]);
+  const getSnapshot = useCallback(() => store?.getSnapshot(target) ?? MISSING_THREAD_FILE_INDEX,
+    [store, target]);
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  useEffect(() => {
+    if (!enabled || !store || !target) return;
+    void store.ensure(target).catch(error => console.error(
+      "Thread file suggestions unavailable:",
+      error instanceof Error ? error.message.slice(0, 512) : "Unknown file-index failure.",
+    ));
+  }, [enabled, store, target]);
+  return {
+    snapshot: enabled && !target ? MISSING_THREAD_FILE_INDEX : snapshot,
+    canRetry: Boolean(store && target),
+    retry: () => store && target ? store.ensure(target, true) : Promise.resolve(MISSING_THREAD_FILE_INDEX),
+  };
+}
 
 const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   changes: {},
@@ -96,6 +132,13 @@ const EMPTY_THREAD_RUNTIME_SNAPSHOT: WorkbenchThreadRuntimeSnapshot = {
   threadsError: "",
 };
 const EMPTY_SUBSCRIBE = (_listener: () => void) => () => {};
+const EMPTY_PROJECT_SOURCE_ERROR = () => "";
+const INITIAL_STARTUP: ReturnType<MountedWorkbenchClient["startup"]["getSnapshot"]> = {
+  phase: "loading", error: null,
+};
+const INITIAL_PRESENTATION: ReturnType<NonNullable<MountedWorkbenchClient["presentationClient"]>["snapshot"]> = {
+  phase: "idle", error: null, data: null,
+};
 const EMPTY_PROJECT_THREAD_SIDEBARS: WorkbenchProjectThreadSidebars = { projects: [] };
 const EMPTY_PROJECT_THREAD_SUMMARIES: WorkbenchProjectThreadSummaries = { projects: [] };
 const EMPTY_HOME_THREAD_DISPLAY_ORDER: WorkbenchHomeThreadDisplayOrderSnapshot = {
@@ -116,8 +159,12 @@ interface WorkbenchClientMountOptions {
   initialRoute: WorkbenchRoute;
 }
 
-export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): WorkbenchClientController {
+export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): WorkbenchClientController & {
+  startup: ReturnType<MountedWorkbenchClient["startup"]["getSnapshot"]>;
+  projectSourceError: string;
+} {
   const [mounted, setMounted] = useState<MountedWorkbenchClient | null>(null);
+  const [mountError, setMountError] = useState<string | null>(null);
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -126,9 +173,9 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): W
     let cancelled = false;
     let mountedClient: MountedWorkbenchClient | null = null;
     const timeoutId = window.setTimeout(() => {
-      void import("../../WorkbenchClient").then(async ({ WorkbenchClient }) => {
+      void import("../../WorkbenchClient").then(({ WorkbenchClient }) => {
         const current = optionsRef.current;
-        const nextMounted = await WorkbenchClient({
+        const nextMounted = WorkbenchClient({
           clientStateController: current.clientStateController,
           dom: current.getDomSurfaces(),
           initialRoute: current.initialRoute,
@@ -145,6 +192,12 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): W
         }
         mountedClient = nextMounted;
         setMounted(nextMounted);
+      }).catch(error => {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message.slice(0, 512)
+          : "Workbench client could not mount.";
+        setMountError(message);
+        console.error("Workbench client could not mount:", message);
       });
     }, 0);
 
@@ -155,11 +208,28 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): W
     };
   }, [options.clientStateController]);
 
+  const startup = useSyncExternalStore(
+    mounted?.startup.subscribe ?? EMPTY_SUBSCRIBE,
+    mounted?.startup.getSnapshot ?? (() => INITIAL_STARTUP),
+    () => INITIAL_STARTUP,
+  );
+  const presentation = useSyncExternalStore(
+    mounted?.presentationClient?.subscribe ?? EMPTY_SUBSCRIBE,
+    mounted?.presentationClient?.snapshot ?? (() => INITIAL_PRESENTATION),
+    () => INITIAL_PRESENTATION,
+  );
+  const projectSourceError = useSyncExternalStore(
+    mounted?.projectSourceErrors.subscribe ?? EMPTY_SUBSCRIBE,
+    mounted?.projectSourceErrors.getSnapshot ?? EMPTY_PROJECT_SOURCE_ERROR,
+    EMPTY_PROJECT_SOURCE_ERROR,
+  );
   return useMemo(() => ({
-    controls: mounted?.controls ?? null,
+    controls: startup.phase === "ready" ? mounted?.controls ?? null : null,
     explorer,
     mounted,
-  }), [explorer, mounted]);
+    projectSourceError,
+    startup: mountError ? { phase: "failed" as const, error: mountError } : startup,
+  }), [explorer, mountError, mounted, presentation, projectSourceError, startup]);
 }
 
 export function useWorkbenchThreadTextPresentationField(
@@ -169,7 +239,10 @@ export function useWorkbenchThreadTextPresentationField(
 ) {
   const providedClient = useContext(WorkbenchClientContext);
   const standaloneText = useContext(ThreadTextPresentationContext);
-  const controller = (explicitClient ?? providedClient)?.mounted?.threadTextPresentation ?? standaloneText;
+  const mounted = (explicitClient ?? providedClient)?.mounted;
+  const controller = key
+    ? mounted?.threadTextPresentationFor(key.threadId) ?? standaloneText
+    : mounted?.threadTextPresentation ?? standaloneText;
   const stableKey = useMemo<ThreadTextPresentationKey | null>(() => key ? {
     field: key.field,
     index: key.index,
@@ -302,7 +375,7 @@ export function useWorkbenchThreads(explicitClient?: WorkbenchClientController, 
   const store = scoped ?? client.mounted?.threadRuntime;
   const runtime = useSyncExternalStore(
     store?.subscribe ?? EMPTY_SUBSCRIBE,
-    store?.getSnapshot ?? (() => EMPTY_THREAD_RUNTIME_SNAPSHOT),
+    scoped?.getPublishedSnapshot ?? store?.getSnapshot ?? (() => EMPTY_THREAD_RUNTIME_SNAPSHOT),
     () => EMPTY_THREAD_RUNTIME_SNAPSHOT,
   );
   const document = useCallback(

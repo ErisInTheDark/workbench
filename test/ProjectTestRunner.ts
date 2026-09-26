@@ -145,6 +145,7 @@ export default class ProjectTestRunner {
         "--import",
         "tsx",
         "--test",
+        "--test-force-exit",
         `--test-concurrency=${concurrency}`,
         ...(this.testTimeoutMs === null ? [] : [`--test-timeout=${this.testTimeoutMs}`]),
         `--test-reporter=${reporter}`,

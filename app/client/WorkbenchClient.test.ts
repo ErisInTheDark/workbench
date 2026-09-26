@@ -7,14 +7,16 @@ import test from "node:test";
 import { captureTestOutput } from "../../test/capture-test-output.mts";
 
 import type { ExplorerSnapshot, ThreadSummary, WorkbenchSubagentSummary } from "workbench-shared/types";
+import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { WorkbenchClient, areExplorerSnapshotsEquivalent, describeGlobalThreadStateOpenFailure, openWorkbenchGlobalThreadStateObservation, openWorkbenchThreadStateObservation } from "./WorkbenchClient.ts";
-import { createHomeRoute, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
-import { createLogicalExistingThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { createHomeRoute, createHomeThreadRoute, parseWorkbenchRouteFromPath, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { createLogicalExistingThreadRoute, createLogicalFileRoute, createLogicalProjectRoute, createLogicalThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { appStateClientTables } from "workbench-shared/state/workbench-app-state-schema";
 import type ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
 import WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController";
+import WorkbenchProjectNavigation from "./workbench/navigation/workbench-project-navigation";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -139,6 +141,7 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
         switch (request.method) {
           case "initialize": result = {}; break;
           case "voice/configuration/read": result = { selection: null }; break;
+          case "voice/prepare": result = { ok: true }; break;
           case "workbench/daemon/reload-dirt/read": result = { revision: 1, snapshot: { dirtyScopes: [], pendingScopes: [], error: null } }; break;
           case "project/catalog/read":
             result = catalogueActive
@@ -224,6 +227,7 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
           }
         },
       });
+      await client.startup.start();
       if (order === "server-reload" || order === "reconnect") {
         const opened = await client.controls.applyRoute({ ...createHomeRoute(), projectId, view: "project" });
         assert.equal(opened.ok, true);
@@ -249,6 +253,7 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
         return;
       }
       if (order === "voice-events") {
+        await client.controls.daemon.projects.catalog();
         let recovered = 0;
         const sidebar = client.threadSidebar as ThreadSidebarClient;
         sidebar.reopen = async () => { recovered++; };
@@ -328,7 +333,7 @@ for (const order of ["stale-first", "winner-first", "leave-thread", "project-ali
   });
 }
 
-test("a logical UUID route admits a readable thread to its rendered controller", async () => {
+test("an old-shape UUID URL keeps its thread owner and the sole browse folder through catalogue updates", async () => {
   const originalWindow = globalThis.window;
   const originalDocument = globalThis.document;
   const originalWebSocket = globalThis.WebSocket;
@@ -337,17 +342,29 @@ test("a logical UUID route admits a readable thread to its rendered controller",
   const originalDaemonUrl = process.env.WORKBENCH_CODEX_APP_SERVER_URL;
   const daemonId = fixtureIdentitySchemas.DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029");
   const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("b597a4b6-7af9-41f1-83ea-a53aed6f3b0a");
+  const secondProjectId = fixtureIdentitySchemas.ProjectIdSchema.parse("d597a4b6-7af9-41f1-83ea-a53aed6f3b0a");
   const logicalProjectId = fixtureIdentitySchemas.LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
   const threadId = fixtureIdentitySchemas.ThreadReferenceSchema.parse(crypto.randomUUID());
   const rootPath = "C:/repo";
   const project = {
-    id: projectId, kind: "git", name: "repo", relativePath: "repo", rootPath,
+    id: projectId, kind: "git" as const, name: "repo", relativePath: "repo", rootPath,
     lastCommitTimeMs: null, roots: [{ id: "repo", isPrimary: true, name: "repo", relativePath: ".", rootPath }],
   };
+  const secondProject = { ...project, id: secondProjectId, name: "repo-copy",
+    relativePath: "repo-copy", rootPath: "C:/repo-copy",
+    roots: [{ id: "repo-copy", isPrimary: true, name: "repo-copy",
+      relativePath: ".", rootPath: "C:/repo-copy" }] };
   const catalog = { data: [project], aliases: [], rootPath };
   let catalogAvailable = true;
+  let secondAvailable = false;
+  let registeredLocationsVisible = true;
+  let presentationRevision = 1;
+  let storedDraft: PresentationSnapshot["drafts"][number] | null = null;
+  const releaseFirstPresentation = Promise.withResolvers<void>();
+  let holdFirstPresentation = true;
   const identityKey = "remote://example.test/team/repo";
   const locations = { data: [{ identityKey, rootIdentityKeys: [identityKey], project }] };
+  const secondLocation = { identityKey, rootIdentityKeys: [identityKey], project: secondProject };
   const presentation = {
     revision: 1, daemons: [{ id: daemonId, hostname: "desktop" }],
     projects: [{ id: logicalProjectId, matchKey: identityKey, label: "team/repo" }],
@@ -356,8 +373,6 @@ test("a logical UUID route admits a readable thread to its rendered controller",
   };
   const rows = Object.fromEntries(Object.keys(appStateClientTables).map(name => [name, []]));
   const requests: string[] = [];
-  const exportRequested = Promise.withResolvers<void>();
-  let releaseExport = () => {};
   const network = {
     configuration: {
       mode: "localhost", hostServe: { enabled: false, port: 8080 }, members: [],
@@ -377,30 +392,24 @@ test("a logical UUID route admits a readable thread to its rendered controller",
   };
   class Socket extends EventTarget {
     static OPEN = 1;
+    static latest: Socket | null = null;
     readyState = 1;
+    readonly closed = Promise.withResolvers<void>();
     constructor() {
       super();
+      Socket.latest = this;
       queueMicrotask(() => this.dispatchEvent(new Event("open")));
     }
     close() {
       this.readyState = 3;
       this.dispatchEvent(new Event("close"));
+      this.closed.resolve();
     }
     send(raw: string) {
       const request = JSON.parse(raw) as { id?: number; method: string; params?: Record<string, unknown> };
       if (request.id === undefined) return;
       requests.push(request.method);
       const params = request.params ?? {};
-      if (request.method === "thread/presentation/export") {
-        exportRequested.resolve();
-        releaseExport = () => queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
-          data: JSON.stringify({
-            id: request.id,
-            result: { projectId, sourceRevision: 1, drafts: [], nextCursor: null },
-          }),
-        })));
-        return;
-      }
       const entry = {
         entryKind: "thread", title: "thread", activityAt: 1,
         identity: { harness: "codex", threadId },
@@ -409,8 +418,16 @@ test("a logical UUID route admits a readable thread to its rendered controller",
       };
       const result = request.method === "initialize" ? {}
         : request.method === "voice/configuration/read" ? { selection: null }
-        : request.method === "project/catalog/read" ? catalogAvailable ? catalog : { data: [], aliases: [], rootPath }
-        : request.method === "project/locations/read" ? catalogAvailable ? locations : { data: [] }
+        : request.method === "voice/prepare" ? { ok: true }
+        : request.method === "project/catalog/read" ? catalogAvailable
+          ? { ...catalog, data: secondAvailable ? [project, secondProject] : [project] }
+          : { data: [], aliases: [], rootPath }
+        : request.method === "project/locations/read" ? catalogAvailable
+          ? { data: secondAvailable ? [...locations.data, secondLocation] : locations.data }
+          : { data: [] }
+        : request.method === "project/file-index/read" ? {
+          projectId, key: "one-file", candidates: [{ path: "src/a.ts", isIgnored: false }],
+        }
         : request.method === "thread/presentation/layout/read" ? (() => {
           const value = params.scope === "project" ? { displayOrder: {} } : {};
           const bytes = Buffer.from(JSON.stringify(value));
@@ -424,6 +441,13 @@ test("a logical UUID route admits a readable thread to its rendered controller",
           pinnedThreadLayout: { displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" },
           projectSidebars: { projects: [{ entries: [entry], error: null, freshness: "fresh", projectId, revision: 1 }] },
         }
+        : request.method === "workbench/thread-state/open" ? {
+          catalog,
+          project: { projectId, revision: 1, updateKind: "project",
+            snapshot: { projectId, root: "repo", rootPath, roots: project.roots,
+              changes: {}, tree: [], workbenchStorageRootPath: `${rootPath}/.workbench` } },
+          sidebar: { entries: [entry], error: null, freshness: "fresh", projectId, revision: 1 },
+        }
         : request.method === "workbench/thread-state/observe" ? {
           observation: {
             ...params, entries: [entry], revision: 1, freshness: "fresh", error: null,
@@ -435,11 +459,15 @@ test("a logical UUID route admits a readable thread to its rendered controller",
         } }
         : request.method === "thread/page/read" ? {
           thread: {
-            ...thread(threadId, 1), cwd: rootPath, status: "idle", turns: [], turnHistory: [],
+            ...thread(threadId, 1), cwd: rootPath, turns: [{
+              completedAt: null, durationMs: null, error: null, id: "turn",
+              items: [], itemsView: "full", startedAt: 1, status: "inProgress",
+            }], turnHistory: [],
             isDraft: false, model: null, reasoningEffort: null, serviceTier: null, agentPath: null, tokenUsage: null,
           },
           nextCursor: null, browseResultEntries: [], questionnaireEntries: [], steerEntries: [],
         }
+        : request.method === "thread/message/submit" ? { kind: "steered", turnId: "turn" }
         : request.method === "thread/reconcile" ? { turnIds: [], exhausted: false }
         : request.method === "account/limits/read" ? {
           rateLimits: { limitId: null, limitName: null, primary: null, secondary: null, credits: null, planType: null },
@@ -453,13 +481,28 @@ test("a logical UUID route admits a readable thread to its rendered controller",
   }
   globalThis.fetch = async (input) => {
     const url = String(input);
-    if (url === "/api/workbench-client-state") return Response.json({
+    const appStateUrl = new URL(url, "http://workbench.test");
+    if (appStateUrl.pathname === "/api/workbench-client-state"
+      && appStateUrl.searchParams.get("capabilities") === "2") return Response.json({
       kind: "snapshot", daemonRegistrationId: "attached-registration",
       registrations: [{ id: "attached-registration", kind: "local", daemonId }],
       oldestAvailableRevision: 0, revision: 1, schemaVersion: 1, rows,
     });
     if (url.startsWith("/api/workbench-network")) return Response.json(network);
-    if (url.startsWith("/api/workbench-presentation")) return Response.json(presentation);
+    if (url.startsWith("/api/workbench-presentation")) {
+      if (holdFirstPresentation) {
+        holdFirstPresentation = false;
+        await releaseFirstPresentation.promise;
+      }
+      return Response.json({
+        ...presentation, revision: presentationRevision,
+        drafts: storedDraft ? [storedDraft] : [],
+        locations: !registeredLocationsVisible ? [] : secondAvailable ? [...presentation.locations, {
+          target: { daemonId, projectId: secondProjectId }, logicalProjectId, identityKey,
+          name: "repo-copy", rootPath: "C:/repo-copy",
+        }] : presentation.locations,
+      });
+    }
     return new Response(null, { status: 404 });
   };
   globalThis.EventSource = class {
@@ -479,17 +522,86 @@ test("a logical UUID route admits a readable thread to its rendered controller",
   const clientStateController = new WorkbenchClientStateController({
     mode: "http", visibility: { hidden: () => true, subscribe: () => () => {} },
   });
+  const explorerSnapshots: ExplorerSnapshot[] = [];
+  let observeBrowse: ((snapshot: ExplorerSnapshot) => void) | null = null;
   let client: Awaited<ReturnType<typeof WorkbenchClient>> | undefined;
   try {
     await clientStateController.bootstrap();
     const route = createLogicalExistingThreadRoute(logicalProjectId,
       { kind: "provider", threadId });
-    client = await WorkbenchClient({ clientStateController, initialRoute: route });
-    await exportRequested.promise;
+    client = WorkbenchClient({ clientStateController,
+      onExplorerStateChange: snapshot => { explorerSnapshots.push(snapshot); observeBrowse?.(snapshot); },
+      initialRoute: parseWorkbenchRouteFromPath(`/repo/@/thread/${threadId}`) });
+    assert.equal(client.startup.getSnapshot().phase, "loading",
+      "a pending presentation read must not prevent client construction");
+    const presentationReady = Promise.withResolvers<void>();
+    const unsubscribePresentation = client.presentationClient?.subscribe(() => {
+      if (client?.presentationClient?.snapshot().data) presentationReady.resolve();
+    });
+    releaseFirstPresentation.resolve();
+    await Promise.all([client.startup.start(), presentationReady.promise]);
+    unsubscribePresentation?.();
+    const legacyNew = await client.controls.applyRoute(createHomeThreadRoute(projectId, { kind: "new" }));
+    assert.equal(legacyNew.ok, false, "app-owned drafts cannot be created through a daemon sidebar route");
+    assert.equal(requests.filter(method => method === "thread/page/read").length, 0,
+      "mount must not open the initial URL before the URL intent adapter applies it");
+    assert.equal((await client.controls.applyRoute(route)).ok, true);
+    assert.equal(requests.includes("thread/presentation/export"), false,
+      "opening a thread must not trigger an eager legacy export");
     assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, threadId,
       `initial route did not read the thread: ${requests.join(", ")}`);
+    const combined = await client.controls.applyRoute(createLogicalProjectRoute(logicalProjectId));
+    assert.equal(combined.ok, true, combined.error ?? "combined project route did not open");
+    await new Promise<void>(resolve => queueMicrotask(resolve));
+    assert.equal(explorerSnapshots.at(-1)?.currentProjectId, projectId);
+    assert.equal(explorerSnapshots.at(-1)?.logicalThreads?.length, 1);
+    assert.deepEqual(explorerSnapshots.at(-1)?.browseLocation, { daemonId, projectId });
+    const multiple = Promise.withResolvers<void>();
+    observeBrowse = snapshot => {
+      if (snapshot.logicalProjects?.[0]?.locations.filter(item => item.project).length === 2
+        && snapshot.browseLocation === null) multiple.resolve();
+    };
+    secondAvailable = true;
+    presentationRevision += 1;
+    await client.controls.refreshProjectCatalog();
+    await client.presentationClient?.refresh();
+    await multiple.promise;
+    const homeThread = await client.controls.applyRoute(createLogicalExistingThreadRoute(null,
+      { kind: "provider", threadId }));
+    assert.equal(homeThread.ok, true, homeThread.error ?? "home thread did not open");
+    assert.equal(explorerSnapshots.at(-1)?.browseLocation, null);
+    const soleAgain = Promise.withResolvers<void>();
+    observeBrowse = snapshot => {
+      if (snapshot.logicalProjects?.[0]?.locations.filter(item => item.project).length === 1
+        && snapshot.browseLocation === null) soleAgain.resolve();
+    };
+    secondAvailable = false;
+    presentationRevision += 1;
+    await client.controls.refreshProjectCatalog();
+    await client.presentationClient?.refresh();
+    await soleAgain.promise;
+    assert.equal(explorerSnapshots.at(-1)?.currentProjectId, "",
+      "a Home thread never selects its sole launch folder for browsing");
+    observeBrowse = null;
+    const file = await client.controls.applyRoute(createLogicalFileRoute(logicalProjectId, null, "src/a.ts"));
+    assert.equal(file.ok, true, file.error ?? "single-folder file route did not select its browse owner");
+    await new Promise<void>(resolve => queueMicrotask(resolve));
+    assert.deepEqual(explorerSnapshots.at(-1)?.browseLocation, { daemonId, projectId });
     const home = await client.controls.applyRoute(createHomeRoute());
     assert.equal(home.ok, true, home.error ?? "home route did not complete");
+    assert.ok(client.projectFileIndexStore);
+    assert.deepEqual((await client.projectFileIndexStore.ensure({ daemonId, projectId })).paths, ["src/a.ts"]);
+    assert.equal(explorerSnapshots.at(-1)?.browseLocation, null);
+    let homeRuntimePublications = 0;
+    const stopHomeRuntime = client.threadRuntime.subscribe(() => { homeRuntimePublications += 1; });
+    Socket.latest?.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+      method: "workbench/thread-state/updated",
+      params: { updateKind: "pinnedThreadLayout", revision: 2, displayOrder: {} },
+      workbenchHarness: "workbench",
+    }) }));
+    assert.equal(homeRuntimePublications, 0,
+      "a global layout update must not reset the projectless selected-thread runtime");
+    stopHomeRuntime();
     const reopened = await client.controls.applyRoute(route);
     assert.equal(reopened.ok, true, reopened.error ?? requests.join(", "));
     const controller = client.getThreadController(projectId, { kind: "provider", threadId });
@@ -497,6 +609,27 @@ test("a logical UUID route admits a readable thread to its rendered controller",
     assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, threadId, requests.join(", "));
     assert.equal(controller.getSnapshot().status, "ready");
     assert.equal(controller.getSnapshot().document?.id, threadId);
+    assert.deepEqual(client.threadDraftIdentityFor(threadId), {
+      daemonRegistrationId: "attached-registration", projectId, threadId,
+    });
+    const selectedThread = client.threadRuntime.getSnapshot().currentThread!;
+    if (selectedThread.isDraft) throw new Error("The active UUID route must select an admitted thread.");
+    await client.controls.refreshProjectCatalog();
+    assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, threadId);
+    await assert.rejects(client.controls.sendThreadMessage({
+      ...selectedThread, id: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("wrong-thread"),
+    }, [{ text: "wrong owner", text_elements: [], type: "text" }]));
+    assert.equal(requests.filter(method => method === "thread/message/submit").length, 0);
+    await client.controls.applyRoute(createLogicalProjectRoute(logicalProjectId));
+    await assert.rejects(client.controls.sendThreadMessage(selectedThread, [{
+      text: "left thread", text_elements: [], type: "text",
+    }]));
+    assert.equal(requests.filter(method => method === "thread/message/submit").length, 0);
+    assert.equal((await client.controls.applyRoute(route)).ok, true);
+    await client.controls.sendThreadMessage(selectedThread, [{
+      text: "active steer", text_elements: [], type: "text",
+    }]);
+    assert.equal(requests.filter(method => method === "thread/message/submit").length, 1);
     catalogAvailable = false;
     await client.controls.refreshProjectCatalog();
     const missing = await client.controls.applyRoute(createLogicalExistingThreadRoute(logicalProjectId, {
@@ -504,9 +637,103 @@ test("a logical UUID route admits a readable thread to its rendered controller",
     }));
     assert.equal(missing.ok, false);
     assert.match(missing.error ?? "", /unavailable/iu);
+    catalogAvailable = true;
+    const firstSocket = Socket.latest;
+    client.dispose();
+    await firstSocket?.closed.promise;
+    client = await WorkbenchClient({ clientStateController,
+      onExplorerStateChange: snapshot => { explorerSnapshots.push(snapshot); },
+      initialRoute: {
+      ...createHomeRoute(), projectId, view: "thread", threadId,
+      threadTarget: { kind: "provider", threadId, harness: "codex" },
+    } });
+    await client.startup.start();
+    assert.equal((await client.controls.applyRoute({
+      ...createHomeRoute(), projectId, view: "thread", threadId,
+      threadTarget: { kind: "provider", threadId, harness: "codex" },
+    })).ok, true);
+    assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, threadId, requests.join(", "));
+    assert.deepEqual(client.threadDraftIdentityFor(threadId), {
+      daemonRegistrationId: "attached-registration", projectId, threadId,
+    });
+    const oldUrlThread = client.threadRuntime.getSnapshot().currentThread!;
+    if (oldUrlThread.isDraft) throw new Error("The old URL must open an existing thread.");
+    const sendsBeforeOldUrl = requests.filter(method => method === "thread/message/submit").length;
+    await client.controls.sendThreadMessage(oldUrlThread, [{
+      text: "old URL steer", text_elements: [], type: "text",
+    }]);
+    assert.equal(requests.filter(method => method === "thread/message/submit").length, sendsBeforeOldUrl + 1);
+    const publicNavigation = new WorkbenchProjectNavigation(
+      [project], [], explorerSnapshots.at(-1)?.logicalProjects ?? [],
+    );
+    const fromUrl = (route: WorkbenchRoute) => {
+      const href = publicNavigation.href(route);
+      assert.ok(href);
+      return publicNavigation.readRoute(href);
+    };
+    const freshRoute = fromUrl(createLogicalThreadRoute(
+      null, logicalProjectId, { daemonId, projectId }, { kind: "new" },
+    ));
+    assert.equal(freshRoute.logical?.location, null);
+    assert.equal((await client.controls.applyRoute(freshRoute)).ok, true);
+    assert.equal(explorerSnapshots.at(-1)?.currentProjectId, "",
+      "a Home draft's launch folder must not become the viewed project");
+    assert.equal(explorerSnapshots.at(-1)?.browseLocation, null);
+    const editingDraft = client.threadRuntime.getSnapshot().currentThread;
+    assert.ok(editingDraft?.isDraft);
+    storedDraft = {
+      id: fixtureIdentitySchemas.DraftIdSchema.parse(editingDraft.id),
+      logicalProjectId, target: { daemonId, projectId }, prompt: "a saved draft",
+      selection: { kind: "custom", settings: {
+        agentPath: null, agentSource: null, harness: "codex", model: "",
+        reasoningEffort: null, serviceTier: null, contextWindowTokens: null,
+      } },
+      updatedAt: 2, revision: presentationRevision + 1, phase: "unsent",
+      pinned: false, snoozed: false, launchId: null, acceptedThreadId: null, attachments: [],
+    };
+    presentationRevision += 1;
+    await client.presentationClient?.refresh();
+    const savedRoute = fromUrl(createLogicalThreadRoute(null, logicalProjectId, null,
+      { kind: "draft", draftId: fixtureIdentitySchemas.DraftIdSchema.parse(storedDraft.id) }));
+    assert.equal(savedRoute.logical?.location, null);
+    const phases: string[] = [];
+    const stopRoutePhases = client.navigation.subscribe(() => {
+      phases.push(client!.navigation.getSnapshot().phase);
+    });
+    assert.equal((await client.controls.applyRoute(savedRoute)).ok, true);
+    stopRoutePhases();
+    assert.equal(phases.includes("loading"), false,
+      "saving a draft does not put its existing editor back into route loading");
+    assert.strictEqual(client.threadRuntime.getSnapshot().currentThread, editingDraft,
+      "saving a draft refines its route without creating another editor session");
+    storedDraft = { ...storedDraft, phase: "deleted", revision: presentationRevision + 1 };
+    presentationRevision += 1;
+    await client.presentationClient?.refresh();
+    const clearingPhases: string[] = [];
+    const stopClearingPhases = client.navigation.subscribe(() => {
+      clearingPhases.push(client!.navigation.getSnapshot().phase);
+    });
+    assert.equal((await client.controls.applyRoute(freshRoute)).ok, true);
+    stopClearingPhases();
+    assert.equal(clearingPhases.includes("loading"), false);
+    assert.strictEqual(client.threadRuntime.getSnapshot().currentThread, editingDraft);
+    assert.equal(client.navigation.getSnapshot().phase, "ready");
+    assert.equal((await client.controls.applyRoute(createHomeRoute())).ok, true);
+    assert.equal(client.draftLocationFor(editingDraft.id), null,
+      "leaving the empty composer retires its transient session owner");
+    registeredLocationsVisible = false;
+    presentationRevision += 1;
+    await client.presentationClient?.refresh();
+    const observedOnly = await client.controls.applyRoute(createLogicalExistingThreadRoute(logicalProjectId, {
+      kind: "provider", threadId,
+    }));
+    assert.equal(observedOnly.ok, true,
+      observedOnly.error ?? "an observed thread should open before its presentation location is stored");
   } finally {
-    releaseExport();
+    releaseFirstPresentation.resolve();
+    const lastSocket = Socket.latest;
     client?.dispose();
+    await lastSocket?.closed.promise;
     clientStateController.dispose();
     globalThis.window = originalWindow;
     globalThis.document = originalDocument;
@@ -561,7 +788,7 @@ test("thread-state open tries attachment-aware summaries before the prior protoc
 
 test("global thread-state open installs a catalog and full sidebars without a selected project snapshot", async () => {
   const catalogs: unknown[] = [];
-  const versions: Array<4 | 5 | 6 | 7> = [];
+  const versions: Array<4 | 5 | 6 | 7 | 8> = [];
   const result = await openWorkbenchGlobalThreadStateObservation({
     installCatalog: (catalog) => { catalogs.push(catalog); },
     request: async (version) => {
@@ -576,11 +803,11 @@ test("global thread-state open installs a catalog and full sidebars without a se
             { ...sidebar(), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") },
           ],
         },
-        version: 7,
+        version: 8,
       };
     },
   });
-  assert.deepEqual(versions, [7]);
+  assert.deepEqual(versions, [8]);
   assert.deepEqual(catalogs, [{ data: [], aliases: [], rootPath: "C:/projects" }]);
   assert.deepEqual(result.projectSidebars.projects.map(({ projectId }) => projectId), ["alpha", "beta"]);
   assert.equal(result.homeThreadDisplayOrder?.revision, 2);
@@ -588,7 +815,7 @@ test("global thread-state open installs a catalog and full sidebars without a se
 });
 
 test("global thread-state open falls back to read-only version 4 only for an old protocol rejection", async () => {
-  const versions: Array<4 | 5 | 6 | 7> = [];
+  const versions: Array<4 | 5 | 6 | 7 | 8> = [];
   const result = await openWorkbenchGlobalThreadStateObservation({
     installCatalog: () => undefined,
     request: async (version) => {
@@ -604,12 +831,12 @@ test("global thread-state open falls back to read-only version 4 only for an old
       };
     },
   });
-  assert.deepEqual(versions, [7, 6, 5, 4]);
+  assert.deepEqual(versions, [8, 7, 6, 5, 4]);
   assert.equal(result.homeThreadDisplayOrder, null);
 });
 
 test("global thread-state open preserves version 5 home ordering during a mixed reload", async () => {
-  const versions: Array<4 | 5 | 6 | 7> = [];
+  const versions: Array<4 | 5 | 6 | 7 | 8> = [];
   const result = await openWorkbenchGlobalThreadStateObservation({
     installCatalog: () => undefined,
     request: async (version) => {
@@ -627,7 +854,7 @@ test("global thread-state open preserves version 5 home ordering during a mixed 
       };
     },
   });
-  assert.deepEqual(versions, [7, 6, 5]);
+  assert.deepEqual(versions, [8, 7, 6, 5]);
   assert.equal(result.homeThreadDisplayOrder?.revision, 7);
 });
 

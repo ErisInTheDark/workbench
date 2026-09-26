@@ -15,6 +15,52 @@ async function settledVerification(client: WorkbenchNetworkClient) {
   return client.snapshot().verification;
 }
 
+test("presentation revision notices ride the network stream without replacing network state", async () => {
+  const snapshot: WorkbenchNetworkSnapshot = {
+    configuration: { mode: "localhost", hostServe: { enabled: false, port: 8080 }, members: [], privateAccess: null },
+    runtime: {
+      hostServe: { phase: "off", message: null, url: null },
+      privateAccess: {
+        phase: "off", message: null, url: null, hostname: null, nodeId: null,
+        keyFingerprint: null, loginUrl: null, addresses: [], rootCertificate: null,
+        rootFingerprint: null, certificateExpiresAt: null, pending: [],
+      },
+    },
+    executable: { available: true, message: null }, hostPlatform: "win32", busy: false, failure: null,
+  };
+  const listeners = new Map<string, EventListener>();
+  const events = {
+    close: () => {},
+    onmessage: null,
+    onerror: null,
+    addEventListener: (name: string, listener: EventListenerOrEventListenerObject) => {
+      listeners.set(name, listener as EventListener);
+    },
+  } as unknown as EventSource;
+  const client = new WorkbenchNetworkClient({
+    events: () => events,
+    fetcher: async () => Response.json(snapshot),
+  });
+  try {
+    await client.start();
+    const revisions: number[] = [];
+    const failures: number[] = [];
+    client.subscribePresentation(revision => revisions.push(revision));
+    client.subscribePresentationImport(status => {
+      if (status.phase === "partial") failures.push(status.failed);
+    });
+    listeners.get("presentation")!({ data: JSON.stringify({ revision: 7 }) } as MessageEvent);
+    listeners.get("presentation-import")!({ data: JSON.stringify({
+      phase: "partial", scanned: 2, imported: 1, failed: 1,
+    }) } as MessageEvent);
+    assert.deepEqual(revisions, [7]);
+    assert.deepEqual(failures, [1]);
+    assert.equal(client.snapshot().snapshot?.configuration.mode, "localhost");
+  } finally {
+    client.close();
+  }
+});
+
 test("ready HTTPS checks automatically from HTTP and only retries after trust changes or explicit intent", async context => {
   const snapshot: WorkbenchNetworkSnapshot = {
     configuration: { mode: "tailnet-service", hostServe: { enabled: true, port: 8080 }, members: [],

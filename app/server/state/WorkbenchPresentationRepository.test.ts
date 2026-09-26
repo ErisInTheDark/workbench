@@ -189,6 +189,9 @@ test("incomplete imported attachments stay hidden and receipt blocks resurrectio
       attachments: [{ id: "old-image", mediaType: "image/png", contentHash }] };
     repository.mutate(staged);
     assert.equal(repository.read().drafts.length, 0);
+    assert.deepEqual(repository.readImportReceipts(first, [
+      { kind: "draft", sourceId: "old-draft" },
+    ]), [], "a staged draft is not an accepted import");
     assert.deepEqual(repository.read().sourceMappings, [{
       daemonId: first, sourceKind: "draft", sourceId: "old-draft", targetId: draftId, sourceRevision: 3,
     }]);
@@ -213,6 +216,25 @@ test("incomplete imported attachments stay hidden and receipt blocks resurrectio
     };
     repository.mutate(layout);
     repository.mutate(layout);
+    assert.deepEqual(repository.readImportReceipts(first, [
+      { kind: "draft", sourceId: "old-draft" },
+      { kind: "layout", sourceId: "project-layout" },
+      { kind: "layout", sourceId: "home" },
+    ]), [
+      { kind: "draft", sourceId: "old-draft" },
+      { kind: "layout", sourceId: "project-layout" },
+    ]);
+    const homeLayout = { ...layout, sourceId: "home", scope: "home" as const,
+      logicalProjectId: null, folders: [], members: [] };
+    assert.throws(() => repository.mutateImportBatch([
+      homeLayout,
+      { ...homeLayout, sourceId: "invalid", scope: "project" as const },
+    ]), /belongs to another scope/u);
+    assert.deepEqual(repository.readImportReceipts(first, [{ kind: "layout", sourceId: "home" }]), [],
+      "a later invalid item rolls back the whole import batch");
+    assert.deepEqual(repository.mutateImportBatch([homeLayout]), { accepted: true });
+    assert.deepEqual(repository.readImportReceipts(first, [{ kind: "layout", sourceId: "home" }]),
+      [{ kind: "layout", sourceId: "home" }]);
     assert.equal(repository.read().folders.length, 1);
     assert.equal(repository.read().members[0]?.draftId, draftId);
     repository.mutate({ kind: "deleteDraft", draftId, expectedRevision: imported.revision });

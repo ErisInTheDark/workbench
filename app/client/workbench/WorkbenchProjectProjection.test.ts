@@ -5,8 +5,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
-import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import { projectLogicalProjects, projectLogicalSummaries } from "./WorkbenchProjectProjection";
+import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { preferredLogicalLaunchLocation, projectLogicalProjects, projectLogicalSummaries, projectLogicalThreadRows } from "./WorkbenchProjectProjection";
+import type { WorkbenchProjectThreadSidebars } from "workbench-shared/workbench/thread/thread-state";
 
 const first = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
 const second = DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029");
@@ -48,6 +49,9 @@ test("remote identity has one row, collisions show hosts, and unavailable locati
     location.hostname, location.rootPath, location.project !== null,
   ]), [["desktop", "C:/repo", true], ["laptop", "/home/repo", false]]);
   assert.equal(projects[0]?.locations[1]?.target.daemonId, second);
+  assert.equal(projects[0]?.displayName, "repo");
+  assert.equal(projects[0]?.displayPath, "desktop:/repo");
+  assert.equal(projects[2]?.displayName, "C:/other");
   const source = (threadId: string, working: number) => ({
     projects: [{
       projectId: concrete, revision: 1, lastThreadUpdateAt: working,
@@ -68,4 +72,138 @@ test("remote identity has one row, collisions show hosts, and unavailable locati
   assert.deepEqual(summaries.get(remoteId)?.unsettledThreads.map(item => [
     item.location.daemonId, item.entry.identity.threadId,
   ]), [[second, "laptop-thread"], [first, "desktop-thread"]]);
+});
+
+test("a local project's name stays separate from its shortest daemon folder address", () => {
+  const snapshot: PresentationSnapshot = {
+    revision: 1, daemons: [{ id: first, hostname: "tower-of-floof" }],
+    projects: [{ id: localId, matchKey: "local://c:/git/app/bak/.git", label: "C:/git/app/bak" }],
+    locations: [{
+      target: { daemonId: first, projectId: concrete }, logicalProjectId: localId,
+      identityKey: "local://c:/git/app/bak/.git", name: "bak", rootPath: "C:/git/app/bak",
+    }],
+    defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const project = projectLogicalProjects(snapshot, new Map([[first, [catalog("C:/git/app/bak")]]]))[0]!;
+  assert.equal(project.displayName, "bak");
+  assert.equal(project.displayPath, "tower-of-floof:/bak");
+});
+
+test("remote project labels use the shortest unambiguous repository suffix", () => {
+  const base: PresentationSnapshot = {
+    revision: 1, daemons: [], locations: [], defaults: [], drafts: [], folders: [],
+    members: [], divergences: [], sourceMappings: [],
+    projects: [{ id: remoteId, matchKey: "remote://example.test/team/repo", label: "example.test/team/repo" }],
+  };
+  const labels = (projects: PresentationSnapshot["projects"]) =>
+    projectLogicalProjects({ ...base, projects }, new Map()).map(project => project.label);
+  assert.deepEqual(labels(base.projects), ["repo"]);
+  assert.deepEqual(labels([
+    ...base.projects,
+    { id: collisionId, matchKey: "remote://example.test/other/repo", label: "example.test/other/repo" },
+  ]), ["team/repo", "other/repo"]);
+  assert.deepEqual(labels([
+    ...base.projects,
+    { id: collisionId, matchKey: "remote://other.test/team/repo", label: "other.test/team/repo" },
+  ]), ["example.test/team/repo", "other.test/team/repo"]);
+  assert.deepEqual(labels([
+    ...base.projects,
+    { id: localId, matchKey: "local://C:/git/repo", label: "repo" },
+  ]), ["team/repo", "local://C:/git/repo"]);
+  assert.deepEqual(labels([
+    ...base.projects,
+    { id: collisionId, matchKey: "remote://example.test/group/other/repo", label: "other/repo" },
+  ]), ["team/repo", "other/repo"]);
+});
+
+test("launch suggestion follows the latest used target inside one logical project", () => {
+  const firstTarget = { daemonId: first, projectId: concrete };
+  const secondTarget = { daemonId: second, projectId: concrete };
+  const snapshot: PresentationSnapshot = {
+    revision: 15,
+    daemons: [],
+    projects: [{ id: remoteId, matchKey: "remote://example.test/team/repo", label: "repo" }],
+    locations: [firstTarget, secondTarget].map(target => ({
+      target, logicalProjectId: remoteId, identityKey: "remote://example.test/team/repo",
+      name: "repo", rootPath: "C:/repo",
+    })),
+    defaults: [{ target: firstTarget, revision: 5,
+      selection: {} as PresentationSnapshot["defaults"][number]["selection"] }],
+    drafts: [{ target: secondTarget, logicalProjectId: remoteId, revision: 10,
+      phase: "accepted" } as PresentationSnapshot["drafts"][number]],
+    folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const project = projectLogicalProjects(snapshot, new Map([
+    [first, [catalog("C:/repo")]], [second, [catalog("/home/repo")]],
+  ]))[0]!;
+  assert.deepEqual(preferredLogicalLaunchLocation(project, snapshot), secondTarget);
+  const available = { ...snapshot, locations: snapshot.locations.slice(0, 1) };
+  assert.deepEqual(preferredLogicalLaunchLocation(
+    projectLogicalProjects(available, new Map([[first, [catalog("C:/repo")]]]))[0]!, available,
+  ), firstTarget);
+});
+
+test("one logical project includes thread rows from both daemon folders", () => {
+  const snapshot: PresentationSnapshot = {
+    revision: 1,
+    daemons: [{ id: first, hostname: "desktop" }, { id: second, hostname: "laptop" }],
+    projects: [{ id: remoteId, matchKey: "remote://example.test/team/repo", label: "repo" }],
+    locations: [first, second].map(daemonId => ({
+      target: { daemonId, projectId: concrete }, logicalProjectId: remoteId,
+      identityKey: "remote://example.test/team/repo", name: "repo", rootPath: "C:/repo",
+    })),
+    defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const entry = (id: string): WorkbenchProjectThreadSidebars["projects"][number]["entries"][number] => ({
+    entryKind: "thread", title: id, activityAt: 1,
+    identity: { harness: "codex", threadId: WorkbenchThreadIdSchema.parse(id) },
+    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+  });
+  const sidebars = new Map([
+    [first, { projects: [{ projectId: concrete, revision: 1, error: null,
+      freshness: "fresh" as const, entries: [entry("first-thread")] }] }],
+    [second, { projects: [{ projectId: concrete, revision: 1, error: null,
+      freshness: "fresh" as const, entries: [entry("second-thread")] }] }],
+  ]);
+  const rows = projectLogicalThreadRows(projectLogicalProjects(snapshot, new Map()), sidebars, snapshot);
+  assert.deepEqual(rows.map(row => [row.logicalProjectId, row.location.daemonId,
+    row.entry.entryKind === "thread" ? row.entry.identity.threadId : null]), [
+    [remoteId, first, "first-thread"], [remoteId, second, "second-thread"],
+  ]);
+});
+
+test("observed daemon facts show Home rows without becoming persisted launch targets", () => {
+  const snapshot: PresentationSnapshot = {
+    revision: 1,
+    daemons: [],
+    projects: [{ id: remoteId, matchKey: "remote://example.test/team/repo", label: "repo" }],
+    locations: [], defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const observed = new Map([[first, {
+    hostname: "desktop",
+    data: [{
+      identityKey: ProjectIdentityKeySchema.parse("remote://example.test/team/repo"),
+      rootIdentityKeys: [],
+      project: catalog("C:/repo"),
+    }],
+  }]]);
+  const projects = projectLogicalProjects(snapshot, new Map([[first, [catalog("C:/repo")]]]), observed);
+  assert.equal(projects[0]?.locations.length, 0);
+  assert.equal(projects[0]?.observedLocations?.[0]?.project.id, concrete);
+  assert.equal(preferredLogicalLaunchLocation(projects[0]!, snapshot), null);
+  const sidebars: ReadonlyMap<typeof first, WorkbenchProjectThreadSidebars> = new Map([[first, {
+    projects: [{
+      projectId: concrete, revision: 1, error: null, freshness: "fresh",
+      entries: [{
+        entryKind: "thread", title: "Observed thread", activityAt: 1,
+        identity: { harness: "codex", threadId: WorkbenchThreadIdSchema.parse("observed-thread") },
+        lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+        metadata: { archived: false, pinned: false, snoozed: false },
+      }],
+    }],
+  }]]);
+  const rows = projectLogicalThreadRows(projects, sidebars, snapshot);
+  assert.equal(rows[0]?.entry.entryKind, "thread");
+  assert.equal(rows[0]?.observedOnly, true);
 });

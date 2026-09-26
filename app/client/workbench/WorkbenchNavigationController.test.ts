@@ -15,6 +15,7 @@ import {
 import {
   createHomeRoute,
   createLogicalProjectRoute,
+  createLogicalThreadRoute,
   type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import type {
@@ -94,7 +95,6 @@ function draft(): WorkbenchThreadDraft {
 
 function createPorts(overrides: Partial<WorkbenchNavigationPorts> = {}): WorkbenchNavigationPorts {
   return {
-    activateThreadControllers: () => undefined,
     applyDraft: () => undefined,
     clearSelection: () => undefined,
     createDraft: () => undefined,
@@ -138,6 +138,83 @@ test("logical navigation uses its source route instead of legacy attached-projec
   assert.deepEqual(controller.getSnapshot().route, route);
 });
 
+test("one admitted draft session retargets between new and saved URLs without reopening", async () => {
+  const logicalId = "112f7e1e-81b6-4c30-bdc0-f83475981001";
+  const draftId = DraftIdSchema.parse("00000000-0000-4000-8000-000000000001");
+  const fresh = createLogicalThreadRoute(null, logicalId, null, { kind: "new" });
+  const saved = createLogicalThreadRoute(null, logicalId, null, { kind: "draft", draftId });
+  let opens = 0;
+  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
+    openLogicalRoute: async () => { opens++; return { ok: true }; },
+  }));
+  await controller.applyRoute(fresh);
+  assert.equal(controller.retargetDraftSession(saved, draftId), true);
+  assert.equal(controller.getSnapshot().phase, "ready");
+  assert.deepEqual(controller.getSnapshot().route, saved);
+  assert.equal(controller.retargetDraftSession(fresh, draftId), true);
+  assert.deepEqual(controller.getSnapshot().route, fresh);
+  assert.equal(controller.retargetDraftSession(saved, DraftIdSchema.parse("different")), false);
+  assert.equal(opens, 1);
+});
+
+test("a pending saved-route admission cannot replace a retargeted empty draft session", async () => {
+  const logicalId = "112f7e1e-81b6-4c30-bdc0-f83475981001";
+  const draftId = DraftIdSchema.parse("00000000-0000-4000-8000-000000000001");
+  const fresh = createLogicalThreadRoute(null, logicalId, null, { kind: "new" });
+  const saved = createLogicalThreadRoute(null, logicalId, null, { kind: "draft", draftId });
+  const started = deferred<void>();
+  const late = deferred<WorkbenchRouteLoadResult>();
+  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
+    openLogicalRoute: async route => {
+      if (route.threadTarget?.kind !== "draft") return { ok: true };
+      started.resolve();
+      return await late.promise;
+    },
+  }));
+  await controller.applyRoute(fresh);
+  const opening = controller.applyRoute(saved);
+  await started.promise;
+  assert.equal(controller.getSnapshot().phase, "loading");
+  assert.equal(controller.retargetDraftSession(fresh, draftId), true);
+  assert.equal(controller.getSnapshot().phase, "ready");
+  late.resolve({ ok: false, error: "The deleted draft cannot open." });
+  assert.deepEqual(await opening, { ok: false });
+  assert.equal(controller.getSnapshot().phase, "ready");
+  assert.equal(controller.getSnapshot().error, null);
+  assert.deepEqual(controller.getSnapshot().route, fresh);
+});
+
+test("a verified empty draft session can recover a failed saved route or retain its current route", async () => {
+  const logicalId = "112f7e1e-81b6-4c30-bdc0-f83475981001";
+  const draftId = DraftIdSchema.parse("00000000-0000-4000-8000-000000000001");
+  const fresh = createLogicalThreadRoute(null, logicalId, null, { kind: "new" });
+  const saved = createLogicalThreadRoute(null, logicalId, null, { kind: "draft", draftId });
+  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
+    openLogicalRoute: async () => ({ ok: true }),
+  }));
+  await controller.applyRoute(fresh);
+  controller.rejectRoute(saved, "The deleted draft cannot open.");
+  assert.equal(controller.retargetDraftSession(fresh, draftId), true);
+  assert.equal(controller.getSnapshot().phase, "ready");
+  assert.equal(controller.getSnapshot().error, null);
+  assert.equal(controller.retargetDraftSession(fresh, draftId), true);
+  assert.deepEqual(controller.getSnapshot().route, fresh);
+});
+
+test("a rejected route intent exposes failure without clearing the current selection", () => {
+  let clears = 0;
+  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
+    clearSelection: () => { clears++; },
+  }));
+  const route = threadRoute("blocked");
+  assert.deepEqual(controller.rejectRoute(route, "Project identity is unavailable."), {
+    ok: false, error: "Project identity is unavailable.",
+  });
+  assert.equal(controller.getSnapshot().phase, "failed");
+  assert.deepEqual(controller.getSnapshot().route, route);
+  assert.equal(clears, 0);
+});
+
 test("overlapping thread opens publish only the latest route", async () => {
   const reads = new Map<string, ReturnType<typeof deferred<WorkbenchRouteLoadResult>>>();
   const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
@@ -150,6 +227,8 @@ test("overlapping thread opens publish only the latest route", async () => {
 
   const first = controller.applyRoute(threadRoute("first"));
   const firstRead = await waitForRead(reads, "first");
+  assert.equal(controller.getSnapshot().phase, "loading",
+    "the route owner must expose a pending read instead of relying on a skeleton");
   const second = controller.applyRoute(threadRoute("second"));
   const secondRead = await waitForRead(reads, "second");
   firstRead.resolve({ ok: true });
@@ -197,11 +276,24 @@ test("failed thread opens publish to the exact current owner", async () => {
   const result = await controller.applyRoute(threadRoute("failed"));
 
   assert.deepEqual(result, { error: "transcript unavailable", ok: false });
+  assert.equal(controller.getSnapshot().phase, "failed");
+  assert.equal(controller.getSnapshot().error, "transcript unavailable");
   assert.deepEqual(failures, [{
     error: "transcript unavailable",
     projectId: "project",
     threadId: "failed",
   }]);
+});
+
+test("navigation guard failures become owned route failures", async () => {
+  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
+    guardNavigation: async () => { throw new Error("draft save failed"); },
+  }));
+  assert.deepEqual(await controller.applyRoute(threadRoute("guarded")), {
+    error: "draft save failed", ok: false,
+  });
+  assert.equal(controller.getSnapshot().phase, "failed");
+  assert.equal(controller.getSnapshot().error, "draft save failed");
 });
 
 test("project aliases become internal canonical scope without a public redirect", async () => {

@@ -6,6 +6,7 @@
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 import {
+  useMemo,
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -23,7 +24,6 @@ import {
   type WorkbenchThreadRowDragPayload,
 } from "../../workbench/layout/workbench-drag";
 import {
-  findWorkbenchThreadFolder,
   getWorkbenchThreadDisplayKey,
   getWorkbenchThreadFolderKey,
   projectWorkbenchThreadDisplaySection,
@@ -101,11 +101,14 @@ export default function WorkbenchThreadList({
   allowMainPanelDrop = false,
   attentionLabelsByThreadId = {},
   autoFocusFolderId = null,
+  canCreateThread = true,
   createThreadLabel = "Create new thread",
   currentTarget,
   displayOrder = {},
   getThreadContextMenu,
   entries,
+  entryProjectId,
+  isEntryReadOnly,
   getThreadHref,
   activeDragPayload = null,
   nowMs = Date.now(),
@@ -126,10 +129,13 @@ export default function WorkbenchThreadList({
   allowMainPanelDrop?: boolean;
   attentionLabelsByThreadId?: Record<string, string | undefined>;
   autoFocusFolderId?: string | null;
+  canCreateThread?: boolean;
   createThreadLabel?: string;
   currentTarget: WorkbenchThreadTarget | null;
   displayOrder?: WorkbenchThreadDisplayOrder;
   entries: WorkbenchThreadSidebarEntry[];
+  entryProjectId?: (entry: WorkbenchThreadSidebarEntry) => ProjectId;
+  isEntryReadOnly?: (entry: WorkbenchThreadSidebarEntry) => boolean;
   getThreadHref: (target: WorkbenchThreadTarget, ownerProjectId?: string) => string | undefined;
   getThreadContextMenu?: (entry: WorkbenchThreadSidebarEntry, ownerProjectId: ProjectId, folderScope?: "pinned" | "project") => WorkbenchContextMenuDefinition | null;
   activeDragPayload?: WorkbenchDragPayload | null;
@@ -162,6 +168,10 @@ export default function WorkbenchThreadList({
     settledItems: currentSettledItems,
     snoozedItems: currentSnoozedItems,
   });
+  const foldersByThreadKey = useMemo(() => new Map(
+    (placement.displayOrder.folders ?? []).flatMap(folder =>
+      folder.threadKeys.map(key => [key, folder] as const)),
+  ), [placement.displayOrder]);
   const pinnedItems = mergeThreadDisplayItems(placement.pinnedItems, entries);
   const mainEntries = mergeContextMenuPlacementEntries(
     placement.groupedEntries.mainEntries,
@@ -221,13 +231,15 @@ export default function WorkbenchThreadList({
   ) => {
     const index = navigableEntries.indexOf(entry);
     const target = targetForEntry(entry);
+    const ownerProjectId = entryProjectId?.(entry) ?? projectId;
+    const readOnly = isEntryReadOnly?.(entry) ?? false;
     const selected = isWorkbenchThreadTargetSelected(target, currentTarget);
     const displayKey = getWorkbenchThreadDisplayKey(entry);
     const frozenSection = placementSection
       ?? reorderSection
       ?? (entry.entryKind !== "subagent" && entry.metadata.pinned ? "pinned" : "main");
     const dragSection: WorkbenchThreadDragSection = frozenSection === "archived" ? "main" : frozenSection;
-    const folder = reorderSection ? findWorkbenchThreadFolder(placement.displayOrder, displayKey) : null;
+    const folder = reorderSection ? foldersByThreadKey.get(displayKey) ?? null : null;
     const targetIdentity = entry.entryKind === "thread" ? entry.identity : null;
     const targetReady = entry.entryKind === "thread"
       && entry.lifecycle.kind === "completed"
@@ -240,7 +252,7 @@ export default function WorkbenchThreadList({
       && (reorderSection !== "settled" || activeDragPayload.section === "settled"),
     );
     const archived = frozenSection === "archived";
-    const dragTargets = archived ? null : (
+    const dragTargets = archived || readOnly ? null : (
       <WorkbenchThreadDragTargets
         activePayload={activeDragPayload}
         folderLabel={folder ? `add to ${folder.title}` : "create folder"}
@@ -263,19 +275,19 @@ export default function WorkbenchThreadList({
       const sharedProps = {
         anchorRef: (node: HTMLAnchorElement | null) => { if (node) rowRefs.current.set(displayKey, node); else rowRefs.current.delete(displayKey); },
         attentionLabel: entry.entryKind === "draft" ? "" : attentionLabelsByThreadId[entry.identity.threadId],
-        contextMenu: getThreadContextMenu?.(entry, projectId, "project") ?? null,
+        contextMenu: readOnly ? null : getThreadContextMenu?.(entry, ownerProjectId, "project") ?? null,
         dimmedOverride,
         entry,
         isShiftPressed,
         nowMs,
-        onAction: (action: import("./thread-row-actions").ThreadRowAction) => onAction?.(entry, action, projectId),
+        onAction: (action: import("./thread-row-actions").ThreadRowAction) => onAction?.(entry, action, ownerProjectId),
         onActivate: (activatedTarget: WorkbenchThreadTarget) => onOpenThread(activatedTarget),
         onDragStart: (event: import("react").DragEvent<HTMLAnchorElement>) => onDragStart(event),
         onKeyDown: (event: ReactKeyboardEvent<HTMLAnchorElement>) => moveFocus(event, index),
         onPointerDown: (event: import("react").PointerEvent<HTMLAnchorElement>) => onPointerDown(event),
-        projectId,
+        projectId: ownerProjectId,
         selected,
-        showActions: true,
+        showActions: !readOnly,
         showPinPriorityIcon: showPinnedThreadsInMain,
         tooltipDetails: renderThreadTooltipDetails?.(entry),
       };
@@ -299,8 +311,8 @@ export default function WorkbenchThreadList({
         />
       );
     };
-    const rowDragEnabled = entry.entryKind !== "subagent" && !archived;
-    const dropTargetIds = rowDragEnabled
+    const rowDragEnabled = entry.entryKind !== "subagent" && !archived && !readOnly;
+    const dropTargetIds = readOnly ? [] : rowDragEnabled
       ? [
           ...(onMove ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID] : []),
           ...(onSetPriority ? [WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID] : []),
@@ -389,7 +401,7 @@ export default function WorkbenchThreadList({
             key={`tooltip:${getWorkbenchThreadDisplayKey(entry)}`}
             nowMs={nowMs}
             onActivate={onOpenThread}
-            projectId={projectId}
+            projectId={entryProjectId?.(entry) ?? projectId}
             showTooltip={false}
             tabIndex={-1}
           />
@@ -476,7 +488,7 @@ export default function WorkbenchThreadList({
   ) : null;
   return (
     <DropTargetBoundary className="space-y-1">
-      <a
+      {canCreateThread ? <a
         href={getThreadHref({ kind: "new" })}
         title={createThreadLabel}
         aria-current={blankThreadSelected ? "page" : undefined}
@@ -498,7 +510,7 @@ export default function WorkbenchThreadList({
           <SparkleIcon className="shrink-0" size={16} />
           <span className={`${workbenchThreadListLabelClassName}${blankThreadSelected ? " font-semibold" : ""}`}>{createThreadLabel}</span>
         </span>
-      </a>
+      </a> : <div className="px-2 py-2 text-[0.78rem] text-fg/muted">Waiting for project identities</div>}
       <div role="tablist" aria-label="Threads" className="min-w-0">
         {showPinnedThreadsInMain
           ? pinnedItems.length

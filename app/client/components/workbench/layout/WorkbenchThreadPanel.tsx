@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useEffect, useRef, useState, type ComponentProps, type PointerEvent } from "react";
+import { useContext, useEffect, useRef, useState, type ComponentProps, type PointerEvent } from "react";
 
 import type { ThreadPayload, ThreadSummary } from "workbench-shared/types";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
@@ -12,7 +12,7 @@ import ThreadScrollViewport from "../thread-view/ThreadScrollViewport";
 import ThreadView from "../thread-view/ThreadView";
 import { useWorkbenchThread } from "../use-workbench-thread";
 import { useWorkbenchClientController } from "../workbench-client-context";
-import WorkbenchDaemonClientContext, { WorkbenchDaemonAssetOriginContext, useWorkbenchDaemonAssetOrigin, useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
+import WorkbenchDaemonClientContext, { WorkbenchDaemonAssetOriginContext, useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
 import WorkbenchWorkingTreeProvider from "../git/WorkbenchWorkingTreeProvider";
 import WorkbenchComposerProfileProvider from "../WorkbenchComposerProfileProvider";
 import type WorkbenchComposerProfileController from "../../../workbench/state/WorkbenchComposerProfileController";
@@ -68,7 +68,7 @@ export default function WorkbenchThreadPanel ({
 }: WorkbenchThreadPanelProps) {
   const client = useWorkbenchClientController();
   const outerDaemon = useWorkbenchDaemonClient();
-  const outerAssetOrigin = useWorkbenchDaemonAssetOrigin();
+  const outerAssetSource = useContext(WorkbenchDaemonAssetOriginContext);
   const threadContext = threadViewProps.threadTarget?.kind === "provider"
     || threadViewProps.threadTarget?.kind === "subagent"
     ? client.mounted?.threadContextFor(threadId) : null;
@@ -203,12 +203,10 @@ export default function WorkbenchThreadPanel ({
             || location) && !panelContext
             ? <p className="py-6 text-sm text-fg/muted">
               Thread owner unavailable.
-              {ownerMetadata ? ` ${ownerMetadata.hostname} \u00b7 ${ownerMetadata.rootPath}` : null}
+              {ownerMetadata ? ` ${ownerMetadata.displayPath}` : null}
             </p>
             : <WorkbenchDaemonClientContext.Provider value={panelContext?.daemon ?? outerDaemon}>
-            <WorkbenchDaemonAssetOriginContext.Provider value={{
-              origin: panelContext ? panelContext.assetOrigin : outerAssetOrigin ?? null,
-            }}>
+            <WorkbenchDaemonAssetOriginContext.Provider value={panelContext?.assetSource ?? outerAssetSource}>
               <WorkbenchWorkingTreeProvider
                 projectId={panelContext?.project.id ?? threadViewProps.projectId}
                 sourceDaemon={panelContext?.daemon ?? outerDaemon}
@@ -221,8 +219,8 @@ export default function WorkbenchThreadPanel ({
                 projectRootPath={panelContext?.project.rootPath ?? threadViewProps.projectRootPath}
                 projectRoots={panelContext?.project.roots ?? threadViewProps.projectRoots}
                 threadOwnerContent={ownerMetadata
-                  ? <span className="truncate font-mono text-fg/muted">
-                    {ownerMetadata.hostname} {" \u00b7 "} {ownerMetadata.rootPath}
+                  ? <span className="truncate text-fg/muted" title={`${ownerMetadata.hostname}: ${ownerMetadata.rootPath}`}>
+                    {ownerMetadata.displayPath}
                   </span> : threadViewProps.threadOwnerContent}
                 contained
                 fontSizeRem={effectiveFontSizeRem}

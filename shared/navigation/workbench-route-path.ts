@@ -5,6 +5,7 @@
  */
 
 export function encodeWorkbenchRoutePath(value: string) {
+  if (value.includes("://")) return encodeURIComponent(value);
   return value
     .split("/")
     .filter((segment) => segment.length > 0)

@@ -10,11 +10,10 @@ import {
   PresentationMutationSchema, PresentationSnapshotSchema,
 } from "workbench-shared/state/workbench-presentation-state";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
-import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import { ProjectIdSchema, type DaemonId, type LogicalProjectId, type ProjectId } from "workbench-shared/workbench/identity";
+import type { LogicalProjectId } from "workbench-shared/workbench/identity";
 import {
   createWorkbenchThreadFolder, getWorkbenchThreadDisplayKey, moveWorkbenchThreadDisplayItem,
-  projectWorkbenchThreadDisplaySection, renameWorkbenchThreadFolder, WorkbenchThreadDisplayOrderSchema,
+  projectWorkbenchThreadDisplaySection, renameWorkbenchThreadFolder,
 } from "workbench-shared/workbench/thread/thread-display-order";
 import { projectLogicalPinnedDisplayOrder, projectLogicalThreadDisplayOrder } from "../WorkbenchProjectProjection";
 import {
@@ -22,12 +21,9 @@ import {
   moveThreadDisplayLayoutItem, projectThreadDisplayLayoutSection, renameThreadDisplayFolder,
 } from "workbench-shared/workbench/thread/thread-display-layout";
 import { getThreadSidebarGroup } from "workbench-shared/workbench/thread/thread-state";
-import type { WorkbenchProjectThreadSidebars, WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
-import { WorkbenchComposerProfileSelectionSchema } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadDisplayOrder } from "workbench-shared/workbench/thread/thread-display-order";
 import {
-  getWorkbenchHomeThreadKey, projectWorkbenchHomeThreadList, resolveWorkbenchHomeThreadSectionKeys,
-  WorkbenchHomeThreadDisplayOrderSchema,
+  getWorkbenchHomeThreadKey, resolveWorkbenchHomeThreadSectionKeys,
   type WorkbenchHomeThreadDisplayOrder,
 } from "workbench-shared/workbench/thread/home-thread-display-order";
 import { getWorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
@@ -46,6 +42,8 @@ export default class WorkbenchPresentationClient {
   private readonly listeners = new Set<() => void>();
   private readonly requests = new Set<AbortController>();
   private closed = false;
+  private notifiedRevision = -1;
+  private notificationRefresh: Promise<void> | null = null;
 
   constructor(private readonly options: { fetcher?: typeof fetch } = {}) {}
 
@@ -54,6 +52,24 @@ export default class WorkbenchPresentationClient {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   };
+
+  noticeRevision(revision: number) {
+    if (this.closed || revision <= (this.state.data?.revision ?? -1)) return;
+    this.notifiedRevision = Math.max(this.notifiedRevision, revision);
+    if (this.notificationRefresh) return;
+    const operation = this.drainRevisions();
+    const settled = operation.finally(() => {
+      if (this.notificationRefresh === settled) this.notificationRefresh = null;
+    });
+    this.notificationRefresh = settled;
+  }
+
+  private async drainRevisions() {
+    while (!this.closed && this.notifiedRevision > (this.state.data?.revision ?? -1)) {
+      try { await this.refresh(); }
+      catch { return; } // refresh retains the bounded failure in presentation state.
+    }
+  }
 
   draft(id: string) {
     return this.state.data?.drafts.find(draft => draft.id === id) ?? null;
@@ -343,284 +359,6 @@ export default class WorkbenchPresentationClient {
     signal?.throwIfAborted();
     this.accept(snapshot);
     return url;
-  }
-
-  async importProject(daemonId: DaemonId, projectId: ProjectId, logicalProjectId: LogicalProjectId,
-    daemon: WorkbenchDaemonClient, signal?: AbortSignal) {
-    let cursor: string | null = null;
-    do {
-      signal?.throwIfAborted();
-      const page = await daemon.presentationExport.project({ projectId, cursor, limit: 10 });
-      signal?.throwIfAborted();
-      for (const source of page.drafts) {
-        signal?.throwIfAborted();
-        const mapped = this.state.data?.sourceMappings.find(item =>
-          item.daemonId === daemonId && item.sourceKind === "draft" && item.sourceId === source.draftId);
-        const id = mapped?.targetId ?? crypto.randomUUID();
-        const target = { daemonId, projectId };
-        const prepared: Array<{ id: string; url: string; mediaType: string; contentHash: string }> = [];
-        try {
-          for (const attachment of source.attachments) {
-            signal?.throwIfAborted();
-            if (attachment.kind === "inline") {
-              const chunks: Uint8Array[] = [];
-              let offset = 0;
-              do {
-                const part = await daemon.presentationExport.attachment({
-                  projectId, draftId: source.draftId, attachmentId: attachment.id, offset,
-                });
-                signal?.throwIfAborted();
-                if (part.byteLength !== attachment.byteLength
-                  || part.contentHash !== attachment.contentHash
-                  || part.mediaType !== attachment.mediaType) {
-                  throw new Error("Legacy draft image changed during transfer.");
-                }
-                chunks.push(Uint8Array.from(atob(part.bytes), character => character.charCodeAt(0)));
-                if (part.nextOffset !== null && part.nextOffset <= offset) {
-                  throw new Error("Legacy draft image transfer did not advance.");
-                }
-                offset = part.nextOffset ?? -1;
-              } while (offset >= 0);
-              const bytes = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
-              let copied = 0;
-              for (const chunk of chunks) { bytes.set(chunk, copied); copied += chunk.length; }
-              const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-              const hash = [...digest].map(byte => byte.toString(16).padStart(2, "0")).join("");
-              if (bytes.length !== attachment.byteLength || hash !== attachment.contentHash) {
-                throw new Error("Legacy draft image content did not match its source.");
-              }
-              prepared.push({
-                id: attachment.id, url: URL.createObjectURL(new Blob([bytes], { type: attachment.mediaType })),
-                mediaType: attachment.mediaType, contentHash: attachment.contentHash,
-              });
-            } else {
-              const response = await (this.options.fetcher ?? fetch)(attachment.url, { signal });
-              signal?.throwIfAborted();
-              if (!response.ok) throw new Error("A legacy draft image URL is unavailable.");
-              const bytes = new Uint8Array(await response.arrayBuffer());
-              signal?.throwIfAborted();
-              const mediaType = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
-              if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mediaType)) {
-                throw new Error("A legacy draft image type is unsupported.");
-              }
-              const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-              prepared.push({
-                id: attachment.id, url: URL.createObjectURL(new Blob([bytes], { type: mediaType })),
-                mediaType, contentHash: [...digest].map(byte => byte.toString(16).padStart(2, "0")).join(""),
-              });
-            }
-          }
-          signal?.throwIfAborted();
-          await this.mutate({
-            kind: "importDraft", daemonId, sourceId: source.draftId,
-            sourceRevision: page.sourceRevision,
-            pinned: source.pinned, snoozed: source.snoozed,
-            draft: {
-              id, logicalProjectId, target, prompt: source.prompt,
-              selection: source.profileId
-                ? { kind: "profile", profileId: source.profileId, settings: source.composerSettings }
-                : { kind: "custom", settings: source.composerSettings },
-              updatedAt: source.updatedAt,
-            },
-            attachments: prepared.map(item => ({
-              id: item.id, mediaType: item.mediaType, contentHash: item.contentHash,
-            })),
-          }, signal);
-          signal?.throwIfAborted();
-          if (this.draft(id)?.phase !== "importing") continue;
-          for (const attachment of prepared) {
-            signal?.throwIfAborted();
-            if (this.draft(id)?.attachments.some(item => item.id === attachment.id)) continue;
-            await this.uploadAttachment(id, attachment.id, attachment.url, signal);
-          }
-          signal?.throwIfAborted();
-          await this.mutate({
-            kind: "finishImportDraft", daemonId, sourceId: source.draftId,
-            draftId: id, sourceRevision: page.sourceRevision,
-          }, signal);
-        } finally {
-          for (const attachment of prepared) URL.revokeObjectURL(attachment.url);
-        }
-      }
-      cursor = page.nextCursor;
-    } while (cursor);
-  }
-
-  async importProjectLayout(daemonId: DaemonId, projectId: ProjectId,
-    logicalProjectId: LogicalProjectId, daemon: WorkbenchDaemonClient,
-    sidebar: WorkbenchThreadSidebarSnapshot, signal?: AbortSignal) {
-    const { value, sourceRevision } = await this.readLegacyLayout(daemon, { scope: "project", projectId }, signal);
-    const parsed = z.object({
-      displayOrder: WorkbenchThreadDisplayOrderSchema,
-      newThreadProfile: WorkbenchComposerProfileSelectionSchema.nullable().optional(),
-    }).strict().safeParse(value);
-    if (!parsed.success) {
-      reportClientSchemaError("Rejected legacy project layout export", parsed.error);
-      throw new Error("Legacy project layout is invalid.");
-    }
-    const folders: Extract<PresentationMutation, { kind: "importLayout" }>["folders"] = [];
-    const members: Extract<PresentationMutation, { kind: "importLayout" }>["members"] = [];
-    const sourceId = `project:${projectId}`;
-    const mappedId = (kind: "folder" | "member", key: string) =>
-      this.state.data?.sourceMappings.find(item => item.daemonId === daemonId
-        && item.sourceKind === kind && item.sourceId === key)?.targetId ?? crypto.randomUUID();
-    for (const section of ["pinned", "snoozed", "settled"] as const) {
-      for (const item of projectWorkbenchThreadDisplaySection(sidebar.entries, parsed.data.displayOrder, section)) {
-        const folderSourceId = item.itemKind === "folder"
-          ? `${sourceId}:folder:${item.folder.folderId}` : null;
-        if (item.itemKind === "folder") folders.push({
-          id: mappedId("folder", folderSourceId!), sourceId: folderSourceId!,
-          scope: "project", logicalProjectId, title: item.folder.title, position: folders.length,
-        });
-        const entries = item.itemKind === "folder" ? item.entries : [item.entry];
-        for (const entry of entries) {
-          const memberSourceId = `${sourceId}:${section}:${getWorkbenchThreadDisplayKey(entry)}`;
-          members.push({
-            id: mappedId("member", memberSourceId), sourceId: memberSourceId,
-            scope: "project", logicalProjectId, folderId: folderSourceId,
-            kind: entry.entryKind === "draft" ? "draft" : "thread",
-            draftId: entry.entryKind === "draft" ? entry.draft.draftId : null,
-            thread: entry.entryKind === "draft" ? null : {
-              location: { daemonId, projectId }, threadId: entry.identity.threadId,
-            },
-            position: members.length,
-          });
-        }
-      }
-    }
-    signal?.throwIfAborted();
-    await this.mutate({
-      kind: "importLayout", daemonId, sourceId,
-      sourceRevision, scope: "project", logicalProjectId, folders, members,
-    }, signal);
-  }
-
-  async importHomeLayout(daemonId: DaemonId, daemon: WorkbenchDaemonClient,
-    sidebars: WorkbenchProjectThreadSidebars, signal?: AbortSignal) {
-    const { value, sourceRevision } = await this.readLegacyLayout(daemon, { scope: "home" }, signal);
-    const parsed = WorkbenchHomeThreadDisplayOrderSchema.safeParse(value);
-    if (!parsed.success) {
-      reportClientSchemaError("Rejected legacy home layout export", parsed.error);
-      throw new Error("Legacy home layout is invalid.");
-    }
-    const layout = projectWorkbenchHomeThreadList(sidebars, parsed.data);
-    const members: Extract<PresentationMutation, { kind: "importLayout" }>["members"] = [];
-    const mappedId = (key: string) => this.state.data?.sourceMappings.find(item =>
-      item.daemonId === daemonId && item.sourceKind === "member" && item.sourceId === key)
-      ?.targetId ?? crypto.randomUUID();
-    for (const section of ["pinned", "snoozed", "settled"] as const) {
-      const items = section === "pinned" ? layout.pinnedItems
-        : section === "snoozed" ? layout.snoozedItems : layout.settledItems;
-      for (const item of items) {
-        for (const { entry, projectId } of item.itemKind === "folder" ? item.entries : [item.entry]) {
-          const key = `home:${getWorkbenchHomeThreadKey(projectId, entry)}`;
-          members.push({
-            id: mappedId(key), sourceId: key, scope: "home", logicalProjectId: null,
-            folderId: null, position: members.length,
-            kind: entry.entryKind === "draft" ? "draft" : "thread",
-            draftId: entry.entryKind === "draft" ? entry.draft.draftId : null,
-            thread: entry.entryKind === "draft" ? null : {
-              location: { daemonId, projectId: ProjectIdSchema.parse(projectId) },
-              threadId: entry.identity.threadId,
-            },
-          });
-        }
-      }
-    }
-    signal?.throwIfAborted();
-    await this.mutate({
-      kind: "importLayout", daemonId, sourceId: "home", sourceRevision,
-      scope: "home", logicalProjectId: null, folders: [], members,
-    }, signal);
-  }
-
-  async importPinnedLayout(daemonId: DaemonId, daemon: WorkbenchDaemonClient,
-    sidebars: WorkbenchProjectThreadSidebars, signal?: AbortSignal) {
-    const { value, sourceRevision } = await this.readLegacyLayout(daemon, { scope: "pinned" }, signal);
-    const parsed = WorkbenchThreadDisplayOrderSchema.safeParse(value);
-    if (!parsed.success) {
-      reportClientSchemaError("Rejected legacy pinned layout export", parsed.error);
-      throw new Error("Legacy pinned layout is invalid.");
-    }
-    const entries = sidebars.projects.flatMap(sidebar => sidebar.entries.flatMap(entry =>
-      entry.entryKind !== "subagent" && getThreadSidebarGroup(entry) === "pinned"
-        ? [{ entry, projectId: sidebar.projectId }] : []));
-    const layoutEntries = entries.map(({ entry, projectId }) => ({
-      key: getProjectQualifiedThreadDisplayKey(projectId, getWorkbenchThreadDisplayKey(entry)),
-      section: "pinned" as const,
-    }));
-    const items = projectThreadDisplayLayoutSection(
-      entries, layoutEntries, parsed.data, "pinned",
-    );
-    const folders: Extract<PresentationMutation, { kind: "importLayout" }>["folders"] = [];
-    const members: Extract<PresentationMutation, { kind: "importLayout" }>["members"] = [];
-    const mappedId = (kind: "folder" | "member", key: string) =>
-      this.state.data?.sourceMappings.find(item => item.daemonId === daemonId
-        && item.sourceKind === kind && item.sourceId === key)?.targetId ?? crypto.randomUUID();
-    for (const item of items) {
-      const folderSourceId = item.itemKind === "folder" ? `pinned:folder:${item.folder.folderId}` : null;
-      if (item.itemKind === "folder") folders.push({
-        id: mappedId("folder", folderSourceId!), sourceId: folderSourceId!,
-        scope: "pinned", logicalProjectId: null, title: item.folder.title, position: folders.length,
-      });
-      for (const { entry, projectId } of item.itemKind === "folder" ? item.entries : [item.entry]) {
-        const key = `pinned:${getProjectQualifiedThreadDisplayKey(projectId, getWorkbenchThreadDisplayKey(entry))}`;
-        members.push({
-          id: mappedId("member", key), sourceId: key,
-          scope: "pinned", logicalProjectId: null, folderId: folderSourceId,
-          position: members.length,
-          kind: entry.entryKind === "draft" ? "draft" : "thread",
-          draftId: entry.entryKind === "draft" ? entry.draft.draftId : null,
-          thread: entry.entryKind === "draft" ? null : {
-            location: { daemonId, projectId }, threadId: entry.identity.threadId,
-          },
-        });
-      }
-    }
-    signal?.throwIfAborted();
-    await this.mutate({
-      kind: "importLayout", daemonId, sourceId: "pinned", sourceRevision,
-      scope: "pinned", logicalProjectId: null, folders, members,
-    }, signal);
-  }
-
-  private async readLegacyLayout(daemon: WorkbenchDaemonClient,
-    scope: { scope: "project"; projectId: ProjectId } | { scope: "home" } | { scope: "pinned" },
-    signal?: AbortSignal) {
-    const chunks: Uint8Array[] = [];
-    let offset = 0;
-    let sourceRevision: number | null = null;
-    let totalBytes: number | null = null;
-    do {
-      signal?.throwIfAborted();
-      const chunk = await daemon.presentationExport.layout({
-        ...scope, sourceRevision, offset,
-      });
-      signal?.throwIfAborted();
-      if (sourceRevision !== null && chunk.sourceRevision !== sourceRevision) {
-        throw new Error("Legacy layout changed during transfer.");
-      }
-      if (totalBytes !== null && chunk.totalBytes !== totalBytes) {
-        throw new Error("Legacy layout length changed during transfer.");
-      }
-      sourceRevision = chunk.sourceRevision;
-      totalBytes = chunk.totalBytes;
-      chunks.push(Uint8Array.from(atob(chunk.bytes), character => character.charCodeAt(0)));
-      if (chunk.nextOffset !== null && chunk.nextOffset <= offset) {
-        throw new Error("Legacy layout transfer did not advance.");
-      }
-      offset = chunk.nextOffset ?? -1;
-    } while (offset >= 0);
-    const total = chunks.reduce((size, chunk) => size + chunk.length, 0);
-    if (total !== totalBytes) throw new Error("Legacy layout transfer is incomplete.");
-    const bytes = new Uint8Array(total);
-    let copied = 0;
-    for (const chunk of chunks) { bytes.set(chunk, copied); copied += chunk.length; }
-    try {
-      return { value: JSON.parse(new TextDecoder().decode(bytes)) as unknown,
-        sourceRevision: sourceRevision ?? 0 };
-    }
-    catch { throw new Error("Legacy layout is malformed."); }
   }
 
   async refresh(): Promise<PresentationSnapshot> {

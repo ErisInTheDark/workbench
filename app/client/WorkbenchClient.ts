@@ -15,13 +15,15 @@ import WorkbenchPresentationClient from "./workbench/state/WorkbenchPresentation
 import WorkbenchDaemonSession from "./workbench/WorkbenchDaemonSession";
 import WorkbenchDaemonSessions from "./workbench/WorkbenchDaemonSessions";
 import WorkbenchThreadRouter from "./workbench/WorkbenchThreadRouter";
-import { projectLogicalProjects, projectLogicalSummaries, projectLogicalThreadRows } from "./workbench/WorkbenchProjectProjection";
+import WorkbenchProjectFileIndexStore from "./workbench/project/WorkbenchProjectFileIndexStore";
+import { preferredLogicalLaunchLocation, projectLogicalProjects, projectLogicalSummaries, projectLogicalThreadRows } from "./workbench/WorkbenchProjectProjection";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getCurrentTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type {
     ExplorerSnapshot,
     DeleteFileResponse,
     WorkbenchProjectOption,
+    WorkbenchLogicalProjectSummary,
     ThreadPayload,
     WorkbenchBindings,
     WorkbenchControls,
@@ -53,6 +55,7 @@ import {
 import type { WorkbenchMosaicNode } from "workbench-shared/workbench/navigation/workbench-mosaic-route";
 import FileDraftStore from "./workbench/state/FileDraftStore";
 import WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController";
+import type { ClientDraftIdentity } from "./workbench/state/draft-persistence";
 import type ThreadTextPresentationController from "./workbench/thread/ThreadTextPresentationController";
 import LifecycleScope from "./workbench/state/LifecycleScope";
 import SessionState from "./workbench/state/SessionState";
@@ -66,7 +69,7 @@ import type { WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFileP
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./workbench/WorkbenchThreadClient";
 import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, type DaemonId } from "workbench-shared/workbench/identity";
-import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import type { ProjectLocationReference, WorkbenchProjectLocationsPayload } from "workbench-shared/workbench/project/project-location";
 import WorkbenchThreadRuntimeStoreController from "./workbench/WorkbenchThreadRuntimeStore";
 import WorkbenchNavigationController from "./workbench/WorkbenchNavigationController";
 import WorkbenchConnectionRecoveryController, { type WorkbenchConnectionContinuity } from "./workbench/WorkbenchConnectionRecoveryController";
@@ -104,6 +107,13 @@ export interface MountedWorkbenchClient {
   networkClient?: WorkbenchNetworkClient;
   presentationClient?: WorkbenchPresentationClient;
   daemonSessions?: WorkbenchDaemonSessions;
+  navigation: WorkbenchNavigationController;
+  startup: {
+    getSnapshot: () => { phase: "loading" | "ready" | "failed"; error: string | null };
+    subscribe: (listener: () => void) => () => void;
+    start: () => Promise<void>;
+    retry: () => Promise<void>;
+  };
   voice?: WorkbenchVoiceClient;
   getThreadController: (...args: Parameters<ReturnType<typeof WorkbenchThreadClient>["getThreadController"]>) =>
     ReturnType<ReturnType<typeof WorkbenchThreadClient>["getThreadController"]> | null;
@@ -112,28 +122,38 @@ export interface MountedWorkbenchClient {
     projectId: string;
     hostname: string;
     rootPath: string;
+    displayPath: string;
   } | null;
+  threadDraftIdentityFor: (threadId: string) => ClientDraftIdentity | null;
   threadContextFor: (threadId: string) => {
     daemonId: DaemonId;
     daemon: WorkbenchDaemonClient;
     threads: ReturnType<typeof WorkbenchThreadClient>;
     project: WorkbenchProjectOption;
-    assetOrigin: string | null;
-    registrationId: string;
+    assetSource: { kind: "attached" } | { kind: "peer"; origin: string | null };
+    registrationId: string | null;
   } | null;
   launchContextFor: (location: ProjectLocationReference) => {
     daemonId: DaemonId;
     daemon: WorkbenchDaemonClient;
     threads: ReturnType<typeof WorkbenchThreadClient>;
     project: WorkbenchProjectOption;
-    assetOrigin: string | null;
+    assetSource: { kind: "attached" } | { kind: "peer"; origin: string | null };
   } | null;
   draftContextFor: (draftId: string) => ReturnType<MountedWorkbenchClient["launchContextFor"]>;
+  draftLocationFor: (draftId: string) => ProjectLocationReference | null;
+  projectFileIndexStore?: WorkbenchProjectFileIndexStore;
+  projectSourceErrors: {
+    getSnapshot: () => string;
+    subscribe: (listener: () => void) => () => void;
+  };
+  selectBrowseLocation: (logicalProjectId: string, location: ProjectLocationReference) => Promise<void>;
   controls: WorkbenchControls;
   dispose: () => void;
   threadRuntime: WorkbenchThreadRuntimeStore;
   threadSidebar: WorkbenchThreadSidebarStore;
   threadTextPresentation: ThreadTextPresentationController;
+  threadTextPresentationFor: (threadId: string) => ThreadTextPresentationController | null;
 }
 
 function readInitialEditorFontSize(controller?: WorkbenchClientStateController) {
@@ -213,6 +233,8 @@ export function areExplorerSnapshotsEquivalent(left: ExplorerSnapshot | null, ri
 
   return left.configuredDiscoveryRootPath === right.configuredDiscoveryRootPath
     && left.currentProjectId === right.currentProjectId
+    && left.browseLocation?.daemonId === right.browseLocation?.daemonId
+    && left.browseLocation?.projectId === right.browseLocation?.projectId
     && left.root === right.root
     && left.rootPath === right.rootPath
     && left.projectFileIndexId === right.projectFileIndexId
@@ -244,22 +266,44 @@ export function describeGlobalThreadStateOpenFailure(error: unknown) {
   return `Unable to open all-project threads through workbench/thread-state/global/open: ${message}`.slice(0, 500);
 }
 
-export async function WorkbenchClient(
+export function WorkbenchClient(
   bindings: WorkbenchBindings & {
     clientStateController?: WorkbenchClientStateController;
     dom?: WorkbenchDomSurfaces | null;
   } = {},
-): Promise<MountedWorkbenchClient> {
+): MountedWorkbenchClient {
   const { ...workbenchBindings } = bindings;
 
   const coordinatorLifecycle = new LifecycleScope();
   let explorerStateChangeScheduled = false;
   let lastEmittedExplorerSnapshot: ExplorerSnapshot | null = null;
   let reportStatusMessage = (_message: string) => {};
+  const reportBackgroundFailure = (summary: string, error: unknown) => {
+    const detail = (error instanceof Error ? error.message : "Unknown failure.")
+      .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 512);
+    console.warn(summary, detail);
+    reportStatusMessage(`${summary} ${detail}`);
+  };
   let networkClient: WorkbenchNetworkClient | undefined;
   let presentationClient: WorkbenchPresentationClient | undefined;
   let daemonSessions: WorkbenchDaemonSessions | undefined;
   let attachedSession: WorkbenchDaemonSession | undefined;
+  const projectSourceErrorListeners = new Set<() => void>();
+  const getProjectSourceError = () => [
+    attachedSession, ...(daemonSessions?.list() ?? []),
+  ].flatMap(session => {
+    const error = session?.getSnapshot().error;
+    return error ? [error] : [];
+  })
+    .slice(0, 3).join(" ").slice(0, 500);
+  const publishProjectSourceError = () => {
+    for (const listener of projectSourceErrorListeners) listener();
+  };
+  coordinatorLifecycle.addUnsubscribe(() => projectSourceErrorListeners.clear());
+  let startupSnapshot: ReturnType<MountedWorkbenchClient["startup"]["getSnapshot"]> = {
+    phase: "loading", error: null,
+  };
+  const startupListeners = new Set<() => void>();
   const initialRoute = workbenchBindings.initialRoute ?? createHomeRoute();
   let navigation: WorkbenchNavigationController;
   let coordinateAcceptedIntent: (event: WorkbenchAcceptedIntent) => Promise<void> = async (_event) => {
@@ -286,21 +330,21 @@ export async function WorkbenchClient(
   let unsubscribeActivePeer: (() => void) | null = null;
   let activeBrowsePeerSession: WorkbenchDaemonSession | null = null;
   let unsubscribeActiveBrowsePeer: (() => void) | null = null;
-  const appLifetime = new WorkbenchAppLifetimeClient({
+  const createAppLifetime = () => new WorkbenchAppLifetimeClient({
     available: available => threadClient.setAppAvailable(available),
     status: message => reportStatusMessage(message),
   });
+  threadClient.setAppAvailable(false);
+  let appLifetime = createAppLifetime();
   coordinatorLifecycle.addUnsubscribe(() => appLifetime.dispose());
-  try { await appLifetime.start(); }
-  catch (error) { threadClient.dispose(); coordinatorLifecycle.dispose(); throw error; }
   const daemon = new WorkbenchDaemonClient({
     onDisconnect: listener => threadClient.onDisconnect(listener),
     onNotification: (listener) => threadClient.onWorkbenchNotification(listener),
     onReconnect: (listener) => threadClient.onReconnect(listener),
     request: async (method, params) => await threadClient.requestWorkbench(method, params),
   });
-  const voice = new WorkbenchVoiceClient(daemon, `/assets/voice-capture.js?v=${frontendJavaScriptGeneration}`, workbenchBindings.clientStateController);
-  coordinatorLifecycle.addUnsubscribe(() => voice.dispose());
+  let voice: WorkbenchVoiceClient | undefined;
+  coordinatorLifecycle.addUnsubscribe(() => voice?.dispose());
   const threadIdentity = new ThreadIdentityController(async (request) => {
     const { data } = await daemon.threads.resolveIdentity(request);
     if (data) workbenchBindings.clientStateController?.rememberThreadIdentityAlias(data.projectId, request.threadId, data.threadId);
@@ -323,7 +367,7 @@ export async function WorkbenchClient(
   let activeProjectClient = projectClient;
   const threadRouter = new WorkbenchThreadRouter({
     presentation: () => presentationClient?.snapshot().data ?? null,
-    rows: () => getExplorerSnapshot().logicalThreads ?? [],
+    rows: () => getLogicalProjection()?.threads ?? [],
     daemons: () => {
       const attachedId = networkClient?.snapshot().snapshot?.daemon?.daemonId
         ?? workbenchBindings.clientStateController?.getSnapshot().registrations
@@ -332,10 +376,19 @@ export async function WorkbenchClient(
         ...(attachedId ? [{
           daemonId: DaemonIdSchema.parse(attachedId), daemon, threads: threadClient,
           ready: () => !coordinatorLifecycle.isDisposed,
+          prepare: async () => {
+            if (!attachedSession) return;
+            await attachedSession.start();
+            if (attachedSession.getSnapshot().phase !== "ready") await attachedSession.refresh();
+          },
         }] : []),
         ...(daemonSessions?.list().map(session => ({
           daemonId: session.getSnapshot().daemonId,
           daemon: session.daemon, threads: session.threads,
+          prepare: async () => {
+            await session.start();
+            if (session.getSnapshot().phase !== "ready") await session.refresh();
+          },
           ready: () => session.getSnapshot().phase === "ready"
             && daemonSessions?.get(session.getSnapshot().daemonId) === session,
         })) ?? []),
@@ -344,16 +397,23 @@ export async function WorkbenchClient(
     onWarning: message => reportStatusMessage(message),
   });
   coordinatorLifecycle.addUnsubscribe(() => threadRouter.dispose());
+  const projectFileIndexStore = new WorkbenchProjectFileIndexStore(async target => {
+    const source = threadRouter.sourceFor(target.daemonId);
+    if (!source) throw new Error("The thread's daemon is unavailable for file suggestions.");
+    return await source.daemon.projects.fileIndex({ projectId: target.projectId });
+  });
+  coordinatorLifecycle.addUnsubscribe(() => projectFileIndexStore.dispose());
   let threadSidebarSnapshot: WorkbenchThreadSidebarSnapshot | null = null;
   const threadSidebarClient = new ThreadSidebarClient({
     onChange: (snapshot) => {
+      const selectedThreadStateChanged = snapshot !== threadSidebarSnapshot;
       threadSidebarSnapshot = snapshot;
       daemonRuntime.acceptLegacy(snapshot?.reloadDirt ? {
         dirtyScopes: snapshot.reloadDirt.dirtyScopes,
         error: snapshot.reloadDirt.error ?? null,
         pendingScopes: snapshot.reloadDirt.pendingScopes,
       } : null);
-      installCurrentThreadStateSources(snapshot);
+      if (selectedThreadStateChanged) installCurrentThreadStateSources(snapshot);
       emitExplorerStateChange();
     },
     transport: {
@@ -474,7 +534,6 @@ export async function WorkbenchClient(
       ?? workbenchBindings.clientStateController?.daemonRegistrationId ?? "",
   );
   navigation = new WorkbenchNavigationController(initialRoute, {
-    activateThreadControllers: () => threadClient.activateThreadControllers(),
     applyDraft: (entry, project) => applyDraftEntryToCurrentView(entry, { project }),
     clearSelection: () => {
       clearCurrentSelectionView();
@@ -530,15 +589,19 @@ export async function WorkbenchClient(
   const mountedFilePanelClients = new Set<ReturnType<typeof WorkbenchFilePanelClient>>();
   let activeFilePath = "";
   let activeProjectId = projectClient.getSnapshot().currentProjectId;
+  let lastAttachedCatalog = projectClient.getSnapshot().projects;
   coordinatorLifecycle.addUnsubscribe(projectClient.subscribe((snapshot) => {
     const previousProjectId = activeProjectId;
     activeProjectId = snapshot.currentProjectId;
-    threadClient.setProjectContext({
-      projectId: snapshot.currentProjectId,
-      root: snapshot.root,
-      rootPath: snapshot.rootPath,
-      roots: snapshot.roots,
-    });
+    const route = navigation.getSnapshot().route;
+    if (route.view !== "thread") {
+      threadClient.setProjectContext({
+        projectId: snapshot.currentProjectId,
+        root: snapshot.root,
+        rootPath: snapshot.rootPath,
+        roots: snapshot.roots,
+      });
+    }
     if (previousProjectId !== snapshot.currentProjectId) {
       installCurrentThreadStateSources();
     }
@@ -547,6 +610,11 @@ export async function WorkbenchClient(
       void activeFileDraftStore().hydratePersistedDrafts();
     }
     emitExplorerStateChange();
+    if (!areDeeplyEqual(lastAttachedCatalog, snapshot.projects)) {
+      lastAttachedCatalog = snapshot.projects;
+      void requestLogicalBrowseReconciliation().catch(error =>
+        reportBackgroundFailure("Project browse location could not update.", error));
+    }
   }));
 
   let previousThreadSnapshot = initialThreadSnapshot;
@@ -681,40 +749,98 @@ export async function WorkbenchClient(
     return Array.from(modifiedPaths).sort((left, right) => left.localeCompare(right));
   }
 
-  function getExplorerSnapshot(): ExplorerSnapshot {
-    const projectSnapshot = activeProjectClient.getSnapshot();
-    const attachedProjectSnapshot = projectClient.getSnapshot();
-    const threadSnapshot = activeThreadClient.getSnapshot();
+  let logicalProjectionCache: {
+    presentation: NonNullable<ReturnType<WorkbenchPresentationClient["snapshot"]>["data"]>;
+    sources: Array<{
+      daemonId: DaemonId;
+      hostname: string;
+      catalog: readonly WorkbenchProjectOption[] | null;
+      locations: WorkbenchProjectLocationsPayload | null;
+      summaries: WorkbenchProjectThreadSummaries | null;
+      sidebars: WorkbenchProjectThreadSidebars | null;
+    }>;
+    projects: ReturnType<typeof projectLogicalProjects>;
+    summaries: Record<string, WorkbenchLogicalProjectSummary>;
+    threads: ReturnType<typeof projectLogicalThreadRows>;
+  } | null = null;
+  function getLogicalProjection() {
     const presentation = presentationClient?.snapshot().data;
-    const catalogs = new Map<DaemonId, readonly WorkbenchProjectOption[]>();
-    const summaries = new Map<DaemonId, WorkbenchProjectThreadSummaries>();
-    const sidebars = new Map<DaemonId, WorkbenchProjectThreadSidebars>();
+    if (!presentation) return null;
+    const attachedProjectSnapshot = projectClient.getSnapshot();
+    const sources: NonNullable<typeof logicalProjectionCache>["sources"] = [];
     const attachedId = workbenchBindings.clientStateController?.getSnapshot().registrations
       .find(registration => registration.kind === "local")?.daemonId;
     if (attachedId && (!attachedSession || attachedSession.getSnapshot().phase === "ready")) {
-      catalogs.set(attachedId, attachedProjectSnapshot.projects);
-      summaries.set(attachedId, threadSidebarClient.getProjectThreadSummaries());
-      sidebars.set(attachedId, threadSidebarClient.getProjectThreadSidebars());
+      sources.push({
+        daemonId: attachedId,
+        hostname: attachedSession?.getSnapshot().hostname ?? "",
+        catalog: attachedProjectSnapshot.projects,
+        locations: attachedSession?.getSnapshot().locations ?? null,
+        summaries: threadSidebarClient.getProjectThreadSummaries(),
+        sidebars: threadSidebarClient.getProjectThreadSidebars(),
+      });
     }
     for (const session of daemonSessions?.list() ?? []) {
       if (session.getSnapshot().phase !== "ready") continue;
-      const projects = session.projects?.getSnapshot().projects;
-      if (projects) catalogs.set(session.getSnapshot().daemonId, projects);
-      const peerSummaries = session.sidebar?.getProjectThreadSummaries();
-      if (peerSummaries) summaries.set(session.getSnapshot().daemonId, peerSummaries);
-      const projectSidebars = session.sidebar?.getProjectThreadSidebars();
-      if (projectSidebars) sidebars.set(session.getSnapshot().daemonId, projectSidebars);
+      sources.push({
+        daemonId: session.getSnapshot().daemonId,
+        hostname: session.getSnapshot().hostname,
+        catalog: session.projects?.getSnapshot().projects ?? null,
+        locations: session.getSnapshot().locations,
+        summaries: session.sidebar?.getProjectThreadSummaries() ?? null,
+        sidebars: session.sidebar?.getProjectThreadSidebars() ?? null,
+      });
     }
-    const logicalProjects = presentation ? projectLogicalProjects(presentation, catalogs) : undefined;
+    const previous = logicalProjectionCache;
+    if (previous?.presentation === presentation && previous.sources.length === sources.length
+      && sources.every((source, index) => {
+        const prior = previous.sources[index];
+        return prior?.daemonId === source.daemonId
+          && prior.hostname === source.hostname
+          && (prior.catalog === source.catalog || areDeeplyEqual(prior.catalog, source.catalog))
+          && (prior.locations === source.locations || areDeeplyEqual(prior.locations, source.locations))
+          && prior.summaries === source.summaries && prior.sidebars === source.sidebars;
+      })) {
+      previous.sources = sources;
+      return previous;
+    }
+    const catalogs = new Map(sources.flatMap(source => source.catalog
+      ? [[source.daemonId, source.catalog] as const] : []));
+    const summaries = new Map(sources.flatMap(source => source.summaries
+      ? [[source.daemonId, source.summaries] as const] : []));
+    const sidebars = new Map(sources.flatMap(source => source.sidebars
+      ? [[source.daemonId, source.sidebars] as const] : []));
+    const observations = new Map(sources.flatMap(source => source.locations
+      ? [[source.daemonId, { hostname: source.hostname, data: source.locations.data }] as const] : []));
+    const projects = projectLogicalProjects(presentation, catalogs, observations);
+    logicalProjectionCache = {
+      presentation, sources, projects,
+      summaries: Object.fromEntries(projectLogicalSummaries(projects, summaries)),
+      threads: projectLogicalThreadRows(projects, sidebars, presentation),
+    };
+    return logicalProjectionCache;
+  }
+
+  function getExplorerSnapshot(): ExplorerSnapshot {
+    const projectSnapshot = activeProjectClient.getSnapshot();
+    const threadSnapshot = activeThreadClient.getSnapshot();
+    const logical = getLogicalProjection();
+    const attachedId = workbenchBindings.clientStateController?.getSnapshot().registrations
+      .find(registration => registration.kind === "local")?.daemonId;
+    const browseDaemonId = activeBrowsePeerSession?.getSnapshot().daemonId ?? attachedId;
+    const browseProjectId = projectSnapshot.currentProjectId;
+    const browseLocation = browseDaemonId && browseProjectId
+      ? { daemonId: browseDaemonId, projectId: ProjectIdSchema.parse(browseProjectId) } : null;
     return {
       root: projectSnapshot.root,
       configuredDiscoveryRootPath: projectSnapshot.configuredDiscoveryRootPath,
       currentProjectId: projectSnapshot.currentProjectId,
+      browseLocation,
       projects: projectSnapshot.projects,
-      ...(logicalProjects && presentation ? {
-        logicalProjects,
-        logicalSummaries: Object.fromEntries(projectLogicalSummaries(logicalProjects, summaries)),
-        logicalThreads: projectLogicalThreadRows(logicalProjects, sidebars, presentation),
+      ...(logical ? {
+        logicalProjects: logical.projects,
+        logicalSummaries: logical.summaries,
+        logicalThreads: logical.threads,
       } : {}),
       rootPath: projectSnapshot.rootPath,
       roots: projectSnapshot.roots,
@@ -775,7 +901,7 @@ export async function WorkbenchClient(
         if (activeBrowsePeerSession !== session) return;
         const changed = observedProjectId !== snapshot.currentProjectId;
         observedProjectId = snapshot.currentProjectId;
-        if (activePeerSession === session) {
+        if (activePeerSession === session && navigation.getSnapshot().route.view !== "thread") {
           session.threads.setProjectContext({
             projectId: snapshot.currentProjectId, root: snapshot.root,
             rootPath: snapshot.rootPath, roots: snapshot.roots,
@@ -1006,13 +1132,26 @@ export async function WorkbenchClient(
     }
     if (outcome.kind === "superseded") return { ok: false };
 
+    const attachedDaemonId = networkClient?.snapshot().snapshot?.daemon?.daemonId
+      ?? workbenchBindings.clientStateController?.getSnapshot().registrations
+        .find(registration => registration.kind === "local")?.daemonId;
+    const ownerProjectId = project?.id ?? projectClient.getSnapshot().currentProjectId;
+    if (attachedDaemonId && ownerProjectId) {
+      threadRouter.rememberRead({
+        id: outcome.payload.id,
+        harness: outcome.payload.harness,
+        location: { daemonId: DaemonIdSchema.parse(attachedDaemonId),
+          projectId: ProjectIdSchema.parse(ownerProjectId) },
+        daemon,
+      });
+    }
     applyThreadPayloadToCurrentView(outcome.payload, `Read thread ${new Date(outcome.payload.updatedAt * 1000).toLocaleString()}`);
     emitExplorerStateChange();
     return { ok: true };
   }
 
   async function readThread(threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) {
-    if (navigation.getSnapshot().route.logical) {
+    if (threadRouter.known(threadId)?.kind === "thread" || navigation.getSnapshot().route.logical) {
       return await threadRouter.withThread(threadId, async (owner, source) =>
         await source.threads.readThread(owner.id, owner.harness, options));
     }
@@ -1026,11 +1165,24 @@ export async function WorkbenchClient(
   ) {
     let owner = activeThreadClient;
     const route = navigation.getSnapshot().route;
-    if (!thread.isDraft && route.logical) {
-      const payload = await threadRouter.withThread(thread.id, async (resolved, source) => {
-        if (thread.harness !== resolved.harness) throw new Error("Thread harness does not match its UUID owner.");
-        return await source.threads.sendThreadMessage(thread, input, options);
-      });
+    const knownOwner = !thread.isDraft ? threadRouter.known(thread.id) : null;
+    if (!thread.isDraft && (knownOwner?.kind === "thread" || route.logical)) {
+      if (route.view !== "thread" || !route.threadTarget
+        || route.threadTarget.kind === "new" || route.threadTarget.kind === "draft"
+        || getWorkbenchThreadTargetSelectedId(route.threadTarget) !== thread.id) {
+        throw new ThreadMessageNotSentError();
+      }
+      const rootId = getWorkbenchThreadTargetRootId(route.threadTarget);
+      const resolved = threadRouter.known(rootId);
+      const source = resolved?.kind === "thread"
+        ? threadRouter.sourceFor(resolved.location.daemonId) : null;
+      if (!source || !resolved || resolved.kind !== "thread"
+        || route.logical?.threadOwnerProjectId
+          && resolved?.logicalProjectId !== route.logical.threadOwnerProjectId) {
+        throw new Error("The opened thread's daemon folder changed before Send.");
+      }
+      owner = source.threads;
+      const payload = await owner.sendThreadMessage(thread, input, options);
       if (payload && route.view === "thread" && route.threadId === thread.id
         && navigation.getSnapshot().route === route && options.selectThread !== false) {
         applyThreadPayloadToCurrentView(payload, "Sent message.");
@@ -1125,7 +1277,8 @@ export async function WorkbenchClient(
   }
 
   async function stopThread(thread: ThreadPayload) {
-    const payload = navigation.getSnapshot().route.logical && !thread.isDraft
+    const payload = !thread.isDraft && (threadRouter.known(thread.id)?.kind === "thread"
+      || navigation.getSnapshot().route.logical)
       ? await threadRouter.withThread(thread.id, async (_owner, source) =>
         await source.threads.stopThread(thread))
       : await activeThreadClient.stopThread(thread);
@@ -1168,7 +1321,8 @@ export async function WorkbenchClient(
   }
 
   async function compactThread(thread: ThreadPayload) {
-    const payload = navigation.getSnapshot().route.logical && !thread.isDraft
+    const payload = !thread.isDraft && (threadRouter.known(thread.id)?.kind === "thread"
+      || navigation.getSnapshot().route.logical)
       ? await threadRouter.withThread(thread.id, async (_owner, source) =>
         await source.threads.compactThread(thread))
       : await activeThreadClient.compactThread(thread);
@@ -1188,9 +1342,75 @@ export async function WorkbenchClient(
     activeFilePath = "";
   }
 
+  let browseReconcileRunning: Promise<void> | null = null;
+  let browseReconcileRequested = false;
+  function reconcileLogicalBrowse() {
+    const route = navigation.getSnapshot().route;
+    if (!route.logical || route.view !== "project" && route.view !== "thread") return;
+    const logicalProjectId = route.logical.projectId;
+    if (!logicalProjectId) {
+      selectBrowsePeer(null);
+      projectClient.enterNoProject();
+      return;
+    }
+    const project = getLogicalProjection()?.projects.find(item => item.id === logicalProjectId);
+    const available = project?.locations.filter(location => location.project) ?? [];
+    const target = route.logical.browseLocation
+      ? available.find(location =>
+        location.target.daemonId === route.logical?.browseLocation?.daemonId
+        && location.target.projectId === route.logical?.browseLocation?.projectId)?.target ?? null
+      : available.length === 1 ? available[0]!.target : null;
+    const currentProjectId = activeProjectClient.getSnapshot().currentProjectId;
+    const attachedId = networkClient?.snapshot().snapshot?.daemon?.daemonId;
+    const current = currentProjectId
+      ? { daemonId: activeBrowsePeerSession?.getSnapshot().daemonId ?? attachedId,
+        projectId: currentProjectId } : null;
+    if (target?.daemonId === current?.daemonId && target?.projectId === current?.projectId) return;
+    if (!target) {
+      selectBrowsePeer(null);
+      projectClient.enterNoProject();
+      return;
+    }
+    const peer = target.daemonId === attachedId ? null : daemonSessions?.get(target.daemonId) ?? null;
+    const projects = peer?.projects ?? (target.daemonId === attachedId ? projectClient : null);
+    if (!projects) return;
+    return projects.selectProjectStrict(target.projectId).then(selected => {
+      if (!selected || coordinatorLifecycle.isDisposed) return;
+      const currentRoute = navigation.getSnapshot().route;
+      if (!isSameWorkbenchRoute(currentRoute, route)) {
+        requestLogicalBrowseReconciliation();
+        return;
+      }
+      selectBrowsePeer(peer);
+      if (peer) projectClient.enterNoProject();
+      emitExplorerStateChange();
+    });
+  }
+  function requestLogicalBrowseReconciliation(): Promise<void> {
+    browseReconcileRequested = true;
+    if (browseReconcileRunning) return browseReconcileRunning;
+    const operation = Promise.resolve().then(async () => {
+      while (browseReconcileRequested && !coordinatorLifecycle.isDisposed) {
+        browseReconcileRequested = false;
+        await reconcileLogicalBrowse();
+      }
+    });
+    browseReconcileRunning = operation;
+    const finish = () => {
+      if (browseReconcileRunning !== operation) return;
+      browseReconcileRunning = null;
+      if (browseReconcileRequested && !coordinatorLifecycle.isDisposed) {
+        void requestLogicalBrowseReconciliation().catch(error =>
+          reportBackgroundFailure("Project browse location could not update.", error));
+      }
+    };
+    void operation.then(finish, finish);
+    return operation;
+  }
+
   async function openLogicalRoute(route: WorkbenchRoute, isCurrent: () => boolean): Promise<WorkbenchRouteLoadResult> {
     const address = route.logical;
-    const presentation = presentationClient?.snapshot().data;
+    let presentation = presentationClient?.snapshot().data;
     if (!address || !presentation) return { ok: false, error: "Project presentation state is unavailable." };
     const existingTarget = route.view === "thread" && route.threadTarget
       && (route.threadTarget.kind === "provider" || route.threadTarget.kind === "subagent")
@@ -1204,6 +1424,7 @@ export async function WorkbenchClient(
         return { ok: false, error: error instanceof Error ? error.message : "Thread owner resolution failed." };
       }
       if (!isCurrent()) return { ok: false };
+      presentation = presentationClient?.snapshot().data ?? presentation;
       if (existingOwner.kind !== "thread") return { ok: false, error: "This route does not name an existing thread." };
       if (address.legacyOwnerLocation
         && (address.legacyOwnerLocation.daemonId !== existingOwner.location.daemonId
@@ -1222,12 +1443,11 @@ export async function WorkbenchClient(
     if (address.projectId && !presentation.projects.some(project => project.id === address.projectId)) {
       return { ok: false, error: "The selected project identity is unavailable." };
     }
-    let selectedBrowse = address.projectId
+    let selectedBrowse = address.projectId && address.browseLocation
       ? presentation.locations.find(item =>
         item.logicalProjectId === address.projectId
         && item.target.daemonId === address.browseLocation?.daemonId
         && item.target.projectId === address.browseLocation?.projectId)
-        ?? presentation.locations.find(item => item.logicalProjectId === address.projectId)
       : null;
     if (address.browseLocation && (!selectedBrowse
       || selectedBrowse.target.daemonId !== address.browseLocation.daemonId
@@ -1253,15 +1473,18 @@ export async function WorkbenchClient(
       return session?.getSnapshot().phase === "ready" && session.projects
         ? { project: session.projects, threads: session.threads, session } : null;
     };
-    const importAttachedLayouts = () => {
-      void attachedSession?.importAvailableLayouts().catch(error => {
-        if (coordinatorLifecycle.isDisposed || error instanceof DOMException && error.name === "AbortError") return;
-        console.warn("Attached layout import could not finish:",
-          error instanceof Error
-            ? error.message.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 512)
-            : "Unknown error.");
-      });
-    };
+    if (route.view === "project") {
+      void attachedSession?.observeProject(null).catch(error =>
+        reportBackgroundFailure("Global thread observation could not open.", error));
+      if (!isCurrent()) return { ok: false };
+      selectActivePeer(null, false);
+      void requestLogicalBrowseReconciliation().catch(error =>
+        reportBackgroundFailure("Project browse location could not update.", error));
+      applyCurrentThreadSelection(null);
+      emitExplorerStateChange();
+      const canonicalRoute = createLogicalProjectRoute(ownerId);
+      return isSameWorkbenchRoute(route, canonicalRoute) ? { ok: true } : { ok: true, canonicalRoute };
+    }
     if (route.view === "mosaic" && route.mosaicNode) {
       const resolvePane = async (node: WorkbenchMosaicNode): Promise<WorkbenchMosaicNode> => {
         if (node.type === "split") {
@@ -1337,65 +1560,69 @@ export async function WorkbenchClient(
         || savedDraft.target.projectId !== address.location.projectId)) {
       return { ok: false, error: "The legacy draft address does not match its saved target." };
     }
-    const requestedTarget = existingOwner?.location ?? savedDraft?.target ?? address.location;
-    const requestedLocation = requestedTarget
+    const projectIdentity = getExplorerSnapshot().logicalProjects?.find(project => project.id === ownerId);
+    const preferredLaunch = projectIdentity
+      ? preferredLogicalLaunchLocation(projectIdentity, presentation) : null;
+    const activeBrowseTarget = getExplorerSnapshot().browseLocation;
+    const browseTarget = route.view === "file" || route.view === "git"
+      ? address.location ?? (activeBrowseTarget && locations.some(item =>
+        item.target.daemonId === activeBrowseTarget.daemonId
+        && item.target.projectId === activeBrowseTarget.projectId) ? activeBrowseTarget : null)
+      : null;
+    const requestedTarget = existingOwner?.location ?? savedDraft?.target
+      ?? (route.view === "thread" && route.threadTarget?.kind === "new"
+        ? address.location ?? preferredLaunch
+        : browseTarget);
+    const storedLocation = requestedTarget
       ? locations.find(item => item.target.daemonId === requestedTarget.daemonId
         && item.target.projectId === requestedTarget.projectId) ?? null
       : null;
+    const observedOwnerLocation = existingOwner && projectIdentity?.observedLocations?.find(item =>
+      item.daemonId === existingOwner.location.daemonId
+      && item.projectId === existingOwner.location.projectId);
+    const requestedLocation = storedLocation ?? (existingOwner && observedOwnerLocation
+      ? { target: existingOwner.location } : null);
     if (requestedTarget && !requestedLocation) {
       return { ok: false, error: "The selected daemon folder does not belong to this project." };
     }
     let location = requestedLocation;
     let source: Awaited<ReturnType<typeof availableSource>> = null;
-    const canChooseLocation = route.view === "project"
-      || route.view === "thread" && route.threadTarget?.kind === "new";
-    for (const candidate of requestedLocation ? [requestedLocation] : canChooseLocation ? locations : []) {
+    const canChooseLocation = route.view === "thread" && route.threadTarget?.kind === "new";
+    const launchCanFallback = canChooseLocation && !address.location;
+    const candidates = requestedLocation
+      ? launchCanFallback ? [requestedLocation, ...locations.filter(item => item !== requestedLocation)]
+        : [requestedLocation]
+      : canChooseLocation ? locations : [];
+    for (const candidate of candidates) {
       source = await availableSource(candidate.target);
       if (!isCurrent()) return { ok: false };
       if (source) { location = candidate; break; }
     }
+    if (!source && launchCanFallback) location = null;
+    if (!location && (route.view === "file" || route.view === "git") && locations.length === 1) {
+      location = locations[0];
+      source = await availableSource(location.target);
+      if (!isCurrent()) return { ok: false };
+    }
     if (!location) {
       if (!canChooseLocation) {
-        return { ok: false, error: "This route needs a concrete daemon folder." };
+        return { ok: false, error: route.view === "file" || route.view === "git"
+          ? "Choose a daemon folder before browsing files or Git."
+          : "This route needs a concrete daemon folder." };
       }
-      selectActivePeer(null);
-      projectClient.enterNoProject();
-      applyCurrentThreadSelection(null);
-      emitExplorerStateChange();
-      return { ok: true };
+      return { ok: false, error: "No daemon folder for this project is available." };
     }
     if (!source) return { ok: false, error: "The selected daemon folder is unavailable." };
     if (existingTarget) {
       const project = source.project.getSnapshot().projects.find(item =>
         item.id === location.target.projectId);
       if (!project) return { ok: false, error: "The thread's folder is unavailable." };
-      let browseSource: Awaited<ReturnType<typeof availableSource>> = null;
-      const browseCandidates = address.browseLocation
-        ? selectedBrowse ? [selectedBrowse] : []
-        : presentation.locations.filter(item => item.logicalProjectId === address.projectId);
-      for (const candidate of browseCandidates) {
-        const candidateSource = await availableSource(candidate.target);
-        if (!isCurrent()) return { ok: false };
-        if (candidateSource && await candidateSource.project.selectProjectStrict(candidate.target.projectId)) {
-          if (!isCurrent()) return { ok: false };
-          selectedBrowse = candidate;
-          browseSource = candidateSource;
-          break;
-        }
-      }
-      if (address.browseLocation && !browseSource) {
-        return { ok: false, error: "The selected browse folder is unavailable." };
-      }
-      if (!browseSource) selectedBrowse = null;
-      if (source.session) await source.session.observeProject(null);
-      else if (!await threadSidebarClient.openGlobal()) {
-        return { ok: false, error: "The global thread observation could not open." };
-      }
-      if (!source.session) importAttachedLayouts();
+      void (source.session ?? attachedSession)?.observeProject(null).catch(error =>
+        reportBackgroundFailure("Global thread observation could not open.", error));
       if (!isCurrent()) return { ok: false };
       selectActivePeer(source.session, false);
-      selectBrowsePeer(browseSource?.session ?? null);
-      if (!selectedBrowse) projectClient.enterNoProject();
+      void requestLogicalBrowseReconciliation().catch(error =>
+        reportBackgroundFailure("Project browse location could not update.", error));
       source.threads.setProjectContext({
         projectId: project.id, root: project.name || project.id,
         rootPath: project.rootPath, roots: project.roots,
@@ -1407,35 +1634,40 @@ export async function WorkbenchClient(
       });
       if (!isCurrent() || outcome.kind === "superseded") return { ok: false };
       if (outcome.kind === "failure") return { ok: false, error: outcome.failure.message };
+      threadRouter.rememberRead({
+        id: outcome.payload.id, harness: outcome.payload.harness,
+        location: location.target, daemon: source.session?.daemon ?? daemon,
+      });
       applyThreadPayloadToCurrentView(outcome.payload);
+      void requestLogicalBrowseReconciliation().catch(error =>
+        reportBackgroundFailure("Project browse location could not update.", error));
       emitExplorerStateChange();
       const canonicalRoute = createLogicalExistingThreadRoute(address.projectId, existingTarget,
-        selectedBrowse?.target ?? null);
+        null);
       return isSameWorkbenchRoute(route, canonicalRoute) ? { ok: true }
         : { ok: true, canonicalRoute };
     }
-    const selected = await source.project.selectProjectStrict(location.target.projectId);
-    if (!selected || !isCurrent()) return selected
-      ? { ok: false } : { ok: false, error: "The selected daemon folder is unavailable." };
-    if (source.session) await source.session.observeProject(null);
-    else if (!await threadSidebarClient.openGlobal()) {
-      return { ok: false, error: "The global thread observation could not open." };
+    const isDraftRoute = route.view === "thread"
+      && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft");
+    if (!isDraftRoute) {
+      const selected = await source.project.selectProjectStrict(location.target.projectId);
+      if (!selected || !isCurrent()) return selected
+        ? { ok: false } : { ok: false, error: "The selected daemon folder is unavailable." };
     }
-    if (!source.session) importAttachedLayouts();
+    void (source.session ?? attachedSession)?.observeProject(null).catch(error =>
+      reportBackgroundFailure("Global thread observation could not open.", error));
     if (!isCurrent()) return { ok: false };
-    selectActivePeer(source.session);
+    selectActivePeer(source.session, route.view === "file" || route.view === "git");
     const project = source.project.getSnapshot().projects.find(item => item.id === location.target.projectId);
     if (!project) return { ok: false, error: "The selected project folder is missing." };
+    if (isDraftRoute && !address.projectId) {
+      selectBrowsePeer(null);
+      projectClient.enterNoProject();
+    }
     source.threads.setProjectContext({
       projectId: project.id, root: project.name || project.id,
       rootPath: project.rootPath, roots: project.roots,
     });
-    if (route.view === "project") {
-      applyCurrentThreadSelection(null);
-      emitExplorerStateChange();
-      return address.location ? { ok: true }
-        : { ok: true, canonicalRoute: createLogicalProjectRoute(ownerId, location.target) };
-    }
     if (route.view === "thread" && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft")) {
       const draftId = DraftIdSchema.parse(savedDraft?.id ?? crypto.randomUUID());
       const draftThread = source.threads.createThread(
@@ -1443,7 +1675,10 @@ export async function WorkbenchClient(
         draftId,
         { project },
       );
+      threadRouter.rememberDraft(draftId, ownerId, location.target);
       applyThreadPayloadToCurrentView(draftThread);
+      void requestLogicalBrowseReconciliation().catch(error =>
+        reportBackgroundFailure("Project browse location could not update.", error));
       emitExplorerStateChange();
       const locationMatches = address.location?.daemonId === location.target.daemonId
         && address.location?.projectId === location.target.projectId;
@@ -1471,8 +1706,10 @@ export async function WorkbenchClient(
   }
 
   function draftLocationFor(draftId: string): ProjectLocationReference | null {
+    const known = threadRouter.known(draftId);
+    if (known?.kind === "draft") return known.location;
     const saved = presentationClient?.draft(draftId);
-    if (saved) return saved.target;
+    if (saved?.phase === "unsent" || saved?.phase === "submitting") return saved.target;
     const visit = (node: WorkbenchMosaicNode | null): ProjectLocationReference | null => {
       if (!node) return null;
       if (node.type === "split") {
@@ -1509,10 +1746,6 @@ export async function WorkbenchClient(
         return `Project not found or unavailable: ${route.projectId}`;
       }
     }
-    if (attachedSession) void attachedSession.importAvailableLayouts().catch(error =>
-      reportStatusMessage(error instanceof Error ? error.message.slice(0, 512)
-        : "Legacy layout import could not run."));
-
     const nextProjectId = projectClient.getSnapshot().currentProjectId;
     if (nextProjectId && workbenchBindings.clientStateController) {
       void workbenchBindings.clientStateController.put({
@@ -1524,18 +1757,66 @@ export async function WorkbenchClient(
     if (nextProjectId && previousProjectId !== nextProjectId) {
       await activeFileDraftStore().hydratePersistedDrafts();
     }
+    const selectedProject = projectClient.getSnapshot();
+    threadClient.setProjectContext({
+      projectId: selectedProject.currentProjectId,
+      root: selectedProject.root,
+      rootPath: selectedProject.rootPath,
+      roots: selectedProject.roots,
+    });
 
     return "";
   }
 
   async function applyRoute(route: WorkbenchRoute): Promise<WorkbenchRouteLoadResult> {
-    return await navigation.applyRoute(route);
+    if (presentationClient && route.view === "thread" && !route.logical
+      && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft")) {
+      return navigation.rejectRoute(route, "Unsent drafts require an app-owned project identity.");
+    }
+    const previous = navigation.getSnapshot().route;
+    const currentDraft = activeThreadClient.getSnapshot().currentThread;
+    if (currentDraft?.isDraft && previous.view === "thread" && route.view === "thread"
+      && previous.logical && route.logical) {
+      const owner = threadRouter.known(currentDraft.id);
+      const newRoute = previous.threadTarget?.kind === "new" ? previous
+        : route.threadTarget?.kind === "new" ? route : null;
+      const newLocation = newRoute && owner?.kind === "draft"
+        ? newRoute.logical?.location ?? owner.location : null;
+      const saved = presentationClient?.draft(currentDraft.id);
+      if (owner?.kind === "draft" && newLocation
+        && owner.logicalProjectId === route.logical.threadOwnerProjectId
+        && owner.location.daemonId === newLocation.daemonId
+        && owner.location.projectId === newLocation.projectId
+        && (route.threadTarget?.kind === "draft" ? saved?.phase === "unsent"
+          : route.threadTarget?.kind === "new" && (!saved || saved.phase === "deleted"))
+        && navigation.retargetDraftSession(route, DraftIdSchema.parse(currentDraft.id))) {
+        return { ok: true };
+      }
+    }
+    const priorDraftId = previous.logical && previous.view === "thread"
+      ? previous.threadTarget?.kind === "draft" ? previous.threadTarget.draftId
+        : previous.threadTarget?.kind === "new" ? currentDraft?.isDraft ? currentDraft.id : null : null
+      : null;
+    const result = await navigation.applyRoute(route);
+    if (result.ok && route.view === "thread") {
+      void refreshRateLimits().catch(error => reportStatusMessage(
+        error instanceof Error ? error.message.slice(0, 512) : "Rate limits could not refresh.",
+      ));
+    }
+    if (result.ok && priorDraftId && !isSameWorkbenchRoute(previous, route)
+      && !(route.view === "thread" && route.threadTarget?.kind === "draft"
+        && route.threadTarget.draftId === priorDraftId)) {
+      threadRouter.forgetDraft(priorDraftId);
+    }
+    return result;
   }
 
   async function updateThreadStateWithAcceptance(request: Parameters<WorkbenchControls["updateThreadState"]>[0]) {
-    const owner = activeThreadClient;
-    const sidebar = activePeerSession?.sidebar ?? threadSidebarClient;
-    if (request.method === "workbench/thread-state/title/dismiss" && !activePeerSession) {
+    const known = "identity" in request ? threadRouter.known(request.identity.threadId) : null;
+    const owner = known ? clientForThreadMutation(known.id) : activeThreadClient;
+    const sidebar = known ? daemonSessions?.get(known.location.daemonId)?.sidebar
+      ?? threadSidebarClient : activePeerSession?.sidebar ?? threadSidebarClient;
+    if (request.method === "workbench/thread-state/title/dismiss" && owner === threadClient) {
       await admitPinnedTitleAction(request.projectId, request.identity);
     }
     const response = await owner.requestWorkbench(request.method, request);
@@ -1602,31 +1883,34 @@ export async function WorkbenchClient(
   }
 
   function clientForThreadMutation(threadId: string) {
+    const owner = threadRouter.known(threadId);
+    if (owner) {
+      const source = threadRouter.sourceFor(owner.location.daemonId);
+      if (!source) throw new Error("The thread's daemon is unavailable.");
+      return source.threads;
+    }
     const route = navigation.getSnapshot().route;
     if (!route.logical || route.view === "thread"
       && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft")) {
       return activeThreadClient;
     }
-    const owner = threadRouter.known(threadId);
-    const draftLocation = owner?.kind === "draft" ? owner.location : draftLocationFor(threadId);
+    const draftLocation = draftLocationFor(threadId);
     if (draftLocation) {
       const source = threadRouter.sourceFor(draftLocation.daemonId);
       if (!source) throw new Error("The draft's daemon is unavailable.");
       return source.threads;
     }
-    if (owner?.kind !== "thread") throw new Error("The thread's UUID owner is unavailable.");
-    const source = threadRouter.sourceFor(owner.location.daemonId);
-    if (!source) throw new Error("The thread's daemon is unavailable.");
-    return source.threads;
+    throw new Error("The thread's UUID owner is unavailable.");
   }
 
   async function validateDraftDestination(
     draft: NonNullable<ReturnType<WorkbenchPresentationClient["draft"]>>,
     target: Parameters<WorkbenchControls["retargetPresentationDraft"]>[1],
+    logicalProjectId = draft.logicalProjectId,
   ) {
     const registered = presentationClient?.snapshot().data?.locations.find(location =>
       location.target.daemonId === target.daemonId && location.target.projectId === target.projectId);
-    if (registered?.logicalProjectId !== draft.logicalProjectId) {
+    if (registered?.logicalProjectId !== logicalProjectId) {
       throw new Error("That folder belongs to another project identity.");
     }
     const attachedId = networkClient?.snapshot().snapshot?.daemon?.daemonId;
@@ -1823,26 +2107,27 @@ export async function WorkbenchClient(
     stopThread,
     threadAction,
     threadGoals: {
-      clear: threadId => activeThreadClient.threadGoals.clear(threadId),
-      getSnapshot: threadId => activeThreadClient.threadGoals.getSnapshot(threadId),
-      load: threadId => activeThreadClient.threadGoals.load(threadId),
-      refresh: threadId => activeThreadClient.threadGoals.refresh(threadId),
-      subscribe: (threadId, listener) => activeThreadClient.threadGoals.subscribe(threadId, listener),
-      updateObjective: (threadId, objective) => activeThreadClient.threadGoals.updateObjective(threadId, objective),
+      clear: threadId => clientForThreadMutation(threadId).threadGoals.clear(threadId),
+      getSnapshot: threadId => clientForThreadMutation(threadId).threadGoals.getSnapshot(threadId),
+      load: threadId => clientForThreadMutation(threadId).threadGoals.load(threadId),
+      refresh: threadId => clientForThreadMutation(threadId).threadGoals.refresh(threadId),
+      subscribe: (threadId, listener) => clientForThreadMutation(threadId).threadGoals.subscribe(threadId, listener),
+      updateObjective: (threadId, objective) => clientForThreadMutation(threadId).threadGoals.updateObjective(threadId, objective),
     },
     deletePresentationDraft: async draftId => {
       if (!presentationClient) throw new Error("App draft presentation state is unavailable.");
       await presentationClient.removeDraft(draftId);
     },
-    retargetPresentationDraft: async (draftId, target) => {
+    retargetPresentationDraft: async (draftId, target, logicalProjectId) => {
       const presentation = presentationClient;
       const draft = presentation?.draft(draftId);
       if (!presentation || !draft || draft.phase !== "unsent") {
         throw new Error("The unsent draft is unavailable.");
       }
-      await validateDraftDestination(draft, target);
+      const destinationProjectId = logicalProjectId ?? draft.logicalProjectId;
+      await validateDraftDestination(draft, target, destinationProjectId);
       await presentation.putDraft({
-        id: draft.id, logicalProjectId: draft.logicalProjectId, target,
+        id: draft.id, logicalProjectId: destinationProjectId, target,
         prompt: draft.prompt, selection: draft.selection, updatedAt: Date.now(),
       });
     },
@@ -1964,19 +2249,21 @@ export async function WorkbenchClient(
       reportConnectionRecoveryFailure("Unable to refresh projects after daemon reload.", error);
     });
   }));
-  await daemonRuntime.open().catch((error: unknown) => {
-    console.error(
-      "Unable to observe Workbench daemon reload dirt.",
-      error instanceof Error ? error.message.slice(0, 500) : "Unknown reload observation failure.",
-    );
-  });
   emitExplorerStateChange();
   const appState = workbenchBindings.clientStateController;
+  let startDaemonSessions = () => {};
   if (appState && appState.daemonRegistrationId !== "memory") {
     networkClient = new WorkbenchNetworkClient();
     presentationClient = new WorkbenchPresentationClient();
     const network = networkClient;
     const presentation = presentationClient;
+    coordinatorLifecycle.addUnsubscribe(network.subscribePresentation(revision =>
+      presentation.noticeRevision(revision)));
+    coordinatorLifecycle.addUnsubscribe(network.subscribePresentationImport(status => {
+      if (status.phase === "failed" || status.phase === "partial") {
+        reportStatusMessage(`Legacy presentation import is incomplete (${status.failed} source failures). Originals remain on the daemon; check the app log.`);
+      }
+    }));
     daemonSessions = new WorkbenchDaemonSessions({
       network: {
         snapshot: () => network.snapshot().snapshot,
@@ -1990,6 +2277,7 @@ export async function WorkbenchClient(
     });
     const sessions = daemonSessions;
     const reconcileAttachedSession = () => {
+      if (startupSnapshot.phase !== "ready") return;
       const identity = network.snapshot().snapshot?.daemon;
       if (!identity) return;
       if (attachedSession) {
@@ -2005,16 +2293,28 @@ export async function WorkbenchClient(
         appState, presentation,
         onError: message => reportStatusMessage(message),
       });
-      coordinatorLifecycle.addUnsubscribe(attachedSession.subscribe(emitExplorerStateChange));
+      coordinatorLifecycle.addUnsubscribe(attachedSession.subscribe(() => {
+        publishProjectSourceError();
+        emitExplorerStateChange();
+        void requestLogicalBrowseReconciliation().catch(error =>
+          reportBackgroundFailure("Project browse location could not update.", error));
+      }));
       void attachedSession.start().catch(error => {
         reportStatusMessage(error instanceof Error ? error.message.slice(0, 512)
           : "The attached daemon session could not start.");
       });
     };
-    coordinatorLifecycle.addUnsubscribe(presentation.subscribe(emitExplorerStateChange));
+    coordinatorLifecycle.addUnsubscribe(presentation.subscribe(() => {
+      emitExplorerStateChange();
+      void requestLogicalBrowseReconciliation().catch(error =>
+        reportBackgroundFailure("Project browse location could not update.", error));
+    }));
     coordinatorLifecycle.addUnsubscribe(sessions.subscribe(() => {
+      publishProjectSourceError();
       threadRouter.invalidateUnavailable();
       emitExplorerStateChange();
+      void requestLogicalBrowseReconciliation().catch(error =>
+        reportBackgroundFailure("Project browse location could not update.", error));
     }));
     coordinatorLifecycle.addUnsubscribe(network.subscribe(reconcileAttachedSession));
     coordinatorLifecycle.addUnsubscribe(() => {
@@ -2022,25 +2322,60 @@ export async function WorkbenchClient(
       network.close();
       presentation.dispose();
     });
-    sessions.start();
-    const networkStart = network.start();
-    const presentationRead = presentation.refresh().catch(error => {
-      reportStatusMessage(error instanceof Error ? error.message.slice(0, 512)
-        : "App presentation state could not be read.");
+    startDaemonSessions = () => {
+      sessions.start();
+      reconcileAttachedSession();
+    };
+  }
+  function publishStartup(next: typeof startupSnapshot) {
+    startupSnapshot = next;
+    for (const listener of startupListeners) listener();
+    emitExplorerStateChange();
+  }
+  let readsStarted = false;
+  let startupGeneration = 0;
+  let startupOperation: Promise<void> | null = null;
+  function startClient(force = false): Promise<void> {
+    if (coordinatorLifecycle.isDisposed) return Promise.resolve();
+    if (!force && startupOperation) return startupOperation;
+    if (force) {
+      appLifetime.dispose();
+      appLifetime = createAppLifetime();
+    }
+    const generation = ++startupGeneration;
+    publishStartup({ phase: "loading", error: null });
+    if (!readsStarted) {
+      readsStarted = true;
+      void networkClient?.start();
+      void presentationClient?.refresh().catch(error => {
+        reportStatusMessage(error instanceof Error ? error.message.slice(0, 512)
+          : "App presentation state could not be read.");
+      });
+    }
+    const operation = appLifetime.start().then(async () => {
+      if (coordinatorLifecycle.isDisposed || generation !== startupGeneration) return;
+      voice ??= new WorkbenchVoiceClient(
+        daemon, `/assets/voice-capture.js?v=${frontendJavaScriptGeneration}`,
+        workbenchBindings.clientStateController,
+      );
+      publishStartup({ phase: "ready", error: null });
+      startDaemonSessions();
+      connectionRecovery.start();
+      await daemonRuntime.open().catch((error: unknown) => {
+        if (coordinatorLifecycle.isDisposed) return;
+        console.error("Unable to observe Workbench daemon reload dirt.",
+          error instanceof Error ? error.message.slice(0, 500) : "Unknown reload observation failure.");
+      });
+    }).catch(error => {
+      if (coordinatorLifecycle.isDisposed || generation !== startupGeneration) return;
+      const message = error instanceof Error ? error.message.slice(0, 512)
+        : "Workbench app connection could not start.";
+      publishStartup({ phase: "failed", error: message });
+      reportStatusMessage(message);
     });
-    if (initialRoute.logical) await Promise.all([networkStart, presentationRead]);
+    startupOperation = operation;
+    return operation;
   }
-  const initialRouteResult = await applyRoute(navigation.getSnapshot().route);
-  if (!initialRouteResult.ok && initialRouteResult.error
-    && navigation.getSnapshot().route.logical && navigation.getSnapshot().route.view === "thread") {
-    console.warn(`Initial Workbench route could not open: ${
-      initialRouteResult.error.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 512)
-    }`);
-  }
-  if (sessionState.currentThreadId || navigation.getSnapshot().route.view === "thread") {
-    void refreshRateLimits();
-  }
-  connectionRecovery.start();
   const launchContextFor: MountedWorkbenchClient["launchContextFor"] = location => {
     const registered = presentationClient?.snapshot().data?.locations.some(item =>
       item.target.daemonId === location.daemonId && item.target.projectId === location.projectId);
@@ -2053,28 +2388,98 @@ export async function WorkbenchClient(
       : projectClient.getSnapshot().projects.find(item => item.id === location.projectId);
     if (!project) return null;
     return { daemonId: location.daemonId, daemon: source.daemon, threads: source.threads,
-      project, assetOrigin: peer ? daemonSessions?.httpOrigin(location.daemonId) ?? null : null };
+      project, assetSource: peer
+        ? { kind: "peer" as const, origin: daemonSessions?.httpOrigin(location.daemonId) ?? null }
+        : { kind: "attached" as const } };
   };
+  const threadOwnerFor: MountedWorkbenchClient["threadOwnerFor"] = threadId => {
+    try {
+      const owner = threadRouter.known(threadId);
+      const presentation = presentationClient?.snapshot().data;
+      const retained = presentation?.members.filter(member =>
+        member.kind === "thread" && member.thread?.threadId === threadId
+        && member.thread.location) ?? [];
+      const retainedLocations = new Map(retained.map(member => [
+        `${member.thread!.location.daemonId}/${member.thread!.location.projectId}`,
+        member.thread!.location,
+      ]));
+      if (retainedLocations.size > 1) throw new Error("Thread UUID has conflicting saved owners.");
+      if (owner?.kind === "thread" && retainedLocations.size) {
+        const retainedLocation = retainedLocations.values().next().value!;
+        if (retainedLocation.daemonId !== owner.location.daemonId
+          || retainedLocation.projectId !== owner.location.projectId) {
+          throw new Error("Thread UUID has conflicting observed and saved owners.");
+        }
+      }
+      const location = owner?.kind === "thread"
+        ? owner.location : retainedLocations.values().next().value;
+      if (!location) return null;
+      const projectedLocation = getLogicalProjection()?.projects.flatMap(project => project.locations)
+        .find(item => item.daemonId === location.daemonId
+          && item.target.projectId === location.projectId);
+      const hostname = presentation?.daemons.find(item =>
+        item.id === location.daemonId)?.hostname ?? location.daemonId;
+      const rootPath = presentation?.locations.find(item =>
+        item.target.daemonId === location.daemonId
+        && item.target.projectId === location.projectId)?.rootPath ?? location.projectId;
+      return {
+        daemonId: location.daemonId, projectId: location.projectId,
+        hostname, rootPath,
+        displayPath: projectedLocation?.displayPath ?? `${hostname}:${rootPath}`,
+      };
+    } catch (error) {
+      reportStatusMessage(error instanceof Error ? error.message.slice(0, 512)
+        : "Thread owner metadata is conflicting.");
+      return null;
+    }
+  };
+  void startClient();
   return {
     networkClient,
     presentationClient,
     daemonSessions,
-    voice,
+    navigation,
+    startup: {
+      getSnapshot: () => startupSnapshot,
+      subscribe: listener => {
+        startupListeners.add(listener);
+        return () => { startupListeners.delete(listener); };
+      },
+      start: () => startClient(),
+      retry: () => startupSnapshot.phase === "ready" ? Promise.resolve() : startClient(true),
+    },
+    projectFileIndexStore,
+    projectSourceErrors: {
+      getSnapshot: getProjectSourceError,
+      subscribe: listener => {
+        projectSourceErrorListeners.add(listener);
+        return () => { projectSourceErrorListeners.delete(listener); };
+      },
+    },
+    get voice() { return voice; },
     controls,
     dispose: () => {
+      startupGeneration += 1;
+      startupListeners.clear();
       threadSidebarClient.bestEffortFlush();
-      void threadSidebarClient.close();
+      const sidebarClosed = threadSidebarClient.close();
       daemonRuntime.dispose();
-      if (attachedSession) attachedSession.dispose();
-      else {
-        projectClient.dispose();
-        threadClient.dispose();
-      }
+      attachedSession?.dispose();
+      projectClient.dispose();
       coordinatorLifecycle.dispose();
+      void sidebarClosed.catch(error => {
+        console.warn("Unable to close the thread sidebar before disposal.",
+          error instanceof Error ? error.message.slice(0, 512) : "Unknown sidebar failure.");
+      }).finally(() => threadClient.dispose());
     },
     threadRuntime,
     get threadSidebar() { return activeBrowsePeerSession?.sidebar ?? threadSidebarClient; },
     get threadTextPresentation() { return activeThreadClient.textPresentation; },
+    threadTextPresentationFor: threadId => {
+      const owner = threadRouter.known(threadId);
+      if (!owner) return activeThreadClient.textPresentation;
+      return threadRouter.sourceFor(owner.location.daemonId)?.threads.textPresentation ?? null;
+    },
     getThreadController: (projectId, target) => {
       if (target.kind === "draft") {
         const location = draftLocationFor(target.draftId);
@@ -2083,14 +2488,14 @@ export async function WorkbenchClient(
           return source?.threads.getThreadController(location.projectId, target) ?? null;
         }
       }
-      if (!navigation.getSnapshot().route.logical
-        || target.kind !== "provider" && target.kind !== "subagent") {
+      if (target.kind !== "provider" && target.kind !== "subagent") {
         return activeThreadClient.getThreadController(projectId, target);
       }
       const id = target.kind === "subagent" ? target.parentThreadId : target.threadId;
       try {
         const owner = threadRouter.known(id);
-        if (owner?.kind !== "thread") return null;
+        if (owner?.kind !== "thread") return navigation.getSnapshot().route.logical
+          ? null : activeThreadClient.getThreadController(projectId, target);
         const source = threadRouter.sourceFor(owner.location.daemonId);
         if (!source) return null;
         return source.threads.getThreadController(owner.location.projectId, {
@@ -2102,42 +2507,17 @@ export async function WorkbenchClient(
         return null;
       }
     },
-    threadOwnerFor: threadId => {
-      try {
-        const owner = threadRouter.known(threadId);
-        const presentation = presentationClient?.snapshot().data;
-        const retained = presentation?.members.filter(member =>
-          member.kind === "thread" && member.thread?.threadId === threadId
-          && member.thread.location) ?? [];
-        const retainedLocations = new Map(retained.map(member => [
-          `${member.thread!.location.daemonId}/${member.thread!.location.projectId}`,
-          member.thread!.location,
-        ]));
-        if (retainedLocations.size > 1) throw new Error("Thread UUID has conflicting saved owners.");
-        if (owner?.kind === "thread" && retainedLocations.size) {
-          const retainedLocation = retainedLocations.values().next().value!;
-          if (retainedLocation.daemonId !== owner.location.daemonId
-            || retainedLocation.projectId !== owner.location.projectId) {
-            throw new Error("Thread UUID has conflicting observed and saved owners.");
-          }
-        }
-        const location = owner?.kind === "thread"
-          ? owner.location : retainedLocations.values().next().value;
-        if (!location) return null;
-        return {
-          daemonId: location.daemonId, projectId: location.projectId,
-          hostname: presentation?.daemons.find(item =>
-            item.id === location.daemonId)?.hostname ?? location.daemonId,
-          rootPath: presentation?.locations.find(item =>
-            item.target.daemonId === location.daemonId
-            && item.target.projectId === location.projectId)?.rootPath
-            ?? location.projectId,
-        };
-      } catch (error) {
-        reportStatusMessage(error instanceof Error ? error.message.slice(0, 512)
-          : "Thread owner metadata is conflicting.");
-        return null;
-      }
+    threadOwnerFor,
+    threadDraftIdentityFor: threadId => {
+      const owner = threadOwnerFor(threadId);
+      const registration = workbenchBindings.clientStateController?.getSnapshot().registrations
+        .find(item => item.daemonId === owner?.daemonId);
+      if (!owner || !registration) return null;
+      return {
+        daemonRegistrationId: registration.id,
+        projectId: ProjectIdSchema.parse(owner.projectId),
+        threadId: ThreadReferenceSchema.parse(threadId),
+      };
     },
     threadContextFor: threadId => {
       try {
@@ -2151,10 +2531,11 @@ export async function WorkbenchClient(
           : projectClient.getSnapshot().projects.find(item => item.id === owner.location.projectId);
         if (!project) return null;
         const registrationId = peer?.getSnapshot().registrationId
-          ?? (peer ? null : workbenchBindings.clientStateController?.daemonRegistrationId);
-        if (!registrationId) return null;
+          ?? (peer ? null : workbenchBindings.clientStateController?.daemonRegistrationId ?? null);
         return { daemonId: owner.location.daemonId, daemon: source.daemon, threads: source.threads, project,
-          assetOrigin: peer ? daemonSessions?.httpOrigin(owner.location.daemonId) ?? null : null,
+          assetSource: peer
+            ? { kind: "peer" as const, origin: daemonSessions?.httpOrigin(owner.location.daemonId) ?? null }
+            : { kind: "attached" as const },
           registrationId };
       } catch (error) {
         reportStatusMessage(error instanceof Error ? error.message.slice(0, 512)
@@ -2163,10 +2544,30 @@ export async function WorkbenchClient(
       }
     },
     launchContextFor,
+    selectBrowseLocation: async (logicalProjectId, location) => {
+      const registered = presentationClient?.snapshot().data?.locations.some(item =>
+        item.logicalProjectId === logicalProjectId
+        && item.target.daemonId === location.daemonId
+        && item.target.projectId === location.projectId);
+      if (!registered) throw new Error("The selected folder does not belong to this project.");
+      const attachedId = networkClient?.snapshot().snapshot?.daemon?.daemonId;
+      const session = location.daemonId === attachedId ? null : daemonSessions?.get(location.daemonId);
+      if (session) {
+        await session.start();
+        if (session.getSnapshot().phase !== "ready") await session.refresh();
+      }
+      const project = session?.projects ?? (location.daemonId === attachedId ? projectClient : null);
+      if (!project || !await project.selectProjectStrict(location.projectId)) {
+        throw new Error("The selected daemon folder is unavailable.");
+      }
+      selectBrowsePeer(session ?? null);
+      emitExplorerStateChange();
+    },
     draftContextFor: draftId => {
       const location = draftLocationFor(draftId);
       if (!location) return null;
       return launchContextFor(location);
     },
+    draftLocationFor,
   };
 }

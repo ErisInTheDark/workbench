@@ -5,10 +5,12 @@
 import {
   PresentationMutationSchema, type PresentationMutation,
 } from "workbench-shared/state/workbench-presentation-state";
+import type { PresentationImportSource } from "workbench-shared/state/workbench-presentation-import";
+import type { DaemonId } from "workbench-shared/workbench/identity";
 import WorkbenchPresentationRepository from "./WorkbenchPresentationRepository.ts";
 
 export default class WorkbenchPresentationController {
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = new Set<(revision: number) => void>();
   private closed = false;
 
   constructor(private readonly repository: WorkbenchPresentationRepository) {}
@@ -16,6 +18,16 @@ export default class WorkbenchPresentationController {
   read() {
     this.assertOpen();
     return this.repository.read();
+  }
+
+  revision() {
+    this.assertOpen();
+    return this.repository.readRevision();
+  }
+
+  readImportReceipts(daemonId: DaemonId, sources: readonly PresentationImportSource[]) {
+    this.assertOpen();
+    return { present: this.repository.readImportReceipts(daemonId, sources) };
   }
 
   mutate(value: PresentationMutation) {
@@ -42,7 +54,7 @@ export default class WorkbenchPresentationController {
     return this.repository.readAttachment(draftId, id);
   }
 
-  subscribe(listener: () => void) {
+  subscribe(listener: (revision: number) => void) {
     this.assertOpen();
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
@@ -53,11 +65,19 @@ export default class WorkbenchPresentationController {
     this.listeners.clear();
   }
 
+  mutateImportBatch(values: readonly PresentationMutation[]) {
+    this.assertOpen();
+    const result = this.repository.mutateImportBatch(values);
+    this.publish();
+    return result;
+  }
+
   private assertOpen() {
     if (this.closed) throw new Error("Presentation state is closed.");
   }
 
   private publish() {
-    for (const listener of this.listeners) listener();
+    const revision = this.repository.readRevision();
+    for (const listener of this.listeners) listener(revision);
   }
 }

@@ -3,15 +3,137 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import {
   createProjectRoute, createFileRoute, createThreadRoute, createHomeThreadRoute,
-  createPinnedThreadRoute, createSettingsRoute, createStatsRoute, createMosaicRoute,
+  createPinnedThreadRoute, createSettingsRoute, createStatsRoute, createLogicalProjectRoute,
+  createLogicalExistingThreadRoute,
   createWorkbenchHref, parseWorkbenchRouteFromLocation,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import WorkbenchProjectNavigation from "./workbench-project-navigation";
 
 const identities = ["remote://github.com/team/repo", "local:///C:/git/repo", "workspace://members"];
+
+test("longer remote addresses resolve to one project and canonicalise to its shortest slug", () => {
+  const id = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const navigation = new WorkbenchProjectNavigation([], [], [{
+    id, matchKey: "remote://github.com/team/repo", label: "repo", locations: [],
+  }]);
+  assert.equal(navigation.href(createLogicalProjectRoute(id)), "/repo");
+  for (const address of ["/repo", "/team/repo", "/github.com/team/repo"]) {
+    const resolved = navigation.readRoute(address);
+    assert.equal(resolved.logical?.projectId, id);
+    assert.equal(navigation.href(resolved), "/repo");
+  }
+});
+
+test("a concrete project address keeps its logical selection when opening a thread", () => {
+  const logicalId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const projectId = ProjectIdSchema.parse("b597a4b6-7af9-41f1-83ea-a53aed6f3b0a");
+  const location = {
+    daemonId: DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c"),
+    projectId,
+  };
+  const project = {
+    id: projectId, kind: "git" as const, name: "workbench", relativePath: "workbench",
+    rootPath: "C:/workbench", roots: [], lastCommitTimeMs: null,
+  };
+  const navigation = new WorkbenchProjectNavigation([project], [], [{
+    id: logicalId, matchKey: "remote://github.com/team/workbench", label: "workbench",
+    locations: [{
+      target: location, daemonId: location.daemonId, hostname: "desktop",
+      name: "workbench", rootPath: project.rootPath, project,
+    }],
+  }], () => location);
+  const selected = navigation.resolveRoute(createProjectRoute(projectId));
+  assert.equal(selected.logical?.projectId, logicalId);
+  const target = createLogicalExistingThreadRoute(selected.logical?.projectId ?? null, {
+    kind: "provider", threadId: ThreadReferenceSchema.parse("thread-uuid"),
+  });
+  const href = navigation.href(target);
+  assert.ok(href);
+  assert.equal(navigation.readRoute(href).logical?.projectId, logicalId);
+});
+
+test("a display label cannot become a project address", () => {
+  const id = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const navigation = new WorkbenchProjectNavigation([], [], [{
+    id, matchKey: "remote://github.com/team/repo", label: "friendly", locations: [],
+  }]);
+  assert.equal(navigation.readRoute("/friendly").logical, undefined);
+  assert.equal(navigation.href(createLogicalProjectRoute(id)), "/repo");
+});
+
+test("remote collisions reject a short alias instead of guessing and keep the longer owner", () => {
+  const firstId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const secondId = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const navigation = new WorkbenchProjectNavigation([], [], [
+    { id: firstId, matchKey: "remote://github.com/team/repo", label: "team/repo", locations: [] },
+    { id: secondId, matchKey: "remote://github.com/other/repo", label: "other/repo", locations: [] },
+  ]);
+  assert.equal(navigation.readRoute("/repo").view, "invalid");
+  assert.equal(navigation.readRoute("/team/repo").logical?.projectId, firstId);
+  assert.equal(navigation.readRoute("/github.com/team/repo").logical?.projectId, firstId);
+  assert.equal(navigation.href(navigation.readRoute("/github.com/team/repo")), "/team/repo");
+  assert.equal(navigation.readRoute("/team/repo/@/pin/missing/@/thread/id").view, "invalid");
+});
+
+test("a local name collision cannot steal a former remote short link", () => {
+  const remoteId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const localId = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const navigation = new WorkbenchProjectNavigation([], [], [
+    { id: remoteId, matchKey: "remote://github.com/team/repo",
+      storedLabel: "team/repo", label: "team/repo", locations: [] },
+    { id: localId, matchKey: "local://C:/git/repo",
+      storedLabel: "repo", label: "local://C:/git/repo", locations: [] },
+  ]);
+  assert.equal(navigation.readRoute("/repo").view, "invalid");
+  const localHref = navigation.href(createLogicalProjectRoute(localId));
+  assert.equal(navigation.readRoute(localHref!).logical?.projectId, localId);
+  assert.equal(navigation.href(createLogicalProjectRoute(remoteId)), "/team/repo");
+});
+
+test("a UUID link needs its verified owner and does not borrow the selected project", () => {
+  const firstId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const secondId = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const ownerLocation = {
+    daemonId: DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c"),
+    projectId: ProjectIdSchema.parse("owner-folder"),
+  };
+  const projects = [
+    { id: firstId, matchKey: "remote://github.com/team/repo", label: "repo", locations: [] },
+    { id: secondId, matchKey: "remote://github.com/team/other", label: "other",
+      locations: [{ target: ownerLocation, daemonId: ownerLocation.daemonId, hostname: "desktop",
+        name: "other", rootPath: "C:/other", project: null }] },
+  ] satisfies ConstructorParameters<typeof WorkbenchProjectNavigation>[2];
+  const route = createLogicalExistingThreadRoute(firstId, {
+    kind: "provider", threadId: ThreadReferenceSchema.parse("thread-uuid"),
+  });
+  assert.equal(new WorkbenchProjectNavigation([], [], projects).href(route), undefined);
+  const navigation = new WorkbenchProjectNavigation([], [], projects, () => ownerLocation);
+  assert.equal(navigation.href(route), "/repo/@/pin/other/@/thread/thread-uuid");
+});
+
+test("a verified observed-only thread still has a Home link", () => {
+  const id = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const location = {
+    daemonId: DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c"),
+    projectId: ProjectIdSchema.parse("owner-folder"),
+  };
+  const threadId = ThreadReferenceSchema.parse("observed-thread");
+  const navigation = new WorkbenchProjectNavigation([], [], [{
+    id, matchKey: "remote://github.com/team/repo", label: "repo", locations: [],
+    observedLocations: [{
+      ...location, hostname: "desktop", rootPath: "C:/repo",
+      project: {
+        id: location.projectId, kind: "git", name: "repo", relativePath: "repo",
+        rootPath: "C:/repo", lastCommitTimeMs: null, roots: [],
+      },
+    }],
+  }], () => location);
+  assert.equal(navigation.href(createLogicalExistingThreadRoute(null, { kind: "provider", threadId })),
+    `/@/thread/repo/@/${threadId}`);
+});
 
 test("catalogue addresses replace junction aliases without changing thread identity", () => {
   const projectId = ProjectIdSchema.parse(identities[0]);
@@ -43,7 +165,6 @@ for (const identity of identities) {
       createThreadRoute(address, "thread"), createHomeThreadRoute(address, "thread"),
       createPinnedThreadRoute("other/project", address, "thread"),
       createSettingsRoute(address, "project"), createStatsRoute(address),
-      createMosaicRoute(address, { type: "target", target: { kind: "file", filePath: "src/a.ts" } }),
     ];
     for (const publicRoute of routes.map(route => parseWorkbenchRouteFromLocation(createWorkbenchHref(route)))) {
       const internal = navigation.resolveRoute(publicRoute);

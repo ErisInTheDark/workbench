@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
+import type { WorkbenchLogicalThreadRow } from "workbench-shared/types";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchThreadRouter, { type WorkbenchThreadSource } from "./WorkbenchThreadRouter";
@@ -71,5 +72,105 @@ test("a UUID seen on two daemons fails closed instead of choosing one", async ()
     presentation: () => ({ ...presentation, locations: [] }), rows: () => [], daemons: () => [first, second],
   });
   await assert.rejects(router.resolve(threadId), /multiple daemons/);
+  router.dispose();
+});
+
+test("one concrete thread cannot belong to two logical projects", () => {
+  const first = source(firstId, true);
+  const row: WorkbenchLogicalThreadRow = {
+    logicalProjectId, location: { daemonId: firstId, projectId },
+    hostname: "desktop", rootPath: "/repo",
+    entry: {
+      entryKind: "thread", title: "Thread", activityAt: 1,
+      identity: { harness: "codex", threadId },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
+    },
+  };
+  const router = new WorkbenchThreadRouter({
+    presentation: () => presentation,
+    rows: () => [row, { ...row, logicalProjectId: LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002") }],
+    daemons: () => [first],
+  });
+  assert.throws(() => router.known(threadId), /conflicting owners/u);
+  router.dispose();
+});
+
+test("owner lookup waits for its verified session to become ready", async () => {
+  let ready = false;
+  const candidate = {
+    ...source(firstId, true),
+    ready: () => ready,
+    prepare: async () => { ready = true; },
+  };
+  const router = new WorkbenchThreadRouter({
+    presentation: () => presentation, rows: () => [], daemons: () => [candidate],
+  });
+  assert.equal((await router.resolve(threadId)).location.daemonId, firstId);
+  router.dispose();
+});
+
+test("a verified direct read teaches the UUID router its owner without a presentation location", () => {
+  const first = source(firstId, true);
+  const router = new WorkbenchThreadRouter({
+    presentation: () => ({ ...presentation, locations: [] }), rows: () => [],
+    daemons: () => [first],
+  });
+  router.rememberRead({
+    id: threadId, harness: "codex", location: { daemonId: firstId, projectId },
+    daemon: first.daemon,
+  });
+  assert.deepEqual(router.known(threadId)?.location, { daemonId: firstId, projectId });
+  first.revoke();
+  router.invalidateUnavailable();
+  assert.equal(router.known(threadId), null);
+  router.dispose();
+});
+
+test("an unsaved draft target can move, yields to saved state, and is forgotten on leave", () => {
+  let state = presentation;
+  const router = new WorkbenchThreadRouter({
+    presentation: () => state, rows: () => [], daemons: () => [],
+  });
+  const firstTarget = { daemonId: firstId, projectId };
+  const secondTarget = { daemonId: secondId, projectId };
+  router.rememberDraft(threadId, logicalProjectId, firstTarget);
+  assert.deepEqual(router.known(threadId)?.location, firstTarget);
+  router.rememberDraft(threadId, logicalProjectId, secondTarget);
+  assert.deepEqual(router.known(threadId)?.location, secondTarget);
+  state = { ...presentation, drafts: [{
+    id: threadId, logicalProjectId, target: firstTarget, phase: "unsent",
+  } as unknown as PresentationSnapshot["drafts"][number]] };
+  assert.deepEqual(router.known(threadId)?.location, firstTarget);
+  state = { ...state, drafts: [{ ...state.drafts[0]!, phase: "accepted" }] };
+  assert.equal(router.known(threadId), null);
+  state = { ...state, drafts: [{ ...state.drafts[0]!, phase: "deleted" }] };
+  router.rememberDraft(threadId, logicalProjectId, secondTarget);
+  assert.deepEqual(router.known(threadId)?.location, secondTarget,
+    "a deleted app record cannot erase the active empty composer session");
+  state = presentation;
+  assert.deepEqual(router.known(threadId)?.location, secondTarget);
+  router.rememberDraft(threadId, logicalProjectId, secondTarget);
+  router.forgetDraft(threadId);
+  assert.equal(router.known(threadId), null);
+  router.dispose();
+  assert.throws(() => router.known(threadId), /closed/);
+});
+
+test("an active draft session retains its concrete owner through saved-record deletion", () => {
+  let state = presentation;
+  const location = { daemonId: firstId, projectId };
+  const router = new WorkbenchThreadRouter({
+    presentation: () => state, rows: () => [], daemons: () => [],
+  });
+  router.rememberDraft(threadId, logicalProjectId, location);
+  state = { ...presentation, drafts: [{
+    id: threadId, logicalProjectId, target: location, phase: "unsent",
+  } as unknown as PresentationSnapshot["drafts"][number]] };
+  assert.deepEqual(router.known(threadId)?.location, location);
+  state = { ...state, drafts: [{ ...state.drafts[0]!, phase: "deleted" }] };
+  assert.deepEqual(router.known(threadId)?.location, location);
+  router.forgetDraft(threadId);
+  assert.equal(router.known(threadId), null);
   router.dispose();
 });

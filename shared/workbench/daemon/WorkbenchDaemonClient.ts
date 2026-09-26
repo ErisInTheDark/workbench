@@ -23,6 +23,7 @@ import {
   WorkbenchPresentationAttachmentChunkSchema,
   WorkbenchPresentationExportPageSchema,
   WorkbenchPresentationLayoutChunkSchema,
+  WorkbenchPresentationManifestPageSchema,
 } from "../thread/thread-presentation-export";
 import {
   GitArcStashResultSchema,
@@ -36,6 +37,7 @@ import {
 } from "../git/git-arc-failures.ts";
 import reportClientSchemaError from "../report-client-schema-error.ts";
 import { WorkbenchProjectsPayloadSchema } from "../project/project-state.ts";
+import { WorkbenchProjectFileIndexResponseSchema } from "../project/project-file-index.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "../thread/thread-state.ts";
 import { WorkbenchModelContextCapabilitySchema } from "../thread/thread-profile.ts";
 import { WorkbenchThreadIdentityResolutionSchema } from "../thread/workbench-thread-identity.ts";
@@ -100,10 +102,12 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "project/discovery-settings/read": return ProjectDiscoverySettingsReadSchema;
     case "project/discovery-settings/update": return ProjectDiscoverySettingsResultSchema;
     case "project/catalog/read": return WorkbenchProjectsPayloadSchema;
+    case "project/file-index/read": return WorkbenchProjectFileIndexResponseSchema;
     case "project/locations/read": return WorkbenchProjectLocationsPayloadSchema;
     case "thread/launch": return WorkbenchThreadLaunchStateSchema;
     case "thread/launch/read": return z.object({ state: WorkbenchThreadLaunchStateSchema.nullable() }).strict();
     case "thread/presentation/export": return WorkbenchPresentationExportPageSchema;
+    case "thread/presentation/manifest/read": return WorkbenchPresentationManifestPageSchema;
     case "thread/presentation/attachment/read": return WorkbenchPresentationAttachmentChunkSchema;
     case "thread/presentation/layout/read": return WorkbenchPresentationLayoutChunkSchema;
     case "thread/identity/resolve": return z.object({ data: WorkbenchThreadIdentityResolutionSchema.nullable() }).strict();
@@ -232,6 +236,8 @@ class WorkbenchDaemonClient {
 
   readonly projects = {
     catalog: () => this.request("project/catalog/read", {}),
+    fileIndex: (params: WorkbenchDaemonParams<"project/file-index/read">) =>
+      this.request("project/file-index/read", params),
     locations: () => this.request("project/locations/read", {}),
     files: {
       read: (params: WorkbenchDaemonParams<"project/file/read">) => this.request("project/file/read", params),
@@ -279,6 +285,8 @@ class WorkbenchDaemonClient {
   };
 
   readonly presentationExport = {
+    manifest: (params: WorkbenchDaemonParams<"thread/presentation/manifest/read">) =>
+      this.request("thread/presentation/manifest/read", params),
     project: (params: WorkbenchDaemonParams<"thread/presentation/export">) =>
       this.request("thread/presentation/export", params),
     attachment: (params: WorkbenchDaemonParams<"thread/presentation/attachment/read">) =>

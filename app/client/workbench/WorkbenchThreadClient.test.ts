@@ -1,4 +1,4 @@
-/* Exports: none. Tests protect reads, retention, lifecycle fencing, canonical placement, streaming, admission, and questionnaire answer intent. */
+/* Exports: none. Tests protect stable runtime publication, reads, retention, lifecycle fencing, canonical placement, streaming, admission, and questionnaire answer intent. */
 
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
@@ -427,6 +427,24 @@ function questionnaireEntry(
     turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
   };
 }
+
+test("published runtime reads stay stable until the thread owner publishes new state", async () => withClient(async (client) => {
+  const initial = client.getPublishedSnapshot();
+  assert.strictEqual(client.getPublishedSnapshot(), initial);
+
+  let published: ReturnType<typeof client.getSnapshot> | null = null;
+  const unsubscribe = client.subscribe(snapshot => { published = snapshot; });
+  try {
+    const thread = activeThread();
+    client.selectThreadPayload(thread);
+    assert.notStrictEqual(published, initial);
+    assert.strictEqual(client.getPublishedSnapshot(), published);
+    assert.strictEqual(client.getPublishedSnapshot(), published);
+    assert.equal(client.getPublishedSnapshot().currentThread?.id, thread.id);
+  } finally {
+    unsubscribe();
+  }
+}));
 
 test("voice document events traverse the shared socket and mounted daemon adapter", async () => withClient(async (client, socket) => {
   const daemon = new WorkbenchDaemonClient({

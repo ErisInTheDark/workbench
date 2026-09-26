@@ -288,19 +288,13 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
       ? getActivatedWorkbenchSkillPathsForTextValues(Object.values(responseCustomValues), highlightSources)
       : [];
     setError("");
-    await editing.session.submit(async () => {
+    await editing.session.submitAccepted(async () => {
       await interactiveProps.onSubmit(
         response,
         supplementalInput.length ? supplementalInput : undefined,
         activatedSkillPaths.length ? activatedSkillPaths : undefined,
       );
-      try {
-        await interactiveProps.onDraftClear();
-      } catch (error) {
-        editing.session.reportError(error, "The answer was sent, but its draft could not be cleared.");
-      }
-      return true;
-    });
+    }, interactiveProps.onDraftClear);
   };
 
   const handleSubmit = async () => {

@@ -159,6 +159,62 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
 
 const testPersistenceByRoot = new Map<string, MemoryThreadStatePersistence>();
 
+test("new global observation admits Home before a slow project loads", async () => {
+  const persistence = new MemoryThreadStatePersistence();
+  const slowProject = fixtureProjectIds.beta;
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const published = Promise.withResolvers<WorkbenchThreadStateSnapshot>();
+  const readProject = persistence.readProject.bind(persistence);
+  persistence.readProject = async projectId => {
+    if (projectId === slowProject) {
+      entered.resolve();
+      await release.promise;
+      throw new Error("slow project failed");
+    }
+    return await readProject(projectId);
+  };
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "progressive-global-open", threadStateStore: persistence,
+    getProjectCatalog: () => ({
+      data: [
+        projectOption(fixtureProjectIds.alpha, "C:/alpha"),
+        projectOption(slowProject, "C:/beta"),
+      ],
+      rootPath: "C:/",
+    }),
+    projectState: projectState(),
+    publish: (_connectionId, update) => {
+      if ("updateKind" in update && update.updateKind === "projectThreadSidebar"
+        && update.sidebar.projectId === slowProject) published.resolve(update);
+    },
+    reconcileProject: async () => [],
+  });
+  try {
+    let opened = false;
+    const opening = controller.openGlobal("viewer", 8).then(result => {
+      opened = true;
+      return result;
+    });
+    await entered.promise;
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.equal(opened, true, "a slow project must not hold the global bootstrap response");
+    } finally {
+      release.resolve();
+    }
+    const result = await opening;
+    assert.equal(result.catalog.data.length, 2);
+    const update = await published.promise;
+    assert.equal("updateKind" in update && update.updateKind === "projectThreadSidebar"
+      ? update.sidebar.error : null, "slow project failed");
+  } finally {
+    release.resolve();
+    await controller.dispose();
+  }
+});
+
 test("retained project requests share one observation and move drafts between canonical owners", async () => {
   const persistence = new MemoryThreadStatePersistence();
   const source = testProjectIds.project;
@@ -2414,6 +2470,9 @@ test("legacy presentation export pages drafts and reads inline attachments witho
   const second = await controller.exportPresentationPage({ projectId, cursor: first.nextCursor, limit: 1 });
   assert.equal(second.drafts[0]?.draftId, secondId);
   assert.equal(second.nextCursor, null);
+  const selected = await controller.exportPresentationPage({ projectId, draftIds: [secondId] });
+  assert.deepEqual(selected.drafts.map(item => item.draftId), [secondId],
+    "missing-source transfer must not reread an already receipted draft");
   const layout = await controller.exportPresentationLayoutChunk({
     scope: "project", projectId, sourceRevision: null, offset: 0,
   });
@@ -2428,6 +2487,34 @@ test("legacy presentation export pages drafts and reads inline attachments witho
   await assert.rejects(controller.exportPresentationLayoutChunk({
     scope: "project", projectId, sourceRevision: layout.sourceRevision, offset: 0,
   }), /source changed/u);
+});
+
+test("presentation manifest identifies missing sources without exporting every empty project", async context => {
+  const projectId = fixtureProjectIds.alpha;
+  const emptyProjectId = fixtureProjectIds.beta;
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("11111111-1111-4111-8111-111111111111");
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: () => ({
+      data: [projectOption(projectId, "C:/alpha"), projectOption(emptyProjectId, "C:/beta")],
+      rootPath: "C:/",
+    }),
+    projectState: projectState(), publish: () => undefined,
+    reconcileProject: async () => [], storageRoot: "presentation-manifest",
+    threadStateStore: new MemoryThreadStatePersistence(),
+  });
+  context.after(() => controller.dispose());
+  await controller.handleRequest("observer", {
+    method: "workbench/thread-state/draft/upsert", projectId,
+    draft: {
+      draftId, projectId, profileId: null, composerSettings: EMPTY_CODEX_SETTINGS,
+      prompt: "keep", attachments: [], clientUpdatedAt: 1, createdAt: 1, updatedAt: 1,
+    },
+  });
+  const manifest = await controller.exportPresentationManifestPage({ limit: 100 });
+  assert.deepEqual(manifest.sources, [
+    { kind: "draft", projectId, sourceId: draftId },
+  ]);
+  assert.equal(manifest.nextCursor, null);
 });
 
 test("legacy layout export keeps each socket response bounded across a large retained order", async context => {

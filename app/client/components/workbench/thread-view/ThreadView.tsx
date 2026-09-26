@@ -31,7 +31,9 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
   const active = useWorkbenchThread(props.projectId, selectedId && selectedId !== rootId
     ? thread.state.status === "ready" ? { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(rootId), threadId: ThreadReferenceSchema.parse(selectedId), harness: child?.harness } : null
     : target, undefined, selectedId !== rootId ? "view" : interest);
-  const error = thread.state.error ?? active.state.error ?? (!thread.state.document ? routeError : "");
+  const error = thread.state.error ?? active.state.error
+    ?? (!props.projectId && thread.state.document ? "The thread's project owner is unavailable."
+      : !thread.state.document ? routeError : "");
   if (error) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center px-6 py-8">

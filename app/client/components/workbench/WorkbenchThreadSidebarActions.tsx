@@ -10,7 +10,7 @@ import type { ThreadSummary, WorkbenchHarness, WorkbenchLogicalThreadRow } from 
 import { projectLogicalPinnedDisplayOrder, projectLogicalThreadDisplayOrder } from "../../workbench/WorkbenchProjectProjection";
 import type { WorkbenchThreadRowDragPayload } from "../../workbench/layout/workbench-drag";
 import { writeTextToClipboard } from "../../workbench/dom/clipboard";
-import { findWorkbenchThreadFolder, getWorkbenchThreadDisplayKey, type WorkbenchThreadDisplayOrder, type WorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
+import { getWorkbenchThreadDisplayKey, type WorkbenchThreadDisplayOrder, type WorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
 import { getProjectQualifiedThreadDisplayKey, getThreadDisplayDraftKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import { FolderIdSchema, LogicalProjectIdSchema, ProjectIdSchema, type DraftId, type ProjectId, type ThreadDisplayKey, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import {
@@ -126,6 +126,16 @@ function WorkbenchThreadSidebarActionsProvider({
   const controls = client.controls;
   const logicalThreads = client.explorer.logicalThreads;
   const presentation = client.mounted?.presentationClient?.snapshot().data;
+  const logicalProjectOrders = useMemo(() => new Map(
+    presentation && logicalThreads
+      ? [...new Set(logicalThreads.map(row => row.logicalProjectId))].map(id => [
+        id, projectLogicalThreadDisplayOrder(id, logicalThreads, presentation),
+      ] as const)
+      : [],
+  ), [logicalThreads, presentation]);
+  const logicalPinnedOrder = useMemo(() => presentation && logicalThreads
+    ? projectLogicalPinnedDisplayOrder(logicalThreads, presentation) : null,
+  [logicalThreads, presentation]);
   const threadSummariesById = useMemo(() =>
     new Map(client.explorer.threads.map(thread => [thread.id, thread])),
   [client.explorer.threads]);
@@ -283,16 +293,16 @@ function WorkbenchThreadSidebarActionsProvider({
     const ownerSidebar = projectThreadSidebars.projects.find((candidate) => candidate.projectId === ownerProjectId) ?? null;
     const appOrder = source && qualifiedRow && presentation && logicalThreads
       ? useProjectFolder
-        ? projectLogicalThreadDisplayOrder(
-          LogicalProjectIdSchema.parse(qualifiedRow.logicalProjectId), logicalThreads, presentation,
-        )
-        : projectLogicalPinnedDisplayOrder(logicalThreads, presentation)
+        ? logicalProjectOrders.get(LogicalProjectIdSchema.parse(qualifiedRow.logicalProjectId)) ?? null
+        : logicalPinnedOrder
       : null;
+    const folderIn = (order: WorkbenchThreadDisplayOrder | null | undefined) =>
+      order?.folders?.find(item => item.threadKeys.includes(displayKey)) ?? null;
     const folder = appOrder
-      ? findWorkbenchThreadFolder(appOrder, displayKey)
+      ? folderIn(appOrder)
       : useProjectFolder
-        ? findWorkbenchThreadFolder(ownerSidebar?.displayOrder, displayKey)
-        : findWorkbenchThreadFolder(pinnedThreadLayout.displayOrder, displayKey);
+        ? folderIn(ownerSidebar?.displayOrder)
+        : folderIn(pinnedThreadLayout.displayOrder);
     if (entry.entryKind !== "subagent" && (group === "pinned" || group === "snoozed" || group === "settled") && !folder) {
       items.push({
         icon: <FolderInputIcon size={16} />,
@@ -456,7 +466,7 @@ function WorkbenchThreadSidebarActionsProvider({
       });
     }
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}`, placementScope: "thread-list" };
-  }, [controls, logicalThreads, mutateEntry, onOpenQualifiedThread, onOpenThread,
+  }, [controls, logicalPinnedOrder, logicalProjectOrders, logicalThreads, mutateEntry, onOpenQualifiedThread, onOpenThread,
     onPresentationDraftDeleted, pinnedThreadLayout.displayOrder, presentation, projectId,
     projectThreadSidebars.projects, stopThread, threadSummariesById]);
 

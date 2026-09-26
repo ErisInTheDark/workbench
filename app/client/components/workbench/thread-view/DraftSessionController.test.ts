@@ -167,6 +167,37 @@ test("reset is a real edit, not stale hydration overwriting content", async () =
   assert.equal(store.saved.text, "");
 });
 
+test("one mounted draft session saves through the current route after new becomes a draft", async () => {
+  let stored = emptyComposer();
+  const writes: string[] = [];
+  const session = new DraftSessionController(stored, {
+    empty: emptyComposer,
+    save: update => {
+      stored = update(stored);
+      if (!stored.text) throw new Error("The old new-thread route cannot delete a saved draft.");
+      writes.push("new");
+      return stored;
+    },
+    schedule: () => 1,
+    cancelSchedule: () => {},
+  });
+  session.attach();
+  session.edit(draft => ({ ...draft, text: "enough words to save" }));
+  assert.equal(await session.flush(), true);
+  session.updatePorts({
+    empty: emptyComposer,
+    save: update => {
+      stored = update(stored);
+      writes.push("draft");
+      return stored;
+    },
+  });
+  session.edit(draft => ({ ...draft, text: "" }));
+  assert.equal(await session.flush(), true);
+  assert.deepEqual(writes, ["new", "draft"]);
+  assert.equal(session.getSnapshot().draft.text, "");
+});
+
 test("submission waits for earlier saves and success cannot resurrect a cleared draft", async () => {
   const store = fixture(emptyComposer(), emptyComposer);
   const saved = deferred<WorkbenchComposerInputDraft>();
@@ -190,6 +221,58 @@ test("submission waits for earlier saves and success cannot resurrect a cleared 
   await session.flush();
   assert.equal(session.getSnapshot().draft.text, "");
   assert.equal(store.saved.text, "");
+});
+
+test("accepted questionnaire delivery starts before autosave and clears only after it settles", async () => {
+  const store = fixture(emptyQuestionnaire(), emptyQuestionnaire);
+  const saved = deferred<WorkbenchQuestionnaireDraft>();
+  store.ports.save = () => saved.promise;
+  const session = store.create();
+  session.edit((draft) => ({ ...draft, customValues: { answer: "send this" } }));
+  const saving = session.flush();
+  let deliveries = 0;
+  let cleanups = 0;
+  const cleaned = Promise.withResolvers<void>();
+  const submitting = session.submitAccepted(async (draft) => {
+    assert.equal(draft.customValues.answer, "send this");
+    deliveries += 1;
+  }, async () => {
+    cleanups += 1;
+    store.saved = emptyQuestionnaire();
+    cleaned.resolve();
+  });
+  assert.equal(deliveries, 1);
+  assert.equal(cleanups, 0);
+  saved.resolve({ ...emptyQuestionnaire(), customValues: { answer: "send this" } });
+  await saving;
+  assert.equal(await submitting, true);
+  await cleaned.promise;
+  assert.equal(cleanups, 1);
+  assert.deepEqual(store.saved, emptyQuestionnaire());
+});
+
+test("a failed old autosave cannot leak into the next questionnaire after acceptance", async (t) => {
+  t.mock.method(console, "error", () => {});
+  t.mock.method(console, "warn", () => {});
+  const store = fixture(emptyQuestionnaire(), emptyQuestionnaire);
+  const oldSave = deferred<WorkbenchQuestionnaireDraft>();
+  const normalSave = store.ports.save;
+  store.ports.save = () => oldSave.promise;
+  const session = store.create();
+  session.edit((draft) => ({ ...draft, customValues: { old: "old answer" } }));
+  const saving = session.flush();
+  const cleaned = Promise.withResolvers<void>();
+  assert.equal(await session.submitAccepted(async () => {}, async () => {
+    store.saved = emptyQuestionnaire();
+    cleaned.resolve();
+  }), true);
+  oldSave.reject(new Error("old write failed"));
+  await saving;
+  await cleaned.promise;
+  store.ports.save = normalSave;
+  session.edit((draft) => ({ ...draft, customValues: { ...draft.customValues, next: "new answer" } }));
+  await session.flush();
+  assert.deepEqual(store.saved.customValues, { next: "new answer" });
 });
 
 test("a new screenshot can start the next draft after successful submission", async () => {

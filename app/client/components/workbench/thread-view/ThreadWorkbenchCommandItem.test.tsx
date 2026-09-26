@@ -147,14 +147,26 @@ function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClien
     mounted: store ? {
       getThreadController: () => { throw new Error("Unexpected thread view during command rendering."); },
       threadOwnerFor: () => null,
+      threadDraftIdentityFor: () => null,
       threadContextFor: () => null,
       launchContextFor: () => null,
       draftContextFor: () => null,
+      draftLocationFor: () => null,
+      selectBrowseLocation: async () => undefined,
+      navigation: {} as NonNullable<WorkbenchClientController["mounted"]>["navigation"],
+      startup: {
+        getSnapshot: () => ({ phase: "ready" as const, error: null }),
+        subscribe: () => () => undefined,
+        start: async () => undefined,
+        retry: async () => undefined,
+      },
       controls: {} as NonNullable<WorkbenchClientController["mounted"]>["controls"],
       dispose: () => undefined,
       threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],
       threadSidebar: store,
       threadTextPresentation: {} as NonNullable<WorkbenchClientController["mounted"]>["threadTextPresentation"],
+      threadTextPresentationFor: () => null,
+      projectSourceErrors: { getSnapshot: () => "", subscribe: () => () => undefined },
     } : null,
   };
 }

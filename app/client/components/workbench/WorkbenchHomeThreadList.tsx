@@ -5,6 +5,7 @@
 "use client";
 
 import { useMemo, useState, type ReactNode } from "react";
+import { useWorkbenchClientController } from "./workbench-client-context";
 
 import type { WorkbenchControls, WorkbenchLogicalProject, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
@@ -125,7 +126,7 @@ export default function WorkbenchHomeThreadList({
   actions: HomeThreadActions;
   activeDragPayload: WorkbenchDragPayload | null;
   attentionLabelsByThreadId: Record<string, string | undefined>;
-  createProject: WorkbenchProjectOption | WorkbenchLogicalProject;
+  createProject: WorkbenchProjectOption | WorkbenchLogicalProject | null;
   currentTarget: WorkbenchThreadTarget | null;
   onCreateThread: (ownerProjectId: string, folderId?: FolderId) => void;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
@@ -143,6 +144,10 @@ export default function WorkbenchHomeThreadList({
   const [layoutError, setLayoutError] = useState("");
   const homeDisplayOrderSupported = Boolean(logicalProjects && presentation && controls)
     || actions.homeDisplayOrderSupported;
+  const client = useWorkbenchClientController();
+  const canCreate = Boolean(client.mounted && (!client.mounted.presentationClient
+    || createProject && "matchKey" in createProject
+      && createProject.locations.some(location => location.project)));
   const projectHref = useWorkbenchProjectNavigation();
   const {
     preferences,
@@ -353,7 +358,7 @@ export default function WorkbenchHomeThreadList({
       && activeDragPayload.ownerProjectId === projectId
       && (reorderSection !== "settled" || activeDragPayload.section === "settled"),
     );
-    const dragTargets = archived ? null : (
+    const dragTargets = archived || qualified?.observedOnly ? null : (
       <WorkbenchThreadDragTargets
         activePayload={activeDragPayload}
         folderLabel={placementFolder ? `add to ${placementFolder.title}` : "create folder"}
@@ -409,10 +414,10 @@ export default function WorkbenchHomeThreadList({
       <WorkbenchThreadListItem
         attentionLabel={entry.entryKind === "draft" ? "" : attentionLabelsByThreadId[entry.identity.threadId]}
         compact={false}
-        contextMenu={qualified
+        contextMenu={qualified?.observedOnly ? null : qualified
           ? actions.getThreadContextMenuFor(entry, "project")
           : logicalProjects ? null : actions.getThreadContextMenu(entry, sourceProjectId, "project")}
-        draggable={draggable}
+        draggable={draggable && !qualified?.observedOnly}
         dragTargets={dragTargets}
         entry={entry}
         href={projectHref(qualified
@@ -424,25 +429,24 @@ export default function WorkbenchHomeThreadList({
         isShiftPressed={isShiftPressed}
         key={threadKey}
         nowMs={actions.nowMs}
-        onAction={(action) => qualified
+        onAction={(action) => qualified?.observedOnly ? undefined : qualified
           ? actions.onActionFor(entry, action)
           : actions.onAction(entry, action, sourceProjectId)}
         onActivate={(activatedTarget) => qualified
           ? onOpenQualifiedThread?.(qualified) : onOpenThread(activatedTarget, sourceProjectId)}
-        onDragStart={onDragStart}
-        onPointerDown={onPointerDown}
+        onDragStart={qualified?.observedOnly ? undefined : onDragStart}
+        onPointerDown={qualified?.observedOnly ? undefined : onPointerDown}
         project={logicalProject ?? project}
         projectId={sourceProjectId}
-        ownerLabel={qualified ? `${qualified.hostname} · ${qualified.rootPath}` : undefined}
         selected={projectId === selectedOwnerProjectId && isWorkbenchThreadTargetSelected(target, currentTarget)}
-        showActions
+        showActions={!qualified?.observedOnly}
         showPinPriorityIcon
         tooltipDetails={renderThreadTooltipDetails?.(entry)}
       />
     );
     return (
       <Draggable
-        disabled={archived}
+        disabled={archived || Boolean(qualified?.observedOnly)}
         dropTargetIds={[
           ...(homeDisplayOrderSupported ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID] : []),
           WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID,
@@ -553,6 +557,7 @@ export default function WorkbenchHomeThreadList({
   const renderFolderCreateThread = (item: Extract<WorkbenchHomeThreadDisplayItem, { itemKind: "folder" }>) => {
     const target = { folderId: item.folder.folderId, kind: "new" as const };
     const logicalProject = logicalProjects?.find(project => project.id === item.projectId);
+    if (client.mounted?.presentationClient && !logicalProject) return null;
     const location = logicalProject?.locations.find(candidate => candidate.project)?.target
       ?? logicalProject?.locations[0]?.target ?? null;
     const selected = selectedOwnerProjectId === item.projectId && isWorkbenchThreadTargetSelected(target, currentTarget);
@@ -671,14 +676,14 @@ export default function WorkbenchHomeThreadList({
     />
   );
 
-  const createLocation = "matchKey" in createProject
+  const createLocation = createProject && "matchKey" in createProject
     ? createProject.locations.find(location => location.project)?.target ?? null : null;
-  const createProjectId = createLocation?.projectId ?? createProject.id;
-  const blankThreadSelected = selectedOwnerProjectId === createProject.id
+  const createProjectId = createLocation?.projectId ?? createProject?.id ?? "";
+  const blankThreadSelected = selectedOwnerProjectId === createProject?.id
     && isWorkbenchThreadTargetSelected({ kind: "new" }, currentTarget);
   return (
     <DropTargetBoundary className="space-y-1">
-      <a
+      {createProject && canCreate ? <a
         href={projectHref("matchKey" in createProject
           ? createLogicalThreadRoute(null, createProject.id, createLocation, { kind: "new" })
           : createHomeThreadRoute(createProject.id, { kind: "new" }))}
@@ -698,7 +703,7 @@ export default function WorkbenchHomeThreadList({
           <SparkleIcon className="shrink-0" size={16} />
           <span className={workbenchThreadListLabelClassName}>Create new thread</span>
         </span>
-      </a>
+      </a> : null}
       <div role="tablist" aria-label="Threads" className="min-w-0">
         {list.pinnedItems.length ? renderSection(list.pinnedItems, "pinned") : priorityTarget("pinned")}
         {priorityTarget("main")}

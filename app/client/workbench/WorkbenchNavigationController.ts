@@ -10,7 +10,7 @@ import type {
   WorkbenchProjectOption,
   WorkbenchRouteLoadResult,
 } from "workbench-shared/types";
-import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, ThreadReferenceSchema, type DraftId } from "workbench-shared/workbench/identity";
 import {
   getWorkbenchThreadTargetRootId,
   getWorkbenchThreadTargetSelectedId,
@@ -27,12 +27,12 @@ type ThreadTarget = NonNullable<WorkbenchRoute["threadTarget"]>;
 export interface WorkbenchNavigationSnapshot {
   error: string | null;
   generation: number;
+  phase: "idle" | "loading" | "ready" | "failed";
   route: WorkbenchRoute;
   selectedPinnedThreadDraft: WorkbenchThreadDraft | null;
 }
 
 export interface WorkbenchNavigationPorts {
-  activateThreadControllers: () => void;
   applyDraft: (
     entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>,
     project?: WorkbenchProjectOption,
@@ -88,6 +88,7 @@ export default class WorkbenchNavigationController {
     this.snapshot = {
       error: null,
       generation: 0,
+      phase: "idle",
       route: initialRoute,
       selectedPinnedThreadDraft: null,
     };
@@ -114,13 +115,52 @@ export default class WorkbenchNavigationController {
       && isSameWorkbenchRoute(active.route, route);
   }
 
+  retargetDraftSession(route: WorkbenchRoute, draftId: DraftId) {
+    const current = this.snapshot.route;
+    if (current.view !== "thread" || route.view !== "thread"
+      || !current.logical?.threadOwnerProjectId
+      || current.logical.threadOwnerProjectId !== route.logical?.threadOwnerProjectId
+      || current.logical.projectId !== route.logical.projectId
+      || current.projectId !== route.projectId
+      || current.threadOwnerProjectId !== route.threadOwnerProjectId) return false;
+    const from = current.threadTarget;
+    const to = route.threadTarget;
+    if (!from || !to || !(
+      from.kind === "new" && to.kind === "draft" && to.draftId === draftId
+      || from.kind === "draft" && from.draftId === draftId && to.kind === "new"
+      || from.kind === "new" && to.kind === "new"
+    )) return false;
+    if (this.snapshot.phase === "ready" && isSameWorkbenchRoute(current, route)) return true;
+    this.publish({
+      ...this.snapshot, error: null, generation: this.snapshot.generation + 1,
+      phase: "ready", route, selectedPinnedThreadDraft: null,
+    });
+    return true;
+  }
+
+  rejectRoute(route: WorkbenchRoute, error: string): WorkbenchRouteLoadResult {
+    this.publish({
+      ...this.snapshot, error, generation: this.snapshot.generation + 1,
+      phase: "failed", route,
+    });
+    return { ok: false, error };
+  }
+
   async applyRoute(route: WorkbenchRoute): Promise<WorkbenchRouteLoadResult> {
     let result: WorkbenchRouteLoadResult = { ok: false };
-    let generation: number | undefined;
-    await this.ports.guardNavigation(async () => {
-      generation = this.snapshot.generation + 1;
-      result = await this.applyRouteOwned(route);
+    const generation = this.snapshot.generation + 1;
+    this.publish({
+      ...this.snapshot, error: null, generation, phase: "loading",
+      route, selectedPinnedThreadDraft: null,
     });
+    try {
+      await this.ports.guardNavigation(async () => {
+        if (this.isCurrent(route, generation)) result = await this.applyRouteOwned(route, generation);
+      });
+    } catch (error) {
+      result = { ok: false, error: error instanceof Error ? error.message.slice(0, 512)
+        : "The view could not open." };
+    }
     if (route.view === "thread" && !route.logical && this.snapshot.generation === generation && !result.ok && result.error) {
       const target = route.threadTarget ?? {
         kind: "provider" as const,
@@ -132,7 +172,10 @@ export default class WorkbenchNavigationController {
       }
     }
     if (this.snapshot.generation === generation) {
-      this.publish({ ...this.snapshot, error: result.ok ? null : result.error ?? null });
+      this.publish({
+        ...this.snapshot, phase: result.ok ? "ready" : "failed",
+        error: result.ok ? null : result.error ?? "The view could not open.",
+      });
     }
     return result;
   }
@@ -172,22 +215,18 @@ export default class WorkbenchNavigationController {
     this.listeners.clear();
   }
 
-  private async applyRouteOwned(requestedRoute: WorkbenchRoute): Promise<WorkbenchRouteLoadResult> {
-    const generation = this.snapshot.generation + 1;
+  private async applyRouteOwned(requestedRoute: WorkbenchRoute, generation: number): Promise<WorkbenchRouteLoadResult> {
     let route = requestedRoute;
-    this.publish({
-      error: null,
-      generation,
-      route,
-      selectedPinnedThreadDraft: null,
-    });
     if (route.view === "thread" && route.threadTarget?.kind === "new") this.ports.clearSelection();
 
     if (route.view === "invalid") {
       this.ports.clearSelection();
       return { error: route.error || "Invalid route.", ok: false };
     }
-
+    if (route.view === "mosaic") {
+      this.ports.clearSelection();
+      return { error: "Mosaic routes are unavailable.", ok: false };
+    }
     if (route.logical) {
       if (!this.ports.openLogicalRoute) return { error: "Logical project navigation is unavailable.", ok: false };
       const result = await this.ports.openLogicalRoute(route, () => this.isCurrent(route, generation));
@@ -228,10 +267,9 @@ export default class WorkbenchNavigationController {
       };
     }
 
-    if (route.view === "home" || route.view === "project" || route.view === "settings" || route.view === "mosaic") {
+    if (route.view === "home" || route.view === "project" || route.view === "settings") {
       this.ports.clearSelection();
       this.ports.hydrateSidebar(route, generation);
-      if (route.view === "mosaic") this.ports.activateThreadControllers();
       return { ok: true };
     }
 

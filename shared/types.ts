@@ -76,7 +76,7 @@
  * - WorkbenchSkillDefinition: resolved skill definition.
  * - WorkbenchProjectIcon: selected project icon asset descriptor.
  * - WorkbenchProjectOption: selectable project option.
- * - WorkbenchLogicalProject/WorkbenchLogicalProjectLocation: display identity and qualified execution locations.
+ * - WorkbenchLogicalProject/WorkbenchLogicalProjectLocation: display identity, observed display sources, and registered execution locations.
  * - WorkbenchLogicalProjectSummary/WorkbenchLogicalThreadRow: source-qualified status and sidebar projections.
  * - WorkbenchProjectRoot: project-root contract.
  * - WorkbenchProjectsPayload: project-list payload.
@@ -720,6 +720,7 @@ export interface WorkbenchLogicalProjectLocation {
   hostname: string;
   name: string;
   rootPath: string;
+  displayPath?: string;
   project: WorkbenchProjectOption | null;
 }
 
@@ -727,7 +728,17 @@ export interface WorkbenchLogicalProject {
   id: LogicalProjectId;
   matchKey: string;
   label: string;
+  storedLabel?: string;
+  displayName?: string;
+  displayPath?: string | null;
   locations: WorkbenchLogicalProjectLocation[];
+  observedLocations?: Array<{
+    daemonId: DaemonId;
+    projectId: ProjectId;
+    hostname: string;
+    rootPath: string;
+    project: WorkbenchProjectOption;
+  }>;
 }
 
 export interface WorkbenchLogicalProjectSummary {
@@ -743,6 +754,7 @@ export interface WorkbenchLogicalThreadRow {
   hostname: string;
   rootPath: string;
   entry: WorkbenchThreadSidebarEntry;
+  observedOnly?: boolean;
 }
 
 export interface WorkbenchProjectRoot {
@@ -1112,6 +1124,7 @@ export interface ProjectSnapshot {
 }
 
 export interface ExplorerSnapshot {
+  browseLocation?: ProjectLocationReference | null;
   configuredDiscoveryRootPath: string | null;
   currentProjectId: ProjectId | "";
   projects: WorkbenchProjectOption[];
@@ -1225,7 +1238,9 @@ export interface WorkbenchControls {
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   deleteThreadDraft: (draftId: DraftId, projectId?: ProjectId) => Promise<void>;
   deletePresentationDraft: (draftId: DraftId) => Promise<void>;
-  retargetPresentationDraft: (draftId: DraftId, location: ProjectLocationReference) => Promise<void>;
+  retargetPresentationDraft: (
+    draftId: DraftId, location: ProjectLocationReference, logicalProjectId?: LogicalProjectId,
+  ) => Promise<void>;
   setPresentationDraftPriority: (
     draftId: DraftId, priority: { pinned: boolean; snoozed: boolean },
   ) => Promise<void>;

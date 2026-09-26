@@ -152,6 +152,7 @@ interface WorkbenchThreadClient {
   createThread: (harness: WorkbenchHarness, threadId?: DraftId, options?: { project?: WorkbenchProjectOption; select?: boolean }) => ThreadPayload<DraftId>;
   dispose: () => void;
   getSnapshot: () => WorkbenchThreadRuntimeSnapshot;
+  getPublishedSnapshot: () => WorkbenchThreadRuntimeSnapshot;
   hasThread: (threadId: string) => boolean;
   isCurrentThreadUpToDate: (threadId: string) => boolean;
   isDraftThreadId: (threadId: string) => threadId is DraftId;
@@ -914,7 +915,9 @@ function WorkbenchThreadClient(
     if (!areDeeplyEqual(state.subagents, subagents)) state.subagents = subagents;
   }
 
-  function getSnapshot(): WorkbenchThreadRuntimeSnapshot {
+  let publishedSnapshot: WorkbenchThreadRuntimeSnapshot | null = null;
+
+  function createSnapshot(): WorkbenchThreadRuntimeSnapshot {
     return {
       currentThread: state.currentThread,
       currentThreadId: state.currentThreadId,
@@ -928,8 +931,17 @@ function WorkbenchThreadClient(
     };
   }
 
+  function getSnapshot(): WorkbenchThreadRuntimeSnapshot {
+    return createSnapshot();
+  }
+
+  function getPublishedSnapshot(): WorkbenchThreadRuntimeSnapshot {
+    return publishedSnapshot ??= createSnapshot();
+  }
+
   function emit() {
-    const snapshot = getSnapshot();
+    const snapshot = createSnapshot();
+    publishedSnapshot = snapshot;
     for (const listener of listeners) {
       listener(snapshot);
     }
@@ -4210,7 +4222,7 @@ function WorkbenchThreadClient(
         admission.kind === "admitted"
         || admission.kind === "turnStarted"
       )) {
-        if (sendOptions.composerProfileSlot) {
+        if (sendOptions.composerProfileSlot && admission.kind === "turnStarted") {
           const source = threadSources.get(threadKey);
           if (source) {
             const fence = captureThreadOperationFence(harness, thread.id, { selectionBound: true });
@@ -4946,6 +4958,7 @@ function WorkbenchThreadClient(
     createThread,
     dispose,
     getSnapshot,
+    getPublishedSnapshot,
     hasThread,
     installThreadStateSources,
     isCurrentThreadUpToDate,

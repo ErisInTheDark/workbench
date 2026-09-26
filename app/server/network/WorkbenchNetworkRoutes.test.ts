@@ -3,7 +3,69 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import type { WorkbenchNetworkResult, WorkbenchNetworkSnapshot } from "workbench-shared/http/workbench-network";
+import type WorkbenchPresentationController from "../state/WorkbenchPresentationController";
+import type WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController";
 import WorkbenchNetworkRoutes from "./WorkbenchNetworkRoutes.ts";
+
+test("presentation changes share the existing app network stream", async context => {
+  let notifyPresentation = (_revision: number) => {};
+  let notifyImport = (_status: { phase: "partial"; scanned: number; imported: number; failed: number }) => {};
+  const routes = new WorkbenchNetworkRoutes({
+    ingress: () => ({ deviceNodeId: null, manageApp: true, manageNetwork: true, trustHost: false }),
+    discovery: () => ({ refreshing: false, peers: [] }),
+    connection: () => ({ localPort: null, tailnetPort: 0 }),
+    snapshot: () => ({ configuration: { privateAccess: null } }) as WorkbenchNetworkSnapshot,
+    subscribe: () => () => {},
+    action: async () => ({ kind: "ok" }),
+  }, {
+    subscribe: listener => { notifyPresentation = listener; return () => { notifyPresentation = () => {}; }; },
+    revision: () => 5,
+  } as Pick<WorkbenchPresentationController, "subscribe" | "revision">, {
+    subscribe: listener => {
+      notifyImport = listener;
+      return () => { notifyImport = () => {}; };
+    },
+    snapshot: () => ({ phase: "idle", scanned: 0, imported: 0, failed: 0 }),
+  } as Pick<WorkbenchPresentationImportController, "subscribe" | "snapshot">);
+  const server = createServer((request, response) => {
+    void routes.handle(request, response, new URL(request.url!, "http://localhost"));
+  });
+  context.after(async () => {
+    routes.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const cancellation = new AbortController();
+  const response = await fetch(`http://127.0.0.1:${address.port}/api/workbench-network/events`, {
+    signal: cancellation.signal,
+  });
+  const reader = response.body!.getReader();
+  try {
+    let initial = "";
+    while (!initial.includes("event: presentation-import")) {
+      initial += new TextDecoder().decode((await reader.read()).value);
+    }
+    assert.match(initial, /"revision":5/u, "reconnected streams catch up to the current app revision");
+    assert.match(initial, /"phase":"idle"/u);
+    notifyPresentation(7);
+    const event = await reader.read();
+    assert.equal(event.done, false);
+    const text = new TextDecoder().decode(event.value);
+    assert.match(text, /event: presentation/u);
+    assert.deepEqual(JSON.parse(text.split("data: ")[1]!.trim()), { revision: 7 });
+    notifyImport({ phase: "partial", scanned: 2, imported: 1, failed: 1 });
+    const importEvent = new TextDecoder().decode((await reader.read()).value);
+    assert.match(importEvent, /event: presentation-import/u);
+    assert.deepEqual(JSON.parse(importEvent.split("data: ")[1]!.trim()),
+      { phase: "partial", scanned: 2, imported: 1, failed: 1 });
+  } finally {
+    cancellation.abort();
+    await reader.cancel().catch(() => {});
+  }
+});
 
 test("cross-origin actions are rejected; admitted actions do not pin route disposal", async context => {
   let finish!: (result: WorkbenchNetworkResult) => void;

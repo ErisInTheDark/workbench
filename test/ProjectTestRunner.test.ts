@@ -103,5 +103,6 @@ test("live runners can omit the test timeout without changing the ordinary defau
   await run(null);
 
   assert.ok(invocations[0]?.includes("--test-timeout=30000"));
+  assert.ok(invocations[0]?.includes("--test-force-exit"));
   assert.equal(invocations[1]?.some(argument => argument.startsWith("--test-timeout=")), false);
 });

@@ -16,6 +16,7 @@ export interface WorkbenchThreadSource {
   daemon: WorkbenchDaemonClient;
   threads: ReturnType<typeof WorkbenchThreadClient>;
   ready(): boolean;
+  prepare?(): Promise<void>;
 }
 
 export type WorkbenchThreadOwner =
@@ -38,6 +39,7 @@ type CachedOwner = { owner: ResolvedThread; daemon: WorkbenchDaemonClient };
 
 export default class WorkbenchThreadRouter {
   private readonly resolved = new Map<string, CachedOwner>();
+  private readonly draftSessions = new Map<string, Extract<WorkbenchThreadOwner, { kind: "draft" }>>();
   private disposed = false;
 
   constructor(private readonly sources: {
@@ -49,23 +51,40 @@ export default class WorkbenchThreadRouter {
 
   known(id: string): WorkbenchThreadOwner | null {
     this.assertActive();
-    const draft = this.sources.presentation()?.drafts.find(item =>
-      item.id === id && (item.phase === "unsent" || item.phase === "submitting"));
+    const storedDraft = this.sources.presentation()?.drafts.find(item => item.id === id);
+    const draft = storedDraft?.phase === "unsent" || storedDraft?.phase === "submitting"
+      ? storedDraft : null;
+    const retained = this.draftSessions.get(id);
+    if (storedDraft && storedDraft.phase !== "deleted"
+      && (!draft || retained && (
+        retained.logicalProjectId !== draft.logicalProjectId
+        || retained.location.daemonId !== draft.target.daemonId
+        || retained.location.projectId !== draft.target.projectId
+      ))) this.draftSessions.delete(id);
     const observed = this.sources.rows().flatMap(row => row.entry.entryKind !== "draft"
       && row.entry.identity.threadId === id ? [{ row, identity: row.entry.identity }] : []);
-    const owners = new Map(observed.map(({ row, identity }) => [
-      `${row.location.daemonId}/${row.location.projectId}`,
-      {
-        kind: "thread" as const, id, harness: identity.harness,
+    const owners = new Map<string, ResolvedThread>();
+    for (const { row, identity } of observed) {
+      const key = `${row.location.daemonId}/${row.location.projectId}`;
+      const prior = owners.get(key);
+      if (prior && (prior.harness !== identity.harness
+        || prior.logicalProjectId !== row.logicalProjectId)) {
+        throw new Error("Thread UUID has conflicting owners.");
+      }
+      owners.set(key, {
+        kind: "thread", id, harness: identity.harness,
         logicalProjectId: row.logicalProjectId, location: row.location,
-      },
-    ]));
+      });
+    }
     if (owners.size > 1 || draft && owners.size) {
       throw new Error("Thread UUID has conflicting owners.");
     }
-    if (draft) return {
-      kind: "draft", id, logicalProjectId: draft.logicalProjectId, location: draft.target,
-    };
+    if (draft) {
+      return { kind: "draft", id, logicalProjectId: draft.logicalProjectId, location: draft.target };
+    }
+    const session = this.draftSessions.get(id);
+    if (session && owners.size) throw new Error("Draft UUID has conflicting thread ownership.");
+    if (session) return session;
     const observedOwner = owners.values().next().value as ResolvedThread | undefined;
     const cached = this.resolved.get(id);
     if (observedOwner && cached
@@ -82,10 +101,65 @@ export default class WorkbenchThreadRouter {
     return null;
   }
 
+  rememberRead(input: {
+    id: string;
+    harness: WorkbenchHarness;
+    location: ProjectLocationReference;
+    daemon: WorkbenchDaemonClient;
+  }) {
+    this.assertActive();
+    const source = this.sourceFor(input.location.daemonId);
+    if (source?.daemon !== input.daemon) throw new Error("Verified thread source is unavailable.");
+    const prior = this.known(input.id);
+    if (prior && (prior.kind !== "thread"
+      || prior.harness !== input.harness
+      || prior.location.daemonId !== input.location.daemonId
+      || prior.location.projectId !== input.location.projectId)) {
+      throw new Error("Thread UUID has conflicting owners.");
+    }
+    const presentation = this.sources.presentation();
+    const retained = presentation?.members.filter(member =>
+      member.kind === "thread" && member.thread?.threadId === input.id) ?? [];
+    if (retained.some(member => member.thread?.location.daemonId !== input.location.daemonId
+      || member.thread.location.projectId !== input.location.projectId)) {
+      throw new Error("Thread UUID conflicts with its saved owner.");
+    }
+    const logicalProjectId = presentation?.locations.find(item =>
+      item.target.daemonId === input.location.daemonId
+      && item.target.projectId === input.location.projectId)?.logicalProjectId ?? null;
+    this.resolved.set(input.id, {
+      daemon: input.daemon,
+      owner: {
+        kind: "thread", id: input.id, harness: input.harness,
+        logicalProjectId, location: input.location,
+      },
+    });
+  }
+
+  rememberDraft(id: string, logicalProjectId: LogicalProjectId, location: ProjectLocationReference) {
+    this.assertActive();
+    const saved = this.sources.presentation()?.drafts.find(draft => draft.id === id);
+    if (saved && saved.phase !== "deleted"
+      && (saved.phase !== "unsent" && saved.phase !== "submitting"
+        || saved.logicalProjectId !== logicalProjectId
+        || saved.target.daemonId !== location.daemonId
+        || saved.target.projectId !== location.projectId)) {
+      throw new Error("Saved draft target belongs to another session.");
+    }
+    if (this.known(id)?.kind === "thread") throw new Error("Draft UUID conflicts with a thread.");
+    this.draftSessions.set(id, { kind: "draft", id, logicalProjectId, location });
+  }
+
+  forgetDraft(id: string) {
+    this.draftSessions.delete(id);
+  }
+
   async resolve(id: string): Promise<WorkbenchThreadOwner> {
     const known = this.known(id);
     if (known?.kind === "draft") return known;
     if (known?.kind === "thread") {
+      await this.sources.daemons().find(source =>
+        source.daemonId === known.location.daemonId)?.prepare?.();
       const source = this.sourceFor(known.location.daemonId);
       if (!source) throw new Error("The thread's daemon is unavailable.");
       return known;
@@ -100,11 +174,13 @@ export default class WorkbenchThreadRouter {
     if (retainedLocations.size > 1) throw new Error("Thread UUID has conflicting saved owners.");
     const candidateSources = retainedLocations.size
       ? this.sources.daemons().filter(source =>
-        source.daemonId === retainedLocations.values().next().value?.daemonId && source.ready())
-      : this.sources.daemons().filter(source => source.ready());
+        source.daemonId === retainedLocations.values().next().value?.daemonId)
+      : this.sources.daemons();
     if (!candidateSources.length) throw new Error("The thread's daemon is unavailable.");
     const results = await Promise.all(candidateSources.map(async source => {
       try {
+        await source.prepare?.();
+        if (!source.ready()) throw new Error("Daemon session is unavailable.");
         const response = await source.daemon.threads.resolveIdentity({
           threadId: ThreadReferenceSchema.parse(id), allowProviderAdmission: false,
         });
@@ -183,6 +259,7 @@ export default class WorkbenchThreadRouter {
   dispose() {
     this.disposed = true;
     this.resolved.clear();
+    this.draftSessions.clear();
   }
 
   private assertActive() {

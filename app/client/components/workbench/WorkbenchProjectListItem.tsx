@@ -31,7 +31,7 @@ function ProjectTooltipContent({ entry, nowMs }: { entry: DisplaySidebarProject;
   return (
     <div className="flex max-h-full min-w-0 max-w-[min(30rem,calc(100vw-2rem))] flex-col gap-2">
       <div className="min-w-0">
-        <p className="m-0 break-words text-[0.9rem] font-medium leading-[1.45] text-text">{logical ? project.label : project.name || project.id}</p>
+        <p className="m-0 break-words text-[0.9rem] font-medium leading-[1.45] text-text">{logical ? project.displayName ?? project.label : project.name || project.id}</p>
         <p className="m-0 whitespace-pre-wrap break-all font-mono text-[0.72rem] leading-[1.45] text-fg/muted">
           {logical ? project.locations.map(location => `${location.hostname}: ${location.rootPath}`).join("\n")
             : WorkbenchProjectLabel.getFullPath(project)}

@@ -15,10 +15,11 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkbenchSelectedProjectPinPlacement } from "../../workbench/state/workbench-settings";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
-import type { FolderId, ProjectId } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, type FolderId, type ProjectId } from "workbench-shared/workbench/identity";
 import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import { getWorkbenchThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-order";
 import WorkbenchThreadList from "./WorkbenchThreadList";
+import { useWorkbenchClientController } from "./workbench-client-context";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 
 interface WorkbenchThreadSidebarProps {
@@ -61,10 +62,11 @@ export default memo(function WorkbenchThreadSidebar({
   onOpenQualifiedThread,
 }: WorkbenchThreadSidebarProps) {
   const projectHref = useWorkbenchProjectNavigation();
+  const client = useWorkbenchClientController();
   const actions = WorkbenchThreadSidebarActionsProvider.useActions();
   const [layoutError, setLayoutError] = useState("");
-  if (actions.isLoading) return <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />;
-  if (!projectId) return null;
+  if (actions.isLoading && !logicalProject) return <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />;
+  if (!projectId && !logicalProject) return null;
   const projectRows = logicalProject ? logicalThreads.filter(row =>
     row.logicalProjectId === logicalProject.id) : [];
   const findRow = (target: WorkbenchThreadTarget) => projectRows.find(row =>
@@ -100,6 +102,8 @@ export default memo(function WorkbenchThreadSidebar({
     <>
       <nav aria-label="Threads">
         <WorkbenchThreadList
+          canCreateThread={Boolean(client.mounted && (!client.mounted.presentationClient
+            || logicalProject?.locations.some(location => location.project)))}
           allowMainPanelDrop={showMosaicView}
           attentionLabelsByThreadId={attentionLabelsByThreadId}
           autoFocusFolderId={actions.autoFocusFolderId}
@@ -107,6 +111,9 @@ export default memo(function WorkbenchThreadSidebar({
           currentTarget={currentTarget}
           displayOrder={displayOrder}
           entries={displayedEntries}
+          entryProjectId={logicalProject ? entry =>
+            findEntryRow(entry)?.location.projectId ?? ProjectIdSchema.parse(projectId || logicalProject.id) : undefined}
+          isEntryReadOnly={logicalProject ? entry => Boolean(findEntryRow(entry)?.observedOnly) : undefined}
           getThreadHref={(target) => {
             const row = findRow(target);
             if (logicalProject) {
@@ -120,12 +127,12 @@ export default memo(function WorkbenchThreadSidebar({
           }}
           getThreadContextMenu={logicalProject ? (entry, _ownerProjectId, folderScope) => {
             const row = findEntryRow(entry);
-            return row ? actions.getThreadContextMenuFor(entry, folderScope) : null;
+            return row && !row.observedOnly ? actions.getThreadContextMenuFor(entry, folderScope) : null;
           } : actions.getThreadContextMenu}
           nowMs={actions.nowMs}
           onAction={logicalProject ? (entry, action) => {
             const row = findEntryRow(entry);
-            if (row) actions.onActionFor(entry, action);
+            if (row && !row.observedOnly) actions.onActionFor(entry, action);
           } : actions.onAction}
           onAutoFocusFolderComplete={actions.onAutoFocusFolderComplete}
           onCreateThread={onCreateThread}
@@ -145,7 +152,7 @@ export default memo(function WorkbenchThreadSidebar({
               targetKey, destinationFolderId,
             });
           } : (payload, targetKey, section, destinationFolderId) => {
-            actions.onProjectFolderDrop(payload, projectId, targetKey, section, destinationFolderId);
+            actions.onProjectFolderDrop(payload, ProjectIdSchema.parse(projectId), targetKey, section, destinationFolderId);
           }}
           onRenameFolder={logicalProject ? async (folderId, title) => {
             if (!await updateLayout({ kind: "rename", folderId, title })) {
@@ -169,8 +176,8 @@ export default memo(function WorkbenchThreadSidebar({
               console.error("Thread priority failed", message);
             });
           } : actions.onSetPriority}
-          onSnoozeUntil={logicalProject ? undefined : (payload, targetIdentity) => actions.onSnoozeUntil(payload, projectId, targetIdentity)}
-          projectId={projectId}
+          onSnoozeUntil={logicalProject ? undefined : (payload, targetIdentity) => actions.onSnoozeUntil(payload, ProjectIdSchema.parse(projectId), targetIdentity)}
+          projectId={logicalProject ? ProjectIdSchema.parse(logicalProject.id) : ProjectIdSchema.parse(projectId)}
           renderThreadTooltipDetails={renderThreadTooltipDetails}
           showPinnedThreadsInMain={selectedProjectPinPlacement === "threads-section"}
         />

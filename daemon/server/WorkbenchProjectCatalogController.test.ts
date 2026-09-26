@@ -69,6 +69,38 @@ test("catalogue admission and reopening publish one owner across remote changes"
   } finally { database.close(); }
 });
 
+test("location reads wait for one coalesced repair of an incomplete cached catalogue", async () => {
+  const project = createProject("local://C:/projects/ready", "C:/projects/ready");
+  const identityKey = fixtureIdentitySchemas.ProjectIdentityKeySchema.parse("local://C:/projects/ready");
+  const incomplete: WorkbenchProjectCacheRecord = { project, sourceKey: "ready", checkedAt: null };
+  const complete: WorkbenchProjectCacheRecord = {
+    ...incomplete, identityKey, rootIdentityKeys: [identityKey],
+  };
+  let scans = 0;
+  const controller = new WorkbenchProjectCatalogController({
+    initialProjects: reconciledProjects([incomplete]),
+    persistence: {
+      reconcileProjectCatalog: async () => reconciledProjects([complete]),
+      readProjectAliases: async () => [],
+      resolveProjectIdentity: async () => project.id,
+      settleProjectIcon: async () => true,
+    },
+    discoverProjectIdentities: async () => {
+      scans++;
+      return discoveryForProjects([project]);
+    },
+  });
+  try {
+    assert.equal((await controller.readCatalog()).data[0]?.id, project.id);
+    const [first, second] = await Promise.all([controller.readLocations(), controller.readLocations()]);
+    assert.equal(first.data[0]?.identityKey, identityKey);
+    assert.deepEqual(second, first);
+    assert.equal(scans, 1);
+  } finally {
+    await controller.dispose();
+  }
+});
+
 test("saving roots validates the whole list and replaces watchers without partial writes", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-discovery-roots-"));
   const first = path.join(root, "first");

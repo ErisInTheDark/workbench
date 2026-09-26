@@ -3,7 +3,7 @@
  * - WORKBENCH_ROUTE_MARKER: route marker for workbench URLs.
  * - WorkbenchRouteView/WorkbenchSettingsScope/WorkbenchRoute/WorkbenchRouteParseResult: normalized route contracts.
  * - createHomeRoute/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
- * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute/createLogicalMosaicRoute: v2 project, target and UUID routes.
+ * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute/createLogicalMosaicRoute: internal project, target and UUID routes.
  * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse URL state without changing history.
  * - createWorkbenchHref/createHomeHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createHomeThreadHref/createSettingsHref/createStatsHref/createMosaicHref: build hrefs.
@@ -15,15 +15,11 @@ import {
   encodeWorkbenchRoutePath,
 } from "../../navigation/workbench-route-path.ts";
 
-import {
-  parseWorkbenchMosaicRouteExpression,
-  serializeWorkbenchMosaicRouteExpression,
-  type WorkbenchMosaicNode,
-} from "./workbench-mosaic-route.ts";
+import { type WorkbenchMosaicNode } from "./workbench-mosaic-route.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 import { z } from "zod";
 import { WorkbenchThreadRouteTargetSchema, type WorkbenchThreadRouteTarget } from "../thread/thread-state.ts";
-import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, type LogicalProjectId, type ProjectId } from "../identity.ts";
+import { LogicalProjectIdSchema, type LogicalProjectId, type ProjectId } from "../identity.ts";
 import { ProjectLocationReferenceSchema, type ProjectLocationReference } from "../project/project-location.ts";
 
 export const WORKBENCH_ROUTE_MARKER = "@";
@@ -101,11 +97,11 @@ export function createLogicalProjectRoute(logicalProjectId: string, location: Pr
   } };
 }
 
-export function createLogicalGitRoute(logicalProjectId: string, location: ProjectLocationReference): WorkbenchRoute {
+export function createLogicalGitRoute(logicalProjectId: string, location: ProjectLocationReference | null): WorkbenchRoute {
   return { ...createLogicalProjectRoute(logicalProjectId, location), view: "git" };
 }
 
-export function createLogicalFileRoute(logicalProjectId: string, location: ProjectLocationReference, filePath: string): WorkbenchRoute {
+export function createLogicalFileRoute(logicalProjectId: string, location: ProjectLocationReference | null, filePath: string): WorkbenchRoute {
   return { ...createLogicalProjectRoute(logicalProjectId, location), view: "file", filePath };
 }
 
@@ -442,12 +438,7 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
       return createPinnedThreadRoute(projectId, pinnedRoute.projectId, pinnedRoute.threadTarget);
     }
     if (mode === "mosaic") {
-      const parsedMosaic = parseWorkbenchMosaicRouteExpression(segments.slice(markerIndex + 2).join("/"));
-      if (parsedMosaic.ok === false) {
-        return createProjectRoute(projectId);
-      }
-
-      return createMosaicRoute(projectId, parsedMosaic.node);
+      return createInvalidWorkbenchRoute("Mosaic routes are unavailable.", projectId);
     }
 
     const valueSegments = decodeRouteSegments(segments.slice(markerIndex + 2));
@@ -531,113 +522,7 @@ export function parseWorkbenchRouteFromPath(pathname: string, search = ""): Work
     return createHomeRoute();
   }
 
-  if (segments[0] === WORKBENCH_ROUTE_MARKER && segments[1] === "v2") {
-    return parseLogicalRoute(segments.slice(2));
-  }
   return parseLegacyRouteFromSegments(segments, searchParams);
-}
-
-function parseLogicalRoute(rawSegments: string[]): WorkbenchRoute {
-  if (rawSegments[0] === "p" && rawSegments[2] === "mosaic") {
-    const projectSegment = decodeRouteSegment(rawSegments[1] ?? "");
-    const project = projectSegment.ok ? LogicalProjectIdSchema.safeParse(projectSegment.value) : null;
-    const mosaic = parseWorkbenchMosaicRouteExpression(rawSegments.slice(3).join("/"));
-    return project?.success && mosaic.ok && mosaicPanesHaveSources(mosaic.node)
-      ? createLogicalMosaicRoute(project.data, mosaic.node)
-      : createInvalidWorkbenchRoute("Invalid logical mosaic route.");
-  }
-  const decoded = decodeRouteSegments(rawSegments);
-  if (decoded.ok === false) return createInvalidWorkbenchRoute(decoded.error);
-  const segments = decoded.value;
-  const home = segments[0] === "home";
-  const selectedResult = LogicalProjectIdSchema.safeParse(segments[1]);
-  if (!home && (segments[0] !== "p" || !selectedResult.success)) {
-    return createInvalidWorkbenchRoute("Logical routes require a project or home.");
-  }
-  const selected = home ? null : selectedResult.data ?? null;
-  const tail = segments.slice(home ? 1 : 2);
-  if (!tail.length && selected) return createLogicalProjectRoute(selected);
-  if (tail[0] === "browse" && selected) {
-    const daemonId = DaemonIdSchema.safeParse(tail[1]);
-    const projectId = ProjectIdSchema.safeParse(tail[2]);
-    if (!daemonId.success || !projectId.success) return createInvalidWorkbenchRoute("Invalid browse location.");
-    const location = { daemonId: daemonId.data, projectId: projectId.data };
-    if (tail.length === 3) return createLogicalProjectRoute(selected, location);
-    if (tail.length === 4 && tail[3] === "git") return createLogicalGitRoute(selected, location);
-    if (tail.length >= 5 && tail[3] === "file") {
-      return createLogicalFileRoute(selected, location, tail.slice(4).join("/"));
-    }
-    return createInvalidWorkbenchRoute("Invalid browse route.");
-  }
-  if (tail[0] !== "thread") return createInvalidWorkbenchRoute("Unknown logical route.");
-  if (tail[1] === "id") {
-    const browseAt = tail.indexOf("browse", 2);
-    const identityTail = browseAt < 0 ? tail : tail.slice(0, browseAt);
-    const browse = browseAt < 0 ? null : ProjectLocationReferenceSchema.safeParse({
-      daemonId: tail[browseAt + 1], projectId: tail[browseAt + 2],
-    });
-    if (browseAt >= 0 && (tail.length !== browseAt + 3 || !browse?.success)) {
-      return createInvalidWorkbenchRoute("Invalid thread browse location.");
-    }
-    const candidate = identityTail.length === 3
-      ? { kind: "provider", threadId: identityTail[2] }
-      : identityTail.length === 5 && identityTail[3] === "sub"
-        ? { kind: "subagent", parentThreadId: identityTail[2], threadId: identityTail[4] }
-        : null;
-    const parsed = WorkbenchThreadRouteTargetSchema.safeParse(candidate);
-    return parsed.success && (parsed.data.kind === "provider" || parsed.data.kind === "subagent")
-      ? createLogicalExistingThreadRoute(selected, parsed.data, browse?.success ? browse.data : null)
-      : createInvalidWorkbenchRoute("Invalid UUID thread route.");
-  }
-  const owner = LogicalProjectIdSchema.safeParse(tail[1]);
-  if (!owner.success) return createInvalidWorkbenchRoute("Invalid thread project identity.");
-  const target = tail.slice(2);
-  if (target[0] === "new" && (target.length === 1 || target.length === 3 && target[1] === "folder"
-    || target.length === 4 && target[1] === "at"
-    || target.length === 6 && target[1] === "folder" && target[3] === "at")) {
-    const parsed = WorkbenchThreadRouteTargetSchema.safeParse(
-      target[1] === "folder" ? { kind: "new", folderId: target[2] } : { kind: "new" },
-    );
-    const at = target[1] === "at" ? 1 : target[3] === "at" ? 3 : -1;
-    const daemonId = at < 0 ? null : DaemonIdSchema.safeParse(target[at + 1]);
-    const projectId = at < 0 ? null : ProjectIdSchema.safeParse(target[at + 2]);
-    return parsed.success && (at < 0 || daemonId?.success && projectId?.success)
-      ? createLogicalThreadRoute(selected, owner.data,
-        daemonId?.success && projectId?.success ? { daemonId: daemonId.data, projectId: projectId.data } : null,
-        parsed.data)
-      : createInvalidWorkbenchRoute("Invalid logical new-thread route.");
-  }
-  if (target[0] === "draft" && (target.length === 2 || target.length === 5 && target[2] === "at")) {
-    const parsed = WorkbenchThreadRouteTargetSchema.safeParse({ kind: "draft", draftId: target[1] });
-    const daemonId = target.length === 5 ? DaemonIdSchema.safeParse(target[3]) : null;
-    const projectId = target.length === 5 ? ProjectIdSchema.safeParse(target[4]) : null;
-    return parsed.success && (target.length === 2 || daemonId?.success && projectId?.success)
-      ? createLogicalThreadRoute(selected, owner.data,
-        daemonId?.success && projectId?.success ? { daemonId: daemonId.data, projectId: projectId.data } : null,
-        parsed.data)
-      : createInvalidWorkbenchRoute("Invalid logical draft.");
-  }
-  if (target[0] === "at" && (target.length === 4 || target.length === 6 && target[4] === "sub")) {
-    const daemonId = DaemonIdSchema.safeParse(target[1]);
-    const projectId = ProjectIdSchema.safeParse(target[2]);
-    if (!daemonId.success || !projectId.success) return createInvalidWorkbenchRoute("Invalid thread location.");
-    const candidate = target.length === 4
-      ? { kind: "provider", threadId: target[3] }
-      : { kind: "subagent", parentThreadId: target[3], threadId: target[5] };
-    const parsed = WorkbenchThreadRouteTargetSchema.safeParse(candidate);
-    return parsed.success && (parsed.data.kind === "provider" || parsed.data.kind === "subagent") ? {
-      ...createLogicalExistingThreadRoute(selected, parsed.data),
-      logical: {
-        projectId: selected,
-        threadOwnerProjectId: null,
-        location: null,
-        browseLocation: null,
-        legacyOwnerLocation: { daemonId: daemonId.data, projectId: projectId.data },
-      },
-    }
-      : createInvalidWorkbenchRoute("Invalid logical thread.");
-  }
-  return createInvalidWorkbenchRoute("Invalid logical thread route.");
 }
 
 export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike | string): WorkbenchRouteParseResult {
@@ -654,7 +539,7 @@ export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike 
 }
 
 export function createWorkbenchHref(route: WorkbenchRoute): string {
-  if (route.logical) return createLogicalHref(route);
+  if (route.logical) throw new Error("Logical routes need project-address resolution before serialisation.");
   const projectPath = encodeWorkbenchRoutePath(route.projectId);
   const markedPath = projectPath ? `/${projectPath}/${WORKBENCH_ROUTE_MARKER}` : `/${WORKBENCH_ROUTE_MARKER}`;
   if (route.view === "home") {
@@ -692,46 +577,9 @@ export function createWorkbenchHref(route: WorkbenchRoute): string {
   if (route.view === "stats") {
     return `${markedPath}/stats`;
   }
-  if (route.view === "mosaic" && route.mosaicNode) {
-    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/mosaic/${serializeWorkbenchMosaicRouteExpression(route.mosaicNode)}`;
-  }
+  if (route.view === "mosaic") throw new Error("Mosaic routes are unavailable.");
 
   return createWorkbenchProjectHref(route.projectId);
-}
-
-function createLogicalHref(route: WorkbenchRoute): string {
-  const logical = route.logical!;
-  const base = `/${WORKBENCH_ROUTE_MARKER}/v2/${logical.projectId ? `p/${encodeRouteSegment(logical.projectId)}` : "home"}`;
-  const location = logical.location
-    ? `${encodeRouteSegment(logical.location.daemonId)}/${encodeRouteSegment(logical.location.projectId)}` : null;
-  if (route.view === "project" && logical.projectId) return location ? `${base}/browse/${location}` : base;
-  if (route.view === "git" && location) return `${base}/browse/${location}/git`;
-  if (route.view === "file" && location) return `${base}/browse/${location}/file/${encodeRouteSegment(route.filePath)}`;
-  if (route.view === "mosaic" && route.mosaicNode) {
-    return `${base}/mosaic/${serializeWorkbenchMosaicRouteExpression(route.mosaicNode)}`;
-  }
-  if (route.view === "thread" && route.threadTarget
-    && (route.threadTarget.kind === "provider" || route.threadTarget.kind === "subagent")
-    && !logical.threadOwnerProjectId) {
-    const target = route.threadTarget;
-    const threadHref = target.kind === "provider"
-      ? `${base}/thread/id/${encodeRouteSegment(target.threadId)}`
-      : `${base}/thread/id/${encodeRouteSegment(target.parentThreadId)}/sub/${encodeRouteSegment(target.threadId)}`;
-    const browse = logical.browseLocation;
-    return browse ? `${threadHref}/browse/${encodeRouteSegment(browse.daemonId)}/${encodeRouteSegment(browse.projectId)}`
-      : threadHref;
-  }
-  if (route.view === "thread" && logical.threadOwnerProjectId && route.threadTarget) {
-    const threadBase = `${base}/thread/${encodeRouteSegment(logical.threadOwnerProjectId)}`;
-    const target = route.threadTarget;
-    if (target.kind === "new") return `${threadBase}/new${target.folderId
-      ? `/folder/${encodeRouteSegment(target.folderId)}` : ""}${location ? `/at/${location}` : ""}`;
-    if (target.kind === "draft") return `${threadBase}/draft/${encodeRouteSegment(target.draftId)}`;
-    if (!location) throw new Error("Materialized thread route has no daemon location.");
-    if (target.kind === "provider") return `${threadBase}/at/${location}/${encodeRouteSegment(target.threadId)}`;
-    return `${threadBase}/at/${location}/${encodeRouteSegment(target.parentThreadId)}/sub/${encodeRouteSegment(target.threadId)}`;
-  }
-  throw new Error("Logical route is missing its required source address.");
 }
 
 export function createProjectHref(projectId: string) {

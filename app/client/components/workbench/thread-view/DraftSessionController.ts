@@ -9,6 +9,7 @@
  * - DraftSessionSnapshot: rendered input and lifecycle status.
  */
 import type { WorkbenchThreadComposerAttachmentDraft } from "workbench-shared/types";
+import { isThreadMessageNotSentError } from "../../../workbench/thread/thread-message-submission";
 
 export interface DraftSessionContent {
   attachments: WorkbenchThreadComposerAttachmentDraft[];
@@ -36,7 +37,7 @@ export interface DraftSessionSnapshot<Draft> {
 }
 
 export default class DraftSessionController<Draft extends DraftSessionContent> {
-  readonly #ports: DraftSessionPorts<Draft>;
+  #ports: DraftSessionPorts<Draft>;
   readonly #listeners = new Set<() => void>();
   #snapshot: DraftSessionSnapshot<Draft>;
   #receivedDraft: Draft;
@@ -58,6 +59,14 @@ export default class DraftSessionController<Draft extends DraftSessionContent> {
     this.#listeners.add(listener);
     return () => { this.#listeners.delete(listener); };
   };
+
+  updatePorts(ports: DraftSessionPorts<Draft>) {
+    this.#ports = {
+      ...ports,
+      schedule: this.#ports.schedule,
+      cancelSchedule: this.#ports.cancelSchedule,
+    };
+  }
 
   attach() {
     this.#attached = true;
@@ -98,16 +107,23 @@ export default class DraftSessionController<Draft extends DraftSessionContent> {
       try {
         const savedDraft = await this.#ports.save(update, { detached: !this.#attached, reason });
         if (savedDraft === null) {
-          this.#pending = [...edits, ...this.#pending];
+          if (!this.#submitted) this.#pending = [...edits, ...this.#pending];
           return false;
         }
+        if (this.#submitted) return true;
         const baseline = this.#receivedDraft !== receivedAtStart ? this.#receivedDraft : savedDraft;
         const draft = this.#pending.reduce<Draft>((current, edit) => edit(current), baseline);
         this.#publish({ draft, error: "" });
         return true;
       } catch (error) {
-        this.#pending = [...edits, ...this.#pending];
-        this.reportError(error, "Unable to save the draft.");
+        if (!this.#submitted) {
+          this.#pending = [...edits, ...this.#pending];
+          this.reportError(error, "Unable to save the draft.");
+        } else {
+          console.warn("An earlier draft autosave failed after answer acceptance.",
+            error instanceof Error ? error.message.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 500)
+              : "Unknown draft save failure.");
+        }
         return false;
       } finally {
         this.#saving = null;
@@ -175,9 +191,44 @@ export default class DraftSessionController<Draft extends DraftSessionContent> {
     }
   }
 
+  async submitAccepted(
+    deliver: (draft: Draft) => Promise<void>,
+    clear: () => Promise<void> | void,
+    subject: "answer" | "message" = "answer",
+  ): Promise<boolean> {
+    if (this.#submitted || this.#snapshot.isSubmitting || this.#attachmentReads.size) return false;
+    this.#cancelSave();
+    const priorSave = this.#saving;
+    const draft = this.#snapshot.draft;
+    this.#publish({ isSubmitting: true, error: "" });
+    try {
+      await deliver(draft);
+      this.#pending = [];
+      this.#submitted = true;
+      this.#publish({ draft: this.#ports.empty(), isSubmitting: false });
+      void (async () => {
+        if (priorSave) await priorSave;
+        try {
+          await clear();
+        } catch (error) {
+          this.reportError(error, `The ${subject} was accepted, but its draft could not be cleared.`);
+        }
+      })();
+      return true;
+    } catch (error) {
+      if (subject !== "message" || !isThreadMessageNotSentError(error)) {
+        this.reportError(error, `Unable to submit the ${subject}.`);
+      }
+      this.#publish({ isSubmitting: false });
+      if (this.#pending.length) this.#scheduleSave();
+      return false;
+    }
+  }
+
   reportError(error: unknown, fallback: string) {
-    const message = error instanceof Error ? error.message : fallback;
-    console.error(fallback, message.slice(0, 500));
+    const message = (error instanceof Error ? error.message : fallback)
+      .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 500);
+    console.error(fallback, message);
     this.#publish({ error: message });
   }
 

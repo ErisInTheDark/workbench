@@ -24,6 +24,9 @@ import {
   WorkbenchPresentationExportPageSchema,
   WorkbenchPresentationLayoutChunkRequestSchema,
   WorkbenchPresentationLayoutChunkSchema,
+  WorkbenchPresentationManifestPageSchema,
+  WorkbenchPresentationManifestRequestSchema,
+  type WorkbenchPresentationManifestPage,
 } from "workbench-shared/workbench/thread/thread-presentation-export";
 import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
@@ -125,7 +128,7 @@ interface StoredThreadMetadata { archived: boolean; harness: WorkbenchHarness; l
 type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
 type ProjectObservation =
   | { pinnedThreadKeys: Set<string>; projectId: ProjectId; scope: "project"; version: 1 | 2 | 3 | 4 | 5 | 6 }
-  | { pinnedThreadKeys: Set<string>; scope: "global"; version: 4 | 5 | 6 | 7 };
+  | { pinnedThreadKeys: Set<string>; scope: "global"; version: 4 | 5 | 6 | 7 | 8 };
 
 function summaryForObservation(summary: WorkbenchProjectThreadSummary, observation: ProjectObservation): WorkbenchProjectThreadSummary {
   if (observation.scope === "project" && observation.version >= 6) return summary;
@@ -315,6 +318,45 @@ export default class WorkbenchThreadStateController {
     };
   }
 
+  /** @deprecated Legacy app-presentation import source; remove after verified migration and backup. */
+  async exportPresentationManifestPage(value: z.input<typeof WorkbenchPresentationManifestRequestSchema>) {
+    const request = WorkbenchPresentationManifestRequestSchema.parse(value);
+    const catalog = this.options.getProjectCatalog().data
+      .map(project => project.id).sort((left, right) => left.localeCompare(right));
+    const projects = await Promise.all(catalog.map(async projectId => ({
+      projectId, state: await this.getProject(projectId),
+    })));
+    const sources: WorkbenchPresentationManifestPage["sources"] = projects.flatMap(({ projectId, state }) => [
+      ...[...state.drafts.keys()].sort((left, right) => left.localeCompare(right))
+        .map(sourceId => ({ kind: "draft" as const, projectId, sourceId: DraftIdSchema.parse(sourceId) })),
+      ...(isWorkbenchThreadDisplayOrderEmpty(state.displayOrder)
+        ? [] : [{ kind: "projectLayout" as const, projectId, sourceId: `project:${projectId}` }]),
+    ]);
+    const [home, pinned] = await Promise.all([
+      this.homeDisplayOrder.getSnapshot(), this.pinnedLayout.getSnapshot(),
+    ]);
+    if (!isWorkbenchThreadDisplayOrderEmpty(home.displayOrder)) {
+      sources.push({ kind: "homeLayout", sourceId: "home" });
+    }
+    if (!isWorkbenchThreadDisplayOrderEmpty(pinned.displayOrder)) {
+      sources.push({ kind: "pinnedLayout", sourceId: "pinned" });
+    }
+    const signature = createHash("sha256").update(sources.map(source =>
+      `${source.kind}\0${"projectId" in source ? source.projectId : ""}\0${source.sourceId}`).join("\n")).digest("hex");
+    const cursor = request.cursor
+      ? z.object({ signature: z.string().length(64), index: z.number().int().nonnegative() }).strict()
+        .parse(JSON.parse(request.cursor))
+      : { signature, index: 0 };
+    if (cursor.signature !== signature) throw new Error("Presentation sources changed during manifest read.");
+    const page = sources.slice(cursor.index, cursor.index + request.limit);
+    const next = cursor.index + page.length;
+    return WorkbenchPresentationManifestPageSchema.parse({
+      sources: page,
+      nextCursor: next < sources.length ? JSON.stringify({ signature, index: next }) : null,
+    });
+  }
+
+  /** @deprecated Legacy app-presentation import source; remove after verified migration and backup. */
   async exportPresentationPage(value: z.input<typeof WorkbenchPresentationExportRequestSchema>) {
     const request = WorkbenchPresentationExportRequestSchema.parse(value);
     const state = await this.getProject(request.projectId);
@@ -323,7 +365,10 @@ export default class WorkbenchThreadStateController {
         .parse(JSON.parse(request.cursor))
       : { revision: state.revision, index: 0 };
     if (cursor.revision !== state.revision) throw new Error("Draft source changed during export; restart the page read.");
-    const drafts = [...state.drafts.values()].sort((left, right) => left.draftId.localeCompare(right.draftId));
+    const selectedDraftIds = request.draftIds ? new Set(request.draftIds) : null;
+    const drafts = [...state.drafts.values()]
+      .filter(draft => !selectedDraftIds || selectedDraftIds.has(DraftIdSchema.parse(draft.draftId)))
+      .sort((left, right) => left.draftId.localeCompare(right.draftId));
     const page = drafts.slice(cursor.index, cursor.index + request.limit).map(draft => {
       const entry = state.entries.get(`draft:${draft.draftId}`);
       return {
@@ -351,6 +396,7 @@ export default class WorkbenchThreadStateController {
     });
   }
 
+  /** @deprecated Legacy app-presentation import source; remove after verified migration and backup. */
   async exportPresentationLayoutChunk(value: z.input<typeof WorkbenchPresentationLayoutChunkRequestSchema>) {
     const request = WorkbenchPresentationLayoutChunkRequestSchema.parse(value);
     const source = request.scope === "project"
@@ -379,6 +425,7 @@ export default class WorkbenchThreadStateController {
     });
   }
 
+  /** @deprecated Legacy app-presentation import source; remove after verified migration and backup. */
   async readPresentationAttachmentChunk(value: z.input<typeof WorkbenchPresentationAttachmentChunkRequestSchema>) {
     const request = WorkbenchPresentationAttachmentChunkRequestSchema.parse(value);
     const state = await this.getProject(request.projectId);
@@ -628,13 +675,59 @@ export default class WorkbenchThreadStateController {
     };
   }
 
-  async openGlobal(connectionId: string, version: 4 | 5 | 6 | 7 = 5): Promise<WorkbenchGlobalThreadStateOpenResult> {
+  async openGlobal(connectionId: string, version: 4 | 5 | 6 | 7 | 8 = 5): Promise<WorkbenchGlobalThreadStateOpenResult> {
     const priorObservation = this.connectionProjects.get(connectionId);
     if (priorObservation?.scope === "project") await this.close(connectionId, priorObservation.projectId);
     else if (priorObservation) await this.closeGlobal(connectionId);
     const observation: ProjectObservation = { pinnedThreadKeys: new Set(), scope: "global", version };
     this.connectionProjects.set(connectionId, observation);
     const catalog = this.options.getProjectCatalog();
+    if (version === 8) {
+      const readySidebars = catalog.data.flatMap(({ id }) => {
+        const state = this.projects.get(id);
+        return state ? [this.snapshotForObservation(this.snapshot(id, state), observation)] : [];
+      });
+      void this.pinnedLayout.getSnapshot().then(snapshot => {
+        if (this.active && this.connectionProjects.get(connectionId) === observation) {
+          this.options.publish(connectionId, snapshot);
+        }
+      }).catch(error => this.options.log?.(`Pinned layout read failed: ${sanitizeError(error)}`));
+      void this.homeDisplayOrder.getSnapshot().then(snapshot => {
+        if (this.active && this.connectionProjects.get(connectionId) === observation) {
+          this.options.publish(connectionId, snapshot);
+        }
+      }).catch(error => this.options.log?.(`Home layout read failed: ${sanitizeError(error)}`));
+      for (const { id } of catalog.data) {
+        if (this.projects.has(id)) continue;
+        void this.getProject(id).then(state => {
+          if (!this.active || this.connectionProjects.get(connectionId) !== observation) return;
+          this.options.publish(connectionId, {
+            sidebar: this.snapshotForObservation(this.snapshot(id, state), observation),
+            updateKind: "projectThreadSidebar",
+          });
+        }).catch(error => {
+          if (!this.active || this.connectionProjects.get(connectionId) !== observation) return;
+          this.options.publish(connectionId, {
+            sidebar: {
+              entries: [], error: sanitizeError(error), freshness: "partial",
+              projectId: id, revision: 0,
+            },
+            updateKind: "projectThreadSidebar",
+          });
+        });
+      }
+      return {
+        catalog,
+        pinnedThreadLayout: {
+          displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout",
+        },
+        projectSidebars: { projects: readySidebars },
+        homeThreadDisplayOrder: {
+          displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder",
+        },
+        version,
+      };
+    }
     const projectSidebars = await Promise.all(catalog.data.map(async ({ id }) => (
       this.snapshotForObservation(this.snapshot(id, await this.getProject(id)), observation)
     )));

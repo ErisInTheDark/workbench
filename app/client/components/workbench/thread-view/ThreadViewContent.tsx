@@ -45,7 +45,7 @@ import {
 } from "../../../workbench/thread/thread-subagents";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
-import { useWorkbenchThreads } from "../use-workbench-client";
+import { useWorkbenchThreadFileIndex, useWorkbenchThreads } from "../use-workbench-client";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import previousTurnLoadReducer from "./previous-turn-load-state";
 import ThreadHistoryPagingController, { type HistoryPagingOptions } from "./ThreadHistoryPagingController";
@@ -250,10 +250,11 @@ export default memo(function ThreadViewContent ({
   onThreadSettingsChange,
   onSelectedThreadChange,
   projectId,
-  projectFileCandidates,
-  projectFileIndexId,
+  projectFileCandidates: browseFileCandidates,
+  projectFileIndexId: browseFileIndexId,
   projectFileLinkRoots,
-  projectFilePaths,
+  projectFilePaths: browseFilePaths,
+  useOwnerFileIndex = false,
   projectRootPath,
   projectRoots,
   scrollViewportRef,
@@ -295,6 +296,7 @@ export default memo(function ThreadViewContent ({
   projectFileIndexId: string;
   projectFileLinkRoots?: readonly WorkspaceFileLinkRoot[];
   projectFilePaths: readonly string[];
+  useOwnerFileIndex?: boolean;
   projectRootPath: string;
   projectRoots?: readonly WorkbenchProjectRoot[];
   scrollViewportRef: RefObject<HTMLDivElement | null>;
@@ -309,6 +311,10 @@ export default memo(function ThreadViewContent ({
   const rootThreadController = useWorkbenchThread(projectId, rootTarget);
   // ThreadView admits this subtree only while this owner's document is available.
   const thread = rootThreadController.state.document!;
+  const ownedFileIndex = useWorkbenchThreadFileIndex(thread.id, useOwnerFileIndex);
+  const projectFileCandidates = useOwnerFileIndex ? ownedFileIndex.snapshot.candidates : browseFileCandidates;
+  const projectFileIndexId = useOwnerFileIndex ? ownedFileIndex.snapshot.id : browseFileIndexId;
+  const projectFilePaths = useOwnerFileIndex ? ownedFileIndex.snapshot.paths : browseFilePaths;
   const daemon = useWorkbenchDaemonClient();
   const projectHref = useWorkbenchProjectNavigation();
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
@@ -956,11 +962,18 @@ export default memo(function ThreadViewContent ({
       )}
     />
   ) : null;
+  const fileIndexError = useOwnerFileIndex && ownedFileIndex.snapshot.status === "error"
+    ? <p role="alert" className="m-0 py-2 text-[0.76rem] text-danger">
+      File suggestions unavailable: {ownedFileIndex.snapshot.error}
+      {ownedFileIndex.canRetry ? <button className="ml-2 rounded px-1 hover:bg-accent-soft" type="button"
+        onClick={() => { void ownedFileIndex.retry(); }}>Retry</button> : null}
+    </p> : null;
   const composer = activeThread ? (
     <ThreadComposer
       onDraftSessionChange={onDraftSessionChange}
       targetControl={isDraftThreadView ? draftTargetControl : null}
       canToggleHarness={canSelectHarness}
+      header={fileIndexError}
       key={`${projectId}:${activeThread.id}`}
       composerSpellCheck={composerSpellCheck}
       onListModels={threads.listModels}
@@ -1045,7 +1058,6 @@ export default memo(function ThreadViewContent ({
   const initialThreadContentReady = Boolean(
     activeThread && (!usesSqlTranscript || activeTranscriptProjection || transcriptSourceMessage),
   );
-
   return (
     <ThreadScrollViewportContext.Provider value={entryMotionContext}>
     <ProjectFilePathDisplayProvider

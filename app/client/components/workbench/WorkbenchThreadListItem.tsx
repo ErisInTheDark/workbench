@@ -155,7 +155,6 @@ export default function WorkbenchThreadListItem({
   onDragStart,
   onKeyDown,
   onPointerDown,
-  ownerLabel,
   project,
   presentation = "row",
   projectId,
@@ -188,7 +187,6 @@ export default function WorkbenchThreadListItem({
   onDragStart?: DragEventHandler<HTMLAnchorElement>;
   onKeyDown?: (event: ReactKeyboardEvent<HTMLAnchorElement>) => void;
   onPointerDown?: (event: PointerEvent<HTMLAnchorElement>) => void;
-  ownerLabel?: string;
   project?: WorkbenchProjectOption | WorkbenchLogicalProject;
   presentation?: "row" | "disclosure-summary";
   projectId: ProjectId;
@@ -392,10 +390,9 @@ export default function WorkbenchThreadListItem({
             </>
           )}
           contextMenu={Boolean(contextMenu)}
-          eyebrow={project || ownerLabel ? (
+          eyebrow={project ? (
             <span className="flex min-w-0 items-center gap-2">
               {project ? <WorkbenchProjectLabel project={project} variant="thread" /> : null}
-              {ownerLabel ? <span className="min-w-0 truncate font-mono text-[0.68rem] text-fg/muted">{ownerLabel}</span> : null}
             </span>
           ) : undefined}
           metadata={(

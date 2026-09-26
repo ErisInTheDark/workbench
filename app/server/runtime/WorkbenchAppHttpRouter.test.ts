@@ -16,6 +16,8 @@ import WorkbenchAppHttpRouter from "./WorkbenchAppHttpRouter.ts";
 async function fixtureRouter(
   errors: string[],
   appOrigin = "http://127.0.0.1:43210",
+  lines: string[] = [],
+  onLine: () => void = () => {},
 ) {
   const output = await mkdtemp(path.join(os.tmpdir(), "workbench-app-router-"));
   await mkdir(path.join(output, "tab-icons"), { recursive: true });
@@ -37,11 +39,32 @@ async function fixtureRouter(
         source: "setting",
       }),
     },
-    logger: new WorkbenchProcessLogger({ color: false, writeError: (value) => errors.push(value) }),
+    logger: new WorkbenchProcessLogger({
+      color: false,
+      writeError: (value) => errors.push(value),
+      writeOutput: (value) => { lines.push(value); onLine(); },
+    }),
     outputDirectoryPath: output,
     state,
   });
 }
+
+test("logs ordinary app requests without leaking request paths or query values", async context => {
+  const lines: string[] = [];
+  const logged = Promise.withResolvers<void>();
+  const router = await fixtureRouter([], undefined, lines, () => logged.resolve());
+  await router.start();
+  context.after(() => router.close());
+  const server = new HttpServer({ hostname: "127.0.0.1", handleRequest: (request, response) => router.handle(request, response) });
+  context.after(() => server.close());
+  const { url } = await server.start();
+  const response = await fetch(`${url}/private/thread-secret?token=private-token`);
+  assert.equal(response.status, 200);
+  await response.text();
+  await logged.promise;
+  assert.equal(lines.length, 1);
+  assert.doesNotMatch(lines.join(""), /thread-secret|private-token/u);
+});
 
 test("admits bounded browser logs under the client domain", async (context) => {
   const errors: string[] = [];

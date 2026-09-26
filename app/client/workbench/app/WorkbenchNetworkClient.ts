@@ -9,6 +9,10 @@ import {
   WORKBENCH_NETWORK_PATH, WorkbenchNetworkActionSchema, WorkbenchNetworkResultSchema, WorkbenchNetworkSnapshotSchema, WorkbenchNetworkVerificationSchema, workbenchNetworkMode,
   type WorkbenchNetworkAction, type WorkbenchNetworkResult, type WorkbenchNetworkSnapshot, type WorkbenchNetworkSettings,
 } from "workbench-shared/http/workbench-network";
+import {
+  WorkbenchPresentationImportStatusSchema, WorkbenchPresentationRevisionEventSchema,
+  type WorkbenchPresentationImportStatus,
+} from "workbench-shared/state/workbench-presentation-state";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import { z } from "zod";
 import { consumeNetworkHandoff, networkNavigationUrl, type NetworkHandoff, type NetworkUpgrade } from "./workbench-network-navigation";
@@ -30,15 +34,17 @@ export default class WorkbenchNetworkClient {
     snapshot: null, error: null, loading: true, verification: { phase: "idle" }, handoff: null,
   };
   private readonly listeners = new Set<() => void>();
+  private readonly presentationListeners = new Set<(revision: number) => void>();
+  private readonly presentationImportListeners = new Set<(status: WorkbenchPresentationImportStatus) => void>();
   private readonly requests = new Set<AbortController>();
-  private events: Pick<EventSource, "close" | "onmessage" | "onerror"> | null = null;
+  private events: Pick<EventSource, "close" | "onmessage" | "onerror"> & Partial<Pick<EventSource, "addEventListener">> | null = null;
   private closed = false;
   private upgrade: NetworkUpgrade | null = null;
   private verificationRequest: AbortController | null = null;
 
   constructor(private readonly options: {
     fetcher?: typeof fetch;
-    events?: (url: string) => Pick<EventSource, "close" | "onmessage" | "onerror">;
+    events?: (url: string) => Pick<EventSource, "close" | "onmessage" | "onerror"> & Partial<Pick<EventSource, "addEventListener">>;
   } = {}) {}
 
   readonly subscribe = (listener: () => void) => {
@@ -46,6 +52,14 @@ export default class WorkbenchNetworkClient {
     return () => { this.listeners.delete(listener); };
   };
   readonly snapshot = () => this.state;
+  readonly subscribePresentation = (listener: (revision: number) => void) => {
+    this.presentationListeners.add(listener);
+    return () => { this.presentationListeners.delete(listener); };
+  };
+  readonly subscribePresentationImport = (listener: (status: WorkbenchPresentationImportStatus) => void) => {
+    this.presentationImportListeners.add(listener);
+    return () => { this.presentationImportListeners.delete(listener); };
+  };
 
   async start() {
     if (this.closed) return;
@@ -70,6 +84,34 @@ export default class WorkbenchNetworkClient {
           this.update({ ...this.state, error: "Network progress data was invalid." });
         }
       };
+      events.addEventListener?.("presentation", event => {
+        if (this.closed || this.events !== events) return;
+        try {
+          const parsed = WorkbenchPresentationRevisionEventSchema.safeParse(
+            JSON.parse((event as MessageEvent).data));
+          if (!parsed.success) {
+            reportClientSchemaError("Rejected Workbench presentation revision", parsed.error);
+            return;
+          }
+          for (const listener of this.presentationListeners) listener(parsed.data.revision);
+        } catch {
+          this.update({ ...this.state, error: "Presentation progress data was invalid." });
+        }
+      });
+      events.addEventListener?.("presentation-import", event => {
+        if (this.closed || this.events !== events) return;
+        try {
+          const parsed = WorkbenchPresentationImportStatusSchema.safeParse(
+            JSON.parse((event as MessageEvent).data));
+          if (!parsed.success) {
+            reportClientSchemaError("Rejected Workbench presentation import status", parsed.error);
+            return;
+          }
+          for (const listener of this.presentationImportListeners) listener(parsed.data);
+        } catch {
+          this.update({ ...this.state, error: "Presentation import progress data was invalid." });
+        }
+      });
       events.onerror = () => {
         if (this.closed || this.events !== events) return;
         this.update({ ...this.state, error: "Network progress disconnected; the browser is reconnecting." });
@@ -192,6 +234,8 @@ export default class WorkbenchNetworkClient {
     for (const controller of this.requests) controller.abort();
     this.requests.clear();
     this.listeners.clear();
+    this.presentationListeners.clear();
+    this.presentationImportListeners.clear();
   }
 
   async verify() {

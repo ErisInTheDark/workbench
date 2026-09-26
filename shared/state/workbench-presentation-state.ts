@@ -3,6 +3,8 @@
  * - PresentationDraftInputSchema/PresentationDraftInput: app-owned unsent content and one concrete target.
  * - PresentationMutationSchema/PresentationMutation: revision-checked presentation intents.
  * - PresentationSnapshotSchema/PresentationSnapshot: combined app state, never a daemon execution response.
+ * - WorkbenchPresentationRevisionEventSchema: compact app presentation change notice.
+ * - WorkbenchPresentationImportStatusSchema/WorkbenchPresentationImportStatus: bounded server import progress.
  */
 import { z } from "zod";
 import { DaemonIdSchema, LogicalProjectIdSchema } from "../workbench/identity.ts";
@@ -10,6 +12,14 @@ import { ProjectLocationReferenceSchema, WorkbenchProjectLocationsPayloadSchema 
 import { WorkbenchComposerProfileSelectionSchema } from "../workbench/thread/thread-state.ts";
 
 const revision = z.number().int().nonnegative();
+export const WorkbenchPresentationRevisionEventSchema = z.object({ revision }).strict();
+export const WorkbenchPresentationImportStatusSchema = z.object({
+  phase: z.enum(["idle", "running", "complete", "partial", "failed"]),
+  scanned: z.number().int().nonnegative(),
+  imported: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+}).strict();
+export type WorkbenchPresentationImportStatus = z.infer<typeof WorkbenchPresentationImportStatusSchema>;
 const uuid = z.uuid();
 const layoutScope = z.enum(["project", "home", "pinned"]);
 const member = z.object({

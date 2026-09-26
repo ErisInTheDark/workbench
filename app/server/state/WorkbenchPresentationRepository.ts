@@ -18,7 +18,9 @@ import {
   type PresentationMutation, type PresentationSnapshot,
 } from "workbench-shared/state/workbench-presentation-state";
 import { presentationSchema, type PresentationRows } from "workbench-shared/state/workbench-presentation-schema";
+import type { PresentationImportSource } from "workbench-shared/state/workbench-presentation-import";
 import releases from "workbench-shared/state/workbench-presentation-releases";
+import type { DaemonId } from "workbench-shared/workbench/identity";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
 export interface WorkbenchPresentationRepositoryOptions {
@@ -84,6 +86,19 @@ export default class WorkbenchPresentationRepository {
       await restoreWorkbenchDatabaseBackup(backupPath, this.databasePath);
     }
     await this.start();
+  }
+
+  readImportReceipts(daemonId: DaemonId, sources: readonly PresentationImportSource[]) {
+    const read = this.requireDatabase().prepare(`
+      SELECT 1 FROM presentation_import_receipts
+      WHERE daemon_id = ? AND source_kind = ? AND source_id = ?
+    `);
+    return sources.filter(source => Boolean(read.get(daemonId, source.kind, source.sourceId)));
+  }
+
+  readRevision() {
+    return (this.requireDatabase().prepare("SELECT revision FROM presentation_metadata WHERE id = 'singleton'")
+      .get() as { revision: number }).revision;
   }
 
   read(): PresentationSnapshot {
@@ -159,23 +174,38 @@ export default class WorkbenchPresentationRepository {
   mutate(value: PresentationMutation) {
     const mutation = PresentationMutationSchema.parse(value);
     const db = this.requireDatabase();
-    db.transaction(() => {
-      switch (mutation.kind) {
-        case "registerLocations": this.registerLocations(mutation); break;
-        case "putDraft": this.putDraft(mutation); break;
-        case "deleteDraft": this.deleteDraft(mutation); break;
-        case "setDraftPriority": this.setDraftPriority(mutation); break;
-        case "deleteAttachment": this.deleteAttachment(mutation); break;
-        case "reserveLaunch": this.reserveLaunch(mutation); break;
-        case "completeLaunch": this.completeLaunch(mutation); break;
-        case "saveLayout": this.saveLayout(mutation); break;
-        case "saveLayouts": this.saveLayouts(mutation); break;
-        case "importDraft": this.importDraft(mutation); break;
-        case "finishImportDraft": this.finishImportDraft(mutation); break;
-        case "importLayout": this.importLayout(mutation); break;
-      }
-    })();
+    db.transaction(() => this.applyMutation(mutation))();
     return this.read();
+  }
+
+  mutateImportBatch(values: readonly PresentationMutation[]) {
+    if (!values.length || values.length > 20) throw new Error("Import batch size is invalid.");
+    const mutations = values.map(value => PresentationMutationSchema.parse(value));
+    if (mutations.some(value => value.kind !== "importDraft"
+      && value.kind !== "finishImportDraft" && value.kind !== "importLayout")) {
+      throw new Error("Import batch contains a non-import mutation.");
+    }
+    this.requireDatabase().transaction(() => {
+      for (const mutation of mutations) this.applyMutation(mutation);
+    })();
+    return { accepted: true as const };
+  }
+
+  private applyMutation(mutation: PresentationMutation) {
+    switch (mutation.kind) {
+      case "registerLocations": this.registerLocations(mutation); break;
+      case "putDraft": this.putDraft(mutation); break;
+      case "deleteDraft": this.deleteDraft(mutation); break;
+      case "setDraftPriority": this.setDraftPriority(mutation); break;
+      case "deleteAttachment": this.deleteAttachment(mutation); break;
+      case "reserveLaunch": this.reserveLaunch(mutation); break;
+      case "completeLaunch": this.completeLaunch(mutation); break;
+      case "saveLayout": this.saveLayout(mutation); break;
+      case "saveLayouts": this.saveLayouts(mutation); break;
+      case "importDraft": this.importDraft(mutation); break;
+      case "finishImportDraft": this.finishImportDraft(mutation); break;
+      case "importLayout": this.importLayout(mutation); break;
+    }
   }
 
   readAttachment(draftId: string, id: string) {

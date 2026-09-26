@@ -37,6 +37,8 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   sources: [
     "app/server/runtime/AppHttpNode.ts",
     "app/server/runtime/WorkbenchAppHttpRouter.ts",
+    "app/server/state/WorkbenchPresentationImportController.ts",
+    "shared/state/workbench-presentation-legacy-layout.ts",
     "app/server/runtime/WorkbenchAppPortRoutes.ts",
     "app/server/runtime/WorkbenchAppSettingsRoutes.ts",
     "app/server/state/workbench-app-state-routes.ts",

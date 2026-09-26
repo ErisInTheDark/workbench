@@ -60,6 +60,7 @@ export default class WorkbenchComposerProfileController {
   private snapshot: WorkbenchComposerProfileSnapshot;
   private targetPersistence: ComposerProfileTargetPersistence | null = null;
   private readonly selectionWrites = new Map<string, Promise<boolean>>();
+  private readonly selectionFailures = new Map<string, string>();
   private readonly profileWrites = new Map<string, Promise<boolean>>();
   private catalogueRefresh: Promise<void> | null = null;
 
@@ -120,6 +121,8 @@ export default class WorkbenchComposerProfileController {
     for (const [key, generation] of this.selectionGenerations) {
       this.selectionGenerations.set(key, generation + 1);
     }
+    this.selectionFailures.clear();
+    this.publish();
   }
 
   dispose() {
@@ -130,6 +133,13 @@ export default class WorkbenchComposerProfileController {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   getSnapshot = () => this.snapshot;
   hasSelection(slot: WorkbenchComposerProfileSlot) { return Object.hasOwn(this.selections, getSlotKey(slot)); }
+  selectionWriteState(slot: WorkbenchComposerProfileSlot): "ready" | "pending" | "failed" {
+    const key = getSlotKey(slot);
+    const selection = this.selections[key];
+    if (this.selectionWrites.has(key)
+      || selection?.kind === "profile" && this.profileWrites.has(selection.profileId)) return "pending";
+    return this.selectionFailures.has(key) ? "failed" : "ready";
+  }
   getSelection(slot: WorkbenchComposerProfileSlot): WorkbenchComposerProfileSelection {
     const selection = this.selections[getSlotKey(slot)] ?? EMPTY_CUSTOM_SELECTION;
     return selection.kind === "profile" && this.stableProfileGeneration > 0 && !this.getProfile(selection.profileId)
@@ -225,12 +235,21 @@ export default class WorkbenchComposerProfileController {
           contextWindowTokens: model.contextWindow?.defaultTokens ?? null,
         } });
       } catch (error) {
+        if ((this.selectionGenerations.get(key) ?? 0) === generation) {
+          this.selectionFailures.set(key, error instanceof Error ? error.message : "Unable to change provider.");
+        }
         this.fail(error instanceof Error ? error.message : "Unable to change provider.");
         return false;
       }
     })();
     this.selectionWrites.set(key, pending);
-    return pending.finally(() => { if (this.selectionWrites.get(key) === pending) this.selectionWrites.delete(key); });
+    this.publish();
+    return pending.finally(() => {
+      if (this.selectionWrites.get(key) === pending) {
+        this.selectionWrites.delete(key);
+        this.publish();
+      }
+    });
   }
   selectProfile(slot: WorkbenchComposerProfileSlot, profileId: string) {
     const profile = this.getProfile(profileId);
@@ -258,7 +277,11 @@ export default class WorkbenchComposerProfileController {
       const selection = this.selections[key] ?? EMPTY_CUSTOM_SELECTION;
       const pending = this.selectionWrites.get(key)
         ?? (selection.kind === "profile" ? this.profileWrites.get(selection.profileId) : null);
-      if (!pending) return;
+      if (!pending) {
+        const failure = this.selectionFailures.get(key);
+        if (failure) throw new Error(failure);
+        return;
+      }
       if (!await pending) throw new Error(this.error || "The profile settings could not be saved.");
     }
   }
@@ -315,6 +338,7 @@ export default class WorkbenchComposerProfileController {
       else {
         this.stableSelections.delete(key);
         this.installSelection(slot, EMPTY_CUSTOM_SELECTION, false);
+        this.selectionFailures.delete(key);
       }
       this.error = "";
       this.publish();
@@ -330,13 +354,20 @@ export default class WorkbenchComposerProfileController {
     const key = getSlotKey(slot);
     const pending = this.writeSelection(slot, selection, this.selectionWrites.get(key));
     this.selectionWrites.set(key, pending);
-    return pending.finally(() => { if (this.selectionWrites.get(key) === pending) this.selectionWrites.delete(key); });
+    this.publish();
+    return pending.finally(() => {
+      if (this.selectionWrites.get(key) === pending) {
+        this.selectionWrites.delete(key);
+        this.publish();
+      }
+    });
   }
 
   private async writeSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection, previous?: Promise<boolean>): Promise<boolean> {
     const key = getSlotKey(slot);
     const generation = (this.selectionGenerations.get(key) ?? 0) + 1;
     this.selectionGenerations.set(key, generation);
+    this.selectionFailures.delete(key);
     this.installSelection(slot, selection, false);
     this.publish();
     try {
@@ -364,7 +395,10 @@ export default class WorkbenchComposerProfileController {
           this.selections = rest;
         }
       }
-      if (this.selectionGenerations.get(key) === generation) this.fail(error instanceof Error ? error.message : "Unable to persist the composer profile selection.");
+      if (this.selectionGenerations.get(key) === generation) {
+        this.selectionFailures.set(key, error instanceof Error ? error.message : "Unable to persist the composer profile selection.");
+        this.fail(error instanceof Error ? error.message : "Unable to persist the composer profile selection.");
+      }
       return false;
     }
   }
@@ -374,6 +408,7 @@ export default class WorkbenchComposerProfileController {
     const generation = (this.selectionGenerations.get(key) ?? 0) + 1;
     this.selectionGenerations.set(key, generation);
     this.stableSelections.set(key, { generation, selection: this.cloneTargetSelection(selection) });
+    this.selectionFailures.delete(key);
     this.installSelection(slot, selection, publish);
   }
 
@@ -409,7 +444,13 @@ export default class WorkbenchComposerProfileController {
     const id = mutation.kind === "delete" ? mutation.profileId : mutation.profile.id;
     const pending = this.writeProfileMutation(mutation, optimistic);
     this.profileWrites.set(id, pending);
-    return pending.finally(() => { if (this.profileWrites.get(id) === pending) this.profileWrites.delete(id); });
+    this.publish();
+    return pending.finally(() => {
+      if (this.profileWrites.get(id) === pending) {
+        this.profileWrites.delete(id);
+        this.publish();
+      }
+    });
   }
 
   private async writeProfileMutation(mutation: WorkbenchComposerProfileMutation, optimistic: WorkbenchComposerProfile[]) {

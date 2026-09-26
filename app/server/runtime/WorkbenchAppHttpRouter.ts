@@ -13,6 +13,7 @@ import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import WorkbenchAppStateRoutes from "../state/workbench-app-state-routes.ts";
 import WorkbenchPresentationRoutes from "../state/workbench-presentation-routes.ts";
 import type WorkbenchPresentationController from "../state/WorkbenchPresentationController.ts";
+import WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController.ts";
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
 import WorkbenchAppSettingsRoutes from "./WorkbenchAppSettingsRoutes.ts";
@@ -23,6 +24,19 @@ const CLIENT_LOG_PATH = "/api/workbench-client-log";
 const MAX_CLIENT_LOG_BODY_BYTES = 128_000;
 const MAX_CLIENT_LOG_ENTRIES = 100;
 const MAX_CLIENT_LOG_MESSAGE = 8_000;
+
+function requestKind(pathname: string) {
+  if (pathname === "/api/workbench-network/events") return "network stream";
+  if (/^\/api\/workbench-presentation\/drafts\/[^/]+\/attachments\//u.test(pathname)) return "draft image";
+  if (pathname.startsWith("/api/workbench-presentation")) return "presentation";
+  if (pathname.startsWith("/api/workbench-network")) return "network";
+  if (pathname.startsWith("/api/workbench-client-state")) return "app state";
+  if (pathname.startsWith("/api/workbench-app-port")) return "app port";
+  if (pathname.startsWith("/api/workbench-app-settings")) return "app settings";
+  if (pathname === CLIENT_LOG_PATH) return "client log";
+  if (pathname.startsWith("/api/")) return "api";
+  return /\.[a-z0-9]{1,8}$/iu.test(pathname) ? "asset" : "page";
+}
 
 function sendJson(response: ServerResponse, status: number, value: object) {
   response.writeHead(status, {
@@ -73,6 +87,7 @@ export default class WorkbenchAppHttpRouter {
   private readonly presentationRoutes: WorkbenchPresentationRoutes | null;
   private readonly staticRequests: StaticHttpRequestController;
   private readonly networkRoutes: WorkbenchNetworkRoutes | null;
+  private readonly importController: WorkbenchPresentationImportController | null;
 
   constructor(private readonly options: {
     appPort: WorkbenchAppPortControl;
@@ -83,7 +98,12 @@ export default class WorkbenchAppHttpRouter {
     state: WorkbenchBrowserStateRegistry;
     presentation?: WorkbenchPresentationController;
   }) {
-    this.networkRoutes = options.network ? new WorkbenchNetworkRoutes(options.network) : null;
+    this.importController = options.network && options.presentation
+      ? new WorkbenchPresentationImportController({
+          network: options.network, presentation: options.presentation, logger: options.logger,
+        }) : null;
+    this.networkRoutes = options.network
+      ? new WorkbenchNetworkRoutes(options.network, options.presentation, this.importController ?? undefined) : null;
     this.portRoutes = new WorkbenchAppPortRoutes({
       appPort: {
         read: () => options.appPort.read(),
@@ -127,9 +147,11 @@ export default class WorkbenchAppHttpRouter {
 
   async start() {
     await this.staticRequests.start();
+    this.importController?.start();
   }
 
   async close() {
+    await this.importController?.close();
     await this.presentationRoutes?.close();
     this.networkRoutes?.close();
     this.staticRequests.close();
@@ -146,6 +168,27 @@ export default class WorkbenchAppHttpRouter {
   }
 
   async handle(request: IncomingMessage, response: ServerResponse) {
+    const pathname = new URL(request.url ?? "/", "http://workbench.local").pathname;
+    const kind = requestKind(pathname);
+    const method = request.method ?? "UNKNOWN";
+    const startedAt = Date.now();
+    const stream = kind === "network stream";
+    let recorded = false;
+    const record = (closed: boolean) => {
+      if (recorded) return;
+      recorded = true;
+      const duration = `${Date.now() - startedAt}ms`;
+      this.options.logger.line("app", `${method} ${kind} ${response.statusCode} ${closed ? "closed " : ""}in ${duration}`);
+    };
+    response.once("finish", () => record(stream));
+    response.once("close", () => record(true));
+    await this.route(request, response);
+    if (stream && response.headersSent && !recorded && !response.writableEnded) {
+      this.options.logger.line("app", `${method} ${kind} ${response.statusCode} open`);
+    }
+  }
+
+  private async route(request: IncomingMessage, response: ServerResponse) {
     if (!await this.admitHttp(request, response)) return;
     const url = new URL(request.url ?? "/", "http://workbench.local");
     if (url.pathname === WORKBENCH_APP_PORT_PATH && request.method !== "GET"

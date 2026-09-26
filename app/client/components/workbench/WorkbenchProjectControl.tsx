@@ -4,7 +4,7 @@
  */
 "use client";
 
-import type { WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import { ProjectIcon } from "./workbench-icons";
 import WorkbenchRotatorButton from "./WorkbenchRotatorButton";
 
@@ -15,9 +15,9 @@ export default function WorkbenchProjectControl({
 }: {
   disabled?: boolean;
   onRotate: () => void;
-  project: WorkbenchProjectOption;
+  project: WorkbenchProjectOption | WorkbenchLogicalProject;
 }) {
-  const label = project.name || project.id;
+  const label = "matchKey" in project ? project.displayName ?? project.label : project.name || project.id;
   return (
     <WorkbenchRotatorButton
       ariaLabel={`Create thread in ${label}. Click to use the next recent project.`}

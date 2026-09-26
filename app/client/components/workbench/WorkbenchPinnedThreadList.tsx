@@ -351,7 +351,6 @@ export default function WorkbenchPinnedThreadList ({
             onPointerDown={onPointerDown}
             project={logicalProject ?? project}
             projectId={sourceProjectId}
-            ownerLabel={qualified ? `${qualified.hostname} · ${qualified.rootPath}` : undefined}
             selected={project.id === selectedOwnerProjectId && isWorkbenchThreadTargetSelected(target, currentTarget)}
             showActions={logicalProjects ? true : project.id === projectId || entry.entryKind !== "draft"}
           />

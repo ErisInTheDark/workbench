@@ -2,7 +2,7 @@
  * No production exports. Tests protect canonical SQLite order, grouping, hidden controls, turn ownership, and Browse attachment.
  */
 import assert from "node:assert/strict";
-import { createRef } from "react";
+import { createElement, createRef } from "react";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -21,6 +21,8 @@ import type {
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
+import ThreadUserImage from "./ThreadUserImage";
+import { WorkbenchDaemonAssetOriginContext } from "../WorkbenchDaemonClientContext";
 
 function turn(id: string, turnIndex: number, items: ThreadItem[]): WorkbenchProjectedTranscriptTurn {
   return {
@@ -183,6 +185,30 @@ test("native incoming messages and screenshots render once per identity after pr
     assert.deepEqual(sources, [expectedUrl]);
     assert.equal(html.includes(recovery.output as string), false);
   }
+});
+
+test("attached transcript images keep their daemon asset URL while a missing peer origin does not fall back", async () => {
+  const previous = process.env.WORKBENCH_CODEX_APP_SERVER_URL;
+  try {
+    process.env.WORKBENCH_CODEX_APP_SERVER_URL = "ws://transcript.test";
+    await workbenchDaemonConnection.resolve();
+  } finally {
+    if (previous === undefined) delete process.env.WORKBENCH_CODEX_APP_SERVER_URL;
+    else process.env.WORKBENCH_CODEX_APP_SERVER_URL = previous;
+  }
+  const src = "/api/transcript-assets/codex/thread/screenshot.png";
+  const attached = renderToStaticMarkup(createElement(
+    WorkbenchDaemonAssetOriginContext.Provider,
+    { value: { kind: "attached" } },
+    createElement(ThreadUserImage, { alt: "screenshot", src }),
+  ));
+  assert.match(attached, /http:\/\/transcript\.test\/daemon\/transcript-assets\/codex\/thread\/screenshot\.png/u);
+  const unavailablePeer = renderToStaticMarkup(createElement(
+    WorkbenchDaemonAssetOriginContext.Provider,
+    { value: { kind: "peer", origin: null } },
+    createElement(ThreadUserImage, { alt: "screenshot", src }),
+  ));
+  assert.doesNotMatch(unavailablePeer, /transcript\.test/u);
 });
 
 test("SQLite projection preserves canonical order with initially closed Browse details", () => {

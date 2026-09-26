@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests preserve scoped drafts and canonical identity adoption.
+ * - No production exports; tests preserve negotiated daemon registration, scoped drafts, and canonical identity adoption.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -24,10 +24,10 @@ test("peer registration resolves a browser-private owner distinct from its durab
     }
     return Response.json({
       kind: "snapshot", daemonRegistrationId: "attached-registration",
-      registrations: registered ? [
+      ...(new URL(url, "http://app.test").searchParams.get("capabilities") === "2" ? { registrations: registered ? [
         { id: "attached-registration", kind: "local", daemonId: null },
         { id: registrationId, kind: "remote", daemonId },
-      ] : [{ id: "attached-registration", kind: "local", daemonId: null }],
+      ] : [{ id: "attached-registration", kind: "local", daemonId: null }] } : {}),
       oldestAvailableRevision: 0, revision: registered ? 1 : 0, schemaVersion: 1, rows,
     });
   };
@@ -36,15 +36,16 @@ test("peer registration resolves a browser-private owner distinct from its durab
   });
   try {
     await state.bootstrap();
+    assert.equal(state.getSnapshot().registrations[0]?.id, "attached-registration");
     assert.deepEqual(await Promise.all([
       state.ensureDaemonRegistration(daemonId, false),
       state.ensureDaemonRegistration(daemonId, false),
     ]), [registrationId, registrationId]);
     assert.equal(state.getSnapshot().registrations.find(item => item.daemonId === daemonId)?.id, registrationId);
     assert.deepEqual(requests, [
-      "GET /api/workbench-client-state",
+      "GET /api/workbench-client-state?capabilities=2",
       "POST /api/workbench-client-state/daemon-register",
-      "GET /api/workbench-client-state",
+      "GET /api/workbench-client-state?capabilities=2",
     ]);
   } finally {
     state.dispose();

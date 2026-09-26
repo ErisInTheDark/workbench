@@ -7,6 +7,7 @@
 import {
   useCallback,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -23,6 +24,7 @@ import {
 } from "../../workbench/state/workbench-settings";
 import {
   WorkbenchSidebarPreferencesContext,
+  type WorkbenchSidebarDisclosurePreferenceKey,
   type WorkbenchSidebarDisplayState,
   type WorkbenchSidebarPreferencesValue,
 } from "./workbench-sidebar-preferences-context";
@@ -45,35 +47,39 @@ export default function WorkbenchSidebarPreferencesProvider({
     settledThreadItemLimit: 50,
     settledThreadsOpen: false,
   });
-  const preferences = useMemo(() => {
+  const [pendingDisclosure, setPendingDisclosure] = useState<Partial<Record<WorkbenchSidebarDisclosurePreferenceKey, boolean>>>({});
+  const disclosureGeneration = useRef(new Map<WorkbenchSidebarDisclosurePreferenceKey, number>());
+  const persistedPreferences = useMemo(() => {
     const projectPreferences = projectId
       ? readWorkbenchProjectSidebarPreferences(clientState.daemonRegistrationId, projectId, clientState.records)
       : createDefaultWorkbenchProjectSidebarPreferences();
     return {
       ...projectPreferences,
       ...readWorkbenchGlobalSidebarPreferences(clientState.daemonRegistrationId, clientState.records),
-      ...displayState,
     };
-  }, [clientState.daemonRegistrationId, clientState.records, displayState, projectId]);
+  }, [clientState.daemonRegistrationId, clientState.records, projectId]);
+  const preferences = useMemo(() => ({
+    ...persistedPreferences, ...displayState, ...pendingDisclosure,
+  }), [displayState, pendingDisclosure, persistedPreferences]);
 
   const persistGlobalPreference = useCallback((
     key: keyof WorkbenchGlobalSidebarPreferences,
     value: boolean | number,
   ) => {
-    if (preferences[key] === value) return;
+    if (persistedPreferences[key] === value) return;
     void writeWorkbenchGlobalSidebarPreference(controller, clientState.schemaVersion, key, value).catch((error) => {
       console.error("Workbench global sidebar preference persistence failed.", error);
     });
-  }, [clientState.schemaVersion, controller, preferences]);
+  }, [clientState.schemaVersion, controller, persistedPreferences]);
   const persistProjectPreference = useCallback((
     key: Exclude<keyof WorkbenchProjectSidebarPreferences, "pinnedFolderIds" | "threadFolderIds">,
     value: boolean,
   ) => {
-    if (!projectId || preferences[key] === value) return;
+    if (!projectId || persistedPreferences[key] === value) return;
     void writeWorkbenchProjectSidebarPreference(controller, projectId, key, value).catch((error) => {
       console.error("Workbench project sidebar preference persistence failed.", error);
     });
-  }, [controller, preferences, projectId]);
+  }, [controller, persistedPreferences, projectId]);
   const setDisclosureOpen = useCallback<WorkbenchSidebarPreferencesValue["setDisclosureOpen"]>(
     (key, open) => {
       if (key === "gitOpen") {
@@ -84,10 +90,29 @@ export default function WorkbenchSidebarPreferencesProvider({
           settledThreadsOpen: open,
           settledThreadItemLimit: open ? 50 : previous.settledThreadItemLimit,
         });
-      } else if (key === "projectsOpen") persistGlobalPreference(key, open);
-      else persistProjectPreference(key, open);
+      } else {
+        if (preferences[key] === open || key !== "projectsOpen" && !projectId) return;
+        const generation = (disclosureGeneration.current.get(key) ?? 0) + 1;
+        disclosureGeneration.current.set(key, generation);
+        setPendingDisclosure(previous => ({ ...previous, [key]: open }));
+        const clear = () => {
+          if (disclosureGeneration.current.get(key) !== generation) return;
+          setPendingDisclosure(previous => {
+            const next = { ...previous };
+            delete next[key];
+            return next;
+          });
+        };
+        const write = key === "projectsOpen"
+          ? writeWorkbenchGlobalSidebarPreference(controller, clientState.schemaVersion, key, open)
+          : writeWorkbenchProjectSidebarPreference(controller, projectId, key, open);
+        void write.then(clear, error => {
+          clear();
+          console.error("Workbench sidebar disclosure persistence failed.", error);
+        });
+      }
     },
-    [persistGlobalPreference, persistProjectPreference],
+    [clientState.schemaVersion, controller, preferences, projectId],
   );
   const setFolderOpen = useCallback<WorkbenchSidebarPreferencesValue["setFolderOpen"]>((scope, folderId, open) => {
     const key = scope === "pinned" ? "pinnedFolderIds" : "threadFolderIds";

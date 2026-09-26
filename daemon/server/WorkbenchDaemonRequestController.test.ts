@@ -96,6 +96,7 @@ function createController(options: {
   readDetailed?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["stats"]["readDetailed"];
   questionnaireResponses?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["questionnaireResponses"];
   commandApprovals?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["commandApprovals"];
+  projectSnapshot?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["projectSnapshot"];
 } = {}) {
   let globalNetworkEnabled = false;
   const projectNetworkOverrides = new Map<string, boolean>();
@@ -188,6 +189,13 @@ function createController(options: {
         if (projectId === options.rejectProjectId) throw new Error("Unknown project.");
         return { id: projectId == null ? undefined : ProjectIdSchema.parse(options.canonicalProjectId ?? projectId), kind: "git", root: "", rootPath: "", roots: [] };
       },
+    },
+    projectSnapshot: options.projectSnapshot ?? {
+      readProjectSnapshot: async projectId => ({
+        projectId: ProjectIdSchema.parse(projectId),
+        root: "project", rootPath: "C:/project", roots: [],
+        tree: [], changes: {}, workbenchStorageRootPath: "C:/project/.workbench",
+      }),
     },
     search: {
       search: async (request) => {
@@ -613,6 +621,35 @@ test("project-scoped network, search, and stats requests use the resolved owner 
   await controller.handle({ id: 3, method: "stats/read", params: { projectId, range: "7d" } });
   assert.deepEqual(searchRequests, [{ projectId: canonicalProjectId, query: "" }]);
   assert.deepEqual(statsRequests, [{ projectId: canonicalProjectId, range: "7d", model: null, provider: null }]);
+});
+
+test("file-index reads stay qualified to the requested project without changing observation", async () => {
+  const reads: string[] = [];
+  const { controller } = createController({
+    projectSnapshot: {
+      readProjectSnapshot: async projectId => {
+        reads.push(projectId);
+        return {
+          projectId: ProjectIdSchema.parse(projectId),
+          root: projectId, rootPath: `C:/${projectId}`, roots: [],
+          tree: [{ type: "file", name: `${projectId}.ts`, path: `src/${projectId}.ts` }],
+          changes: {}, workbenchStorageRootPath: `C:/${projectId}/.workbench`,
+        };
+      },
+    },
+  });
+  const first = await controller.handle({
+    id: 1, method: "project/file-index/read", params: { projectId: "first" },
+  });
+  const second = await controller.handle({
+    id: 2, method: "project/file-index/read", params: { projectId: "second" },
+  });
+  assert.deepEqual(reads, ["first", "second"]);
+  assert.deepEqual((first.result as { candidates: { path: string }[] }).candidates.map(item => item.path), ["src/first.ts"]);
+  assert.deepEqual((second.result as { candidates: { path: string }[] }).candidates.map(item => item.path), ["src/second.ts"]);
+  assert.equal((await controller.handle({
+    id: 3, method: "project/file-index/read", params: {},
+  })).error?.code, -32602);
 });
 
 for (const harness of ["codex", "copilot", "opencode"] as const) {

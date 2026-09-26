@@ -192,9 +192,11 @@ export default function ThreadComposer ({
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
   const hasEffectiveProfile = !profileSlot || Boolean(composerProfileController.resolveSettings(profileSlot)?.model);
+  const profileWriteState = profileSlot ? composerProfileController.selectionWriteState(profileSlot) : "ready";
   const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(thread, threadLifecycle, hasPendingUserInputRequest, controlsMode);
   const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken;
-  const isSendDisabled = isInputDisabled || isProviderUnavailable || (!isActiveThread && !hasEffectiveProfile);
+  const isSendDisabled = isInputDisabled || isProviderUnavailable
+    || (!isActiveThread && (!hasEffectiveProfile || profileWriteState !== "ready"));
   const isShiftPressed = useNonTextInputShiftKey({
     allowWhileTextInputFocused: showQuestionnairePanel && isQuestionnaireActionsHovered,
   });
@@ -212,6 +214,10 @@ export default function ThreadComposer ({
   const isMobileTextInput = useMobileTextInputEnvironment();
   const helperText = isProviderUnavailable
       ? `Provider ${thread.harness} is not installed. Saved input is retained.`
+      : !isActiveThread && profileWriteState === "pending"
+      ? "Saving composer profile before sending..."
+      : !isActiveThread && profileWriteState === "failed"
+      ? composerProfileSnapshot.error || "The composer profile could not be saved."
       : !hasEffectiveProfile
       ? composerProfileSnapshot.error
       : hasVisiblePendingUserInputRequest
@@ -356,15 +362,21 @@ export default function ThreadComposer ({
 
     const activatedSkillPaths = getActivatedWorkbenchSkillPaths(composerHighlights);
     setError("");
+    const send = () => onSendMessage(thread.id, input, {
+      ...(activatedSkillPaths.length ? { activatedSkillPaths } : {}),
+    });
+    if (!thread.isDraft) {
+      await editing.session.submitAccepted(async () => await send(),
+        () => onThreadComposerDraftClear(projectId, thread.id, composerTarget), "message");
+      return;
+    }
     await editing.session.submit(async (submitted, options) => {
       return await runThreadComposerSubmission({
         clearDurableDraft: () => onThreadComposerDraftClear(projectId, thread.id, composerTarget),
         preserveDurableDraft: async () => {
           await onThreadComposerDraftChange(projectId, thread.id, () => submitted, "submission", composerTarget, options.detached);
         },
-        send: () => onSendMessage(thread.id, input, {
-          ...(activatedSkillPaths.length ? { activatedSkillPaths } : {}),
-        }),
+        send,
         showError: setError,
       });
     });

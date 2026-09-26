@@ -15,6 +15,7 @@ import { WorkbenchProjectsPayloadSchema, type WorkbenchProjectStateUpdate } from
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import ProjectTreeFileIndex, { type ProjectTreeFileCandidate, type ProjectTreeFileIndex as ProjectTreeFileIndexRecord } from "workbench-shared/workbench/project/ProjectTreeFileIndex";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
+import { composeProjectAliases } from "workbench-shared/workbench/project/project-aliases";
 import WorkbenchClientStateController from "./state/WorkbenchClientStateController";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import { ProjectIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
@@ -71,6 +72,7 @@ export type WorkbenchProjectListener = (snapshot: WorkbenchProjectSnapshot) => v
 interface WorkbenchProjectClient {
   accept: (update: WorkbenchProjectStateUpdate) => void;
   beginProjectSelection: (projectId: string) => (() => void) | null;
+  bindDaemonRegistration: (registrationId: string) => void;
   createEntry: (parentPath: string, name: string, type: "directory" | "file") => Promise<string>;
   deleteFile: (filePath: string, options?: { confirmUntracked?: boolean }) => Promise<DeleteFileResponse>;
   dispose: () => void;
@@ -141,7 +143,7 @@ function WorkbenchProjectClient({
   let snapshot: WorkbenchProjectSnapshot | null = null;
 
   function persistCurrentExpandedDirectories() {
-    if (!clientStateController || !state.currentProjectId) return;
+    if (!clientStateController || !daemonRegistrationId || !state.currentProjectId) return;
     const desired = new Set(state.expandedDirectories);
     const current = clientStateController.records("expandedDirectory").filter((record) => (
       record.daemonRegistrationId === daemonRegistrationId
@@ -364,19 +366,67 @@ function WorkbenchProjectClient({
     const parsed = WorkbenchProjectsPayloadSchema.safeParse(payload);
     if (!parsed.success) reportClientSchemaError("Repaired Workbench project catalog response", parsed.error);
     const catalog = conformToZodSchema(WorkbenchProjectsPayloadSchema, payload, { data: [], rootPath: "" }).data;
-    if (catalog.aliases?.length) {
-      if (!clientStateController) throw new Error("Project identity adoption requires the app-state owner.");
-      await clientStateController.adoptProjectAliases(catalog.aliases, daemonRegistrationId);
-    }
     const previousId = state.currentProjectId;
-    const canonicalId = clientStateController?.resolveProjectId(previousId, daemonRegistrationId) ?? previousId;
+    let canonicalId = clientStateController && daemonRegistrationId
+      ? clientStateController.resolveProjectId(previousId, daemonRegistrationId) : previousId;
+    let canAdoptAliases = Boolean(clientStateController && daemonRegistrationId && catalog.aliases?.length);
+    if (catalog.aliases?.length && !clientStateController) {
+      console.warn("Project catalogue aliases could not be saved: app-state owner unavailable.");
+      onError("Project identity adoption requires the app-state owner.");
+    }
+    if (canAdoptAliases) {
+      try {
+        const composed = composeProjectAliases(
+          clientStateController!.getProjectAliases(daemonRegistrationId), catalog.aliases!,
+        );
+        canonicalId = new Map(composed.aliases.map(item => [item.alias, item.projectId])).get(previousId) ?? canonicalId;
+        canAdoptAliases = composed.changes.length > 0;
+      } catch (error) {
+        canAdoptAliases = false;
+        const message = error instanceof Error
+          ? error.message.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 512)
+          : "Project aliases could not be adopted.";
+        console.warn("Project catalogue aliases could not be adopted:", message);
+        onError(message);
+      }
+    }
     if (canonicalId !== previousId) {
       state.currentProjectId = ProjectIdSchema.parse(canonicalId);
-      state.expandedDirectories = new Set(readExpandedDirectories(clientStateController, daemonRegistrationId, canonicalId));
+      state.expandedDirectories = new Set(readExpandedDirectories(clientStateController, daemonRegistrationId, previousId));
     }
     const didChange = applyCatalog(catalog) || canonicalId !== previousId;
     if (didChange) emit();
+    if (state.currentProjectId && !catalog.data.some(project => project.id === state.currentProjectId)) {
+      onError("The selected project is unavailable until its identity can be resolved.");
+      enterNoProject();
+    }
+    if (canAdoptAliases) {
+      void clientStateController!.adoptProjectAliases(catalog.aliases!, daemonRegistrationId).catch(error => {
+        const message = error instanceof Error
+          ? error.message.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 512)
+          : "Project aliases could not be saved.";
+        console.warn("Project catalogue aliases could not be saved:", message);
+        onError(message);
+      });
+    }
     return didChange;
+  }
+
+  function bindDaemonRegistration(registrationId: string) {
+    if (!registrationId) throw new Error("Daemon registration ID is required.");
+    if (daemonRegistrationId && daemonRegistrationId !== registrationId) {
+      throw new Error("A project client cannot change daemon registration.");
+    }
+    if (daemonRegistrationId === registrationId) return;
+    daemonRegistrationId = registrationId;
+    if (state.currentProjectId) {
+      state.expandedDirectories = new Set([
+        ...readExpandedDirectories(clientStateController, registrationId, state.currentProjectId),
+        ...state.expandedDirectories,
+      ]);
+      persistCurrentExpandedDirectories();
+      emit();
+    }
   }
 
   function accept(update: WorkbenchProjectStateUpdate) {
@@ -549,6 +599,7 @@ function WorkbenchProjectClient({
   return {
     accept,
     beginProjectSelection,
+    bindDaemonRegistration,
     createEntry,
     deleteFile,
     dispose,

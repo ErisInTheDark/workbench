@@ -4,12 +4,15 @@
  */
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useContext, useEffect, useState, useSyncExternalStore } from "react";
 
 import { getWorkbenchProjectIconUrl, workbenchDaemonConnection } from "workbench-shared/workbench/workbench-connection";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { getIdentityAccentHue, type IdentityAccentStyle } from "../../workbench/identity-accent-color";
-import { useWorkbenchDaemonAssetOrigin } from "./WorkbenchDaemonClientContext";
+import {
+  resolveWorkbenchDaemonAssetOrigin, WorkbenchDaemonAssetOriginContext,
+  type WorkbenchDaemonAssetSource,
+} from "./WorkbenchDaemonClientContext";
 
 const VARIANT_CLASS_NAMES = {
   card: {
@@ -35,14 +38,18 @@ function projectInitial (project: WorkbenchProjectOption) {
 
 export default function WorkbenchProjectIcon ({
   project,
+  assetSource,
   variant = "card",
 }: {
   project: WorkbenchProjectOption;
+  assetSource?: WorkbenchDaemonAssetSource;
   variant?: keyof typeof VARIANT_CLASS_NAMES;
 }) {
   const assetKey = project.icon ? `${project.id}:${project.icon.rootId}:${project.icon.path}` : project.id;
   useSyncExternalStore(workbenchDaemonConnection.subscribe, workbenchDaemonConnection.getSnapshot, workbenchDaemonConnection.getSnapshot);
-  const assetUrl = getWorkbenchProjectIconUrl(project.id, assetKey, useWorkbenchDaemonAssetOrigin());
+  const contextSource = useContext(WorkbenchDaemonAssetOriginContext);
+  const origin = resolveWorkbenchDaemonAssetOrigin(assetSource ?? contextSource);
+  const assetUrl = getWorkbenchProjectIconUrl(project.id, assetKey, origin);
   const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => setLoadFailed(false), [assetKey, assetUrl]);
   const className = `inline-flex shrink-0 rounded-[0.3rem] items-center justify-center overflow-hidden font-semibold leading-none`;

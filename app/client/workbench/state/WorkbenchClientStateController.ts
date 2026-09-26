@@ -408,7 +408,9 @@ export default class WorkbenchClientStateController {
     const body = mutation
       ? "action" in mutation ? mutation.action === "put" ? mutation.record : mutation.identity : mutation
       : undefined;
-    const response = await this.#fetcher(url, {
+    const requestUrl = new URL(url, "http://workbench.local");
+    requestUrl.searchParams.set("capabilities", "2");
+    const response = await this.#fetcher(`${requestUrl.pathname}${requestUrl.search}`, {
       ...(body ? { body: JSON.stringify(body) } : {}),
       headers: {
         ...(body ? { "Content-Type": "application/json" } : {}),

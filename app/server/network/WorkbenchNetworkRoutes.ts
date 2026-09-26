@@ -5,12 +5,19 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { WORKBENCH_NETWORK_PATH, WorkbenchNetworkActionSchema } from "workbench-shared/http/workbench-network";
+import type { WorkbenchPresentationImportStatus } from "workbench-shared/state/workbench-presentation-state";
 import type WorkbenchNetworkController from "./WorkbenchNetworkController.ts";
+import type WorkbenchPresentationController from "../state/WorkbenchPresentationController.ts";
+import type WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController.ts";
 
 export default class WorkbenchNetworkRoutes {
   private closed = false;
   private readonly responses = new Map<ServerResponse, () => void>();
-  constructor(private readonly controller: Pick<WorkbenchNetworkController, "snapshot" | "subscribe" | "action" | "connection" | "ingress" | "discovery">) {}
+  constructor(
+    private readonly controller: Pick<WorkbenchNetworkController, "snapshot" | "subscribe" | "action" | "connection" | "ingress" | "discovery">,
+    private readonly presentation?: Pick<WorkbenchPresentationController, "subscribe" | "revision">,
+    private readonly presentationImport?: Pick<WorkbenchPresentationImportController, "snapshot" | "subscribe">,
+  ) {}
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
     const progress = url.pathname === `${WORKBENCH_NETWORK_PATH}/events`;
@@ -60,9 +67,23 @@ export default class WorkbenchNetworkRoutes {
       const write = () => {
         if (!response.write(`data: ${JSON.stringify(snapshot())}\n\n`)) response.end();
       };
-      const unsubscribe = this.controller.subscribe(write);
-      this.own(response, unsubscribe);
+      const writePresentation = (revision: number) => {
+        if (!response.write(`event: presentation\ndata: ${JSON.stringify({ revision })}\n\n`)) response.end();
+      };
+      const writeImport = (status: WorkbenchPresentationImportStatus) => {
+        if (!response.write(`event: presentation-import\ndata: ${JSON.stringify(status)}\n\n`)) response.end();
+      };
+      const unsubscribeNetwork = this.controller.subscribe(write);
+      const unsubscribePresentation = this.presentation?.subscribe(writePresentation);
+      const unsubscribeImport = this.presentationImport?.subscribe(writeImport);
+      this.own(response, () => {
+        unsubscribeNetwork();
+        unsubscribePresentation?.();
+        unsubscribeImport?.();
+      });
       write();
+      if (this.presentation && !response.writableEnded) writePresentation(this.presentation.revision());
+      if (this.presentationImport && !response.writableEnded) writeImport(this.presentationImport.snapshot());
       return true;
     }
     if (request.method !== "POST" || progress) {

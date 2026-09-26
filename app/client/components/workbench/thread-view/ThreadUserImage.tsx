@@ -17,7 +17,7 @@ export default function ThreadUserImage({
 }) {
   useSyncExternalStore(workbenchDaemonConnection.subscribe, workbenchDaemonConnection.getSnapshot, workbenchDaemonConnection.getSnapshot);
   const resolvedSrc = getWorkbenchTranscriptAssetUrl(src, useWorkbenchDaemonAssetOrigin());
-  if (!resolvedSrc) return <span className={className}>Image unavailable while the daemon is disconnected.</span>;
+  if (!resolvedSrc) return <span className={className}>Image unavailable.</span>;
   return (
     <ThreadLightboxImage
       alt={alt}

@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { WorkbenchProjectOption } from "workbench-shared/types";
+import type { ExplorerSnapshot, WorkbenchProjectOption } from "workbench-shared/types";
 import WorkbenchClientStateController from "../../workbench/state/WorkbenchClientStateController";
 import {
   WorkbenchThreadSidebarEntrySchema,
@@ -20,6 +20,7 @@ import WorkbenchPinnedThreadList from "./WorkbenchPinnedThreadList";
 import WorkbenchClientStateProvider from "./WorkbenchClientStateProvider";
 import WorkbenchComposerDraftPresenceProvider from "./WorkbenchComposerDraftPresenceProvider";
 import WorkbenchHomeThreadList from "./WorkbenchHomeThreadList";
+import WorkbenchClientProvider from "./WorkbenchClientProvider";
 import ThreadRateLimits from "./thread-view/ThreadRateLimits";
 import WorkbenchSidebarPreferencesProvider from "./WorkbenchSidebarPreferencesProvider";
 import WorkbenchThreadList from "./WorkbenchThreadList";
@@ -232,7 +233,9 @@ function renderHomeThreads({
   return renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
-      children: () => createElement(
+      children: () => createElement(WorkbenchClientProvider, {
+        client: { controls: null, explorer: {} as ExplorerSnapshot, mounted: null },
+        children: createElement(
         WorkbenchContextMenuContext.Provider,
         { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
         createElement(WorkbenchDragProvider, null, createElement(WorkbenchHomeThreadList, {
@@ -246,7 +249,8 @@ function renderHomeThreads({
           projects,
           selectedOwnerProjectId: "",
         })),
-      ),
+        ),
+      }),
       projectId: "",
     },
   ));
@@ -740,15 +744,13 @@ test("home renders one combined priority list with project-owned folders and for
     projectThreadSidebars,
     projects,
   });
-  const createIndex = html.indexOf("href=\"/@/thread/alpha/@/new\"");
   const alphaFolderIndex = html.indexOf("Alpha folder");
   const betaPinnedIndex = html.indexOf("Beta pinned");
   const mainIndex = html.indexOf("Alpha main");
   const snoozedIndex = html.indexOf("Beta snoozed");
   const settledIndex = html.indexOf("Settled threads");
-  assert.equal(createIndex >= 0, true);
-  assert.equal(alphaFolderIndex > createIndex, true);
-  assert.equal(betaPinnedIndex > createIndex, true);
+  assert.equal(alphaFolderIndex >= 0, true);
+  assert.equal(betaPinnedIndex >= 0, true);
   assert.equal(mainIndex > alphaFolderIndex && mainIndex > betaPinnedIndex, true);
   assert.equal(snoozedIndex > mainIndex, true);
   assert.equal(settledIndex > snoozedIndex, true);

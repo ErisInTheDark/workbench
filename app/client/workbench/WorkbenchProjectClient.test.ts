@@ -15,6 +15,12 @@ test("catalogue adoption preserves the selected tree and expanded directories un
   const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("remote://example.test/owner/repo");
   const { transport } = createTransport();
   const client = WorkbenchProjectClient({ transport, clientStateController });
+  const adopted = Promise.withResolvers<void>();
+  const originalAdopt = clientStateController.adoptProjectAliases.bind(clientStateController);
+  clientStateController.adoptProjectAliases = async (...args) => {
+    await originalAdopt(...args);
+    adopted.resolve();
+  };
   try {
     await clientStateController.put({ kind: "expandedDirectory", daemonRegistrationId: "memory", projectId: "old", path: "src" });
     client.beginProjectSelection("old");
@@ -22,11 +28,71 @@ test("catalogue adoption preserves the selected tree and expanded directories un
     await client.installCatalog({
       data: [{ ...createProject("old"), id: projectId }], rootPath: "C:/projects", aliases: [{ alias: "old", projectId }],
     });
+    await adopted.promise;
     assert.equal(client.getSnapshot().currentProjectId, projectId);
     assert.deepEqual(client.getSnapshot().expandedDirectories, ["src"]);
     assert.equal(client.getSnapshot().tree[0]?.name, "README.md");
     assert.equal(clientStateController.records("expandedDirectory")[0]!.projectId, projectId);
   } finally { client.dispose(); clientStateController.dispose(); }
+});
+
+test("a valid catalogue remains visible while browser alias persistence is pending", async () => {
+  const clientStateController = new WorkbenchClientStateController({ mode: "memory" });
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("remote://example.test/owner/repo");
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const adopted = Promise.withResolvers<void>();
+  const originalAdopt = clientStateController.adoptProjectAliases.bind(clientStateController);
+  clientStateController.adoptProjectAliases = async (...args) => {
+    entered.resolve();
+    await release.promise;
+    await originalAdopt(...args);
+    adopted.resolve();
+  };
+  const client = WorkbenchProjectClient({ transport: createTransport().transport, clientStateController });
+  try {
+    const installing = client.installCatalog({
+      data: [{ ...createProject("old"), id: projectId }], rootPath: "C:/projects",
+      aliases: [{ alias: "old", projectId }],
+    });
+    await entered.promise;
+    assert.equal(client.getSnapshot().projects[0]?.id, projectId,
+      "alias persistence must not hold a valid catalogue hostage");
+    release.resolve();
+    await installing;
+    await adopted.promise;
+  } finally {
+    release.resolve();
+    client.dispose();
+    clientStateController.dispose();
+  }
+});
+
+test("alias persistence failure leaves canonical catalogue targets usable and reports the failure", async (context) => {
+  const warnings = context.mock.method(console, "warn", () => {});
+  const clientStateController = new WorkbenchClientStateController({ mode: "memory" });
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("remote://example.test/owner/repo");
+  const failed = Promise.withResolvers<string>();
+  clientStateController.adoptProjectAliases = async () => { throw new Error("disk busy"); };
+  const client = WorkbenchProjectClient({
+    transport: createTransport().transport, clientStateController,
+    onError: message => failed.resolve(message),
+  });
+  try {
+    client.beginProjectSelection("old");
+    await client.installCatalog({
+      data: [{ ...createProject("old"), id: projectId }], rootPath: "C:/projects",
+      aliases: [{ alias: "old", projectId }],
+    });
+    assert.equal(client.getSnapshot().currentProjectId, projectId);
+    assert.equal(client.getSnapshot().projects[0]?.id, projectId);
+    assert.match(await failed.promise, /disk busy/u);
+    assert.equal(client.getSnapshot().currentProjectId, projectId);
+    assert.equal(warnings.mock.callCount(), 1);
+  } finally {
+    client.dispose();
+    clientStateController.dispose();
+  }
 });
 
 function createProject(projectId: string): WorkbenchProjectOption {
@@ -166,6 +232,22 @@ test("catalogue snapshot distinguishes pending, empty, and configured discovery"
   } finally {
     empty.restore();
     client.dispose();
+  }
+});
+
+test("late daemon registration does not discard an already selected browse expansion", async () => {
+  const fetchHarness = installProjectsFetch([createProject("alpha")]);
+  const { transport } = createTransport();
+  const client = WorkbenchProjectClient({ transport, daemonRegistrationId: "" });
+  try {
+    await client.installCatalog({ data: [createProject("alpha")], rootPath: "C:/projects" });
+    assert.equal(await client.selectProjectStrict("alpha"), true);
+    client.toggleDirectory("src");
+    client.bindDaemonRegistration("peer-registration");
+    assert.equal(client.getSnapshot().expandedDirectories.includes("src"), true);
+  } finally {
+    client.dispose();
+    fetchHarness.restore();
   }
 });
 

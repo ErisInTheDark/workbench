@@ -1,12 +1,14 @@
 /*
  * Exports:
  * - projectLogicalProjects: build display identities from app-owned projects and daemon-qualified catalogs.
+ * - preferredLogicalLaunchLocation: choose a project's last used launch target without changing its combined view.
  * - projectLogicalSummaries/LogicalProjectSummary: combine source-qualified thread summaries without rewriting ids.
  * - projectLogicalThreadRows/projectLogicalThreadDisplayOrder/projectLogicalHomeDisplayOrder/projectLogicalPinnedDisplayOrder: retain sources and app-owned layouts.
  */
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
 import type { DaemonId, LogicalProjectId } from "workbench-shared/workbench/identity";
+import type { ProjectLocationReference, WorkbenchProjectLocationsPayload } from "workbench-shared/workbench/project/project-location";
 import type {
   WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchProjectThreadSummaryCounts,
 } from "workbench-shared/workbench/thread/thread-state";
@@ -22,6 +24,19 @@ import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/
 import {
   getWorkbenchHomeThreadKey, type WorkbenchHomeThreadDisplayOrder,
 } from "workbench-shared/workbench/thread/home-thread-display-order";
+
+function projectDisplayLocations(project: WorkbenchLogicalProject) {
+  return [
+    ...project.locations.map(location => ({
+      target: location.target, hostname: location.hostname, rootPath: location.rootPath,
+      observedOnly: false,
+    })),
+    ...(project.observedLocations ?? []).map(location => ({
+      target: { daemonId: location.daemonId, projectId: location.projectId },
+      hostname: location.hostname, rootPath: location.rootPath, observedOnly: true,
+    })),
+  ];
+}
 
 export function projectLogicalHomeDisplayOrder(
   rows: readonly WorkbenchLogicalThreadRow[],
@@ -144,13 +159,14 @@ export function projectLogicalThreadRows(
   sources: ReadonlyMap<DaemonId, WorkbenchProjectThreadSidebars>,
   presentation: PresentationSnapshot,
 ): WorkbenchLogicalThreadRow[] {
-  const materialized = projects.flatMap(project => project.locations.flatMap(location =>
-    (sources.get(location.daemonId)?.projects.find(sidebar =>
+  const materialized = projects.flatMap(project => projectDisplayLocations(project).flatMap(location =>
+    (sources.get(location.target.daemonId)?.projects.find(sidebar =>
       sidebar.projectId === location.target.projectId)?.entries ?? [])
       .filter(entry => entry.entryKind !== "draft")
       .map(entry => ({
         logicalProjectId: project.id, location: location.target,
         hostname: location.hostname, rootPath: location.rootPath, entry,
+        ...(location.observedOnly ? { observedOnly: true } : {}),
       })),
   ));
   const drafts: WorkbenchLogicalThreadRow[] = presentation.drafts
@@ -187,6 +203,25 @@ export function projectLogicalThreadRows(
 
 export type LogicalProjectSummary = WorkbenchLogicalProjectSummary;
 
+export function preferredLogicalLaunchLocation(
+  project: WorkbenchLogicalProject,
+  presentation: PresentationSnapshot,
+): ProjectLocationReference | null {
+  const registered = (target: ProjectLocationReference) => project.locations.some(location =>
+    location.target.daemonId === target.daemonId && location.target.projectId === target.projectId);
+  const latest = [
+    ...presentation.defaults.filter(item => registered(item.target)),
+    ...presentation.drafts.filter(item => item.logicalProjectId === project.id
+      && item.phase !== "deleted" && item.phase !== "importing"
+      && registered(item.target)),
+  ]
+    .sort((left, right) => right.revision - left.revision
+      || left.target.daemonId.localeCompare(right.target.daemonId)
+      || left.target.projectId.localeCompare(right.target.projectId))[0];
+  return latest?.target ?? project.locations.find(location => location.project)?.target
+    ?? project.locations[0]?.target ?? null;
+}
+
 export function projectLogicalSummaries(
   projects: readonly WorkbenchLogicalProject[],
   sources: ReadonlyMap<DaemonId, WorkbenchProjectThreadSummaries>,
@@ -200,8 +235,8 @@ export function projectLogicalSummaries(
     const pinnedThreads: LogicalProjectSummary["pinnedThreads"] = [];
     const unsettledThreads: LogicalProjectSummary["unsettledThreads"] = [];
     let lastThreadUpdateAt: number | null = null;
-    for (const location of project.locations) {
-      const summary = sources.get(location.daemonId)?.projects.find(
+    for (const location of projectDisplayLocations(project)) {
+      const summary = sources.get(location.target.daemonId)?.projects.find(
         item => item.projectId === location.target.projectId,
       );
       if (!summary) continue;
@@ -230,9 +265,13 @@ export function projectLogicalSummaries(
 export function projectLogicalProjects(
   presentation: PresentationSnapshot,
   catalogs: ReadonlyMap<DaemonId, readonly WorkbenchProjectOption[]>,
+  observations: ReadonlyMap<DaemonId, {
+    hostname: string;
+    data: WorkbenchProjectLocationsPayload["data"];
+  }> = new Map(),
 ): WorkbenchLogicalProject[] {
-  const remotes = new Map<string, { path: string; host: string }>();
-  const counts = new Map<string, number>();
+  const remotes = new Map<string, { path: string; parts: string[]; host: string }>();
+  const suffixCounts = new Map<string, number>();
   for (const project of presentation.projects) {
     if (!project.matchKey.startsWith("remote://") || project.matchKey.startsWith("remote://file:")) continue;
     const address = project.matchKey.slice("remote://".length);
@@ -241,8 +280,18 @@ export function projectLogicalProjects(
     const url = new URL(urlText);
     const remotePath = url.pathname.replace(/^\/+/u, "");
     if (!url.host || !remotePath) continue;
-    remotes.set(project.id, { path: remotePath, host: url.host });
-    counts.set(remotePath, (counts.get(remotePath) ?? 0) + 1);
+    const parts = remotePath.split("/").filter(Boolean);
+    remotes.set(project.id, { path: remotePath, parts, host: url.host });
+    for (let count = 1; count <= parts.length; count += 1) {
+      const suffix = parts.slice(-count).join("/");
+      suffixCounts.set(suffix, (suffixCounts.get(suffix) ?? 0) + 1);
+    }
+  }
+  const otherLabels = new Set(presentation.projects
+    .filter(project => !remotes.has(project.id)).map(project => project.label));
+  const localLabelCounts = new Map<string, number>();
+  for (const project of presentation.projects.filter(item => !remotes.has(item.id))) {
+    localLabelCounts.set(project.label, (localLabelCounts.get(project.label) ?? 0) + 1);
   }
   const hostLabels = new Map<string, number>();
   for (const remote of remotes.values()) {
@@ -250,35 +299,84 @@ export function projectLogicalProjects(
     hostLabels.set(label, (hostLabels.get(label) ?? 0) + 1);
   }
   const hostnames = new Map(presentation.daemons.map(daemon => [daemon.id, daemon.hostname]));
+  const pathSuffixCounts = new Map<string, number>();
+  const pathParts = (path: string) => path.replace(/\\/gu, "/").split("/").filter(Boolean);
+  const displayLocationPath = (hostname: string, rootPath: string) => {
+    const parts = pathParts(rootPath);
+    const suffix = parts.map((_, index) => parts.slice(-(index + 1)).join("/"))
+      .find(value => pathSuffixCounts.get(`${hostname.toLowerCase()}:/${value.toLowerCase()}`) === 1);
+    return suffix ? `${hostname}:/${suffix}` : `${hostname}:${rootPath}`;
+  };
+  for (const location of presentation.locations) {
+    const hostname = hostnames.get(location.target.daemonId) ?? location.target.daemonId;
+    const parts = pathParts(location.rootPath);
+    for (let count = 1; count <= parts.length; count += 1) {
+      const key = `${hostname.toLowerCase()}:/${parts.slice(-count).join("/").toLowerCase()}`;
+      pathSuffixCounts.set(key, (pathSuffixCounts.get(key) ?? 0) + 1);
+    }
+  }
   const locations = new Map(presentation.projects.map(project => [project.id, [] as WorkbenchLogicalProject["locations"]]));
   for (const location of presentation.locations) {
     const owner = locations.get(location.logicalProjectId);
     if (!owner) continue;
     const project = catalogs.get(location.target.daemonId)?.find(candidate => candidate.id === location.target.projectId) ?? null;
+    const hostname = hostnames.get(location.target.daemonId) ?? location.target.daemonId;
     owner.push({
       target: location.target,
       daemonId: location.target.daemonId,
-      hostname: hostnames.get(location.target.daemonId) ?? location.target.daemonId,
+      hostname,
       name: location.name,
       rootPath: location.rootPath,
+      displayPath: displayLocationPath(hostname, location.rootPath),
       project,
     });
+  }
+  const observedByKey = new Map<string, NonNullable<WorkbenchLogicalProject["observedLocations"]>>();
+  const registeredTargets = new Set(presentation.locations.map(location =>
+    `${location.target.daemonId}/${location.target.projectId}`));
+  for (const [daemonId, source] of observations) {
+    for (const item of source.data) {
+      if (registeredTargets.has(`${daemonId}/${item.project.id}`)) continue;
+      const entries = observedByKey.get(item.identityKey) ?? [];
+      entries.push({
+        daemonId, projectId: item.project.id, hostname: source.hostname,
+        rootPath: item.project.rootPath, project: item.project,
+      });
+      observedByKey.set(item.identityKey, entries);
+    }
+  }
+  for (const entries of observedByKey.values()) {
+    entries.sort((left, right) => left.hostname.localeCompare(right.hostname)
+      || left.rootPath.localeCompare(right.rootPath)
+      || left.daemonId.localeCompare(right.daemonId));
   }
   return presentation.projects.map(project => {
     const remote = remotes.get(project.id);
     const withHost = remote ? `${remote.host}/${remote.path}` : "";
     const label = remote
-      ? counts.get(remote.path) === 1 ? remote.path
-        : hostLabels.get(withHost) === 1 ? withHost : project.matchKey.slice("remote://".length)
-      : project.label;
+      ? remote.parts.map((_, index) => remote.parts.slice(-(index + 1)).join("/"))
+        .find(suffix => suffixCounts.get(suffix) === 1 && !otherLabels.has(suffix))
+        ?? (hostLabels.get(withHost) === 1 && !otherLabels.has(withHost)
+          ? withHost : project.matchKey.slice("remote://".length))
+      : suffixCounts.has(project.label) || hostLabels.has(project.label)
+        || (localLabelCounts.get(project.label) ?? 0) > 1
+        ? project.matchKey : project.label;
+    const projectLocations = (locations.get(project.id) ?? []).sort((left, right) =>
+      left.hostname.localeCompare(right.hostname)
+      || left.rootPath.localeCompare(right.rootPath)
+      || left.daemonId.localeCompare(right.daemonId));
+    const preferred = projectLocations.find(location => location.project) ?? projectLocations[0];
+    const displayPath = preferred?.displayPath ?? null;
     return {
       id: project.id,
       matchKey: project.matchKey,
       label,
-      locations: (locations.get(project.id) ?? []).sort((left, right) =>
-        left.hostname.localeCompare(right.hostname)
-        || left.rootPath.localeCompare(right.rootPath)
-        || left.daemonId.localeCompare(right.daemonId)),
+      storedLabel: project.label,
+      displayName: remote?.parts.at(-1) ?? preferred?.name ?? project.label,
+      displayPath,
+      locations: projectLocations,
+      ...(observedByKey.get(project.matchKey)?.length
+        ? { observedLocations: observedByKey.get(project.matchKey) } : {}),
     };
   });
 }

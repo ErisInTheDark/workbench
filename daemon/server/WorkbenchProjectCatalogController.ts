@@ -444,7 +444,10 @@ export default class WorkbenchProjectCatalogController {
   }
 
   async readLocations() {
-    const { catalog } = await this.readFreshCatalog();
+    let { catalog } = await this.readFreshCatalog();
+    if (catalog.records.some(record => !record.identityKey || !record.rootIdentityKeys)) {
+      catalog = await this.refreshCatalog();
+    }
     return {
       data: catalog.records.map(record => {
         if (!record.identityKey || !record.rootIdentityKeys) {

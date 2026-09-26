@@ -19,11 +19,14 @@ import {
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import { CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
+import { WorkbenchProjectFileIndexRequestSchema } from "workbench-shared/workbench/project/project-file-index";
+import ProjectTreeFileIndex from "workbench-shared/workbench/project/ProjectTreeFileIndex";
 import { WorkbenchThreadLaunchReadSchema, WorkbenchThreadLaunchRequestSchema } from "workbench-shared/workbench/thread/thread-launch";
 import {
   WorkbenchPresentationAttachmentChunkRequestSchema,
   WorkbenchPresentationExportRequestSchema,
   WorkbenchPresentationLayoutChunkRequestSchema,
+  WorkbenchPresentationManifestRequestSchema,
 } from "workbench-shared/workbench/thread/thread-presentation-export";
 import type WorkbenchThreadLaunchController from "./WorkbenchThreadLaunchController";
 import {
@@ -55,6 +58,7 @@ import { WorkingTreeReadRequestSchema, WorkingTreeFileRequestSchema, WorkingTree
 import type WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchProjectFileController from "./WorkbenchProjectFileController";
+import type WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
 import type WorkbenchSearchController from "./WorkbenchSearchController";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
@@ -84,8 +88,9 @@ const METHODS = new Set([
   "local-capabilities/read", "local-capabilities/update",
   "native/file/link-roots", "native/file/open", "native/file/reveal",
   "profiles/delete", "profiles/read", "profiles/target/read", "profiles/target/set", "profiles/upsert",
-  "project/catalog/read", "project/locations/read", "thread/launch", "thread/launch/read",
+  "project/catalog/read", "project/file-index/read", "project/locations/read", "thread/launch", "thread/launch/read",
   "thread/presentation/export", "thread/presentation/attachment/read", "thread/presentation/layout/read",
+  "thread/presentation/manifest/read",
   "project/file/read", "project/file/reset", "project/file/save",
   "questionnaire/respond",
   "search/query",
@@ -216,7 +221,8 @@ export default class WorkbenchDaemonRequestController {
     threadActions?: Pick<WorkbenchThreadActionController, "handle">;
     launches?: Pick<WorkbenchThreadLaunchController, "launch" | "read">;
     presentationExport?: Pick<WorkbenchThreadStateController,
-      "exportPresentationPage" | "readPresentationAttachmentChunk" | "exportPresentationLayoutChunk">;
+      "exportPresentationPage" | "exportPresentationManifestPage"
+      | "readPresentationAttachmentChunk" | "exportPresentationLayoutChunk">;
     agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readSkills">;
     files: Pick<WorkbenchProjectFileController, "read" | "write">;
     gitArc: Pick<WorkbenchGitArcFeature, "executeRequest">;
@@ -225,6 +231,7 @@ export default class WorkbenchDaemonRequestController {
     profiles: Pick<WorkbenchComposerProfileStore, "mutate" | "read">;
     profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
     projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "readLocations" | "resolveProjectById" | "readDiscoverySettings" | "updateDiscoverySettings">;
+    projectSnapshot: Pick<WorkbenchProjectSnapshotController, "readProjectSnapshot">;
     search: Pick<WorkbenchSearchController, "search">;
     stats: Pick<WorkbenchStatsController, "read" | "readDetailed" | "refreshRateLimits" | "startImport">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
@@ -346,6 +353,15 @@ export default class WorkbenchDaemonRequestController {
           break;
         }
         case "project/catalog/read": result = await this.owners.projects.readCatalog(); break;
+        case "project/file-index/read": {
+          const request = WorkbenchProjectFileIndexRequestSchema.safeParse(params);
+          if (!request.success) throw new InvalidParamsError("A project ID is required for file-index reads.");
+          const { projectId } = request.data;
+          const snapshot = await this.owners.projectSnapshot.readProjectSnapshot(projectId);
+          const index = ProjectTreeFileIndex.fromTree(snapshot.tree);
+          result = { projectId, key: index.key, candidates: index.candidates };
+          break;
+        }
         case "project/locations/read": result = await this.owners.projects.readLocations(); break;
         case "thread/launch": {
           if (!this.owners.launches) throw new Error("Thread launch is unavailable.");
@@ -361,6 +377,12 @@ export default class WorkbenchDaemonRequestController {
           if (!this.owners.presentationExport) throw new Error("Presentation export is unavailable.");
           result = await this.owners.presentationExport.exportPresentationPage(
             WorkbenchPresentationExportRequestSchema.parse(params));
+          break;
+        }
+        case "thread/presentation/manifest/read": {
+          if (!this.owners.presentationExport) throw new Error("Presentation export is unavailable.");
+          result = await this.owners.presentationExport.exportPresentationManifestPage(
+            WorkbenchPresentationManifestRequestSchema.parse(params));
           break;
         }
         case "thread/presentation/attachment/read": {

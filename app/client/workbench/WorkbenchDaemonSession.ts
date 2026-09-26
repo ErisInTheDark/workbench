@@ -5,6 +5,7 @@
  */
 import type { WorkbenchProjectsPayload } from "workbench-shared/types";
 import { DaemonIdSchema, type DaemonId, type ProjectId } from "workbench-shared/workbench/identity";
+import type { WorkbenchProjectLocationsPayload } from "workbench-shared/workbench/project/project-location";
 import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import {
   WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema,
@@ -24,6 +25,7 @@ export interface WorkbenchDaemonSessionSnapshot {
   phase: "connecting" | "ready" | "unavailable";
   error: string | null;
   catalog: WorkbenchProjectsPayload | null;
+  locations: WorkbenchProjectLocationsPayload | null;
   registrationId: string | null;
 }
 
@@ -33,7 +35,6 @@ export default class WorkbenchDaemonSession {
   private projectsClient: ReturnType<typeof WorkbenchProjectClient> | null;
   private sidebarClient: ThreadSidebarClient | null = null;
   private readonly listeners = new Set<() => void>();
-  private readonly importedLayouts = new Set<string>();
   private readonly unsubscribeOpen: () => void;
   private readonly unsubscribeClose: () => void;
   private readonly unsubscribeNotifications: () => void;
@@ -43,9 +44,7 @@ export default class WorkbenchDaemonSession {
   private observedProjectId: ProjectId | null = null;
   private observing: Promise<void> | null = null;
   private refreshing: Promise<boolean> | null = null;
-  private importAbort: AbortController | null = null;
-  private importTask: Promise<void> | null = null;
-  private layoutImport: Promise<void> | null = null;
+  private refreshAbort: AbortController | null = null;
   private state: WorkbenchDaemonSessionSnapshot;
 
   constructor(private readonly options: {
@@ -65,7 +64,7 @@ export default class WorkbenchDaemonSession {
     this.sidebarClient = options.attached?.sidebar ?? null;
     this.state = {
       daemonId: DaemonIdSchema.parse(options.daemonId), hostname: options.hostname,
-      phase: "connecting", error: null, catalog: null, registrationId: null,
+      phase: "connecting", error: null, catalog: null, locations: null, registrationId: null,
     };
     this.threads = options.attached?.threads ?? WorkbenchThreadClient({
       resolveDaemonUrl: options.resolveUrl,
@@ -120,65 +119,6 @@ export default class WorkbenchDaemonSession {
     }
   }
 
-  async importAvailableLayouts() {
-    if (this.disposed) throw new Error("Daemon session has closed.");
-    if (this.layoutImport) return await this.layoutImport;
-    const operation = (async () => {
-      if (this.refreshing) await this.refreshing;
-      if (this.importTask) await this.importTask;
-      if (this.disposed) throw new Error("Daemon session has closed.");
-      await this.importObservedLayouts(this.importAbort?.signal);
-    })().finally(() => {
-      if (this.layoutImport === operation) this.layoutImport = null;
-    });
-    this.layoutImport = operation;
-    return await operation;
-  }
-
-  private async importObservedLayouts(signal?: AbortSignal) {
-    signal?.throwIfAborted();
-    const presentation = this.options.presentation.snapshot().data;
-    if (!presentation || !this.sidebarClient) return;
-    for (const location of presentation.locations.filter(item => item.target.daemonId === this.options.daemonId)) {
-      signal?.throwIfAborted();
-      const projectId = location.target.projectId;
-      const sourceKey = `project:${projectId}`;
-      if (this.importedLayouts.has(sourceKey)) continue;
-      const sidebar = this.sidebarClient.getProjectSnapshot(projectId);
-      if (!sidebar) continue;
-      try {
-        await this.options.presentation.importProjectLayout(
-          this.options.daemonId, projectId, location.logicalProjectId, this.daemon, sidebar, signal,
-        );
-        signal?.throwIfAborted();
-        this.importedLayouts.add(sourceKey);
-      } catch (error) {
-        if (signal?.aborted) throw error;
-        this.reportImportFailure(error instanceof Error ? error.message
-          : "Legacy project layout import failed.");
-      }
-    }
-    if (!this.sidebarClient.isObservingGlobal()) return;
-    const sidebars = this.sidebarClient.getProjectThreadSidebars();
-    for (const scope of ["home", "pinned"] as const) {
-      signal?.throwIfAborted();
-      if (this.importedLayouts.has(scope)) continue;
-      try {
-        if (scope === "home" && this.sidebarClient.getHomeThreadDisplayOrderSupported()) {
-          await this.options.presentation.importHomeLayout(this.options.daemonId, this.daemon, sidebars, signal);
-        } else if (scope === "pinned") {
-          await this.options.presentation.importPinnedLayout(this.options.daemonId, this.daemon, sidebars, signal);
-        }
-        signal?.throwIfAborted();
-        this.importedLayouts.add(scope);
-      } catch (error) {
-        if (signal?.aborted) throw error;
-        this.reportImportFailure(error instanceof Error ? error.message
-          : "Legacy global layout import failed.");
-      }
-    }
-  }
-
   async start() {
     if (this.disposed) throw new Error("Daemon session has closed.");
     if (this.opening) return await this.opening;
@@ -212,25 +152,16 @@ export default class WorkbenchDaemonSession {
   }
 
   private async read() {
-    this.importAbort?.abort();
-    const registrationId = await this.options.appState.ensureDaemonRegistration(
-      this.options.daemonId, Boolean(this.options.attached),
-    );
-    const [catalog, locations] = await Promise.all([
-      this.daemon.projects.catalog(),
-      this.daemon.projects.locations(),
-    ]);
+    this.refreshAbort?.abort();
+    const controller = new AbortController();
+    this.refreshAbort = controller;
+    const catalog = await this.daemon.projects.catalog();
     if (this.disposed) throw new Error("Daemon session closed during catalog refresh.");
-    const registered = await this.options.presentation.mutate({
-      kind: "registerLocations",
-      daemonId: this.options.daemonId,
-      hostname: this.options.hostname,
-      catalog: locations,
-    });
-    if (this.disposed) throw new Error("Daemon session closed during catalog refresh.");
+    const knownRegistrationId = this.options.appState.getSnapshot().registrations
+      .find(item => item.daemonId === this.options.daemonId)?.id ?? null;
     const projects = this.projectsClient ?? WorkbenchProjectClient({
       clientStateController: this.options.appState,
-      daemonRegistrationId: registrationId,
+      daemonRegistrationId: knownRegistrationId ?? "",
       onError: message => this.options.onError?.(message),
       transport: {
         readCatalog: async () => await this.daemon.projects.catalog(),
@@ -262,10 +193,11 @@ export default class WorkbenchDaemonSession {
     });
     this.projectsClient = projects;
     await projects.installCatalog(catalog);
-    let sidebarError: string | null = null;
     if (!this.options.attached) {
       const sidebar = this.sidebarClient ?? new ThreadSidebarClient({
-        onChange: () => this.publish(this.state),
+        onChange: () => {
+          this.publish(this.state);
+        },
         transport: {
           close: async projectId => {
             await this.threads.requestWorkbench("workbench/thread-state/close", { projectId });
@@ -289,61 +221,67 @@ export default class WorkbenchDaemonSession {
         },
       });
       this.sidebarClient = sidebar;
-      try {
-        await sidebar.refreshFor(this.observedProjectId);
-      } catch (error) {
-        sidebarError = error instanceof Error ? error.message.slice(0, 512) : "Thread list is unavailable.";
-        this.options.onError?.(sidebarError);
-      }
     }
     if (!this.disposed) this.publish({
-      ...this.state, phase: "ready", error: sidebarError, catalog, registrationId,
+      ...this.state, phase: "ready", error: null, catalog, locations: null, registrationId: knownRegistrationId,
     });
-    if (!this.disposed) this.startImport(registered, locations.data.map(item => item.project.id));
-  }
-
-  private startImport(registered: Awaited<ReturnType<WorkbenchPresentationClient["mutate"]>>,
-    projectIds: readonly ProjectId[]) {
-    const controller = new AbortController();
-    this.importAbort = controller;
-    this.importedLayouts.clear();
-    const operation = (async () => {
-      for (const projectId of projectIds) {
-        controller.signal.throwIfAborted();
-        const location = registered.locations.find(item => item.target.daemonId === this.options.daemonId
-          && item.target.projectId === projectId);
-        if (!location) continue;
-        try {
-          await this.options.presentation.importProject(this.options.daemonId,
-            location.target.projectId, location.logicalProjectId, this.daemon, controller.signal);
-        } catch (error) {
-          if (controller.signal.aborted) throw error;
-          const message = error instanceof Error ? error.message : "Legacy draft import failed.";
-          this.reportImportFailure(`Legacy drafts remain on ${this.options.hostname}: ${message}`);
-        }
+    if (this.disposed) return;
+    void this.options.appState.ensureDaemonRegistration(
+      this.options.daemonId, Boolean(this.options.attached),
+    ).then(async registrationId => {
+      if (this.disposed || controller.signal.aborted) return;
+      projects.bindDaemonRegistration(registrationId);
+      await projects.installCatalog(catalog);
+      if (!this.disposed && !controller.signal.aborted) {
+        this.publish({ ...this.state, registrationId });
       }
-      await this.importObservedLayouts(controller.signal);
-    })().catch(error => {
-      if (controller.signal.aborted || this.disposed) return;
-      this.reportImportFailure(error instanceof Error ? error.message : "Legacy presentation import failed.");
-    }).finally(() => {
-      if (this.importTask === operation) this.importTask = null;
+    }).catch(error => {
+      if (this.disposed || controller.signal.aborted) return;
+      const message = error instanceof Error ? error.message : "Daemon registration failed.";
+      this.reportPresentationFailure(`Daemon registration failed: ${message}`);
     });
-    this.importTask = operation;
+    void this.observeProject(this.observedProjectId).catch(error => {
+      if (this.disposed || controller.signal.aborted) return;
+      const message = error instanceof Error
+        ? error.message.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 512)
+        : "Thread list is unavailable.";
+      console.warn("Daemon thread list could not open:", message);
+      this.options.onError?.(message);
+      this.publish({ ...this.state, error: message });
+    });
+    void this.daemon.projects.locations().then(async locations => {
+      if (this.disposed || controller.signal.aborted) return;
+      this.publish({ ...this.state, locations });
+      if (this.options.attached) return;
+      await this.options.presentation.mutate({
+        kind: "registerLocations",
+        daemonId: this.options.daemonId,
+        hostname: this.options.hostname,
+        catalog: locations,
+      }, controller.signal);
+    }).catch(error => {
+      if (this.disposed || controller.signal.aborted) return;
+      this.reportPresentationFailure(error instanceof Error
+        ? `Project locations could not reconcile: ${error.message}`
+        : "Project locations could not reconcile.");
+    });
   }
 
-  private reportImportFailure(message: string) {
+  private reportPresentationFailure(message: string) {
     if (this.disposed) return;
     const bounded = message.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 512);
-    console.warn(`Workbench presentation import failed: ${bounded}`);
+    console.warn(`Workbench presentation reconciliation failed: ${bounded}`);
     this.options.onError?.(bounded);
     this.publish({ ...this.state, error: this.state.error ?? bounded });
   }
 
   private fail(error: unknown) {
     if (this.disposed) return;
-    const message = error instanceof Error ? error.message.slice(0, 512) : "Daemon session is unavailable.";
-    this.publish({ ...this.state, phase: "unavailable", error: message });
+    const message = error instanceof Error
+      ? error.message.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 512)
+      : "Daemon session is unavailable.";
+    console.warn("Daemon session could not refresh:", message);
+    this.publish({ ...this.state, phase: this.state.phase === "ready" ? "ready" : "unavailable", error: message });
     this.options.onError?.(message);
   }
 
@@ -355,7 +293,7 @@ export default class WorkbenchDaemonSession {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    this.importAbort?.abort();
+    this.refreshAbort?.abort();
     this.unsubscribeOpen();
     this.unsubscribeClose();
     this.unsubscribeNotifications();

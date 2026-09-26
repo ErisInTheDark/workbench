@@ -51,19 +51,21 @@ export default memo(function WorkbenchAllProjectsThreadSidebar({
   onOpenQualifiedThread,
 }: WorkbenchAllProjectsThreadSidebarProps) {
   const actions = WorkbenchThreadSidebarActionsProvider.useActions();
-  const createProject = logicalProjects?.find(project => project.locations.some(location =>
-    location.target.projectId === createProjectId && location.project))
-    ?? projects.find(({ id }) => id === createProjectId) ?? null;
+  const createProject = logicalProjects
+    ? logicalProjects.find(project => project.locations.some(location =>
+      location.target.projectId === createProjectId && location.project)) ?? null
+    : projects.find(({ id }) => id === createProjectId) ?? null;
   const errors = useMemo(
     () => [...new Set(actions.projectThreadSidebars.projects.map(({ error }) => error).filter(Boolean))],
     [actions.projectThreadSidebars.projects],
   );
-  if (actions.isLoading && projects.length) return <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />;
+  if (actions.isLoading && !logicalProjects && projects.length) {
+    return <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />;
+  }
 
   return (
     <nav aria-label="Threads" className="space-y-2">
-      {createProject ? (
-        <WorkbenchHomeThreadList
+      <WorkbenchHomeThreadList
           actions={actions}
           activeDragPayload={activeDragPayload}
           attentionLabelsByThreadId={attentionLabelsByThreadId}
@@ -81,7 +83,6 @@ export default memo(function WorkbenchAllProjectsThreadSidebar({
           attachedDaemonId={attachedDaemonId}
           onOpenQualifiedThread={onOpenQualifiedThread}
         />
-      ) : null}
       {errors.map((error) => (
         <p className="m-0 pr-2 text-[0.84rem] leading-6 text-fg/muted" key={error}>{error}</p>
       ))}

@@ -4,9 +4,11 @@
  */
 
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
+import { useContext } from "react";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
 import { ProjectIcon } from "./workbench-icons";
+import WorkbenchClientContext from "./workbench-client-context";
 
 function getWorkbenchProjectDisplayPath(project: WorkbenchProjectOption) {
   const relativePath = project.relativePath || project.id || ".";
@@ -30,12 +32,32 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
   project: WorkbenchProjectOption | WorkbenchLogicalProject;
   variant?: "card" | "heading" | "thread";
 }) {
+  const client = useContext(WorkbenchClientContext);
   if ("matchKey" in project) {
+    const location = project.locations.find(item => item.project)
+      ?? project.observedLocations?.[0] ?? project.locations[0];
+    const attachedDaemonId = client?.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId;
+    const assetSource = location?.daemonId === attachedDaemonId
+      ? { kind: "attached" as const }
+      : location ? { kind: "peer" as const,
+          origin: client?.mounted?.daemonSessions?.httpOrigin(location.daemonId) ?? null }
+        : undefined;
+    const name = project.displayName ?? project.label;
+    const secondary = project.matchKey.startsWith("remote://")
+      ? project.label === name ? null : project.label
+      : project.displayPath ?? null;
     return (
-      <span className="flex min-w-0 items-center gap-2" title={project.matchKey}>
-        <ProjectIcon className="shrink-0" size={variant === "heading" ? 20 : 16} />
-        <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate text-text${active ? " font-semibold" : ""}`}>
-          {project.label}
+      <span className="flex min-w-0 items-center gap-2" title={[
+        ...project.locations, ...(project.observedLocations ?? []),
+      ].map(item => `${item.hostname}: ${item.rootPath}`).join("\n") || project.matchKey}>
+        {location?.project
+          ? <WorkbenchProjectIcon project={location.project} assetSource={assetSource} variant={variant} />
+          : <ProjectIcon className="shrink-0" size={variant === "heading" ? 20 : 16} />}
+        <span className="flex min-w-0 flex-1 items-baseline gap-2">
+          <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate text-text${active || variant === "heading" ? " font-semibold" : ""}`}>
+            {name}
+          </span>
+          {secondary ? <span className="min-w-0 flex-1 truncate text-[0.72rem] font-normal text-fg/muted">{secondary}</span> : null}
         </span>
       </span>
     );
