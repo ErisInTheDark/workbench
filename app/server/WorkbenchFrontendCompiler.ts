@@ -5,7 +5,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { type ChildProcess, spawn } from "node:child_process";
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, glob, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
@@ -20,6 +20,7 @@ import {
 } from "workbench-shared/frontend-generation";
 import resolveWorkbenchRuntimeRoot from "./workbench-runtime-root.ts";
 import WorkbenchFrontendWatcher, { type WorkbenchFrontendWatcherOptions } from "./WorkbenchFrontendWatcher.ts";
+import { expandVariantGroupsInSource } from "./variant-group-source.ts";
 
 export interface WorkbenchFrontendCompilerOptions {
   createContext?: (options: esbuild.BuildOptions) => Promise<esbuild.BuildContext>;
@@ -32,7 +33,7 @@ export interface WorkbenchFrontendCompilerOptions {
   readReactDevelopmentMode?: () => boolean;
   repositoryRootPath?: string;
   spawnTailwind?: (args: readonly string[], options: {
-    cwd: string; env: NodeJS.ProcessEnv; stdio: ["ignore", "pipe", "pipe"];
+    cwd: string; env: NodeJS.ProcessEnv; stdio: ["pipe", "pipe", "pipe"];
   }) => ChildProcess;
 }
 
@@ -328,6 +329,20 @@ export default class WorkbenchFrontendCompiler {
             path.join(this.repositoryRootPath, "shared", "frontend-generation.ts"),
           ],
         }));
+        build.onLoad({ filter: /\.[jt]sx?$/ }, async args => {
+          const relative = path.relative(this.appDirectoryPath, args.path);
+          if (relative.startsWith("..") || path.isAbsolute(relative)) return;
+          const source = await readFile(args.path, "utf8");
+          const transformed = expandVariantGroupsInSource(source, args.path);
+          if (!transformed.map) return;
+          const sourceMap = Buffer.from(transformed.map).toString("base64");
+          return {
+            contents: `${transformed.code}\n//# sourceMappingURL=data:application/json;base64,${sourceMap}`,
+            loader: path.extname(args.path).slice(1) as esbuild.Loader,
+            resolveDir: path.dirname(args.path),
+            watchFiles: [args.path],
+          };
+        });
         build.onEnd(async (result) => {
           if (this.generation.signal.aborted) return;
           await this.sourceWatcher?.updateDependencies(
@@ -410,7 +425,7 @@ export default class WorkbenchFrontendCompiler {
     return [
       tailwindCliPath,
       "--input",
-      path.join(this.appDirectoryPath, "tailwind.css"),
+      "-",
       "--output",
       path.join(this.workingDirectoryPath, "assets", "app.css"),
       "--cwd",
@@ -422,10 +437,24 @@ export default class WorkbenchFrontendCompiler {
 
   private async runTailwindOnce() {
     this.generation.signal.throwIfAborted();
+    const groupedSourcePath = path.join(this.workingDirectoryPath, "variant-groups.html");
+    const groupedSources: string[] = [];
+    for (const extension of ["ts", "tsx", "js", "jsx"]) {
+      for await (const relativePath of glob(`**/*.${extension}`, { cwd: this.appDirectoryPath })) {
+        const filePath = path.join(this.appDirectoryPath, relativePath);
+        const source = await readFile(filePath, "utf8");
+        const transformed = expandVariantGroupsInSource(source, filePath);
+        if (transformed.map) groupedSources.push(transformed.code);
+      }
+    }
+    this.generation.signal.throwIfAborted();
+    await writeFile(groupedSourcePath, groupedSources.join("\n"), "utf8");
+    const groupedSourceReference = path.relative(this.appDirectoryPath, groupedSourcePath).replaceAll("\\", "/");
+    const tailwindInput = `@import "./tailwind.css";\n@source "${groupedSourceReference}";\n`;
     const child = this.spawnTailwind(this.tailwindArguments(), {
-      cwd: this.repositoryRootPath,
+      cwd: this.appDirectoryPath,
       env: this.environment,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
     this.children.add(child);
     child.once("exit", () => this.children.delete(child));
@@ -437,10 +466,21 @@ export default class WorkbenchFrontendCompiler {
     child.stderr?.on("data", (chunk) => {
       output += chunk.toString();
     });
-    const exitCode = await waitForExit(child);
+    const inputDone = new Promise<void>((resolve, reject) => {
+      if (!child.stdin) {
+        reject(new Error("Tailwind stdin is unavailable."));
+        return;
+      }
+      child.stdin.once("error", reject);
+      child.stdin.end(tailwindInput, resolve);
+    });
+    const [exit, input] = await Promise.allSettled([waitForExit(child), inputDone]);
+    if (exit.status === "rejected") throw exit.reason;
+    const exitCode = exit.value;
     if (exitCode !== 0) {
       throw new Error(`Tailwind compilation failed with exit code ${exitCode}.\n${boundedOutput(output)}`);
     }
+    if (input.status === "rejected") throw input.reason;
   }
 
 }

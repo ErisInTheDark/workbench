@@ -100,7 +100,7 @@ export default function ProjectSidebar ({
           ) : null}
           {hasMoreTimeGroups ? (
             <button
-              className="w-full rounded-lg px-2 py-1.5 text-left text-[0.78rem] font-medium text-fg/muted transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+              className="w-full rounded-lg px-2 py-1.5 text-left text-[0.78rem] font-medium text-fg/muted transition hover:(bg-accent-soft text-accent) focus-visible:(bg-accent-soft text-accent outline-none)"
               onClick={() => setProjectTimeGroupCount(preferences.projectTimeGroupCount + 1)}
               type="button"
             >

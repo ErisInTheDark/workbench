@@ -247,6 +247,9 @@ importers:
       esbuild:
         specifier: 0.28.1
         version: 0.28.1
+      magic-string:
+        specifier: 0.30.21
+        version: 0.30.21
       qrcode:
         specifier: 1.5.1
         version: 1.5.1

@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
+import { createRequire } from "node:module";
+import { PassThrough } from "node:stream";
 import * as esbuild from "esbuild";
 import type parcelWatcher from "@parcel/watcher";
 import os from "node:os";
@@ -18,6 +20,42 @@ import WorkbenchFrontendCompiler from "./WorkbenchFrontendCompiler.ts";
 async function assertFile(filePath: string) {
   assert.equal((await stat(filePath)).isFile(), true, `${filePath} should be a file`);
 }
+
+test("grouped classes appear in browser output and generated Tailwind CSS", async context => {
+  const repositoryRootPath = await mkdtemp(path.join(os.tmpdir(), "workbench-variant-groups-"));
+  const clientDirectoryPath = path.join(repositoryRootPath, "app", "client");
+  const require = createRequire(import.meta.url);
+  const tailwindCssPath = path.join(path.dirname(require.resolve("tailwindcss/package.json")), "index.css")
+    .replaceAll("\\", "/");
+  await mkdir(path.join(clientDirectoryPath, "static"), { recursive: true });
+  await mkdir(path.join(clientDirectoryPath, "workbench", "voice"), { recursive: true });
+  await writeFile(path.join(clientDirectoryPath, "static", "index.html"), "<div></div>");
+  await writeFile(path.join(clientDirectoryPath, "browser-entry.tsx"), 'document.body.className = "hover:(bg-red-500 text-white)";');
+  await writeFile(path.join(clientDirectoryPath, "workbench", "voice", "voice-capture-worklet.ts"), "console.log('voice');");
+  await writeFile(path.join(clientDirectoryPath, "tailwind.css"), `@import "${tailwindCssPath}";\n@source "./";\n`);
+  const compiler = new WorkbenchFrontendCompiler({
+    logger: quietLogger(),
+    repositoryRootPath,
+    outputDirectoryPath: path.join(repositoryRootPath, ".workbench", "frontend"),
+  });
+  context.after(async () => {
+    await compiler.shutdown();
+    await rm(repositoryRootPath, { recursive: true, force: true });
+  });
+
+  await compiler.buildOnce();
+  const javascript = await readFile(path.join(compiler.outputDirectoryPath, "assets", "app.js"), "utf8");
+  const stylesheet = await readFile(path.join(compiler.outputDirectoryPath, "assets", "app.css"), "utf8");
+  assert.match(stylesheet, /hover\\:bg-red-500/u);
+  assert.match(stylesheet, /hover\\:text-white/u);
+  assert.match(javascript, /hover:bg-red-500 hover:text-white/u);
+  const sourceMap = JSON.parse(await readFile(path.join(compiler.outputDirectoryPath, "assets", "app.js.map"), "utf8")) as {
+    sources: string[];
+    sourcesContent: string[];
+  };
+  assert.ok(sourceMap.sources.some(source => source.endsWith("app/client/browser-entry.tsx")));
+  assert.ok(sourceMap.sourcesContent.some(source => source.includes("hover:(bg-red-500 text-white)")));
+});
 
 function quietLogger() {
   return new WorkbenchProcessLogger({
@@ -76,6 +114,7 @@ function compilerTools() {
     spawnTailwind(args: readonly string[]) {
       const child = Object.assign(new EventEmitter(), {
         exitCode: null as number | null, signalCode: null as NodeJS.Signals | null, killed: false,
+        stdin: new PassThrough(),
         kill() {
           this.killed = true;
           this.signalCode = "SIGTERM";
@@ -83,6 +122,7 @@ function compilerTools() {
           return true;
         },
       });
+      child.stdin.resume();
       const nextStylesheet = stylesheet;
       if (nextStylesheet === null) {
         queueMicrotask(() => { child.exitCode = 1; child.emit("exit", 1, null); });
@@ -171,6 +211,7 @@ test("a native source event rebuilds real esbuild output after creating a missin
   await mkdir(path.join(client, "workbench/voice"), { recursive: true });
   await writeFile(path.join(client, "static/index.html"), "<main></main>");
   await writeFile(path.join(client, "browser-entry.tsx"), "console.log('initial');");
+  await writeFile(path.join(client, "tailwind.css"), "");
   await writeFile(path.join(client, "workbench/voice/voice-capture-worklet.ts"), "console.log('voice');");
   const tools = compilerTools();
   const failed = Promise.withResolvers<void>();
