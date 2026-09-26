@@ -2,17 +2,17 @@
  * Exports:
  * - default startWorkbenchAppProcess: configure the standalone app and forward process signals to its lifecycle owner.
  */
-import WorkbenchApp from "./WorkbenchApp.ts";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
+import resolveWorkbenchDataRoot from "../../shared/workbench-data-root.ts";
+import WorkbenchApp from "./WorkbenchApp.ts";
+import WorkbenchAppControl from "./WorkbenchAppControl.ts";
 import WorkbenchAppProcessProtocol from "./WorkbenchAppProcessProtocol.ts";
 import WorkbenchFrontendCompiler from "./WorkbenchFrontendCompiler.ts";
 import WorkbenchFrontendServer from "./WorkbenchFrontendServer.ts";
-import WorkbenchAppRuntime from "./runtime/WorkbenchAppRuntime.ts";
 import { readWorkbenchAppCommandLine } from "./app-command-line.ts";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import resolveWorkbenchDataRoot from "../../shared/workbench-data-root.ts";
-import WorkbenchAppControl from "./WorkbenchAppControl.ts";
+import WorkbenchAppRuntime from "./runtime/WorkbenchAppRuntime.ts";
 
 const processLogger = new WorkbenchProcessLogger();
 
@@ -118,7 +118,7 @@ async function main() {
 
 export default function startWorkbenchAppProcess() {
   return main().catch((error) => {
-    processLogger.error("app", `failed to start: ${error instanceof Error ? error.message : String(error)}`);
+    processLogger.error("app", `failed to start: ${error instanceof Error ? `${error.stack}` : String(error)}`);
     process.exitCode = 1;
   });
 }
