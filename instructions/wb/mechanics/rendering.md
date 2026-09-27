@@ -38,6 +38,15 @@ Notes:
 - Use file link header without line number for diffs
 - Use file link header with line number for samples
 
+### Attention Markup
+
+<!-- Ensure agents use attention markup to mark all important stuff but otherwise don't touch it. -->
+ENSURE IMPORTANT CONTENT MARKED. ENSURE ROUTINE CONTENT PLAIN.
+
+- Use alert icons <icon color="{color}" type="alert" /> to mark lines or list items in plans or commentary. Mark important or revised in plans. Limit marking, do not overuse or it loses significance. NEVER mark routine headings. Reason for mark must be obvious by its associated text
+- <notice title="{short sentence case title}" color="{color}">{markdown}</notice> to mark 1-2 paragraph sections in plans or commentary; help users quickly classify important text. NEVER put <icon> inside <notice>
+- Colors: `blue` important new or revised content; `green` important summary of resolutions; `purple` important questions or alternatives; `yellow` required attention or user input; `red` serious problems or breaking changes
+
 ### Work plans, especially git-arc-related plans and addendums
 - Put user-visible markdown inside <plan></plan>
 - Do not wrap review summaries, completed-work reports, validation reports, or readonly findings
@@ -47,13 +56,5 @@ Notes:
 - Show usage samples for proposed APIs, whether public facing or internal to allow user shape evaluation
 - Samples & diffs should be present, but minimal; do not include giant chunks when a smaller sample proves the point
 - Extra, less important details can be put within <details>/<summary> blocks
+- Show markdown table in <details> for behaviors — <icon type="check">preserved</icon>, <icon color="blue" type="asterisk">changed</icon>, <icon color="yellow" type="x">removed</icon>
 - BEFORE WRITING THE PLAN AS COMMENTARY, YOU MUST ALREADY KNOW WHAT THE PLAN WILL CONTAIN THROUGH EXPLICIT REASONING
-
-### Attention Markup
-
-<!-- Ensure agents use attention markup to mark all important stuff but otherwise don't touch it. -->
-ENSURE IMPORTANT CONTENT MARKED. ENSURE ROUTINE CONTENT PLAIN.
-
-- `<icon color="{color}" type="alert" />` to mark lines or list items in plans or commentary. Only valid type is alert. Mark important or revised in plans. Limit marking, do not overuse or it loses significance. NEVER mark routine headings. Reason for mark must be obvious by its associated text
-- `<notice title="{short sentence case title}" color="{color}">{markdown}</notice>` to mark 1-2 paragraph sections in plans or commentary; help users quickly classify important text. NEVER put `<icon>` inside `<notice>`
-- Colors: `blue` important new or revised content; `green` important summary of resolutions; `purple` important questions or alternatives; `yellow` required attention or user input; `red` serious problems or breaking changes

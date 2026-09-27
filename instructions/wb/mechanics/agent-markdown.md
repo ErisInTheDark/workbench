@@ -8,11 +8,14 @@ Why:
 - reduce cognitive load
 
 Treat as agent-facing markdown by default:
-- plan/spec docs
-- agent instruction: AGENTS.md, skill, workflow, glossary docs
+- plan/spec files
+- agent instruction: AGENTS.md, skill, workflow, glossary files
 - handoffs
 - prompts/messages to agents
 - user/project instructions may override default
+
+NOT agent-facing markdown:
+- user-visible commentary or posts
 
 How:
 - use minimal words to preserve meaning
