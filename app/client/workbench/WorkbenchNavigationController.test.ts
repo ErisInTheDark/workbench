@@ -14,6 +14,7 @@ import {
 } from "workbench-shared/workbench/identity";
 import {
   createHomeRoute,
+  createFileRoute,
   createLogicalProjectRoute,
   createLogicalThreadRoute,
   type WorkbenchRoute,
@@ -213,6 +214,16 @@ test("a rejected route intent exposes failure without clearing the current selec
   assert.equal(controller.getSnapshot().phase, "failed");
   assert.deepEqual(controller.getSnapshot().route, route);
   assert.equal(clears, 0);
+});
+
+test("file navigation rejects a non-openable file before invoking the file owner", async () => {
+  let opened = false;
+  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
+    openFile: async () => { opened = true; return true; },
+  }));
+  const result = await controller.applyRoute(createFileRoute(ProjectIdSchema.parse("project"), "image.png"));
+  assert.equal(result.ok, false);
+  assert.equal(opened, false);
 });
 
 test("overlapping thread opens publish only the latest route", async () => {

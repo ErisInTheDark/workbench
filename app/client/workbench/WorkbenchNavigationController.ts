@@ -11,6 +11,7 @@ import type {
   WorkbenchRouteLoadResult,
 } from "workbench-shared/types";
 import { ProjectIdSchema, ThreadReferenceSchema, type DraftId } from "workbench-shared/workbench/identity";
+import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
 import {
   getWorkbenchThreadTargetRootId,
   getWorkbenchThreadTargetSelectedId,
@@ -219,6 +220,9 @@ export default class WorkbenchNavigationController {
     let route = requestedRoute;
     if (route.view === "thread" && route.threadTarget?.kind === "new") this.ports.clearSelection();
 
+    if (route.view === "file" && !isWorkbenchOpenableFile(route.filePath)) {
+      return { error: `This file cannot be opened here: ${route.filePath}`, ok: false };
+    }
     if (route.view === "invalid") {
       this.ports.clearSelection();
       return { error: route.error || "Invalid route.", ok: false };

@@ -149,6 +149,7 @@ function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClien
       draftLocationFor: () => null,
       selectBrowseLocation: async () => undefined,
       navigation: {} as NonNullable<WorkbenchClientController["mounted"]>["navigation"],
+      routeIntents: {} as NonNullable<WorkbenchClientController["mounted"]>["routeIntents"],
       startup: {
         getSnapshot: () => ({ phase: "ready" as const, error: null }),
         subscribe: () => () => undefined,

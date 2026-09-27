@@ -15,8 +15,6 @@ import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } fr
 import WorkbenchProjectNavigation from "./workbench-project-navigation";
 import { useWorkbenchProjectNavigation } from "./use-workbench-project-navigation";
 import type { WorkbenchLogicalProject } from "workbench-shared/types";
-import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
-import { createInvalidWorkbenchRoute, isSameWorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 
 const emptyLogicalProjects: readonly WorkbenchLogicalProject[] = [];
 const emptySubscribe = (_listener: () => void) => () => {};
@@ -91,38 +89,12 @@ export function useWorkbenchRouteIntent(
   navigateToRoute: (route: WorkbenchRoute, options?: { replace?: boolean }) => void,
 ) {
   const navigate = useRef(navigateToRoute);
-  const lastApplied = useRef<{
-    controls: NonNullable<WorkbenchClientController["controls"]>;
-    route: WorkbenchRoute;
-  } | null>(null);
   navigate.current = navigateToRoute;
-  const needsProject = Boolean(intent.projectId || intent.threadOwnerProjectId || intent.logical);
-  const logicalReady = !needsProject || Boolean(
-    client.mounted?.presentationClient?.snapshot().data && client.explorer.logicalProjects,
-  );
   useEffect(() => {
-    const controls = client.controls;
-    if (!controls) return;
-    if (!logicalReady) return;
-    const requested = intent.view === "file" && !isWorkbenchOpenableFile(intent.filePath)
-      ? createInvalidWorkbenchRoute(`This file cannot be opened here: ${intent.filePath}`)
-      : intent;
-    const prior = lastApplied.current;
-    if (prior?.controls === controls && isSameWorkbenchRoute(prior.route, requested)) return;
-    const applied = { controls, route: requested };
-    lastApplied.current = applied;
-    let active = true;
-    void controls.applyRoute(requested).then(result => {
-      if (active && !result.ok && result.error && lastApplied.current === applied) lastApplied.current = null;
-      if (active && result.canonicalRoute) navigate.current(result.canonicalRoute, { replace: true });
-    }).catch(error => {
-      if (active && lastApplied.current === applied) lastApplied.current = null;
-      if (active) console.error("Workbench route could not open:",
-        error instanceof Error ? error.message.slice(0, 512) : "Unknown route failure.");
-    });
-    return () => {
-      active = false;
-      if (lastApplied.current === applied) lastApplied.current = null;
-    };
-  }, [client.controls, client.mounted, logicalReady, intent]);
+    const routes = client.mounted?.routeIntents;
+    if (!routes) return;
+    const unsubscribe = routes.subscribeCanonical(route => navigate.current(route, { replace: true }));
+    routes.request(intent);
+    return unsubscribe;
+  }, [client.mounted, intent]);
 }

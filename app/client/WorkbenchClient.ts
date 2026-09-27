@@ -10,8 +10,10 @@
 
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import WorkbenchAppLifetimeClient from "./workbench/app/WorkbenchAppLifetimeClient";
+import WorkbenchAppSourcesController from "./workbench/app/WorkbenchAppSourcesController";
 import WorkbenchNetworkClient from "./workbench/app/WorkbenchNetworkClient";
 import WorkbenchPresentationClient from "./workbench/state/WorkbenchPresentationClient";
+import WorkbenchRouteIntentController from "./workbench/navigation/WorkbenchRouteIntentController";
 import WorkbenchDaemonSession from "./workbench/WorkbenchDaemonSession";
 import WorkbenchDaemonSessions from "./workbench/WorkbenchDaemonSessions";
 import WorkbenchThreadRouter from "./workbench/WorkbenchThreadRouter";
@@ -108,6 +110,7 @@ export interface MountedWorkbenchClient {
   presentationClient?: WorkbenchPresentationClient;
   daemonSessions?: WorkbenchDaemonSessions;
   navigation: WorkbenchNavigationController;
+  routeIntents: WorkbenchRouteIntentController;
   startup: {
     getSnapshot: () => { phase: "loading" | "ready" | "failed"; error: string | null };
     subscribe: (listener: () => void) => () => void;
@@ -287,6 +290,7 @@ export function WorkbenchClient(
   let networkClient: WorkbenchNetworkClient | undefined;
   let presentationClient: WorkbenchPresentationClient | undefined;
   let daemonSessions: WorkbenchDaemonSessions | undefined;
+  let appSources: WorkbenchAppSourcesController | undefined;
   let attachedSession: WorkbenchDaemonSession | undefined;
   const resolveAttachedDaemonId = () => {
     const registeredId = workbenchBindings.clientStateController?.getSnapshot().registrations
@@ -296,13 +300,14 @@ export function WorkbenchClient(
     return registeredId ?? networkId ?? null;
   };
   const projectSourceErrorListeners = new Set<() => void>();
-  const getProjectSourceError = () => [
-    attachedSession, ...(daemonSessions?.list() ?? []),
-  ].flatMap(session => {
-    const error = session?.getSnapshot().error;
-    return error ? [error] : [];
-  })
-    .slice(0, 3).join(" ").slice(0, 500);
+  const getProjectSourceError = () => {
+    const errors = [
+      networkClient?.snapshot().error,
+      ...[attachedSession, ...(daemonSessions?.list() ?? [])].map(session => session?.getSnapshot().error),
+    ];
+    return errors.filter((error): error is string => Boolean(error))
+      .slice(0, 3).join(" ").slice(0, 500);
+  };
   const publishProjectSourceError = () => {
     for (const listener of projectSourceErrorListeners) listener();
   };
@@ -313,6 +318,7 @@ export function WorkbenchClient(
   const startupListeners = new Set<() => void>();
   const initialRoute = workbenchBindings.initialRoute ?? createHomeRoute();
   let navigation: WorkbenchNavigationController;
+  let routeIntents: WorkbenchRouteIntentController;
   let coordinateAcceptedIntent: (event: WorkbenchAcceptedIntent) => Promise<void> = async (_event) => {
     throw new Error("The thread sidebar coordinator is not ready.");
   };
@@ -338,7 +344,10 @@ export function WorkbenchClient(
   let activeBrowsePeerSession: WorkbenchDaemonSession | null = null;
   let unsubscribeActiveBrowsePeer: (() => void) | null = null;
   const createAppLifetime = () => new WorkbenchAppLifetimeClient({
-    available: available => threadClient.setAppAvailable(available),
+    available: available => {
+      threadClient.setAppAvailable(available);
+      if (available) routeIntents?.sourceAvailable();
+    },
     status: message => reportStatusMessage(message),
   });
   threadClient.setAppAvailable(false);
@@ -591,6 +600,12 @@ export function WorkbenchClient(
     resolveRoute: route => threadIdentity.resolveRoute(route),
   });
   coordinatorLifecycle.addUnsubscribe(() => navigation.dispose());
+  routeIntents = new WorkbenchRouteIntentController({
+    available: () => startupSnapshot.phase === "ready",
+    apply: route => applyRoute(route, true),
+    onError: error => reportBackgroundFailure("Workbench route could not open.", error),
+  });
+  coordinatorLifecycle.addUnsubscribe(() => routeIntents.dispose());
   const mountedFilePanelClients = new Set<ReturnType<typeof WorkbenchFilePanelClient>>();
   let activeFilePath = "";
   let activeProjectId = projectClient.getSnapshot().currentProjectId;
@@ -666,6 +681,7 @@ export function WorkbenchClient(
     const removedRouteProject = Boolean(routeProjectId)
       && !projectClient.getSnapshot().projects.some(project => project.id === routeProjectId);
     if (removedSelectedProject || removedRouteProject) {
+      routeIntents.supersede(createHomeRoute());
       await navigation.applyRoute(createHomeRoute());
     } else if (reapplyCurrentRoute) {
       await navigation.applyRoute(route);
@@ -710,6 +726,7 @@ export function WorkbenchClient(
   });
   coordinatorLifecycle.addUnsubscribe(threadClient.onReconnect(() => {
     threadIdentity.reset();
+    if (startupSnapshot.phase !== "ready") return;
     return connectionRecovery.recoverAfterConnectionLoss();
   }));
   coordinatorLifecycle.addUnsubscribe(() => connectionRecovery.dispose());
@@ -1772,7 +1789,8 @@ export function WorkbenchClient(
     return "";
   }
 
-  async function applyRoute(route: WorkbenchRoute): Promise<WorkbenchRouteLoadResult> {
+  async function applyRoute(route: WorkbenchRoute, fromIntent = false): Promise<WorkbenchRouteLoadResult> {
+    if (!fromIntent) routeIntents.supersede(route);
     if (presentationClient && route.view === "thread" && !route.logical
       && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft")) {
       return navigation.rejectRoute(route, "Unsent drafts require an app-owned project identity.");
@@ -2262,6 +2280,11 @@ export function WorkbenchClient(
     presentationClient = new WorkbenchPresentationClient();
     const network = networkClient;
     const presentation = presentationClient;
+    appSources = new WorkbenchAppSourcesController({
+      network, presentation,
+      onError: error => reportBackgroundFailure("App project sources could not load.", error),
+    });
+    coordinatorLifecycle.addUnsubscribe(() => appSources?.dispose());
     coordinatorLifecycle.addUnsubscribe(network.subscribePresentation(revision =>
       presentation.noticeRevision(revision)));
     coordinatorLifecycle.addUnsubscribe(network.subscribePresentationImport(status => {
@@ -2298,7 +2321,11 @@ export function WorkbenchClient(
         appState, presentation,
         onError: message => reportStatusMessage(message),
       });
+      let lastReadySnapshot: ReturnType<WorkbenchDaemonSession["getSnapshot"]> | null = null;
       coordinatorLifecycle.addUnsubscribe(attachedSession.subscribe(() => {
+        const snapshot = attachedSession?.getSnapshot() ?? null;
+        if (snapshot?.phase === "ready" && snapshot !== lastReadySnapshot) routeIntents.sourceAvailable();
+        lastReadySnapshot = snapshot?.phase === "ready" ? snapshot : null;
         publishProjectSourceError();
         emitExplorerStateChange();
         void requestLogicalBrowseReconciliation().catch(error =>
@@ -2309,19 +2336,37 @@ export function WorkbenchClient(
           : "The attached daemon session could not start.");
       });
     };
+    let presentationSources: Pick<NonNullable<ReturnType<WorkbenchPresentationClient["snapshot"]>["data"]>,
+      "projects" | "locations"> | null = null;
     coordinatorLifecycle.addUnsubscribe(presentation.subscribe(() => {
+      const data = presentation.snapshot().data;
+      if (data && (!presentationSources
+        || !areDeeplyEqual(data.projects, presentationSources.projects)
+        || !areDeeplyEqual(data.locations, presentationSources.locations))) {
+        routeIntents.sourceAvailable();
+      }
+      presentationSources = data ? { projects: data.projects, locations: data.locations } : null;
       emitExplorerStateChange();
       void requestLogicalBrowseReconciliation().catch(error =>
         reportBackgroundFailure("Project browse location could not update.", error));
     }));
+    let readyPeers = new Map<DaemonId, ReturnType<WorkbenchDaemonSession["getSnapshot"]>>();
     coordinatorLifecycle.addUnsubscribe(sessions.subscribe(() => {
+      const nextReady = new Map(sessions.list()
+        .filter(session => session.getSnapshot().phase === "ready")
+        .map(session => [session.getSnapshot().daemonId, session.getSnapshot()] as const));
+      if ([...nextReady].some(([id, snapshot]) => readyPeers.get(id) !== snapshot)) routeIntents.sourceAvailable();
+      readyPeers = nextReady;
       publishProjectSourceError();
       threadRouter.invalidateUnavailable();
       emitExplorerStateChange();
       void requestLogicalBrowseReconciliation().catch(error =>
         reportBackgroundFailure("Project browse location could not update.", error));
     }));
-    coordinatorLifecycle.addUnsubscribe(network.subscribe(reconcileAttachedSession));
+    coordinatorLifecycle.addUnsubscribe(network.subscribe(() => {
+      reconcileAttachedSession();
+      publishProjectSourceError();
+    }));
     coordinatorLifecycle.addUnsubscribe(() => {
       sessions.dispose();
       network.close();
@@ -2336,8 +2381,8 @@ export function WorkbenchClient(
     startupSnapshot = next;
     for (const listener of startupListeners) listener();
     emitExplorerStateChange();
+    if (next.phase === "ready") routeIntents.sourceAvailable();
   }
-  let readsStarted = false;
   let startupGeneration = 0;
   let startupOperation: Promise<void> | null = null;
   function startClient(force = false): Promise<void> {
@@ -2349,14 +2394,7 @@ export function WorkbenchClient(
     }
     const generation = ++startupGeneration;
     publishStartup({ phase: "loading", error: null });
-    if (!readsStarted) {
-      readsStarted = true;
-      void networkClient?.start();
-      void presentationClient?.refresh().catch(error => {
-        reportStatusMessage(error instanceof Error ? error.message.slice(0, 512)
-          : "App presentation state could not be read.");
-      });
-    }
+    appSources?.start();
     const operation = appLifetime.start().then(async () => {
       if (coordinatorLifecycle.isDisposed || generation !== startupGeneration) return;
       voice ??= new WorkbenchVoiceClient(
@@ -2444,6 +2482,7 @@ export function WorkbenchClient(
     presentationClient,
     daemonSessions,
     navigation,
+    routeIntents,
     startup: {
       getSnapshot: () => startupSnapshot,
       subscribe: listener => {

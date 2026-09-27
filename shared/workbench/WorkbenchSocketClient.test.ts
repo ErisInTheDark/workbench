@@ -167,11 +167,11 @@ test("a socket that errors before opening is closed before replacement", async (
     await client.connectSocket("ws://test");
     assert.equal(sockets.length, 2);
     assert.equal(opens, 1);
-    assert.equal(reconnects, 0);
+    assert.equal(reconnects, 1, "a first successful open after failure must rebuild lost state");
     sockets[1]!.close();
     await client.connectSocket("ws://test");
     assert.equal(opens, 2);
-    assert.equal(reconnects, 1);
+    assert.equal(reconnects, 2);
     client.close();
   } finally {
     globalThis.WebSocket = originalWebSocket;

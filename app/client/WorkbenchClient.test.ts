@@ -426,7 +426,7 @@ test("an old-shape UUID URL keeps its thread owner and the sole browse folder th
           ? { data: secondAvailable ? [...locations.data, secondLocation] : locations.data }
           : { data: [] }
         : request.method === "project/file-index/read" ? {
-          projectId, key: "one-file", candidates: [{ path: "src/a.ts", isIgnored: false }],
+          projectId, key: "one-file", candidates: [{ path: "src/a.md", isIgnored: false }],
         }
         : request.method === "thread/presentation/layout/read" ? (() => {
           const value = params.scope === "project" ? { displayOrder: {} } : {};
@@ -571,17 +571,26 @@ test("an old-shape UUID URL keeps its thread owner and the sole browse folder th
       initialRoute: parseWorkbenchRouteFromPath(`/repo/@/thread/${threadId}`) });
     assert.equal(client.startup.getSnapshot().phase, "loading",
       "a pending presentation read must not prevent client construction");
+    assert.equal(requests.filter(method => method === "thread/page/read").length, 0,
+      "mount must not open the initial URL before the URL intent adapter applies it");
     const presentationReady = Promise.withResolvers<void>();
     const unsubscribePresentation = client.presentationClient?.subscribe(() => {
       if (client?.presentationClient?.snapshot().data) presentationReady.resolve();
     });
+    const admittedRoute = Promise.withResolvers<void>();
+    const unsubscribeRoute = client.navigation.subscribe(() => {
+      const selected = client?.navigation.getSnapshot();
+      if (selected?.phase === "ready" && selected.route.view === "thread"
+        && selected.route.threadId === threadId) admittedRoute.resolve();
+    });
+    client.routeIntents.request(route);
     releaseFirstPresentation.resolve();
     await Promise.all([client.startup.start(), presentationReady.promise]);
+    await admittedRoute.promise;
     unsubscribePresentation?.();
+    unsubscribeRoute();
     const legacyNew = await client.controls.applyRoute(createHomeThreadRoute(projectId, { kind: "new" }));
     assert.equal(legacyNew.ok, false, "app-owned drafts cannot be created through a daemon sidebar route");
-    assert.equal(requests.filter(method => method === "thread/page/read").length, 0,
-      "mount must not open the initial URL before the URL intent adapter applies it");
     assert.equal((await client.controls.applyRoute(route)).ok, true);
     const beforeWait = requests.length;
     await assert.rejects(client.controls.threadAction(
@@ -642,14 +651,14 @@ test("an old-shape UUID URL keeps its thread owner and the sole browse folder th
     assert.equal(explorerSnapshots.at(-1)?.currentProjectId, "",
       "a Home thread never selects its sole launch folder for browsing");
     observeBrowse = null;
-    const file = await client.controls.applyRoute(createLogicalFileRoute(logicalProjectId, null, "src/a.ts"));
+    const file = await client.controls.applyRoute(createLogicalFileRoute(logicalProjectId, null, "src/a.md"));
     assert.equal(file.ok, true, file.error ?? "single-folder file route did not select its browse owner");
     await new Promise<void>(resolve => queueMicrotask(resolve));
     assert.deepEqual(explorerSnapshots.at(-1)?.browseLocation, { daemonId, projectId });
     const home = await client.controls.applyRoute(createHomeRoute());
     assert.equal(home.ok, true, home.error ?? "home route did not complete");
     assert.ok(client.projectFileIndexStore);
-    assert.deepEqual((await client.projectFileIndexStore.ensure({ daemonId, projectId })).paths, ["src/a.ts"]);
+    assert.deepEqual((await client.projectFileIndexStore.ensure({ daemonId, projectId })).paths, ["src/a.md"]);
     assert.equal(explorerSnapshots.at(-1)?.browseLocation, null);
     let homeRuntimePublications = 0;
     const stopHomeRuntime = client.threadRuntime.subscribe(() => { homeRuntimePublications += 1; });

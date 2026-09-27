@@ -115,7 +115,7 @@ export default class WorkbenchRpcSocketClient {
       }, { once: true });
     });
     if (this.socket !== socket) throw new Error(`${this.label} connection was replaced before opening.`);
-    const reconnected = this.hasOpened;
+    const reconnected = this.hasOpened || this.reconnectAttempt > 0;
     this.hasOpened = true;
     this.reconnectAttempt = 0;
     for (const listener of this.opened) listener(reconnected);
