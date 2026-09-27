@@ -6,6 +6,15 @@ import test from "node:test";
 
 import { deriveMarkdownAppendPresentation } from "./markdown-append-presentation";
 
+test("a newly appended labelled icon reveals visible label text", () => {
+  const presentation = deriveMarkdownAppendPresentation({
+    previousMarkdown: "before",
+    nextMarkdown: "before\n\n<icon color=\"blue\" type=\"asterisk\">note</icon>",
+  });
+
+  assert.equal(presentation.kind, "append");
+});
+
 function derive(previousMarkdown: string | null, nextMarkdown: string, reducedMotion = false) {
   return deriveMarkdownAppendPresentation({ nextMarkdown, previousMarkdown, reducedMotion });
 }

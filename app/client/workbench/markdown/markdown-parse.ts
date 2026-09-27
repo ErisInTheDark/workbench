@@ -74,7 +74,7 @@ export type ParsedInlineNode =
   | { type: "break" }
   | { type: "link"; children: ParsedInlineNode[]; external: boolean; href: string }
   | { type: "inlineComment"; children: ParsedInlineNode[] }
-  | { type: "threadIcon"; color: string; iconType: string; source: string }
+  | { type: "threadIcon"; children: ParsedInlineNode[] | null; color: string | null; iconType: string; source: string }
   | { type: "knownSkillMention"; text: string; title: string }
   | {
     type: "projectFileLink";
@@ -556,25 +556,23 @@ function parseThreadIconMarker(markdown: string, index: number, options: Markdow
   }
 
   const source = markdown.slice(index);
-  const colorFirstMatch = /^<icon color="([a-z][a-z0-9-]*)" type="([a-z][a-z0-9-]*)"\s*\/>/u.exec(source);
-  const typeFirstMatch = colorFirstMatch
-    ? null
-    : /^<icon type="([a-z][a-z0-9-]*)" color="([a-z][a-z0-9-]*)"\s*\/>/u.exec(source);
-  const marker = colorFirstMatch
-    ? { color: colorFirstMatch[1], iconType: colorFirstMatch[2], source: colorFirstMatch[0] }
-    : typeFirstMatch
-      ? { color: typeFirstMatch[2], iconType: typeFirstMatch[1], source: typeFirstMatch[0] }
-      : null;
-  if (!marker) {
-    return null;
-  }
+  const marker = /^<icon (?:(?:color="([a-z][a-z0-9-]*)" type="([a-z][a-z0-9-]*)")|(?:type="([a-z][a-z0-9-]*)"(?: color="([a-z][a-z0-9-]*)")?))\s*(\/>|>)/u.exec(source);
+  if (!marker) return null;
+
+  const openingTag = marker[0];
+  const paired = marker[5] === ">";
+  const closeIndex = paired ? markdown.indexOf("</icon>", index + openingTag.length) : -1;
+  if (paired && closeIndex === -1) return null;
+  const end = paired ? closeIndex + "</icon>".length : index + openingTag.length;
+  const label = paired ? markdown.slice(index + openingTag.length, closeIndex) : "";
 
   return {
-    end: index + marker.source.length,
+    end,
     node: {
-      color: marker.color,
-      iconType: marker.iconType,
-      source: marker.source,
+      children: label.trim() ? parseInlineMarkdown(label, options) : null,
+      color: marker[1] ?? marker[4] ?? null,
+      iconType: marker[2] ?? marker[3],
+      source: markdown.slice(index, end),
       type: "threadIcon" as const,
     },
   };
@@ -603,6 +601,11 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
     if (threadIconMarker) {
       nodes.push(threadIconMarker.node);
       index = threadIconMarker.end;
+      continue;
+    }
+    if ((options.profile ?? "editor") === "thread" && markdown.startsWith("</icon>", index)) {
+      pushTextNode(nodes, "</icon>");
+      index += "</icon>".length;
       continue;
     }
 

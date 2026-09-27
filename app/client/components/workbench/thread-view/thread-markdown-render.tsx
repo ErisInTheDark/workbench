@@ -208,6 +208,7 @@ function renderThreadInlineNodes (
             color={node.color}
             iconType={node.iconType}
             key={key}
+            label={node.children ? renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath) : null}
             source={node.source}
           />
         );

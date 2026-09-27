@@ -111,7 +111,7 @@ function inlineVisibleText(node: ParsedInlineNode): string {
     case "projectFileLink":
       return node.label ?? node.relativePath;
     case "threadIcon":
-      return "";
+      return node.children?.map(inlineVisibleText).join("") ?? "";
   }
 }
 

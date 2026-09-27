@@ -77,6 +77,44 @@ test("thread check, asterisk, and x markers render inline icons", () => {
   assert.equal(Array.from(html.matchAll(/data-thread-inline-icon=/gu)).length, 3);
 });
 
+test("thread icons without color inherit surrounding text color", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
+    "**<icon type=\"alert\" /> <icon type=\"check\" /> <icon type=\"asterisk\" /> <icon type=\"x\" />**",
+  )));
+
+  for (const type of ["alert", "check", "asterisk", "x"]) {
+    const markerTag = new RegExp(`<span[^>]*aria-label="${type} marker"[^>]*data-thread-inline-icon="${type}"[^>]*>`, "u").exec(html)?.[0];
+    assert.ok(markerTag, `expected inherited ${type} marker`);
+    assert.doesNotMatch(markerTag, /data-thread-inline-icon-color=|text-(?:sky|emerald|violet|red|amber)-/u);
+  }
+  assert.equal(Array.from(html.matchAll(/data-thread-inline-icon=/gu)).length, 4);
+  assert.match(html, /<strong>.*data-thread-inline-icon="alert".*<\/strong>/u);
+});
+
+test("paired thread icons attach a markdown label in the chosen color", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
+    '<icon color="blue" type="asterisk">coloured **label** attached to icon</icon>',
+  )));
+
+  assert.match(html, /data-thread-inline-icon="asterisk"/u);
+  assert.match(html, /data-thread-inline-icon-color="blue"/u);
+  assert.match(html, /coloured <strong>label<\/strong> attached to icon/u);
+  assert.doesNotMatch(html, /&lt;\/?icon/u);
+});
+
+test("paired icons inherit text color and malformed pairs stay literal", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    '<icon type="check">done</icon>',
+    '<icon color="orange" type="check">unsupported color</icon>',
+    '<icon type="x">unclosed',
+  ].join("\n\n"))));
+
+  assert.match(html, /data-thread-inline-icon="check"/u);
+  assert.match(html, /data-thread-inline-icon="check"[^>]*>.*done/u);
+  assert.match(html, /&lt;icon color=&quot;orange&quot; type=&quot;check&quot;&gt;unsupported color&lt;\/icon&gt;/u);
+  assert.match(html, /&lt;icon type=&quot;x&quot;&gt;unclosed/u);
+});
+
 test("unsupported and code-span markers remain literal text", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
     '<icon color="red" type="red" /> unsupported type',
