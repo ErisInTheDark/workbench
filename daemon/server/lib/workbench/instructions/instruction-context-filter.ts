@@ -45,10 +45,16 @@ interface SelectorControl {
   pattern: RegExp | null;
   value: string;
 }
+interface SelectorTag {
+  control: SelectorControl;
+  end: number;
+  line: number;
+  start: number;
+}
 interface Fence { include?: boolean; marker: "`" | "~"; size: number }
 
-const SELECTOR_LINE = /^\s*<(\/)?(available|harness|model|shell|role):([^<>]+)>\s*$/u;
-const MODEL_REGEX_LINE = /^\s*<(\/)?model matches="([^"\n]+)">\s*$/u;
+const SELECTOR_TAG = /<(\/)?(available|harness|model|shell|role):([^<>]+)>/uy;
+const MODEL_REGEX_TAG = /<(\/)?model matches="([^"\n]+)">/uy;
 const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|harness|model|shell|role)(?::|\s|>)/u;
 const AVAILABLE_VALUE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
 const MODEL_VALUE = /^[^\s<>]{1,200}$/u;
@@ -81,6 +87,58 @@ interface LocatedInstructionSourceSpan extends InstructionSourceSpan {
 function findLastMatchingIndex<T>(values: readonly T[], predicate: (value: T) => boolean) {
   for (let index = values.length - 1; index >= 0; index -= 1) if (predicate(values[index] as T)) return index;
   return -1;
+}
+
+function scanSelectorTags(line: string, lineIndex: number, onMalformed: (column: number) => void) {
+  const tags: SelectorTag[] = [];
+  for (let index = 0; index < line.length;) {
+    if (line[index] === "`") {
+      let runEnd = index + 1;
+      while (line[runEnd] === "`") runEnd += 1;
+      let close = runEnd;
+      while (close < line.length) {
+        close = line.indexOf("`", close);
+        if (close < 0) break;
+        let closeEnd = close + 1;
+        while (line[closeEnd] === "`") closeEnd += 1;
+        if (closeEnd - close === runEnd - index) break;
+        close = closeEnd;
+      }
+      if (close >= 0) { index = close + runEnd - index; continue; }
+      index = runEnd;
+      continue;
+    }
+    if (line[index] !== "<") { index += 1; continue; }
+    MODEL_REGEX_TAG.lastIndex = index;
+    SELECTOR_TAG.lastIndex = index;
+    const regexMatch = MODEL_REGEX_TAG.exec(line);
+    const match = regexMatch ?? SELECTOR_TAG.exec(line);
+    if (match) {
+      tags.push({
+        control: {
+          axis: regexMatch ? "model" : match[2] as SelectorAxis,
+          closing: Boolean(match[1]),
+          matchMode: regexMatch ? "regex" : "exact",
+          neutral: false,
+          pattern: null,
+          value: regexMatch ? regexMatch[2] ?? "" : match[3]?.trim() ?? "",
+        },
+        end: index + match[0].length,
+        line: lineIndex,
+        start: index,
+      });
+      index += match[0].length;
+      continue;
+    }
+    if (SELECTOR_LOOKALIKE.test(line.slice(index))) {
+      onMalformed(index);
+      const end = line.indexOf(">", index);
+      index = end < 0 ? line.length : end + 1;
+      continue;
+    }
+    index += 1;
+  }
+  return tags;
 }
 
 function readFence(line: string): Fence | null {
@@ -328,73 +386,67 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
     nextLineStart += line.length + 1;
   });
   const locatedSources = locateInstructionSources(normalizedValue, context.sourceSections);
-  const controls = new Map<number, SelectorControl>();
-  const openLines: number[] = [];
+  const tagsByLine = new Map<number, SelectorTag[]>();
+  const openTags: SelectorTag[] = [];
   let fence: Fence | null = null;
 
   lines.forEach((line, lineIndex) => {
     if (fence) { if (closesFence(line, fence)) fence = null; return; }
     const openedFence = readFence(line);
     if (openedFence) { fence = openedFence; return; }
-    const regexMatch = MODEL_REGEX_LINE.exec(line);
-    const match = regexMatch ?? SELECTOR_LINE.exec(line);
-    if (!match) {
-      if (SELECTOR_LOOKALIKE.test(line)) {
-        warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "malformed", line);
-      }
-      return;
-    }
-    const control: SelectorControl = {
-      axis: regexMatch ? "model" : match[2] as SelectorAxis,
-      closing: Boolean(match[1]),
-      matchMode: regexMatch ? "regex" : "exact",
-      neutral: false,
-      pattern: null,
-      value: regexMatch ? regexMatch[2] ?? "" : match[3]?.trim() ?? "",
-    };
-    controls.set(lineIndex, control);
-    const valueColumn = control.value ? line.indexOf(control.value) : Math.max(0, line.indexOf(":") + 1);
-    const detail = {
-      axis: control.axis,
-      column: valueColumn,
-      length: Math.max(1, control.value.length),
-      value: control.value,
-    };
-    let valid = control.matchMode === "regex"
-      ? control.value.length <= MAX_MODEL_REGEX_LENGTH
-      : isKnownValue(control.axis, control.value);
-    if (valid && control.matchMode === "regex") {
-      try { control.pattern = new RegExp(control.value, "u"); }
-      catch { valid = false; }
-    }
-    if (!valid) {
-      control.neutral = true;
-      warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "malformed", line, detail);
-      return;
-    }
-    if (!control.closing) { openLines.push(lineIndex); return; }
-    const matchingStackIndex = findLastMatchingIndex(openLines, (openLine) => {
-      const opened = controls.get(openLine);
-      return opened?.axis === control.axis && opened.matchMode === control.matchMode && opened.value === control.value;
+    const tags = scanSelectorTags(line, lineIndex, (column) => {
+      warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "malformed", line, { column });
     });
-    if (matchingStackIndex < 0) {
-      control.neutral = true;
-      warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "unmatched", line, detail);
-      return;
-    }
-    if (matchingStackIndex !== openLines.length - 1) {
-      control.neutral = true;
-      openLines.slice(matchingStackIndex).forEach((openLine) => { const opened = controls.get(openLine); if (opened) opened.neutral = true; });
-      warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "crossed", line, detail);
-    }
-    openLines.splice(matchingStackIndex, 1);
+    if (tags.length) tagsByLine.set(lineIndex, tags);
+    tags.forEach((tag) => {
+      const { control } = tag;
+      const valueColumn = control.value
+        ? tag.start + line.slice(tag.start, tag.end).indexOf(control.value)
+        : tag.start + Math.max(0, line.slice(tag.start, tag.end).indexOf(":") + 1);
+      const detail = {
+        axis: control.axis,
+        column: valueColumn,
+        length: Math.max(1, control.value.length),
+        value: control.value,
+      };
+      let valid = control.matchMode === "regex"
+        ? control.value.length <= MAX_MODEL_REGEX_LENGTH
+        : isKnownValue(control.axis, control.value);
+      if (valid && control.matchMode === "regex") {
+        try { control.pattern = new RegExp(control.value, "u"); }
+        catch { valid = false; }
+      }
+      if (!valid) {
+        control.neutral = true;
+        warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "malformed", line, detail);
+        return;
+      }
+      if (!control.closing) { openTags.push(tag); return; }
+      const matchingStackIndex = findLastMatchingIndex(openTags, (opened) => {
+        const candidate = opened.control;
+        return candidate.axis === control.axis && candidate.matchMode === control.matchMode && candidate.value === control.value;
+      });
+      if (matchingStackIndex < 0) {
+        control.neutral = true;
+        warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "unmatched", line, detail);
+        return;
+      }
+      if (matchingStackIndex !== openTags.length - 1) {
+        control.neutral = true;
+        openTags.slice(matchingStackIndex).forEach((opened) => { opened.control.neutral = true; });
+        warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "crossed", line, detail);
+      }
+      openTags.splice(matchingStackIndex, 1);
+    });
   });
-  openLines.forEach((lineIndex) => {
-    const control = controls.get(lineIndex);
-    if (!control) return;
+  openTags.forEach((tag) => {
+    const { control } = tag;
     control.neutral = true;
+    const lineIndex = tag.line;
     const source = lines[lineIndex] ?? "";
-    const valueColumn = control.value ? source.indexOf(control.value) : Math.max(0, source.indexOf(":") + 1);
+    const valueColumn = control.value
+      ? tag.start + source.slice(tag.start, tag.end).indexOf(control.value)
+      : tag.start + Math.max(0, source.slice(tag.start, tag.end).indexOf(":") + 1);
     warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "unclosed", source, {
       axis: control.axis,
       column: valueColumn,
@@ -410,13 +462,25 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
     if (fence) { if (fence.include !== false) output.push(line); if (closesFence(line, fence)) fence = null; return; }
     const openedFence = readFence(line);
     if (openedFence) { const include = active.every((control) => control.neutral || matches(control, context)); if (include) output.push(line); fence = { ...openedFence, include }; return; }
-    const control = controls.get(lineIndex);
-    if (control) {
-      if (!control.closing && control.value) active.push(control);
-      else if (control.closing) { const index = findLastMatchingIndex(active, (opened) => opened.axis === control.axis && opened.matchMode === control.matchMode && opened.value === control.value); if (index >= 0) active.splice(index, 1); }
+    const tags = tagsByLine.get(lineIndex);
+    if (!tags?.length) {
+      if (active.every((opened) => opened.neutral || matches(opened, context))) output.push(line);
       return;
     }
-    if (active.every((opened) => opened.neutral || matches(opened, context))) output.push(line);
+    let rendered = "";
+    let cursor = 0;
+    for (const tag of tags) {
+      if (active.every((opened) => opened.neutral || matches(opened, context))) rendered += line.slice(cursor, tag.start);
+      const { control } = tag;
+      if (!control.closing && control.value) active.push(control);
+      else if (control.closing) {
+        const index = findLastMatchingIndex(active, (opened) => opened.axis === control.axis && opened.matchMode === control.matchMode && opened.value === control.value);
+        if (index >= 0) active.splice(index, 1);
+      }
+      cursor = tag.end;
+    }
+    if (active.every((opened) => opened.neutral || matches(opened, context))) rendered += line.slice(cursor);
+    if (rendered && !(tags.length === 1 && !line.slice(0, tags[0]!.start).trim() && !line.slice(tags[0]!.end).trim())) output.push(rendered);
   });
   return output.join("\n");
 }

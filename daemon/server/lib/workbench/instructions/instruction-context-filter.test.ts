@@ -39,6 +39,72 @@ test("selectors are conjunctive and control lines never escape", () => {
   assert.equal(filter(value).output, "before\nkept\nafter");
 });
 
+test("adjacent inline harness selectors choose one branch and retain shared text", () => {
+  const value = "- <harness:codex>Use Codex search.</harness:codex><harness:opencode>Use OpenCode search.</harness:opencode> Pass arguments separately.";
+  assert.equal(filter(value).output, "- Use Codex search. Pass arguments separately.");
+  assert.equal(filter(value, "opencode").output, "- Use OpenCode search. Pass arguments separately.");
+  assert.deepEqual(filter(value).warnings, []);
+});
+
+test("inline selectors work for every axis and compose with standalone blocks", () => {
+  const value = [
+    "<harness:codex>",
+    "start <role:agent>agent</role:agent><role:voice-to-text>voice</role:voice-to-text>",
+    "<model:gpt-6-astra>exact</model:gpt-6-astra>",
+    '<model matches="^gpt-">family</model matches="^gpt-">',
+    "<shell:pwsh>powershell</shell:pwsh>",
+    "<available:thread-recall>recall</available:thread-recall>",
+    "</harness:codex>",
+  ].join("\n");
+  assert.equal(filter(value).output, "start agent\nexact\nfamily\npowershell\nrecall");
+  assert.equal(filter(value, "codex", "bash", new Set(), "gpt-6-preview").output, "start agent\nfamily");
+  assert.equal(filter(value, "opencode").output, "");
+
+  const warnings: WorkbenchInstructionFilterWarning[] = [];
+  const voice = filterWorkbenchInstructionContent(value, {
+    available: new Set(["thread-recall"]), field: "test", harness: "codex",
+    model: "gpt-6-astra", onWarning: warning => warnings.push(warning),
+    role: "voice-to-text", shell: "pwsh",
+  });
+  assert.equal(voice, "start voice\nexact\nfamily\npowershell\nrecall");
+  assert.deepEqual(warnings, []);
+});
+
+test("inline selectors stay literal in Markdown code and comments cannot activate them", () => {
+  const value = [
+    "before `<harness:opencode>literal</harness:opencode>` after",
+    "```md",
+    "<harness:opencode>fenced</harness:opencode>",
+    "```",
+    "keep<!-- <harness:opencode>hidden</harness:opencode> -->going",
+  ].join("\n");
+  const result = filter(value);
+  assert.equal(result.output, [
+    "before `<harness:opencode>literal</harness:opencode>` after",
+    "```md",
+    "<harness:opencode>fenced</harness:opencode>",
+    "```",
+    "keepgoing",
+  ].join("\n"));
+  assert.deepEqual(result.warnings, []);
+});
+
+test("inline malformed and crossing selectors preserve body and report the affected column", () => {
+  const malformed = filter("prefix <available:not-real>body</available:not-real> suffix");
+  assert.equal(malformed.output, "prefix body suffix");
+  assert.deepEqual(malformed.warnings.map(warning => warning.recovery), ["malformed", "malformed"]);
+  assert.equal(malformed.warnings[0]?.column, "prefix <available:".length + 1);
+
+  const crossed = filter("<harness:codex><model:gpt-6-astra>body</harness:codex></model:gpt-6-astra>");
+  assert.equal(crossed.output, "body");
+  assert.deepEqual(crossed.warnings.map(warning => warning.recovery), ["crossed"]);
+
+  const unclosed = filter("prefix <harness:opencode>body");
+  assert.equal(unclosed.output, "prefix body");
+  assert.deepEqual(unclosed.warnings.map(warning => warning.recovery), ["unclosed"]);
+  assert.equal(unclosed.warnings[0]?.column, "prefix <harness:".length + 1);
+});
+
 test("trusted voice role excludes agent guidance and composes with other selectors", () => {
   const source = "<role:agent>\nordinary\n</role:agent>\n<role:voice-to-text>\n<harness:codex>\nvoice\n</harness:codex>\n</role:voice-to-text>";
   const warnings: WorkbenchInstructionFilterWarning[] = [];
