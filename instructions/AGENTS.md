@@ -152,67 +152,43 @@ Review must cover:
 
 ## Project Quality
 
-- Think wider than the immediate line change. Ask what is possible, what would be coherent, and what would leave the project better.
-- Do not use caution, diff size, or imagined effort as an excuse to preserve bad shape near the task.
-- "Boil the ocean" means considering the full sane fix and recommending it when it is the right shape. It does not mean making huge, unfocused, or messy changes.
-- Prefer the coherent end state over fake stages, patch piles, and abstractions that only hide the problem.
-- Push back when the requested path is too narrow, dependency-heavy, unsafe, or likely to create long-term maintenance cost.
-- Prefer project-local code, conventions, and existing ownership before adding dependencies or wrappers.
-- Add dependencies only when they buy meaningful correctness, security, protocol support, domain logic, ecosystem support, or operations leverage.
-- Avoid migration systems unless migration is an explicit user invariant. Prefer optional-property fallbacks, resilient state handling, and just-in-time conversion.
-- Keep behavior changes visible. Name changed behavior separately from refactors and call out behavior that intentionally stays the same.
+Triggers:
+- Planning work
+- Reviewing code
+- During implementation, when encountering unexpected things that change the plan (route back to inspection!!)
 
-Treat complexity as a primary tax. Weigh every new state, abstraction, protocol, guard, and compatibility path against the project's actual invariants and the user's requested behavior. Keep it only when the benefit is worth the tax. If nearby or owning refactors can offset new complexity being added, it is likely worth doing the refactor. Always striving for the correct, simple shape is worth code churn & wider changesets.
+Use the following **Reasoning Checklist**:
+- [ ] **Think wider:** Have you traced further up? Have you traced around? Have you asked what shapes the code *could* have, which would be the most coherent, and which would leave the project better?
+- [ ] **Avoid caution, laziness, and tiny-patching:** Are you using caution, diff size, or imagined effort as excuses to preserve bad shapes?
+- [ ] **Are you treating existing code as sacred?** Code is never sacred. Project requirements are. Behavior *may* be
+- [ ] **Refactor framing:** Have you tried reframing your inspection, a plan, a fix, or an improvement around refactoring related code? Do you *need* to know exact reasons why something isn't working in order to fix it, or could replacing the code with *better* code fix the problem?
+- [ ] **Proactively fight nearby smells:** One by one analyse your plan or existing code for issues such as:
+  - unclear ownership
+  - helper soup
+  - conceptually shallow files
+  - hidden lifecycle state
+  - swallowed failures
+  - stacked retries or timeouts
+  - fake abstractions
+  - runtime import cycles
+- [ ] **Boil the ocean:** You're an agent. You can do a frankly INSANE amount of work incredibly quickly. There is no need for tiny slices, "safe" changes, or experiments
+- [ ] **Push back!** Be critical of user suggestions. Be a useful collaborator, not a yes-man. Proactively challenge things the user may not have thought through fully, when you have inspected enough to refute them
+- [ ] **Project-local preference:** Favor local code, conventions, and existing ownership before adding dependencies or wrappers. Add dependencies only when they provide significant value with little risk
+- [ ] **Dedupe by default:** Prefer refactoring to extract logic, components, etc rather than duplicating them
+- [ ] **Avoid scattered migration code and systems:** Prefer optional-property fallbacks, resilient state handling, and just-in-time conversion. Centralize migration logic when necessary, and keep it high quality and tested if possible
+- [ ] **Complexity is a primary tax:** Weigh every new state, abstraction, protocol, guard, and compatibility path against the project's actual invariants and the user's requested behavior. Keep it only when the benefit is worth the tax. If nearby or owning refactors can offset new complexity being added, prefer that
+- [ ] **Lifecycle has one owner:** Timeouts, retries, cancellation, readiness, polling, animation-frame, scheduler, and failure state need one owner, one reason, and one failure path. Identify the correct owner and list the state variables that represent lifecycle truth. Avoid:
+  - nested retries
+  - stacked timeouts
+  - hidden Promise state
+  - racing fallbacks
+  - swallowed failures
+  - multiple layers owning cancel or retry behavior
+- [ ] **Avoid mirror state:** Before adding counters, caches, registries, or other derived lifecycle state, inspect whether existing structures encode same invariant. Prefer deriving from existing owner unless performance, async boundaries, or external protocol constraints make duplicate state necessary. Duplicate state only allowed with explicit invariants and proof drift is impossible or acceptable
+- [ ] **Keep external weirdness at the edge:** Wrap protocols, CLIs, browser APIs, generated clients, subprocesses, and other hostile shapes; must not enter core project code
 
-**Hard rule: do not tiny-patch around a bad shape.**
-
-When nearby design is part of the problem, include the coherent fix in the plan.
-
-Fight nearby smells that create future cost:
-
-- unclear ownership
-- helper soup
-- conceptually shallow files
-- hidden lifecycle state
-- swallowed failures
-- stacked retries or timeouts
-- fake abstractions
-- runtime import cycles
-- behavior changes hidden as refactors
-
-Aggressively propose related refactors when they improve project maintainability.
-
-If a refactor is warranted, but you believe it is truly out of scope for the current task, state it in the brief as potential follow-up work, and in review repeat the suggestion.
-
-## Real Ownership
-
-<!-- Failure: agents copy referenced work without inspecting or reusing its owner. -->
-- Keep each concept with its smallest real owner. Avoid helpers that only move meaning.
-- For matching work, inspect the existing owner before planning. Reuse it, extract a shared owner, or explain why not.
-- Keep long-running async work owned by a clear controller, state model, or lifecycle boundary.
-- Before adding counters, Sets, caches, registries, or other derived lifecycle state, inspect whether an existing owned structure already encodes the same invariant. Prefer deriving from the existing owner unless performance, async boundaries, or external protocol constraints make duplicated state necessary. If duplicated state is proposed, explicitly justify why it cannot drift or why the drift risk is acceptable.
-- Avoid stacked timeouts, nested retries, hidden Promise state, swallowed failures, racing fallbacks, and multiple layers owning the same cancel or retry behavior.
-- Keep external weirdness at the edge. Wrap protocols, CLIs, browser APIs, generated clients, subprocesses, and other hostile shapes before they enter core project code.
-- Use structured parsers and project types for structured data when available. Do not rely on ad hoc string manipulation when the project has a real boundary type or parser.
-- Avoid fake abstractions, helper soup, runtime import cycles, pointless snapshots, generic managers, and registries that exist only to hide control flow.
-
-## Lifecycle Ownership
-
-**Hard rule: lifecycle has one owner.**
-
-Timeouts, retries, cancellation, readiness, polling, animation-frame, scheduler, and failure state need one owner, one reason, and one failure path.
-
-For timeout, retry, cancellation, readiness, polling, animation-frame, and scheduler changes, identify the lifecycle owner and list the state variables that represent lifecycle truth. Reject mirror-state unless the plan names the invariant that keeps it synchronized.
-
-Avoid:
-
-- nested retries
-- stacked timeouts
-- hidden Promise state
-- broad fallbacks
-- swallowed failures
-
-Prefer a controller, state model, or lifecycle boundary with explicit idle/loading/failed states and intent methods for refresh, cancel, retry, or dispose.
+**Hard rule: Aggressively propose related refactors when they improve project maintainability.**
+On needed refactor, but TRULY out of scope for current task, state in brief as potential follow-up work; in review repeat suggestion
 
 ## Before Editing Files
 
@@ -225,12 +201,7 @@ Prefer a controller, state model, or lifecycle boundary with explicit idle/loadi
 
 ## When Using Tools
 
-<harness:codex>
-- Use `tools.mcp__wb__rg` for project search. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
-</harness:codex>
-<harness:opencode>
-- Use `tools.wb.rg` for project search inside `execute`. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
-</harness:opencode>
+- <harness:codex>Use `tools.mcp__wb__rg` for project search.</harness:codex><harness:opencode>Use `tools.wb.rg` for project search inside `execute`.</harness:opencode> Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
 - Prefer parallel tool calls for independent read-only inspections. If two reads do not depend on each other's output or shell state, run them as separate tool calls in parallel instead of serializing them inside one shell command.
 - Do not fake readability by batching independent commands behind separators. Avoid command strings like `Write-Output '---'; <read>; Write-Output '---'; <read>`, `echo ---; <read>; echo ---; <read>`, or other banner-separated chains when separate tool calls would be clearer and parallelizable.
 - Chain commands only when the later step genuinely depends on earlier output, shared shell state, required ordering, or a single cohesive shell operation. Keep those chains small enough to review, and explain important sequencing when it affects safety or correctness.
