@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import type { WorkbenchNetworkSnapshot } from "workbench-shared/http/workbench-network";
 import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 import WorkbenchNetworkRoutes from "../network/WorkbenchNetworkRoutes.ts";
+import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppEventSocketController from "./WorkbenchAppEventSocketController.ts";
 
 test("network sockets deliver current state and close when their grant disappears", async context => {
@@ -23,11 +24,19 @@ test("network sockets deliver current state and close when their grant disappear
     action: async () => ({ kind: "ok" as const }),
   };
   const routes = new WorkbenchNetworkRoutes(network, undefined, undefined, true);
+  let sendStateNotice = (_revision: number) => {};
+  const state = {
+    readBrowser: async () => ({ kind: "snapshot", revision: 5, rows: {} }),
+    subscribeBrowser: (_browserStateId: string | undefined, listener: (revision: number) => void) => {
+      sendStateNotice = listener;
+      return () => { sendStateNotice = () => {}; };
+    },
+  } as unknown as WorkbenchBrowserStateRegistry;
   const sockets = new WorkbenchAppEventSocketController({
     logger: new WorkbenchProcessLogger({
       color: false, writeOutput: line => lines.push(line), writeError: line => lines.push(line),
     }),
-    network, routes,
+    network, routes, state,
   });
   const server = createServer((_request, response) => { response.writeHead(404); response.end(); });
   server.on("upgrade", (request, socket, head) => sockets.handleUpgrade(request, socket, head));
@@ -47,6 +56,27 @@ test("network sockets deliver current state and close when their grant disappear
   const frame = JSON.parse(message.toString()) as { kind: string; snapshot: { capabilities: { appEventsWebSocket: boolean } } };
   assert.equal(frame.kind, "network");
   assert.equal(frame.snapshot.capabilities.appEventsWebSocket, true);
+  client.send(JSON.stringify({ id: 1, method: "app/network/read", params: {} }));
+  const [reply] = await Promise.race([
+    once(client, "message"),
+    once(client, "close").then(() => { throw new Error("RPC socket closed before replying."); }),
+  ]);
+  const response = JSON.parse(reply.toString()) as { id: number; result: { capabilities: { appEventsWebSocket: boolean } } };
+  assert.equal(response.id, 1);
+  assert.equal(response.result.capabilities.appEventsWebSocket, true);
+  client.send(JSON.stringify({ id: 2, method: "app/state/read",
+    params: { browserStateId: null, sinceRevision: null } }));
+  const [stateReply] = await once(client, "message");
+  assert.deepEqual(JSON.parse(stateReply.toString()), {
+    id: 2, result: { kind: "snapshot", revision: 5, rows: {} },
+  });
+  const notice = once(client, "message");
+  sendStateNotice(6);
+  assert.deepEqual(JSON.parse((await notice)[0].toString()), { kind: "state", revision: 6 });
+  client.send(JSON.stringify({ id: 3, method: "app/state/read",
+    params: { browserStateId: "10000000-0000-4000-8000-000000000001", sinceRevision: null } }));
+  const [crossOwner] = await once(client, "message");
+  assert.match(JSON.parse(crossOwner.toString()).error.message, /changed browser owner/u);
   const closed = once(client, "close");
   granted = false;
   notify();

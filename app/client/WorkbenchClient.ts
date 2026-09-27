@@ -12,6 +12,7 @@ import { defaultProviderKey } from "workbench-shared/workbench/provider/provider
 import WorkbenchAppLifetimeClient from "./workbench/app/WorkbenchAppLifetimeClient";
 import WorkbenchAppSourcesController from "./workbench/app/WorkbenchAppSourcesController";
 import WorkbenchNetworkClient from "./workbench/app/WorkbenchNetworkClient";
+import type WorkbenchAppRpcClient from "./workbench/app/WorkbenchAppRpcClient";
 import WorkbenchPresentationClient from "./workbench/state/WorkbenchPresentationClient";
 import WorkbenchRouteIntentController from "./workbench/navigation/WorkbenchRouteIntentController";
 import WorkbenchDaemonSession from "./workbench/WorkbenchDaemonSession";
@@ -271,6 +272,7 @@ export function describeGlobalThreadStateOpenFailure(error: unknown) {
 
 export function WorkbenchClient(
   bindings: WorkbenchBindings & {
+    appRpc?: WorkbenchAppRpcClient | null;
     clientStateController?: WorkbenchClientStateController;
     dom?: WorkbenchDomSurfaces | null;
   } = {},
@@ -2276,8 +2278,8 @@ export function WorkbenchClient(
   const appState = workbenchBindings.clientStateController;
   let startDaemonSessions = () => {};
   if (appState && appState.daemonRegistrationId !== "memory") {
-    networkClient = new WorkbenchNetworkClient();
-    presentationClient = new WorkbenchPresentationClient();
+    networkClient = new WorkbenchNetworkClient({ rpc: workbenchBindings.appRpc ?? undefined });
+    presentationClient = new WorkbenchPresentationClient({ rpc: workbenchBindings.appRpc ?? undefined });
     const network = networkClient;
     const presentation = presentationClient;
     appSources = new WorkbenchAppSourcesController({

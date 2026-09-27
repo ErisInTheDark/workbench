@@ -15,6 +15,7 @@ import {
 import { readWorkbenchBrowserStateTransferId } from "../../workbench/state/workbench-browser-state-identity";
 import WorkbenchTextField from "./WorkbenchTextField";
 import PrimaryButton from "./PrimaryButton";
+import { useWorkbenchAppRpc } from "../../workbench/app/WorkbenchAppRpcContext";
 
 function boundedError(error: unknown) {
   return (error instanceof Error ? error.message : "Unable to read the Workbench app port.").slice(0, 500);
@@ -37,6 +38,7 @@ function sourceDescription(snapshot: WorkbenchAppPortClientSnapshot | null) {
 }
 
 export default function WorkbenchAppPortSetting({ inline = false }: { inline?: boolean }) {
+  const rpc = useWorkbenchAppRpc();
   const [snapshot, setSnapshot] = useState<WorkbenchAppPortClientSnapshot | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
@@ -47,7 +49,7 @@ export default function WorkbenchAppPortSetting({ inline = false }: { inline?: b
 
   useEffect(() => {
     let cancelled = false;
-    void readWorkbenchAppPort()
+    void readWorkbenchAppPort(fetch, window.location.href, rpc ?? undefined)
       .then((nextSnapshot) => {
         if (cancelled) return;
         setSnapshot(nextSnapshot);
@@ -62,7 +64,7 @@ export default function WorkbenchAppPortSetting({ inline = false }: { inline?: b
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [rpc]);
 
   async function apply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

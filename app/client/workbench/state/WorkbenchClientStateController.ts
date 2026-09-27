@@ -29,6 +29,7 @@ import { conformWorkbenchClientStateResponse } from "./workbench-client-state-co
 import type { WorkbenchProjectAlias } from "workbench-shared/types";
 import { composeProjectAliases } from "workbench-shared/workbench/project/project-aliases";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
+import type WorkbenchAppRpcClient from "../app/WorkbenchAppRpcClient";
 
 export interface WorkbenchClientStateSnapshot {
   attachmentsAsUrls: boolean;
@@ -44,6 +45,7 @@ export interface WorkbenchClientStateControllerOptions {
   browserStateId?: string;
   fetcher?: typeof fetch;
   mode?: "http" | "memory";
+  rpc?: WorkbenchAppRpcClient;
   pollDelayMs?: number;
   schedule?: (callback: () => void, delayMs: number) => number;
   cancelSchedule?: (id: number) => void;
@@ -88,6 +90,7 @@ export default class WorkbenchClientStateController {
   readonly #mutationQueues = new Map<string, Promise<void>>();
   readonly #optimistic = new Map<string, { generation: number; mutation: WorkbenchClientStateMutation }>();
   readonly #pollDelayMs: number;
+  readonly #rpc: WorkbenchAppRpcClient | null;
   readonly #records = new Map<string, WorkbenchClientStateRecord>();
   readonly #registrationRequests = new Map<string, Promise<string>>();
   readonly #threadAliases = new Map<string, Map<string, Map<string, string>>>();
@@ -101,6 +104,7 @@ export default class WorkbenchClientStateController {
   #mutationGeneration = 0;
   #polling = false;
   #revision = 0;
+  #notifiedRevision = 0;
   #registrations: WorkbenchClientStateSnapshot["registrations"] = [];
   #schemaVersion = 0;
   #attachmentsAsUrls = false;
@@ -116,10 +120,13 @@ export default class WorkbenchClientStateController {
     schemaVersion: 0,
   };
   #unsubscribeVisibility: (() => void) | null = null;
+  #unsubscribeRpcEvent: (() => void) | null = null;
+  #unsubscribeRpcReconnect: (() => void) | null = null;
 
   constructor(options: WorkbenchClientStateControllerOptions = {}) {
     this.#browserStateId = options.browserStateId;
     this.#mode = options.mode ?? "memory";
+    this.#rpc = this.#mode === "http" && options.rpc?.available ? options.rpc : null;
     const fetcher = options.fetcher ?? globalThis.fetch;
     this.#fetcher = (input, init) => fetcher.call(globalThis, input, init);
     this.#pollDelayMs = options.pollDelayMs ?? 2_000;
@@ -145,24 +152,47 @@ export default class WorkbenchClientStateController {
 
   async bootstrap() {
     if (this.#mode === "memory") return this.#snapshot;
-    let response = await this.#request("GET", "/api/workbench-client-state");
-    if (!response.registrations
-      && (response.schemaVersion ?? 0) >= appStateReleases.durableDaemonRegistrations.version
-      && this.#requestCapabilities === "3") {
-      this.#requestCapabilities = "2";
-      response = await this.#request("GET", "/api/workbench-client-state");
+    let ready = false;
+    let reconnectDuringBootstrap = false;
+    if (this.#rpc) {
+      this.#unsubscribeRpcEvent = this.#rpc.onEvent(event => {
+        if (event.kind !== "state" || event.revision <= this.#revision) return;
+        this.#notifiedRevision = Math.max(this.#notifiedRevision, event.revision);
+        if (ready) void this.#poll();
+      });
+      this.#unsubscribeRpcReconnect = this.#rpc.onReconnect(() => {
+        if (ready) void this.#poll();
+        else reconnectDuringBootstrap = true;
+      });
     }
-    if (response.kind !== "snapshot") throw new Error("Workbench app state bootstrap did not return a complete snapshot.");
-    this.#apply(response);
-    this.#unsubscribeVisibility = this.#visibility.subscribe(() => {
-      if (this.#disposed || this.#visibility.hidden()) {
-        this.#cancelPendingPoll();
-        return;
+    try {
+      let response = await this.#request("GET", "/api/workbench-client-state");
+      if (!this.#rpc && !response.registrations
+        && (response.schemaVersion ?? 0) >= appStateReleases.durableDaemonRegistrations.version
+        && this.#requestCapabilities === "3") {
+        this.#requestCapabilities = "2";
+        response = await this.#request("GET", "/api/workbench-client-state");
       }
-      void this.#poll();
-    });
-    this.#schedulePoll();
-    return this.#snapshot;
+      if (response.kind !== "snapshot") throw new Error("Workbench app state bootstrap did not return a complete snapshot.");
+      this.#apply(response);
+      ready = true;
+      this.#unsubscribeVisibility = this.#visibility.subscribe(() => {
+        if (this.#disposed || this.#visibility.hidden()) {
+          this.#cancelPendingPoll();
+          return;
+        }
+        void this.#poll();
+      });
+      if (reconnectDuringBootstrap || this.#notifiedRevision > this.#revision) void this.#poll();
+      this.#schedulePoll();
+      return this.#snapshot;
+    } catch (error) {
+      this.#unsubscribeRpcEvent?.();
+      this.#unsubscribeRpcReconnect?.();
+      this.#unsubscribeRpcEvent = null;
+      this.#unsubscribeRpcReconnect = null;
+      throw error;
+    }
   }
 
   async put(record: WorkbenchClientStateRecord) {
@@ -253,17 +283,25 @@ export default class WorkbenchClientStateController {
     if (pending) return await pending;
     const operation = (async () => {
       if (this.#disposed) throw new Error("Workbench app state is disposed.");
-      const response = await this.#fetcher("/api/workbench-client-state/daemon-register", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(this.#browserStateId ? { [WORKBENCH_BROWSER_STATE_HEADER]: this.#browserStateId } : {}),
-        },
-        body: JSON.stringify(request),
-      });
-      if (!response.ok) throw new Error((await response.text()).slice(0, 1_000)
-        || `Daemon registration failed with HTTP ${response.status}.`);
-      const state = await this.#request("GET", "/api/workbench-client-state");
+      let state: WorkbenchClientStateResponse;
+      if (this.#rpc) {
+        state = this.#parseResponse(await this.#rpc.requestRaw({
+          method: "app/state/register",
+          params: { browserStateId: this.#browserStateId ?? null, request },
+        }));
+      } else {
+        const response = await this.#fetcher("/api/workbench-client-state/daemon-register", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(this.#browserStateId ? { [WORKBENCH_BROWSER_STATE_HEADER]: this.#browserStateId } : {}),
+          },
+          body: JSON.stringify(request),
+        });
+        if (!response.ok) throw new Error((await response.text()).slice(0, 1_000)
+          || `Daemon registration failed with HTTP ${response.status}.`);
+        state = await this.#request("GET", "/api/workbench-client-state");
+      }
       if (this.#disposed) throw new Error("Workbench app state was disposed during daemon registration.");
       if (state.kind !== "snapshot") throw new Error("Daemon registration did not return a complete app state.");
       this.#apply(state);
@@ -336,7 +374,8 @@ export default class WorkbenchClientStateController {
     this.#projectRemap = boundary;
     void boundary.then(() => {
       if (this.#projectRemap === boundary) this.#projectRemap = null;
-      this.#schedulePoll();
+      if (this.#rpc && this.#notifiedRevision > this.#revision) void this.#poll();
+      else this.#schedulePoll();
     });
     await operation;
   }
@@ -385,6 +424,10 @@ export default class WorkbenchClientStateController {
     this.#cancelPendingPoll();
     this.#unsubscribeVisibility?.();
     this.#unsubscribeVisibility = null;
+    this.#unsubscribeRpcEvent?.();
+    this.#unsubscribeRpcReconnect?.();
+    this.#unsubscribeRpcEvent = null;
+    this.#unsubscribeRpcReconnect = null;
     this.#listeners.clear();
     this.#threadAliases.clear();
     this.#projectAliases.clear();
@@ -444,24 +487,32 @@ export default class WorkbenchClientStateController {
     if (this.#disposed || this.#mode === "memory" || this.#visibility.hidden() || this.#polling || this.#projectRemap) return;
     this.#cancelPendingPoll();
     this.#polling = true;
+    const revisionBeforeRead = this.#revision;
+    const noticeBeforeRead = this.#notifiedRevision;
+    let repeat = false;
     try {
       const response = await this.#request("GET", `/api/workbench-client-state?sinceRevision=${this.#revision}`);
-      if (this.#requestCapabilities === "2" && response.schemaVersion !== undefined
+      if (!this.#rpc && this.#requestCapabilities === "2" && response.schemaVersion !== undefined
         && response.schemaVersion >= appStateReleases.draftImageContent.version) {
         this.#requestCapabilities = "3";
         this.#apply(await this.#request("GET", "/api/workbench-client-state"));
       } else this.#apply(response);
-      this.#setError("");
+      if (this.#rpc && this.#notifiedRevision > this.#revision) {
+        repeat = this.#revision > revisionBeforeRead || this.#notifiedRevision > noticeBeforeRead;
+        if (!repeat) this.#setError("App state update is not visible yet.");
+      } else this.#setError("");
     } catch (error) {
       this.#setError(error instanceof Error ? error.message : "Workbench app state polling failed.");
     } finally {
       this.#polling = false;
-      this.#schedulePoll();
+      if (repeat && !this.#visibility.hidden()) {
+        void this.#poll();
+      } else this.#schedulePoll();
     }
   }
 
   #schedulePoll() {
-    if (this.#disposed || this.#mode === "memory" || this.#visibility.hidden() || this.#scheduledPoll !== null) return;
+    if (this.#disposed || this.#mode === "memory" || this.#rpc || this.#visibility.hidden() || this.#scheduledPoll !== null) return;
     this.#scheduledPoll = this.#schedule(() => {
       this.#scheduledPoll = null;
       void this.#poll();
@@ -475,10 +526,32 @@ export default class WorkbenchClientStateController {
   }
 
   async #request(method: "DELETE" | "GET" | "PUT" | "POST", url: string, mutation?: WorkbenchClientStateMutation | WorkbenchProjectRemap) {
+    const requestUrl = new URL(url, "http://workbench.local");
+    if (this.#rpc) {
+      const browserStateId = this.#browserStateId ?? null;
+      if (method === "GET" && requestUrl.pathname === "/api/workbench-client-state") {
+        const rawRevision = requestUrl.searchParams.get("sinceRevision");
+        return this.#parseResponse(await this.#rpc.requestRaw({
+          method: "app/state/read",
+          params: { browserStateId, sinceRevision: rawRevision === null ? null : Number(rawRevision) },
+        }));
+      }
+      if (method === "POST" && requestUrl.pathname === "/api/workbench-client-state/project-remap"
+        && mutation && !("action" in mutation)) {
+        return this.#parseResponse(await this.#rpc.requestRaw({
+          method: "app/state/remap", params: { browserStateId, request: mutation },
+        }));
+      }
+      if ((method === "PUT" || method === "DELETE") && mutation && "action" in mutation) {
+        return this.#parseResponse(await this.#rpc.requestRaw({
+          method: "app/state/mutate", params: { browserStateId, mutation },
+        }));
+      }
+      throw new Error("Unsupported Workbench app-state RPC intent.");
+    }
     const body = mutation
       ? "action" in mutation ? mutation.action === "put" ? mutation.record : mutation.identity : mutation
       : undefined;
-    const requestUrl = new URL(url, "http://workbench.local");
     requestUrl.searchParams.set("capabilities", this.#requestCapabilities);
     const response = await this.#fetcher(`${requestUrl.pathname}${requestUrl.search}`, {
       ...(body ? { body: JSON.stringify(body) } : {}),

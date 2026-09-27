@@ -6,31 +6,14 @@
  */
 import {
   WORKBENCH_APP_PORT_PATH,
+  WorkbenchAppPortSnapshotSchema,
   type WorkbenchAppPortSnapshot,
 } from "workbench-shared/http/workbench-app-port";
 import { z } from "zod";
 
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import { WORKBENCH_BROWSER_STATE_TRANSFER_PARAMETER } from "../state/workbench-browser-state-identity";
-
-const WorkbenchAppPortSnapshotSchema = z.object({
-  appOrigin: z.string().url().refine((value) => {
-    const origin = new URL(value);
-    return origin.protocol === "http:" && origin.hostname === "127.0.0.1" && Boolean(origin.port) && origin.origin === value;
-  }, "Expected a bound loopback HTTP origin."),
-  currentPort: z.number().int().min(1).max(65_535),
-  editable: z.boolean(),
-  source: z.enum(["environment", "random", "setting"]),
-  stableOrigin: z.url().refine(value => new URL(value).origin === value && ["http:", "https:"].includes(new URL(value).protocol)).nullable().default(null),
-}).strict().superRefine((value, context) => {
-  if (Number(new URL(value.appOrigin).port) !== value.currentPort) {
-    context.addIssue({
-      code: "custom",
-      message: "Origin port must match currentPort.",
-      path: ["appOrigin"],
-    });
-  }
-});
+import type WorkbenchAppRpcClient from "./WorkbenchAppRpcClient";
 
 const ErrorResponseSchema = z.object({
   error: z.string().max(500),
@@ -61,8 +44,8 @@ async function responseError(response: Response) {
   return parsed.success ? parsed.data.error : "The Workbench app port request failed.";
 }
 
-async function snapshotResponse(response: Response) {
-  const parsed = WorkbenchAppPortSnapshotSchema.safeParse(await response.json().catch(() => null));
+function snapshotResponse(value: unknown) {
+  const parsed = WorkbenchAppPortSnapshotSchema.safeParse(value);
   if (!parsed.success) {
     reportClientSchemaError("Rejected Workbench app port response", parsed.error);
     throw new Error("The Workbench app port response was invalid.");
@@ -73,11 +56,15 @@ async function snapshotResponse(response: Response) {
 export async function readWorkbenchAppPort(
   fetcher: typeof fetch = fetch,
   currentHref: string = window.location.href,
+  rpc?: WorkbenchAppRpcClient,
 ): Promise<WorkbenchAppPortClientSnapshot> {
+  if (rpc?.available) return snapshotResponse(await rpc.requestRaw({
+    method: "app/port/read", params: {},
+  }));
   const response = await fetcher(`${WORKBENCH_APP_PORT_PATH}?version=2`, { cache: "no-store" });
   if (response.status === 404) return currentOriginSnapshot(currentHref);
   if (!response.ok) throw new Error(await responseError(response));
-  return await snapshotResponse(response);
+  return snapshotResponse(await response.json().catch(() => null));
 }
 
 export async function updateWorkbenchAppPort(
@@ -91,7 +78,7 @@ export async function updateWorkbenchAppPort(
     method: "PUT",
   });
   if (!response.ok) throw new Error(await responseError(response));
-  return await snapshotResponse(response);
+  return snapshotResponse(await response.json().catch(() => null));
 }
 
 export function createWorkbenchAppPortRedirectUrl(

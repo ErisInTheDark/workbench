@@ -100,6 +100,7 @@ export default class WorkbenchAppHttpRouter {
     readAppliedReactDevelopmentMode?: () => boolean;
     state: WorkbenchBrowserStateRegistry;
     presentation?: WorkbenchPresentationController;
+    runtime?: { read(): object; subscribe(listener: () => void): () => void };
     supportsAppWebSockets?: boolean;
   }) {
     this.importController = options.network && options.presentation
@@ -109,11 +110,6 @@ export default class WorkbenchAppHttpRouter {
     this.networkRoutes = options.network
       ? new WorkbenchNetworkRoutes(options.network, options.presentation, this.importController ?? undefined,
           options.supportsAppWebSockets === true) : null;
-    this.eventSockets = options.network && this.networkRoutes
-      ? new WorkbenchAppEventSocketController({
-          logger: options.logger, network: options.network, routes: this.networkRoutes,
-          presentation: options.presentation, presentationImport: this.importController ?? undefined,
-        }) : null;
     this.portRoutes = new WorkbenchAppPortRoutes({
       appPort: {
         read: () => options.appPort.read(),
@@ -148,6 +144,14 @@ export default class WorkbenchAppHttpRouter {
     this.stateRoutes = new WorkbenchAppStateRoutes(options.state,
       daemonId => options.network?.snapshot().daemon?.daemonId === daemonId);
     this.presentationRoutes = options.presentation ? new WorkbenchPresentationRoutes(options.presentation) : null;
+    this.eventSockets = options.network && this.networkRoutes
+      ? new WorkbenchAppEventSocketController({
+          logger: options.logger, network: options.network, routes: this.networkRoutes,
+          presentation: options.presentation, presentationImport: this.importController ?? undefined,
+          state: options.state, runtime: options.runtime,
+          settings: this.settingsRoutes, port: this.portRoutes,
+          verifyAttachedDaemon: daemonId => options.network?.snapshot().daemon?.daemonId === daemonId,
+        }) : null;
     this.staticRequests = new StaticHttpRequestController({
       cacheSeconds: 0,
       rootDirectoryPath: options.outputDirectoryPath,

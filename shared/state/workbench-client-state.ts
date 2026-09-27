@@ -15,6 +15,7 @@
  * - WorkbenchClientStateRecord: persisted browser state variants.
  * - WorkbenchClientStateIdentity: browser state addresses.
  * - WorkbenchClientStateMutation: put/delete intents.
+ * - WorkbenchClientStateRecordSchema/WorkbenchClientStateIdentitySchema/WorkbenchClientStateMutationSchema: validate app-state writes.
  * - WorkbenchClientStateAttachmentIdentity: composer or questionnaire image owner.
  * - workbenchClientStateAttachmentUrl: browser-scoped image URL for one saved attachment.
  * - WorkbenchClientStateRows: schema-derived wire rows.
@@ -32,6 +33,7 @@ import type { SelectRow } from "../database/schema/schema-definition.ts";
 import { z } from "zod";
 import { WorkbenchProjectAliasSchema } from "../workbench/project/project-state.ts";
 import { DaemonIdSchema } from "../workbench/identity.ts";
+import { ProviderKeySchema } from "../workbench/provider/provider-key.ts";
 
 export const WorkbenchDaemonRegistrationRequestSchema = z.object({
   daemonId: DaemonIdSchema,
@@ -184,6 +186,110 @@ export type WorkbenchClientStateResponse =
 export type WorkbenchClientStateMutation =
   | { action: "put"; record: WorkbenchClientStateRecord }
   | { action: "delete"; identity: WorkbenchClientStateIdentity };
+
+const address = z.string().min(1);
+const preferenceBoolean = z.object({
+  key: z.enum([
+    "composerSpellCheck", "editorSpellCheck", "projectStatusCountsExpanded", "projectsOpen",
+    "reactDevelopmentMode", "reloadNecessaryOpen", "showUnopenableFiles", "sidebarCollapsed",
+    "threadCodeBlockWrap", "threadCodeDetails", "threadLiveActivityOpen", "voiceInputEnabled",
+  ]),
+  value: z.boolean(),
+});
+const GlobalPreferenceSchema = z.union([
+  preferenceBoolean,
+  z.object({ key: z.literal("editorFontFamily"), value: z.enum(["mono", "sans", "serif"]) }),
+  z.object({ key: z.enum(["appPort", "editorFontSize", "projectTimeGroupCount"]), value: z.number() }),
+  z.object({ key: z.literal("fileOpenBehavior"), value: z.enum(["vscode", "workbench", "workbench-or-vscode"]) }),
+  z.object({ key: z.literal("harness"), value: ProviderKeySchema }),
+  z.object({ key: z.literal("selectedProjectPinPlacement"), value: z.enum(["pinned-section", "threads-section"]) }),
+  z.object({ key: z.literal("theme"), value: z.enum(["default", "magical-girl", "winter"]) }),
+  z.object({ key: z.literal("transcriptProjectionMode"), value: z.enum(["compare", "json", "sqlite"]) }),
+]);
+const ProjectPreferenceSchema = z.union([
+  z.object({ enabled: z.boolean(), key: z.enum([
+    "composerSpellCheck", "editorSpellCheck", "showUnopenableFiles", "threadCodeBlockWrap", "threadCodeDetails",
+  ]), value: z.boolean() }),
+  z.object({ enabled: z.boolean(), key: z.literal("editorFontFamily"), value: z.enum(["mono", "sans", "serif"]) }),
+  z.object({ enabled: z.boolean(), key: z.literal("editorFontSize"), value: z.number() }),
+  z.object({ enabled: z.boolean(), key: z.literal("fileOpenBehavior"), value: z.enum(["vscode", "workbench", "workbench-or-vscode"]) }),
+  z.object({ enabled: z.boolean(), key: z.literal("selectedProjectPinPlacement"),
+    value: z.enum(["pinned-section", "threads-section"]) }),
+  z.object({ enabled: z.boolean(), key: z.literal("theme"), value: z.enum(["default", "magical-girl", "winter"]) }),
+]);
+const SidebarPreferenceSchema = z.union([
+  z.object({ key: z.enum(["projectTimeGroupCount", "settledThreadItemLimit"]), value: z.number() }),
+  z.object({ key: z.enum([
+    "browseSessionsOpen", "explorerOpen", "pinnedStatusCountsExpanded", "pinnedThreadsOpen",
+    "projectStatusCountsExpanded", "projectsOpen", "reloadNecessaryOpen", "settledThreadsOpen",
+    "sidebarCollapsed", "threadsOpen",
+  ]), value: z.boolean() }),
+]);
+const projectAddress = { daemonRegistrationId: address, projectId: address };
+const attachment = z.object({ id: address, url: z.string() });
+
+export const WorkbenchClientStateRecordSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("modelPreference"), harness: ProviderKeySchema,
+    modelId: z.string(), favourite: z.boolean() }),
+  z.object({ kind: z.literal("globalPreference"), preference: GlobalPreferenceSchema }),
+  z.object({ kind: z.literal("projectPreference"), ...projectAddress,
+    preference: ProjectPreferenceSchema }),
+  z.object({ kind: z.literal("sidebarPreference"), ...projectAddress,
+    preference: SidebarPreferenceSchema }),
+  z.object({ kind: z.literal("sidebarFolder"), ...projectAddress, folderId: address,
+    scope: z.enum(["pinned", "thread"]) }),
+  z.object({ kind: z.literal("expandedDirectory"), ...projectAddress, path: z.string() }),
+  z.object({ kind: z.literal("fileDraft"), ...projectAddress, path: z.string(),
+    value: z.object({
+      baselineContent: z.string(), content: z.string(),
+      expectedMtimeMs: z.number().nullable(), headContent: z.string().nullable(),
+      mode: z.enum(["plain", "rich"]),
+    }) }),
+  z.object({ kind: z.literal("composerDraft"), ...projectAddress, threadId: address,
+    value: z.object({ attachments: z.array(attachment),
+      text: z.string(), updatedAt: z.number() }) }),
+  z.object({ kind: z.literal("questionnaireDraft"), ...projectAddress, threadId: address,
+    requestKey: address, value: z.object({
+      attachments: z.array(attachment),
+      customValues: z.record(address, z.string()),
+      selectedValues: z.record(address, z.array(z.string())),
+      updatedAt: z.number(),
+    }) }),
+  z.object({ kind: z.literal("lastLaunchTarget"), daemonRegistrationId: address,
+    projectId: address }),
+]);
+
+export const WorkbenchClientStateIdentitySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("modelPreference"), harness: ProviderKeySchema, modelId: z.string() }),
+  z.object({ kind: z.literal("globalPreference"), key: z.enum([
+    "composerSpellCheck", "editorSpellCheck", "projectStatusCountsExpanded", "projectsOpen",
+    "reactDevelopmentMode", "reloadNecessaryOpen", "showUnopenableFiles", "sidebarCollapsed",
+    "threadCodeBlockWrap", "threadCodeDetails", "threadLiveActivityOpen", "voiceInputEnabled",
+    "editorFontFamily", "appPort", "editorFontSize", "projectTimeGroupCount", "fileOpenBehavior",
+    "harness", "selectedProjectPinPlacement", "theme", "transcriptProjectionMode",
+  ]) }),
+  z.object({ kind: z.literal("projectPreference"), ...projectAddress,
+    key: z.enum(["composerSpellCheck", "editorSpellCheck", "showUnopenableFiles", "threadCodeBlockWrap",
+      "threadCodeDetails", "editorFontFamily", "editorFontSize", "fileOpenBehavior",
+      "selectedProjectPinPlacement", "theme"]) }),
+  z.object({ kind: z.literal("sidebarPreference"), ...projectAddress,
+    key: z.enum(["projectTimeGroupCount", "settledThreadItemLimit", "browseSessionsOpen", "explorerOpen",
+      "pinnedStatusCountsExpanded", "pinnedThreadsOpen", "projectStatusCountsExpanded", "projectsOpen",
+      "reloadNecessaryOpen", "settledThreadsOpen", "sidebarCollapsed", "threadsOpen"]) }),
+  z.object({ kind: z.literal("sidebarFolder"), ...projectAddress, folderId: address,
+    scope: z.enum(["pinned", "thread"]) }),
+  z.object({ kind: z.literal("expandedDirectory"), ...projectAddress, path: z.string() }),
+  z.object({ kind: z.literal("fileDraft"), ...projectAddress, path: z.string() }),
+  z.object({ kind: z.literal("composerDraft"), ...projectAddress, threadId: address }),
+  z.object({ kind: z.literal("questionnaireDraft"), ...projectAddress, threadId: address,
+    requestKey: address }),
+  z.object({ kind: z.literal("lastLaunchTarget") }),
+]);
+
+export const WorkbenchClientStateMutationSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("put"), record: WorkbenchClientStateRecordSchema }),
+  z.object({ action: z.literal("delete"), identity: WorkbenchClientStateIdentitySchema }),
+]);
 
 export type WorkbenchClientStateAttachmentIdentity = Extract<
   WorkbenchClientStateIdentity,

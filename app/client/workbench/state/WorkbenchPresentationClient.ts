@@ -28,6 +28,7 @@ import {
 } from "workbench-shared/workbench/thread/home-thread-display-order";
 import { getWorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
 import { z } from "zod";
+import type WorkbenchAppRpcClient from "../app/WorkbenchAppRpcClient";
 
 const path = "/api/workbench-presentation";
 const failureSchema = z.object({ error: z.string().max(512) }).strict();
@@ -46,7 +47,7 @@ export default class WorkbenchPresentationClient {
   private notifiedRevision = -1;
   private notificationRefresh: Promise<void> | null = null;
 
-  constructor(private readonly options: { fetcher?: typeof fetch } = {}) {}
+  constructor(private readonly options: { fetcher?: typeof fetch; rpc?: WorkbenchAppRpcClient } = {}) {}
 
   readonly snapshot = () => this.state;
   readonly subscribe = (listener: () => void) => {
@@ -67,7 +68,16 @@ export default class WorkbenchPresentationClient {
 
   private async drainRevisions() {
     while (!this.closed && this.notifiedRevision > (this.state.data?.revision ?? -1)) {
-      try { await this.refresh(); }
+      const before = this.state.data?.revision ?? -1;
+      const noticeBefore = this.notifiedRevision;
+      try {
+        await this.refresh();
+        if ((this.state.data?.revision ?? -1) <= before) {
+          if (this.notifiedRevision > noticeBefore) continue;
+          this.publish({ ...this.state, error: "Presentation update is not visible yet.", phase: "failed" });
+          return;
+        }
+      }
       catch { return; } // refresh retains the bounded failure in presentation state.
     }
   }
@@ -374,9 +384,15 @@ export default class WorkbenchPresentationClient {
     const controller = new AbortController();
     this.requests.add(controller);
     try {
-      const response = await (this.options.fetcher ?? fetch)(path, { cache: "no-store", signal: controller.signal });
-      if (!response.ok) throw await this.responseError(response);
-      const data = this.parseSnapshot(await response.json());
+      let value: unknown;
+      if (this.options.rpc?.available) {
+        value = await this.options.rpc.requestRaw({ method: "app/presentation/read", params: {} });
+      } else {
+        const response = await (this.options.fetcher ?? fetch)(path, { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw await this.responseError(response);
+        value = await response.json();
+      }
+      const data = this.parseSnapshot(value);
       controller.signal.throwIfAborted();
       this.accept(data);
       return this.state.data!;
@@ -397,15 +413,23 @@ export default class WorkbenchPresentationClient {
     const controller = new AbortController();
     this.requests.add(controller);
     try {
-      const response = await (this.options.fetcher ?? fetch)(`${path}/mutate`, {
-        method: "POST", cache: "no-store",
-        signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(mutation),
-      });
+      let value: unknown;
+      if (this.options.rpc?.available) {
+        value = await this.options.rpc.requestRaw({
+          method: "app/presentation/mutate", params: { mutation },
+        });
+      } else {
+        const response = await (this.options.fetcher ?? fetch)(`${path}/mutate`, {
+          method: "POST", cache: "no-store",
+          signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(mutation),
+        });
+        if (!response.ok) throw await this.responseError(response);
+        value = await response.json();
+      }
       signal?.throwIfAborted();
-      if (!response.ok) throw await this.responseError(response);
-      const data = this.parseSnapshot(await response.json());
+      const data = this.parseSnapshot(value);
       signal?.throwIfAborted();
       controller.signal.throwIfAborted();
       this.accept(data);

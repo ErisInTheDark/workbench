@@ -11,12 +11,14 @@ import {
   updateWorkbenchAppSettings,
 } from "../../workbench/app/workbench-app-settings-client";
 import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
+import { useWorkbenchAppRpc } from "../../workbench/app/WorkbenchAppRpcContext";
 
 function boundedError(error: unknown) {
   return (error instanceof Error ? error.message : "Unable to read Workbench app settings.").slice(0, 500);
 }
 
 export default function WorkbenchReactDevelopmentModeSetting() {
+  const rpc = useWorkbenchAppRpc();
   const [applied, setApplied] = useState(false);
   const [requested, setRequested] = useState(false);
   const [error, setError] = useState("");
@@ -27,7 +29,7 @@ export default function WorkbenchReactDevelopmentModeSetting() {
 
   useEffect(() => {
     let cancelled = false;
-    void readWorkbenchAppSettings()
+    void readWorkbenchAppSettings(fetch, rpc ?? undefined)
       .then((snapshot) => {
         if (cancelled) return;
         if (!snapshot) {
@@ -47,7 +49,7 @@ export default function WorkbenchReactDevelopmentModeSetting() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [rpc]);
 
   const description = !isAvailable
     ? "Restart Workbench to load the app process that supports this setting."
@@ -62,7 +64,7 @@ export default function WorkbenchReactDevelopmentModeSetting() {
     setIsSaving(true);
     setError("");
     try {
-      const snapshot = await updateWorkbenchAppSettings(!requested);
+      const snapshot = await updateWorkbenchAppSettings(!requested, fetch, rpc ?? undefined);
       setApplied(snapshot.appliedReactDevelopmentMode);
       setRequested(snapshot.requestedReactDevelopmentMode);
     } catch (updateError) {

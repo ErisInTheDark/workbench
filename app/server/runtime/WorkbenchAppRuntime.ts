@@ -8,6 +8,7 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WORKBENCH_APP_LIFETIME_SOCKET_PATH } from "workbench-shared/http/workbench-app-events";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 
 import ReloadableNodeHost from "workbench-shared/reload/ReloadableNodeHost";
 import { createReloadableNodeModuleLoader } from "workbench-shared/reload/reloadable-node-loader";
@@ -25,6 +26,7 @@ import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateReposito
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import WorkbenchAppLifetime from "./WorkbenchAppLifetime.ts";
+import { projectWorkbenchAppRuntimeSnapshot } from "./workbench-app-runtime-snapshot.ts";
 
 const RUNTIME_PATH = "/api/workbench-app-runtime";
 const MAX_RELOAD_BODY_BYTES = 16_000;
@@ -50,17 +52,6 @@ function sendJson(response: ServerResponse, status: number, value: object) {
     "Content-Type": "application/json; charset=utf-8",
   });
   response.end(JSON.stringify(value));
-}
-
-function projectReloadDirt(
-  snapshot: WorkbenchReloadDirtSnapshot,
-  includeDependants: boolean,
-): WorkbenchReloadDirtSnapshot {
-  if (includeDependants) return snapshot;
-  return {
-    ...snapshot,
-    dirtyScopes: snapshot.dirtyScopes.map(({ dependantScopes: _dependantScopes, ...scope }) => scope),
-  };
 }
 
 async function readReloadScopes(request: IncomingMessage) {
@@ -91,6 +82,11 @@ export default class WorkbenchAppRuntime {
   private readonly lifetime: WorkbenchAppLifetime;
   private appliedReactDevelopmentMode: boolean | null = null;
   private readonly host: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
+  private readonly runtimeListeners = new Set<() => void>();
+  private runtimeSourceUnsubscribers: Array<() => void> = [];
+  private lastHostDirt: WorkbenchReloadDirtSnapshot | null = null;
+  private lastRequestedReactDevelopmentMode = false;
+  private runtimeSourcesReady = false;
 
   constructor(private readonly options: WorkbenchAppRuntimeOptions) {
     this.lifetime = new WorkbenchAppLifetime(options.logger);
@@ -121,6 +117,7 @@ export default class WorkbenchAppRuntime {
       },
       outputDirectoryPath: options.outputDirectoryPath,
       processLogger: options.logger,
+      readAppRuntimeSnapshot: () => this.readRuntimeSnapshot("4"),
       readAppliedReactDevelopmentMode: () => {
         if (this.appliedReactDevelopmentMode === null) {
           throw new Error("Workbench frontend mode is unavailable before compiler startup.");
@@ -129,6 +126,10 @@ export default class WorkbenchAppRuntime {
       },
       repositoryRootPath: options.repositoryRootPath,
       supportsAppWebSockets: true,
+      subscribeAppRuntimeChanges: listener => {
+        this.runtimeListeners.add(listener);
+        return () => { this.runtimeListeners.delete(listener); };
+      },
     };
     const require = createRequire(import.meta.url);
     const loader = createReloadableNodeModuleLoader<AppProcessContext, AppRuntimeObjects, never>(
@@ -141,7 +142,13 @@ export default class WorkbenchAppRuntime {
     );
     host = new ReloadableNodeHost(context, loader, {
       sourceExclusions: ["app/client/**"],
-      onSwap: (scopes) => options.logger.line("app", `reloaded app nodes: ${scopes.join(", ")}`),
+      onSwap: (scopes) => {
+        options.logger.line("app", `reloaded app nodes: ${scopes.join(", ")}`);
+        if (this.runtimeSourcesReady) {
+          this.bindRuntimeSources();
+          this.publishRuntimeChange();
+        }
+      },
       processScope: {
         descriptor: {
           access: "operator",
@@ -181,11 +188,65 @@ export default class WorkbenchAppRuntime {
 
   async start() {
     await this.host.start();
+    this.runtimeSourcesReady = true;
+    this.bindRuntimeSources();
   }
 
   async close() {
+    this.runtimeSourcesReady = false;
+    for (const unsubscribe of this.runtimeSourceUnsubscribers) unsubscribe();
+    this.runtimeSourceUnsubscribers = [];
+    this.runtimeListeners.clear();
     this.lifetime.close();
     await this.host.dispose();
+  }
+
+  private readRuntimeSnapshot(version: string | null) {
+    return projectWorkbenchAppRuntimeSnapshot({
+      allScopes: this.host.getReloadScopeCatalog().map(({ scope }) => scope),
+      appliedReactDevelopmentMode: this.appliedReactDevelopmentMode,
+      frontendGeneration: this.host.get("compiler").getFrontendGeneration(),
+      hostDirt: this.host.get("network").hostReloadDirt(),
+      reloadDirt: this.host.get("reloadDirt").getSnapshot(),
+      requestedReactDevelopmentMode: this.host.get("state")
+        .readGlobalPreference("reactDevelopmentMode") === true,
+    }, version);
+  }
+
+  private bindRuntimeSources() {
+    for (const unsubscribe of this.runtimeSourceUnsubscribers) unsubscribe();
+    const dirt = this.host.get("reloadDirt");
+    const compiler = this.host.get("compiler");
+    const network = this.host.get("network");
+    const state = this.host.get("state");
+    this.lastHostDirt = network.hostReloadDirt();
+    this.lastRequestedReactDevelopmentMode = state.readGlobalPreference("reactDevelopmentMode") === true;
+    this.runtimeSourceUnsubscribers = [
+      dirt.subscribe(() => this.publishRuntimeChange()),
+      compiler.subscribe(() => this.publishRuntimeChange()),
+      state.subscribeBrowser(undefined, () => {
+        const next = state.readGlobalPreference("reactDevelopmentMode") === true;
+        if (next === this.lastRequestedReactDevelopmentMode) return;
+        this.lastRequestedReactDevelopmentMode = next;
+        this.publishRuntimeChange();
+      }),
+      network.subscribe(() => {
+        const next = network.hostReloadDirt();
+        if (areDeeplyEqual(next, this.lastHostDirt)) return;
+        this.lastHostDirt = next;
+        this.publishRuntimeChange();
+      }),
+    ];
+  }
+
+  private publishRuntimeChange() {
+    for (const listener of this.runtimeListeners) {
+      try { listener(); }
+      catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown runtime listener failure.";
+        this.options.logger.error("app", `Runtime notice failed: ${message.slice(0, 500)}`);
+      }
+    }
   }
 
   async stopNetwork() {
@@ -215,40 +276,7 @@ export default class WorkbenchAppRuntime {
     }
     if (url.pathname === RUNTIME_PATH && request.method === "GET") {
       const responseVersion = url.searchParams.get("version");
-      const reloadDirt = this.host.get("reloadDirt").getSnapshot();
-      const requestedReactDevelopmentMode = this.host.get("state")
-        .readGlobalPreference("reactDevelopmentMode") === true;
-      const appliedReactDevelopmentMode = this.appliedReactDevelopmentMode;
-      const projectedDirt = requestedReactDevelopmentMode !== appliedReactDevelopmentMode
-        && !reloadDirt.dirtyScopes.some(({ scope }) => scope === "client:process")
-        ? {
-            ...reloadDirt,
-            dirtyScopes: [
-              ...reloadDirt.dirtyScopes,
-              {
-                dependantScopes: this.host.getReloadScopeCatalog().map(({ scope }) => scope),
-                description: "Restart the Workbench app to apply app-wide settings.",
-                destructive: true,
-                scope: "client:process",
-              },
-            ],
-          }
-        : reloadDirt;
-      const hostDirt = responseVersion === "4" ? this.host.get("network").hostReloadDirt() : null;
-      const combinedDirt = hostDirt ? {
-        dirtyScopes: [...projectedDirt.dirtyScopes, ...hostDirt.dirtyScopes],
-        pendingScopes: [...projectedDirt.pendingScopes, ...hostDirt.pendingScopes],
-        error: [projectedDirt.error, hostDirt.error].filter(Boolean).join(" ").slice(0, 500) || null,
-      } : projectedDirt;
-      sendJson(response, 200, {
-        ...(responseVersion === "3" || responseVersion === "4"
-          ? { frontendGeneration: this.host.get("compiler").getFrontendGeneration() }
-          : {}),
-        reloadDirt: projectReloadDirt(
-          combinedDirt,
-          responseVersion === "2" || responseVersion === "3" || responseVersion === "4",
-        ),
-      });
+      sendJson(response, 200, this.readRuntimeSnapshot(responseVersion));
       return;
     }
     if (url.pathname === RUNTIME_PATH && request.method === "POST") {

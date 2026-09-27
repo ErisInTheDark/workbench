@@ -6,6 +6,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import {
   WORKBENCH_APP_PORT_PATH,
+  WorkbenchAppPortUpdateRequestSchema,
   type WorkbenchAppPortUpdateRequest,
 } from "workbench-shared/http/workbench-app-port";
 
@@ -31,20 +32,9 @@ async function readUpdate(request: IncomingMessage): Promise<WorkbenchAppPortUpd
     chunks.push(buffer);
   }
   const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-  if (
-    !value
-    || typeof value !== "object"
-    || Array.isArray(value)
-    || Object.keys(value).length !== 1
-    || !("port" in value)
-    || typeof value.port !== "number"
-    || !Number.isSafeInteger(value.port)
-    || value.port < 1
-    || value.port > 65_535
-  ) {
-    throw new Error("Workbench app port must be an integer from 1 through 65535.");
-  }
-  return { port: value.port };
+  const parsed = WorkbenchAppPortUpdateRequestSchema.safeParse(value);
+  if (!parsed.success) throw new Error("Workbench app port must be an integer from 1 through 65535.");
+  return parsed.data;
 }
 
 function expectedUpdateFailure(error: unknown) {
@@ -66,7 +56,7 @@ export default class WorkbenchAppPortRoutes {
   async handle(request: IncomingMessage, response: ServerResponse, url: URL) {
     if (url.pathname !== WORKBENCH_APP_PORT_PATH) return false;
     if (request.method === "GET") {
-      sendJson(response, 200, this.project(this.options.appPort.read(), request, url));
+      sendJson(response, 200, this.read(request, url));
       return true;
     }
     if (request.method !== "PUT") {
@@ -102,5 +92,9 @@ export default class WorkbenchAppPortRoutes {
     return url.searchParams.get("version") === "2"
       ? { ...snapshot, stableOrigin: this.options.stableOrigin?.(request) ?? null }
       : snapshot;
+  }
+
+  read(request: IncomingMessage, url: URL) {
+    return this.project(this.options.appPort.read(), request, url);
   }
 }

@@ -182,13 +182,19 @@ test("source events publish fresh CSS with JS and preserve the last pair across 
     subscribeSources: tools.subscribeSources,
     onDiagnostic: message => failed.resolve(message),
   });
+  const publications: string[] = [];
+  const releasePublication = compiler.subscribe(() => {
+    publications.push(compiler.getFrontendGeneration()?.stylesheet ?? "");
+  });
   context.after(async () => {
+    releasePublication();
     await compiler.close();
     await rm(outputDirectoryPath, { recursive: true, force: true });
   });
   await compiler.startWatching();
   const initial = compiler.getFrontendGeneration();
   assert.ok(initial);
+  assert.deepEqual(publications, [initial.stylesheet]);
 
   built = Promise.withResolvers<void>();
   tools.setStylesheet("body { color: blue; }");
@@ -198,6 +204,7 @@ test("source events publish fresh CSS with JS and preserve the last pair across 
   assert.ok(updated);
   assert.notEqual(updated.stylesheet, initial.stylesheet);
   assert.notEqual(updated.javascript, initial.javascript);
+  assert.deepEqual(publications, [initial.stylesheet, updated.stylesheet]);
   assert.match(await readFile(path.join(outputDirectoryPath, "assets/app.css"), "utf8"), /body \{ color: blue; \}/u);
 
   failed = Promise.withResolvers<string>();
@@ -205,6 +212,7 @@ test("source events publish fresh CSS with JS and preserve the last pair across 
   tools.sourceEvent(repositoryRootPath, "app/client/tailwind.css");
   assert.match(await failed.promise, /Tailwind compilation failed/u);
   assert.deepEqual(compiler.getFrontendGeneration(), updated);
+  assert.deepEqual(publications, [initial.stylesheet, updated.stylesheet]);
   assert.match(await readFile(path.join(outputDirectoryPath, "assets/app.css"), "utf8"), /body \{ color: blue; \}/u);
 
   built = Promise.withResolvers<void>();

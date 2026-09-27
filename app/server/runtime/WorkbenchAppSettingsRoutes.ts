@@ -6,6 +6,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import {
   WORKBENCH_APP_SETTINGS_PATH,
+  WorkbenchAppSettingsUpdateRequestSchema,
   type WorkbenchAppSettingsSnapshot,
   type WorkbenchAppSettingsUpdateRequest,
 } from "workbench-shared/http/workbench-app-settings";
@@ -30,17 +31,9 @@ async function readUpdate(request: IncomingMessage): Promise<WorkbenchAppSetting
     chunks.push(buffer);
   }
   const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-  if (
-    !value
-    || typeof value !== "object"
-    || Array.isArray(value)
-    || Object.keys(value).length !== 1
-    || !("reactDevelopmentMode" in value)
-    || typeof value.reactDevelopmentMode !== "boolean"
-  ) {
-    throw new Error("Workbench app settings request is invalid.");
-  }
-  return { reactDevelopmentMode: value.reactDevelopmentMode };
+  const parsed = WorkbenchAppSettingsUpdateRequestSchema.safeParse(value);
+  if (!parsed.success) throw new Error("Workbench app settings request is invalid.");
+  return parsed.data;
 }
 
 export default class WorkbenchAppSettingsRoutes {
@@ -54,7 +47,7 @@ export default class WorkbenchAppSettingsRoutes {
   async handle(request: IncomingMessage, response: ServerResponse, url: URL) {
     if (url.pathname !== WORKBENCH_APP_SETTINGS_PATH) return false;
     if (request.method === "GET") {
-      sendJson(response, 200, this.snapshot());
+      sendJson(response, 200, this.read());
       return true;
     }
     if (request.method !== "PUT") {
@@ -64,8 +57,7 @@ export default class WorkbenchAppSettingsRoutes {
     }
     try {
       const update = await readUpdate(request);
-      await this.options.writeRequestedReactDevelopmentMode(update.reactDevelopmentMode);
-      sendJson(response, 200, this.snapshot());
+      sendJson(response, 200, await this.update(update));
     } catch (error) {
       if (
         error instanceof SyntaxError
@@ -85,10 +77,16 @@ export default class WorkbenchAppSettingsRoutes {
     return true;
   }
 
-  private snapshot(): WorkbenchAppSettingsSnapshot {
+  read(): WorkbenchAppSettingsSnapshot {
     return {
       appliedReactDevelopmentMode: this.options.readAppliedReactDevelopmentMode(),
       requestedReactDevelopmentMode: this.options.readRequestedReactDevelopmentMode() === true,
     };
+  }
+
+  async update(value: WorkbenchAppSettingsUpdateRequest) {
+    const input = WorkbenchAppSettingsUpdateRequestSchema.parse(value);
+    await this.options.writeRequestedReactDevelopmentMode(input.reactDevelopmentMode);
+    return this.read();
   }
 }

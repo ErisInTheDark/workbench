@@ -46,6 +46,8 @@ test("app lifetime socket stays ready until process shutdown, then signals stop"
   const origin = `http://127.0.0.1:${address.port}`;
   const probe = await fetch(`${origin}/api/workbench-app-lifetime?capabilities=2`, { method: "HEAD" });
   assert.equal(probe.headers.get("x-workbench-app-lifetime-socket"), "1");
+  const rpcProbe = await fetch(`${origin}/api/workbench-app-lifetime?capabilities=3`, { method: "HEAD" });
+  assert.equal(rpcProbe.headers.get("x-workbench-app-rpc"), "1");
   const client = new WebSocket(`${origin.replace(/^http/u, "ws")}/api/workbench-app-lifetime/socket`, { origin });
   context.after(() => client.terminate());
   const [ready] = await once(client, "message");

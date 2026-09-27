@@ -9,6 +9,7 @@ import {
   readWorkbenchAppPort,
   updateWorkbenchAppPort,
 } from "./workbench-app-port-client";
+import type WorkbenchAppRpcClient from "./WorkbenchAppRpcClient";
 
 function fetcher(response: Response) {
   return (async () => response) as typeof fetch;
@@ -58,6 +59,24 @@ test("redirects to the new origin without losing route, query, hash, or stable b
     ),
     "http://127.0.0.1:43211/project/workbench/settings/global?panel=app&workbenchBrowserStateId=10000000-0000-4000-8000-000000000001#port",
   );
+});
+
+test("new-process port reads use RPC while listener changes stay HTTP", async () => {
+  const methods: string[] = [];
+  const snapshot = {
+    appOrigin: "http://127.0.0.1:43210", currentPort: 43_210,
+    editable: true, source: "random", stableOrigin: null,
+  };
+  const rpc = {
+    available: true,
+    requestRaw: async (intent: { method: string }) => {
+      methods.push(intent.method);
+      return snapshot;
+    },
+  } as unknown as WorkbenchAppRpcClient;
+  const noHttp: typeof fetch = async () => { throw new Error("Unexpected port HTTP read."); };
+  assert.deepEqual(await readWorkbenchAppPort(noHttp, "http://127.0.0.1:43210/", rpc), snapshot);
+  assert.deepEqual(methods, ["app/port/read"]);
 });
 
 test("port moves preserve private HTTPS and static tailnet origins while direct tailnet URLs follow the new port", () => {

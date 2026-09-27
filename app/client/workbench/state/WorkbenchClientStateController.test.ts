@@ -8,6 +8,8 @@ import WorkbenchClientStateController from "./WorkbenchClientStateController";
 import { appStateClientTables } from "workbench-shared/state/workbench-app-state-schema";
 import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import type WorkbenchAppRpcClient from "../app/WorkbenchAppRpcClient";
+import type { WorkbenchAppNetworkEvent } from "workbench-shared/http/workbench-app-events";
 
 test("peer registration resolves a browser-private owner distinct from its durable daemon id", async () => {
   const daemonId = DaemonIdSchema.parse("902902c0-9512-40be-bb06-c65d86ef2029");
@@ -94,6 +96,144 @@ test("new browser code keeps old-server registrations and upgrades image reads a
     await ready;
     assert.deepEqual(requests, ["3", "2", "2", "3"]);
     assert.equal(state.getSnapshot().registrations[0]?.id, "attached-registration");
+  } finally { state.dispose(); }
+});
+
+test("RPC app state reads only at bootstrap and matching change notices, never on an idle timer", async () => {
+  const rows = Object.fromEntries(Object.keys(appStateClientTables).map(name => [name, []]));
+  const events: Array<(event: WorkbenchAppNetworkEvent) => void> = [];
+  const requests: string[] = [];
+  let revision = 0;
+  const rpc = {
+    available: true,
+    requestRaw: async (intent: { method: string }) => {
+      requests.push(intent.method);
+      return {
+        kind: "snapshot", daemonRegistrationId: "attached-registration",
+        registrations: [{ id: "attached-registration", kind: "local", daemonId: null }],
+        attachmentsAsUrls: true, oldestAvailableRevision: 0, revision, schemaVersion: 16, rows,
+      };
+    },
+    onEvent: (listener: (event: WorkbenchAppNetworkEvent) => void) => {
+      events.push(listener);
+      return () => { events.splice(events.indexOf(listener), 1); };
+    },
+    onReconnect: () => () => {},
+  } as unknown as WorkbenchAppRpcClient;
+  const state = new WorkbenchClientStateController({
+    mode: "http", rpc,
+    fetcher: async () => { throw new Error("Unexpected HTTP app-state read."); },
+    schedule: () => { throw new Error("Idle app-state poll scheduled."); },
+    visibility: { hidden: () => false, subscribe: () => () => {} },
+  });
+  try {
+    await state.bootstrap();
+    assert.deepEqual(requests, ["app/state/read"]);
+    revision = 1;
+    const changed = new Promise<void>(resolve => {
+      const release = state.subscribe(() => {
+        if (state.getSnapshot().revision !== 1) return;
+        release();
+        resolve();
+      });
+    });
+    events[0]?.({ kind: "state", revision: 1 });
+    await changed;
+    assert.deepEqual(requests, ["app/state/read", "app/state/read"]);
+  } finally { state.dispose(); }
+});
+
+test("a state notice during bootstrap is reconciled after the initial snapshot", async () => {
+  const rows = Object.fromEntries(Object.keys(appStateClientTables).map(name => [name, []]));
+  const response = (revision: number) => ({
+    kind: "snapshot", daemonRegistrationId: "attached-registration",
+    registrations: [{ id: "attached-registration", kind: "local", daemonId: null }],
+    attachmentsAsUrls: true, oldestAvailableRevision: 0, revision, schemaVersion: 16, rows,
+  });
+  const initial = Promise.withResolvers<ReturnType<typeof response>>();
+  const requested = Promise.withResolvers<void>();
+  const events: Array<(event: WorkbenchAppNetworkEvent) => void> = [];
+  let reads = 0;
+  const rpc = {
+    available: true,
+    requestRaw: async () => {
+      reads++;
+      if (reads === 1) {
+        requested.resolve();
+        return await initial.promise;
+      }
+      return response(1);
+    },
+    onEvent: (listener: (event: WorkbenchAppNetworkEvent) => void) => {
+      events.push(listener);
+      return () => { events.splice(events.indexOf(listener), 1); };
+    },
+    onReconnect: () => () => {},
+  } as unknown as WorkbenchAppRpcClient;
+  const state = new WorkbenchClientStateController({
+    mode: "http", rpc, visibility: { hidden: () => false, subscribe: () => () => {} },
+  });
+  const boot = state.bootstrap();
+  try {
+    await requested.promise;
+    assert.equal(events.length, 1, "listen before awaiting the bootstrap read");
+    const advanced = new Promise<void>(resolve => {
+      const release = state.subscribe(() => {
+        if (state.getSnapshot().revision !== 1) return;
+        release();
+        resolve();
+      });
+    });
+    events[0]?.({ kind: "state", revision: 1 });
+    initial.resolve(response(0));
+    await boot;
+    await advanced;
+    assert.equal(reads, 2);
+  } finally {
+    initial.resolve(response(0));
+    await boot.catch(() => undefined);
+    state.dispose();
+  }
+});
+
+test("a stale app-state RPC read cannot spin on one revision notice", async () => {
+  const rows = Object.fromEntries(Object.keys(appStateClientTables).map(name => [name, []]));
+  const events: Array<(event: WorkbenchAppNetworkEvent) => void> = [];
+  let reads = 0;
+  const rpc = {
+    available: true,
+    requestRaw: async () => {
+      reads++;
+      if (reads > 2) throw new Error("Excess read");
+      return {
+        kind: "snapshot", daemonRegistrationId: "attached-registration",
+        registrations: [{ id: "attached-registration", kind: "local", daemonId: null }],
+        attachmentsAsUrls: true, oldestAvailableRevision: 0, revision: 0, schemaVersion: 16, rows,
+      };
+    },
+    onEvent: (listener: (event: WorkbenchAppNetworkEvent) => void) => {
+      events.push(listener);
+      return () => { events.splice(events.indexOf(listener), 1); };
+    },
+    onReconnect: () => () => {},
+  } as unknown as WorkbenchAppRpcClient;
+  const state = new WorkbenchClientStateController({
+    mode: "http", rpc,
+    visibility: { hidden: () => false, subscribe: () => () => {} },
+  });
+  try {
+    await state.bootstrap();
+    const failed = new Promise<void>(resolve => {
+      const release = state.subscribe(() => {
+        if (!state.getSnapshot().error) return;
+        release();
+        resolve();
+      });
+    });
+    events[0]?.({ kind: "state", revision: 1 });
+    await failed;
+    assert.equal(reads, 2);
+    assert.match(state.getSnapshot().error, /not visible/u);
   } finally { state.dispose(); }
 });
 

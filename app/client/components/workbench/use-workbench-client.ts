@@ -45,6 +45,7 @@ import type {
 } from "workbench-shared/workbench/thread/thread-state";
 import ProjectTreeFileIndex from "workbench-shared/workbench/project/ProjectTreeFileIndex";
 import type WorkbenchClientStateController from "../../workbench/state/WorkbenchClientStateController";
+import type WorkbenchAppRpcClient from "../../workbench/app/WorkbenchAppRpcClient";
 import { getThreadDocumentFromSnapshot } from "../../workbench/thread/thread-document-keys";
 import type { WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
@@ -154,6 +155,7 @@ const EMPTY_PINNED_THREAD_LAYOUT: WorkbenchPinnedThreadLayoutSnapshot = {
 type ProviderThreadSidebarEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
 
 interface WorkbenchClientMountOptions {
+  appRpc: WorkbenchAppRpcClient | null;
   clientStateController: WorkbenchClientStateController;
   getDomSurfaces: () => WorkbenchDomSurfaces | null;
   initialRoute: WorkbenchRoute;
@@ -176,6 +178,7 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): W
       void import("../../WorkbenchClient").then(({ WorkbenchClient }) => {
         const current = optionsRef.current;
         const nextMounted = WorkbenchClient({
+          appRpc: current.appRpc,
           clientStateController: current.clientStateController,
           dom: current.getDomSurfaces(),
           initialRoute: current.initialRoute,

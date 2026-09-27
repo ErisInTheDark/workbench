@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_APP_LIFETIME_SOCKET_PATH/WORKBENCH_APP_NETWORK_SOCKET_PATH: app-owned upgrade routes.
- * - WorkbenchAppLifetimeEventSchema/WorkbenchAppNetworkEventSchema: validated channel-specific notifications.
+ * - WorkbenchAppLifetimeEventSchema/WorkbenchAppNetworkEventSchema/WorkbenchAppNetworkEvent: validated channel-specific notifications.
  */
 import { z } from "zod";
 import { WorkbenchNetworkSnapshotSchema } from "./workbench-network.ts";
@@ -22,4 +22,7 @@ export const WorkbenchAppNetworkEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("network"), snapshot: WorkbenchNetworkSnapshotSchema }).strict(),
   z.object({ kind: z.literal("presentation"), event: WorkbenchPresentationRevisionEventSchema }).strict(),
   z.object({ kind: z.literal("presentation-import"), status: WorkbenchPresentationImportStatusSchema }).strict(),
+  z.object({ kind: z.literal("state"), revision: z.number().int().nonnegative() }).strict(),
+  z.object({ kind: z.literal("runtime") }).strict(),
 ]);
+export type WorkbenchAppNetworkEvent = z.infer<typeof WorkbenchAppNetworkEventSchema>;

@@ -13,7 +13,7 @@ import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/s
 import { appStateSchema } from "workbench-shared/state/workbench-app-state-schema";
 import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { DATABASE_LOG_PREFIX } from "workbench-shared/database/database-log-format";
 import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
@@ -40,6 +40,45 @@ test("voice enabled preference remains browser-local and survives reopening", as
   try {
     assert.ok(records(await reopened.readBrowser(BROWSER_A)).some(item => item.kind === "globalPreference" && item.preference.key === "voiceInputEnabled" && item.preference.value === false));
   } finally { await reopened.close(); }
+});
+
+test("committed browser-state writes notify both tabs of that browser without waking another browser", async context => {
+  const { registry } = await fixture(context);
+  await registry.readBrowser(BROWSER_A);
+  await registry.readBrowser(BROWSER_B);
+  const first: number[] = [];
+  const second: number[] = [];
+  const other: number[] = [];
+  const releaseFirst = registry.subscribeBrowser(BROWSER_A, revision => first.push(revision));
+  const releaseSecond = registry.subscribeBrowser(BROWSER_A, revision => second.push(revision));
+  const releaseOther = registry.subscribeBrowser(BROWSER_B, revision => other.push(revision));
+  try {
+    const saved = await registry.mutateBrowser(BROWSER_A, { action: "put", record: {
+      kind: "globalPreference", preference: { key: "theme", value: "winter" },
+    } });
+    assert.deepEqual(first, [saved.revision]);
+    assert.deepEqual(second, [saved.revision]);
+    assert.deepEqual(other, []);
+  } finally {
+    releaseFirst();
+    releaseSecond();
+    releaseOther();
+  }
+});
+
+test("a remote registration's project remap notifies its browser after commit", async context => {
+  const { registry } = await fixture(context);
+  const { registrationId } = await registry.registerBrowserDaemon(BROWSER_A,
+    DaemonIdSchema.parse("d9f2d4e2-e58d-4b8c-b11d-9ff66db3f212"), false);
+  const revisions: number[] = [];
+  const release = registry.subscribeBrowser(BROWSER_A, revision => revisions.push(revision));
+  try {
+    const saved = await registry.remapBrowserProjects(BROWSER_A, {
+      daemonRegistrationId: registrationId,
+      aliases: [{ alias: "old", projectId: testProjectIds.project }],
+    });
+    assert.deepEqual(revisions, [saved.revision]);
+  } finally { release(); }
 });
 
 test("project aliases reach open stores and dormant stores before their next read", async context => {

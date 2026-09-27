@@ -2,6 +2,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import WorkbenchNetworkClient from "./WorkbenchNetworkClient.ts";
+import type WorkbenchAppRpcClient from "./WorkbenchAppRpcClient";
+import type { WorkbenchAppNetworkEvent } from "workbench-shared/http/workbench-app-events";
 import type { WorkbenchNetworkSnapshot } from "workbench-shared/http/workbench-network";
 
 async function settledVerification(client: WorkbenchNetworkClient) {
@@ -106,6 +108,68 @@ test("advertised app socket carries network and presentation updates without ope
   assert.deepEqual(revisions, [9]);
   assert.equal(streams, 0);
   assert.equal(client.snapshot().snapshot?.capabilities?.appEventsWebSocket, true);
+});
+
+test("tab-owned app RPC supplies network state and notices without another socket or HTTP read", async context => {
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    location: { href: "http://127.0.0.1:4200/settings", origin: "http://127.0.0.1:4200" },
+    history: { state: null, replaceState: () => {} },
+  } });
+  context.after(() => {
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  });
+  const snapshot: WorkbenchNetworkSnapshot = {
+    configuration: { mode: "localhost", hostServe: { enabled: false, port: 8080 }, members: [], privateAccess: null },
+    runtime: {
+      hostServe: { phase: "off", message: null, url: null },
+      privateAccess: {
+        phase: "off", message: null, url: null, hostname: null, nodeId: null,
+        keyFingerprint: null, loginUrl: null, addresses: [], rootCertificate: null,
+        rootFingerprint: null, certificateExpiresAt: null, pending: [],
+      },
+    },
+    executable: { available: true, message: null }, hostPlatform: "win32", busy: false, failure: null,
+  };
+  const eventListeners: Array<(event: WorkbenchAppNetworkEvent) => void> = [];
+  let reads = 0;
+  let actions = 0;
+  const rpc = {
+    available: true,
+    request: async () => { reads++; return snapshot; },
+    requestRaw: async (intent: { method: string }) => {
+      assert.equal(intent.method, "app/network/action");
+      actions++;
+      return { kind: "ok" };
+    },
+    onEvent: (listener: (event: WorkbenchAppNetworkEvent) => void) => {
+      eventListeners.push(listener);
+      return () => {
+        const index = eventListeners.indexOf(listener);
+        if (index >= 0) eventListeners.splice(index, 1);
+      };
+    },
+    onReconnect: () => () => {},
+  } as unknown as WorkbenchAppRpcClient;
+  const options = {
+    rpc,
+    fetcher: async () => { throw new Error("Unexpected HTTP network read."); },
+    events: () => { throw new Error("Unexpected network stream."); },
+    socket: () => { throw new Error("Unexpected second socket."); },
+  };
+  const client = new WorkbenchNetworkClient(options);
+  try {
+    await client.start();
+    assert.equal(reads, 1);
+    assert.equal(client.snapshot().snapshot?.configuration.mode, "localhost");
+    const revisions: number[] = [];
+    client.subscribePresentation(revision => revisions.push(revision));
+    eventListeners[0]?.({ kind: "presentation", event: { revision: 7 } });
+    assert.deepEqual(revisions, [7]);
+    assert.deepEqual(await client.action({ action: "daemon-discovery-refresh" }), { kind: "ok" });
+    assert.equal(actions, 1);
+  } finally { client.close(); }
 });
 
 test("ready HTTPS checks automatically from HTTP and only retries after trust changes or explicit intent", async context => {

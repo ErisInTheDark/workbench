@@ -27,10 +27,12 @@ export default class WorkbenchAppLifetime {
     if (request.method !== "GET" && request.method !== "HEAD") {
       response.writeHead(405, { Allow: "GET, HEAD" }); response.end(); return;
     }
-    const wantsSocket = new URL(request.url ?? "/", "http://workbench.local").searchParams.get("capabilities") === "2";
+    const capabilities = new URL(request.url ?? "/", "http://workbench.local").searchParams.get("capabilities");
+    const wantsSocket = capabilities === "2" || capabilities === "3";
     response.writeHead(200, {
       "Content-Type": "text/event-stream", "Cache-Control": "no-store",
       ...(wantsSocket ? { "X-Workbench-App-Lifetime-Socket": "1" } : {}),
+      ...(capabilities === "3" ? { "X-Workbench-App-Rpc": "1" } : {}),
     });
     if (request.method === "HEAD") { response.end(); return; }
     this.streams.add(response);

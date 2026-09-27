@@ -4,11 +4,16 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
-import { WORKBENCH_NETWORK_PATH, WorkbenchNetworkActionSchema } from "workbench-shared/http/workbench-network";
+import { WORKBENCH_NETWORK_PATH, WorkbenchNetworkActionSchema,
+  type WorkbenchNetworkAction } from "workbench-shared/http/workbench-network";
 import type { WorkbenchPresentationImportStatus } from "workbench-shared/state/workbench-presentation-state";
 import type WorkbenchNetworkController from "./WorkbenchNetworkController.ts";
 import type WorkbenchPresentationController from "../state/WorkbenchPresentationController.ts";
 import type WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController.ts";
+
+class NetworkActionAdmissionError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
 
 export default class WorkbenchNetworkRoutes {
   private closed = false;
@@ -94,28 +99,15 @@ export default class WorkbenchNetworkRoutes {
         this.send(response, 400, { error: "Network action is invalid." });
         return true;
       }
-      const networkAction = ["dns-app", "access", "access-prepare", "transfer-owner", "create-setup"].includes(parsed.data.action);
-      const currentCapability = this.controller.ingress(request.headers);
-      if (!currentCapability || (!currentCapability.manageApp && parsed.data.action !== "daemon-discovery-refresh") || (networkAction && !currentCapability.manageNetwork)
-        || (parsed.data.action === "trust-host" && !currentCapability.trustHost)) {
-        this.send(response, 403, { error: "This device cannot manage these network settings." });
-        return true;
-      }
-      if (this.closed) {
-        this.send(response, 503, { error: "Network settings are reloading." });
-        return true;
-      }
-      if (currentCapability.deviceNodeId !== null
-        && ["mode", "host-serve", "tailnet-port", "machine-name", "private-access", "remove-registration"].includes(parsed.data.action)) {
-        this.send(response, 409, { error: "Refresh settings and use Apply to change this connection safely." });
-        return true;
-      }
       this.own(response, () => {});
       // The controller owns the operation, not an HTTP reload lease. Closing this
       // route ends its response; disposing the parent controller cancels the work.
-      void this.controller.action(parsed.data, { deviceNodeId: currentCapability.deviceNodeId, origin: request.headers.origin! }).then(
+      void this.actionFor(request, parsed.data).then(
         result => this.send(response, 200, result),
-        () => this.send(response, 409, { error: this.controller.snapshot().failure ?? "Network action could not complete." }),
+        error => this.send(response, error instanceof NetworkActionAdmissionError ? error.status : 409, {
+          error: error instanceof NetworkActionAdmissionError ? error.message
+            : this.controller.snapshot().failure ?? "Network action could not complete.",
+        }),
       );
     } catch {
       this.send(response, 400, { error: "Network request could not be read." });
@@ -135,6 +127,30 @@ export default class WorkbenchNetworkRoutes {
 
   admitSocket(request: IncomingMessage) {
     return !this.closed && Boolean(this.controller.ingress(request.headers)) && this.sameOrigin(request);
+  }
+
+  canManageApp(request: IncomingMessage) {
+    return this.admitSocket(request) && this.controller.ingress(request.headers)?.manageApp === true;
+  }
+
+  async actionFor(request: IncomingMessage, input: WorkbenchNetworkAction) {
+    const action = WorkbenchNetworkActionSchema.parse(input);
+    if (this.closed) throw new NetworkActionAdmissionError(503, "Network settings are reloading.");
+    const capability = this.controller.ingress(request.headers);
+    const networkAction = ["dns-app", "access", "access-prepare", "transfer-owner", "create-setup"].includes(action.action);
+    if (!capability || !this.sameOrigin(request)
+      || (!capability.manageApp && action.action !== "daemon-discovery-refresh")
+      || networkAction && !capability.manageNetwork
+      || action.action === "trust-host" && !capability.trustHost) {
+      throw new NetworkActionAdmissionError(403, "This device cannot manage these network settings.");
+    }
+    if (capability.deviceNodeId !== null
+      && ["mode", "host-serve", "tailnet-port", "machine-name", "private-access", "remove-registration"].includes(action.action)) {
+      throw new NetworkActionAdmissionError(409, "Refresh settings and use Apply to change this connection safely.");
+    }
+    return await this.controller.action(action, {
+      deviceNodeId: capability.deviceNodeId, origin: request.headers.origin!,
+    });
   }
 
   snapshotFor(request: IncomingMessage, url: URL) {

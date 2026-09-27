@@ -6,6 +6,7 @@ import { test } from "node:test";
 import type { PresentationDraftInput, PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchPresentationClient from "./WorkbenchPresentationClient";
+import type WorkbenchAppRpcClient from "../app/WorkbenchAppRpcClient";
 
 const daemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
 
@@ -42,6 +43,29 @@ test("burst presentation notices share one read and retain the newest revision",
   }
 });
 
+test("a stale presentation read stops a notice drain instead of spinning", async () => {
+  let reads = 0;
+  const client = new WorkbenchPresentationClient({ fetcher: async () => {
+    reads++;
+    return reads <= 2 ? Response.json(snapshot(1))
+      : Response.json({ error: "still stale" }, { status: 500 });
+  } });
+  try {
+    await client.refresh();
+    const failed = new Promise<void>(resolve => {
+      const release = client.subscribe(() => {
+        if (client.snapshot().phase !== "failed") return;
+        release();
+        resolve();
+      });
+    });
+    client.noticeRevision(2);
+    await failed;
+    assert.equal(reads, 2);
+    assert.match(client.snapshot().error ?? "", /not visible/u);
+  } finally { client.dispose(); }
+});
+
 test("a late presentation read cannot replace a newer mutation result", async () => {
   let releaseRead!: (response: Response) => void;
   const readResponse = new Promise<Response>(resolve => { releaseRead = resolve; });
@@ -74,6 +98,27 @@ test("a rejected presentation mutation refreshes current state and still fails v
       daemonId, hostname: "desktop", catalog: { data: [] } }),
     /Draft revision changed/u);
     assert.equal(client.snapshot().data?.revision, 3);
+  } finally { client.dispose(); }
+});
+
+test("new-process presentation reads and mutations use tab RPC without HTTP", async () => {
+  const methods: string[] = [];
+  const rpc = {
+    available: true,
+    requestRaw: async (intent: { method: string }) => {
+      methods.push(intent.method);
+      return snapshot(methods.length);
+    },
+  } as unknown as WorkbenchAppRpcClient;
+  const client = new WorkbenchPresentationClient({
+    rpc,
+    fetcher: async () => { throw new Error("Unexpected presentation HTTP request."); },
+  });
+  try {
+    await client.refresh();
+    await client.mutate({ kind: "registerLocations",
+      daemonId, hostname: "desktop", catalog: { data: [] } });
+    assert.deepEqual(methods, ["app/presentation/read", "app/presentation/mutate"]);
   } finally { client.dispose(); }
 });
 

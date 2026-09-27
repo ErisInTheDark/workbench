@@ -81,6 +81,7 @@ import {
 } from "../workbench/search/workbench-action-registry";
 import WorkbenchSearchController from "../workbench/search/WorkbenchSearchController";
 import { WorkbenchNetworkClientContext } from "../workbench/app/WorkbenchNetworkClient";
+import { useWorkbenchAppRpc } from "../workbench/app/WorkbenchAppRpcContext";
 import { createComposerProfilePersistence, createComposerProfileTargetPersistence } from "../workbench/state/composer-profile-api";
 import {
     clearComposerDraft, presentationDraftToInput, projectComposerDrafts, saveComposerDraft, sidebarDraftToInput,
@@ -406,6 +407,7 @@ function getProjectTabLabel (projectName: string | null | undefined) {
 const THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 
 export default function Workbench ({ appRuntime = null }: { appRuntime?: WorkbenchAppRuntimeStore | null }) {
+  const appRpc = useWorkbenchAppRpc();
   const clientStateController = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
   const [composerProfileControllers] = useState(() => new Map<string, WorkbenchComposerProfileController>());
@@ -415,6 +417,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const currentRouteRef = useRef<WorkbenchRoute>(initialRoute);
   const activeDraftSessionRef = useRef<DraftSessionController<WorkbenchComposerInputDraft> | null>(null);
   const workbenchClient = useWorkbenchClientMount({
+    appRpc,
     clientStateController,
     getDomSurfaces: getWorkbenchDomSurfaces,
     initialRoute,

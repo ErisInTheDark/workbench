@@ -8,6 +8,7 @@ import {
   readWorkbenchAppSettings,
   updateWorkbenchAppSettings,
 } from "./workbench-app-settings-client";
+import type WorkbenchAppRpcClient from "./WorkbenchAppRpcClient";
 
 function fetcher(response: Response) {
   return (async () => response) as typeof fetch;
@@ -45,4 +46,20 @@ test("updates React mode and rejects malformed browser-boundary responses", asyn
   } finally {
     console.error = originalError;
   }
+});
+
+test("new-process settings reads and writes use RPC without HTTP", async () => {
+  const methods: string[] = [];
+  const snapshot = { appliedReactDevelopmentMode: false, requestedReactDevelopmentMode: true };
+  const rpc = {
+    available: true,
+    requestRaw: async (intent: { method: string }) => {
+      methods.push(intent.method);
+      return snapshot;
+    },
+  } as unknown as WorkbenchAppRpcClient;
+  const noHttp: typeof fetch = async () => { throw new Error("Unexpected settings HTTP."); };
+  assert.deepEqual(await readWorkbenchAppSettings(noHttp, rpc), snapshot);
+  assert.deepEqual(await updateWorkbenchAppSettings(true, noHttp, rpc), snapshot);
+  assert.deepEqual(methods, ["app/settings/read", "app/settings/update"]);
 });

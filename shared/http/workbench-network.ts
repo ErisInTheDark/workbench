@@ -4,6 +4,7 @@
  * - WorkbenchNetworkMemberSchema/WorkbenchNetworkConfigurationSchema: private app-owned configuration.
  * - WorkbenchNetworkRuntimeSchema/WorkbenchNetworkSnapshotSchema: validated runtime and settings projection.
  * - WorkbenchNetworkActionSchema/WorkbenchNetworkResultSchema: bounded user intents and action results.
+ * - workbenchNetworkActionKeepsAppConnection: select actions safe for reply-bearing app RPC.
  * - WorkbenchNetworkVerificationSchema: browser proof of the expected private node over trusted HTTPS.
  * - WorkbenchNetworkSidecarConfigurationSchema/WorkbenchNetworkPipeResponseSchema/WorkbenchNetworkCommandSchema: subprocess boundary.
  * - WorkbenchNetworkMember/WorkbenchNetworkConfiguration/WorkbenchNetworkRuntime/WorkbenchNetworkSnapshot: inferred state contracts.
@@ -170,6 +171,11 @@ export const WorkbenchNetworkActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("retry") }).strict(),
   z.object({ action: z.literal("cancel") }).strict(),
 ]);
+
+export function workbenchNetworkActionKeepsAppConnection(action: z.infer<typeof WorkbenchNetworkActionSchema>) {
+  return action.action === "daemon-discovery-refresh" || action.action === "daemon-wake-retry"
+    || action.action === "discover" || action.action === "pair-code";
+}
 
 export const WorkbenchNetworkResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("settings-pending"), token: z.uuid(), origin: z.url(), message: z.string().max(512) }).strict(),

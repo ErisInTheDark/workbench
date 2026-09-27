@@ -36,6 +36,21 @@ test("registration metadata is negotiated without changing legacy app-state resp
   assert.ok(modern && typeof modern === "object");
   assert.equal("registrations" in legacy, false);
   assert.ok("registrations" in modern);
+  const invalid = await fetch(`${origin}/api/workbench-client-state/global-preference?capabilities=3`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ kind: "globalPreference", preference: {
+      key: "harness", value: "not a provider",
+    } }),
+  });
+  assert.equal(invalid.status, 400, "an invalid provider identity must not be admitted by a kind-only cast");
+  const compatible = await fetch(`${origin}/api/workbench-client-state/global-preference?capabilities=3`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ kind: "globalPreference",
+      preference: { key: "theme", value: "winter", oldBrowserHint: true } }),
+  });
+  assert.equal(compatible.status, 200, "unknown old-browser fields must not reject a valid preference");
 });
 
 test("draft images upload separately from the bounded mutation body and remain readable", async context => {

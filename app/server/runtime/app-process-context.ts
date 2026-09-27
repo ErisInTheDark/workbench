@@ -9,6 +9,7 @@ import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import type WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
 import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
 import type WorkbenchNetworkController from "../network/WorkbenchNetworkController.ts";
+import type { projectWorkbenchAppRuntimeSnapshot } from "./workbench-app-runtime-snapshot.ts";
 
 export interface AppProcessContext {
   daemonEndpointPath: string;
@@ -20,7 +21,9 @@ export interface AppProcessContext {
   executeReloadScopes(scopes: WorkbenchReloadScope[]): Promise<WorkbenchReloadScope[]>;
   outputDirectoryPath: string;
   processLogger: WorkbenchProcessLogger;
+  readAppRuntimeSnapshot(): ReturnType<typeof projectWorkbenchAppRuntimeSnapshot>;
   readAppliedReactDevelopmentMode(): boolean;
   repositoryRootPath: string;
   supportsAppWebSockets?: true;
+  subscribeAppRuntimeChanges(listener: () => void): () => void;
 }

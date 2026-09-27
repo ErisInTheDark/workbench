@@ -17,6 +17,10 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       appPort: context.appPort,
       logger,
       network: build.get("network"),
+      runtime: {
+        read: context.readAppRuntimeSnapshot,
+        subscribe: context.subscribeAppRuntimeChanges,
+      },
       outputDirectoryPath: context.outputDirectoryPath,
       readAppliedReactDevelopmentMode: context.readAppliedReactDevelopmentMode,
       state: build.get("state"),
@@ -47,6 +51,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
     "app/server/state/workbench-presentation-routes.ts",
     "shared/http/workbench-app-port.ts",
     "shared/http/workbench-app-events.ts",
+    "shared/http/workbench-app-rpc.ts",
     "shared/http/workbench-app-settings.ts",
     "shared/http/StaticHttpRequestController.ts",
     "shared/http/loopback-connection.ts",

@@ -80,6 +80,7 @@ export default class WorkbenchBrowserStateRegistry {
   readonly #onDatabaseDiagnostic: WorkbenchBrowserStateRegistryOptions["onDatabaseDiagnostic"];
   readonly #controllers = new Map<string, WorkbenchAppStateController>();
   readonly #openingControllers = new Map<string, Promise<WorkbenchAppStateController>>();
+  readonly #listeners = new Map<string, Set<(revision: number) => void>>();
   #seedQueue = Promise.resolve();
   #disposed = false;
 
@@ -111,6 +112,21 @@ export default class WorkbenchBrowserStateRegistry {
     return this.#sharedController.read(sinceRevision);
   }
 
+  subscribeBrowser(browserStateId: string | undefined, listener: (revision: number) => void) {
+    if (browserStateId && !isWorkbenchBrowserStateId(browserStateId)) {
+      throw new Error("Workbench browser state ID is invalid.");
+    }
+    if (this.#disposed) throw new Error("Workbench browser state registry is closed.");
+    const key = browserStateId ?? "shared";
+    const listeners = this.#listeners.get(key) ?? new Set<(revision: number) => void>();
+    listeners.add(listener);
+    this.#listeners.set(key, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) this.#listeners.delete(key);
+    };
+  }
+
   readGlobalPreference<TKey extends Parameters<WorkbenchAppStateController["readGlobalPreference"]>[0]>(
     key: TKey,
   ) {
@@ -118,7 +134,10 @@ export default class WorkbenchBrowserStateRegistry {
   }
 
   mutate(mutation: WorkbenchClientStateMutation) {
-    return this.#sharedController.mutate(mutation);
+    return this.#sharedController.mutate(mutation).then(response => {
+      this.#notifyBrowser(undefined, response.revision);
+      return response;
+    });
   }
 
   async readBrowser(browserStateId: string | undefined, sinceRevision?: number, attachmentsAsUrls = false) {
@@ -133,6 +152,7 @@ export default class WorkbenchBrowserStateRegistry {
     const response = await controller.mutate(mutation, {
       attachmentsAsUrls, browserStateId: browserStateId ?? "shared",
     });
+    this.#notifyBrowser(browserStateId, response.revision);
     const registrationId = mutation.action === "put"
       ? "daemonRegistrationId" in mutation.record ? mutation.record.daemonRegistrationId : null
       : "daemonRegistrationId" in mutation.identity ? mutation.identity.daemonRegistrationId : null;
@@ -162,8 +182,11 @@ export default class WorkbenchBrowserStateRegistry {
     const selected = await this.#controllerFor(browserStateId);
     if (attachedLocal && selected !== this.#sharedController) {
       await this.#sharedController.registerDaemon(daemonId, true);
+      this.#notifyBrowser(undefined, this.#sharedController.read().revision);
     }
-    return await selected.registerDaemon(daemonId, attachedLocal);
+    const registration = await selected.registerDaemon(daemonId, attachedLocal);
+    this.#notifyBrowser(browserStateId, selected.read().revision);
+    return registration;
   }
 
   async remapBrowserProjects(browserStateId: string | undefined, request: WorkbenchProjectRemap) {
@@ -172,13 +195,22 @@ export default class WorkbenchBrowserStateRegistry {
       if (!selected.read().registrations?.some(item => item.id === request.daemonRegistrationId)) {
         throw new Error("Project remap belongs to another daemon registration.");
       }
-      return await selected.remapProjects(request);
+      const result = await selected.remapProjects(request);
+      this.#notifyBrowser(browserStateId, result.revision);
+      return result;
     }
     const operation = this.#seedQueue.then(async () => {
       if (this.#disposed) throw new Error("Workbench browser state registry is closed.");
-      await this.#sharedController.remapProjects({ ...request, daemonRegistrationId: this.daemonRegistrationId });
-      const results = await Promise.allSettled([...this.#controllers.values()].map(controller =>
+      const shared = await this.#sharedController.remapProjects({
+        ...request, daemonRegistrationId: this.daemonRegistrationId,
+      });
+      this.#notifyBrowser(undefined, shared.revision);
+      const controllers = [...this.#controllers.entries()];
+      const results = await Promise.allSettled(controllers.map(([, controller]) =>
         controller.remapProjects({ ...request, daemonRegistrationId: controller.daemonRegistrationId })));
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") this.#notifyBrowser(controllers[index]![0], result.value.revision);
+      });
       const failures = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
       if (failures.length) throw new AggregateError(failures, "Project adoption failed in a browser state store.");
       return selected.read();
@@ -200,6 +232,7 @@ export default class WorkbenchBrowserStateRegistry {
       }
     }
     this.#controllers.clear();
+    this.#listeners.clear();
     if (failures.length) throw new AggregateError(failures, "Workbench browser state disposal failed.");
   }
 
@@ -291,13 +324,24 @@ export default class WorkbenchBrowserStateRegistry {
     return controller;
   }
 
+  #notifyBrowser(browserStateId: string | undefined, revision: number) {
+    for (const listener of this.#listeners.get(browserStateId ?? "shared") ?? []) {
+      try { listener(revision); }
+      catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown listener failure.";
+        this.#onDiagnostic(`browser state notice failed: ${message.slice(0, 500)}`);
+      }
+    }
+  }
+
   #enqueueSeedMutation(mutation: WorkbenchClientStateMutation) {
     const daemonRegistrationId = this.#sharedDaemonRegistrationId;
     if (!daemonRegistrationId) throw new Error("Workbench browser state registry is not ready.");
     const seedMutation = sharedSeedMutation(mutation, daemonRegistrationId);
     const operation = this.#seedQueue.then(async () => {
       try {
-        await this.#sharedController.mutate(seedMutation);
+        const response = await this.#sharedController.mutate(seedMutation);
+        this.#notifyBrowser(undefined, response.revision);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.#onDiagnostic(`browser state seed refresh failed: ${message.slice(0, 500)}`);

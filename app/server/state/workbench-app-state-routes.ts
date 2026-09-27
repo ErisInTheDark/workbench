@@ -9,10 +9,10 @@ import {
   WORKBENCH_BROWSER_STATE_HEADER,
   isWorkbenchBrowserStateId,
   WorkbenchDaemonRegistrationRequestSchema,
+  WorkbenchClientStateMutationSchema,
   WorkbenchProjectRemapSchema,
   workbenchClientStateMutationKinds,
   type WorkbenchClientStateIdentity,
-  type WorkbenchClientStateRecord,
   type WorkbenchClientStateResponse,
 } from "workbench-shared/state/workbench-client-state";
 
@@ -80,10 +80,6 @@ async function readImage(request: IncomingMessage) {
   }
   if (!bytes) throw new Error("Draft image is empty.");
   return Buffer.concat(chunks);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export default class WorkbenchAppStateRoutes {
@@ -179,15 +175,15 @@ export default class WorkbenchAppStateRoutes {
       }
       if (mutationKinds && (request.method === "PUT" || request.method === "DELETE")) {
         const value = await readJson(request);
-        if (!isRecord(value) || typeof value.kind !== "string" || !mutationKinds.includes(value.kind as never)) {
+        const parsed = WorkbenchClientStateMutationSchema.safeParse(request.method === "PUT"
+          ? { action: "put", record: value } : { action: "delete", identity: value });
+        if (!parsed.success || !mutationKinds.includes(parsed.data.action === "put"
+          ? parsed.data.record.kind : parsed.data.identity.kind)) {
           sendJson(response, 400, { error: "Workbench app-state mutation is invalid." });
           return true;
         }
-        const mutation = request.method === "PUT"
-          ? { action: "put" as const, record: value as WorkbenchClientStateRecord }
-          : { action: "delete" as const, identity: value as WorkbenchClientStateIdentity };
         sendJson(response, 200, negotiatedState(await this.#registry.mutateBrowser(
-          browserStateId, mutation, url.searchParams.get("capabilities") === "3"), url));
+          browserStateId, parsed.data, url.searchParams.get("capabilities") === "3"), url));
         return true;
       }
       response.writeHead(405, { Allow: isReadRoute ? "GET" : isRemapRoute || isRegistrationRoute ? "POST" : "DELETE, PUT" });

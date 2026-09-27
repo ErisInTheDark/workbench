@@ -52,11 +52,18 @@ function fixture(privateIssue?: () => string | null) {
     identity: { protocol: 1, daemonId: "67e323d5-949a-4c41-956f-1fa28905f034", hostname: "fixture", state: "ready", wakeEnabled: false },
     daemonOrigin: target.daemonOrigin, failure: null, network: host.snapshot(), discovery: { refreshing: false, peers: [] },
   });
+  const currentPort = () => ({
+    appOrigin: target.appOrigin,
+    currentPort: Number(new URL(target.appOrigin).port),
+    editable: true,
+    source: "setting" as const,
+  });
   const owner = new WorkbenchNetworkController({
     endpointPath: "unused", ensure: async () => {}, wakeLocal: false, warn: () => {}, privateIssue,
     readTarget: () => targetAvailable ? target : null,
     appPort: {
-      read: () => ({ appOrigin: target.appOrigin, currentPort: Number(new URL(target.appOrigin).port), editable: true, source: "setting" as const }),
+      read: currentPort,
+      current: currentPort,
       update: async port => {
         await beforePortUpdate();
         target = { ...target, appOrigin: `http://127.0.0.1:${port}` };

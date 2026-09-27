@@ -82,6 +82,7 @@ export default class WorkbenchFrontendCompiler {
   private readonly nativeServiceStopped = Promise.withResolvers<void>();
   private readonly spawnTailwind: NonNullable<WorkbenchFrontendCompilerOptions["spawnTailwind"]>;
   private readonly children = new Set<ChildProcess>();
+  private readonly publicationListeners = new Set<() => void>();
   private javascriptOutput: { generation: string; files: esbuild.OutputFile[] } | null = null;
   private stylesheetOutput: { generation: string; contents: string; sourceMap: Buffer } | null = null;
   private publishing = true;
@@ -175,6 +176,7 @@ export default class WorkbenchFrontendCompiler {
     if (this.retirement) return await this.retirement;
     this.generation.abort(new Error("Workbench frontend compiler is retired."));
     this.publishing = false;
+    this.publicationListeners.clear();
     const context = this.esbuildContext;
     const sourceWatcher = this.sourceWatcher;
     const children = [...this.children];
@@ -249,6 +251,12 @@ export default class WorkbenchFrontendCompiler {
       javascript: this.javascriptGeneration,
       stylesheet: this.stylesheetGeneration,
     };
+  }
+
+  subscribe(listener: () => void) {
+    if (this.generation.signal.aborted) throw new Error("Workbench frontend compiler is retired.");
+    this.publicationListeners.add(listener);
+    return () => { this.publicationListeners.delete(listener); };
   }
 
   private esbuildOptions(): esbuild.BuildOptions {
@@ -413,8 +421,17 @@ export default class WorkbenchFrontendCompiler {
       const stylesheetPath = path.join(this.outputDirectoryPath, "assets", "app.css");
       await writeFile(stylesheetPath, stylesheet.contents, "utf8");
       await writeFile(`${stylesheetPath}.map`, stylesheet.sourceMap);
+      const changed = this.javascriptGeneration !== javascript.generation
+        || this.stylesheetGeneration !== stylesheet.generation;
       this.javascriptGeneration = javascript.generation;
       this.stylesheetGeneration = stylesheet.generation;
+      if (changed) for (const listener of this.publicationListeners) {
+        try { listener(); }
+        catch (error) {
+          const message = error instanceof Error ? error.message : "Unknown publication listener failure.";
+          this.onDiagnostic(`Compiler publication notice failed: ${message.slice(0, 500)}`);
+        }
+      }
     });
     this.publicationTail = publication.catch(() => undefined);
     return publication;

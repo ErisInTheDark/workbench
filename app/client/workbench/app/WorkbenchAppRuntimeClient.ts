@@ -3,9 +3,8 @@
  * - WorkbenchAppRuntimeClientOptions: HTTP, polling, and visibility seams.
  * - default WorkbenchAppRuntimeClient: own app reload dirt, tab freshness, and reload requests.
  */
-import { z } from "zod";
-
 import type { WorkbenchReloadResponse, WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
+import { WorkbenchAppRuntimeResponseSchema } from "workbench-shared/http/workbench-app-rpc";
 
 import type {
   WorkbenchAppRuntimeSnapshot,
@@ -13,25 +12,8 @@ import type {
 } from "workbench-shared/types";
 import { DaemonReloadResponseSchema } from "workbench-shared/workbench/daemon-reload";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
+import type WorkbenchAppRpcClient from "./WorkbenchAppRpcClient";
 
-const ReloadDirtSchema = z.object({
-  dirtyScopes: z.array(z.object({
-    dependantScopes: z.array(z.string().regex(/^(?:client|host):[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u)).default([]),
-    description: z.string(),
-    destructive: z.boolean(),
-    scope: z.string().regex(/^(?:client|host):[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u),
-  }).strict()),
-  error: z.string().max(500).nullable(),
-  pendingScopes: z.array(z.string().regex(/^(?:client|host):[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/u)),
-}).strict();
-const FrontendGenerationSchema = z.object({
-  javascript: z.string().min(1).max(200),
-  stylesheet: z.string().min(1).max(200),
-}).strict();
-const RuntimeResponseSchema = z.object({
-  frontendGeneration: FrontendGenerationSchema.nullable().optional().default(null),
-  reloadDirt: ReloadDirtSchema,
-}).strict();
 const EMPTY: WorkbenchAppRuntimeSnapshot = {
   dirtyScopes: [],
   error: null,
@@ -44,6 +26,7 @@ export interface WorkbenchAppRuntimeClientOptions {
   fetcher?: typeof fetch;
   loadedFrontendGeneration?: WorkbenchFrontendGeneration | null;
   pollDelayMs?: number;
+  rpc?: WorkbenchAppRpcClient;
   schedule?: (callback: () => void, delayMs: number) => number;
   visibility?: {
     hidden(): boolean;
@@ -70,16 +53,21 @@ export default class WorkbenchAppRuntimeClient {
   readonly #loadedFrontendGeneration: WorkbenchFrontendGeneration | null;
   #polling = false;
   readonly #pollDelayMs: number;
+  readonly #rpc: WorkbenchAppRpcClient | null;
   readonly #schedule: (callback: () => void, delayMs: number) => number;
   #scheduled: number | null = null;
+  #refreshAgain = false;
   #snapshot: WorkbenchAppRuntimeSnapshot = EMPTY;
   #unsubscribe: (() => void) | null = null;
+  #unsubscribeRpcEvent: (() => void) | null = null;
+  #unsubscribeRpcReconnect: (() => void) | null = null;
   readonly #visibility: NonNullable<WorkbenchAppRuntimeClientOptions["visibility"]>;
 
   constructor(options: WorkbenchAppRuntimeClientOptions = {}) {
     const fetcher = options.fetcher ?? globalThis.fetch;
     this.#fetcher = (input, init) => fetcher.call(globalThis, input, init);
     this.#loadedFrontendGeneration = options.loadedFrontendGeneration ?? null;
+    this.#rpc = options.rpc?.available ? options.rpc : null;
     this.#pollDelayMs = options.pollDelayMs ?? 2_000;
     this.#schedule = options.schedule ?? ((callback, delay) => globalThis.setTimeout(callback, delay) as unknown as number);
     this.#cancelSchedule = options.cancelSchedule ?? ((id) => globalThis.clearTimeout(id));
@@ -94,16 +82,39 @@ export default class WorkbenchAppRuntimeClient {
   };
 
   async bootstrap() {
-    await this.#refresh();
-    this.#unsubscribe = this.#visibility.subscribe(() => {
-      if (this.#disposed || this.#visibility.hidden()) {
-        this.#cancelPoll();
-        return;
-      }
-      void this.#poll();
-    });
-    this.#schedulePoll();
-    return this.#snapshot;
+    let ready = false;
+    let changedDuringBootstrap = false;
+    if (this.#rpc) {
+      this.#unsubscribeRpcEvent = this.#rpc.onEvent(event => {
+        if (event.kind !== "runtime") return;
+        if (ready) void this.#poll();
+        else changedDuringBootstrap = true;
+      });
+      this.#unsubscribeRpcReconnect = this.#rpc.onReconnect(() => {
+        if (ready) void this.#poll();
+        else changedDuringBootstrap = true;
+      });
+    }
+    try {
+      await this.#refresh();
+      ready = true;
+      this.#unsubscribe = this.#visibility.subscribe(() => {
+        if (this.#disposed || this.#visibility.hidden()) {
+          this.#cancelPoll();
+          return;
+        }
+        void this.#poll();
+      });
+      if (changedDuringBootstrap) void this.#poll();
+      this.#schedulePoll();
+      return this.#snapshot;
+    } catch (error) {
+      this.#unsubscribeRpcEvent?.();
+      this.#unsubscribeRpcReconnect?.();
+      this.#unsubscribeRpcEvent = null;
+      this.#unsubscribeRpcReconnect = null;
+      throw error;
+    }
   }
 
   async reloadScopes(scopes: readonly WorkbenchReloadScope[]): Promise<WorkbenchReloadResponse> {
@@ -134,26 +145,45 @@ export default class WorkbenchAppRuntimeClient {
     this.#disposed = true;
     this.#cancelPoll();
     this.#unsubscribe?.();
+    this.#unsubscribeRpcEvent?.();
+    this.#unsubscribeRpcReconnect?.();
     this.#listeners.clear();
   }
 
   async #poll() {
-    if (this.#disposed || this.#polling || this.#visibility.hidden()) return;
+    if (this.#disposed || this.#visibility.hidden()) return;
+    if (this.#polling) {
+      if (this.#rpc) this.#refreshAgain = true;
+      return;
+    }
     this.#cancelPoll();
     this.#polling = true;
+    let succeeded = false;
     try {
-      await this.#refresh();
+      succeeded = await this.#refresh();
     } finally {
       this.#polling = false;
-      this.#schedulePoll();
+      if (this.#rpc && succeeded && this.#refreshAgain) {
+        this.#refreshAgain = false;
+        void this.#poll();
+      } else {
+        this.#refreshAgain = false;
+        this.#schedulePoll();
+      }
     }
   }
 
   async #refresh() {
     try {
-      const response = await this.#fetcher("/api/workbench-app-runtime?version=4");
-      if (!response.ok) throw new Error((await response.text()).slice(0, 1_000) || `App runtime request failed with ${response.status}.`);
-      const parsed = RuntimeResponseSchema.safeParse(await response.json());
+      const value = this.#rpc
+        ? await this.#rpc.requestRaw({ method: "app/runtime/read", params: {} })
+        : await (async () => {
+          const response = await this.#fetcher("/api/workbench-app-runtime?version=4");
+          if (!response.ok) throw new Error((await response.text()).slice(0, 1_000)
+            || `App runtime request failed with ${response.status}.`);
+          return await response.json() as unknown;
+        })();
+      const parsed = WorkbenchAppRuntimeResponseSchema.safeParse(value);
       if (!parsed.success) {
         reportClientSchemaError("Rejected Workbench app runtime response", parsed.error);
         throw new Error("The Workbench app runtime response was invalid.");
@@ -164,16 +194,18 @@ export default class WorkbenchAppRuntimeClient {
         pendingScopes: parsed.data.reloadDirt.pendingScopes,
         tabOutOfDate: this.#isTabOutOfDate(parsed.data.frontendGeneration),
       });
+      return true;
     } catch (error) {
       this.#publish({
         ...this.#snapshot,
         error: error instanceof Error ? error.message.slice(0, 500) : "Workbench app runtime polling failed.",
       });
+      return false;
     }
   }
 
   #schedulePoll() {
-    if (this.#disposed || this.#visibility.hidden() || this.#scheduled !== null) return;
+    if (this.#disposed || this.#rpc || this.#visibility.hidden() || this.#scheduled !== null) return;
     this.#scheduled = this.#schedule(() => {
       this.#scheduled = null;
       void this.#poll();
