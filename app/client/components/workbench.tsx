@@ -1595,16 +1595,24 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
           };
         },
         materialize: () => {
-          if (currentRouteRef.current !== route) return;
-          if (route.view !== "mosaic" || !route.mosaicNode) {
-            navigateToRoute(createLogicalThreadRoute(route.logical?.projectId ?? null,
-              logicalProjectId, null, { draftId, kind: "draft" }), { replace: true });
-          }
+          const current = currentRouteRef.current;
+          if (current.view !== "thread" || current.threadTarget?.kind !== "new"
+            || !route.logical || !current.logical
+            || current.logical.projectId !== route.logical.projectId
+            || current.logical.threadOwnerProjectId !== logicalProjectId
+            || !isWorkbenchThreadTargetSelected(route.threadTarget!, current.threadTarget)
+            || workbenchClient.mounted?.threadRuntime.getSnapshot().currentThread?.id !== draftId) return;
+          navigateToRoute(createLogicalThreadRoute(current.logical.projectId,
+            logicalProjectId, null, { draftId, kind: "draft" }), { replace: true });
         },
         dematerialize: () => {
-          if (currentRouteRef.current !== route || route.view !== "thread") return;
-          navigateToRoute(createLogicalThreadRoute(route.logical?.projectId ?? null,
-            logicalProjectId, location, { kind: "new" }), { replace: true });
+          const current = currentRouteRef.current;
+          if (current.view !== "thread" || current.threadTarget?.kind !== "draft"
+            || current.threadTarget.draftId !== draftId || !route.logical || !current.logical
+            || current.logical.projectId !== route.logical.projectId
+            || current.logical.threadOwnerProjectId !== logicalProjectId) return;
+          navigateToRoute(createLogicalThreadRoute(current.logical.projectId,
+            logicalProjectId, current.logical.location ?? location, { kind: "new" }), { replace: true });
         },
       };
     }

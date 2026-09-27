@@ -67,6 +67,46 @@ test("one remote groups locations but drafts retain a concrete daemon target acr
   }
 });
 
+test("only the exact revision from deleting an unlaunched draft can reopen it", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-reopen-"));
+  const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
+  try {
+    await repository.start();
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/desktop/repo") });
+    const logicalProjectId = repository.read().projects[0]!.id;
+    const draft = { id: draftId, logicalProjectId,
+      target: { daemonId: first, projectId }, prompt: "first words", selection, updatedAt: 1 };
+    const saved = repository.mutate({ kind: "putDraft", draft, expectedRevision: null }).drafts[0]!;
+    const deleted = repository.mutate({ kind: "deleteDraft", draftId, expectedRevision: saved.revision });
+    assert.equal(deleted.drafts.length, 0);
+    assert.throws(() => repository.mutate({ kind: "putDraft", draft: { ...draft, prompt: "new words" },
+      expectedRevision: null }), /another browser/u);
+    assert.throws(() => repository.mutate({ kind: "putDraft", draft: { ...draft, prompt: "new words" },
+      expectedRevision: saved.revision }), /another browser/u);
+    const reopened = repository.mutate({ kind: "putDraft", draft,
+      expectedRevision: deleted.revision }).drafts[0]!;
+    assert.equal(reopened.prompt, "first words");
+    assert.equal(reopened.phase, "unsent");
+    const same = repository.mutate({ kind: "putDraft", draft,
+      expectedRevision: reopened.revision }).drafts[0]!;
+    assert.equal(same.revision, reopened.revision);
+    const deletedAgain = repository.mutate({ kind: "deleteDraft", draftId,
+      expectedRevision: same.revision });
+    const edited = repository.mutate({ kind: "putDraft", draft: { ...draft, prompt: "new words" },
+      expectedRevision: deletedAgain.revision }).drafts[0]!;
+    assert.equal(edited.prompt, "new words");
+    const reserved = repository.mutate({
+      kind: "reserveLaunch", draftId, expectedRevision: edited.revision, launchId: crypto.randomUUID(),
+    }).drafts[0]!;
+    repository.mutate({ kind: "deleteDraft", draftId, expectedRevision: reserved.revision });
+    assert.throws(() => repository.mutate({ kind: "putDraft", draft: { ...draft, prompt: "too late" },
+      expectedRevision: repository.read().revision }), /submitting or closed/u);
+  } finally {
+    await repository.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("equal path identities share one project without losing concrete daemon targets", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-path-"));
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });

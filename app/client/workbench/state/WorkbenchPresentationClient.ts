@@ -41,6 +41,7 @@ export default class WorkbenchPresentationClient {
   private state: PresentationState = { data: null, error: null, phase: "idle" };
   private readonly listeners = new Set<() => void>();
   private readonly requests = new Set<AbortController>();
+  private readonly deletedDraftRevisions = new Map<string, number>();
   private closed = false;
   private notifiedRevision = -1;
   private notificationRefresh: Promise<void> | null = null;
@@ -81,13 +82,18 @@ export default class WorkbenchPresentationClient {
 
   async putDraft(draft: PresentationDraftInput) {
     const existing = this.draft(draft.id);
-    return await this.mutate({ kind: "putDraft", expectedRevision: existing?.revision ?? null, draft });
+    const result = await this.mutate({ kind: "putDraft",
+      expectedRevision: existing?.revision ?? this.deletedDraftRevisions.get(draft.id) ?? null, draft });
+    this.deletedDraftRevisions.delete(draft.id);
+    return result;
   }
 
   async removeDraft(id: string) {
     const existing = this.draft(id);
     if (!existing || existing.phase !== "unsent") return;
-    await this.mutate({ kind: "deleteDraft", draftId: existing.id, expectedRevision: existing.revision });
+    const result = await this.mutate({ kind: "deleteDraft", draftId: existing.id,
+      expectedRevision: existing.revision });
+    this.deletedDraftRevisions.set(id, result.revision);
   }
 
   async setDraftPriority(id: string, priority: { pinned: boolean; snoozed: boolean }) {
@@ -403,7 +409,7 @@ export default class WorkbenchPresentationClient {
       signal?.throwIfAborted();
       controller.signal.throwIfAborted();
       this.accept(data);
-      return this.state.data!;
+      return data;
     } catch (error) {
       if (this.closed) throw error;
       if (signal?.aborted) throw error;
@@ -455,6 +461,7 @@ export default class WorkbenchPresentationClient {
 
   dispose() {
     this.closed = true;
+    this.deletedDraftRevisions.clear();
     for (const controller of this.requests) controller.abort();
     this.requests.clear();
     this.listeners.clear();

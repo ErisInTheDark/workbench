@@ -380,9 +380,12 @@ export default class WorkbenchPresentationRepository {
     if (input.expectedRevision === null ? Boolean(previous) : previous?.revision !== input.expectedRevision) {
       throw new Error("Draft changed in another browser.");
     }
-    if (previous && previous.phase !== "unsent") throw new Error("Draft is already submitting or closed.");
+    if (previous && previous.phase !== "unsent"
+      && (previous.phase !== "deleted" || previous.launch_id)) {
+      throw new Error("Draft is already submitting or closed.");
+    }
     const selectionJson = JSON.stringify(draft.selection);
-    if (previous && previous.logical_project_id === draft.logicalProjectId
+    if (previous?.phase === "unsent" && previous.logical_project_id === draft.logicalProjectId
       && previous.daemon_id === draft.target.daemonId && previous.project_id === draft.target.projectId
       && previous.prompt === draft.prompt && areDeeplyEqual(this.selection(previous.selection_json), draft.selection)) return;
     const revision = this.nextRevision();
@@ -394,7 +397,7 @@ export default class WorkbenchPresentationRepository {
       ON CONFLICT(id) DO UPDATE SET
         logical_project_id = excluded.logical_project_id, daemon_id = excluded.daemon_id,
         project_id = excluded.project_id, prompt = excluded.prompt,
-        selection_json = excluded.selection_json, revision = excluded.revision,
+        selection_json = excluded.selection_json, phase = 'unsent', revision = excluded.revision,
         updated_at = excluded.updated_at
     `).run(draft.id, draft.logicalProjectId, draft.target.daemonId, draft.target.projectId,
       draft.prompt, selectionJson, revision, draft.updatedAt);

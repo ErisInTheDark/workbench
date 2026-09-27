@@ -145,6 +145,41 @@ test("clearing the last app draft content dematerialises its current route only 
   assert.deepEqual(events, ["removed", "route"]);
 });
 
+test("a still-new presentation view retries its draft handoff after later successful saves", async () => {
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse(crypto.randomUUID());
+  const logicalProjectId = fixtureIdentitySchemas.LogicalProjectIdSchema.parse(crypto.randomUUID());
+  const location = {
+    daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse(crypto.randomUUID()),
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  };
+  const selection = { kind: "custom" as const, settings: {
+    agentPath: null, agentSource: null, harness: "codex" as const, model: "model",
+    reasoningEffort: null, serviceTier: null, contextWindowTokens: null,
+  } };
+  let stored: { id: typeof draftId; logicalProjectId: typeof logicalProjectId;
+    target: typeof location; prompt: string; attachments: []; updatedAt: number } | null = null;
+  const prompts: string[] = [];
+  let handoffs = 0;
+  const owner = {
+    draft: () => stored,
+    putDraft: async (input: NonNullable<typeof stored>) => {
+      stored = input;
+      prompts.push(input.prompt);
+    },
+    attachmentUrl: () => "",
+  } as unknown as WorkbenchPresentationClient;
+  const target: ComposerDraftTarget = {
+    kind: "presentation", draftId, isNew: true, logicalProjectId, location, owner,
+    selection: () => selection, materialize: () => { handoffs++; }, dematerialize: () => {},
+  };
+  await saveComposerDraft(new WorkbenchClientStateController(), target,
+    draft => ({ ...draft, text: "first saved words" }), autosave);
+  await saveComposerDraft(new WorkbenchClientStateController(), target,
+    draft => ({ ...draft, text: "later saved words" }), autosave);
+  assert.deepEqual(prompts, ["first saved words", "later saved words"]);
+  assert.equal(handoffs, 2);
+});
+
 test("detached creation never navigates and clearing uses the original project identity", async () => {
   const state = new WorkbenchClientStateController();
   const store = sidebarFixture();

@@ -152,7 +152,7 @@ export async function saveComposerDraft(
         attachmentId: attachment.id, expectedRevision: revision,
       });
     }
-    if (target.isNew && !existing && !options.detached && options.reason !== "retarget") target.materialize();
+    if (target.isNew && !options.detached && options.reason !== "retarget") target.materialize();
     return { ...input, attachments: input.attachments.map(item => ({
       id: item.id, url: target.owner.attachmentUrl(target.draftId, item.id),
     })) };
