@@ -64,6 +64,19 @@ test("thread alert markers preserve the legacy type-first attribute order", () =
   assert.match(html, /data-thread-inline-icon-color="blue"/u);
 });
 
+test("thread check, asterisk, and x markers render inline icons", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    '<icon color="green" type="check" /> done',
+    '<icon color="purple" type="asterisk" /> note',
+    '<icon color="red" type="x" /> blocked',
+  ].join("\n\n"))));
+
+  for (const [type, color] of [["check", "green"], ["asterisk", "purple"], ["x", "red"]]) {
+    assert.match(html, new RegExp(`<span[^>]*aria-label="${color} ${type} marker"[^>]*data-thread-inline-icon="${type}"[^>]*data-thread-inline-icon-color="${color}"[^>]*><svg\\b`, "u"));
+  }
+  assert.equal(Array.from(html.matchAll(/data-thread-inline-icon=/gu)).length, 3);
+});
+
 test("unsupported and code-span markers remain literal text", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
     '<icon color="red" type="red" /> unsupported type',

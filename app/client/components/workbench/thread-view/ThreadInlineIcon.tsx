@@ -5,13 +5,16 @@
 
 import type { ComponentType } from "react";
 
-import { CircleAlertIcon, type IconProps } from "../workbench-icons";
+import { AsteriskIcon, CheckIcon, CircleAlertIcon, type IconProps, XIcon } from "../workbench-icons";
 import { getThreadMarkdownEmphasisColors } from "./thread-markdown-emphasis-colors";
 
 type InlineIconComponent = ComponentType<IconProps>;
 
 const THREAD_INLINE_ICON_REGISTRY = new Map<string, InlineIconComponent>([
   ["alert", CircleAlertIcon],
+  ["check", CheckIcon],
+  ["asterisk", AsteriskIcon],
+  ["x", XIcon],
 ]);
 
 export default function ThreadInlineIcon ({ color, iconType, source }: {
