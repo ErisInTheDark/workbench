@@ -403,7 +403,7 @@ export default class IsolatedWorkbench {
     await this.prepareDaemonEnvironment(prefixProof, signal);
     signal.throwIfAborted();
     assert.equal(this.closed, false, "Scenario stopped during startup");
-    const env = this.environment();
+    const env = this.environment(this.project);
     const child = spawn(process.execPath, ["--import", "tsx", "--import",
       pathToFileURL(path.join(this.project, ".workbench/isolated-shutdown.mjs")).href, "server/index.ts"], {
       ...createSpawnOptions(path.join(this.project, "daemon"), env, true),
@@ -494,7 +494,7 @@ export default class IsolatedWorkbench {
     signal.throwIfAborted();
   }
 
-  private environment(): NodeJS.ProcessEnv {
+  private environment(projectRootPath: string): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
       ...process.env, CODEX_HOME: path.join(this.root, "codex"), WORKBENCH_LIBRARY_ROOT: path.join(this.root, "library"),
       HOME: path.join(this.root, "user"), USERPROFILE: path.join(this.root, "user"),
@@ -503,7 +503,7 @@ export default class IsolatedWorkbench {
       WORKBENCH_STARTUP_DIAGNOSTICS: "1",
       WORKBENCH_DAEMON_LOOP: "1",
       WORKBENCH_SERVICE_MANAGED: "1",
-      WORKBENCH_TEMPORARY_ROOT: path.join(this.project, ".workbench", "tmp"),
+      WORKBENCH_TEMPORARY_ROOT: path.join(projectRootPath, ".workbench", "tmp"),
       TSX_TSCONFIG_PATH: path.join(this.project, "daemon", "tsconfig.json"),
       XDG_DATA_HOME: path.join(this.root, "data"), XDG_CONFIG_HOME: path.join(this.root, "config"),
       XDG_CACHE_HOME: path.join(this.root, "cache"), NO_COLOR: "1",
@@ -533,7 +533,7 @@ export default class IsolatedWorkbench {
     const child = spawn(process.execPath, ["--import", "tsx", "--import",
       pathToFileURL(path.join(this.project, ".workbench/isolated-shutdown.mjs")).href, "daemon/host/launch-node.mjs"], {
       ...createSpawnOptions(this.project, {
-        ...this.environment(), WORKBENCH_SERVICE_SESSION: this.serviceSession,
+        ...this.environment(path.dirname(this.project)), WORKBENCH_SERVICE_SESSION: this.serviceSession,
       }, true),
       windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
@@ -573,7 +573,7 @@ export default class IsolatedWorkbench {
     const offset = this.appLog.length;
     const child = spawn(process.execPath, ["--import", "tsx", "--import",
       pathToFileURL(path.join(this.project, ".workbench/isolated-shutdown.mjs")).href, "app/server/index.ts"], {
-      ...createSpawnOptions(this.project, { ...this.environment(), TSX_TSCONFIG_PATH: path.join(this.project, "app/tsconfig.json") }, true),
+      ...createSpawnOptions(this.project, { ...this.environment(path.dirname(this.project)), TSX_TSCONFIG_PATH: path.join(this.project, "app/tsconfig.json") }, true),
       windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
     const collect = (chunk: Buffer) => {

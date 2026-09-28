@@ -15,8 +15,8 @@ const context = {
 
 test("live provider tests admit only their exact scenario files", async () => {
   for (const [provider, file] of [
-    ["codex", "test/scenarios/codex.scenario.test.ts"],
-    ["opencode", "test/scenarios/opencode.scenario.test.ts"],
+    ["codex", "test/scenarios/thread.scenario.test.ts"],
+    ["opencode", "test/scenarios/thread.scenario.test.ts"],
   ] as const) {
     const parsed = await parseWorkbenchAgentCliCommand(["test", "live", provider, "--", file], context);
     assert.equal(parsed.kind, "request");
@@ -31,7 +31,7 @@ test("live provider tests admit only their exact scenario files", async () => {
 
   for (const args of [
     ["test", "live", "opencode"],
-    ["test", "live", "other", "--", "test/scenarios/opencode.scenario.test.ts"],
+    ["test", "live", "other", "--", "test/scenarios/thread.scenario.test.ts"],
     ["test", "live", "opencode", "--", "test/scenarios/codex.scenario.test.ts"],
     ["test", "live", "opencode", "--", "test/arbitrary.test.ts"],
   ]) {

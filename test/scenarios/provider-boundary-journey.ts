@@ -17,7 +17,7 @@ export interface ProviderBoundaryToolNames {
   questionnaire: string;
 }
 
-export function createProviderBoundaryJourney(tools: ProviderBoundaryToolNames) {
+export function createProviderBoundaryJourney(tools: ProviderBoundaryToolNames, holdCommand: (proof: string) => string) {
   const ask = (id: string) => `Call ${tools.questionnaire} with exactly ${
     JSON.stringify({
       questions: [{
@@ -28,17 +28,17 @@ export function createProviderBoundaryJourney(tools: ProviderBoundaryToolNames) 
       }],
     })
   }. Wait for the answer on that same tool call.`;
-  const sleep = (proof: string) => [
-    `Call ${tools.shell} with command \`node -e "setTimeout(()=>console.log('${proof}'),5000)"\`.`,
-    "This is a five-second sleep. Do not replace, skip, shorten, or background it.",
+  const hold = (proof: string) => [
+    `Call ${tools.shell} with command \`${holdCommand(proof)}\`.`,
+    "This tool waits for the scenario to release it. Do not replace, skip, or background it.",
   ].join(" ");
   return {
     ask,
-    active: (prefixProof: string, sleepProof: string) => [
+    active: (prefixProof: string, activeProof: string) => [
       "Authorised Workbench provider scenario. Follow exactly, in order. Do not finish early.",
       `1. Report the project-instruction proof "${prefixProof}" in commentary.`,
-      `2. ${sleep(sleepProof)}`,
-      "3. After the sleep, report the proof from the newest user steer in commentary.",
+      `2. ${hold(activeProof)}`,
+      "3. After the tool returns, report the proof from the newest user steer in commentary.",
       `4. ${ask("live_answer")}`,
       "5. Quote the answer exactly in commentary.",
       `6. ${ask("held_answer")}`,
@@ -54,7 +54,7 @@ export function createProviderBoundaryJourney(tools: ProviderBoundaryToolNames) 
     ].join("\n"),
     stop: (proof: string) => [
       "Authorised interruption scenario. Follow exactly.",
-      `1. ${sleep(proof)}`,
+      `1. ${hold(proof)}`,
       "2. Make no additional tool calls. The scenario will interrupt this turn.",
     ].join("\n"),
     final: (prefixProof: string, finalProof: string) => [

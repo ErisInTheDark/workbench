@@ -31,7 +31,7 @@ test("scenario tests require exact selection without hiding ordinary sibling tes
     const ordinary = path.join(scenarios, "IsolatedWorkbench.test.ts");
     await Promise.all([
       writeFile(requested, ""),
-      writeFile(path.join(scenarios, "codex.scenario.test.ts"), ""),
+      writeFile(path.join(scenarios, "thread.scenario.test.ts"), ""),
       writeFile(path.join(scenarios, "lifecycle-fixture.ts"), ""),
       writeFile(path.join(scenarios, "IsolatedWorkbench.ts"), ""),
       writeFile(ordinary, ""),
@@ -42,7 +42,7 @@ test("scenario tests require exact selection without hiding ordinary sibling tes
     const catalog = await ProjectTestCatalog.read(root, ["test/scenarios/lifecycle.scenario.test.ts"]);
     assert.doesNotThrow(() => catalog.validate());
     assert.deepEqual(catalog.select(["test/scenarios/lifecycle.scenario.test.ts"]), [requested]);
-    assert.equal(catalog.tests.some(file => file.endsWith("codex.scenario.test.ts")), false);
+    assert.equal(catalog.tests.some(file => file.endsWith("thread.scenario.test.ts")), false);
   } finally {
     await temporary.dispose();
   }

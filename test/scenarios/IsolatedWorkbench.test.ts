@@ -65,6 +65,11 @@ test("isolated host and app do not inherit the caller's supervisor ownership", a
     });
   }
   const rejectBorrowedOwner = `
+    import path from "node:path";
+    const expectedTemporaryRoot = path.resolve(process.cwd(), "..", ".workbench", "tmp");
+    if (path.resolve(process.env.WORKBENCH_TEMPORARY_ROOT ?? "") !== expectedTemporaryRoot) {
+      throw new Error("Fixture temporary root does not belong to this process's project root");
+    }
     for (const key of ["WORKBENCH_SERVICE_ACK_REQUIRED", "WORKBENCH_SERVICE_RUNTIME", "WORKBENCH_FOREGROUND_PIPE"]) {
       if (process.env[key]) throw new Error("Borrowed parent supervision: " + key);
     }

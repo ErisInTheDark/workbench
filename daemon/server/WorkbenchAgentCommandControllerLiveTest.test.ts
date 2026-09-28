@@ -33,21 +33,21 @@ test("runs one exact provider scenario and rejects overlap", async () => {
   });
   const execution = controller.execute({
     cwd: "C:/git/web/workbench",
-    file: "test/scenarios/opencode.scenario.test.ts",
+    file: "test/scenarios/thread.scenario.test.ts",
     provider: "opencode",
   }, new AbortController().signal);
 
   await spawnedChild;
   await assert.rejects(controller.execute({
     cwd: "C:/git/web/workbench",
-    file: "test/scenarios/codex.scenario.test.ts",
+    file: "test/scenarios/thread.scenario.test.ts",
     provider: "codex",
   }, new AbortController().signal), /already running/u);
 
   (running.stdout as PassThrough | null)?.write("journey\n");
   running.emit("close", 0, null);
   assert.equal(await (await execution).text(), "journey\n");
-  assert.deepEqual(spawned[0]?.args.slice(-2), ["opencode", "test/scenarios/opencode.scenario.test.ts"]);
+  assert.deepEqual(spawned[0]?.args.slice(-2), ["opencode", "test/scenarios/thread.scenario.test.ts"]);
 });
 
 test("cancellation retires the exact owned child", async () => {
@@ -66,7 +66,7 @@ test("cancellation retires the exact owned child", async () => {
   const abort = new AbortController();
   const execution = controller.execute({
     cwd: "C:/git/web/workbench",
-    file: "test/scenarios/codex.scenario.test.ts",
+    file: "test/scenarios/thread.scenario.test.ts",
     provider: "codex",
   }, abort.signal);
 
@@ -92,7 +92,7 @@ test("explicit cancellation retires the active child", async () => {
   });
   const execution = controller.execute({
     cwd: "C:/git/web/workbench",
-    file: "test/scenarios/opencode.scenario.test.ts",
+    file: "test/scenarios/thread.scenario.test.ts",
     provider: "opencode",
   }, new AbortController().signal);
 
@@ -120,7 +120,7 @@ test("cancellation during spawn still retires the child", async () => {
 
   await assert.rejects(controller.execute({
     cwd: "C:/git/web/workbench",
-    file: "test/scenarios/opencode.scenario.test.ts",
+    file: "test/scenarios/thread.scenario.test.ts",
     provider: "opencode",
   }, abort.signal), /cancelled while spawning/u);
   assert.deepEqual(retired, [42]);
@@ -146,7 +146,7 @@ test("cancellation remains owned until the detached service cleanup finishes", a
   });
   const request = {
     cwd: "C:/git/web/workbench",
-    file: "test/scenarios/opencode.scenario.test.ts",
+    file: "test/scenarios/thread.scenario.test.ts",
     provider: "opencode",
   };
   const execution = controller.execute(request, new AbortController().signal);

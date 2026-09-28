@@ -1,26 +1,26 @@
 /*
- * No exports. Admits only the explicitly named paid Codex scenario through the trusted daemon.
+ * No exports. Require explicit paid selection, then use the trusted daemon's isolated live-test owner.
  */
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
+import { parseThreadTestArguments } from "./thread-test-arguments.ts";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const file = "test/scenarios/codex.scenario.test.ts";
-const args = process.argv.slice(2).filter((value) => value !== "--");
-if (args.length !== 1 || args[0] !== file) {
-  console.error(`Real Codex usage required. Run: pnpm test:codex -- ${file}`);
+let provider;
+try {
+  provider = parseThreadTestArguments(process.argv.slice(2));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;
-} else {
-  console.log("Paid live scenario: five short luna.low turns and compaction, isolated runtime, exact created-thread cleanup.");
+}
+
+if (provider) {
+  const file = "test/scenarios/thread.scenario.test.ts";
   const executable = path.join(projectRoot, "daemon", "node_modules", ".bin", "wb");
   const child = spawn(process.platform === "win32" ? "bash" : executable, [
     ...(process.platform === "win32" ? [executable] : []),
-    "test",
-    "live",
-    "codex",
-    "--",
-    file,
+    "test", "live", provider, "--", file,
   ], {
     cwd: projectRoot,
     env: process.env,

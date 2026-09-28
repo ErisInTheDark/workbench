@@ -8,8 +8,8 @@ import { z } from "zod";
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
 const LIVE_PROVIDER_SCENARIOS = {
-  codex: "test/scenarios/codex.scenario.test.ts",
-  opencode: "test/scenarios/opencode.scenario.test.ts",
+  codex: "test/scenarios/thread.scenario.test.ts",
+  opencode: "test/scenarios/thread.scenario.test.ts",
 } as const;
 
 const providerSchema = z.enum(["codex", "opencode"]);
