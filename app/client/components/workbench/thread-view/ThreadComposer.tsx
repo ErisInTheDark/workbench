@@ -224,7 +224,6 @@ export default function ThreadComposer ({
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
   const hasEffectiveProfile = !profileSlot || Boolean(composerProfileController.resolveSettings(profileSlot)?.model);
-  const profileWriteState = profileSlot ? composerProfileController.selectionWriteState(profileSlot) : "ready";
   const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(thread, threadLifecycle, hasPendingUserInputRequest, controlsMode);
   const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken;
   useLayoutEffect(() => {
@@ -234,7 +233,7 @@ export default function ThreadComposer ({
     }
   }, []);
   const isSendDisabled = isInputDisabled || isProviderUnavailable
-    || (!isActiveThread && (!hasEffectiveProfile || profileWriteState !== "ready"));
+    || (!isActiveThread && !hasEffectiveProfile);
   const isShiftPressed = useNonTextInputShiftKey({
     allowWhileTextInputFocused: showQuestionnairePanel && isQuestionnaireActionsHovered,
   });
@@ -252,10 +251,6 @@ export default function ThreadComposer ({
   const isMobileTextInput = useMobileTextInputEnvironment();
   const helperText = isProviderUnavailable
       ? `Provider ${thread.harness} is not installed. Saved input is retained.`
-      : !isActiveThread && profileWriteState === "pending"
-      ? "Saving composer profile before sending..."
-      : !isActiveThread && profileWriteState === "failed"
-      ? composerProfileSnapshot.error || "The composer profile could not be saved."
       : !hasEffectiveProfile
       ? composerProfileSnapshot.error
       : hasVisiblePendingUserInputRequest
