@@ -37,9 +37,9 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     [pathname, search],
   );
   const launchProjectId = stateSnapshot.records.find(record => record.kind === "lastLaunchTarget")?.projectId;
-  const resolved = new WorkbenchProjectNavigation(
+  const resolved = (client.mounted?.projectNavigator ?? new WorkbenchProjectNavigation(
     client.explorer.projects, state.getProjectAliases(), client.explorer.logicalProjects ?? emptyLogicalProjects,
-  )
+  ))
     .readRoute(locationSnapshot, launchProjectId);
   const route = useMemo(() => resolved, [
     locationSnapshot, resolved.projectId, resolved.threadOwnerProjectId,

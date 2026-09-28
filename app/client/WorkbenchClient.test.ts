@@ -54,6 +54,29 @@ test("empty and multi-project list routes do not invent a browsed folder", async
     && item.params.query.kind === "projectTree"), false);
 });
 
+test("mounted project navigation keeps its identity while project facts change", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const navigator = client.projectNavigator;
+  const route = createLogicalProjectRoute(logicalId);
+  assert.equal(navigator.href(route), undefined);
+
+  const query = await socket.request("workspace/observe", 0,
+    request => request.params.query.kind === "projects");
+  socket.observation(query, { kind: "projects", phase: "current", failure: null, data: facts(true) });
+  assert.equal(client.projectNavigator, navigator);
+  assert.equal(navigator.href(route), "/bak/@/");
+
+  const renamed = facts(true);
+  renamed.projects[0] = { ...renamed.projects[0]!, matchKey: "remote://github.com/team/renamed",
+    locations: [] };
+  socket.observation(query, { kind: "projects", phase: "current", failure: null, data: renamed }, 2);
+  assert.equal(client.projectNavigator, navigator);
+  assert.equal(navigator.href(route), "/renamed/@/");
+});
+
 test("project row observations hand off without blanking visible threads", async context => {
   const warnings: string[] = [];
   context.mock.method(console, "warn", (message: string) => warnings.push(message));

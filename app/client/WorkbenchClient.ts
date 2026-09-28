@@ -44,6 +44,7 @@ import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchThreadProject } from "./workbench/WorkbenchThreadClient";
 import WorkbenchFilePanelClient, { type WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchNavigationController from "./workbench/WorkbenchNavigationController";
+import WorkbenchProjectNavigation from "./workbench/navigation/workbench-project-navigation";
 import WorkbenchRouteIntentController from "./workbench/navigation/WorkbenchRouteIntentController";
 import WorkbenchDaemonRuntimeClient from "./workbench/WorkbenchDaemonRuntimeClient";
 import WorkbenchProjectFileIndexStore from "./workbench/project/WorkbenchProjectFileIndexStore";
@@ -78,6 +79,7 @@ export interface MountedWorkbenchClient {
   presentationClient: WorkbenchPresentationClient;
   workspace: WorkbenchWorkspaceClient;
   navigation: WorkbenchNavigationController;
+  projectNavigator: WorkbenchProjectNavigation;
   routeIntents: WorkbenchRouteIntentController;
   voice: WorkbenchVoiceClient;
   getThreadController: ThreadClient["getThreadController"];
@@ -261,6 +263,19 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
           "project/file/delete", { projectId, path, ...options }, requiredFolderScope())),
     },
   });
+  const projectNavigator = new WorkbenchProjectNavigation(
+    projectClient.getSnapshot().projects,
+    state?.getProjectAliases() ?? [],
+    projectFacts()?.projects ?? [],
+    id => locationForThread(id),
+  );
+  function refreshProjectNavigator() {
+    projectNavigator.update(
+      projectClient.getSnapshot().projects,
+      state?.getProjectAliases() ?? [],
+      projectFacts()?.projects ?? [],
+    );
+  }
   const sidebar = new ThreadSidebarClient({
     onChange: snapshot => {
       if (browseLocation) rendererFor(browseLocation).installThreadStateSources({ activeProjectSnapshot: snapshot });
@@ -412,6 +427,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   function factsChanged() {
     if (disposed) return;
     retirePreviousRows();
+    refreshProjectNavigator();
     for (const source of projectFacts()?.sources ?? []) renderers.get(source.daemonId)?.acceptSourceGeneration(source.generation);
     if (browseLocation) {
       void projectClient.installCatalog(catalogueFor(browseLocation.daemonId))
@@ -799,7 +815,10 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     return { ...location, hostname, rootPath: project?.rootPath ?? "",
       displayPath };
   };
-  lifetime.addUnsubscribe(projectClient.subscribe(() => emit()));
+  lifetime.addUnsubscribe(projectClient.subscribe(() => {
+    refreshProjectNavigator();
+    emit();
+  }));
   lifetime.addUnsubscribe(presentation.subscribe(factsChanged));
   if (state) lifetime.addUnsubscribe(state.subscribe(factsChanged));
   presentation.start();
@@ -810,7 +829,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
 
   return {
     workspace, networkClient: network, presentationClient: presentation,
-    navigation, routeIntents, controls, voice, projectFileIndexStore,
+    navigation, projectNavigator, routeIntents, controls, voice, projectFileIndexStore,
     projectSourceErrors: {
       getSnapshot: () => [projects.getSnapshot().failure,
         ...(projectFacts()?.catalogues.map(item => item.failure) ?? []),

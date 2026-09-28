@@ -15,6 +15,7 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import type { WorkbenchPinnedThreadSummaryEntry, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
 import type { WorkbenchClientController } from "./workbench-client-context";
+import WorkbenchProjectNavigation from "../../workbench/navigation/workbench-project-navigation";
 import WorkbenchContextMenuProvider from "./WorkbenchContextMenuProvider";
 import WorkbenchThreadTooltipDetails from "./WorkbenchThreadTooltipDetails";
 import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
@@ -163,6 +164,7 @@ function createClient(store: WorkbenchThreadSidebarStore | null, ownerLocation?:
       draftLocationFor: () => null,
       selectBrowseLocation: async () => undefined,
       navigation: {} as NonNullable<WorkbenchClientController["mounted"]>["navigation"],
+      projectNavigator: new WorkbenchProjectNavigation([], [], [], () => source),
       routeIntents: {} as NonNullable<WorkbenchClientController["mounted"]>["routeIntents"],
       controls: {} as NonNullable<WorkbenchClientController["mounted"]>["controls"],
       dispose: () => undefined,

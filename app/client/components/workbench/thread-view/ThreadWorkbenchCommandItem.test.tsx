@@ -15,6 +15,7 @@ import { getWorkbenchMcpCommandRoute } from "../../../workbench/thread/thread-co
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientProvider from "../WorkbenchClientProvider";
 import type { WorkbenchClientController } from "../workbench-client-context";
+import WorkbenchProjectNavigation from "../../../workbench/navigation/workbench-project-navigation";
 import WorkbenchContextMenuProvider from "../WorkbenchContextMenuProvider";
 import ThreadGitArcPresentationContext, { type ThreadGitArcPresentation } from "./ThreadGitArcPresentationContext";
 import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
@@ -243,6 +244,7 @@ function createClient(
       draftLocationFor: () => null,
       selectBrowseLocation: async () => undefined,
       navigation: {} as NonNullable<WorkbenchClientController["mounted"]>["navigation"],
+      projectNavigator: new WorkbenchProjectNavigation([], [], [], () => ownerLocation),
       routeIntents: {} as NonNullable<WorkbenchClientController["mounted"]>["routeIntents"],
       controls: {} as NonNullable<WorkbenchClientController["mounted"]>["controls"],
       dispose: () => undefined,

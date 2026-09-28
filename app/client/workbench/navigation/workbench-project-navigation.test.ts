@@ -17,6 +17,40 @@ import WorkbenchProjectNavigation from "./workbench-project-navigation";
 
 const identities = ["remote://github.com/team/repo", "local:///C:/git/repo", "workspace://members"];
 
+test("one navigator refreshes project collisions and aliases without freezing thread ownership", () => {
+  const firstId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const secondId = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const first = { id: firstId, matchKey: "remote://github.com/team/repo", label: "repo", locations: [] };
+  const second = { id: secondId, matchKey: "remote://gitlab.com/team/repo", label: "repo", locations: [] };
+  const location = {
+    daemonId: DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c"),
+    projectId: ProjectIdSchema.parse("owner-folder"),
+  };
+  let owner: typeof location | null = null;
+  const navigator = new WorkbenchProjectNavigation([], [], [first], () => owner);
+  const projectRoute = createLogicalProjectRoute(firstId);
+  const threadRoute = createLogicalExistingThreadRoute(firstId, {
+    kind: "provider", threadId: ThreadReferenceSchema.parse("thread-uuid"),
+  });
+  assert.equal(navigator.href(projectRoute), "/repo/@/");
+  assert.equal(navigator.href(threadRoute), undefined);
+
+  navigator.update([], [], [first, { ...second, locations: [{
+    target: location, daemonId: location.daemonId, hostname: "desktop",
+    name: "repo", rootPath: "C:/repo", project: null,
+  }] }]);
+  assert.equal(navigator.readRoute("/repo").view, "invalid");
+  assert.equal(navigator.href(projectRoute), "/github.com/team/repo/@/");
+  owner = location;
+  assert.equal(navigator.href(threadRoute), "/github.com/team/repo/@/pin/gitlab.com/team/repo/@/thread/thread-uuid");
+
+  const physicalId = ProjectIdSchema.parse("physical-project");
+  navigator.update([], [{ alias: "old-project", projectId: physicalId }], []);
+  assert.equal(navigator.readRoute("/old-project").projectId, physicalId);
+  navigator.update([], [], []);
+  assert.equal(navigator.readRoute("/old-project").projectId, "old-project");
+});
+
 test("multi-project addresses keep selection independent of a draft owner", () => {
   const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
   const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");

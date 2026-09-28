@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchProjectNavigation: resolve selected readable project addresses and thread owners to logical identities.
+ * - default WorkbenchProjectNavigation: maintain current project addresses and resolve routes, hrefs, and live thread owners.
  */
 import type { WorkbenchLogicalProject, WorkbenchProjectAlias, WorkbenchProjectOption } from "workbench-shared/types";
 import {
@@ -14,18 +14,38 @@ export default class WorkbenchProjectNavigation {
   private readonly addressOwners = new Map<string, Set<WorkbenchLogicalProject>>();
 
   constructor(
-    readonly projects: readonly WorkbenchProjectOption[],
-    readonly aliases: readonly WorkbenchProjectAlias[],
-    readonly logicalProjects: readonly WorkbenchLogicalProject[] = [],
+    private projects: readonly WorkbenchProjectOption[],
+    private aliases: readonly WorkbenchProjectAlias[],
+    private logicalProjects: readonly WorkbenchLogicalProject[] = [],
     readonly threadLocation?: (threadId: string) => ProjectLocationReference | null,
   ) {
+    this.rebuildAddressOwners();
+  }
+
+  update(
+    projects: readonly WorkbenchProjectOption[],
+    aliases: readonly WorkbenchProjectAlias[],
+    logicalProjects: readonly WorkbenchLogicalProject[],
+  ) {
+    if (this.projects === projects && this.logicalProjects === logicalProjects
+      && this.aliases.length === aliases.length
+      && this.aliases.every((alias, index) => alias.alias === aliases[index]?.alias
+        && alias.projectId === aliases[index]?.projectId)) return;
+    this.projects = projects;
+    this.aliases = aliases;
+    this.logicalProjects = logicalProjects;
+    this.addressOwners.clear();
+    this.rebuildAddressOwners();
+  }
+
+  private rebuildAddressOwners() {
     const add = (address: string, project: WorkbenchLogicalProject) => {
       if (!address) return;
       const owners = this.addressOwners.get(address) ?? new Set<WorkbenchLogicalProject>();
       owners.add(project);
       this.addressOwners.set(address, owners);
     };
-    for (const project of logicalProjects) {
+    for (const project of this.logicalProjects) {
       add(project.id, project);
       add(project.matchKey, project);
       for (const address of this.remoteAddresses(project)) add(address, project);
@@ -37,7 +57,7 @@ export default class WorkbenchProjectNavigation {
         add(location.target.projectId, project);
         if (!location.project) continue;
         add(location.project.relativePath, project);
-        for (const alias of aliases) {
+        for (const alias of this.aliases) {
           if (alias.projectId === location.project.id) add(alias.alias, project);
         }
       }

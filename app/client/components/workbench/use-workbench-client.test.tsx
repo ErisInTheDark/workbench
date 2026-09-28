@@ -17,6 +17,7 @@ import {
   useWorkbenchThreadSidebarEntry, useWorkbenchThreadTitleHistory,
 } from "./use-workbench-client";
 import WorkbenchThreadController from "../../workbench/WorkbenchThreadController";
+import WorkbenchProjectNavigation from "../../workbench/navigation/workbench-project-navigation";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -93,6 +94,7 @@ const client = {
     draftLocationFor: () => null,
     selectBrowseLocation: async () => undefined,
     navigation: {} as NonNullable<WorkbenchClientController["mounted"]>["navigation"],
+    projectNavigator: new WorkbenchProjectNavigation([], []),
     routeIntents: {} as NonNullable<WorkbenchClientController["mounted"]>["routeIntents"],
     controls: {} as NonNullable<WorkbenchClientController["mounted"]>["controls"],
     dispose: () => undefined,
