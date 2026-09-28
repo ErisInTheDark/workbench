@@ -100,9 +100,12 @@ test("only the exact revision from deleting an unlaunched draft can reopen it", 
     const edited = repository.mutate({ kind: "putDraft", draft: { ...draft, prompt: "new words" },
       expectedRevision: deletedAgain.revision }).drafts[0]!;
     assert.equal(edited.prompt, "new words");
+    const applied = { kind: "profile" as const, profileId: "recorded-profile", settings: selection.settings };
     const reserved = repository.mutate({
       kind: "reserveLaunch", draftId, expectedRevision: edited.revision, launchId: crypto.randomUUID(),
+      selection: applied,
     }).drafts[0]!;
+    assert.deepEqual(reserved.selection, applied);
     repository.mutate({ kind: "deleteDraft", draftId, expectedRevision: reserved.revision });
     assert.throws(() => repository.mutate({ kind: "putDraft", draft: { ...draft, prompt: "too late" },
       expectedRevision: repository.read().revision }), /submitting or closed/u);

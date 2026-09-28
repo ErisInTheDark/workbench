@@ -14,7 +14,7 @@ import { z } from "zod";
 
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchUserInputResponse } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
+import { resolveLinkedProfileSelection } from "workbench-shared/workbench/thread/thread-profile";
 import { DraftIdSchema, ProjectIdSchema, type DraftId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import {
   WorkbenchPresentationAttachmentChunkRequestSchema,
@@ -698,17 +698,14 @@ export default class WorkbenchThreadStateController {
       && state.newThreadProfile?.settings.harness === slot.harness) {
       selection = state.newThreadProfile;
     }
-    const profileId = selection?.kind === "profile" ? selection.profileId
-      : refresh && !selection && entry?.entryKind === "subagent" ? entry.profileId : null;
-    if (refresh && profileId) {
+    const link = selection?.kind === "profile" ? { profileId: selection.profileId, settings: selection.settings }
+      : refresh && !selection && entry?.entryKind === "subagent" && entry.profileId
+        ? { profileId: entry.profileId, settings: null } : null;
+    if (refresh && link) {
       if (!this.options.readComposerProfiles) throw new Error("The daemon composer profile catalogue is unavailable.");
-      const profile = (await this.options.readComposerProfiles()).profiles.find((candidate) => candidate.id === profileId);
-      if (profile && (slot.kind !== "thread" || profile.harness === slot.harness)) {
-        selection = { kind: "profile", profileId, settings: copyComposerSettings(profile) };
-      } else if (selection) {
-        // A deleted definition, or a linked thread definition whose provider drifted, previews the saved Custom snapshot.
-        selection = { kind: "custom", settings: selection.settings };
-      }
+      // A deleted definition, or a linked thread definition whose provider drifted, previews the saved Custom snapshot.
+      selection = resolveLinkedProfileSelection((await this.options.readComposerProfiles()).profiles, link,
+        slot.kind === "thread" ? { harness: slot.harness } : undefined);
     }
     if (!selection || !selection.settings.model.trim()) return null;
     if (slot.kind === "thread" && selection.settings.harness !== slot.harness) {

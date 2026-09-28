@@ -21,6 +21,7 @@ import { presentationSchema, type PresentationRows } from "workbench-shared/stat
 import type { PresentationImportSource } from "workbench-shared/state/workbench-presentation-import";
 import releases from "workbench-shared/state/workbench-presentation-releases";
 import type { DaemonId } from "workbench-shared/workbench/identity";
+import type { WorkbenchHarness } from "workbench-shared/types";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
 export interface WorkbenchPresentationRepositoryOptions {
@@ -101,11 +102,13 @@ export default class WorkbenchPresentationRepository {
       .get() as { revision: number }).revision;
   }
 
-  readAcceptedLaunch(draftId: string): string | null {
+  readAcceptedLaunch(draftId: string): { threadId: string; harness: WorkbenchHarness } | null {
     const receipt = this.requireDatabase().prepare(
-      "SELECT accepted_thread_id FROM presentation_drafts WHERE id = ? AND phase = 'accepted'",
-    ).get(draftId) as Pick<DraftRow, "accepted_thread_id"> | undefined;
-    return receipt?.accepted_thread_id ?? null;
+      "SELECT accepted_thread_id, selection_json FROM presentation_drafts WHERE id = ? AND phase = 'accepted'",
+    ).get(draftId) as Pick<DraftRow, "accepted_thread_id" | "selection_json"> | undefined;
+    if (!receipt?.accepted_thread_id) return null;
+    // The recorded selection is the applied launch intent, so a retried launch reports the real identity.
+    return { threadId: receipt.accepted_thread_id, harness: this.selection(receipt.selection_json).settings.harness };
   }
 
   read(): PresentationSnapshot {
@@ -489,9 +492,11 @@ export default class WorkbenchPresentationRepository {
     if (!draft || draft.phase !== "unsent" || draft.revision !== input.expectedRevision) {
       throw new Error("Draft is no longer ready to launch.");
     }
+    // The reservation also records the resolved selection: the durable launch intent must not
+    // re-resolve differently on retry, and the accepted receipt needs the applied identity.
     this.requireDatabase().prepare(`
-      UPDATE presentation_drafts SET phase = 'submitting', launch_id = ?, revision = ? WHERE id = ?
-    `).run(input.launchId, this.nextRevision(), input.draftId);
+      UPDATE presentation_drafts SET phase = 'submitting', launch_id = ?, selection_json = ?, revision = ? WHERE id = ?
+    `).run(input.launchId, JSON.stringify(input.selection), this.nextRevision(), input.draftId);
   }
 
   private completeLaunch(input: Extract<PresentationMutation, { kind: "completeLaunch" }>) {

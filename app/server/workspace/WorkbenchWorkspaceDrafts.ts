@@ -1,19 +1,26 @@
 /*
  * Exports:
+ * - WorkbenchLaunchedDraft: the accepted thread identity a draft launch applied.
  * - default WorkbenchWorkspaceDrafts: validate and launch saved app drafts through their durable original owner.
  */
 import { randomUUID } from "node:crypto";
-import type { WorkbenchSendThreadMessageOptions } from "workbench-shared/types";
+import type { WorkbenchHarness, WorkbenchSendThreadMessageOptions } from "workbench-shared/types";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { areWorkbenchAgentPathsEqual } from "workbench-shared/workbench/agent-paths";
+import { resolveLinkedProfileSelection } from "workbench-shared/workbench/thread/thread-profile";
 import { WorkbenchThreadLaunchRequestSchema, type WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
 import type WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import type { DaemonId } from "workbench-shared/workbench/identity";
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 
+export interface WorkbenchLaunchedDraft {
+  threadId: string;
+  harness: WorkbenchHarness;
+}
+
 export default class WorkbenchWorkspaceDrafts {
-  private readonly launches = new Map<string, Promise<string>>();
+  private readonly launches = new Map<string, Promise<WorkbenchLaunchedDraft>>();
   private closed = false;
 
   constructor(private readonly options: {
@@ -45,7 +52,7 @@ export default class WorkbenchWorkspaceDrafts {
     await Promise.allSettled(this.launches.values());
   }
 
-  private async performLaunch(draftId: string, expectedRevision: number, options: WorkbenchSendThreadMessageOptions) {
+  private async performLaunch(draftId: string, expectedRevision: number, options: WorkbenchSendThreadMessageOptions): Promise<WorkbenchLaunchedDraft> {
     const presentation = this.options.presentation;
     const accepted = presentation.readAcceptedLaunch(draftId);
     if (accepted) return accepted;
@@ -66,25 +73,19 @@ export default class WorkbenchWorkspaceDrafts {
       if (registered?.logicalProjectId !== draft.logicalProjectId) {
         throw new Error("The draft folder belongs to another project identity.");
       }
+      // A linked draft resolves its stored profile's current definition at launch, exactly as its
+      // composer previews it. Saved settings survive as Custom only when the definition is gone.
+      let profile = draft.selection;
       if (draft.phase === "unsent") {
-        const settings = draft.selection.settings;
+        if (profile.kind === "profile") {
+          const resolved = resolveLinkedProfileSelection((await daemon.profiles.read()).profiles, profile);
+          if (!resolved) throw new Error("This draft has no available composer settings.");
+          profile = resolved;
+        }
+        const settings = profile.settings;
         const models = (await daemon.models.list(settings.harness)).data.filter(model => model.policyState !== "disabled");
         if (!models.length || settings.model && !models.some(model => model.id === settings.model)) {
           throw new Error("The destination daemon does not support this draft's model.");
-        }
-        if (draft.selection.kind === "profile") {
-          const profileId = draft.selection.profileId;
-          const profile = (await daemon.profiles.read()).profiles.find(item => item.id === profileId);
-          if (!profile || profile.scope.kind === "project" && profile.scope.projectId !== target.projectId) {
-            throw new Error("The destination daemon does not have this draft's linked profile.");
-          }
-          if (profile.harness !== settings.harness || profile.model !== settings.model
-            || !areWorkbenchAgentPathsEqual(profile.agentPath, settings.agentPath)
-            || profile.agentSource !== settings.agentSource || profile.reasoningEffort !== settings.reasoningEffort
-            || profile.serviceTier !== settings.serviceTier
-            || (profile.contextWindowTokens ?? null) !== (settings.contextWindowTokens ?? null)) {
-            throw new Error("The destination profile differs from this draft's saved settings.");
-          }
         }
         if (settings.agentPath) {
           const agents = (await daemon.agents.list({ projectId: target.projectId })).data;
@@ -110,12 +111,12 @@ export default class WorkbenchWorkspaceDrafts {
         activatedSkillPaths: options.activatedSkillPaths,
       };
       const request = WorkbenchThreadLaunchRequestSchema.parse({
-        launchId, projectId: target.projectId, profile: draft.selection, firstInput,
+        launchId, projectId: target.projectId, profile, firstInput,
         clientMessageId: `launch:${launchId}`, creationContext: context, messageContext: context,
         additionalWritableRoots: options.additionalWritableRoots,
       });
       if (!wasSubmitting) {
-        presentation.mutate({ kind: "reserveLaunch", draftId, expectedRevision: draft.revision, launchId });
+        presentation.mutate({ kind: "reserveLaunch", draftId, expectedRevision: draft.revision, launchId, selection: profile });
         draft = presentation.read().drafts.find(item => item.id === draftId);
         if (draft?.launchId !== launchId) throw new Error("The launch reservation was not retained.");
       }
@@ -144,7 +145,7 @@ export default class WorkbenchWorkspaceDrafts {
         );
       }
       presentation.mutate({ kind: "completeLaunch", draftId, launchId, threadId: state.threadId });
-      return state.threadId;
+      return { threadId: state.threadId, harness: profile.settings.harness };
     } finally { release(); }
   }
 }

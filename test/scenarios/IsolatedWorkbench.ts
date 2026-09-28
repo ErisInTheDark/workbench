@@ -655,7 +655,7 @@ export default class IsolatedWorkbench {
     });
     const draft = this.presentation.draft(id);
     assert.ok(draft?.phase === "unsent", "The app must persist the draft before launch");
-    return this.workspace.launchDraft(id, draft.revision, { workflowIds: [] });
+    return (await this.workspace.launchDraft(id, draft.revision, { workflowIds: [] })).threadId;
   }
 
   markPhase(label: string) {

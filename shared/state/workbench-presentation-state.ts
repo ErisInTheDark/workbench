@@ -113,6 +113,7 @@ export const PresentationMutationSchema = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({
     kind: z.literal("reserveLaunch"), draftId: uuid, expectedRevision: revision, launchId: uuid,
+    selection: WorkbenchComposerProfileSelectionSchema,
   }).strict(),
   z.object({
     kind: z.literal("completeLaunch"), draftId: uuid, launchId: uuid, threadId: z.string().min(1),

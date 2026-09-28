@@ -1,12 +1,20 @@
 /*
  * Exports:
  * - copyComposerSettings: copy only profile-owned settings.
+ * - resolveLinkedProfileSelection: resolve a stored profile link against current definitions, falling back to saved Custom settings.
  * - WorkbenchThreadCreationProfileSchema: validate creation sources before provider forwarding.
  * - contextCompactionThreshold: reserve fixed or proportional context headroom.
  * - WorkbenchModelContextCapabilitySchema: validated configurable model bounds.
  */
 import { z } from "zod";
-import type { WorkbenchComposerSettings, WorkbenchModelContextCapability, WorkbenchThreadCreationProfile } from "../../types.ts";
+import type {
+  WorkbenchComposerProfile,
+  WorkbenchComposerProfileTargetSelection,
+  WorkbenchComposerSettings,
+  WorkbenchHarness,
+  WorkbenchModelContextCapability,
+  WorkbenchThreadCreationProfile,
+} from "../../types.ts";
 import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotSchema } from "./thread-state.ts";
 
 export function copyComposerSettings(settings: WorkbenchComposerSettings): WorkbenchComposerSettings {
@@ -16,6 +24,20 @@ export function copyComposerSettings(settings: WorkbenchComposerSettings): Workb
     reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier,
     ...(settings.harness !== "opencode" && settings.contextWindowTokens !== undefined ? { contextWindowTokens: settings.contextWindowTokens } : {}),
   };
+}
+
+// A linked selection resolves its stored profile's current definition; saved settings
+// only survive as Custom when the definition is gone or its provider no longer fits.
+export function resolveLinkedProfileSelection(
+  profiles: readonly WorkbenchComposerProfile[],
+  link: { profileId: string; settings: WorkbenchComposerSettings | null },
+  constraint?: { harness?: WorkbenchHarness },
+): WorkbenchComposerProfileTargetSelection | null {
+  const definition = profiles.find((profile) => profile.id === link.profileId);
+  if (definition && (!constraint?.harness || definition.harness === constraint.harness)) {
+    return { kind: "profile", profileId: link.profileId, settings: copyComposerSettings(definition) };
+  }
+  return link.settings ? { kind: "custom", settings: link.settings } : null;
 }
 
 export const WorkbenchThreadCreationProfileSchema = z.discriminatedUnion("kind", [

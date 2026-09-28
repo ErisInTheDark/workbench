@@ -622,15 +622,17 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       const saved = presentation.draft(thread.id);
       if (!saved) throw new Error("Save this draft before starting it.");
       const route = navigation.getSnapshot().route;
-      const threadId = await workspace.launchDraft(saved.id, saved.revision, options);
+      const launched = await workspace.launchDraft(saved.id, saved.revision, options);
+      // The applied identity comes from the launch: a saved snapshot can predate the linked profile's provider.
+      const harness = launched.harness ?? saved.selection.settings.harness;
       try {
-        options.onThreadLaunched?.({ id: WorkbenchThreadIdSchema.parse(threadId), harness: saved.selection.settings.harness });
+        options.onThreadLaunched?.({ id: WorkbenchThreadIdSchema.parse(launched.threadId), harness });
       } catch (error) {
         warn("The thread started, but its view could not be selected.", error);
       }
       if (!options.onThreadLaunched && options.selectThread !== false && navigation.getSnapshot().route === route) {
         routeIntents.request(createLogicalExistingThreadRoute(route.logical?.projectId ?? null,
-          { kind: "provider", threadId: ThreadReferenceSchema.parse(threadId), harness: saved.selection.settings.harness },
+          { kind: "provider", threadId: ThreadReferenceSchema.parse(launched.threadId), harness },
           route.logical?.browseLocation ?? null));
       }
       return null;

@@ -1,6 +1,6 @@
-/* No production exports. Protect independent local-folder rendering and draft-preserving registration. */
+/* No production exports. Protect independent local-folder rendering, draft-preserving registration and applied launch identity. */
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkspaceProjects } from "workbench-shared/workbench/workspace/workspace-observation";
 import { DaemonIdSchema, FolderIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
@@ -332,7 +332,7 @@ test("source-scoped renderers never reuse another daemon's provider model cache"
   await second;
 });
 
-test("accepted draft launch settles without a thread read and cannot steal a newer route", async context => {
+async function openRetainedDraft(context: TestContext) {
   const fixture = createWorkspaceClientFixture();
   const socket = await fixture.open();
   const client = WorkbenchClient({ workspace: fixture.workspace });
@@ -354,6 +354,11 @@ test("accepted draft launch settles without a thread read and cannot steal a new
       updatedAt: 1, revision: 1, phase: "unsent", pinned: false, snoozed: false,
       launchId: null, acceptedThreadId: null, attachments: [] }],
   } });
+  return { socket, client, draft };
+}
+
+test("accepted draft launch settles without a thread read and cannot steal a newer route", async context => {
+  const { socket, client, draft } = await openRetainedDraft(context);
   const launched: Array<{ id: string; harness: string }> = [];
   const offset = socket.sent.length;
   const sending = client.controls.sendThreadMessage(draft, [], {
@@ -368,4 +373,18 @@ test("accepted draft launch settles without a thread read and cannot steal a new
   assert.equal(client.navigation.getSnapshot().route.view, "home");
   assert.equal(socket.sent.slice(offset).some(item => item.method === "workspace/command"
     && (item.params.method === "thread/page/read" || item.params.method === "thread/reconcile")), false);
+});
+
+test("a launched draft routes with the identity the launch applied", async context => {
+  const { socket, client, draft } = await openRetainedDraft(context);
+  const launched: Array<{ id: string; harness: string }> = [];
+  const offset = socket.sent.length;
+  const sending = client.controls.sendThreadMessage(draft, [], {
+    onThreadLaunched: identity => launched.push(identity),
+  });
+  const request = await socket.request("workspace/draft/launch", offset);
+  const threadId = crypto.randomUUID();
+  socket.reply(request, { threadId, harness: "opencode" });
+  assert.equal(await sending, null);
+  assert.deepEqual(launched, [{ id: threadId, harness: "opencode" }]);
 });

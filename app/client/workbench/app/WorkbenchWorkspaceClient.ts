@@ -23,7 +23,7 @@ import {
 import type WorkbenchSocketClient from "workbench-shared/workbench/WorkbenchSocketClient";
 import type { WorkbenchClientNotification } from "workbench-shared/workbench/WorkbenchSocketClient";
 import type { WorkbenchHarness, WorkbenchSendThreadMessageOptions } from "workbench-shared/types";
-import type { WorkbenchThreadRouteTarget } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchHarnessSchema, type WorkbenchThreadRouteTarget } from "workbench-shared/workbench/thread/thread-state";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 
 type WorkspaceScope = { kind: "folder"; location: ProjectLocationReference }
@@ -295,12 +295,13 @@ export default class WorkbenchWorkspaceClient {
       context: { instructionInjections: options.instructionInjections,
         workflowIds: options.workflowIds, activatedSkillPaths: options.activatedSkillPaths },
     } });
-    const parsed = z.object({ threadId: z.uuid() }).safeParse(result);
+    // The harness is additive: an older app server omits the applied identity's provider.
+    const parsed = z.object({ threadId: z.uuid(), harness: WorkbenchHarnessSchema.optional() }).safeParse(result);
     if (!parsed.success) {
       reportClientSchemaError("Rejected workspace draft launch response", parsed.error);
       throw new Error("Draft launch response was invalid.");
     }
-    return parsed.data.threadId;
+    return { threadId: parsed.data.threadId, harness: parsed.data.harness ?? null };
   }
 
   dispose() {

@@ -1,4 +1,4 @@
-/* No production exports. Protect saved-draft ownership, launch fencing and uncertain outcomes. */
+/* No production exports. Protect saved-draft ownership, launch fencing, profile resolution and uncertain outcomes. */
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import fs from "node:fs/promises";
@@ -10,6 +10,7 @@ import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDa
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 import { DaemonIdSchema, ProjectIdSchema, ProjectIdentityKeySchema } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadLaunchRequestSchema, type WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
+import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection, WorkbenchComposerSettings, WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 import WorkbenchPresentationRepository from "../state/WorkbenchPresentationRepository";
@@ -27,7 +28,18 @@ const model: WorkbenchModelOption = {
   policyState: null, billingMultiplier: null,
 };
 
-async function fixture(context: TestContext) {
+function settings(model: string, harness: WorkbenchHarness = "codex"): WorkbenchComposerSettings {
+  return { agentPath: null, agentSource: null, harness, model, reasoningEffort: null, serviceTier: null };
+}
+
+function definition(profileId: string, configured: WorkbenchComposerSettings): WorkbenchComposerProfile {
+  return { ...configured, id: profileId, name: profileId, scope: { kind: "global" }, createdAt: 1, updatedAt: 2 };
+}
+
+async function fixture(
+  context: TestContext,
+  selection: WorkbenchComposerProfileTargetSelection = { kind: "custom", settings: settings(model.id) },
+) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "app-draft-owner-"));
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(directory, "presentation.sqlite3") });
   await repository.start();
@@ -42,11 +54,7 @@ async function fixture(context: TestContext) {
   const logicalProjectId = presentation.read().locations[0]!.logicalProjectId;
   const draftId = randomUUID();
   presentation.mutate({ kind: "putDraft", expectedRevision: null, draft: {
-    id: draftId, logicalProjectId, target, prompt: "first message", updatedAt: 1,
-    selection: { kind: "custom", settings: {
-      harness: "codex", model: model.id, agentPath: null, agentSource: null,
-      reasoningEffort: null, serviceTier: null,
-    } },
+    id: draftId, logicalProjectId, target, prompt: "first message", updatedAt: 1, selection,
   } });
   const requests: Array<{ method: string; params: object }> = [];
   const warnings: string[] = [];
@@ -145,11 +153,11 @@ test("uncertain dispatch reconciles the original launch and coalesces callers", 
   assert.equal(first, second);
   await entered.promise;
   outcome.reject(new Error("connection lost after dispatch"));
-  assert.equal(await first, threadId);
-  assert.equal(f.presentation.readAcceptedLaunch(f.draftId), threadId);
+  assert.equal((await first).threadId, threadId);
+  assert.deepEqual(f.presentation.readAcceptedLaunch(f.draftId), { threadId, harness: "codex" });
   assert.equal(f.draft(), undefined);
   f.available(false);
-  assert.equal(await f.createOwner().launch(f.draftId, 0), threadId);
+  assert.equal((await f.createOwner().launch(f.draftId, 0)).threadId, threadId);
   assert.equal(f.requests.filter(request => request.method === "thread/launch").length, 1);
   assert.equal(f.retained(), 0);
 });
@@ -204,9 +212,76 @@ test("launch reads stored image bytes and disposal drains the accepted operation
   assert.equal(f.retained(), 1);
   const threadId = randomUUID();
   accepted.resolve({ phase: "accepted", launchId, threadId, turnId: randomUUID() });
-  assert.equal(await launching, threadId);
+  assert.equal((await launching).threadId, threadId);
   await closing;
   assert.equal(f.retained(), 0);
-  assert.equal(f.presentation.readAcceptedLaunch(f.draftId), threadId);
+  assert.deepEqual(f.presentation.readAcceptedLaunch(f.draftId), { threadId, harness: "codex" });
   assert.equal(f.draft(), undefined);
+});
+
+test("a linked draft launches with its stored profile's current definition", async context => {
+  const f = await fixture(context, { kind: "profile", profileId: "profile-1", settings: settings("stale model") });
+  const threadId = randomUUID();
+  f.handle(async (method, params) => {
+    if (method === "profiles/read") return { profiles: [definition("profile-1", settings(model.id, "opencode"))] };
+    if (method === "models/list") return { data: [model] };
+    assert.equal(method, "thread/launch");
+    const request = WorkbenchThreadLaunchRequestSchema.parse(params);
+    assert.deepEqual(request.profile, { kind: "profile", profileId: "profile-1", settings: settings(model.id, "opencode") });
+    return { phase: "accepted", launchId: request.launchId, threadId, turnId: randomUUID() };
+  });
+  assert.deepEqual(await f.owner.launch(f.draftId, f.draft().revision), { threadId, harness: "opencode" });
+  assert.deepEqual(f.presentation.readAcceptedLaunch(f.draftId), { threadId, harness: "opencode" });
+});
+
+test("a draft whose linked profile is gone launches with its saved settings as Custom", async context => {
+  const f = await fixture(context, { kind: "profile", profileId: "gone", settings: settings(model.id) });
+  const threadId = randomUUID();
+  f.handle(async (method, params) => {
+    if (method === "profiles/read") return { profiles: [] };
+    if (method === "models/list") return { data: [model] };
+    assert.equal(method, "thread/launch");
+    const request = WorkbenchThreadLaunchRequestSchema.parse(params);
+    assert.deepEqual(request.profile, { kind: "custom", settings: settings(model.id) });
+    return { phase: "accepted", launchId: request.launchId, threadId, turnId: randomUUID() };
+  });
+  assert.deepEqual(await f.owner.launch(f.draftId, f.draft().revision), { threadId, harness: "codex" });
+});
+
+test("launch validation follows the resolved definition's model", async context => {
+  const f = await fixture(context, { kind: "profile", profileId: "profile-1", settings: settings(model.id) });
+  f.handle(async method => {
+    if (method === "profiles/read") return { profiles: [definition("profile-1", settings("missing model"))] };
+    assert.equal(method, "models/list");
+    return { data: [model] };
+  });
+  await assert.rejects(f.owner.launch(f.draftId, f.draft().revision), /does not support this draft's model/u);
+  assert.equal(f.requests.some(request => request.method === "thread/launch"), false);
+});
+
+test("a submitting retry replays the recorded applied selection", async context => {
+  const f = await fixture(context, { kind: "profile", profileId: "profile-1", settings: settings("stale model") });
+  const threadId = randomUUID();
+  let firstProfile: unknown = null;
+  f.handle(async (method, params) => {
+    if (method === "profiles/read") return { profiles: [definition("profile-1", settings(model.id))] };
+    if (method === "models/list") return { data: [model] };
+    if (method === "thread/launch/read") return { state: null };
+    assert.equal(method, "thread/launch");
+    firstProfile = WorkbenchThreadLaunchRequestSchema.parse(params).profile;
+    throw new Error("connection interrupted");
+  });
+  await assert.rejects(f.owner.launch(f.draftId, f.draft().revision), error =>
+    error instanceof WorkbenchRpcRequestInterruptedError && error.dispatched);
+  assert.equal(f.draft().phase, "submitting");
+  assert.deepEqual(firstProfile, { kind: "profile", profileId: "profile-1", settings: settings(model.id) });
+  f.handle(async (method, params) => {
+    if (method === "thread/launch/read") return { state: null };
+    assert.equal(method, "thread/launch");
+    const request = WorkbenchThreadLaunchRequestSchema.parse(params);
+    assert.deepEqual(request.profile, firstProfile);
+    return { phase: "accepted", launchId: request.launchId, threadId, turnId: randomUUID() };
+  });
+  assert.deepEqual(await f.owner.launch(f.draftId, f.draft().revision), { threadId, harness: "codex" });
+  assert.deepEqual(f.presentation.readAcceptedLaunch(f.draftId), { threadId, harness: "codex" });
 });

@@ -237,9 +237,9 @@ export default class WorkbenchAppEventSocketController {
         }
         if (input.method === "workspace/draft/launch") {
           if (!this.options.workspaceDrafts) throw new Error("Draft launch service is unavailable.");
-          return { threadId: await this.options.workspaceDrafts.launch(input.params.draftId, input.params.expectedRevision, {
+          return await this.options.workspaceDrafts.launch(input.params.draftId, input.params.expectedRevision, {
             ...input.params.context, additionalWritableRoots: input.params.additionalWritableRoots,
-          }) };
+          });
         }
         if (input.method === "app/network/action") {
           if (!workbenchNetworkActionKeepsAppConnection(input.params.action)) {
