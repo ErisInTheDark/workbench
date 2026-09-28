@@ -203,6 +203,25 @@ test("thread notices render compact and two-paragraph Markdown bodies", () => {
   assert.match(html, /href="https:\/\/example\.com\/owner"/u);
 });
 
+test("thread notices without a title render under a literal notice title", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    '<notice color="red">Update **every caller** before merging.</notice>',
+    "",
+    '<notice title="" color="purple">',
+    "The current owner cannot enforce this rule.",
+    "</notice>",
+  ].join("\n"))));
+
+  assert.equal(Array.from(html.matchAll(/data-thread-notice="true"/gu)).length, 2);
+  assert.equal(Array.from(html.matchAll(/data-thread-notice-icon="alert"/gu)).length, 2);
+  assert.equal(Array.from(html.matchAll(/aria-label="notice"/gu)).length, 2);
+  assert.match(html, /data-thread-notice-color="red"/u);
+  assert.match(html, /Update <strong>every caller<\/strong> before merging\./u);
+  assert.match(html, /data-thread-notice-color="purple"/u);
+  assert.match(html, /The current owner cannot enforce this rule\./u);
+  assert.doesNotMatch(html, /&lt;notice/u);
+});
+
 test("thread notices accept body text beside multiline delimiters", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
     '<notice title="Mixed delimiters" color="yellow">Opening-line **body**.',
@@ -236,11 +255,9 @@ test("thread notices render inside plans without closing on fenced source", () =
   assert.match(html, /Still inside the notice\./u);
 });
 
-test("unsupported, empty, unclosed, and code-contained notices remain literal text", () => {
+test("unsupported, unclosed, and code-contained notices remain literal text", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
     '<notice title="Unsupported" color="orange">body</notice>',
-    "",
-    '<notice title="" color="red">body</notice>',
     "",
     '<notice title="Unclosed" color="blue">',
     "body",
@@ -255,7 +272,6 @@ test("unsupported, empty, unclosed, and code-contained notices remain literal te
   assert.doesNotMatch(html, /data-thread-notice=/u);
   assert.doesNotMatch(html, /data-thread-notice-icon=/u);
   assert.match(html, /&lt;notice title=&quot;Unsupported&quot; color=&quot;orange&quot;&gt;\s*body\s*&lt;\/notice&gt;/u);
-  assert.match(html, /&lt;notice title=&quot;&quot; color=&quot;red&quot;&gt;\s*body\s*&lt;\/notice&gt;/u);
   assert.match(html, /&lt;notice title=&quot;Unclosed&quot; color=&quot;blue&quot;&gt;/u);
   assert.match(html, /<code[^>]*>&lt;notice title=&quot;Code span&quot; color=&quot;green&quot;&gt;body&lt;\/notice&gt;<\/code>/u);
   assert.match(html, /&lt;notice title=&quot;Source&quot; color=&quot;green&quot;&gt;body&lt;\/notice&gt;/u);
