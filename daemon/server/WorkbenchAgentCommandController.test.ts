@@ -3,14 +3,14 @@
  * - No production exports; tests cover direct dispatch, claim identity, reload dirt, response adaptation and caller cancellation.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import CodexToolsController from "./CodexToolsController";
@@ -492,7 +492,8 @@ test("dispatches ripgrep through one provider-neutral argument-vector request", 
 });
 
 test("dispatches Markdown toc directly with exact heading ranges", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-toc-command-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-toc-command-");
+  const root = temporary.path;
   await writeFile(path.join(root, "guide.md"), [
     "## Parent",
     "body",
@@ -522,7 +523,7 @@ test("dispatches Markdown toc directly with exact heading ranges", async () => {
     ].join("\n"));
   } finally {
     await server.close();
-    await rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 

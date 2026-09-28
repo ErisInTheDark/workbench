@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { test } from "node:test";
 import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
@@ -11,7 +11,8 @@ import { evidenceTables } from "workbench-shared/workbench/database/schema/evide
 import WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
 
 test("immutable image bytes cross the worker, deduplicate, reopen and remain thread scoped", async () => {
-  const root = await mkdtemp(join(tmpdir(), "workbench-image-blob-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-image-blob-");
+  const root = temporary.path;
   const options = { databasePath: join(root, "workbench.sqlite3") };
   let database = new WorkbenchDatabaseController(options);
   try {
@@ -39,6 +40,6 @@ test("immutable image bytes cross the worker, deduplicate, reopen and remain thr
     assert.equal(retained.byteLength, bytes.byteLength);
   } finally {
     await database.close();
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

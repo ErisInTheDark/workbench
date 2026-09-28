@@ -1,7 +1,7 @@
 /* No production exports. Protect atomic external imports and receipt-owned idempotence. */
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
@@ -16,7 +16,8 @@ import { encodeTranscriptPathSegment } from "../codex-transcript-normalizers.ts"
 import WorkbenchLegacyDiffArtifactStore from "./git/WorkbenchLegacyDiffArtifactStore.ts";
 
 test("image conversion validates bytes atomically and preserves deduplicated native URLs", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-image-import-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-image-import-");
+  const root = temporary.path;
   const database = new Database(":memory:");
   try {
     database.pragma("foreign_keys = ON");
@@ -59,12 +60,13 @@ test("image conversion validates bytes atomically and preserves deduplicated nat
     assert.deepEqual(Buffer.from(new WorkbenchTranscriptAssetStore(database).read({ threadId: addresses[0]!, assetName: `${digest}.png` })!.bytes), bytes);
   } finally {
     database.close();
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("capture-gap import retains owned obligations without reviving orphaned history", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-gap-import-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-gap-import-");
+  const root = temporary.path;
   const database = new Database(":memory:");
   try {
     database.pragma("foreign_keys = ON");
@@ -96,12 +98,13 @@ test("capture-gap import retains owned obligations without reviving orphaned his
     assert.equal(warnings.mock.callCount(), 1);
   } finally {
     database.close();
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("catalogue import is atomic, retryable and cannot overwrite newer settings on reopen", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-external-import-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-external-import-");
+  const root = temporary.path;
   const database = new Database(":memory:");
   try {
     installWorkbenchDatabaseSchema(database);
@@ -125,12 +128,13 @@ test("catalogue import is atomic, retryable and cannot overwrite newer settings 
     assert.deepEqual(database.prepare("SELECT browse_raw_commands_enabled FROM workbench_local_capabilities").get(), { browse_raw_commands_enabled: 0 });
   } finally {
     database.close();
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("absent optional catalogues are consumed without creating filesystem fallbacks", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-external-empty-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-external-empty-");
+  const root = temporary.path;
   const database = new Database(":memory:");
   try {
     installWorkbenchDatabaseSchema(database);
@@ -141,6 +145,6 @@ test("absent optional catalogues are consumed without creating filesystem fallba
     assert.deepEqual(database.prepare("SELECT * FROM workbench_local_capabilities").all(), []);
   } finally {
     database.close();
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

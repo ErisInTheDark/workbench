@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { join } from "node:path";
 import { test } from "node:test";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
@@ -28,7 +28,8 @@ const fixtureIdentityValues = {
 };
 
 test("consumer objects retain thread facts, title replacement and project isolation across cold reopen", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-relational-facade-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-relational-facade-");
+  const directory = temporary.path;
   const databasePath = join(directory, "workbench.sqlite3");
   const database = new WorkbenchDatabaseController({ databasePath });
   let reopened: WorkbenchDatabaseController | null = null;
@@ -72,12 +73,13 @@ test("consumer objects retain thread facts, title replacement and project isolat
   } finally {
     await reopened?.close();
     await database.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("same-tick title renames keep recency order across cold reopen", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-title-order-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-title-order-");
+  const directory = temporary.path;
   const databasePath = join(directory, "workbench.sqlite3");
   const database = new WorkbenchDatabaseController({ databasePath });
   let reopened: WorkbenchDatabaseController | null = null;
@@ -105,12 +107,13 @@ test("same-tick title renames keep recency order across cold reopen", async () =
   } finally {
     await reopened?.close();
     await database.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("project-qualified draft replacement preserves a moved draft and removes deleted layout references", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-draft-facade-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-draft-facade-");
+  const directory = temporary.path;
   const database = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   try {
     await database.executeTransaction([
@@ -141,6 +144,6 @@ test("project-qualified draft replacement preserves a moved draft and removes de
     assert.deepEqual((await store.readProject(fixtureIdentityValues.ProjectId["second"])).drafts, []);
   } finally {
     await database.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

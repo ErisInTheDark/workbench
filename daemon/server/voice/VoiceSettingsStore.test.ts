@@ -1,9 +1,9 @@
 /* Exports: none. Protect durable independent model selection and write ordering. */
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import WorkbenchDatabaseController from "../database/WorkbenchDatabaseController";
 import WorkbenchComposerProfileStore from "../WorkbenchComposerProfileStore";
 import VoiceSettingsStore from "./VoiceSettingsStore";
@@ -16,10 +16,11 @@ const settings: WorkbenchComposerSettings = {
 };
 const definition: WorkbenchComposerProfile = { ...settings, id: "voice", name: "Voice", scope: { kind: "global" }, createdAt: 1, updatedAt: 1 };
 async function fixture(context: TestContext) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "voice-settings-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("voice-settings-");
+  const root = temporary.path;
   const database = new WorkbenchDatabaseController({ databasePath: path.join(root, "database.sqlite3") });
   const profiles = new WorkbenchComposerProfileStore(database);
-  context.after(async () => { await profiles.dispose(); await database.close(); await rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await profiles.dispose(); await database.close(); await temporary.dispose(); });
   return { database, profiles, store: new VoiceSettingsStore(database) };
 }
 test("voice retains its saved model independently of profile edits and deletion", async context => {

@@ -5,7 +5,6 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { watch as fsWatch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -15,6 +14,7 @@ import ReloadDirtController, {
   type ReloadDirtSourceDescriptor,
   type ReloadDirtSourceState,
 } from "./ReloadDirtController.ts";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import type { ReloadDirtSnapshotRepositoryPort } from "./ReloadDirtSnapshotRepository.ts";
 import { createReloadContentController, RELOAD_DIRT_FIXTURE } from "./ReloadDirt.test.fixtures.ts";
 import { claimPreparedGitTestFixture } from "../workbench/git/git-test-fixture.ts";
@@ -81,7 +81,8 @@ function transferredState(pendingScopes: string[] = []): ReloadDirtControllerSta
 }
 
 test("internal repository churn cannot wake source watchers through recursive overflow", async (context) => {
-  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-reload-watch-boundary-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-reload-watch-boundary-");
+  const repoRoot = temporary.path;
   await fs.mkdir(path.join(repoRoot, "app"));
   await fs.writeFile(path.join(repoRoot, "app", "core.ts"), "source");
   const repository = new ControlledRepository();
@@ -100,7 +101,7 @@ test("internal repository churn cannot wake source watchers through recursive ov
   }, transferredState());
   context.after(async () => {
     await controller.dispose();
-    await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
+    await temporary.dispose();
   });
   await controller.start();
   const reads = repository.worktreeReads;
@@ -323,7 +324,8 @@ test("Git reload content shares one repository across source graphs", async (con
 });
 
 test("external dirt remains until its owner reloads after the marker is removed", async (context) => {
-  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-external-reload-dirt-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-external-reload-dirt-");
+  const repoRoot = temporary.path;
   const repository = new ControlledRepository();
   const marker = ".workbench/reset";
   const controller = new ReloadDirtController({
@@ -336,7 +338,7 @@ test("external dirt remains until its owner reloads after the marker is removed"
   }, transferredState());
   context.after(async () => {
     await controller.dispose();
-    await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
+    await temporary.dispose();
   });
   await controller.start();
   await fs.mkdir(path.dirname(path.join(repoRoot, marker)), { recursive: true });

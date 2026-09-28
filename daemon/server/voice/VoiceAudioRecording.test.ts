@@ -1,14 +1,15 @@
 /* No exports. Protect exact PCM retention, partial WAV finalisation and failure cleanup. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import test from "node:test";
 import VoiceAudioRecording from "./VoiceAudioRecording";
 
 test("closing drains admitted samples into a playable WAV and rejects late frames", async context => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "voice-audio-"));
-  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("voice-audio-");
+  const directory = temporary.path;
+  context.after(() => temporary.dispose());
   const recording = new VoiceAudioRecording(directory);
   await recording.prepare();
   const frames = [Buffer.from([0, 128, 255, 127]), Buffer.from([42, 0])];
@@ -29,8 +30,9 @@ test("closing drains admitted samples into a playable WAV and rejects late frame
 });
 
 test("a failed PCM write remains a failure but closes a valid completed prefix", async context => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "voice-audio-"));
-  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("voice-audio-");
+  const directory = temporary.path;
+  context.after(() => temporary.dispose());
   const open = fs.open;
   let closed = false;
   context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
@@ -57,8 +59,9 @@ test("a failed PCM write remains a failure but closes a valid completed prefix",
 });
 
 test("recording never overwrites an existing artifact and creation failure survives close", async context => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "voice-audio-"));
-  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("voice-audio-");
+  const directory = temporary.path;
+  context.after(() => temporary.dispose());
   const file = path.join(directory, "audio.wav");
   await fs.writeFile(file, "existing");
   const recording = new VoiceAudioRecording(directory);

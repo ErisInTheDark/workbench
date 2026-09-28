@@ -1,14 +1,15 @@
 /* No exports. Protects consistent fixture capture and cancellation of SQLite copies. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory";
 import test, { type TestContext } from "node:test";
 import Database from "better-sqlite3";
 import { captureThreadStateMigrationSource } from "./thread-state-migration-fixture";
 
 async function source(context: TestContext) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "scenario-capture-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("scenario-capture-");
+  const root = temporary.path;
   const databasePath = path.join(root, "source.sqlite3");
   const writer = new Database(databasePath);
   writer.pragma("journal_mode = WAL");
@@ -20,7 +21,7 @@ async function source(context: TestContext) {
   })();
   context.after(async () => {
     writer.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   });
   return { root, databasePath, writer, target: path.join(root, "isolated", "workbench.sqlite3") };
 }

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { captureTestOutput } from "../../../../test/capture-test-output.mts";
 import Database from "better-sqlite3";
@@ -145,7 +145,8 @@ test("conflicting shadow receipts and independently owned current keys preserve 
 
 test("state added while the backup is retained prevents destructive split consolidation", async context => {
   context.mock.method(console, "warn", () => undefined);
-  const directory = await mkdtemp(path.join(tmpdir(), "project-conversion-drift-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("project-conversion-drift-");
+  const directory = temporary.path;
   captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const { database, discovery } = fixture(path.join(directory, "workbench.sqlite3"));
   try {
@@ -159,7 +160,7 @@ test("state added while the backup is retained prevents destructive split consol
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally {
     database.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 

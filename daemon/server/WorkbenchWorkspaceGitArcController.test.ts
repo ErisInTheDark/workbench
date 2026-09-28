@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
@@ -506,8 +506,9 @@ test("workspace wait start changes zero members when any planned repository is c
 });
 
 test("active claims and Git ignore rules cover patch paths across workspace roots", async (context) => {
-  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-claim-coverage-"));
-  context.after(async () => await rm(temporaryRoot, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-claim-coverage-");
+  const temporaryRoot = temporary.path;
+  context.after(async () => await temporary.dispose());
   const apiRoot = path.join(temporaryRoot, "api");
   const webRoot = path.join(temporaryRoot, "web");
   const apiSource = path.join(apiRoot, "src");

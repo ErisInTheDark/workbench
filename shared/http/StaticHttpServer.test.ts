@@ -2,16 +2,17 @@
  * No production exports. Node tests protect static serving, SPA fallback, path confinement, request seams, free-port binding, and disposal.
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import StaticHttpServer from "./StaticHttpServer.ts";
 
 async function fixture() {
-  const rootDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-static-server-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-static-server-");
+  const rootDirectoryPath = temporary.path;
   await mkdir(path.join(rootDirectoryPath, "assets"));
   await writeFile(path.join(rootDirectoryPath, "index.html"), "<main>Workbench</main>", "utf8");
   await writeFile(path.join(rootDirectoryPath, "assets", "app.js"), "console.log('ready');", "utf8");

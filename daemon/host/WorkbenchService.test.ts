@@ -1,12 +1,12 @@
 /* No production exports. Protect cold identity, private control, app detachment and durable service reopening. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import WorkbenchService from "./WorkbenchService.ts";
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory.ts";
 import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient.ts";
 import { WorkbenchDaemonIdentitySchema } from "../../shared/http/workbench-daemon-discovery.ts";
 import WorkbenchProcessLease from "../../shared/process/WorkbenchProcessLease.ts";
@@ -15,13 +15,14 @@ import WorkbenchDaemonHost from "./WorkbenchDaemonHost.ts";
 const exec = promisify(execFile);
 
 test("foreground owner loss during host startup releases a late singleton lease", async context => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "wb-service-start-close-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-service-start-close-");
+  const root = temporary.path;
   const dataRoot = path.join(root, "data");
   const service = new WorkbenchService({
     root, dataRoot, session: "cancelled-start",
     warn: message => assert.fail(message), restart: () => assert.fail("Cancelled startup cannot restart."),
   });
-  context.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await service.close(); await temporary.dispose(); });
   const starting = service.start();
   const rejected = assert.rejects(starting);
   await service.close();
@@ -32,7 +33,8 @@ test("foreground owner loss during host startup releases a late singleton lease"
 });
 
 test("cold service reads and app detach preserve durable identity without waking a daemon", async context => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "wb-service-cold-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-service-cold-");
+  const root = temporary.path;
   const dataRoot = path.join(root, "data");
   const warnings: string[] = [];
   const services: WorkbenchService[] = [];
@@ -46,7 +48,7 @@ test("cold service reads and app detach preserve durable identity without waking
   context.after(async () => {
     await Promise.all(clients.map(client => client.close()));
     await Promise.all(services.map(service => service.close()));
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   });
   await writeFile(path.join(root, "README.md"), "isolated host\n");
   for (const args of [

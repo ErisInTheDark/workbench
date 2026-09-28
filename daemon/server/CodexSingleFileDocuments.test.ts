@@ -1,14 +1,15 @@
 /* Exports: none. Protect retained session evidence, ordered writes and active-session pruning. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import CodexSingleFileDocuments from "./CodexSingleFileDocuments";
 
 async function fixture(context: TestContext) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "voice-documents-test-"));
-  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("voice-documents-test-");
+  const root = temporary.path;
+  context.after(() => temporary.dispose());
   return { root, owner: new CodexSingleFileDocuments(root) };
 }
 test("creates timestamped session directories", async context => {

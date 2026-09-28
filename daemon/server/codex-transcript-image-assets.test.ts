@@ -3,16 +3,17 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import externalizeCodexTranscriptInlineImages from "./codex-transcript-image-assets";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 test("image admission preserves bytes and URLs without creating a JSON recorder", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "wb-assets-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-assets-");
+  const storageRoot = temporary.path;
   const database = new WorkbenchDatabaseController({ databasePath: path.join(storageRoot, "workbench.sqlite3") });
   try {
     await database.observeThreadIdentities([{
@@ -30,5 +31,5 @@ test("image admission preserves bytes and URLs without creating a JSON recorder"
     const retained = await database.readTranscriptAsset({ threadId: parts.at(-2)!, assetName: parts.at(-1)! });
     assert.ok(retained);
     assert.deepEqual(Buffer.from(retained.bytes), bytes);
-  } finally { await database.close(); await fs.rm(storageRoot, { recursive: true, force: true }); }
+  } finally { await database.close(); await temporary.dispose(); }
 });

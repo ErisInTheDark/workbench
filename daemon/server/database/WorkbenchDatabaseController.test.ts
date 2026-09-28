@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { mkdtemp, readdir, rename, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { join } from "node:path";
 import { test } from "node:test";
 import { captureTestOutput } from "../../../test/capture-test-output.mts";
@@ -82,19 +82,21 @@ async function checkStoredQueries(controller: WorkbenchDatabaseController) {
 }
 
 test("fresh database is ready without a prepared project catalogue", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-empty-project-startup-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-empty-project-startup-");
+  const directory = temporary.path;
   const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   try {
     await controller.start();
     assert.equal(controller.readInitialProjectCatalog(), null);
   } finally {
     await controller.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("worker migration waits for its owner to retain the rollback checkpoint", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-migration-ack-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-migration-ack-");
+  const directory = temporary.path;
   captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const databasePath = join(directory, "workbench.sqlite3");
   const version = databaseReleases.projectOwnership.version;
@@ -113,12 +115,13 @@ test("worker migration waits for its owner to retain the rollback checkpoint", a
     const inspection = new Database(databasePath, { readonly: true });
     try { assert.equal(inspection.pragma("user_version", { simple: true }), version); }
     finally { inspection.close(); }
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("worker startup retains its old-schema backup even when closed during opening", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-migration-worker-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-migration-worker-");
+  const directory = temporary.path;
   captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const databasePath = join(directory, "workbench.sqlite3");
   const version = databaseReleases.projectOwnership.version;
@@ -147,12 +150,13 @@ test("worker startup retains its old-schema backup even when closed during openi
     assert.ok(originalBackups.length > 0, "worker readiness requires its original pre-upgrade checkpoint");
   } finally {
     await controller.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("project preparation coalesces with startup and closes through caller-owned cancellation", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-project-preparation-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-project-preparation-");
+  const directory = temporary.path;
   let calls = 0;
   const entered = Promise.withResolvers<void>();
   const controller = new WorkbenchDatabaseController({
@@ -178,13 +182,14 @@ test("project preparation coalesces with startup and closes through caller-owned
   } finally {
     await controller.close();
     await settled;
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 for (const rejectCheckpoint of [false, true]) {
   test(`worker startup recovers a newer database before readiness (reject checkpoint: ${rejectCheckpoint})`, async context => {
-    const directory = await mkdtemp(join(tmpdir(), "workbench-worker-recovery-"));
+    const temporary = await WorkbenchTemporaryDirectory.create("workbench-worker-recovery-");
+    const directory = temporary.path;
     captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX)
       || (text.startsWith("[database]") && text.includes(directory)));
     const databasePath = join(directory, "workbench.sqlite3");
@@ -221,13 +226,14 @@ for (const rejectCheckpoint of [false, true]) {
       } finally { inspection.close(); archived.close(); }
     } finally {
       await controller.close();
-      await rm(directory, { recursive: true, force: true });
+      await temporary.dispose();
     }
   });
 }
 
 test("database lifecycle reuses retained state across cold workers", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-database-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-database-");
+  const directory = temporary.path;
   captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const databasePath = join(directory, "workbench.sqlite3");
   const controller = new WorkbenchDatabaseController({ databasePath });
@@ -291,12 +297,13 @@ test("database lifecycle reuses retained state across cold workers", async (cont
   } finally {
     await reopened?.close();
     await controller.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("proposal diff cache persists, rejects corruption, touches reads, and enforces its byte budget", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-git-arc-diff-cache-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-git-arc-diff-cache-");
+  const directory = temporary.path;
   const databasePath = join(directory, "workbench.sqlite3");
   let controller = new WorkbenchDatabaseController({ databasePath });
   const changes = [{
@@ -368,7 +375,7 @@ test("proposal diff cache persists, rejects corruption, touches reads, and enfor
     assert.deepEqual(await controller.readGitArcProposalDiff(third), changes);
   } finally {
     await controller.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
@@ -561,7 +568,7 @@ test("schema constraints reject invalid thread state and mismatched item augment
 
 test("startup failure is permanent until the controller is replaced", async () => {
   const missingParent = `missing-workbench-parent-${process.pid}-${Date.now()}`;
-  const controller = new WorkbenchDatabaseController({ databasePath: join(tmpdir(), missingParent, "workbench.sqlite3") });
+  const controller = new WorkbenchDatabaseController({ databasePath: WorkbenchTemporaryDirectory.resolve(missingParent, "workbench.sqlite3") });
   await assert.rejects(controller.start(), /directory does not exist|unable to open database/i);
   assert.equal(controller.state, "failed");
   await assert.rejects(controller.start(), /directory does not exist|unable to open database/i);
@@ -571,7 +578,7 @@ test("startup failure is permanent until the controller is replaced", async () =
 
 test("an unstarted database controller closes without initializing its worker", async () => {
   const controller = new WorkbenchDatabaseController({
-    databasePath: join(tmpdir(), `workbench-database-never-opened-${process.pid}-${Date.now()}.sqlite3`),
+    databasePath: WorkbenchTemporaryDirectory.resolve(`workbench-database-never-opened-${process.pid}-${Date.now()}.sqlite3`),
   });
   await controller.close();
   assert.equal(controller.state, "closed");
@@ -579,7 +586,8 @@ test("an unstarted database controller closes without initializing its worker", 
 });
 
 test("database requests share one evolving relational fixture", async (context) => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-database-statements-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-database-statements-");
+  const directory = temporary.path;
   const controller = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   try {
     // Empty-state checks must precede admission; later stages retain earlier rows.
@@ -591,7 +599,7 @@ test("database requests share one evolving relational fixture", async (context) 
     await context.test("search ranks non-archived relational narrative", () => checkWorkspaceSearch(controller));
   } finally {
     await controller.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 

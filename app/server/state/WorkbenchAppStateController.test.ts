@@ -1,7 +1,7 @@
 /* No production exports. Tests protect revisioned preferences, app-state mutation and structured draft hydration. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import Database from "better-sqlite3";
@@ -178,8 +178,9 @@ test("standalone provider favourites survive repeated saves and controller resta
 });
 
 async function controllerFixture(context: TestContext) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-app-state-controller-"));
-  context.after(() => fs.rm(directory, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-app-state-controller-");
+  const directory = temporary.path;
+  context.after(() => temporary.dispose());
   const databasePath = path.join(directory, "state.sqlite3");
   const create = () => new WorkbenchAppStateController(new WorkbenchAppStateRepository({ databasePath }));
   const controller = create();

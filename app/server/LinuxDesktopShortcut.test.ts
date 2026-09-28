@@ -1,14 +1,15 @@
 /* No production exports. Protect shortcut ownership without running desktop integration. */
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory";
 import test from "node:test";
 import LinuxDesktopShortcut from "./LinuxDesktopShortcut.ts";
 
 test("shortcut installation refuses to overwrite an unrelated menu entry", async context => {
-  const home = await mkdtemp(path.join(os.tmpdir(), "wb-shortcut-"));
-  context.after(() => rm(home, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-shortcut-");
+  const home = temporary.path;
+  context.after(() => temporary.dispose());
   const dataHome = path.join(home, "data");
   const destination = path.join(dataHome, "applications", "inthedark-workbench.desktop");
   await mkdir(path.dirname(destination), { recursive: true });
@@ -23,8 +24,9 @@ test("shortcut installation refuses to overwrite an unrelated menu entry", async
 });
 
 test("shortcut paths cannot inject additional desktop-entry fields", async context => {
-  const home = await mkdtemp(path.join(os.tmpdir(), "wb-shortcut-input-"));
-  context.after(() => rm(home, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-shortcut-input-");
+  const home = temporary.path;
+  context.after(() => temporary.dispose());
   const shortcut = new LinuxDesktopShortcut({
     home, dataHome: path.join(home, "data"), root: "/repo\nTerminal=true",
     launcher: "/launcher", desktopDirectory: async () => "",

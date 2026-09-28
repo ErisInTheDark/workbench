@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -16,7 +16,8 @@ import WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 const run = promisify(execFile);
 
 test("observed instruction files join Git-backed daemon dirt", async (context) => {
-  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-daemon-reload-dirt-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-daemon-reload-dirt-");
+  const repoRoot = temporary.path;
   const git = async (...args: string[]) => await run("git", args, { cwd: repoRoot });
   await git("init");
   await git("config", "user.email", "workbench@example.invalid");
@@ -39,7 +40,7 @@ test("observed instruction files join Git-backed daemon dirt", async (context) =
   });
   context.after(async () => {
     await controller.dispose();
-    await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
+    await temporary.dispose();
   });
   await controller.start();
 

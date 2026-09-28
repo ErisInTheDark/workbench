@@ -4,9 +4,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import { captureTestOutput } from "../../test/capture-test-output.mts";
 
 import Database from "better-sqlite3";
@@ -44,12 +44,13 @@ const retentionSchema = defineWorkbenchDatabaseSchema({
 const day = 86_400_000;
 
 async function fixture(context: TestContext, targetVersion = 1) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-migration-backup-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-migration-backup-");
+  const directory = temporary.path;
   captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const database = new Database(path.join(directory, "source.sqlite3"));
   context.after(async () => {
     if (database.open) database.close();
-    await fs.rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   });
   database.pragma("journal_mode = WAL");
   database.pragma("wal_autocheckpoint = 0");

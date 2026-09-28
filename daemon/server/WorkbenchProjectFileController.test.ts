@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 
@@ -12,7 +12,8 @@ import WorkbenchProjectFileController from "./WorkbenchProjectFileController.ts"
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 test("file writes preserve mtime conflicts and refresh snapshots only after mutation", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-file-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-project-file-");
+  const root = temporary.path;
   const filePath = path.join(root, "note.md");
   await fs.writeFile(filePath, "before", "utf8");
   const project = {
@@ -68,6 +69,6 @@ test("file writes preserve mtime conflicts and refresh snapshots only after muta
       /outside the project (?:root|workspace)/u,
     );
   } finally {
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });

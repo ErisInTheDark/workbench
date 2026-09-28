@@ -1,7 +1,7 @@
 /* Exports: none. Tests protect GPT-5 counting, source sections, project resolution, admission, cancellation, and bounded failures. */
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 
@@ -17,7 +17,8 @@ function createController(
 }
 
 test("counts exact text and stripped Workbench instructions locally", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-token-controller-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-token-controller-");
+  const root = temporary.path;
   const instructionRoot = path.join(root, "instructions");
   await mkdir(instructionRoot, { recursive: true });
   await writeFile(path.join(instructionRoot, "base.md"), "Keep this. <!-- explain failure --> <harness:codex>Keep that.</harness:codex> {macro}");
@@ -32,12 +33,13 @@ test("counts exact text and stripped Workbench instructions locally", async () =
     const managedInstructions = await controller.execute({ callerThreadId: "thread", cwd: root, kind: "instructions", model: "gpt-5.6" }, signal);
     assert.equal(await managedInstructions.text(), "7 tokens across 1 instruction file for gpt-5.6\n");
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("reports independent source and toc-range counts for Workbench instructions", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-token-toc-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-token-toc-");
+  const root = temporary.path;
   const instructionRoot = path.join(root, "instructions");
   await mkdir(instructionRoot, { recursive: true });
   const source = ["plain preamble", "## Policy", "policy body", "### Detail", "detail body"].join("\n");
@@ -60,12 +62,13 @@ test("reports independent source and toc-range counts for Workbench instructions
     assert.match(output, new RegExp(`4-5 ### Detail: ${Gpt5TextTokens.count("### Detail\ndetail body")} tokens`, "u"));
     assert.match(output, /independent[\s\S]*include nested headings[\s\S]*listed once[\s\S]*do not sum/u);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("counts the fresh AGENTS chain from the catalog-owned root", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-token-project-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-token-project-");
+  const root = temporary.path;
   const cwd = path.join(root, "nested");
   const resolvedCwds: string[] = [];
   const controller = createController(root, async (requestedCwd) => {
@@ -114,12 +117,13 @@ test("counts the fresh AGENTS chain from the catalog-owned root", async () => {
     assert.equal(invalidGraph.status, 500);
     assert.match(await invalidGraph.text(), /does not exist[\s\S]*Import chain: AGENTS\.md -> missing/u);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("an owning project with no AGENTS chain counts zero tokens", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-token-empty-project-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-token-empty-project-");
+  const root = temporary.path;
   const controller = createController(root, async (cwd) => ({ cwd, root: { root } }));
   try {
     const result = await controller.execute({
@@ -129,7 +133,7 @@ test("an owning project with no AGENTS chain counts zero tokens", async () => {
     }, new AbortController().signal);
     assert.equal(await result.text(), "0 tokens across the resolved project AGENTS chain for gpt-5.6\n");
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 

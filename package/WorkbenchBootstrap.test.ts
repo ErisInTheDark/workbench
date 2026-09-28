@@ -3,8 +3,8 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
@@ -12,8 +12,9 @@ import test from "node:test";
 import WorkbenchBootstrap from "./WorkbenchBootstrap.mjs";
 
 async function fixture(context, options = {}) {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "wb-bootstrap-"));
-  context.after(() => fs.rm(home, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-bootstrap-");
+  const home = temporary.path;
+  context.after(() => temporary.dispose());
   const checkout = path.join(home, "programs", "wb");
   const calls = [];
   const prompts = [];

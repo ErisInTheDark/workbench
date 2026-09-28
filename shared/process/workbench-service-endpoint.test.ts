@@ -2,16 +2,16 @@
  * No production exports. Tests bounded private publication and process-bound verification.
  */
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import { publishServiceEndpoint, readServiceEndpoint, removeServiceEndpoint, verifyServiceEndpoint } from "./workbench-service-endpoint.ts";
 
 test("service withdrawal cannot remove another process publication", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-service-endpoint-"));
-  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-service-endpoint-");
+  const root = temporary.path;
+  context.after(() => temporary.dispose());
   const file = path.join(root, "endpoint.json");
   const endpoint = { version: 1 as const, instanceId: randomUUID(), pid: 1234, origin: "http://127.0.0.1:1234", token: "a".repeat(64) };
   await publishServiceEndpoint(file, endpoint);

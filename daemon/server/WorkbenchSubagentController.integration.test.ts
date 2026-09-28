@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 
@@ -19,13 +19,14 @@ import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 async function profileFixture(context: TestContext) {
-  const storageRoot = await mkdtemp(path.join(os.tmpdir(), "workbench-subagent-profiles-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-subagent-profiles-");
+  const storageRoot = temporary.path;
   const database = new WorkbenchDatabaseController({ databasePath: path.join(storageRoot, "workbench.sqlite3") });
   const profileStore = new WorkbenchComposerProfileStore(database);
   context.after(async () => {
     await profileStore.dispose();
     await database.close();
-    await rm(storageRoot, { force: true, recursive: true });
+    await temporary.dispose();
   });
   return { storageRoot, profileStore };
 }

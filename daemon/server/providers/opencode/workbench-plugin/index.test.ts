@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import type { Result } from "@opencode/plugin/promise/tool";
 import { createOpenCodeWorkbenchPlugin, readOpenCodeGoQuota, resolveOpenCodeGoCredential } from "./index";
@@ -53,7 +53,8 @@ async function fixture(options: { fail?: string; claim?: () => Response; cwd?: s
 }
 
 test("companion hooks attach write evidence to the native result without replacing the native tool", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-companion-write-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-companion-write-");
+  const root = temporary.path;
   const owner = await fixture({ cwd: root });
   const cleanup = await owner.setup();
   try {
@@ -67,7 +68,7 @@ test("companion hooks attach write evidence to the native result without replaci
     assert.match(settled.result.metadata?.files[0]?.patch ?? "", /\+formatted content/);
   } finally {
     if (typeof cleanup === "function") await cleanup();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 

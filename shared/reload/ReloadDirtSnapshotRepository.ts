@@ -5,9 +5,10 @@
  */
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 
 const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
@@ -171,11 +172,11 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
   }
 
   private async withTemporaryIndex<TValue>(operation: (indexPath: string) => Promise<TValue>) {
-    const directoryPath = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-reload-index-"));
+    const temporary = await WorkbenchTemporaryDirectory.create("workbench-reload-index-");
     try {
-      return await operation(path.join(directoryPath, "index"));
+      return await operation(path.join(temporary.path, "index"));
     } finally {
-      await fs.rm(directoryPath, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+      await temporary.dispose();
     }
   }
 }

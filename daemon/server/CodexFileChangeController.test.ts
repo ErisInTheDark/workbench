@@ -4,18 +4,19 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import CodexFileChangeController from "./CodexFileChangeController";
 
 async function withFiles(run: (root: string, controller: CodexFileChangeController) => Promise<void>) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-patch-observation-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-patch-observation-");
+  const root = temporary.path;
   try {
     await run(root, new CodexFileChangeController());
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 }
 

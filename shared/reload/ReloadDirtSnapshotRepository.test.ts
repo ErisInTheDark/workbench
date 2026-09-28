@@ -4,19 +4,20 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import ReloadDirtSnapshotRepository from "./ReloadDirtSnapshotRepository.ts";
 
 const run = promisify(execFile);
 
 test("scoped reload checks do not open unrelated worktree files", { skip: process.platform !== "win32" }, async (context) => {
-  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-reload-read-boundary-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-reload-read-boundary-");
+  const repoRoot = temporary.path;
   context.after(async () => {
-    await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
+    await temporary.dispose();
   });
   const git = async (...args: string[]) => await run("git", args, { cwd: repoRoot });
   await git("init");
@@ -86,10 +87,11 @@ async function listObjectPaths(rootPath: string) {
 }
 
 test("large scoped reads preserve exact path ownership without writing Git objects", async (context) => {
-  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-reload-snapshot-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-reload-snapshot-");
+  const repoRoot = temporary.path;
   const git = async (...args: string[]) => await run("git", args, { cwd: repoRoot });
   context.after(async () => {
-    await fs.rm(repoRoot, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
+    await temporary.dispose();
   });
   await git("init");
   await git("config", "user.email", "workbench@example.invalid");

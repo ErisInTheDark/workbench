@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import WorkbenchTemporaryDirectory from "./shared/WorkbenchTemporaryDirectory";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -14,7 +14,8 @@ const execFileAsync = promisify(execFile);
 const rootDispatcherPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "wb");
 
 async function dispatcherFixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-root-wb-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-root-wb-");
+  const root = temporary.path;
   const dispatcherPath = path.join(root, "wb");
   const daemonCliPath = path.join(root, "daemon", "server", "lib", "workbench", "cli", "workbench-agent-cli.sh");
   const dispatchPath = path.join(root, "package", "dispatch.mjs");

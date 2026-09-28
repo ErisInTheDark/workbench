@@ -1,10 +1,10 @@
 /* No exports. Tests protect downgrade recovery, archive isolation and failure safety. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import Database from "better-sqlite3";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import { DATABASE_LOG_PREFIX } from "./database-log-format.ts";
 import { captureTestOutput } from "../../test/capture-test-output.mts";
 import { defineTable, integer, text } from "./schema/schema-definition.ts";
@@ -29,7 +29,8 @@ const newSchema = defineWorkbenchDatabaseSchema({
 });
 
 async function fixture(context: TestContext) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-recovery-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-recovery-");
+  const directory = temporary.path;
   captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX)
     || (text.startsWith("[database]") && text.includes(directory)));
   const databasePath = path.join(directory, "state.sqlite3");
@@ -40,7 +41,7 @@ async function fixture(context: TestContext) {
   database.exec("INSERT INTO records VALUES (1, 'original')");
   context.after(async () => {
     if (database.open) database.close();
-    await fs.rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   });
   return { database, databasePath, backups };
 }

@@ -1,8 +1,8 @@
 /* No exports. Tests protect scenario process retirement, diagnostic evidence, workspace cleanup and path containment. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory";
 import { EventEmitter } from "node:events";
 import test, { type TestContext } from "node:test";
 import { captureTestOutput } from "../capture-test-output.mts";
@@ -19,8 +19,9 @@ async function runtime(
 ) {
   captureTestOutput(context, process.stdout, text => text.startsWith("[scenario] "));
   captureTestOutput(context, process.stderr, text => text.startsWith("Scenario diagnostics retained: "));
-  const source = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-scenario-owner-"));
-  context.after(async () => await fs.rm(source, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-scenario-owner-");
+  const source = temporary.path;
+  context.after(async () => await temporary.dispose());
   for (const directory of ["app/node_modules", "daemon/node_modules", "shared/node_modules",
     "instructions", "package", "node_modules", "test/scenarios"]) {
     await fs.mkdir(path.join(source, directory), { recursive: true });
@@ -51,7 +52,7 @@ const hostProgram = `
 test("isolated host and app do not inherit the caller's supervisor ownership", async context => {
   const inherited = {
     WORKBENCH_SERVICE_ACK_REQUIRED: "1",
-    WORKBENCH_SERVICE_RUNTIME: path.join(os.tmpdir(), "parent-host-runtime"),
+    WORKBENCH_SERVICE_RUNTIME: WorkbenchTemporaryDirectory.resolve("parent-host-runtime"),
     WORKBENCH_SERVICE_SESSION: "parent-supervision-session",
     WORKBENCH_FOREGROUND_PIPE: "1",
   };
@@ -242,8 +243,9 @@ test("process signals settle every active scenario exactly once before exit", as
 });
 
 test("removes only the exact owned scenario workspace", async (context) => {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-scenario-cleanup-"));
-  context.after(async () => await fs.rm(temporary, { force: true, recursive: true }));
+  const cleanupTemporary = await WorkbenchTemporaryDirectory.create("workbench-scenario-cleanup-");
+  const temporary = cleanupTemporary.path;
+  context.after(async () => await cleanupTemporary.dispose());
   const fixtures = path.join(temporary, "test-runs");
   const root = path.join(fixtures, "wb-scenario-owned");
   const external = path.join(temporary, "external");
@@ -269,8 +271,9 @@ test("removes only the exact owned scenario workspace", async (context) => {
 });
 
 test("failed setup removes its allocated scenario workspace", async (context) => {
-  const source = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-scenario-setup-"));
-  context.after(async () => await fs.rm(source, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-scenario-setup-");
+  const source = temporary.path;
+  context.after(async () => await temporary.dispose());
 
   await assert.rejects(
     IsolatedWorkbench.create(source, AbortSignal.timeout(5_000), { codexIdentity: false }),

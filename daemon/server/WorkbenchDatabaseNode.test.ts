@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { access, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 
@@ -11,11 +11,13 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 let baselineActiveCodexTranscripts: typeof import("./CodexBridgeNode").baselineActiveCodexTranscripts;
 let WorkbenchDatabaseNode: typeof import("./WorkbenchDatabaseNode").default;
 let discoveryRoot: string;
+let discoveryTemporary: WorkbenchTemporaryDirectory | null = null;
 const previousProjectsRoot = process.env.WORKBENCH_PROJECTS_ROOT;
 const previousLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
 
 before(async () => {
-  discoveryRoot = await mkdtemp(join(tmpdir(), "workbench-database-node-discovery-"));
+  discoveryTemporary = await WorkbenchTemporaryDirectory.create("workbench-database-node-discovery-");
+  discoveryRoot = discoveryTemporary.path;
   process.env.WORKBENCH_PROJECTS_ROOT = discoveryRoot;
   process.env.WORKBENCH_LIBRARY_ROOT = join(discoveryRoot, "library");
   ({ default: WorkbenchDatabaseNode } = await import("./WorkbenchDatabaseNode"));
@@ -27,7 +29,7 @@ after(async () => {
   else process.env.WORKBENCH_PROJECTS_ROOT = previousProjectsRoot;
   if (previousLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
   else process.env.WORKBENCH_LIBRARY_ROOT = previousLibraryRoot;
-  if (discoveryRoot) await rm(discoveryRoot, { recursive: true, force: true });
+  await discoveryTemporary?.dispose();
 });
 
 async function exists(filePath: string) {
@@ -40,7 +42,8 @@ async function exists(filePath: string) {
 }
 
 test("the database node proves readiness before exposing transcript work and closes its worker on disposal", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-database-node-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-database-node-");
+  const directory = temporary.path;
   const dataRootPath = join(directory, "data");
   const instance = WorkbenchDatabaseNode.create(
     { dataRootPath, legacyMigrationProjectRoot: directory } as DaemonProcessContext,
@@ -70,12 +73,13 @@ test("the database node proves readiness before exposing transcript work and clo
     await assert.rejects(database.start(), /closed/);
   } finally {
     await instance.dispose();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("database retirement still closes its worker when transcript disposal fails", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-database-node-close-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-database-node-close-");
+  const directory = temporary.path;
   const instance = WorkbenchDatabaseNode.create(
     { dataRootPath: join(directory, "data"), legacyMigrationProjectRoot: directory } as DaemonProcessContext,
     {
@@ -100,7 +104,7 @@ test("database retirement still closes its worker when transcript disposal fails
     assert.equal(database.state, "closed");
   } finally {
     await database.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 

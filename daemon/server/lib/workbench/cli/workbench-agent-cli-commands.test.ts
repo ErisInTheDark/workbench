@@ -2,15 +2,15 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import WorkbenchAgentCommandLogger from "../../../WorkbenchAgentCommandLogger";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import WorkbenchAgentCommandController from "../../../WorkbenchAgentCommandController.ts";
 import CodexToolsController from "../../../CodexToolsController";
 import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
@@ -224,6 +224,7 @@ let agentCommandController: WorkbenchAgentCommandController;
 let origin = "";
 let server: http.Server;
 let temporaryDirectoryPath = "";
+let temporaryDirectoryOwner: WorkbenchTemporaryDirectory | null = null;
 let temporaryDataRootPath = "";
 let reloadStatusReadCount = 0;
 
@@ -422,7 +423,8 @@ before(async () => {
     },
     getReloadScopeCatalog: () => reloadCatalog,
   }, undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }));
-  temporaryDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-agent-cli-test-"));
+  temporaryDirectoryOwner = await WorkbenchTemporaryDirectory.create("workbench-agent-cli-test-");
+  temporaryDirectoryPath = temporaryDirectoryOwner.path;
   temporaryDataRootPath = path.join(temporaryDirectoryPath, "data");
   await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), {
     version: 1,
@@ -434,7 +436,7 @@ before(async () => {
 
 after(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  await rm(temporaryDirectoryPath, { recursive: true, force: true });
+  await temporaryDirectoryOwner.dispose();
 });
 
 test("questionnaire CLI accepts descriptive headers without a fixed character cap", async () => {

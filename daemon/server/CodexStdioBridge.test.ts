@@ -6,9 +6,9 @@ import type { CodexThreadPageResponse } from "workbench-shared/codex/thread-cont
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { after, before, beforeEach, test } from "node:test";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { captureTestOutput } from "../../test/capture-test-output.mts";
 
 import Database from "better-sqlite3";
@@ -65,6 +65,7 @@ const fixtureIdentityValues = {
 
 const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
 let testWorkbenchLibraryRoot = "";
+let testWorkbenchLibraryTemporary: WorkbenchTemporaryDirectory | null = null;
 let databaseImage: Buffer;
 let CodexStdioBridge: typeof import("./CodexStdioBridge.js").default;
 let WorkbenchCodexInstructionAdapter: (typeof import("./WorkbenchCodexInstructionAdapter.js"))["default"];
@@ -102,7 +103,8 @@ before(async () => {
   } finally {
     template.close();
   }
-  testWorkbenchLibraryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-library-test-"));
+  testWorkbenchLibraryTemporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-library-test-");
+  testWorkbenchLibraryRoot = testWorkbenchLibraryTemporary.path;
   process.env.WORKBENCH_LIBRARY_ROOT = testWorkbenchLibraryRoot;
   await fs.mkdir(path.join(testWorkbenchLibraryRoot, "instructions"), { recursive: true });
   await fs.mkdir(path.join(testWorkbenchLibraryRoot, "agents"), { recursive: true });
@@ -128,7 +130,7 @@ after(async () => {
   if (originalWorkbenchLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
   else process.env.WORKBENCH_LIBRARY_ROOT = originalWorkbenchLibraryRoot;
   if (testWorkbenchLibraryRoot) {
-    await fs.rm(testWorkbenchLibraryRoot, { force: true, recursive: true });
+    await testWorkbenchLibraryTemporary?.dispose();
   }
 });
 
@@ -371,7 +373,8 @@ test("native execution keeps the runtime busy after request settlement until tur
 for (const route of ["managed-creation", "internal"] as const) {
   for (const failed of [false, true]) {
     test(`${route} preserves caller correlation for provider ${failed ? "errors" : "results"}`, async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-correlation-"));
+      const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-correlation-");
+  const root = temporary.path;
       const upstreamIds: JsonRpcRequest["id"][] = [];
       const payload = failed
         ? { error: { code: -32000, message: "Provider refused the request." } }
@@ -410,7 +413,7 @@ for (const route of ["managed-creation", "internal"] as const) {
         }
       } finally {
         await bridge.dispose();
-        await fs.rm(root, { recursive: true, force: true });
+        await temporary.dispose();
       }
     });
   }
@@ -423,7 +426,8 @@ function databaseFixture() {
 }
 
 test("bridge admits public identity before structural publication and records the same identity without blocking deltas on bodies", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-identity-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-identity-");
+  const root = temporary.path;
   const database = databaseFixture();
   const repository = new WorkbenchThreadIdentityRepository(database);
   const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
@@ -548,12 +552,13 @@ test("bridge admits public identity before structural publication and records th
     items.dispose();
     threads.dispose();
     database.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("database replacement preserves ordered live events and usage without replaying provider starts", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-cold-live-identity-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-cold-live-identity-");
+  const root = temporary.path;
   const database = databaseFixture();
   const repository = new WorkbenchThreadIdentityRepository(database);
   const itemRepository = new WorkbenchTranscriptIdentityRepository(database);
@@ -632,7 +637,7 @@ test("database replacement preserves ordered live events and usage without repla
     identities.items.dispose();
     identities.threads.dispose();
     database.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
@@ -642,7 +647,8 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
       text === "[codex-tool-context] injection rejected\n"
       || text === "[codex-tool-context] Codex app-server restarted before the upstream response arrived.\n");
     context.after(() => assert.equal(diagnostics.length, settlement === "failed" || settlement === "restart" ? 1 : 0));
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-file-approval-"));
+    const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-file-approval-");
+    const root = temporary.path;
     const sql = await recordingFixture(root);
     await fs.writeFile(path.join(root, "target.txt"), "new\n");
     const upstreamMessages: JsonRpcRequest[] = [];
@@ -748,7 +754,7 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
       assert.equal(notifications.at(-1)?.method, "questionnaire/requested");
     } finally {
       await bridge.dispose();
-      await fs.rm(root, { force: true, recursive: true });
+      await temporary.dispose();
     }
   });
 }
@@ -761,7 +767,8 @@ for (const origin of ["active", "idle", "changed", "failed"] as const) {
       || text === "[codex-tool-context] rejected\n");
     context.after(() => assert.equal(diagnostics.length, origin === "active" ? 0 : 1));
     const sql = await recordingFixture();
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-passive-context-"));
+    const temporary = await WorkbenchTemporaryDirectory.create("workbench-passive-context-");
+  const root = temporary.path;
     const requests: JsonRpcRequest[] = [];
     const facts: WorkbenchTranscriptObservation[] = [];
     const visible: unknown[] = [];
@@ -833,7 +840,7 @@ for (const origin of ["active", "idle", "changed", "failed"] as const) {
       assert.equal(requests.some(({ method }) => method === "turn/steer" || method === "turn/start"), false);
     } finally {
       await bridge.dispose();
-      await fs.rm(root, { recursive: true, force: true });
+      await temporary.dispose();
     }
   });
 }
@@ -842,7 +849,8 @@ test("stopping before passive-context preparation dispatches no provider work", 
   const diagnostics = captureTestOutput(context, process.stderr, text =>
     text === "[codex-tool-context] Codex bridge stopped before the upstream response arrived.\n");
   context.after(() => assert.equal(diagnostics.length, 1));
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-stop-context-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-stop-context-");
+  const root = temporary.path;
   const requests: JsonRpcRequest[] = [];
   const bridge = new CodexStdioBridge({
     appServer: { send(message: JsonRpcRequest) {
@@ -864,12 +872,13 @@ test("stopping before passive-context preparation dispatches no provider work", 
     assert.deepEqual(requests, []);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("ordinary failed patches receive current-file findings without automatic rejection attribution", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-terminal-patch-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-terminal-patch-");
+  const root = temporary.path;
   const sql = await recordingFixture(root);
   await fs.writeFile(path.join(root, "target"), "new\n");
   const requests: JsonRpcRequest[] = [];
@@ -902,12 +911,13 @@ test("ordinary failed patches receive current-file findings without automatic re
     assert.equal(requests.some(({ method }) => method !== "thread/read"), false);
   } finally {
     await bridge.dispose();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("bridge-only reload preserves the initialized app-server generation", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-capability-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-capability-");
+  const root = temporary.path;
   const bridge = new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -935,12 +945,13 @@ test("bridge-only reload preserves the initialized app-server generation", async
     assert.equal(sent, false);
   } finally {
     await replacement?.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("app-server restart detachment drops process-bound state", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-app-server-restart-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-app-server-restart-");
+  const root = temporary.path;
   const bridge = new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
@@ -959,12 +970,13 @@ test("app-server restart detachment drops process-bound state", async () => {
     assert.equal(state.pendingResponses.size, 0);
     assert.equal(state.pendingUserInputRequests.size, 0);
   } finally {
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("server request resolution detaches ordinary questionnaires but resolves approvals", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-request-resolution-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-request-resolution-");
+  const root = temporary.path;
   const notifications: JsonRpcNotification[] = [];
   const bridge = new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
@@ -1021,12 +1033,13 @@ test("server request resolution detaches ordinary questionnaires but resolves ap
     ]);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("replacement bridge sanitizes legacy handoff state and initializes the new generation", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-app-server-upgrade-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-app-server-upgrade-");
+  const root = temporary.path;
   const legacyState = {
     pendingResponses: new Map(),
     pendingUserInputRequests: new Map(),
@@ -1058,12 +1071,13 @@ test("replacement bridge sanitizes legacy handoff state and initializes the new 
     assert.equal(upstreamRequests.filter(request => request.method === "initialize").length, 1);
   } finally {
     await replacement?.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("thread pages map first and continuation reads into Codex-owned hydration", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-thread-page-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-thread-page-");
+  const root = temporary.path;
   const upstreamRequests: JsonRpcRequest[] = [];
   const contextRequests: JsonRpcRequest[] = [];
   let bridge!: InstanceType<typeof CodexStdioBridge>;
@@ -1156,14 +1170,15 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("provider refresh durably repairs a newer turn omitted by an inactive provider catalog", async (context) => {
   const sql = await recordingFixture();
   context.mock.method(console, "warn", () => undefined);
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-foreground-turn-repair-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-foreground-turn-repair-");
+  const root = temporary.path;
   const recordingStarted = deferred<void>();
   const releaseRecording = deferred<void>();
   const upstreamRequests: JsonRpcRequest[] = [];
@@ -1319,13 +1334,14 @@ test("provider refresh durably repairs a newer turn omitted by an inactive provi
     releaseRecording.resolve();
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("background thread pages await SQL repair without losing later live facts", async () => {
   const sql = await recordingFixture();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-thread-recovery-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-thread-recovery-");
+  const root = temporary.path;
   const recordingStarted = deferred<void>();
   const releaseRecording = deferred<void>();
   const laterProviderFactRecorded = deferred<void>();
@@ -1460,14 +1476,15 @@ test("background thread pages await SQL repair without losing later live facts",
     releaseRecording.resolve();
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("provider catalog identities and the materialized page record as one SQL fact", async () => {
   const sql = await recordingFixture();
   const fixtureIdentities = sql.ports.identities;
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-provider-window-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-provider-window-");
+  const root = temporary.path;
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
   const pageItem: ThreadItem = {
     id: "assistant",
@@ -1550,13 +1567,14 @@ test("provider catalog identities and the materialized page record as one SQL fa
     assert.deepEqual(projection.turns[0]?.items.map(item => item.type), ["agentMessage"]);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("non-empty terminal provider turns record as complete replacement scopes", async () => {
   const fixtureIdentities = await recordingIdentities();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-provider-turn-scope-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-provider-turn-scope-");
+  const root = temporary.path;
   const batches: WorkbenchTranscriptObservation[][] = [];
   const item: ThreadItem = {
     id: "answer",
@@ -1617,13 +1635,14 @@ test("non-empty terminal provider turns record as complete replacement scopes", 
     );
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("usage context follows resolved defaults, reloads, overrides and queued model changes without provider reads", async () => {
   const fixtureIdentities = await recordingIdentities();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-model-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-model-");
+  const root = temporary.path;
   const observations: WorkbenchTranscriptObservation[] = [];
   const requests: string[] = [];
   let bridge!: InstanceType<typeof CodexStdioBridge>;
@@ -1699,13 +1718,14 @@ test("usage context follows resolved defaults, reloads, overrides and queued mod
     ]);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("live provider observations and active baselines stay ordered across a bridge reload", async () => {
   const fixtureIdentities = await recordingIdentities();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-sqlite-transcript-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-sqlite-transcript-");
+  const root = temporary.path;
   const batches: object[][] = [];
   let activeRecords = 0;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
@@ -1822,13 +1842,14 @@ test("live provider observations and active baselines stay ordered across a brid
     assert.equal((batches.at(-1)?.[0] as { kind?: string })?.kind, "turn");
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("blocked SQLite recording holds bridge detach", async () => {
   const fixtureIdentities = await recordingIdentities();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-blocked-shadow-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-blocked-shadow-");
+  const root = temporary.path;
   const sqliteStarted = deferred<void>();
   const releaseSqlite = deferred<void>();
   const bridge = new CodexStdioBridge({
@@ -1862,13 +1883,14 @@ test("blocked SQLite recording holds bridge detach", async () => {
   } finally {
     releaseSqlite.resolve();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("provider-live transcript bursts bypass durable recording until item settlement", async () => {
   const sql = await recordingFixture();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-live-only-transcript-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-live-only-transcript-");
+  const root = temporary.path;
   const notifications: string[] = [];
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
   const bridge = new CodexStdioBridge({
@@ -1975,13 +1997,14 @@ test("provider-live transcript bursts bypass durable recording until item settle
     );
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("only explicit SQLite recovery reads close the exact provider gap after settlement", async () => {
   const fixtureIdentities = await recordingIdentities();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-recovery-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-transcript-recovery-");
+  const root = temporary.path;
   const contexts: WorkbenchTranscriptRecordingContext[] = [];
   let gapIds = ["before-fetch"];
   const upstreamMessages: JsonRpcRequest[] = [];
@@ -2047,12 +2070,13 @@ test("only explicit SQLite recovery reads close the exact provider gap after set
   } finally {
     releaseSqlite.resolve();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("failed process replacement resumes the retained initialized bridge", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-rollback-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-rollback-");
+  const root = temporary.path;
   let sent = false;
   const bridge = new CodexStdioBridge({
     appServer: { send() { sent = true; } } as unknown as CodexAppServer,
@@ -2074,7 +2098,7 @@ test("failed process replacement resumes the retained initialized bridge", async
     assert.equal(sent, false);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
@@ -2195,7 +2219,8 @@ test("SQLite recovery rejects unknown WB identity before contacting the provider
 });
 
 test("paged recovery shares one worker across independent thread histories", async parent => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-real-recovery-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-real-recovery-");
+  const root = temporary.path;
   const database = new WorkbenchDatabaseController({ databasePath: path.join(root, "database.sqlite3") });
   const gaps = new WorkbenchTranscriptCaptureGapController({ database });
   const transcript = new WorkbenchTranscriptController(database, gaps);
@@ -2208,7 +2233,7 @@ test("paged recovery shares one worker across independent thread histories", asy
     identities.threads.dispose();
     identities.items.dispose();
     await database.close();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   });
   await transcript.start();
   await identities.threads.start();
@@ -2423,7 +2448,8 @@ test("demanded Codex reconciliation repairs same-status SQLite bodies without de
 for (const cold of [false, true]) {
   test(`stored-turn recovery preserves an interleaved questionnaire with ${cold ? "cold" : "warm"} identities`, async (context) => {
     const sql = await recordingFixture("C:/repo", true);
-    const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-stored-recovery-"));
+    const temporary = await WorkbenchTemporaryDirectory.create("workbench-stored-recovery-");
+  const storageRoot = temporary.path;
     captureTestOutput(context, process.stderr, text => text.includes("[codex-transcript] capture failed"));
     const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: NativeThreadIdSchema.parse("thread") };
     const threadId = sql.ports.identities.threads.workbenchIdForNative(native);
@@ -2473,7 +2499,7 @@ for (const cold of [false, true]) {
       assert.equal(after.turns[0]?.state, "interrupted");
     } finally {
       await bridge.disposeImmediately();
-      await fs.rm(storageRoot, { recursive: true, force: true });
+      await temporary.dispose();
     }
   });
 }
@@ -2482,7 +2508,8 @@ test("SQL context pages settle provider bodies and then read without legacy stor
   const database = databaseFixture();
   const identities = await recordingIdentities({ database });
   const repository = new WorkbenchTranscriptRepository(database);
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-sql-context-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-sql-context-");
+  const root = temporary.path;
   const requests: JsonRpcRequest[] = [];
   const reader = new CodexStoredTranscriptAdapter(new WorkbenchTranscriptReader({
     readSnapshot: async request => repository.read(request),
@@ -2575,7 +2602,7 @@ test("SQL context pages settle provider bodies and then read without legacy stor
     assert.equal(requests.filter(request => (request.params as { itemsView?: string }).itemsView === "full").length, 3);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
@@ -2607,7 +2634,8 @@ test("ordinary page reads restore context without activity and isolate context r
     text === "[codex-context-usage] Unable to restore context usage; thread content remains available.\n");
   context.after(() => assert.equal(diagnostics.length, 1));
   const sql = await recordingFixture();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-context-page-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-context-page-");
+  const root = temporary.path;
   const usage = {
     last: { inputTokens: 10, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 2, reasoningOutputTokens: 0, totalTokens: 12 },
     total: { inputTokens: 100, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 20, reasoningOutputTokens: 0, totalTokens: 120 },
@@ -2651,13 +2679,14 @@ test("ordinary page reads restore context without activity and isolate context r
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("Workbench questionnaires share native listing, response, and transcript history routes", async () => {
   const fixtureIdentities = await recordingIdentities({ existingTurn: true });
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-owned-questionnaire-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-owned-questionnaire-");
+  const root = temporary.path;
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
   const upstreamMessages: unknown[] = [];
   const request = {
@@ -2751,7 +2780,7 @@ test("Workbench questionnaires share native listing, response, and transcript hi
     });
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
@@ -2760,7 +2789,8 @@ test("SQLite transcript failure does not block steer or questionnaire side effec
     text.startsWith("[codex-transcript] capture failed client-request:") && text.includes("cause=SQLite transcript failed"));
   context.after(() => assert.equal(diagnostics.length, 1));
   const fixtureIdentities = await recordingIdentities({ existingTurn: true });
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-failed-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-transcript-failed-");
+  const root = temporary.path;
   const upstreamMessages: unknown[] = [];
   const contextOrder: string[] = [];
   const client: BridgeClient = {
@@ -2834,7 +2864,7 @@ test("SQLite transcript failure does not block steer or questionnaire side effec
     assert.deepEqual(contextOrder, ["context:steer", "turn/steer", "context:answer", "answer", "resolved", "history"]);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
@@ -2910,7 +2940,8 @@ test("detached questionnaire history records directly without answering a provid
   const native = fixtureIdentities.threads.knownNativeBinding("codex", fixtureIdentityValues.NativeThreadId.thread);
   const threadId = fixtureIdentities.threads.workbenchIdForNative(native);
   const turnId = fixtureIdentities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn });
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-detached-questionnaire-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-detached-questionnaire-");
+  const root = temporary.path;
   const sqliteBatches: WorkbenchTranscriptObservation[][] = [];
   const upstreamMessages: unknown[] = [];
   const bridge = new CodexStdioBridge({
@@ -2991,13 +3022,14 @@ test("detached questionnaire history records directly without answering a provid
     assert.equal(sqliteBatches.length, 1);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("repeated provider misses report one SQLite capture failure with a bounded sanitised root cause", async (t) => {
   const fixtureIdentities = await recordingIdentities({ existingTurn: true });
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-transcript-report-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-transcript-report-");
+  const root = temporary.path;
   const records = captureTestOutput(t, process.stderr, text => text.startsWith("[codex-transcript] capture failed"));
   const bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
@@ -3038,7 +3070,7 @@ test("repeated provider misses report one SQLite capture failure with a bounded 
     assert.ok(!cause.includes("credential") && !cause.includes("storage.sqlite"));
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
@@ -3051,7 +3083,8 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
   const [command] = await fixtureIdentities.items.admit([{
     threadId, sources: [{ turnId, kind: "stable", reference: "command" }],
   }]);
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-browse-asset-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-browse-asset-");
+  const root = temporary.path;
   const observations: object[] = [];
   const notifications: object[] = [];
   const bytes = Buffer.from("verified browse image");
@@ -3122,7 +3155,7 @@ test("Browse settlement verifies Workbench transcript assets before forwarding t
     assert.equal(notifications.length, 1);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
@@ -3137,7 +3170,8 @@ test("SQLite transcript failure does not block Browse settlement", async (contex
   await fixtureIdentities.items.admit([{
     threadId, sources: [{ turnId, kind: "stable", reference: "command" }],
   }]);
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-browse-sqlite-failure-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-browse-sqlite-failure-");
+  const root = temporary.path;
   const notifications: object[] = [];
   const bridge = new CodexStdioBridge({
     identities: fixtureIdentities,
@@ -3170,12 +3204,13 @@ test("SQLite transcript failure does not block Browse settlement", async (contex
     }]);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("live transcript recording and reload use only SQL and preserve image assets", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-live-transcript-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-live-transcript-");
+  const root = temporary.path;
   const database = databaseFixture();
   const fixtureIdentities = await recordingIdentities({ database });
   const repository = new WorkbenchTranscriptRepository(database);
@@ -3495,13 +3530,14 @@ test("live transcript recording and reload use only SQL and preserve image asset
   } finally {
     await bridge.disposeImmediately();
     database.close();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("ordered claim-hook denials synthesize live failures and thread reads across bridge reload", async () => {
   const sql = await recordingFixture();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-file-change-test-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-file-change-test-");
+  const root = temporary.path;
   const anchorlessItemId = "exec-11111111-1111-4111-8111-111111111111";
   const anchoredItemId = "exec-22222222-2222-4222-8222-222222222222";
   const ordinaryItemId = "exec-33333333-3333-4333-8333-333333333333";
@@ -3671,13 +3707,14 @@ test("ordered claim-hook denials synthesize live failures and thread reads acros
     assert.equal(completedState.fileChanges?.turnCursors.size, 0);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("native send failure clears pending response and records exact steer failure", async () => {
   const sql = await recordingFixture("C:/repo", true);
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-test-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-test-");
+  const root = temporary.path;
   const client: BridgeClient = {
     OPEN: 1,
     close() {},
@@ -3718,12 +3755,13 @@ test("native send failure clears pending response and records exact steer failur
     assert.doesNotMatch(persisted.steerEntries?.[0]?.error ?? "", /secret-token|Users\\private/u);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("accepted internal steers do not interrupt MCP waits", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-internal-steer-test-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-internal-steer-test-");
+  const root = temporary.path;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
     send(message: JsonRpcRequest) {
@@ -3743,12 +3781,13 @@ test("accepted internal steers do not interrupt MCP waits", async () => {
     assert.deepEqual(acceptedSteers, []);
   } finally {
     await bridge.dispose();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("fresh first turn prepares its stored profile across reload and failed admission without resume", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-fresh-start-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-fresh-start-");
+  const root = temporary.path;
   const events: string[] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
   let turnStartAttempts = 0;
@@ -3842,13 +3881,14 @@ test("fresh first turn prepares its stored profile across reload and failed admi
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 for (const status of ["notLoaded", "idle", "active", "resumeFailure"] as const) {
   test(`compaction prepares only a cold thread without admitting a turn: ${status}`, async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-compact-"));
+    const temporary = await WorkbenchTemporaryDirectory.create("workbench-compact-");
+    const root = temporary.path;
     const requests: JsonRpcRequest[] = [];
     const configured: string[][] = [];
     let bridge!: InstanceType<typeof CodexStdioBridge>;
@@ -3901,13 +3941,14 @@ for (const status of ["notLoaded", "idle", "active", "resumeFailure"] as const) 
       assert.equal((requests[0]!.params as { includeTurns: boolean }).includeTurns, false);
     } finally {
       await bridge.disposeImmediately();
-      await fs.rm(root, { recursive: true, force: true });
+      await temporary.dispose();
     }
   });
 }
 
 test("retired compaction preparation cannot resume or compact through a replacement generation", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-compact-cancel-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-compact-cancel-");
+  const root = temporary.path;
   let markPrepared!: () => void;
   const prepared = new Promise<void>(resolve => { markPrepared = resolve; });
   let finishPreparation!: () => void;
@@ -3941,12 +3982,13 @@ test("retired compaction preparation cannot resume or compact through a replacem
   } finally {
     finishPreparation();
     await bridge.disposeImmediately();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("managed unloaded turn start resolves when MCP preparation requests a provider reload", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-managed-start-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-managed-start-");
+  const root = temporary.path;
   const events: string[] = [];
   const upstreamRequests: JsonRpcRequest[] = [];
   const unloadedThread = { ...bridgeThread(), status: { type: "notLoaded" as const }, turns: [] };
@@ -4119,12 +4161,13 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("explicit refresh rebuilds the current instruction prefix and prepares MCP before replacement admission", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-explicit-refresh-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-explicit-refresh-");
+  const root = temporary.path;
   const agentPath = path.join(testWorkbenchLibraryRoot, "agents", "refresh.md");
   await fs.writeFile(agentPath, "---\nname: refresh test\n---\nOLD REFRESH PREFIX", "utf8");
   const instructions = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root);
@@ -4185,13 +4228,14 @@ test("explicit refresh rebuilds the current instruction prefix and prepares MCP 
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
     await fs.rm(agentPath, { force: true });
   }
 });
 
 test("profile preparation failure prevents native effects for ordinary, detached and native existing-thread starts", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-profile-failure-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-profile-failure-");
+  const root = temporary.path;
   const sent: JsonRpcRequest[] = [];
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
@@ -4211,7 +4255,7 @@ test("profile preparation failure prevents native effects for ordinary, detached
     onNotification() {}, resolveProjectFromCwd: async () => null,
     prepareThreadConfiguration: async () => { throw new Error("Profile persistence failed"); },
   });
-  context.after(async () => { await bridge.disposeImmediately(); await fs.rm(root, { force: true, recursive: true }); });
+  context.after(async () => { await bridge.disposeImmediately(); await temporary.dispose(); });
   const startRequest = { method: "turn/start", params: { threadId: "thread", input: [] } };
   for (const steer of [true, false]) {
     await assert.rejects(bridge.handleBridgeRequest({
@@ -4228,7 +4272,8 @@ test("profile preparation failure prevents native effects for ordinary, detached
 });
 
 test("managed admission steers a provider-confirmed active turn without changing its prefix", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-managed-steer-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-managed-steer-");
+  const root = temporary.path;
   const upstreamRequests: JsonRpcRequest[] = [];
   const acceptedSteers: string[] = [];
   let prepared = false;
@@ -4343,12 +4388,13 @@ test("managed admission steers a provider-confirmed active turn without changing
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("managed continuation starts the unchanged input when its active turn ends before steer", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-managed-steer-race-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-managed-steer-race-");
+  const root = temporary.path;
   const upstreamRequests: JsonRpcRequest[] = [];
   const activeTurn = { ...bridgeThread().turns[0]!, items: [], itemsView: "notLoaded" as const };
   const activeThread = { ...bridgeThread(), turns: [] };
@@ -4447,12 +4493,13 @@ test("managed continuation starts the unchanged input when its active turn ends 
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("managed admission rejects active metadata without a newest in-progress turn", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-active-turn-missing-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-active-turn-missing-");
+  const root = temporary.path;
   const upstreamRequests: JsonRpcRequest[] = [];
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
@@ -4510,12 +4557,13 @@ test("managed admission rejects active metadata without a newest in-progress tur
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("managed admission attempts a prepared turn start from provider system errors", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-system-error-start-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-system-error-start-");
+  const root = temporary.path;
   const upstreamRequests: JsonRpcRequest[] = [];
   let prepared = false;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
@@ -4601,12 +4649,13 @@ test("managed admission attempts a prepared turn start from provider system erro
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("managed inactive admissions serialize complete resume and start lifecycles", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-serialized-starts-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-serialized-starts-");
+  const root = temporary.path;
   const upstreamRequests: JsonRpcRequest[] = [];
   let heldRead: JsonRpcRequest | null = null;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
@@ -4693,13 +4742,14 @@ test("managed inactive admissions serialize complete resume and start lifecycles
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("context reads bypass the operation queue and negotiate scoped entries without forwarding the capability", async () => {
   const sql = await recordingFixture();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-context-test-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-context-test-");
+  const root = temporary.path;
   const upstreamRequests: JsonRpcRequest[] = [];
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
@@ -4767,14 +4817,15 @@ test("context reads bypass the operation queue and negotiate scoped entries with
   } finally {
     queueGate.resolve({ data: [] });
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("exact transcript windows await ordered provider recording and Thread Recall reuses materialisation", async () => {
   const sql = await recordingFixture();
   const fixtureIdentities = sql.ports.identities;
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-known-window-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-known-window-");
+  const root = temporary.path;
   const pageRecordingStarted = deferred<void>();
   const releasePageRecording = deferred<void>();
   const sqliteBatches: object[][] = [];
@@ -4956,7 +5007,7 @@ test("exact transcript windows await ordered provider recording and Thread Recal
   } finally {
     releasePageRecording.resolve();
     await bridge.dispose();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
@@ -4965,7 +5016,8 @@ test("durable transcript and recall materialisation propagate SQLite failure and
     text.startsWith("[codex-transcript] capture failed provider-turn-window:") && text.includes("cause=SQL page recording failure"));
   context.after(() => assert.equal(diagnostics.length, 1));
   const sql = await recordingFixture();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-materialisation-failure-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-materialisation-failure-");
+  const root = temporary.path;
   const failure = new Error("SQL page recording failure");
   let failing = true;
   let imports = 0;
@@ -5016,13 +5068,14 @@ test("durable transcript and recall materialisation propagate SQLite failure and
     assert.equal(imports, 1, "Recovered materialisation must be reused");
   } finally {
     await bridge.dispose();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("transcript materialisation waits for an admitted live turn to settle", async () => {
   const fixtureIdentities = await recordingIdentities();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-live-materialisation-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-live-materialisation-");
+  const root = temporary.path;
   const liveTurnRecordingStarted = deferred<void>();
   const releaseLiveTurnRecording = deferred<void>();
   const materializedTurnIds = new Set<string>();
@@ -5085,7 +5138,7 @@ test("transcript materialisation waits for an admitted live turn to settle", asy
   } finally {
     releaseLiveTurnRecording.resolve();
     await bridge.dispose();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
@@ -5156,7 +5209,8 @@ test("overlapping managed starts defer early notifications until each captured r
 
 test("turn start responses admit the live turn before materialisation reads SQL", async () => {
   const fixtureIdentities = await recordingIdentities();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-turn-start-materialisation-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-turn-start-materialisation-");
+  const root = temporary.path;
   const directTurnRecordingStarted = deferred<void>();
   const releaseDirectTurnRecording = deferred<void>();
   const materializedTurnIds = new Set<string>();
@@ -5307,13 +5361,14 @@ test("turn start responses admit the live turn before materialisation reads SQL"
   } finally {
     releaseDirectTurnRecording.resolve();
     await bridge.dispose();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("bounded context reads bootstrap unseen threads through one full turn page", async () => {
   const sql = await recordingFixture();
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-unseen-window-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-unseen-window-");
+  const root = temporary.path;
   const upstreamRequests: JsonRpcRequest[] = [];
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
@@ -5381,12 +5436,13 @@ test("bounded context reads bootstrap unseen threads through one full turn page"
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("observational internal thread lists skip transcripts without forwarding the marker", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-observational-test-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-observational-test-");
+  const root = temporary.path;
   const upstreamRequests: JsonRpcRequest[] = [];
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const appServer = {
@@ -5416,12 +5472,13 @@ test("observational internal thread lists skip transcripts without forwarding th
     );
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("caller cancellation clears a pending internal app-server response", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-internal-cancel-test-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-internal-cancel-test-");
+  const root = temporary.path;
   const requestSent = deferred<void>();
   const bridge = new CodexStdioBridge({
     appServer: {
@@ -5445,12 +5502,13 @@ test("caller cancellation clears a pending internal app-server response", async 
     assert.equal(state.pendingResponses.size, 0);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("fatal bridge stop rejects a pending internal app-server response", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-bridge-internal-fatal-test-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-internal-fatal-test-");
+  const root = temporary.path;
   const requestSent = deferred<void>();
   const bridge = new CodexStdioBridge({
     appServer: {
@@ -5473,7 +5531,7 @@ test("fatal bridge stop rejects a pending internal app-server response", async (
     assert.equal(state.pendingResponses.size, 0);
   } finally {
     await bridge.disposeImmediately();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 

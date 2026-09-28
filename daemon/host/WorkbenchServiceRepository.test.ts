@@ -3,20 +3,22 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory.ts";
 import test from "node:test";
 import WorkbenchServiceRepository from "./WorkbenchServiceRepository.ts";
 
 test("service identity and wake policy survive repository reopening", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-service-db-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-service-db-");
+  const root = temporary.path;
   const databasePath = path.join(root, "service.sqlite3");
   const first = new WorkbenchServiceRepository({ databasePath });
   const next = new WorkbenchServiceRepository({ databasePath });
   context.after(async () => {
     await first.close();
     await next.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   });
   await first.start();
   const identity = first.daemonId;
@@ -30,11 +32,12 @@ test("service identity and wake policy survive repository reopening", async cont
 });
 
 test("restart intent wakes only its supervision session and failure requires retry", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-service-intent-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-service-intent-");
+  const root = temporary.path;
   const repository = new WorkbenchServiceRepository({ databasePath: path.join(root, "service.sqlite3") });
   context.after(async () => {
     await repository.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   });
   await repository.start();
   assert.equal(repository.shouldResume("session-a"), false);

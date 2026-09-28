@@ -1,9 +1,9 @@
 /* No production exports. Protect bounded local endpoint publication and instance-owned cleanup. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import {
   readDaemonEndpoint, publishDaemonEndpoint, removeDaemonEndpoint,
 } from "./workbench-daemon-endpoint.ts";
@@ -11,8 +11,9 @@ import {
 const first = { version: 1 as const, instanceId: "6e1a6f64-af71-4639-b997-65d8f314b352", pid: process.pid, origin: "http://127.0.0.1:32123" };
 
 test("publication is readable and an old process cannot withdraw its replacement", async context => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-daemon-endpoint-"));
-  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-daemon-endpoint-");
+  const directory = temporary.path;
+  context.after(() => temporary.dispose());
   const file = path.join(directory, "runtime.json");
   assert.equal(await readDaemonEndpoint(file), null);
   await publishDaemonEndpoint(file, first);
@@ -26,8 +27,9 @@ test("publication is readable and an old process cannot withdraw its replacement
 });
 
 test("untrusted and oversized records never become a daemon address", async context => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-daemon-endpoint-"));
-  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-daemon-endpoint-");
+  const directory = temporary.path;
+  context.after(() => temporary.dispose());
   const file = path.join(directory, "runtime.json");
   for (const origin of ["http://192.168.1.2:32123", "http://127.0.0.1:32123/other", "https://127.0.0.1:32123"]) {
     await fs.writeFile(file, JSON.stringify({ ...first, origin }));

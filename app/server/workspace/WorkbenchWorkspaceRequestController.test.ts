@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
@@ -25,7 +25,8 @@ function state(revision: number): WorkbenchClientStateResponse {
 }
 
 async function fixture(context: TestContext) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-request-owner-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workspace-request-owner-");
+  const directory = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(directory, "presentation.sqlite3") });
   await repository.start();
   const presentation = new WorkbenchPresentationController(repository);
@@ -53,7 +54,7 @@ async function fixture(context: TestContext) {
   });
   context.after(async () => {
     owner.dispose(); threads.dispose(); workspace.dispose(); sources.dispose();
-    presentation.close(); await repository.close(); await fs.rm(directory, { recursive: true, force: true });
+    presentation.close(); await repository.close(); await temporary.dispose();
   });
   return { owner, updates, warnings, changes,
     read: (operation: typeof read) => { read = operation; },

@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
@@ -56,7 +56,8 @@ async function request(controller: WorkbenchTranscriptAssetController, url: stri
 }
 
 test("transcript assets enforce the allowlist and serve immutable typed bytes", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-transcript-asset-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-transcript-asset-");
+  const root = temporary.path;
   const threadId = "dGhyZWFk";
   const asset = `${"a".repeat(64)}.png`;
   const controller = new WorkbenchTranscriptAssetController({
@@ -80,12 +81,13 @@ test("transcript assets enforce the allowlist and serve immutable typed bytes", 
     const missing = await request(controller, `/daemon/transcript-assets/codex/${threadId}/${"b".repeat(64)}.webp`);
     assert.equal(missing.statusCode, 404);
   } finally {
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("canonical asset requests retain native URLs without exposing another thread's bytes", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-transcript-identity-asset-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-transcript-identity-asset-");
+  const root = temporary.path;
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
@@ -129,6 +131,6 @@ test("canonical asset requests retain native URLs without exposing another threa
     assert.equal((await request(controller, `/daemon/transcript-assets/codex/${other.threadId}/${asset}`)).statusCode, 404);
   } finally {
     database.close();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });

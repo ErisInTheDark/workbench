@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import { promisify } from "node:util";
 import test from "node:test";
 
@@ -13,7 +13,8 @@ const execFileAsync = promisify(execFile);
 const packageAdapterPath = path.resolve(import.meta.dirname, "wb");
 
 async function packageFixture(options: { checkoutCli?: boolean } = {}) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-package-wb-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-package-wb-");
+  const root = temporary.path;
   const adapterPath = path.join(root, "package", "wb");
   const checkoutCliPath = path.join(root, "wb");
   const workingDirectory = path.join(root, "project");

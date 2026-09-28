@@ -1,13 +1,14 @@
 /* No exports. Tests protect forward/reverse import closure and fresh on-disk resolution. */
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import test from "node:test";
 import ProjectImportGraph from "./ProjectImportGraph";
 
 test("walks runtime edges, cycles and importers without following erased types", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "import-graph-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("import-graph-");
+  const root = temporary.path;
   const file = (name: string) => path.join(root, `${name}.ts`);
   try {
     const files = {
@@ -29,6 +30,6 @@ test("walks runtime edges, cycles and importers without following erased types",
     await writeFile(file("owner"), 'import "./missing";');
     assert.throws(() => new ProjectImportGraph(root, Object.keys(files).map(file)).closure([file("owner")]), /missing/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

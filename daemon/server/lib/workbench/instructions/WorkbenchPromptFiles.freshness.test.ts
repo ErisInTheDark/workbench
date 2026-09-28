@@ -1,14 +1,15 @@
 /* Exports: none. Protect instruction freshness, overrides, role-specific identity and skill precedence. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 
 test("public instruction use refreshes mirrored generated files and preserves active overrides", async () => {
   const originalCwd = process.cwd();
   const originalLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "instruction-loader-test-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("instruction-loader-test-");
+  const temporaryRoot = temporary.path;
   const temporaryProjectRoot = path.join(temporaryRoot, "project");
   const temporaryDaemonRoot = path.join(temporaryProjectRoot, "daemon");
   const temporaryInstructionRoot = path.join(temporaryProjectRoot, "instructions");
@@ -274,6 +275,6 @@ user-owned agent prompt
     process.chdir(originalCwd);
     if (originalLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
     else process.env.WORKBENCH_LIBRARY_ROOT = originalLibraryRoot;
-    await fs.rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await temporary.dispose();
   }
 });

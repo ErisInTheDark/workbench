@@ -3,14 +3,16 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory.ts";
 import test, { type TestContext } from "node:test";
 import WorkbenchServiceStartup from "./WorkbenchServiceStartup.ts";
 
 async function fixture(context: TestContext) {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "wb-startup-"));
-  context.after(() => fs.rm(home, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-startup-");
+  const home = temporary.path;
+  context.after(() => temporary.dispose());
   const state = { enabled: false, running: false, linger: false, registrationFails: false };
   const run = async (command: string, args: readonly string[]) => {
     if (state.registrationFails) throw new Error("registration refused");

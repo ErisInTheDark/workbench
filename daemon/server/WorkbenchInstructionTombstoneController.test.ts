@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 
@@ -23,7 +23,8 @@ async function exists(filePath: string) {
 }
 
 test("a consumed instruction tombstone never deletes a later user recreation", async () => {
-  const rootPath = await mkdtemp(path.join(tmpdir(), "workbench-instruction-consume-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-instruction-consume-");
+  const rootPath = temporary.path;
   const libraryRoot = path.join(rootPath, "library");
   const database = new WorkbenchDatabaseController({ databasePath: path.join(rootPath, "workbench.sqlite3") });
   const targetPath = path.join(libraryRoot, "wb", "mechanics", "thread-state.md");
@@ -56,12 +57,13 @@ test("a consumed instruction tombstone never deletes a later user recreation", a
     assert.equal(await readFile(targetPath, "utf8"), "user recreation\n");
   } finally {
     await database.close();
-    await rm(rootPath, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("an absent retired file is consumed before a future user creation", async () => {
-  const rootPath = await mkdtemp(path.join(tmpdir(), "workbench-instruction-absent-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-instruction-absent-");
+  const rootPath = temporary.path;
   const libraryRoot = path.join(rootPath, "library");
   const database = new WorkbenchDatabaseController({ databasePath: path.join(rootPath, "workbench.sqlite3") });
   const targetPath = path.join(libraryRoot, "wb", "mechanics", "thread-state.md");
@@ -82,12 +84,13 @@ test("an absent retired file is consumed before a future user creation", async (
     assert.equal(await readFile(targetPath, "utf8"), "future user instructions\n");
   } finally {
     await database.close();
-    await rm(rootPath, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("pending quarantine recovery removes only the retired file", async () => {
-  const rootPath = await mkdtemp(path.join(tmpdir(), "workbench-instruction-recovery-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-instruction-recovery-");
+  const rootPath = temporary.path;
   const libraryRoot = path.join(rootPath, "library");
   const database = new WorkbenchDatabaseController({ databasePath: path.join(rootPath, "workbench.sqlite3") });
   const targetPath = path.join(libraryRoot, "wb", "mechanics", "thread-state.md");
@@ -122,6 +125,6 @@ test("pending quarantine recovery removes only the retired file", async () => {
     );
   } finally {
     await database.close();
-    await rm(rootPath, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

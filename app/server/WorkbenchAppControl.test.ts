@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import http from "node:http";
 import test from "node:test";
@@ -11,7 +11,8 @@ import WorkbenchAppControl from "./WorkbenchAppControl.ts";
 import { readServiceEndpoint } from "../../shared/process/workbench-service-endpoint.ts";
 
 test("app control authenticates, follows port movement and routes Quit once", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-app-control-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-app-control-");
+  const root = temporary.path;
   const endpointPath = path.join(root, "runtime.json");
   let quitCount = 0;
   let quit!: () => void;
@@ -37,7 +38,7 @@ test("app control authenticates, follows port movement and routes Quit once", as
       server.close(error => error ? reject(error) : resolve());
       server.closeAllConnections();
     })));
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   });
   const firstOrigin = await listen();
   await control.publish(firstOrigin);

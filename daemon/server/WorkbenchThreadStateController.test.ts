@@ -3,9 +3,9 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import WorkbenchThreadStateControllerOwner, { type WorkbenchThreadStateControllerOptions } from "./WorkbenchThreadStateController";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "workbench-shared/types";
@@ -1200,7 +1200,8 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, message: str
 }
 
 test("independent project subscribers and warm reads do not own background reconciliation", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-state-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-state-");
+  const root = temporary.path;
   const published: Array<{ connectionId: string; revision: number }> = [];
   let reconciliations = 0;
   const knownEntry: WorkbenchThreadSidebarEntry = {
@@ -1254,7 +1255,8 @@ test("independent project subscribers and warm reads do not own background recon
 });
 
 test("retained project folders import into the legacy pinned export with source-qualified members", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-global-pinned-layout-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-global-pinned-layout-");
+  const root = temporary.path;
   const folderId = fixtureIdentitySchemas.FolderIdSchema.parse("00000000-0000-4000-8000-000000000041");
   const projects = ["project-a", "project-b"];
   await seedProjectState(root, "project-a", {
@@ -1282,11 +1284,12 @@ test("retained project folders import into the legacy pinned export with source-
   const stored = await readGlobalState<{ displayOrder: { folders?: Array<{ threadKeys: string[] }> } }>(root, "pinnedLayout");
   assert.deepEqual(stored.displayOrder.folders?.[0]?.threadKeys, [keyA]);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("a failed priority write restores the loaded project state", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-pinned-move-rollback-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-pinned-move-rollback-");
+  const root = temporary.path;
   const persistence = testPersistence(root);
   await persistence.writeProject("project", {
     drafts: [],
@@ -1320,12 +1323,13 @@ test("a failed priority write restores the loaded project state", async () => {
   const entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread");
   assert.deepEqual(entry?.entryKind === "thread" ? entry.metadata : null, { archived: false, pinned: false, snoozed: true });
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("reconciled project thread state persists authoritatively in SQLite across controller restart", async () => {
   const projectId = testProjectIds.project;
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-sqlite-authority-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-sqlite-authority-");
+  const root = temporary.path;
   await fs.mkdir(path.join(root, ".workbench"), { recursive: true });
   const database = new WorkbenchDatabaseController({ databasePath: path.join(root, ".workbench", "workbench.sqlite3") });
   const store = new WorkbenchThreadStateStore(database);
@@ -1360,12 +1364,13 @@ test("reconciled project thread state persists authoritatively in SQLite across 
   } finally {
     await controller.dispose();
     await database.close();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("authoritative SQLite read and write failures surface at the controller boundary", async () => {
-  const readRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-sqlite-read-failure-"));
+  const readTemporary = await WorkbenchTemporaryDirectory.create("workbench-thread-sqlite-read-failure-");
+  const readRoot = readTemporary.path;
   const readStore = new MemoryThreadStatePersistence();
   readStore.readProject = async () => { throw new Error("sqlite read unavailable"); };
   const readController = new WorkbenchThreadStateController({
@@ -1378,10 +1383,11 @@ test("authoritative SQLite read and write failures surface at the controller bou
     await assert.rejects(readController.getSnapshot(fixtureProjectIds["project"]), /sqlite read unavailable/u);
   } finally {
     await readController.dispose();
-    await fs.rm(readRoot, { force: true, recursive: true });
+    await readTemporary.dispose();
   }
 
-  const writeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-sqlite-write-failure-"));
+  const writeTemporary = await WorkbenchTemporaryDirectory.create("workbench-thread-sqlite-write-failure-");
+  const writeRoot = writeTemporary.path;
   const writeStore = new MemoryThreadStatePersistence();
   const writeController = new WorkbenchThreadStateController({
     getProjectCatalog: () => ({ data: [projectOption("project", writeRoot)], rootPath: writeRoot }),
@@ -1396,12 +1402,13 @@ test("authoritative SQLite read and write failures surface at the controller bou
       pinnedRecord("thread", "Rejected write")), /sqlite write unavailable/u);
   } finally {
     await writeController.dispose();
-    await fs.rm(writeRoot, { force: true, recursive: true });
+    await writeTemporary.dispose();
   }
 });
 
 test("repairable global pinned layout drift cannot block thread-state open", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-global-pinned-layout-repair-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-global-pinned-layout-repair-");
+  const root = temporary.path;
   await seedGlobalState(root, "pinnedLayout", {
     displayOrder: {},
     importedProjectIds: ["project"],
@@ -1424,7 +1431,7 @@ test("repairable global pinned layout drift cannot block thread-state open", asy
   assert.match(logs.join("\n"), /revision/u);
   assert.doesNotMatch(logs.join("\n"), /must-not-be-logged/u);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("project subscribers receive activity and transient wait state without socket-owned observations", async context => {
@@ -1503,7 +1510,8 @@ test("an observed project represents a missing thread as an empty observation", 
 });
 
 test("a subagent observation includes its root without granting authority through socket selection", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-pinned-context-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-pinned-context-");
+  const root = temporary.path;
   const pinnedRoot: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 3,
     entryKind: "thread",
@@ -1582,11 +1590,12 @@ test("a subagent observation includes its root without granting authority throug
   });
   assert.equal(foreign.error?.code, "invalidThreadOwner");
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("provider omission retains saved threads through partial, complete, and reopened snapshots", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-progressive-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-progressive-");
+  const root = temporary.path;
   const oldEntry: WorkbenchThreadSidebarEntry = {
     activityAt: 1,
     entryKind: "thread",
@@ -1651,12 +1660,13 @@ test("provider omission retains saved threads through partial, complete, and reo
   } finally {
     finalGate.resolve();
     await controller.dispose();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("concurrent first reads share one project initialization and reconciliation", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-concurrent-open-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-concurrent-open-");
+  const root = temporary.path;
   let releaseRead = () => undefined;
   const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
   const persistence = testPersistence(root);
@@ -1683,11 +1693,12 @@ test("concurrent first reads share one project initialization and reconciliation
   await waitFor(() => reconciliations === 1, "Shared reconciliation did not start.");
   assert.equal(reconciliations, 1);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("missing SQLite project state initializes empty and the first mutation persists", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-sqlite-empty-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-sqlite-empty-");
+  const storageRoot = temporary.path;
   const persistence = testPersistence(storageRoot);
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: () => ({ data: [projectOption("project", storageRoot)], rootPath: storageRoot }),
@@ -1708,11 +1719,12 @@ test("missing SQLite project state initializes empty and the first mutation pers
   const stored = await persistence.readProject("project") as { records: Array<{ identity: { threadId: string } }> };
   assert.deepEqual(stored.records.map(record => record.identity.threadId), ["thread"]);
   await controller.dispose();
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("stored state repairs invalid leaves without erasing thread or draft siblings", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-conformance-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-conformance-");
+  const root = temporary.path;
   const record = {
     activityAt: 10,
     entryKind: "thread",
@@ -1803,7 +1815,7 @@ test("stored state repairs invalid leaves without erasing thread or draft siblin
   assert.equal(logs.some((message) => message.includes("repairedPaths=gitArc")), true);
   assert.equal(logs.some((message) => message.includes("projectId")), true);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("legacy presentation export pages drafts and reads inline attachments without copying full data URLs", async context => {
@@ -1913,7 +1925,8 @@ test("legacy layout export keeps each socket response bounded across a large ret
 });
 
 test("draft targets are provider-agnostic and adopt any addressed provider", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-draft-provider-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-draft-provider-");
+  const root = temporary.path;
   const projectId = fixtureProjectIds.project;
   const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("11111111-1111-4111-8111-111111111111");
   const settings = { harness: "codex" as const, model: "codex-model", agentPath: null, agentSource: null, reasoningEffort: null, serviceTier: null };
@@ -1944,12 +1957,13 @@ test("draft targets are provider-agnostic and adopt any addressed provider", asy
     assert.equal(entry?.entryKind === "draft" ? entry.draft.prompt : null, "Keep this");
   } finally {
     await controller.dispose();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("legacy profiles migrate and accepted provider work retains its configured profile", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-profiles-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-profiles-");
+  const root = temporary.path;
   const profiles: WorkbenchComposerProfile[] = [];
   const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("11111111-1111-4111-8111-111111111111");
   await seedProjectState(root, "project", {
@@ -2043,11 +2057,12 @@ test("legacy profiles migrate and accepted provider work retains its configured 
   await controller.acceptProviderIntent(fixtureProjectIds["project"], "codex", fixtureThreadIds["materialized"], fixtureTurnIds["next-turn"]);
   assert.deepEqual(await controller.readComposerProfileTarget(threadSlot), selected);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("an unidentified stored record cannot reconcile or overwrite its source file", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-unidentified-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-unidentified-");
+  const root = temporary.path;
   const source = {
     drafts: [],
     records: [{
@@ -2073,11 +2088,12 @@ test("an unidentified stored record cannot reconcile or overwrite its source fil
   assert.equal(reconciliations, 0);
   assert.deepEqual(await readProjectState(root, "project"), source);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("headless provider refresh preserves Git lifecycle and MCP generation without leaking internal fields", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-headless-mcp-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-headless-mcp-");
+  const root = temporary.path;
   const gitArc = {
     checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], intentDescription: "", intentName: "Retain Git state",
     phase: "active" as const, proposals: [{ proposalId: "proposal-one", status: "proposed" as const }], updatedAt: new Date(0).toISOString(),
@@ -2121,11 +2137,12 @@ test("headless provider refresh preserves Git lifecycle and MCP generation witho
   const reopenedEntry = (await reopened.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "headless");
   assert.deepEqual(reopenedEntry?.entryKind === "thread" ? { gitArc: reopenedEntry.gitArc, gitArcPlan: reopenedEntry.gitArcPlan } : null, { gitArc, gitArcPlan });
   await reopened.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("legacy settled thread metadata receives a fresh persisted retention grace window", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-v2-mcp-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-v2-mcp-");
+  const root = temporary.path;
   await seedProjectState(root, "project", {
     drafts: [],
     threads: [{
@@ -2164,11 +2181,12 @@ test("legacy settled thread metadata receives a fresh persisted retention grace 
   assert.equal(stored.version, 4);
   assert.deepEqual(stored.records.map(({ gitHistoryCleanedAt, mcpGeneration, providerObserved, settledAt }) => ({ gitHistoryCleanedAt, mcpGeneration, providerObserved, settledAt })), [{ gitHistoryCleanedAt: null, mcpGeneration: "legacy:4", providerObserved: true, settledAt: 1_234 }]);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("continuous settlement prunes once per durable epoch, retries failures, and resets on restore", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-git-retention-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-git-retention-");
+  const root = temporary.path;
   let now = 1_000;
   const pruned: Array<Array<{ harness: string; threadId: string }>> = [];
   let rejectNextPrune = false;
@@ -2271,11 +2289,12 @@ test("continuous settlement prunes once per durable epoch, retries failures, and
   stored = await readProjectState<{ records: Array<{ gitHistoryCleanedAt?: number | null }> }>(root, "project");
   assert.equal(stored.records[0]?.gitHistoryCleanedAt, now);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("constructing and disposing does not enumerate projects or start migration", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-no-startup-migration-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-no-startup-migration-");
+  const root = temporary.path;
   let catalogReads = 0;
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: () => { catalogReads += 1; throw new Error("catalog unavailable"); },
@@ -2285,11 +2304,12 @@ test("constructing and disposing does not enumerate projects or start migration"
   assert.equal(catalogReads, 0);
   await controller.dispose();
   assert.equal(catalogReads, 0);
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("disposal fences late reconciliation without awaiting its provider request", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dispose-reconcile-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-dispose-reconcile-");
+  const root = temporary.path;
   const publications: WorkbenchThreadSidebarSnapshot[] = [];
   let reconciliationStarted = false;
   let releaseReconciliation = () => undefined;
@@ -2322,11 +2342,12 @@ test("disposal fences late reconciliation without awaiting its provider request"
   releaseReconciliation();
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(publications, []);
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("background reconciliation survives UI disconnect and a warm reopen", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-warm-reopen-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-warm-reopen-");
+  const root = temporary.path;
   let reconciliationCount = 0;
   let staleAccept: ((harness: "codex", entries: WorkbenchThreadSidebarEntry[], options: { complete: boolean }) => void) | null = null;
   let releaseStale = () => undefined;
@@ -2373,7 +2394,8 @@ test("background reconciliation survives UI disconnect and a warm reopen", async
 });
 
 test("request telemetry reports bounded validation evidence without logging request values", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-telemetry-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-telemetry-");
+  const root = temporary.path;
   const logs: string[] = [];
   let now = 10;
   const controller = new WorkbenchThreadStateController({
@@ -2396,7 +2418,8 @@ test("request telemetry reports bounded validation evidence without logging requ
 });
 
 test("invalid title intent telemetry identifies strict-contract drift without logging field values", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-invalid-intent-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-invalid-intent-");
+  const root = temporary.path;
   const logs: string[] = [];
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
@@ -2426,7 +2449,8 @@ test("invalid title intent telemetry identifies strict-contract drift without lo
 });
 
 test("accepted intent survives provider discovery lag and remains visible after its lifecycle advances", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-accepted-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-accepted-");
+  const root = temporary.path;
   const published: WorkbenchThreadSidebarEntry[] = [];
   const publishedSnapshots: WorkbenchThreadSidebarSnapshot[] = [];
   let now = 42;
@@ -2515,7 +2539,8 @@ test("accepted intent survives provider discovery lag and remains visible after 
 });
 
 test("accepted intent replaces only a neutral headless provider title with the first message", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-accepted-title-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-accepted-title-");
+  const root = temporary.path;
   const published: WorkbenchThreadSidebarEntry[] = [];
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
@@ -2598,7 +2623,8 @@ test("provider admission keeps a first-message display fallback separate from ex
 });
 
 test("successful user input wakes snoozed threads without changing questionnaire turn order", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-user-input-wake-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-user-input-wake-");
+  const root = temporary.path;
   let discovered = false;
   let now = 30;
   const accepted: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
@@ -2650,11 +2676,12 @@ test("successful user input wakes snoozed threads without changing questionnaire
   assert.equal(entry?.entryKind === "thread" ? entry.orderAt : null, 20);
 
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("replayed questionnaire lifecycle does not invent fresh thread activity", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-questionnaire-replay-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-questionnaire-replay-");
+  const root = temporary.path;
   const publications: WorkbenchThreadSidebarSnapshot[] = [];
   let now = 20;
   const providerEntry: WorkbenchThreadSidebarEntry = {
@@ -2691,11 +2718,12 @@ test("replayed questionnaire lifecycle does not invent fresh thread activity", a
   assert.equal(publications.length, 1);
 
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("inactive providers release stale questionnaire ownership without changing terminal semantics", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-inactive-questionnaire-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-inactive-questionnaire-");
+  const root = temporary.path;
   const working = (threadId: string): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
     activityAt: 1,
     entryKind: "thread",
@@ -2775,11 +2803,12 @@ test("inactive providers release stale questionnaire ownership without changing 
   assert.equal(top?.entryKind === "thread" ? top.lifecycle.settled : null, true);
 
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("proper questionnaires and late-response history survive controller restarts", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-questionnaire-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-questionnaire-");
+  const root = temporary.path;
   const persistence = testPersistence(root);
   const providerEntry: WorkbenchThreadSidebarEntry = {
     activityAt: 1,
@@ -3004,11 +3033,12 @@ test("proper questionnaires and late-response history survive controller restart
     ["item", "item-2"],
   );
   await fourth.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("wake waits for every unsnoozed row to become settlement-ready, then wakes only the highest projected root snoozed thread", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-one-wake-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-one-wake-");
+  const root = temporary.path;
   const snoozed = (threadId: string, orderAt: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
     activityAt: orderAt,
     entryKind: "thread",
@@ -3078,11 +3108,12 @@ test("wake waits for every unsnoozed row to become settlement-ready, then wakes 
   assert.equal(reopenedSnoozeState.get(fixtureThreadIds["b"]), true);
   assert.deepEqual(reopenedSnapshot.displayOrder.folders?.[0]?.threadKeys, ["codex:c"]);
   await reopened.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("retained legacy folders reconcile members that leave their section", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-folders-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-folders-");
+  const root = temporary.path;
   const pinned = (threadId: string, orderAt: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
     activityAt: orderAt,
     entryKind: "thread",
@@ -3116,7 +3147,7 @@ test("retained legacy folders reconcile members that leave their section", async
   await reopened.handleRequest("reopened", { identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("a") }, method: "workbench/thread-state/pin/set", pinned: false, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") });
   assert.deepEqual((await reopened.getSnapshot(fixtureProjectIds["project"])).displayOrder, {});
   await reopened.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("a held questionnaire never leaves the thread in the automatic recovery state", async () => {
@@ -3201,7 +3232,8 @@ test("a held questionnaire never leaves the thread in the automatic recovery sta
 });
 
 test("profile-less threads use defaults and reads cannot overtake a failed profile save", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-profile-admission-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-profile-admission-");
+  const root = temporary.path;
   let failWrite = false;
   let release!: () => void;
   let entered!: () => void;
@@ -3221,7 +3253,7 @@ test("profile-less threads use defaults and reads cannot overtake a failed profi
     getProjectCatalog: projectCatalog,
     reconcileProject: async () => [], storageRoot: root, threadStateStore: persistence,
   });
-  context.after(async () => { release(); await controller.dispose(); await fs.rm(root, { recursive: true, force: true }); });
+  context.after(async () => { release(); await controller.dispose(); await temporary.dispose(); });
   const defaultSlot = { kind: "new-thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") };
   const threadSlot = { kind: "thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("existing") };
   const original = { kind: "custom" as const, settings: { ...EMPTY_CODEX_SETTINGS, model: "saved-model" } };
@@ -3241,7 +3273,8 @@ test("profile-less threads use defaults and reads cannot overtake a failed profi
 });
 
 test("restarted preview refreshes linked profiles, retains deleted snapshots and recovers subagent profiles", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-profile-restart-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-profile-restart-");
+  const root = temporary.path;
   const persistence = new MemoryThreadStatePersistence();
   let profiles: WorkbenchComposerProfile[] = [{
     ...EMPTY_CODEX_SETTINGS, id: "named", name: "Named", model: "original",
@@ -3260,7 +3293,7 @@ test("restarted preview refreshes linked profiles, retains deleted snapshots and
   await first.dispose();
   profiles = [{ ...profiles[0]!, agentPath: "library:agents/lily.md", agentSource: "library", model: "latest" }];
   const restarted = create();
-  context.after(async () => { await restarted.dispose(); await fs.rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await restarted.dispose(); await temporary.dispose(); });
   const effective = await restarted.readComposerProfileTarget(slot);
   assert.equal(effective?.settings.model, "latest");
   const candidate = (await restarted.prepareComposerProfileTarget(slot)).selection;
@@ -3405,7 +3438,8 @@ test("profile persistence failure after native acceptance retains success and ex
 });
 
 test("priority transitions retain pins while snoozed and clear both when returning to main", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-drag-priority-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-drag-priority-");
+  const root = temporary.path;
   const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 2,
     entryKind: "thread",
@@ -3477,11 +3511,12 @@ test("priority transitions retain pins while snoozed and clear both when returni
   moved = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "source");
   assert.deepEqual(moved?.entryKind === "thread" ? moved.metadata : null, { archived: false, pinned: false, snoozed: false });
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("cross-project dependent snooze waits for completion and the final live claim", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dependent-snooze-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-dependent-snooze-");
+  const root = temporary.path;
   const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 2,
     entryKind: "thread",
@@ -3549,11 +3584,12 @@ test("cross-project dependent snooze waits for completion and the final live cla
   const storedAfterWake = await readProjectState<{ records: Array<{ snoozedUntil?: unknown }> }>(root, "alpha");
   assert.equal(storedAfterWake.records[0]?.snoozedUntil, null);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("dependent snooze also wakes when claims leave before manual completion", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dependent-snooze-claims-first-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-dependent-snooze-claims-first-");
+  const root = temporary.path;
   const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 2,
     entryKind: "thread",
@@ -3623,11 +3659,12 @@ test("dependent snooze also wakes when claims leave before manual completion", a
   const stored = await readProjectState<{ records: Array<{ snoozedUntil?: unknown }> }>(root, "alpha");
   assert.equal(stored.records[0]?.snoozedUntil, null);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("dependent snooze keeps multiple targets, survives missing targets, and clears manually", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dependent-snooze-clearing-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-dependent-snooze-clearing-");
+  const root = temporary.path;
   const thread = (
     threadId: string,
     metadata: { archived: false; pinned: false; snoozed: boolean },
@@ -3781,11 +3818,12 @@ test("dependent snooze keeps multiple targets, survives missing targets, and cle
   assert.equal(afterBoth?.entryKind === "thread" ? afterBoth.metadata.snoozed : null, false);
   assert.deepEqual(afterBoth?.entryKind === "thread" ? afterBoth.waitingOnThreads : null, []);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("restart reevaluates a persisted dependency when its ready target loaded first", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dependent-snooze-restart-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-dependent-snooze-restart-");
+  const root = temporary.path;
   const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 2,
     entryKind: "thread",
@@ -3847,11 +3885,12 @@ test("restart reevaluates a persisted dependency when its ready target loaded fi
   const stored = await persistence.readProject("alpha") as { records: Array<{ snoozedUntil?: unknown }> };
   assert.equal(stored.records[0]?.snoozedUntil, null);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("provider completion auto-completes subagents while top-level turns still need an explicit status", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-lifecycle-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-lifecycle-");
+  const root = temporary.path;
   const working = (threadId: string): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
     activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
     lifecycle: { agent: { agentStatus: "working", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(`${threadId}-turn`) }, kind: "working", reason: "acceptedIntent", settled: false },
@@ -3888,7 +3927,8 @@ test("provider completion auto-completes subagents while top-level turns still n
 });
 
 test("restoring a terminal thread persists across provider reconciliation", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-restore-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-restore-");
+  const root = temporary.path;
   const persistence = testPersistence(root);
   let publications = 0;
   const terminal: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
@@ -3936,7 +3976,8 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
 });
 
 test("manual status persists, restores settled threads, and rejects provider-owned lifecycles", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-manual-attention-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-manual-attention-");
+  const root = temporary.path;
   const published: WorkbenchThreadSidebarSnapshot[] = [];
   let insideGitArcTransition = false;
   let gitArcTransitions = 0;
@@ -4069,5 +4110,5 @@ test("manual status persists, restores settled threads, and rejects provider-own
   entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
   assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "completed", reason: "userCompleted", settled: true });
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
+  await temporary.dispose();
 });

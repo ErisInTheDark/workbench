@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import Database from "better-sqlite3";
@@ -13,11 +13,12 @@ import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThrea
 import WorkbenchThreadGitSelectionStore from "./WorkbenchThreadGitSelectionStore";
 
 async function fixture(context: TestContext) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "selection-store-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("selection-store-");
+  const root = temporary.path;
   const database = new Database(path.join(root, "state.sqlite"));
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
-  context.after(async () => { database.close(); await fs.rm(root, { recursive: true, force: true }); });
+  context.after(async () => { database.close(); await temporary.dispose(); });
   const identities = new WorkbenchThreadIdentityRepository(database);
   for (const native of ["one", "two"]) identities.observe({
     native: { harness: "codex", nativeLocation: root, nativeThreadId: NativeThreadIdSchema.parse(native) },

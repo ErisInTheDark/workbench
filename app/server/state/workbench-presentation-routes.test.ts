@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 import { DaemonIdSchema, ProjectIdSchema, ProjectIdentityKeySchema } from "workbench-shared/workbench/identity";
@@ -14,7 +14,8 @@ import WorkbenchPresentationRepository from "./WorkbenchPresentationRepository";
 import WorkbenchPresentationRoutes from "./workbench-presentation-routes";
 
 test("presentation attachments admit bounded bytes and reject unsupported media", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-http-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-http-");
+  const root = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
   const owner = new WorkbenchPresentationController(repository);
   const routes = new WorkbenchPresentationRoutes(owner);
@@ -78,6 +79,6 @@ test("presentation attachments admit bounded bytes and reject unsupported media"
     await new Promise<void>(resolve => server.close(() => resolve()));
     owner.close();
     await repository.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

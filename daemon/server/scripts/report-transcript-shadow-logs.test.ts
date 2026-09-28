@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -53,7 +53,8 @@ test("shadow field formatting summarizes by default and preserves explicit drill
 });
 
 test("report defaults to failures, groups equal records across the range, and retains malformed lines", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-shadow-report-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-shadow-report-");
+  const directory = temporary.path;
   const filePath = join(directory, "shadow.jsonl");
   try {
     await writeFile(filePath, [
@@ -89,12 +90,13 @@ test("report defaults to failures, groups equal records across the range, and re
     });
     assert.deepEqual(threadState.map(({ record }) => record.event), ["replayed"]);
   } finally {
-    await rm(directory, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("settlement failures group by stable error shape instead of embedded ids", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-shadow-settlement-report-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-shadow-settlement-report-");
+  const directory = temporary.path;
   const filePath = join(directory, "shadow.jsonl");
   try {
     await writeFile(filePath, [
@@ -119,12 +121,13 @@ test("settlement failures group by stable error shape instead of embedded ids", 
     assert.equal(groups[0]?.count, 2);
     assert.equal(groups[0]?.lastAt, 2);
   } finally {
-    await rm(directory, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("changing parity evidence groups by mismatch while retaining the latest useful context", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-shadow-parity-report-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-shadow-parity-report-");
+  const directory = temporary.path;
   const filePath = join(directory, "shadow.jsonl");
   try {
     await writeFile(filePath, [
@@ -152,6 +155,6 @@ test("changing parity evidence groups by mismatch while retaining the latest use
     assert.equal(groups[0]?.lastAt, 2);
     assert.deepEqual(groups[0]?.record.fields.jsonContext, [{ id: "latest" }]);
   } finally {
-    await rm(directory, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });

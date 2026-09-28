@@ -1,8 +1,8 @@
 /* No exports. Tests protect claim/explicit-input boundaries, previews and failure propagation. */
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import ClaimedProjectTestCommand from "./ClaimedProjectTestCommand";
@@ -10,8 +10,9 @@ import { publishDaemonEndpoint } from "../shared/process/workbench-daemon-endpoi
 
 test("automatic selection discovers current endpoint publications without inherited origins", async t => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const data = await mkdtemp(path.join(os.tmpdir(), "claimed-test-endpoint-"));
-  t.after(() => rm(data, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("claimed-test-endpoint-");
+  const data = temporary.path;
+  t.after(() => temporary.dispose());
   const endpoint = path.join(data, "daemon/runtime.json");
   const origins: string[] = [];
   const env: NodeJS.ProcessEnv = { WORKBENCH_DATA_ROOT: data, WORKBENCH_THREAD_ID: "test-thread" };
@@ -48,8 +49,9 @@ test("automatic selection discovers current endpoint publications without inheri
 
 test("uses every live local claim without mixing repositories or launching list-only tests", async t => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const data = await mkdtemp(path.join(os.tmpdir(), "claimed-test-selection-"));
-  t.after(() => rm(data, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("claimed-test-selection-");
+  const data = temporary.path;
+  t.after(() => temporary.dispose());
   await publishDaemonEndpoint(path.join(data, "daemon/runtime.json"), {
     version: 1, pid: 1, instanceId: "00000000-0000-4000-8000-000000000001", origin: "http://127.0.0.1:4500",
   });

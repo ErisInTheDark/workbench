@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
@@ -14,8 +14,9 @@ const execute = promisify(execFile);
 const readerPath = path.join(__dirname, "git.ts");
 
 test("missing Git HEAD markers are not repositories, while an unborn checkout is", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-git-marker-"));
-  context.after(async () => await fs.rm(root, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-git-marker-");
+  const root = temporary.path;
+  context.after(async () => await temporary.dispose());
   const empty = path.join(root, "empty");
   const brokenLink = path.join(root, "broken-link");
   const unborn = path.join(root, "unborn");
@@ -32,7 +33,8 @@ test("missing Git HEAD markers are not repositories, while an unborn checkout is
 });
 
 test("origin parsing does not require trusting a checkout owned by another identity", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-origin-trust-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-origin-trust-");
+  const root = temporary.path;
   // Tighten only this probe's trust policy so an inherited fixture allowlist cannot mask the failure.
   const env = {
     ...process.env, GIT_TEST_ASSUME_DIFFERENT_OWNER: "1",
@@ -53,11 +55,12 @@ test("origin parsing does not require trusting a checkout owned by another ident
       linkedWorktree: false,
       commonGitDirectory: await fs.realpath(path.join(root, ".git")),
     });
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally { await temporary.dispose(); }
 });
 
 test("local config parsing preserves Git syntax, separate directories, absent origins, and malformed-file failures", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-origin-config-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-origin-config-");
+  const root = temporary.path;
   const checkout = path.join(root, "checkout");
   const metadata = path.join(root, "metadata");
   try {
@@ -75,11 +78,12 @@ test("local config parsing preserves Git syntax, separate directories, absent or
     await assert.rejects(readGitProjectMetadata(checkout));
     await fs.rename(config, path.join(metadata, "saved-config"));
     assert.deepEqual(await readGitProjectMetadata(checkout), { origin: null, linkedWorktree: false, commonGitDirectory });
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally { await temporary.dispose(); }
 });
 
 test("linked worktrees reject malformed common repository configuration", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-origin-worktree-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-origin-worktree-");
+  const root = temporary.path;
   const main = path.join(root, "main");
   const linked = path.join(root, "linked");
   try {
@@ -88,11 +92,12 @@ test("linked worktrees reject malformed common repository configuration", async 
     await execute("git", ["-C", main, "worktree", "add", "--detach", linked], { windowsHide: true });
     await fs.writeFile(path.join(main, ".git", "config"), "[invalid");
     await assert.rejects(readGitProjectMetadata(linked));
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally { await temporary.dispose(); }
 });
 
 test("linked worktrees share repository origin identity without trusting the worktree config", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-linked-origin-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-linked-origin-");
+  const root = temporary.path;
   const main = path.join(root, "main");
   const linked = path.join(root, "linked");
   try {
@@ -102,5 +107,5 @@ test("linked worktrees share repository origin identity without trusting the wor
     await execute("git", ["-C", main, "worktree", "add", "--detach", linked], { windowsHide: true });
     assert.equal((await readGitProjectMetadata(main))?.origin, "https://example.test/owner/repo.git");
     assert.equal((await readGitProjectMetadata(linked))?.origin, "https://example.test/owner/repo.git");
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally { await temporary.dispose(); }
 });

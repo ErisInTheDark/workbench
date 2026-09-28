@@ -1,7 +1,7 @@
 /* No production exports. Tests protect actual write evidence and interruption fencing. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import test from "node:test";
 import type { Error as ToolError, Result } from "@opencode/plugin/promise/tool";
@@ -9,7 +9,8 @@ import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff
 import OpenCodeFileEvidenceController from "./OpenCodeFileEvidenceController";
 
 test("settled evidence captures creation and formatted overwrites without replacing native output", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-file-evidence-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-file-evidence-");
+  const root = temporary.path;
   const owner = new OpenCodeFileEvidenceController({
     isManagedSession: async () => true, resolveCwd: async () => root, warn: message => assert.fail(message),
   });
@@ -31,7 +32,7 @@ test("settled evidence captures creation and formatted overwrites without replac
     assert.equal(next.result.metadata?.files[0]?.status, "modified");
   } finally {
     await owner.dispose();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 

@@ -3,14 +3,14 @@
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import type { ChildProcess } from "node:child_process";
 
 import WorkbenchDaemonHost from "./WorkbenchDaemonHost.ts";
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory.ts";
 import { DaemonHostMessageSchema } from "../../shared/http/workbench-daemon-lifecycle.ts";
 
 function fakeChild() {
@@ -126,7 +126,8 @@ function fakeLog(lines: string[]) {
 }
 
 test("idle sleep fences wake until child retirement and does not request crash recovery", async context => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-idle-sleep-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-idle-sleep-");
+  const root = temporary.path;
   const clock = new FakeClock();
   const children: ChildProcess[] = [];
   const retiring = event();
@@ -150,7 +151,7 @@ test("idle sleep fences wake until child retirement and does not request crash r
     terminateChild: async child => { if (child.exitCode === null) child.emit("exit", 0, null); },
     requestRestart: () => assert.fail("Idle sleep is not a crash."),
   });
-  context.after(async () => { retired.resolve(); await host.stop(); await rm(root, { recursive: true, force: true }); });
+  context.after(async () => { retired.resolve(); await host.stop(); await temporary.dispose(); });
   const starting = host.wake();
   await spawned.promise; reportReady(children[0]!); await starting;
   const id = "ff9a81a9-d2c3-484b-8a39-82c824f1fd59";
@@ -169,7 +170,8 @@ test("idle sleep fences wake until child retirement and does not request crash r
 });
 
 test("an intentional stop retires the daemon without recovery and allows an explicit later wake", async context => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-wake-again-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-wake-again-");
+  const root = temporary.path;
   const clock = new FakeClock();
   const children: ChildProcess[] = [];
   let spawned = event();
@@ -187,7 +189,7 @@ test("an intentional stop retires the daemon without recovery and allows an expl
     terminateChild: async child => { child.emit("exit", 0, null); },
     requestRestart: () => assert.fail("Intentional shutdown must not request recovery."),
   });
-  context.after(async () => { await host.stop(); await rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await host.stop(); await temporary.dispose(); });
   const first = host.wake();
   await spawned.promise;
   reportReady(children[0]);
@@ -209,7 +211,8 @@ test("an intentional stop retires the daemon without recovery and allows an expl
 });
 
 test("unexpected supervision failure retires its owned child before rejecting", async context => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-wake-failure-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-wake-failure-");
+  const root = temporary.path;
   const child = fakeChild();
   let retired = 0;
   const host = new WorkbenchDaemonHost({
@@ -223,15 +226,16 @@ test("unexpected supervision failure retires its owned child before rejecting", 
       child.emit("exit", 0, null);
     },
   });
-  context.after(async () => { await host.stop(); await rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await host.stop(); await temporary.dispose(); });
   await assert.rejects(host.run(), /watchdog wait failed/);
   assert.equal(retired, 1);
   assert.equal(host.snapshot().state, "failed");
 });
 
 test("failed retirement cannot be followed by spawning another daemon", async context => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-stop-failure-"));
-  context.after(() => rm(root, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-stop-failure-");
+  const root = temporary.path;
+  context.after(() => temporary.dispose());
   const child = fakeChild();
   const spawned = event();
   const clock = new FakeClock();
@@ -257,7 +261,8 @@ test("failed retirement cannot be followed by spawning another daemon", async co
 });
 
 test("wake coalesces callers and resolves only after child-bound readiness", async context => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-wake-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-wake-");
+  const root = temporary.path;
   const child = fakeChild();
   const clock = new FakeClock();
   const spawned = event();
@@ -269,7 +274,7 @@ test("wake coalesces callers and resolves only after child-bound readiness", asy
     terminateChild: async () => { child.emit("exit", 0, null); },
     requestRestart: () => assert.fail("Normal stop must not restart."),
   });
-  context.after(async () => { await host.stop(); await rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await host.stop(); await temporary.dispose(); });
   const first = host.wake();
   const second = host.wake();
   await spawned.promise;
@@ -282,7 +287,8 @@ test("wake coalesces callers and resolves only after child-bound readiness", asy
 });
 
 test("pre-readiness exit rejects wake and retires the unit instead of respawning locally", async context => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-wake-failed-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-wake-failed-");
+  const root = temporary.path;
   const child = fakeChild();
   const clock = new FakeClock();
   const spawned = event();
@@ -297,7 +303,7 @@ test("pre-readiness exit rejects wake and retires the unit instead of respawning
     onFailure: (_error, beforeReady) => { preReadyFailure = beforeReady; },
     requestRestart: () => retired.resolve(),
   });
-  context.after(async () => { await host.stop(); await rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await host.stop(); await temporary.dispose(); });
   const waking = host.wake();
   const rejected = assert.rejects(waking, /before readiness/i);
   await spawned.promise;
@@ -309,8 +315,9 @@ test("pre-readiness exit rejects wake and retires the unit instead of respawning
 });
 
 test("probes the reported endpoint twice before retiring only its owned child", async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-runner-"));
-  context.after(async () => await rm(root, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-runner-");
+  const root = temporary.path;
+  context.after(async () => await temporary.dispose());
   const clock = new FakeClock();
   const child = fakeChild();
   const lines: string[] = [];
@@ -384,8 +391,9 @@ test("probes the reported endpoint twice before retiring only its owned child", 
 });
 
 test("stop exits a paused runner without spawning or deleting the sentinel", async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-runner-paused-"));
-  context.after(async () => await rm(root, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-runner-paused-");
+  const root = temporary.path;
+  context.after(async () => await temporary.dispose());
   const sentinel = path.join(root, ".workbench", "daemon-loop.pause");
   await mkdir(path.dirname(sentinel), { recursive: true });
   await writeFile(sentinel, "", "utf8");
@@ -414,8 +422,9 @@ test("stop exits a paused runner without spawning or deleting the sentinel", asy
 });
 
 test("child output cancels the stale wait before arming a fresh silence window", async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-runner-output-"));
-  context.after(async () => await rm(root, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-runner-output-");
+  const root = temporary.path;
+  context.after(async () => await temporary.dispose());
   const clock = new FakeClock();
   const child = fakeChild();
   let kills = 0;

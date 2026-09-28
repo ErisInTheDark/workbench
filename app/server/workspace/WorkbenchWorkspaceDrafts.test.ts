@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -40,7 +40,8 @@ async function fixture(
   context: TestContext,
   selection: WorkbenchComposerProfileTargetSelection = { kind: "custom", settings: settings(model.id) },
 ) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "app-draft-owner-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("app-draft-owner-");
+  const directory = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(directory, "presentation.sqlite3") });
   await repository.start();
   const presentation = new WorkbenchPresentationController(repository);
@@ -84,7 +85,7 @@ async function fixture(
   context.after(async () => {
     await Promise.all(owners.map(owner => owner.dispose()));
     presentation.close(); await repository.close();
-    await fs.rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   });
   return {
     owner: createOwner(), createOwner, presentation, requests, warnings, draftId,

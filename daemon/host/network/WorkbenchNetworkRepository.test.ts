@@ -1,18 +1,19 @@
 /* No production exports. Protect mode intent, stable identity and atomic private membership storage. */
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import WorkbenchAppStateRepository from "../../../app/server/state/WorkbenchAppStateRepository.ts";
 import WorkbenchNetworkRepository from "./WorkbenchNetworkRepository.ts";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { WorkbenchNetworkConfigurationSchema, type WorkbenchNetworkConfiguration } from "workbench-shared/http/workbench-network";
 
 test("network ownership, DNS selection and grants survive reopening independently", async context => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "wb-network-group-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-network-group-");
+  const root = temporary.path;
   const database = new WorkbenchAppStateRepository({ dataRootPath: root });
   await database.start();
-  context.after(async () => { await database.close(); await rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await database.close(); await temporary.dispose(); });
   const network = new WorkbenchNetworkRepository(database);
   const configuration = WorkbenchNetworkConfigurationSchema.parse({
     ...network.read(),
@@ -46,12 +47,13 @@ test("network ownership, DNS selection and grants survive reopening independentl
 });
 
 test("persists network state without changing browser revisions and refuses partial membership writes", async context => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "wb-network-state-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-network-state-");
+  const root = temporary.path;
   const database = new WorkbenchAppStateRepository({ dataRootPath: root });
   await database.start();
   context.after(async () => {
     await database.close();
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   });
   const network = new WorkbenchNetworkRepository(database);
   const defaults = network.read();
@@ -74,10 +76,11 @@ test("persists network state without changing browser revisions and refuses part
 });
 
 test("one selected mode determines exposure and a pending URL rename preserves the stable node name", async context => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "wb-network-mode-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-network-mode-");
+  const root = temporary.path;
   const database = new WorkbenchAppStateRepository({ dataRootPath: root });
   await database.start();
-  context.after(async () => { await database.close(); await rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await database.close(); await temporary.dispose(); });
   const network = new WorkbenchNetworkRepository(database);
   const selected = WorkbenchNetworkConfigurationSchema.parse({
     ...network.read(), mode: "tailnet-service",

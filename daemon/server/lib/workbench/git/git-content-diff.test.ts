@@ -1,14 +1,15 @@
 /* No production exports. Tests exercise Git content comparison and owned scratch cleanup. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
 import { diffGitContents } from "./git-content-diff";
 
 test("Git diffs captured contents without retaining scratch files", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-diff-test-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-diff-test-");
+  const root = temporary.path;
   try {
     for (const [before, after, additions, deletions] of [
       ["", "new\nsecond", 2, 0],
@@ -35,6 +36,6 @@ test("Git diffs captured contents without retaining scratch files", async () => 
       else process.env.PATH = originalPath;
     }
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

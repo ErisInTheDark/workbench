@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import test from "node:test";
 import type parcelWatcher from "@parcel/watcher";
@@ -118,11 +118,12 @@ test("retirement closes a subscription that finishes attaching late", async () =
 });
 
 test("external dependency directory deletion triggers recovery and retired inputs release their subscriptions", async context => {
-  const external = await mkdtemp(path.join(os.tmpdir(), "workbench-external-input-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-external-input-");
+  const external = temporary.path;
   const target = fixture();
   context.after(async () => {
     await target.watcher.close();
-    await rm(external, { force: true, recursive: true, maxRetries: 5, retryDelay: 50 });
+    await temporary.dispose();
   });
   await target.watcher.start();
   await target.watcher.updateDependencies([path.join(external, "dependency.ts")], [], true);

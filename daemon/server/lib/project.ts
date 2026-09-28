@@ -22,6 +22,7 @@ import type { ProjectId } from "workbench-shared/workbench/identity";
 import type { WorkbenchProjectDiscovery } from "../database/project/workbench-project-persistence";
 
 import { getGitChanges, isLinkedGitWorktree, readGitProjectMetadata, readRegisteredGitWorktrees, resolveGitDirectory } from "./git";
+import { appRoot, projectRoot } from "./project-root";
 import { localProjectKey, remoteProjectKey, workspaceProjectKey } from "./workbench/project/project-identity";
 import { projectLocationKey } from "./workbench/project/project-location-discovery";
 import { ProjectIdentityKeySchema, type ProjectIdentityKey } from "workbench-shared/workbench/identity";
@@ -36,8 +37,7 @@ import {
   workbenchLibraryRoot,
 } from "./workbench-library";
 
-export const appRoot = process.cwd();
-export const projectRoot = path.resolve(appRoot, "..");
+export { appRoot, projectRoot };
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
 const discoveryIgnoredNames = new Set([...ignoredNames, "dist", "build", "coverage"]);
 const README_FILE_NAME = "README.md";

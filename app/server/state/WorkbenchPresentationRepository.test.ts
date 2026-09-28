@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
@@ -40,7 +40,8 @@ function catalog(rootPath: string, identityKey = remote) {
 }
 
 test("one remote groups locations but drafts retain a concrete daemon target across reopen", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-");
+  const root = temporary.path;
   const databasePath = path.join(root, "presentation.sqlite3");
   const repository = new WorkbenchPresentationRepository({ databasePath });
   try {
@@ -68,12 +69,13 @@ test("one remote groups locations but drafts retain a concrete daemon target acr
     assert.equal(repository.read().projects.length, 1);
   } finally {
     await repository.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("only the exact revision from deleting an unlaunched draft can reopen it", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-reopen-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-reopen-");
+  const root = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
   try {
     await repository.start();
@@ -111,15 +113,16 @@ test("only the exact revision from deleting an unlaunched draft can reopen it", 
       expectedRevision: repository.read().revision }), /submitting or closed/u);
   } finally {
     await repository.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("new-folder draft placement is atomic and autosaves cannot restore an obsolete folder choice", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-draft-folder-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-draft-folder-");
+  const root = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
   context.after(async () => {
-    await repository.close(); await fs.rm(root, { recursive: true, force: true });
+    await repository.close(); await temporary.dispose();
   });
   await repository.start();
   repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/repo") });
@@ -161,10 +164,11 @@ test("new-folder draft placement is atomic and autosaves cannot restore an obsol
 });
 
 test("draft settings and destination defaults commit together without rewriting other drafts", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-draft-defaults-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-draft-defaults-");
+  const root = temporary.path;
   const databasePath = path.join(root, "presentation.sqlite3");
   const repository = new WorkbenchPresentationRepository({ databasePath });
-  context.after(async () => { await repository.close(); await fs.rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await repository.close(); await temporary.dispose(); });
   await repository.start();
   repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/repo") });
   const logicalProjectId = repository.read().projects[0]!.id;
@@ -197,7 +201,8 @@ test("draft settings and destination defaults commit together without rewriting 
 });
 
 test("equal path identities share one project without losing concrete daemon targets", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-path-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-path-");
+  const root = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
   const identityKey = ProjectIdentityKeySchema.parse("local://C:/repo/.git");
   try {
@@ -212,13 +217,14 @@ test("equal path identities share one project without losing concrete daemon tar
     assert.deepEqual(snapshot.locations.map(location => location.target.daemonId), [first, second]);
   } finally {
     await repository.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("v1 path duplicates converge transactionally without losing saved owners or layout order", async context => {
   captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-v1-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-v1-");
+  const root = temporary.path;
   const databasePath = path.join(root, "presentation.sqlite3");
   const oldIds = [
     "112f7e1e-81b6-4c30-bdc0-f83475981001",
@@ -298,12 +304,13 @@ test("v1 path duplicates converge transactionally without losing saved owners or
     }
   } finally {
     await repository.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("incomplete imported attachments stay hidden and receipt blocks resurrection after deletion", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-import-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-import-");
+  const root = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
   try {
     await repository.start();
@@ -376,12 +383,13 @@ test("incomplete imported attachments stay hidden and receipt blocks resurrectio
     })), [{ sourceId: "old-draft", importedRevision: 3, latestRevision: 5 }]);
   } finally {
     await repository.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("equal legacy draft and folder ids from two daemons map to independent app owners", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-sources-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-sources-");
+  const root = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
   try {
     await repository.start();
@@ -433,12 +441,13 @@ test("equal legacy draft and folder ids from two daemons map to independent app 
     assert.equal(repository.read().sourceMappings.length, 6);
   } finally {
     await repository.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("a project layout cannot borrow another project's draft or thread target", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-layout-owner-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-layout-owner-");
+  const root = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
   try {
     await repository.start();
@@ -463,6 +472,6 @@ test("a project layout cannot borrow another project's draft or thread target", 
     assert.equal(repository.read().members.length, 0);
   } finally {
     await repository.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

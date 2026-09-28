@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import type http from "node:http";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
@@ -134,7 +134,8 @@ test("location reads wait for one coalesced repair of an incomplete cached catal
 });
 
 test("saving roots validates the whole list and replaces watchers without partial writes", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-discovery-roots-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-discovery-roots-");
+  const root = temporary.path;
   const first = path.join(root, "first");
   const second = path.join(root, "second");
   await fs.mkdir(first);
@@ -193,12 +194,13 @@ test("saving roots validates the whole list and replaces watchers without partia
     assert.deepEqual(scans.at(-1), []);
   } finally {
     await controller.dispose();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("saving an empty list fences an older in-flight project scan", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-discovery-fence-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-discovery-fence-");
+  const root = temporary.path;
   const gate = deferred<WorkbenchProjectDiscovery>();
   const oldProject = createProject("old", root);
   let persisted = [root];
@@ -236,7 +238,7 @@ test("saving an empty list fences an older in-flight project scan", async () => 
   } finally {
     gate.resolve(discoveryForProjects([]));
     await controller.dispose();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
@@ -858,7 +860,8 @@ test("retired CWD work cannot replace newer mappings or survive disposal", async
 });
 
 test("serves catalog-selected PNG and ICO assets with bounded content types", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-icon-asset-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-project-icon-asset-");
+  const root = temporary.path;
   const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
   const icoBytes = Buffer.from([0x00, 0x00, 0x01, 0x00]);
   await fs.writeFile(path.join(root, "favicon.png"), pngBytes);
@@ -878,7 +881,7 @@ test("serves catalog-selected PNG and ICO assets with bounded content types", as
   });
   context.after(async () => {
     controller.dispose();
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   });
 
   const png = createIconResponse();
@@ -896,7 +899,8 @@ test("serves catalog-selected PNG and ICO assets with bounded content types", as
 });
 
 test("rejects catalog icon descriptors that escape their project root", async (context) => {
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-icon-escape-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-project-icon-escape-");
+  const temporaryRoot = temporary.path;
   const projectRoot = path.join(temporaryRoot, "project");
   await fs.mkdir(projectRoot);
   await fs.writeFile(path.join(temporaryRoot, "outside.png"), "outside", "utf8");
@@ -911,7 +915,7 @@ test("rejects catalog icon descriptors that escape their project root", async (c
   });
   context.after(async () => {
     controller.dispose();
-    await fs.rm(temporaryRoot, { force: true, recursive: true });
+    await temporary.dispose();
   });
 
   const output = createIconResponse();

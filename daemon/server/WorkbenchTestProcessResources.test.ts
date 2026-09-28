@@ -3,13 +3,14 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import test from "node:test";
 import WorkbenchTestProcessResources from "./WorkbenchTestProcessResources";
 
 test("a retained service record kills its detached process without its spawning worker", async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-service-retirement-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-service-retirement-");
+  const directory = temporary.path;
   const record = path.join(directory, "service.json");
   const child = spawn(process.execPath, ["-e",
     'process.on("message", () => {}); process.send("ready");'], {
@@ -27,12 +28,13 @@ test("a retained service record kills its detached process without its spawning 
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await exited;
-    await fs.rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("failed retirement preserves the ownership record and never counts as clean", async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-service-retirement-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-service-retirement-");
+  const directory = temporary.path;
   const record = path.join(directory, "service.json");
   try {
     await fs.writeFile(record, JSON.stringify({ pid: 12345 }));
@@ -43,5 +45,5 @@ test("failed retirement preserves the ownership record and never counts as clean
     }), /access denied/u);
     assert.deepEqual(killed, [12345]);
     assert.ok(await fs.stat(record));
-  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+  } finally { await temporary.dispose(); }
 });

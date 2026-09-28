@@ -4,10 +4,10 @@
 
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import type { JsonRpcRequest } from "./bridge-types";
 import type CodexAppServer from "./CodexAppServer";
 import CodexHealthMonitor from "./CodexHealthMonitor";
@@ -79,7 +79,8 @@ test("a retired probe cannot affect resumed monitoring", async (context) => {
 
 test("health requests use their deadline without waiting behind another internal response", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-health-deadline-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-codex-health-deadline-");
+  const storageRoot = temporary.path;
   const sentRequests: JsonRpcRequest[] = [];
   const bridge = new CodexStdioBridge({
     appServer: { send: (message: unknown) => sentRequests.push(message as JsonRpcRequest) } as unknown as CodexAppServer,

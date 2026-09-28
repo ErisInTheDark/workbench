@@ -5,8 +5,8 @@ import assert from "node:assert/strict";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { test } from "node:test";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import CodexThreadOperations from "./CodexThreadOperations";
 import CodexStdioBridge from "./CodexStdioBridge";
 import type CodexAppServer from "./CodexAppServer";
@@ -302,7 +302,8 @@ test("message intents preserve native identity, content and bounded resume throu
 
 for (const rejected of [false, true]) {
   test(`cold provider operations ${rejected ? "retain initialisation failure without dispatching work" : "share the bridge initialisation gate"}`, async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-provider-cold-"));
+    const temporary = await WorkbenchTemporaryDirectory.create("wb-provider-cold-");
+    const root = temporary.path;
     const methods: string[] = [];
     let finishInitialize!: () => void;
     let entered!: () => void;
@@ -354,7 +355,7 @@ for (const rejected of [false, true]) {
       }
     } finally {
       await bridge.dispose();
-      await fs.rm(root, { recursive: true, force: true });
+      await temporary.dispose();
     }
   });
 }

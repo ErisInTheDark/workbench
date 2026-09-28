@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -39,8 +39,9 @@ for (const scenario of [
   { name: "output beyond the display budget", body: "process.stdout.write('x'.repeat(20_000));", succeeds: false },
 ]) {
   test(`reporter preserves the exit outcome for ${scenario.name}`, async context => {
-    const directory = await mkdtemp(path.join(tmpdir(), "workbench-noise-reporter-"));
-    context.after(() => rm(directory, { recursive: true, force: true }));
+    const temporary = await WorkbenchTemporaryDirectory.create("workbench-noise-reporter-");
+    const directory = temporary.path;
+    context.after(() => temporary.dispose());
     const fixture = path.join(directory, "fixture.test.mjs");
     await writeFile(fixture, `import test from 'node:test';\ntest('fixture', () => { ${scenario.body} });\n`);
     let succeeded = true;

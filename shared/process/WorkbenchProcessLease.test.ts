@@ -3,15 +3,16 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import WorkbenchProcessLease from "./WorkbenchProcessLease.ts";
 
 test("allows one app lease and releases it for the next process owner", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-app-lease-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-app-lease-");
+  const root = temporary.path;
+  context.after(async () => await temporary.dispose());
   const databasePath = path.join(root, "runtime", "app.sqlite3");
 
   const first = await WorkbenchProcessLease.acquire(databasePath);
@@ -25,13 +26,14 @@ test("allows one app lease and releases it for the next process owner", async (c
 });
 
 test("independent process owners do not contend on each other's leases", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-installation-leases-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-installation-leases-");
+  const root = temporary.path;
   let first: Awaited<ReturnType<typeof WorkbenchProcessLease.acquire>> = null;
   let second: Awaited<ReturnType<typeof WorkbenchProcessLease.acquire>> = null;
   context.after(async () => {
     await second?.dispose();
     await first?.dispose();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   });
   first = await WorkbenchProcessLease.acquire(path.join(root, "app.sqlite3"));
   assert.ok(first);

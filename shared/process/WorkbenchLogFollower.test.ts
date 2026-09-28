@@ -3,13 +3,14 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import WorkbenchLogFollower from "./WorkbenchLogFollower.ts";
 
 test("combined following retains recent output and rotation independently for both owners", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-log-combined-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-log-combined-");
+  const root = temporary.path;
   await fs.writeFile(path.join(root, "workbench-app-0001.log"), "app recent\n");
   for (let index = 0; index < 20; index++) {
     await fs.writeFile(path.join(root, `workbench-host-${String(index).padStart(4, "0")}.log`), `host ${index}\n`);
@@ -19,7 +20,7 @@ test("combined following retains recent output and rotation independently for bo
     directory: root, prefix: ["workbench-app", "workbench-host"], schedule: () => () => {},
     write: async text => { output += text; }, failed: error => assert.fail(error),
   });
-  context.after(async () => { await follower.close(); await fs.rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await follower.close(); await temporary.dispose(); });
   await follower.start();
   assert.equal(output, "app recent\nhost 19\n");
   output = "";
@@ -30,7 +31,8 @@ test("combined following retains recent output and rotation independently for bo
 });
 
 test("scheduled following reads open-file appends and stops scheduling on detach", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-log-live-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-log-live-");
+  const root = temporary.path;
   const filename = path.join(root, "workbench-host-0001.log");
   const writer = await fs.open(filename, "a");
   let next: (() => Promise<void>) | null = null;
@@ -51,7 +53,7 @@ test("scheduled following reads open-file appends and stops scheduling on detach
   context.after(async () => {
     await follower.close();
     await writer.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   });
   await writer.write("before attachment\n");
   await follower.start();
@@ -81,7 +83,8 @@ test("scheduled following reads open-file appends and stops scheduling on detach
 });
 
 test("a failed scheduled read reports once and does not keep retrying", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-log-failure-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-log-failure-");
+  const root = temporary.path;
   let next: (() => Promise<void>) | null = null;
   const errors: Error[] = [];
   const follower = new WorkbenchLogFollower({
@@ -89,7 +92,7 @@ test("a failed scheduled read reports once and does not keep retrying", async co
     failed: error => { errors.push(error); },
     schedule: callback => { next = callback; return () => { next = null; }; },
   });
-  context.after(async () => { await follower.close(); await fs.rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await follower.close(); await temporary.dispose(); });
   await follower.start();
   const failure = new Error("log directory unavailable");
   context.mock.method(fs, "readdir", async () => { throw failure; });
@@ -102,7 +105,8 @@ test("a failed scheduled read reports once and does not keep retrying", async co
 });
 
 test("following starts with bounded recent output and drains rotation without replay", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-log-follow-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-log-follow-");
+  const root = temporary.path;
   const first = path.join(root, "workbench-host-0001.log");
   await fs.writeFile(first, Array.from({ length: 500 }, (_, index) => `line ${index}\n`).join(""));
   let text = "";
@@ -110,7 +114,7 @@ test("following starts with bounded recent output and drains rotation without re
     directory: root, prefix: "workbench-host", write: async chunk => { text += chunk; },
     failed: error => assert.fail(error),
   });
-  context.after(async () => { await follower.close(); await fs.rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await follower.close(); await temporary.dispose(); });
   await follower.start();
   assert.ok(!text.includes("line 0\n"));
   assert.ok(text.includes("line 499\n"));
@@ -124,7 +128,8 @@ test("following starts with bounded recent output and drains rotation without re
 });
 
 test("a newer diagnostic file does not hide output from the still-running owner", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-log-owners-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-log-owners-");
+  const root = temporary.path;
   const active = path.join(root, "workbench-host-0001.log");
   await fs.writeFile(active, "earlier output\n");
   await fs.writeFile(path.join(root, "workbench-host-0002.log"), "duplicate launch refused\n");
@@ -133,7 +138,7 @@ test("a newer diagnostic file does not hide output from the still-running owner"
     directory: root, prefix: "workbench-host", write: async chunk => { text += chunk; },
     failed: error => assert.fail(error),
   });
-  context.after(async () => { await follower.close(); await fs.rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await follower.close(); await temporary.dispose(); });
   await follower.start();
   text = "";
   await fs.appendFile(active, "still running\n");

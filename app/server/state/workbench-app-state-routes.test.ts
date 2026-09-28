@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import test from "node:test";
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
@@ -10,7 +10,8 @@ import WorkbenchBrowserStateRegistry from "./WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppStateRoutes from "./workbench-app-state-routes.ts";
 
 test("draft images upload separately from the bounded mutation body and remain readable", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-app-state-images-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-app-state-images-");
+  const root = temporary.path;
   const repository = new WorkbenchAppStateRepository({ databasePath: path.join(root, "state.sqlite3") });
   await repository.start();
   const registry = new WorkbenchBrowserStateRegistry(repository);
@@ -24,7 +25,7 @@ test("draft images upload separately from the bounded mutation body and remain r
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     await registry.close();
     await repository.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();

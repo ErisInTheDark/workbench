@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
@@ -38,8 +38,9 @@ test("selects project icons by preference before root, depth, and lexical order"
 });
 
 test("discovers tracked and non-ignored untracked icons without admitting ignored files", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-icon-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-project-icon-");
+  const root = temporary.path;
+  context.after(async () => await temporary.dispose());
   await execFileAsync("git", ["init", "--quiet"], { cwd: root, windowsHide: true });
   await fs.mkdir(path.join(root, "ignored"), { recursive: true });
   await fs.mkdir(path.join(root, "public"), { recursive: true });
@@ -60,8 +61,9 @@ test("discovers tracked and non-ignored untracked icons without admitting ignore
 });
 
 test("discovers a moved icon instead of its deleted tracked path", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-icon-moved-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-project-icon-moved-");
+  const root = temporary.path;
+  context.after(async () => await temporary.dispose());
   await execFileAsync("git", ["init", "--quiet"], { cwd: root, windowsHide: true });
   await fs.writeFile(path.join(root, "favicon.png"), "icon", "utf8");
   await execFileAsync("git", ["add", "--", "favicon.png"], { cwd: root, windowsHide: true });
@@ -78,8 +80,9 @@ test("discovers a moved icon instead of its deleted tracked path", async (contex
 });
 
 test("treats an invalid Git marker as a project without an icon", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-icon-invalid-git-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-project-icon-invalid-git-");
+  const root = temporary.path;
+  context.after(async () => await temporary.dispose());
   await fs.mkdir(path.join(root, ".git"));
 
   assert.equal(await discoverWorkbenchProjectIcon([{

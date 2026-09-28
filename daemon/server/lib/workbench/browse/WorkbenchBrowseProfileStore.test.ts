@@ -1,16 +1,17 @@
 /* No production exports. Protect persistent-profile lookup and directory deletion scope. */
 import assert from "node:assert/strict";
-import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
 import WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";
 import { browseProfiles } from "../database/schema/browse-persistence-schema";
 import { upsertRow } from "workbench-shared/database/workbench-database-statements";
 
 test("persistent profiles reopen and forgetting one never removes a sibling directory", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-browse-profiles-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-browse-profiles-");
+  const root = temporary.path;
   const profileRoot = path.join(root, "profiles");
   const database = new WorkbenchDatabaseController({ databasePath: path.join(root, "workbench.sqlite3") });
   try {
@@ -29,6 +30,6 @@ test("persistent profiles reopen and forgetting one never removes a sibling dire
     assert.equal(await store.resolveProfilePath({ sessionName: "first", persistent: false }), null);
   } finally {
     await database.close();
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

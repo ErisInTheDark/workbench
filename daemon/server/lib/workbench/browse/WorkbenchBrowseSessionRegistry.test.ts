@@ -2,16 +2,17 @@
 import assert from "node:assert/strict";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { test } from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
+import { rm } from "node:fs/promises";
 import path from "node:path";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
 import WorkbenchBrowseSessionRegistry from "./WorkbenchBrowseSessionRegistry";
 import { insertRow } from "workbench-shared/database/workbench-database-statements";
 import { projectTables } from "workbench-shared/workbench/database/schema/project-schema";
 
 test("session updates preserve other owners and retain the first inactive timestamp", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-browse-registry-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-browse-registry-");
+  const root = temporary.path;
   const database = new WorkbenchDatabaseController({ databasePath: path.join(root, "workbench.sqlite3") });
   try {
     await database.executeTransaction([insertRow(projectTables.projects, { id: testProjectIds.repo })]);
@@ -32,6 +33,6 @@ test("session updates preserve other owners and retain the first inactive timest
     assert.deepEqual((await new WorkbenchBrowseSessionRegistry(database).list()).map(session => session.name), ["b"]);
   } finally {
     await database.close();
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

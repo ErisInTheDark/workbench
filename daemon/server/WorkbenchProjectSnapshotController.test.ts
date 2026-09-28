@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { test } from "node:test";
@@ -383,11 +383,12 @@ test("unobserved snapshots use bounded LRU storage without observation ownership
 });
 
 test("project deletion rejects directory targets", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-delete-test-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-delete-test-");
+  const root = temporary.path;
   await fs.mkdir(path.join(root, "folder"));
   try {
     await assert.rejects(deleteProjectFile("folder", root), /Only files can be deleted/);
   } finally {
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });

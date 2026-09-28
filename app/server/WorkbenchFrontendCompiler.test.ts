@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { PassThrough } from "node:stream";
 import * as esbuild from "esbuild";
 import type parcelWatcher from "@parcel/watcher";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -22,7 +22,8 @@ async function assertFile(filePath: string) {
 }
 
 test("grouped classes appear in browser output and generated Tailwind CSS", async context => {
-  const repositoryRootPath = await mkdtemp(path.join(os.tmpdir(), "workbench-variant-groups-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-variant-groups-");
+  const repositoryRootPath = temporary.path;
   const clientDirectoryPath = path.join(repositoryRootPath, "app", "client");
   const require = createRequire(import.meta.url);
   const tailwindCssPath = path.join(path.dirname(require.resolve("tailwindcss/package.json")), "index.css")
@@ -46,7 +47,7 @@ test("grouped classes appear in browser output and generated Tailwind CSS", asyn
   });
   context.after(async () => {
     await compiler.shutdown();
-    await rm(repositoryRootPath, { recursive: true, force: true });
+    await temporary.dispose();
   });
 
   await compiler.buildOnce();
@@ -149,7 +150,8 @@ function compilerTools() {
 }
 
 test("frontend watching starts without enabling esbuild content polling", async context => {
-  const outputDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-compiler-no-poll-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-compiler-no-poll-");
+  const outputDirectoryPath = temporary.path;
   const tools = compilerTools();
   tools.context.watch = async () => { throw new Error("esbuild content polling was enabled"); };
   const compiler = new WorkbenchFrontendCompiler({
@@ -162,7 +164,8 @@ test("frontend watching starts without enabling esbuild content polling", async 
 
 test("source events publish fresh CSS with JS and preserve the last pair across CSS failures", async context => {
   const repositoryRootPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const outputDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-compiler-css-update-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-compiler-css-update-");
+  const outputDirectoryPath = temporary.path;
   const tools = compilerTools();
   let built = Promise.withResolvers<void>();
   const logger = new WorkbenchProcessLogger({
@@ -189,7 +192,7 @@ test("source events publish fresh CSS with JS and preserve the last pair across 
   context.after(async () => {
     releasePublication();
     await compiler.close();
-    await rm(outputDirectoryPath, { recursive: true, force: true });
+    await temporary.dispose();
   });
   await compiler.startWatching();
   const initial = compiler.getFrontendGeneration();
@@ -224,7 +227,8 @@ test("source events publish fresh CSS with JS and preserve the last pair across 
 });
 
 test("a native source event rebuilds real esbuild output after creating a missing import", async context => {
-  const repositoryRootPath = await mkdtemp(path.join(os.tmpdir(), "workbench-native-rebuild-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-native-rebuild-");
+  const repositoryRootPath = temporary.path;
   const client = path.join(repositoryRootPath, "app/client");
   await mkdir(path.join(client, "static"), { recursive: true });
   await mkdir(path.join(client, "workbench/voice"), { recursive: true });
@@ -252,7 +256,7 @@ test("a native source event rebuilds real esbuild output after creating a missin
   });
   context.after(async () => {
     await compiler.close();
-    await rm(repositoryRootPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await temporary.dispose();
   });
   await compiler.startWatching();
   const previous = compiler.getFrontendGeneration();
@@ -271,7 +275,8 @@ test("a native source event rebuilds real esbuild output after creating a missin
 });
 
 test("terminal compiler shutdown completes even when stopping the service leaves disposal unanswered", async t => {
-  const outputDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-compiler-shutdown-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-compiler-shutdown-");
+  const outputDirectoryPath = temporary.path;
   const tools = compilerTools();
   let release!: () => void;
   let stopped = false;
@@ -296,7 +301,8 @@ test("terminal compiler shutdown completes even when stopping the service leaves
 });
 
 test("suspended compiler output stays private until its owner resumes publication", async context => {
-  const outputDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-compiler-publication-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-compiler-publication-");
+  const outputDirectoryPath = temporary.path;
   await mkdir(path.join(outputDirectoryPath, "assets"));
   const javascriptPath = path.join(outputDirectoryPath, "assets", "app.js");
   await writeFile(javascriptPath, "last successful javascript");
@@ -313,7 +319,8 @@ test("suspended compiler output stays private until its owner resumes publicatio
 });
 
 test("retirement fences context creation that completes after the compiler was replaced", async context => {
-  const outputDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-compiler-late-context-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-compiler-late-context-");
+  const outputDirectoryPath = temporary.path;
   const tools = compilerTools();
   let enter!: () => void;
   const entered = new Promise<void>(resolve => { enter = resolve; });
@@ -337,8 +344,8 @@ test("retirement fences context creation that completes after the compiler was r
 });
 
 test("installation roots isolate generated output from shared library configuration", () => {
-  const repositoryRootPath = path.join(os.tmpdir(), "workbench-source-root");
-  const workbenchLibraryRoot = path.join(os.tmpdir(), "workbench-library-root");
+  const repositoryRootPath = WorkbenchTemporaryDirectory.resolve("workbench-source-root");
+  const workbenchLibraryRoot = WorkbenchTemporaryDirectory.resolve("workbench-library-root");
   const compiler = new WorkbenchFrontendCompiler({
     environment: { WORKBENCH_LIBRARY_ROOT: workbenchLibraryRoot },
     logger: quietLogger(),
@@ -360,7 +367,8 @@ test("installation roots isolate generated output from shared library configurat
 });
 
 test("watches the real browser app into static output without Next runtime imports", async (context) => {
-  const outputDirectoryPath = await mkdtemp(path.join(os.tmpdir(), "workbench-app-build-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-app-build-");
+  const outputDirectoryPath = temporary.path;
   const diagnostics: string[] = [];
   const compiler = new WorkbenchFrontendCompiler({
     logger: quietLogger(),

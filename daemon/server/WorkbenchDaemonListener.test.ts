@@ -2,14 +2,15 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import WorkbenchDaemonListener from "./WorkbenchDaemonListener.ts";
 import { readDaemonEndpoint } from "../../shared/process/workbench-daemon-endpoint.ts";
 
 test("binds an assigned loopback port and publishes only when the runtime is ready", async context => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-daemon-listener-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-daemon-listener-");
+  const directory = temporary.path;
   const endpointPath = path.join(directory, "runtime.json");
   const leasePath = path.join(directory, "launch.sqlite3");
   const owner = new WorkbenchDaemonListener({ endpointPath, leasePath });
@@ -17,7 +18,7 @@ test("binds an assigned loopback port and publishes only when the runtime is rea
   context.after(async () => {
     await duplicate.close();
     await owner.close();
-    await fs.rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   });
   const server = http.createServer((_request, response) => response.end("ready"));
   const endpoint = await owner.bind(server);

@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { captureTestOutput } from "../../../test/capture-test-output.mts";
@@ -174,7 +174,8 @@ function globalPreference(
 }
 
 async function fixture(context: TestContext) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-browser-state-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-browser-state-");
+  const directory = temporary.path;
   const shared = new WorkbenchAppStateRepository({
     databasePath: path.join(directory, "app-state.sqlite3"),
   });
@@ -188,7 +189,7 @@ async function fixture(context: TestContext) {
   context.after(async () => {
     await registry.close();
     await shared.close();
-    await fs.rm(directory, { force: true, recursive: true });
+    await temporary.dispose();
   });
   return { diagnostics, directory, registry, shared };
 }
@@ -366,7 +367,8 @@ test("seed failures are diagnosed without rolling back browser commits", async (
 });
 
 test("failed clones never promote partial browser databases", async (context) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-browser-state-failure-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-browser-state-failure-");
+  const directory = temporary.path;
   class FailingBackupRepository extends WorkbenchAppStateRepository {
     override async backupTo(destinationPath: string) {
       await fs.writeFile(destinationPath, "partial", "utf8");
@@ -383,7 +385,7 @@ test("failed clones never promote partial browser databases", async (context) =>
   context.after(async () => {
     await registry.close();
     await shared.close();
-    await fs.rm(directory, { force: true, recursive: true });
+    await temporary.dispose();
   });
 
   await assert.rejects(registry.readBrowser(BROWSER_A), /backup failed/u);

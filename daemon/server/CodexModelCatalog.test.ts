@@ -2,15 +2,16 @@
  * Exports: none. Protect bounded, capability-only local catalogue reads.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import CodexModelCatalog from "./CodexModelCatalog";
 
 test("missing metadata is unavailable, while supported bounds are read without unrelated model data", async (context) => {
-  const home = await mkdtemp(path.join(os.tmpdir(), "codex-model-catalog-"));
-  context.after(() => rm(home, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("codex-model-catalog-");
+  const home = temporary.path;
+  context.after(() => temporary.dispose());
   const catalog = new CodexModelCatalog(home);
   assert.deepEqual(await catalog.read(), []);
   await writeFile(path.join(home, "models_cache.json"), JSON.stringify({ models: [
@@ -29,8 +30,9 @@ test("missing metadata is unavailable, while supported bounds are read without u
 });
 
 test("malformed or oversized metadata fails without exposing cached content", async (context) => {
-  const home = await mkdtemp(path.join(os.tmpdir(), "codex-model-invalid-"));
-  context.after(() => rm(home, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("codex-model-invalid-");
+  const home = temporary.path;
+  context.after(() => temporary.dispose());
   const catalog = new CodexModelCatalog(home);
   const file = path.join(home, "models_cache.json");
   for (const source of [

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { join } from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
@@ -14,7 +14,8 @@ import WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 
 test("legacy diff text retains its canonical owner and reopens through the worker", async () => {
-  const root = await mkdtemp(join(tmpdir(), "workbench-legacy-diff-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-legacy-diff-");
+  const root = temporary.path;
   const options = { databasePath: join(root, "workbench.sqlite3") };
   const database = new Database(options.databasePath);
   let worker: WorkbenchDatabaseController | undefined;
@@ -43,6 +44,6 @@ test("legacy diff text retains its canonical owner and reopens through the worke
   } finally {
     await worker?.close();
     if (database.open) database.close();
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

@@ -1,7 +1,7 @@
 /* No exports. Tests protect companion ownership and complete orphan reporting. */
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import test from "node:test";
 import ProjectTestCatalog from "./ProjectTestCatalog";
@@ -22,7 +22,8 @@ test("matches batteries to source owners without including unrelated neighbours"
 });
 
 test("scenario tests require exact selection without hiding ordinary sibling tests", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "workbench-test-catalog-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-test-catalog-");
+  const root = temporary.path;
   try {
     const scenarios = path.join(root, "test", "scenarios");
     await mkdir(scenarios, { recursive: true });
@@ -43,6 +44,6 @@ test("scenario tests require exact selection without hiding ordinary sibling tes
     assert.deepEqual(catalog.select(["test/scenarios/lifecycle.scenario.test.ts"]), [requested]);
     assert.equal(catalog.tests.some(file => file.endsWith("codex.scenario.test.ts")), false);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

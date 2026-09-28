@@ -4,9 +4,10 @@
  */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 
 const execute = promisify(execFile);
 
@@ -16,7 +17,8 @@ export async function diffGitContents(before: string, after: string, options: {
 } = {}): Promise<string> {
   options.signal?.throwIfAborted();
   if (before === after) return "";
-  const directory = await fs.mkdtemp(path.join(options.temporaryRoot ?? os.tmpdir(), "workbench-content-diff-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-content-diff-", options.temporaryRoot);
+  const directory = temporary.path;
   let failure: Error | undefined;
   try {
     await Promise.all([
@@ -48,7 +50,7 @@ export async function diffGitContents(before: string, after: string, options: {
     throw failure;
   } finally {
     try {
-      await fs.rm(directory, { recursive: true, force: true });
+      await temporary.dispose();
     } catch (error) {
       throw new AggregateError([...(failure ? [failure] : []), error], "Git content comparison cleanup failed.");
     }

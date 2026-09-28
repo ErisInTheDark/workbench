@@ -4,10 +4,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import WorkbenchTemporaryDirectory from "../../WorkbenchTemporaryDirectory.ts";
 import { claimPreparedGitTestFixture, GIT_TEST_FIXTURE_MANIFEST_ENV, gitTestFixtureKey } from "./git-test-fixture.ts";
 
 const { default: GitTestFixtureCache } = createRequire(import.meta.url)(
@@ -15,12 +15,13 @@ const { default: GitTestFixtureCache } = createRequire(import.meta.url)(
 ) as typeof import("../../../daemon/server/lib/workbench/git/GitTestFixtureCache");
 
 test("prepared fixture consumers share single-use allocation and reject invalid admission", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-fixture-manifest-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-fixture-manifest-");
+  const root = temporary.path;
   const previousManifest = process.env[GIT_TEST_FIXTURE_MANIFEST_ENV];
   context.after(async () => {
     if (previousManifest === undefined) delete process.env[GIT_TEST_FIXTURE_MANIFEST_ENV];
     else process.env[GIT_TEST_FIXTURE_MANIFEST_ENV] = previousManifest;
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await temporary.dispose();
   });
   const spec = { name: "allocation", commits: [] };
   const slot = (name: string) => ({

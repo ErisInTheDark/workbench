@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -145,7 +145,8 @@ test("demanded recovery closes only prefetched complete-turn gaps after successf
 });
 
 test("recording activity retires previews before persistence, but history and delayed settlement preserve newer accumulation", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-preview-activity-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-preview-activity-");
+  const directory = temporary.path;
   const database = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   const controller = new WorkbenchTranscriptController(database, new WorkbenchTranscriptCaptureGapController({
     database,
@@ -253,12 +254,13 @@ test("recording activity retires previews before persistence, but history and de
     database.settleTranscript = settle;
     controller.dispose();
     await database.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("the transcript controller records, reads, refreshes, and stops admitting work after disposal", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-transcript-controller-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-transcript-controller-");
+  const directory = temporary.path;
   const database = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
   const controller = new WorkbenchTranscriptController(
     database,
@@ -397,7 +399,7 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
     releaseProjection.resolve();
     controller.dispose();
     await database.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
@@ -570,7 +572,8 @@ test("durable item facts refresh subscriptions only at complete projection bound
 });
 
 test("durable capture gaps do not block historical imports, subscriptions or live recording", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-transcript-controller-gap-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-transcript-controller-gap-");
+  const directory = temporary.path;
   const databasePath = join(directory, "workbench.sqlite3");
   let database = new WorkbenchDatabaseController({ databasePath });
   let rejectSettlements = true;
@@ -704,6 +707,6 @@ test("durable capture gaps do not block historical imports, subscriptions or liv
     failed.dispose();
     recovered?.dispose();
     await database.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

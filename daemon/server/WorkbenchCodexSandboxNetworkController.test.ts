@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { promisify } from "node:util";
@@ -13,11 +13,13 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 let WorkbenchDatabaseNode: typeof import("./WorkbenchDatabaseNode").default;
 let CodexConfigurationNode: typeof import("./CodexConfigurationNode").default;
 let discoveryRoot: string;
+let discoveryTemporary: WorkbenchTemporaryDirectory | null = null;
 const previousLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
 const execFileAsync = promisify(execFile);
 
 before(async () => {
-  discoveryRoot = await mkdtemp(join(tmpdir(), "workbench-network-discovery-"));
+  discoveryTemporary = await WorkbenchTemporaryDirectory.create("workbench-network-discovery-");
+  discoveryRoot = discoveryTemporary.path;
   for (const name of ["project", "other"]) {
     await mkdir(join(discoveryRoot, name), { recursive: true });
     await execFileAsync("git", ["init", "-q"], { cwd: join(discoveryRoot, name), windowsHide: true });
@@ -30,7 +32,7 @@ before(async () => {
 after(async () => {
   if (previousLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
   else process.env.WORKBENCH_LIBRARY_ROOT = previousLibraryRoot;
-  if (discoveryRoot) await rm(discoveryRoot, { recursive: true, force: true });
+  await discoveryTemporary?.dispose();
 });
 
 function createDatabaseNode(directory: string) {
@@ -66,7 +68,8 @@ function createConfigurationNode(database: NonNullable<ReturnType<typeof createD
 }
 
 test("Codex sandbox network settings persist global and project inheritance", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-codex-network-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-codex-network-");
+  const directory = temporary.path;
   let databaseNode = createDatabaseNode(directory);
   let configurationNode = createConfigurationNode(databaseNode.registrations.database!);
   try {
@@ -122,6 +125,6 @@ test("Codex sandbox network settings persist global and project inheritance", as
   } finally {
     await configurationNode.dispose();
     await databaseNode.dispose();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

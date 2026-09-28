@@ -1,16 +1,17 @@
 /* No exports. Tests protect claim-directed impact without unrelated dependency expansion. */
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import ProjectTestCatalog from "../../../../../test/ProjectTestCatalog";
 import ProjectImportGraph from "./ProjectImportGraph";
 import ClaimedTestSelector from "./ClaimedTestSelector";
 
 test("selects affected consumers and reload boundaries without unrelated dependencies", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "claimed-tests-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("claimed-tests-");
+  const root = temporary.path;
   const file = (name: string) => path.join(root, name);
   try {
     const contents = {
@@ -44,7 +45,7 @@ test("selects affected consumers and reload boundaries without unrelated depende
     assert.throws(() => selector.select([]), /No live/);
     assert.throws(() => selector.select(["../escape.ts"]), /escapes/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 

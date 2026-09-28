@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 
@@ -36,13 +36,14 @@ test("project profile mutations preserve canonical scope through retained aliase
 });
 
 async function fixture(context: TestContext) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-profile-store-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-profile-store-");
+  const root = temporary.path;
   const database = new WorkbenchDatabaseController({ databasePath: path.join(root, "workbench.sqlite3") });
   const stores: WorkbenchComposerProfileStore[] = [];
   context.after(async () => {
     for (const store of stores) await store.dispose();
     await database.close();
-    await rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   });
   const create = () => {
     const store = new WorkbenchComposerProfileStore(database);
@@ -86,8 +87,9 @@ test("turn usage survives stale edits and reopening without resurrecting deleted
 });
 
 test("retired profile reads reject results from their old owner", async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-profile-retired-"));
-  context.after(() => rm(root, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-profile-retired-");
+  const root = temporary.path;
+  context.after(() => temporary.dispose());
   let enter!: () => void;
   let release!: () => void;
   const entered = new Promise<void>((resolve) => { enter = resolve; });

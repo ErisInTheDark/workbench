@@ -5,14 +5,15 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { type FSWatcher, type watch } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import ReloadSourceWatcher, { type ReloadSourceWatchScope } from "./ReloadSourceWatcher.ts";
 
 async function fixture(context: test.TestContext) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-source-watcher-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-source-watcher-");
+  const root = temporary.path;
   for (const directory of ["src/nested", "src/generated", ".git/objects", ".workbench/tmp", "node_modules/unused"]) {
     await fs.mkdir(path.join(root, directory), { recursive: true });
   }
@@ -41,7 +42,7 @@ async function fixture(context: test.TestContext) {
   });
   context.after(async () => {
     watcher.close();
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await temporary.dispose();
   });
   await watcher.refresh();
   return {

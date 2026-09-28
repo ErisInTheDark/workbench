@@ -4,10 +4,10 @@
 
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import type { AgentEndpointProjectResolution } from "./lib/workbench/project/agent-endpoint-project";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type CodexAppServer from "./CodexAppServer";
@@ -69,7 +69,8 @@ function createThread(cwd: string): Thread {
 async function createThreadReadHarness(
   resolveProjectFromCwd: (cwd: string | null | undefined) => Promise<AgentEndpointProjectResolution>,
 ) {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-thread-recall-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-codex-thread-recall-");
+  const storageRoot = temporary.path;
   const sentRequests: JsonRpcRequest[] = [];
   const sqliteReader = new CodexStoredTranscriptAdapter(new WorkbenchTranscriptReader({
     readSnapshot: async () => null, readContext: async () => null,
@@ -104,11 +105,12 @@ async function createThreadReadHarness(
     resolveProjectFromCwd,
     sqliteReader,
   });
-  return { bridge, sentRequests, storageRoot, sqlReads };
+  return { bridge, sentRequests, storageRoot, sqlReads, temporary };
 }
 
 test("stable Codex bridge delegates subagent requests through the current feature owner", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-project-catalog-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-codex-project-catalog-");
+  const storageRoot = temporary.path;
   const delegatedTo: string[] = [];
   let currentOwner = "alpha";
   const bridge = new CodexStdioBridge({
@@ -165,7 +167,7 @@ test("Thread Recall preflights current catalog ownership before SQL history", as
     { includeTurns: false, threadId: "thread-1" },
   ]);
   await harness.bridge.dispose();
-  await fs.rm(harness.storageRoot, { force: true, recursive: true });
+  await harness.temporary.dispose();
 });
 
 test("failed Thread Recall ownership validation prevents SQL history access", async () => {
@@ -184,5 +186,5 @@ test("failed Thread Recall ownership validation prevents SQL history access", as
     { includeTurns: false, threadId: "thread-1" },
   ]);
   await harness.bridge.dispose();
-  await fs.rm(harness.storageRoot, { force: true, recursive: true });
+  await harness.temporary.dispose();
 });

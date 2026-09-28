@@ -9,8 +9,9 @@ import test from "node:test";
 import WorkbenchForegroundHost from "./WorkbenchForegroundHost.ts";
 import type { WorkbenchServiceEndpoint } from "../../shared/http/workbench-service.ts";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory.ts";
 
 const endpoint: WorkbenchServiceEndpoint = {
   version: 1, instanceId: "30e59606-6ba9-4cd6-99ac-3dbec9083650", pid: 12345,
@@ -128,7 +129,8 @@ test("foreground emergency input closes its owner pipe while graceful control is
 test("the committed Windows supervisor retires its real foreground fixture when its owner pipe closes", {
   skip: process.platform !== "win32",
 }, async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-foreground-native-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-foreground-native-");
+  const root = temporary.path;
   const dataRoot = path.join(root, "data");
   const native = path.join("daemon", "host", "bin", `windows-${process.arch}`, "workbench-daemon-host.exe");
   await fs.mkdir(path.dirname(path.join(root, native)), { recursive: true });
@@ -173,7 +175,7 @@ test("the committed Windows supervisor retires its real foreground fixture when 
       close: async () => {},
     }),
   });
-  context.after(async () => { await host.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  context.after(async () => { await host.stop(); await temporary.dispose(); });
   const running = host.run();
   await Promise.race([ready.promise, running.then(() => { throw new Error("Foreground fixture exited before readiness."); })]);
   const descendant = JSON.parse(await fs.readFile(path.join(dataRoot, "descendant.json"), "utf8")) as { pid: number };

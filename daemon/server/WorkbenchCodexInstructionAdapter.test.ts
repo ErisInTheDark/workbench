@@ -1,7 +1,7 @@
 /* Exports: none. Tests protect Codex instructions, filtering, activated skills, caller config, and MCP capability stamping. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { after, before, test } from "node:test";
 
@@ -9,10 +9,12 @@ import type { JsonRpcRequest } from "./bridge-types";
 
 const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
 let testWorkbenchLibraryRoot = "";
+let testWorkbenchLibraryTemporary: WorkbenchTemporaryDirectory | null = null;
 let WorkbenchCodexInstructionAdapter: (typeof import("./WorkbenchCodexInstructionAdapter.js"))["default"];
 
 before(async () => {
-  testWorkbenchLibraryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-instruction-library-"));
+  testWorkbenchLibraryTemporary = await WorkbenchTemporaryDirectory.create("workbench-codex-instruction-library-");
+  testWorkbenchLibraryRoot = testWorkbenchLibraryTemporary.path;
   process.env.WORKBENCH_LIBRARY_ROOT = testWorkbenchLibraryRoot;
   WorkbenchCodexInstructionAdapter = (await import("./WorkbenchCodexInstructionAdapter.js")).default as unknown as (
     typeof WorkbenchCodexInstructionAdapter
@@ -22,7 +24,7 @@ before(async () => {
 after(async () => {
   if (originalWorkbenchLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
   else process.env.WORKBENCH_LIBRARY_ROOT = originalWorkbenchLibraryRoot;
-  await fs.rm(testWorkbenchLibraryRoot, { force: true, recursive: true });
+  await testWorkbenchLibraryTemporary?.dispose();
 });
 
 function readPromptInstructions(request: JsonRpcRequest) {
@@ -149,7 +151,8 @@ test("daemon thread configuration replaces stale caller settings while preservin
 });
 
 test("start, resume, and fork rebuild one filtered project prefix and disable native project docs", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-project-instructions-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-codex-project-instructions-");
+  const root = temporary.path;
   const adapter = new WorkbenchCodexInstructionAdapter("ws://0.0.0.0:4500", root);
   const clientScopes = new Set<string>();
   const prompts: ReturnType<typeof readPromptInstructions>[] = [];
@@ -241,7 +244,7 @@ test("start, resume, and fork rebuild one filtered project prefix and disable na
       },
     });
   } finally {
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
@@ -283,7 +286,8 @@ test("internal resume inherits the full prompt context from its triggering reque
 });
 
 test("normal prompts stay compact while triggering turn inputs receive fresh activated bodies", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-codex-skill-catalog-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-codex-skill-catalog-");
+  const root = temporary.path;
   const iteratePath = path.join(root, ".agents", "skills", "iterate", "SKILL.md");
   const brainstormPath = path.join(root, ".agents", "skills", "brainstorm", "SKILL.md");
   const iterateMarker = "FRESH ITERATE SKILL BODY";
@@ -399,6 +403,6 @@ ${revisedIterateMarker}
       assert.deepEqual(await adapter.augment(request, "turn/steer"), request);
     }
   } finally {
-    await fs.rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });

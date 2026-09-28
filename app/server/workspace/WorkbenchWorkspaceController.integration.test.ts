@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -76,7 +76,8 @@ class Socket extends EventTarget {
 }
 
 async function fixture(context: TestContext) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-owners-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workspace-owners-");
+  const directory = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(directory, "presentation.sqlite3") });
   await repository.start();
   const presentation = new WorkbenchPresentationController(repository);
@@ -110,7 +111,7 @@ async function fixture(context: TestContext) {
   context.after(async () => {
     threads.dispose(); workspace.dispose(); sources.dispose(); presentation.close();
     await repository.close();
-    await fs.rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   });
   workspace.start(); threads.start(); sources.start();
   return { repository, presentation, sources, workspace, threads, warnings,
@@ -229,7 +230,8 @@ async function wireDaemon(context: TestContext) {
 test("real app sockets share daemon interests, route mutations and isolate a held source across clients", async context => {
   const daemonA = await wireDaemon(context);
   const daemonB = await wireDaemon(context);
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-wire-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workspace-wire-");
+  const directory = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(directory, "presentation.sqlite3") });
   await repository.start();
   const presentation = new WorkbenchPresentationController(repository);
@@ -282,7 +284,7 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
     threads.dispose(); workspace.dispose(); sources.dispose(); presentation.close();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
-    await repository.close(); await fs.rm(directory, { recursive: true, force: true });
+    await repository.close(); await temporary.dispose();
   });
   workspace.start(); threads.start(); sources.start();
   const connect = async () => {

@@ -4,12 +4,12 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import Database from "better-sqlite3";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import WorkbenchProjectRepository from "../database/project/WorkbenchProjectRepository";
 import { installWorkbenchDatabaseSchema } from "../database/workbench-database-schema";
 
@@ -24,7 +24,8 @@ function normalizePath(filePath: string) {
 }
 
 test("preserves external Git aliases while suppressing indirect duplicates of direct roots", async (context) => {
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-project-junction-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-project-junction-");
+  const temporaryRoot = temporary.path;
   const projectsRoot = path.join(temporaryRoot, "projects");
   const configuredProjectsRoot = path.join(temporaryRoot, "projects-link");
   const canonicalProjectRoot = path.join(temporaryRoot, "external", "canonical-target");
@@ -46,7 +47,7 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
     } else {
       process.env.WORKBENCH_LIBRARY_ROOT = originalWorkbenchLibraryRoot;
     }
-    await fs.rm(temporaryRoot, { force: true, recursive: true });
+    await temporary.dispose();
   });
 
   await fs.mkdir(canonicalProjectRoot, { recursive: true });

@@ -1,7 +1,7 @@
 /* No production exports. Tests protect active Workbench Library imports, overrides, runtime opacity, and bounded import failures. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 
@@ -16,11 +16,12 @@ async function write(rootPath: string, relativePath: string, content: string) {
 async function withLibrary(
   run: (rootPath: string) => Promise<void>,
 ) {
-  const rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "library-instruction-files-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("library-instruction-files-");
+  const rootPath = temporary.path;
   try {
     await run(rootPath);
   } finally {
-    await fs.rm(rootPath, { force: true, recursive: true });
+    await temporary.dispose();
   }
 }
 

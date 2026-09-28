@@ -28,6 +28,18 @@ const TEST_CONCURRENCY = Math.max(1, Math.min(8, availableParallelism()));
 const TEST_TIMEOUT_MS = 30_000;
 const FILE_TIMEOUT_MS = 300_000;
 
+/**
+ * Ambient agent identity belongs to the invoking shell, not to the tests it runs.
+ * The suite must see the same world whoever runs it, so a fixture that needs one sets it explicitly.
+ */
+const AMBIENT_AGENT_IDENTITY_ENV = ["WORKBENCH_HARNESS", "WORKBENCH_THREAD_ID", "WORKBENCH_ORIGIN", "CODEX_THREAD_ID"] as const;
+
+function withoutAmbientAgentIdentity(environment: NodeJS.ProcessEnv) {
+  const sanitized = { ...environment };
+  for (const key of AMBIENT_AGENT_IDENTITY_ENV) delete sanitized[key];
+  return sanitized;
+}
+
 type TestProcessResult = ProjectTestProcessResult;
 
 export interface ProjectTestRunnerOptions {
@@ -182,7 +194,7 @@ export default class ProjectTestRunner {
         path.relative(testProcessRoot, file).replaceAll("\\", "/"),
       ], {
         cwd: testProcessRoot,
-        env: { ...process.env, ...fixtureEnvironment, ...services.environment },
+        env: { ...withoutAmbientAgentIdentity(process.env), ...fixtureEnvironment, ...services.environment },
         stdio: "inherit",
         detached: process.platform !== "win32",
         windowsHide: true,

@@ -1,7 +1,7 @@
 /* Exports: none. Tests protect provider normalization, state routing, relationships, reconciliation, Git projection, retention, resume, and titles. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import test from "node:test";
 
@@ -519,7 +519,8 @@ test("provider lifecycle notification mapping is exact and bounded", () => {
 });
 
 test("provider notification observation returns the persisted lifecycle result", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-observation-result-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-observation-result-");
+  const storageRoot = temporary.path;
   const database = createThreadStateDatabase(storageRoot, [["thread", "codex"]]);
   const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1,
@@ -557,7 +558,7 @@ test("provider notification observation returns the persisted lifecycle result",
   }))[0]?.lifecycle, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
 
   await feature.dispose();
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("provider activity mapping observes meaningful cross-provider work without token deltas", () => {
@@ -670,7 +671,8 @@ test("agent status is a canonical thread mutation without provider reads", async
 });
 
 test("MCP admission consumes translated metadata without additional provider reads", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-mcp-admission-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-mcp-admission-");
+  const storageRoot = temporary.path;
   const requests: JsonRpcRequest[] = [];
   const resolvedCwds: string[] = [];
   const feature = createFeature({
@@ -734,7 +736,7 @@ test("MCP admission consumes translated metadata without additional provider rea
   await assert.rejects(async () => feature.prepareProviderProfile(await feature.observeThread({ ...provider, cwd: "/unowned" })), /Unowned cwd/u);
 
   await feature.dispose();
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 for (const foreignPage of ["first", "last"] as const) {
@@ -826,7 +828,8 @@ for (const foreignPage of ["first", "last"] as const) {
 }
 
 test("a relationship committed during provider pagination remains a subagent after final reconciliation", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-subagent-race-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-subagent-race-");
+  const storageRoot = temporary.path;
   const secondPageStarted = deferred<void>();
   const releaseSecondPage = deferred<void>();
   let relationships: WorkbenchSubagentRelationship[] = [];
@@ -874,11 +877,12 @@ test("a relationship committed during provider pagination remains a subagent aft
   const child = (await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "child");
   assert.equal(child?.entryKind, "subagent");
   await feature.dispose();
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("provider reconciliation publishes its first page before deeper history and retains relationship and git state", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-feature-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-feature-");
+  const storageRoot = temporary.path;
   const publications: WorkbenchThreadSidebarSnapshot[] = [];
   const starts: string[] = [];
   const codexCursors: Array<string | null> = [];
@@ -1035,11 +1039,12 @@ test("provider reconciliation publishes its first page before deeper history and
     updatedAt: planState.updatedAt,
   });
   await feature.dispose();
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("deep provider pages serialize across projects while both newest pages start immediately", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-pagination-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-pagination-");
+  const storageRoot = temporary.path;
   const projectRoots = new Map<string, string>([
     [fixtureIdentityValues.ProjectId["project-a"], path.join(storageRoot, "project-a")],
     [fixtureIdentityValues.ProjectId["project-b"], path.join(storageRoot, "project-b")],
@@ -1086,11 +1091,12 @@ test("deep provider pages serialize across projects while both newest pages star
   assert.equal(maximumActiveDeepPages, 1);
   secondDeepGate.resolve();
   await feature.dispose();
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("managed title commands use the workbench-recorded title as the mutation precondition", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-managed-title-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-managed-title-");
+  const storageRoot = temporary.path;
   const requests: Array<{ harness: string; method: string; params: unknown }> = [];
   let providerName: string | null = "Current task";
   let providerPreview: string | null = "Initial request";
@@ -1235,11 +1241,12 @@ test("managed title commands use the workbench-recorded title as the mutation pr
   assert.match(stillNamed.error?.message ?? "", /Current title: "New overarching task"/u);
   assert.equal(requests.filter(({ method }) => method === "thread/name/set").length, 2);
   await feature.dispose();
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("Git snapshot reconciliation failures reach the bounded feature log", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-git-failure-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-git-failure-");
+  const storageRoot = temporary.path;
   const logs: string[] = [];
   const feature = createFeature({
     database: createThreadStateDatabase(),
@@ -1263,11 +1270,12 @@ test("Git snapshot reconciliation failures reach the bounded feature log", async
   assert.match(logs[0] ?? "", /reconciliation failed .*error=Git snapshot exploded\./u);
   assert.equal((await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).error, "Git snapshot exploded.");
   await feature.dispose();
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("expired settled threads reach repository retention through the feature boundary", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-retention-feature-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-retention-feature-");
+  const storageRoot = temporary.path;
   const identity = { harness: "codex" as const, threadId: "expired-thread" };
   const database = createThreadStateDatabase();
   await database.seedProject(fixtureIdentityValues.ProjectId.project, {
@@ -1308,11 +1316,12 @@ test("expired settled threads reach repository retention through the feature bou
   await waitFor(() => pruned.length === 1, "Expired thread did not reach Git retention through the feature.");
   assert.deepEqual(pruned, [{ cwd: "C:/workspace", identities: [identity] }]);
   await feature.dispose();
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("provider reconciliation cannot overwrite a newer resolved Git arc projection", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-git-reconcile-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-git-reconcile-");
+  const storageRoot = temporary.path;
   const secondPageGate = deferred<void>();
   let resolved = false;
   let secondPageStarted = false;
@@ -1417,11 +1426,12 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
   });
   assert.equal(thread.gitArcPlan, null);
   await feature.dispose();
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("managed resume validates the provider thread before requesting lifecycle-owned replacement", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-managed-resume-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-managed-resume-");
+  const storageRoot = temporary.path;
   const resumes: Array<{ harness: string; threadId: string }> = [];
   const database = createThreadStateDatabase(storageRoot, [["thread-one", "codex"]]);
   database.admitRecord({
@@ -1478,11 +1488,12 @@ test("managed resume validates the provider thread before requesting lifecycle-o
   });
   assert.deepEqual(resumes, [{ harness: "codex", threadId: "thread-one" }]);
   await feature.dispose();
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await temporary.dispose();
 });
 
 test("observed title mutations update the provider and published sidebar together", async () => {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-title-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-title-");
+  const storageRoot = temporary.path;
   const publications: WorkbenchThreadSidebarSnapshot[] = [];
   const titleRequests: Array<{ harness: string; params: unknown }> = [];
   let rejectTitle = false;
@@ -1556,5 +1567,5 @@ test("observed title mutations update the provider and published sidebar togethe
   assert.equal((await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"])).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one")?.title, "Renamed thread");
 
   await feature.dispose();
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await temporary.dispose();
 });

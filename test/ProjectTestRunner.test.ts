@@ -3,9 +3,9 @@
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import type { ChildProcess } from "node:child_process";
@@ -14,7 +14,8 @@ import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../daemon/server/lib/workbench/Wor
 import ProjectTestRunner from "./ProjectTestRunner";
 
 test("rejects all orphaned tests before acquiring fixtures or launching children", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "test-catalog-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("test-catalog-");
+  const root = temporary.path;
   try {
     await Promise.all(["first.test.ts", "second.test.tsx"].map(file => writeFile(path.join(root, file), "")));
     let acquired = false;
@@ -32,7 +33,7 @@ test("rejects all orphaned tests before acquiring fixtures or launching children
     });
     assert.equal(acquired, false);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
@@ -110,7 +111,8 @@ test("live runners can omit the test timeout without changing the ordinary defau
 });
 
 test("a failed file frees its slot while shared fixtures remain owned until the other files finish", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "test-runner-pool-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("test-runner-pool-");
+  const root = temporary.path;
   const files = ["first", "second", "third"];
   await Promise.all(files.flatMap(name => [
     writeFile(path.join(root, `${name}.ts`), ""),
@@ -149,6 +151,6 @@ test("a failed file frees its slot while shared fixtures remain owned until the 
     assert.deepEqual(disposed, ["fixtures", "lease"]);
   } finally {
     for (const outcome of outcomes) outcome.resolve({ exitCode: 1, signal: null });
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

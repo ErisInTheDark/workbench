@@ -1,7 +1,7 @@
 /* No exports. Tests protect app-state persistence and migration backup lifecycle. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { captureTestOutput } from "../../../test/capture-test-output.mts";
@@ -20,10 +20,11 @@ import { appStateSchema, appStateTables } from "workbench-shared/state/workbench
 import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 
 async function temporaryDatabase(context: TestContext) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-app-state-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-app-state-");
+  const directory = temporary.path;
   captureTestOutput(context, process.stdout, text =>
     text.startsWith(DATABASE_LOG_PREFIX) || text.startsWith("[database] restored schema "));
-  context.after(() => fs.rm(directory, { force: true, recursive: true }));
+  context.after(() => temporary.dispose());
   return path.join(directory, "state.sqlite3");
 }
 
@@ -299,7 +300,8 @@ for (const rejectCheckpoint of [false, true]) {
 }
 
 test("repositories sharing one data root reopen the same app state", async context => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-installation-state-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-installation-state-");
+  const directory = temporary.path;
   const dataRootPath = path.join(directory, "data");
   const first = new WorkbenchAppStateRepository({ dataRootPath });
   let second: WorkbenchAppStateRepository | null = null;
@@ -314,7 +316,7 @@ test("repositories sharing one data root reopen the same app state", async conte
     assert.equal(second.query(selectRows(appStateTables.globalPreferences))[0]?.text_value, "dark");
   } finally {
     await Promise.all([first.close(), second?.close()]);
-    await fs.rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 

@@ -1,7 +1,7 @@
 /* Exports: none. Tests protect resolved instruction sources, sections, and source-only syntax stripping. */
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 
@@ -11,7 +11,8 @@ import {
 } from "./instruction-token-corpus";
 
 test("builds one deterministic corpus without authoring or control syntax", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-instruction-tokens-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-instruction-tokens-");
+  const root = temporary.path;
   try {
     await mkdir(path.join(root, "nested"));
     await writeFile(path.join(root, "z.md"), [
@@ -75,12 +76,13 @@ test("builds one deterministic corpus without authoring or control syntax", asyn
     ]);
     assert.doesNotMatch(corpus.content, /available|failure rationale|runtime\.value|workbench\.rendering|nested\/\*|custom-tag|authoring guide|\{\}/u);
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });
 
 test("builds the active cwd-owned AGENTS tree without source comments", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "project-instruction-tokens-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("project-instruction-tokens-");
+  const root = temporary.path;
   const cwd = path.join(root, "nested");
   try {
     await mkdir(cwd);
@@ -111,6 +113,6 @@ test("builds the active cwd-owned AGENTS tree without source comments", async ()
       ],
     );
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await temporary.dispose();
   }
 });

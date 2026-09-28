@@ -3,10 +3,11 @@
  * - default WorkbenchTestProcessResources: retain isolated service PID records outside a test worker.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+
+import WorkbenchTemporaryDirectory from "./lib/workbench/WorkbenchTemporaryDirectory";
 
 const REGISTRY_ENV = "WORKBENCH_TEST_SERVICE_RECORDS";
 const ServiceProcess = z.object({ pid: z.number().int().min(2) });
@@ -42,13 +43,13 @@ async function retirePid(pid: number) {
 }
 
 export default class WorkbenchTestProcessResources {
-  private constructor(readonly file: string, private readonly ownedDirectory: string | null) {}
+  private constructor(readonly file: string, private readonly ownedDirectory: WorkbenchTemporaryDirectory | null) {}
 
   static async create(inherit = false) {
     const inherited = inherit ? process.env[REGISTRY_ENV] : undefined;
     if (inherited) return new WorkbenchTestProcessResources(inherited, null);
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-test-services-"));
-    const file = path.join(directory, "records.jsonl");
+    const directory = await WorkbenchTemporaryDirectory.create("wb-test-services-");
+    const file = path.join(directory.path, "records.jsonl");
     await fs.writeFile(file, "");
     return new WorkbenchTestProcessResources(file, directory);
   }
@@ -77,6 +78,6 @@ export default class WorkbenchTestProcessResources {
       WorkbenchTestProcessResources.retireService(file)));
     const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
     if (failures.length) throw new AggregateError(failures, "Owned test service cleanup failed.");
-    if (this.ownedDirectory) await fs.rm(this.ownedDirectory, { recursive: true });
+    if (this.ownedDirectory) await this.ownedDirectory.dispose();
   }
 }

@@ -1,14 +1,15 @@
 /* No production exports. Protect durable capabilities, update ordering and reopen. */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 import WorkbenchServerSettings from "./WorkbenchServerSettings.ts";
 import WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController.ts";
 
 test("capabilities default safely and serialised updates persist across worker reopen", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-capabilities-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-capabilities-");
+  const root = temporary.path;
   const options = { databasePath: path.join(root, "workbench.sqlite3") };
   let database = new WorkbenchDatabaseController(options);
   try {
@@ -25,12 +26,13 @@ test("capabilities default safely and serialised updates persist across worker r
     assert.deepEqual(await new WorkbenchServerSettings(database).readLocalCapabilities(), { browseRawCommandsEnabled: true });
   } finally {
     await database.close();
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });
 
 test("discovery folders start empty and replace atomically in order across reopen", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workbench-discovery-settings-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-discovery-settings-");
+  const root = temporary.path;
   const options = { databasePath: path.join(root, "workbench.sqlite3") };
   let database = new WorkbenchDatabaseController(options);
   try {
@@ -46,6 +48,6 @@ test("discovery folders start empty and replace atomically in order across reope
     assert.deepEqual(await settings.readProjectDiscoveryRoots(), []);
   } finally {
     await database.close();
-    await rm(root, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

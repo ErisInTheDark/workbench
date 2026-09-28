@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import fs from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { createServer } from "node:http";
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -18,7 +18,8 @@ const browserStateId = "b67fc086-6f5d-46eb-aede-081027e43b72";
 const daemonId = "10000000-0000-4000-8000-000000000001";
 
 async function fixture(context: TestContext, failAttachment = false) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-app-state-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workspace-app-state-");
+  const directory = temporary.path;
   const repository = new WorkbenchAppStateRepository({ databasePath: path.join(directory, "state.sqlite3") });
   await repository.start();
   const registry = new WorkbenchBrowserStateRegistry(repository);
@@ -64,7 +65,7 @@ async function fixture(context: TestContext, failAttachment = false) {
     state.dispose(); connection.dispose(); server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     await registry.close(); await repository.close();
-    await fs.rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   });
   await state.bootstrap();
   const query = await socket.request("workspace/observe", 0, request => request.params.query.kind === "appState");

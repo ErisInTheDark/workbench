@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events";
 import { once } from "node:events";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirectory";
 import { Socket } from "node:net";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -104,7 +104,7 @@ function runtime() {
     startWatching: async () => "C:/workbench-output",
   } as unknown as WorkbenchFrontendCompiler;
   const database = {
-    databasePath: path.join(os.tmpdir(), "workbench-source-ownership", "app-state.sqlite3"),
+    databasePath: WorkbenchTemporaryDirectory.resolve("workbench-source-ownership", "app-state.sqlite3"),
     configureDiagnostics() {},
     close: async () => {},
     start: async () => "registration",
@@ -126,7 +126,7 @@ function runtime() {
     },
     createCompiler: () => compiler,
     createDatabase: () => database,
-    daemonEndpointPath: path.join(os.tmpdir(), "workbench-source-ownership", "daemon", "runtime.json"),
+    daemonEndpointPath: WorkbenchTemporaryDirectory.resolve("workbench-source-ownership", "daemon", "runtime.json"),
     logger: new WorkbenchProcessLogger({ color: false, writeError: () => {}, writeOutput: () => {} }),
     outputDirectoryPath: "C:/workbench-output",
     repositoryRootPath: path.resolve(appDirectoryPath, ".."),
@@ -207,8 +207,9 @@ test("separates reloadable imports, stable process imports and external build in
 });
 
 test("reloads the database with a fresh repository constructor and no process restart", async (context) => {
-  const rootPath = await mkdtemp(path.join(os.tmpdir(), "workbench-app-runtime-reload-"));
-  context.after(async () => await rm(rootPath, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-app-runtime-reload-");
+  const rootPath = temporary.path;
+  context.after(async () => await temporary.dispose());
   const outputDirectoryPath = path.join(rootPath, "output");
   const databasePath = path.join(rootPath, "app-state.sqlite3");
   await Promise.all(["app", "shared"].map(async (directory) => {

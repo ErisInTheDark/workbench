@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import test from "node:test";
 
@@ -19,7 +19,8 @@ async function fixtureRouter(
   lines: string[] = [],
   onLine: () => void = () => {},
 ) {
-  const output = await mkdtemp(path.join(os.tmpdir(), "workbench-app-router-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-app-router-");
+  const output = temporary.path;
   await mkdir(path.join(output, "tab-icons"), { recursive: true });
   await writeFile(path.join(output, "index.html"), "<main>app</main>", "utf8");
   await writeFile(path.join(output, "tab-icons", "default-256.png"), "icon", "utf8");

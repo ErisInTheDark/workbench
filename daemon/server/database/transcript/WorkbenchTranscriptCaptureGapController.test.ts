@@ -1,7 +1,7 @@
 /* No production exports. Protect durable gap ownership, recovery isolation and atomic settlement. */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { join } from "node:path";
 import { test } from "node:test";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
@@ -24,7 +24,8 @@ test("a missing Workbench fact does not prevent selecting unrelated provider gap
 });
 
 test("gaps survive reopen and reconciliation closes only its observed failures", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "workbench-transcript-gaps-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-transcript-gaps-");
+  const directory = temporary.path;
   const options = { databasePath: join(directory, "workbench.sqlite3") };
   let database = new WorkbenchDatabaseController(options);
   const threadId = WorkbenchThreadIdSchema.parse("thread");
@@ -64,6 +65,6 @@ test("gaps survive reopen and reconciliation closes only its observed failures",
     await assert.rejects(gaps.requireRecovery(threadId), /no entry/);
   } finally {
     await database.close();
-    await rm(directory, { recursive: true, force: true });
+    await temporary.dispose();
   }
 });

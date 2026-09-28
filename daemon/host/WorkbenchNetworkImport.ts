@@ -3,9 +3,9 @@
  * - default WorkbenchNetworkImport: import legacy network state from an isolated SQLite backup.
  */
 import Database from "better-sqlite3";
-import { mkdtemp, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { stat } from "node:fs/promises";
 import path from "node:path";
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory.ts";
 import WorkbenchAppStateRepository from "../../app/server/state/WorkbenchAppStateRepository.ts";
 import WorkbenchNetworkRepository from "./network/WorkbenchNetworkRepository.ts";
 import { insertRow, selectRows } from "../../shared/database/workbench-database-statements.ts";
@@ -29,9 +29,11 @@ export default class WorkbenchNetworkImport {
     }
     const original = new Database(source, { readonly: true, fileMustExist: true });
     let directory: string | undefined;
+    let temporary: WorkbenchTemporaryDirectory | undefined;
     let copy: WorkbenchAppStateRepository | undefined;
     try {
-      directory = await mkdtemp(path.join(tmpdir(), "workbench-network-import-"));
+      temporary = await WorkbenchTemporaryDirectory.create("workbench-network-import-");
+      directory = temporary.path;
       const snapshot = path.join(directory, "app.sqlite3");
       copy = new WorkbenchAppStateRepository({ databasePath: snapshot });
       try { await original.backup(snapshot); }
@@ -42,7 +44,7 @@ export default class WorkbenchNetworkImport {
     } finally {
       if (original.open) original.close();
       await copy?.close();
-      if (directory) await rm(directory, { recursive: true, force: true });
+      await temporary?.dispose();
     }
   }
 }

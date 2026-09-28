@@ -2,16 +2,17 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import test from "node:test";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import VoiceRecognizerProcess from "./VoiceRecognizerProcess";
 import type { VoiceEvent } from "workbench-shared/workbench/voice/voice-contract";
 
 async function harness() {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "voice-process-test-"));
+  const temporary = await WorkbenchTemporaryDirectory.create("voice-process-test-");
+  const directory = temporary.path;
   const descriptor = path.join(directory, "runtime.json");
   await fs.writeFile(descriptor, JSON.stringify({
     version: 1, platform: process.platform, arch: process.arch,
@@ -30,7 +31,7 @@ async function harness() {
     terminateChild: async () => { terminated = true; },
   });
   return { process: recognizer, child, launch, events, errors, get terminated() { return terminated; },
-    async dispose() { await recognizer.dispose(); await fs.rm(directory, { recursive: true, force: true }); } };
+    async dispose() { await recognizer.dispose(); await temporary.dispose(); } };
 }
 
 test("split UTF-8 lines retain native messages and commands wait for readiness", async () => {

@@ -4,15 +4,16 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import test from "node:test";
 
 import ProjectTestRunCoordinator from "./ProjectTestRunCoordinator";
 
 test("waits for the active lease before resetting and acquiring the shared test temp root", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-test-coordinator-"));
-  context.after(async () => await fs.rm(root, { force: true, recursive: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-test-coordinator-");
+  const root = temporary.path;
+  context.after(async () => await temporary.dispose());
   const databasePath = path.join(root, "runtime", "lock.sqlite3");
   const temporaryRootPath = path.join(root, "tmp", "tests");
   const first = new ProjectTestRunCoordinator({ databasePath, temporaryRootPath });

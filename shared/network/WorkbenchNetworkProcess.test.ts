@@ -2,16 +2,17 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import WorkbenchNetworkProcess from "./WorkbenchNetworkProcess.ts";
 
 async function fixture(context: { after(fn: () => Promise<void>): void }) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "wb-network-process-"));
-  context.after(() => rm(root, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-network-process-");
+  const root = temporary.path;
+  context.after(() => temporary.dispose());
   const source = path.join(root, "shared/network/native");
   const platform = process.platform === "win32" ? "windows-x64" : "linux-x64";
   const name = process.platform === "win32" ? "workbench-network.exe" : "workbench-network";
@@ -222,8 +223,9 @@ test("the bundled Windows sidecar accepts disabled configuration and exits on pa
     return;
   }
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const directory = await mkdtemp(path.join(os.tmpdir(), "wb-network-disabled-"));
-  context.after(() => rm(directory, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-network-disabled-");
+  const directory = temporary.path;
+  context.after(() => temporary.dispose());
   let statusCount = 0;
   const owner = new WorkbenchNetworkProcess({
     root, stateDirectory: directory,

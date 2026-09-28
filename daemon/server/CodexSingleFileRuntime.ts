@@ -2,7 +2,7 @@
  * Exports:
  * - default createCodexSingleFileRuntime: isolated native transport and owned scratch documents.
  */
-import os from "node:os";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { z } from "zod";
 import CodexSingleFileDocuments from "./CodexSingleFileDocuments";
 import CodexAppServer, { type CodexAppServerOptions } from "./CodexAppServer";
@@ -34,7 +34,7 @@ export default function createCodexSingleFileRuntime(
         onFailure(error);
       };
       const server = createServer({
-        projectRoot: os.tmpdir(),
+        projectRoot: WorkbenchTemporaryDirectory.resolve("voice-transformer"),
         args: [
           ...[
             "skills.include_instructions=false", "include_apps_instructions=false",

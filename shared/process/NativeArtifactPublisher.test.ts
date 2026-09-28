@@ -3,9 +3,9 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import NativeArtifactPublisher from "./NativeArtifactPublisher.ts";
 
 function windowsImage() {
@@ -18,8 +18,9 @@ function windowsImage() {
 }
 
 test("invalid artifacts cannot replace the current launcher", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-native-publish-"));
-  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-native-publish-");
+  const root = temporary.path;
+  context.after(() => temporary.dispose());
   const source = path.join(root, "built.exe");
   const destination = path.join(root, "committed.exe");
   await fs.writeFile(source, "truncated");
@@ -30,8 +31,9 @@ test("invalid artifacts cannot replace the current launcher", async context => {
 });
 
 test("validated artifacts replace the previous image without leaving candidates", async context => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wb-native-publish-"));
-  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-native-publish-");
+  const root = temporary.path;
+  context.after(() => temporary.dispose());
   const source = path.join(root, "built.exe");
   const destination = path.join(root, "committed.exe");
   const image = windowsImage();
