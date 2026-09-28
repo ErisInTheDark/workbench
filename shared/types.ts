@@ -1157,6 +1157,7 @@ export interface ExplorerSnapshot {
 export interface WorkbenchThreadSidebarStore {
   getDraft?: (projectId: ProjectId, draftId: DraftId) => WorkbenchThreadDraft | null;
   getHomeThreadDisplayOrder?: () => WorkbenchHomeThreadDisplayOrderSnapshot;
+  getLocationSnapshot?: (location: ProjectLocationReference) => WorkbenchThreadSidebarSnapshot | null;
   getHomeThreadDisplayOrderSupported?: () => boolean;
   getPinnedThreadLayout?: () => WorkbenchPinnedThreadLayoutSnapshot;
   getProjectSnapshot: (projectId: ProjectId) => WorkbenchThreadSidebarSnapshot | null;

@@ -32,8 +32,7 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
     ? thread.state.status === "ready" ? { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(rootId), threadId: ThreadReferenceSchema.parse(selectedId), harness: child?.harness } : null
     : target, undefined, selectedId !== rootId ? "view" : interest);
   const error = thread.state.error ?? active.state.error
-    ?? (!props.projectId && thread.state.document ? "The thread's project owner is unavailable."
-      : !thread.state.document ? routeError : "");
+    ?? (!thread.state.document ? routeError : "");
   if (error) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center px-6 py-8">
@@ -45,7 +44,7 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
       </div>
     );
   }
-  if (!target || target.kind === "new" || thread.state.status !== "ready" || !thread.state.document || active.state.status !== "ready" || !active.state.document) return <ThreadLoadingSkeleton />;
+  if (!props.projectId || !target || target.kind === "new" || thread.state.status !== "ready" || !thread.state.document || active.state.status !== "ready" || !active.state.document) return <ThreadLoadingSkeleton />;
   return <ThreadViewContent {...props} rootTarget={target} selectedThreadId={selectedId} onSelectedThreadChange={id => {
     setSelectedId(id);
     props.onSelectedThreadChange?.(id);

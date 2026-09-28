@@ -13,7 +13,7 @@ import ThreadCheckpointCommitItem from "./thread-view/ThreadCheckpointCommitItem
 import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
 import ThreadUserInputRequest from "./thread-view/ThreadUserInputRequest";
 import useWorkbenchQuestionnaire from "./use-workbench-questionnaire";
-import { useWorkbenchProjectThreadSummaries, useWorkbenchThreadSidebarEntry } from "./use-workbench-client";
+import { useThreadArcEntry, useWorkbenchProjectThreadSummaries, useWorkbenchThreadSidebarEntry } from "./use-workbench-client";
 
 export default function WorkbenchThreadTooltipDetails({
   cwd,
@@ -45,12 +45,14 @@ export default function WorkbenchThreadTooltipDetails({
   const questionnaire = useWorkbenchQuestionnaire(projectId, parentThreadId
     ? { kind: "subagent", harness, parentThreadId, threadId } : { kind: "provider", harness, threadId }, onQuestionnaireError);
   const sidebarEntry = useWorkbenchThreadSidebarEntry(projectId, harness, threadId);
+  const ownerArcEntry = useThreadArcEntry(threadId, harness);
   const summaries = useWorkbenchProjectThreadSummaries();
   const pinnedEntry = summaries.projects.find(project => project.projectId === projectId)?.pinnedThreads.find(entry => (
     entry.entryKind === "thread" && entry.identity.harness === harness && entry.identity.threadId === threadId
   ));
-  const entry = questionnaire.thread.state.entry ?? sidebarEntry ?? (pinnedEntry?.entryKind === "thread" ? pinnedEntry : null);
-  const arcPhase = sidebarEntry?.gitArc?.phase ?? entry?.gitArc?.phase;
+  const entry = questionnaire.thread.state.entry ?? ownerArcEntry ?? sidebarEntry
+    ?? (pinnedEntry?.entryKind === "thread" ? pinnedEntry : null);
+  const arcPhase = ownerArcEntry?.gitArc?.phase ?? entry?.gitArc?.phase;
   const pendingRequest = questionnaire.request;
   const proposalId = entry?.gitArc?.proposals.find(proposal => proposal.status === "proposed")?.proposalId ?? null;
   const questionnaireLoading = !pendingRequest && Boolean(entry && (

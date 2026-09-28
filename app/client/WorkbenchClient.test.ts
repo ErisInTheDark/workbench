@@ -230,6 +230,56 @@ test("a resolved existing thread starts its observation while catalogue metadata
   assert.ok(warnings.some(message => message.includes("source read unavailable")));
 });
 
+test("a thread viewed from another project keeps demand for its owning project rows", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (message: string) => warnings.push(message));
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
+  const data = facts(true);
+  const ownerLogicalId = LogicalProjectIdSchema.parse(crypto.randomUUID());
+  const ownerLocation = { daemonId: blockedId, projectId: ProjectIdSchema.parse("owner-folder") };
+  data.projects.push({
+    id: ownerLogicalId, label: "owner", matchKey: "local://owner",
+    locations: [{ target: ownerLocation, daemonId: blockedId, hostname: "remote",
+      name: "owner", rootPath: "/owner", project: null }],
+  });
+  socket.observation(projects, { kind: "projects", phase: "stale", failure: null, data });
+  const threadId = WorkbenchThreadIdSchema.parse(crypto.randomUUID());
+  const route = createLogicalExistingThreadRoute(logicalId,
+    { kind: "provider", harness: "codex", threadId }, null);
+  assert.equal((await client.controls.applyRoute(route)).pending, true);
+  const owner = await socket.request("workspace/observe", 0, request => request.params.query.kind === "threadOwner");
+  socket.observation(owner, { kind: "threadOwner", phase: "current", failure: null, data: {
+    phase: "current", identity: { threadId, projectId: ownerLocation.projectId, harness: "codex" },
+    location: ownerLocation, logicalProjectId: ownerLogicalId,
+  } });
+  const offset = socket.sent.length;
+  const opening = client.controls.applyRoute(route);
+  const rows = await socket.request("workspace/observe", offset, request =>
+    request.params.query.kind === "projectThreads"
+      && request.params.query.projects?.length === 2);
+  assert.equal(rows.params.query.kind, "projectThreads");
+  if (rows.params.query.kind !== "projectThreads") throw new Error("Expected owner row observation.");
+  assert.deepEqual(rows.params.query.projects, [
+    { kind: "logical", projectId: logicalId },
+    { kind: "logical", projectId: ownerLogicalId },
+  ]);
+  const read = await socket.request("workspace/observe", offset, request => request.params.query.kind === "thread");
+  await client.controls.applyRoute(createHomeRoute());
+  socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
+    data: null, owner: { phase: "unavailable", failure: "source read unavailable" } });
+  await opening;
+  for (const request of socket.sent) {
+    if (request.method === "workspace/command" && request.params.method === "questionnaires/pending/read") {
+      socket.reply(request, { data: [] });
+    }
+  }
+  assert.ok(warnings.some(message => message.includes("source read unavailable")));
+});
+
 test("late durable registration canonicalises the existing draft without replacing its local state", async context => {
   const fixture = createWorkspaceClientFixture();
   const socket = await fixture.open();

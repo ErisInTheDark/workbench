@@ -3,6 +3,7 @@
  * - useWorkbenchClientMount: own async Workbench client mount and disposal around root-owned DOM surfaces.
  * - useWorkbenchThreads: read and act on the route-owned thread collection through one visible namespace.
  * - useWorkbenchProjectThreadSidebar: read one project-owned sidebar in every observation mode.
+ * - useThreadClaimIntersections/useThreadCollisionEntries/useThreadArcEntry: select narrow source-qualified Git arc facts.
  * - useWorkbenchThreadSidebarEntry: read one project-owned thread sidebar entry by identity.
  * - useWorkbenchThreadTitleHistory: read previous titles and apply project-qualified rename/dismiss intent.
  * - useWorkbenchProjectThreadSidebars: read the aggregate project sidebar projection.
@@ -34,14 +35,21 @@ import type {
   WorkbenchReadThreadOptions,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadRuntimeSnapshot,
+  WorkbenchThreadSidebarStore,
   WorkbenchUserInputResponse,
 } from "workbench-shared/types";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type {
   WorkbenchHomeThreadDisplayOrderSnapshot,
   WorkbenchPinnedThreadLayoutSnapshot,
   WorkbenchProjectThreadSidebars,
   WorkbenchProjectThreadSummaries,
   WorkbenchThreadSidebarEntry,
+  WorkbenchThreadSidebarSnapshot,
+} from "workbench-shared/workbench/thread/thread-state";
+import {
+  createWorkbenchThreadClaimIntersectionSelector,
+  type WorkbenchHarnessId,
 } from "workbench-shared/workbench/thread/thread-state";
 import ProjectTreeFileIndex from "workbench-shared/workbench/project/ProjectTreeFileIndex";
 import type WorkbenchClientStateController from "../../workbench/state/WorkbenchClientStateController";
@@ -54,7 +62,7 @@ import type { ThreadTextPresentationKey } from "../../workbench/thread/ThreadTex
 import WorkbenchClientContext, { useWorkbenchClientController, type WorkbenchClientController } from "./workbench-client-context";
 import ThreadTextPresentationContext from "./ThreadTextPresentationContext";
 import { useWorkbenchThread } from "./use-workbench-thread";
-import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { DaemonId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchProjectFileIndexSnapshot } from "../../workbench/project/WorkbenchProjectFileIndexStore";
 import { useWorkbenchWorkspace } from "./WorkbenchWorkspaceContext";
 
@@ -279,6 +287,79 @@ export function useWorkbenchProjectThreadSidebar(projectId: ProjectId | "" | nul
     () => projectId ? store?.getProjectSnapshot(projectId) ?? null : null,
     [projectId, store],
   );
+  return useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, getSnapshot, getSnapshot);
+}
+
+function useOwnerSource(threadId: string) {
+  const client = useWorkbenchClientController();
+  const store = client.mounted?.threadSidebar ?? null;
+  const owner = client.mounted?.threadOwnerFor(threadId) ?? null;
+  const daemonId = owner?.daemonId;
+  const projectId = owner?.projectId;
+  const logicalProjectId = owner ? client.explorer.logicalProjects?.find(project =>
+    project.locations.some(location => location.daemonId === owner.daemonId
+      && location.target.projectId === owner.projectId))?.id ?? null : null;
+  return { store, daemonId, projectId, logicalProjectId };
+}
+
+function ownerSourceSnapshot(
+  store: WorkbenchThreadSidebarStore | null, daemonId: DaemonId | undefined, projectId: ProjectId | undefined,
+) {
+  return daemonId && projectId
+    ? store?.getLocationSnapshot?.({ daemonId, projectId }) ?? null : null;
+}
+
+export function useThreadClaimIntersections(
+  threadId: string, harness: WorkbenchHarnessId, scope: "plan" | "stashed",
+) {
+  const { store, daemonId, projectId, logicalProjectId } = useOwnerSource(threadId);
+  const selector = useMemo(() => createWorkbenchThreadClaimIntersectionSelector({ harness, threadId }, scope),
+    [harness, scope, threadId]);
+  const getSnapshot = useCallback(() => selector(ownerSourceSnapshot(store, daemonId, projectId)),
+    [daemonId, projectId, selector, store]);
+  const intersections = useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, getSnapshot, getSnapshot);
+  return useMemo(() => ({ intersections, logicalProjectId, ownerProjectId: projectId }),
+    [intersections, logicalProjectId, projectId]);
+}
+
+export function useThreadCollisionEntries(
+  threadId: string,
+  owners: readonly { harness: string; threadId: string }[],
+) {
+  const { store, daemonId, projectId, logicalProjectId } = useOwnerSource(threadId);
+  const ownerKey = owners.map(owner => `${owner.harness.toLowerCase()}\0${owner.threadId.toLowerCase()}`).sort().join("\n");
+  const select = useMemo(() => {
+    let selected: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>[] = [];
+    const keys = new Set(ownerKey.split("\n"));
+    return (snapshot: WorkbenchThreadSidebarSnapshot | null) => {
+      const next = (snapshot?.entries ?? []).filter((entry): entry is Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> =>
+        entry.entryKind === "thread" && keys.has(`${entry.identity.harness.toLowerCase()}\0${entry.identity.threadId.toLowerCase()}`));
+      if (areDeeplyEqual(selected, next)) return selected;
+      selected = next;
+      return selected;
+    };
+  }, [ownerKey]);
+  const activeStore = ownerKey ? store : null;
+  const getSnapshot = useCallback(() => select(ownerSourceSnapshot(activeStore, daemonId, projectId)),
+    [activeStore, daemonId, projectId, select]);
+  const entries = useSyncExternalStore(activeStore?.subscribe ?? EMPTY_SUBSCRIBE, getSnapshot, getSnapshot);
+  return { entries, logicalProjectId, ownerProjectId: projectId };
+}
+
+export function useThreadArcEntry(threadId: string, harness: WorkbenchHarnessId) {
+  const { store, daemonId, projectId } = useOwnerSource(threadId);
+  const select = useMemo(() => {
+    let selected: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> | null = null;
+    return (snapshot: WorkbenchThreadSidebarSnapshot | null) => {
+      const next = snapshot?.entries.find((entry): entry is Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> =>
+        entry.entryKind === "thread" && entry.identity.harness === harness && entry.identity.threadId === threadId) ?? null;
+      if (areDeeplyEqual(selected, next)) return selected;
+      selected = next;
+      return selected;
+    };
+  }, [harness, threadId]);
+  const getSnapshot = useCallback(() => select(ownerSourceSnapshot(store, daemonId, projectId)),
+    [daemonId, projectId, select, store]);
   return useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, getSnapshot, getSnapshot);
 }
 

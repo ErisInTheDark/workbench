@@ -1078,6 +1078,7 @@ export default memo(function ThreadViewContent ({
         hasActiveGitArc: activeGitArcSelection?.gitArc?.phase === "active",
         onOpenThread,
         projectId,
+        threadId: activeThread?.id ?? thread.id,
         proposalIntents: visibleGitArcProposalPresentation.intents,
       }}>
       <>

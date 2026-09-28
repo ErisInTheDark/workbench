@@ -12,7 +12,7 @@ import type {
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema,
-  WorkbenchThreadIdSchema, type DaemonId, type DraftId,
+  WorkbenchThreadIdSchema, type DaemonId, type DraftId, type ProjectId,
 } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import {
@@ -82,7 +82,7 @@ export interface MountedWorkbenchClient {
   voice: WorkbenchVoiceClient;
   getThreadController: ThreadClient["getThreadController"];
   threadOwnerFor(threadId: string): {
-    daemonId: DaemonId; projectId: string; hostname: string; rootPath: string; displayPath: string;
+    daemonId: DaemonId; projectId: ProjectId; hostname: string; rootPath: string; displayPath: string;
   } | null;
   threadDraftIdentityFor(threadId: string): ClientDraftIdentity | null;
   threadContextFor(threadId: string): (ViewContext & { registrationId: string | null }) | null;
@@ -362,16 +362,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     if (browseLocation) {
       void projectClient.installCatalog(catalogueFor(browseLocation.daemonId))
         .catch(error => warn("Project facts could not be displayed.", error));
-      const value = rows?.getSnapshot().value;
-      const source = value?.data.projects.find(item => sameLocation(item.location, browseLocation));
-      sidebar.acceptFacts(browseLocation, value ? {
-        projectId: browseLocation.projectId,
-        entries: value.data.rows.filter(item => sameLocation(item.location, browseLocation)).map(item => item.entry),
-        revision: value.revision,
-        freshness: source?.phase === "current" ? "fresh" : "partial",
-        error: source?.failure ?? null,
-      } : null);
-    } else sidebar.acceptFacts(null, null);
+    }
+    sidebar.acceptFacts(browseLocation, rows?.getSnapshot().value?.data ?? null);
     const route = navigation.getSnapshot().route;
     prepareMosaicRenderers(route.mosaicNode);
     const currentDraft = threadClient.getSnapshot().currentThread;
@@ -460,7 +452,22 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     retainOwners(route.mosaicNode ? [...getWorkbenchMosaicThreadRootIds(route.mosaicNode)] : root ? [root] : []);
     const logicalId = route.logical?.projectId;
     const explicit = route.logical?.browseLocation ?? route.logical?.location;
-    selectRows(logicalId ? [{ kind: "logical", projectId: logicalId }]
+    const selectedLogicalIds = [...new Set([logicalId, route.logical?.threadOwnerProjectId].filter(
+      (id): id is NonNullable<typeof id> => Boolean(id),
+    ))];
+    const ownerFact = root ? owners.get(root)?.getSnapshot().value?.data : null;
+    const selectedRows: WorkspaceProjectReference[] = selectedLogicalIds.map(projectId => ({
+      kind: "logical", projectId,
+    }));
+    if (selectedRows.length && ownerFact?.phase === "current") {
+      if (ownerFact.logicalProjectId && !selectedLogicalIds.includes(ownerFact.logicalProjectId)) {
+        selectedRows.push({ kind: "logical", projectId: ownerFact.logicalProjectId });
+      } else if (!ownerFact.logicalProjectId) {
+        selectedRows.push({ kind: "location", location: ownerFact.location });
+      }
+    }
+    selectRows(selectedRows.length
+      ? selectedRows
       : explicit ? [{ kind: "location", location: explicit }] : null);
     if (route.view === "home" || route.view === "settings" && route.settingsScope === "global"
       || route.view === "stats") {

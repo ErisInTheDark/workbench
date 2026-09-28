@@ -18,6 +18,7 @@ export interface ThreadGitArcPresentation {
   hasActiveGitArc?: boolean;
   onOpenThread?: (target: WorkbenchThreadTarget) => void;
   projectId?: string | null;
+  threadId?: string;
   proposalIntents?: ReadonlyMap<string, GitCheckpointCommitCommandIntent>;
 }
 

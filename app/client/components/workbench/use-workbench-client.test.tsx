@@ -12,7 +12,10 @@ import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thr
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
 import ThreadObservationController from "../../workbench/thread/ThreadObservationController";
 import type { WorkbenchClientController } from "./workbench-client-context";
-import { useWorkbenchThreadSidebarEntry, useWorkbenchThreadTitleHistory } from "./use-workbench-client";
+import {
+  useThreadArcEntry, useThreadClaimIntersections, useThreadCollisionEntries,
+  useWorkbenchThreadSidebarEntry, useWorkbenchThreadTitleHistory,
+} from "./use-workbench-client";
 import WorkbenchThreadController from "../../workbench/WorkbenchThreadController";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
@@ -132,6 +135,47 @@ test("thread state hooks do not leak another project's entry", () => {
     },
   ));
   assert.match(html, />missing</u);
+});
+
+test("arc selectors read the owner's source, not a selected sidebar with the same project ID", () => {
+  const location = {
+    daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse(crypto.randomUUID()),
+    projectId: projectSnapshot.projectId,
+  };
+  const blocker = {
+    ...entry,
+    identity: { ...entry.identity, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("blocker") },
+    gitArc: { ...entry.gitArc!, claimedPaths: ["app/next.tsx"] },
+  };
+  const source = { ...projectSnapshot, entries: [entry, blocker] };
+  const store = {
+    ...globalStore,
+    getLocationSnapshot: (target: typeof location) =>
+      target.daemonId === location.daemonId ? source : null,
+    getProjectSnapshot: () => ({ ...projectSnapshot, entries: [] }),
+  };
+  const ownerClient = {
+    ...client,
+    mounted: { ...client.mounted, threadSidebar: store,
+      threadOwnerFor: () => ({ ...location, hostname: "local", rootPath: "/repo", displayPath: "repo" }) },
+  } satisfies WorkbenchClientController;
+  let result!: {
+    intersections: ReturnType<typeof useThreadClaimIntersections>;
+    collisions: ReturnType<typeof useThreadCollisionEntries>;
+    arcEntry: ReturnType<typeof useThreadArcEntry>;
+  };
+  function Probe() {
+    result = {
+      intersections: useThreadClaimIntersections("thread", "codex", "plan"),
+      collisions: useThreadCollisionEntries("thread", [{ harness: "codex", threadId: "blocker" }]),
+      arcEntry: useThreadArcEntry("thread", "codex"),
+    };
+    return null;
+  }
+  renderToStaticMarkup(createElement(WorkbenchClientProvider, { client: ownerClient, children: createElement(Probe) }));
+  assert.deepEqual(result.intersections.intersections.activeEntries.map(item => item.entry.identity.threadId), ["blocker"]);
+  assert.deepEqual(result.collisions.entries.map(item => item.identity.threadId), ["blocker"]);
+  assert.equal(result.arcEntry?.identity.threadId, "thread");
 });
 
 test("title history actions target their project and preserve rejection", async () => {

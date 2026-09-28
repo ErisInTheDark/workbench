@@ -8,17 +8,13 @@ import { useContext } from "react";
 
 import { describeGitArcFailure, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import ProjectFileLinkList from "../ProjectFileLinkList";
 import { GitArcConflictIcon } from "./GitArcIcon";
 import WorkbenchThreadReferenceList from "../WorkbenchThreadReferenceList";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadGitArcCommitList from "./ThreadGitArcCommitList";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
-import { useWorkbenchProjectThreadSidebar } from "../use-workbench-client";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
-
-type ProviderThreadSidebarEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
+import { useThreadCollisionEntries } from "../use-workbench-client";
 
 function identityKey(harness: string, threadId: string) {
   return `${harness.toLowerCase()}\0${threadId.toLowerCase()}`;
@@ -39,16 +35,14 @@ export default function ThreadGitArcFailure({
 }) {
   const presentationContext = useContext(ThreadGitArcPresentationContext);
   const resolvedProjectId = projectId ?? presentationContext?.projectId ?? null;
-  const snapshot = useWorkbenchProjectThreadSidebar(resolvedProjectId ? ProjectIdSchema.parse(resolvedProjectId) : null);
   const presentation = describeGitArcFailure(failure);
   const conflicts = failure.code === "siblingClaimCollision" || failure.code === "planDrift" ? failure.conflicts : [];
-  const conflictKeys = new Set(conflicts.map(({ owner }) => identityKey(owner.harness, owner.threadId)));
-  const liveEntries = (snapshot?.entries ?? []).filter((entry): entry is ProviderThreadSidebarEntry => (
-    entry.entryKind !== "draft" && conflictKeys.has(identityKey(entry.identity.harness, entry.identity.threadId))
-  ));
+  const { entries: liveEntries, logicalProjectId, ownerProjectId } = useThreadCollisionEntries(
+    presentationContext?.threadId ?? "", conflicts.map(({ owner }) => owner),
+  );
   const liveKeys = new Set(liveEntries.map((entry) => identityKey(entry.identity.harness, entry.identity.threadId)));
   const missingOwners = conflicts.map(({ owner }) => owner).filter((owner) => !liveKeys.has(identityKey(owner.harness, owner.threadId)));
-  const canRenderLiveThreads = Boolean(liveEntries.length && resolvedProjectId && presentationContext?.onOpenThread);
+  const canRenderLiveThreads = Boolean(liveEntries.length && ownerProjectId && presentationContext?.onOpenThread);
   const rejection = failure.code === "rejection" ? failure.rejection : null;
   const rejectedPaths = rejection && "paths" in rejection ? rejection.paths
     : rejection && "path" in rejection ? [rejection.path] : [];
@@ -100,8 +94,8 @@ export default function ThreadGitArcFailure({
             {canRenderLiveThreads ? (
               <WorkbenchThreadReferenceList
                 references={liveEntries.map((entry) => ({
-                  entry, identity: entry.identity, paths: [], projectId: ProjectIdSchema.parse(resolvedProjectId!),
-                  title: entry.title,
+                  entry, identity: entry.identity, paths: [], projectId: ownerProjectId!,
+                  logicalProjectId, title: entry.title,
                 }))}
                 onOpenThread={presentationContext!.onOpenThread!}
               />

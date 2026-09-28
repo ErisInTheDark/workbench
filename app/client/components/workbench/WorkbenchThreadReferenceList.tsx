@@ -5,9 +5,9 @@
 "use client";
 
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadTarget, WorkbenchThreadWaitTarget } from "workbench-shared/workbench/thread/thread-state";
-import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { createLogicalExistingThreadRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, type LogicalProjectId } from "workbench-shared/workbench/identity";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import ProjectFileLinkList from "./ProjectFileLinkList";
 import { useWorkbenchProjectThreadSidebars } from "./use-workbench-client";
@@ -20,7 +20,9 @@ export default function WorkbenchThreadReferenceList({
   references,
 }: {
   label?: string;
-  references: readonly (WorkbenchThreadWaitTarget & { entry?: ProviderThreadSidebarEntry; paths?: readonly string[] })[];
+  references: readonly (WorkbenchThreadWaitTarget & {
+    entry?: ProviderThreadSidebarEntry; logicalProjectId?: LogicalProjectId | null; paths?: readonly string[];
+  })[];
   onOpenThread?: (target: WorkbenchThreadTarget) => void;
 }) {
   const projectHref = useWorkbenchProjectNavigation();
@@ -30,13 +32,15 @@ export default function WorkbenchThreadReferenceList({
   return (<>
     {label ? <div className="px-2 pt-1 text-[0.78em] font-medium text-fg/muted">{label}</div> : null}
     <ul className="m-0 flex flex-col gap-1 px-1 py-1" data-thread-reference-list="true">
-      {references.map(({ entry: suppliedEntry, identity, paths = [], projectId, title }) => {
+      {references.map(({ entry: suppliedEntry, identity, logicalProjectId, paths = [], projectId, title }) => {
         const entry = suppliedEntry ?? sidebars.projects.find(sidebar => sidebar.projectId === projectId)?.entries.find(
           (candidate): candidate is ProviderThreadSidebarEntry => candidate.entryKind === "thread"
             && candidate.identity.harness === identity.harness && candidate.identity.threadId === identity.threadId,
         );
         const target = { harness: identity.harness, kind: "provider" as const, threadId: identity.threadId };
-        const href = projectHref(createThreadRoute(projectId, target));
+        const href = projectHref(logicalProjectId
+          ? createLogicalExistingThreadRoute(logicalProjectId, target)
+          : createThreadRoute(projectId, target));
         return <li key={`${projectId}:${identity.harness}:${identity.threadId}`}>
           {entry ? <WorkbenchThreadListItem
             className="pb-px"

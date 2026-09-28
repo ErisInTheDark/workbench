@@ -11,6 +11,7 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkbenchPendingUserInputRequest, WorkbenchThreadSidebarStore } from "workbench-shared/types";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { WorkbenchPinnedThreadSummaryEntry, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
 import type { WorkbenchClientController } from "./workbench-client-context";
@@ -25,6 +26,10 @@ const fixtureIdentityValues = {
   WorkbenchThreadId: {
     "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
   },
+};
+const defaultOwnerLocation = {
+  daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse(crypto.randomUUID()),
+  projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
 };
 
 const pendingRequest = {
@@ -63,6 +68,7 @@ async function renderDetails(
     disconnected?: boolean;
     observationPending?: boolean;
     awaitingDocument?: boolean;
+    ownerLocation?: ProjectLocationReference;
   } = {},
 ) {
   const request = options.pendingRequest === undefined ? pendingRequest : options.pendingRequest;
@@ -89,7 +95,7 @@ async function renderDetails(
     await loaded;
     assert.equal(owner.getSnapshot(key).status, options.disconnected ? "loading" : "ready");
   }
-  const client = createClient(options.sidebarStore ?? null);
+  const client = createClient(options.sidebarStore ?? null, options.ownerLocation);
   client.controls = canRead ? {} as NonNullable<WorkbenchClientController["controls"]> : null;
   client.mounted!.threadRuntime = WorkbenchThreadRuntimeStore({
     currentThread: null, currentThreadId: "", isLoading: false,
@@ -134,7 +140,9 @@ async function renderDetails(
   return html;
 }
 
-function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClientController {
+function createClient(store: WorkbenchThreadSidebarStore | null, ownerLocation?: ProjectLocationReference): WorkbenchClientController {
+  const sourceStore: WorkbenchThreadSidebarStore = store ?? planStore;
+  const source = ownerLocation ?? defaultOwnerLocation;
   return {
     controls: null,
     explorer: {} as WorkbenchClientController["explorer"],
@@ -145,7 +153,9 @@ function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClien
       voice: { settings: { subscribe: () => () => {}, enabled: false } } as unknown as NonNullable<WorkbenchClientController["mounted"]>["voice"],
       projectFileIndexStore: {} as NonNullable<WorkbenchClientController["mounted"]>["projectFileIndexStore"],
       getThreadController: () => { throw new Error("Unexpected thread view during static rendering."); },
-      threadOwnerFor: () => null,
+      threadOwnerFor: () => ({
+        ...source, hostname: "local", rootPath: "/project", displayPath: "project",
+      }),
       threadDraftIdentityFor: () => null,
       threadContextFor: () => null,
       launchContextFor: () => null,
@@ -157,7 +167,11 @@ function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClien
       controls: {} as NonNullable<WorkbenchClientController["mounted"]>["controls"],
       dispose: () => undefined,
       threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],
-      threadSidebar: store ?? planStore,
+      threadSidebar: {
+        ...sourceStore,
+        getLocationSnapshot: sourceStore.getLocationSnapshot
+          ?? ((location: ProjectLocationReference) => sourceStore.getProjectSnapshot(location.projectId)),
+      },
       threadTextPresentation: {} as NonNullable<WorkbenchClientController["mounted"]>["threadTextPresentation"],
       threadTextPresentationFor: () => null,
       projectSourceErrors: { getSnapshot: () => "", subscribe: () => () => undefined },
@@ -371,6 +385,35 @@ test("planned-work tooltips keep active intersection navigation and omit planned
     onOpenThread: () => undefined,
   }), planStore);
   assert.match(plannedHtml, /data-project-file-relative-path="src\/feature\/other.ts"/u);
+});
+
+test("a tooltip reads planned intersections from its owner's source during a pending question", async () => {
+  const location = {
+    daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse(crypto.randomUUID()),
+    projectId: planSnapshot.projectId,
+  };
+  const sourceStore = {
+    ...planStore,
+    getProjectSnapshot: () => null,
+    getLocationSnapshot: (target: ProjectLocationReference) =>
+      target.daemonId === location.daemonId ? planSnapshot : null,
+  };
+  const html = await renderDetails(false, "C:/workspace", true, {
+    sidebarStore: sourceStore, ownerLocation: location, proposalId: null,
+  });
+  assert.match(html, /data-thread-git-arc-intersection-card="plan"/u);
+  assert.match(html, /data-thread-reference-list="true"/u);
+  assert.match(html, /data-thread-tooltip-questionnaire=/u);
+});
+
+test("a home-view intersection uses the known owner without parsing an empty view project", () => {
+  const html = renderWithClient(createElement(ThreadGitArcIntersectionCard, {
+    harness: "codex",
+    onOpenThread: () => undefined,
+    projectId: "",
+    threadId: "thread",
+  }), planStore);
+  assert.match(html, /data-workbench-sidebar-thread-link="true"/u);
 });
 
 test("waiting references reuse compact rows and keep unloaded targets navigable", () => {

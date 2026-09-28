@@ -140,7 +140,21 @@ function makeItem(
   };
 }
 
-function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClientController {
+const defaultOwnerLocation = {
+  daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse(crypto.randomUUID()),
+  projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+};
+
+function createClient(
+  store: WorkbenchThreadSidebarStore | null,
+  ownerLocation: { daemonId: ReturnType<typeof fixtureIdentitySchemas.DaemonIdSchema.parse>;
+    projectId: ReturnType<typeof fixtureIdentitySchemas.ProjectIdSchema.parse> } = defaultOwnerLocation,
+): WorkbenchClientController {
+  const sourceStore = store && {
+    ...store,
+    getLocationSnapshot: store.getLocationSnapshot
+      ?? ((location: typeof ownerLocation) => store.getProjectSnapshot(location.projectId)),
+  };
   return {
     controls: null,
     explorer: {} as WorkbenchClientController["explorer"],
@@ -151,7 +165,9 @@ function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClien
       voice: { settings: { subscribe: () => () => {}, enabled: false } } as unknown as NonNullable<WorkbenchClientController["mounted"]>["voice"],
       projectFileIndexStore: {} as NonNullable<WorkbenchClientController["mounted"]>["projectFileIndexStore"],
       getThreadController: () => { throw new Error("Unexpected thread view during command rendering."); },
-      threadOwnerFor: () => null,
+      threadOwnerFor: () => ({
+        ...ownerLocation, hostname: "local", rootPath: "/project", displayPath: "project",
+      }),
       threadDraftIdentityFor: () => null,
       threadContextFor: () => null,
       launchContextFor: () => null,
@@ -163,7 +179,7 @@ function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClien
       controls: {} as NonNullable<WorkbenchClientController["mounted"]>["controls"],
       dispose: () => undefined,
       threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],
-      threadSidebar: store,
+      threadSidebar: sourceStore!,
       threadTextPresentation: {} as NonNullable<WorkbenchClientController["mounted"]>["threadTextPresentation"],
       threadTextPresentationFor: () => null,
       projectSourceErrors: { getSnapshot: () => "", subscribe: () => () => undefined },
@@ -176,6 +192,7 @@ function renderSpecialized(
   presentation: ThreadGitArcPresentation | null = null,
   store: WorkbenchThreadSidebarStore | null = null,
   openDetails = true,
+  ownerLocation: Parameters<typeof createClient>[1] = defaultOwnerLocation,
 ) {
   const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
   assert.equal(route?.kind, "specialized");
@@ -200,7 +217,7 @@ function renderSpecialized(
           }),
         ),
       ),
-      client: createClient(store),
+      client: createClient(store, ownerLocation),
     },
   ));
 }
@@ -440,6 +457,34 @@ test("failed Git arc starts compose drift evidence into one named failure card",
     store,
   );
   assert.doesNotMatch(historicalHtml, /newer unrelated plan/u);
+
+  const ownerLocation = {
+    daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse(crypto.randomUUID()),
+    projectId: snapshot.projectId,
+  };
+  const sourceOnlyStore = {
+    ...store,
+    getProjectSnapshot: () => null,
+    getLocationSnapshot: (location: typeof ownerLocation) =>
+      location.daemonId === ownerLocation.daemonId ? snapshot : null,
+  };
+  const sourceHtml = renderSpecialized(
+    makeItem("git_arc_start", {}, formatGitArcFailureReceipt(failure), "failed"),
+    { ...presentation, threadId: "thread-one" },
+    sourceOnlyStore,
+    true,
+    ownerLocation,
+  );
+  assert.match(sourceHtml, /data-thread-reference-list="true"/u);
+  assert.match(sourceHtml, /data-workbench-sidebar-thread-link="true"/u);
+  const homeHtml = renderSpecialized(
+    makeItem("git_arc_start", {}, formatGitArcFailureReceipt(failure), "failed"),
+    { ...presentation, projectId: "", threadId: "thread-one" },
+    sourceOnlyStore,
+    true,
+    ownerLocation,
+  );
+  assert.match(homeHtml, /data-workbench-sidebar-thread-link="true"/u);
 });
 
 test("title and subagent MCP operations use their dedicated renderers", () => {

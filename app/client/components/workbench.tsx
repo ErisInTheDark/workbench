@@ -1653,6 +1653,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     || routeOwnerMetadata && project.locations.some(location =>
       location.target.daemonId === routeOwnerMetadata.daemonId
       && location.target.projectId === routeOwnerMetadata.projectId)) ?? null;
+  const showThreadOwnerLabel = Boolean(routeOwnerMetadata
+    && !(selectedLogicalProject?.id === logicalThreadProject?.id
+      && selectedLogicalProject?.locations.length === 1));
   const isHomeDraftRoute = route.view === "thread"
     && !route.projectId
     && !route.logical?.projectId
@@ -2798,7 +2801,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       routeError={selectionError}
                       key={`${routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? "attached"}:${threadProjectId}:${threadViewInstanceKey}`}
                       thread={threadForThreadView}
-                      threadOwnerContent={routeOwnerMetadata ? (
+                      threadOwnerContent={showThreadOwnerLabel && routeOwnerMetadata ? (
                         <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 text-fg/muted" title={`${routeOwnerMetadata.hostname}: ${routeOwnerMetadata.rootPath}`}>
                           {routeThreadContext?.project && "kind" in routeThreadContext.project
                             ? <WorkbenchProjectIcon project={routeThreadContext.project} variant="thread" />

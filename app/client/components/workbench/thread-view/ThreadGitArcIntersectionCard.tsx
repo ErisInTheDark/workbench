@@ -4,18 +4,14 @@
  */
 "use client";
 
-import { useMemo } from "react";
-
 import {
-  createWorkbenchThreadClaimIntersectionSelector,
   type WorkbenchHarnessId,
   type WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import ThreadDisclosure from "./ThreadDisclosure";
 import { GitArcConflictIcon, GitArcWaitIcon } from "./GitArcIcon";
 import WorkbenchThreadReferenceList from "../WorkbenchThreadReferenceList";
-import { useWorkbenchProjectThreadSidebar } from "../use-workbench-client";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { useThreadClaimIntersections } from "../use-workbench-client";
 
 function formatThreadCount(count: number, state: "active" | "snoozed") {
   return `${count} ${state} ${count === 1 ? "thread" : "threads"}`;
@@ -26,7 +22,6 @@ export default function ThreadGitArcIntersectionCard({
   mode = "plan",
   onOpenThread,
   presentation = "full",
-  projectId,
   threadId,
 }: {
   harness: WorkbenchHarnessId;
@@ -37,10 +32,8 @@ export default function ThreadGitArcIntersectionCard({
   threadId: string;
 }) {
   const scope = mode === "stashed" ? "stashed" : "plan";
-  const selector = useMemo(() => createWorkbenchThreadClaimIntersectionSelector({ harness, threadId }, scope), [harness, scope, threadId]);
-  const projectSidebar = useWorkbenchProjectThreadSidebar(projectId ? ProjectIdSchema.parse(projectId) : "");
-  const intersections = useMemo(() => selector(projectSidebar), [projectSidebar, selector]);
-  if (!intersections.hasScope) return null;
+  const { intersections, logicalProjectId, ownerProjectId } = useThreadClaimIntersections(threadId, harness, scope);
+  if (!intersections.hasScope || !ownerProjectId) return null;
   const waiting = mode === "wait";
   const stashed = mode === "stashed";
   const compact = presentation === "compact" || waiting || stashed;
@@ -54,8 +47,8 @@ export default function ThreadGitArcIntersectionCard({
     snoozedPlannedThreadCount ? formatThreadCount(snoozedPlannedThreadCount, "snoozed") : null,
   ].filter(Boolean).join(" and ");
   const references = (entries: typeof intersections.activeEntries, withPaths: boolean) => entries.map(({ entry, paths }) => ({
-    entry, identity: entry.identity, projectId: ProjectIdSchema.parse(projectId),
-    title: entry.title, paths: withPaths ? paths : [],
+    entry, identity: entry.identity, projectId: ownerProjectId,
+    logicalProjectId, title: entry.title, paths: withPaths ? paths : [],
   }));
 
   return (
