@@ -4,7 +4,7 @@ import test from "node:test";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkspaceProjects } from "workbench-shared/workbench/workspace/workspace-observation";
 import { DaemonIdSchema, FolderIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalThreadRoute, createObservedProjectRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createObservedProjectRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { createWorkspaceClientFixture } from "./workbench/app/workspace-client-fixture";
 import { WorkbenchClient } from "./WorkbenchClient";
 
@@ -97,6 +97,100 @@ test("a registered offline folder can open a draft without claiming live explore
   assert.deepEqual(client.draftContextFor(draft.id)?.project.roots, []);
   const tree = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projectTree");
   assert.deepEqual(tree.params.query, { kind: "projectTree", location });
+});
+
+test("a multi-folder project does not browse a preferred or arbitrary folder", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const query = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
+  const data = facts(true);
+  const other = { daemonId, projectId: ProjectIdSchema.parse("other-folder") };
+  data.projects[0]!.locations[0]!.displayPath = "workbench";
+  data.projects[0]!.locations.push({
+    target: other, daemonId, hostname: "local", name: "convex-lab",
+    rootPath: "C:/git/web/workbench/.workbench/worktrees/convex-lab",
+    displayPath: "+convex-lab", project: { ...project, id: other.projectId, name: "convex-lab" },
+  });
+  socket.observation(query, { kind: "projects", phase: "current", failure: null, data });
+
+  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
+  assert.equal(socket.sent.some(item => item.method === "workspace/observe"
+    && item.params.query.kind === "projectTree"), false);
+
+  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId, location))).ok, true);
+  assert.ok(socket.sent.some(item => item.method === "workspace/observe"
+    && item.params.query.kind === "projectTree"));
+});
+
+test("a preferred draft destination does not become a multi-folder browse selection", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const query = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
+  const data = facts(true);
+  data.projects[0]!.locations.push({
+    target: { daemonId, projectId: ProjectIdSchema.parse("other-folder") },
+    daemonId, hostname: "local", name: "convex-lab",
+    rootPath: "C:/git/web/workbench/.workbench/worktrees/convex-lab",
+    project: null,
+  });
+  socket.observation(query, { kind: "projects", phase: "current", failure: null, data });
+
+  assert.equal((await client.controls.applyRoute(
+    createLogicalThreadRoute(logicalId, logicalId, null, { kind: "new" }),
+  )).ok, true);
+  const draft = client.threadRuntime.getSnapshot().currentThread;
+  assert.ok(draft?.isDraft);
+  assert.deepEqual(client.draftLocationFor(draft.id), location);
+  assert.equal(client.navigation.getSnapshot().route.logical?.location, null);
+  assert.equal(socket.sent.some(item => item.method === "workspace/observe"
+    && item.params.query.kind === "projectTree"), false);
+});
+
+test("a thread owner uses its projected folder label", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (message: string) => warnings.push(message));
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
+  const data = facts(true);
+  data.projects[0]!.locations[0]!.displayPath = "workbench";
+  data.projects[0]!.locations.push({
+    target: { daemonId, projectId: ProjectIdSchema.parse("other-folder") },
+    daemonId, hostname: "local", name: "convex-lab",
+    rootPath: "C:/git/web/workbench/.workbench/worktrees/convex-lab",
+    displayPath: "+convex-lab", project: null,
+  });
+  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data });
+  const threadId = WorkbenchThreadIdSchema.parse(crypto.randomUUID());
+  const route = createLogicalExistingThreadRoute(logicalId,
+    { kind: "provider", harness: "codex", threadId }, null);
+  assert.equal((await client.controls.applyRoute(route)).pending, true);
+  const owner = await socket.request("workspace/observe", 0, request => request.params.query.kind === "threadOwner");
+  socket.observation(owner, { kind: "threadOwner", phase: "current", failure: null, data: {
+    phase: "current", identity: { threadId, projectId: project.id, harness: "codex" },
+    location, logicalProjectId: logicalId,
+  } });
+  const opening = client.controls.applyRoute(route);
+  const read = await socket.request("workspace/observe", 0, request => request.params.query.kind === "thread");
+  assert.equal(client.threadOwnerFor(threadId)?.displayPath, "workbench");
+  assert.equal(socket.sent.some(item => item.method === "workspace/observe"
+    && item.params.query.kind === "projectTree"), false);
+  await client.controls.applyRoute(createHomeRoute());
+  socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
+    data: null, owner: { phase: "unavailable", failure: "source read unavailable" } });
+  await opening;
+  for (const request of socket.sent) {
+    if (request.method === "workspace/command" && request.params.method === "questionnaires/pending/read") {
+      socket.reply(request, { data: [] });
+    }
+  }
+  assert.ok(warnings.some(message => message.includes("source read unavailable")));
 });
 
 test("a resolved existing thread starts its observation while catalogue metadata remains pending", async context => {

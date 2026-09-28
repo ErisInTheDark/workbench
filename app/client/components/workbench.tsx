@@ -2594,14 +2594,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       logicalProject={selectedLogicalProject}
                     />
                   ) : null}
-                  <WorkbenchGitSidebar active={showGitView} onNavigate={event => {
+                  {(!route.logical || browseLocation) ? <WorkbenchGitSidebar active={showGitView} onNavigate={event => {
                     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                     event.preventDefault();
                     navigateToRoute(route.logical?.projectId
                       ? createLogicalGitRoute(route.logical.projectId, browseLocation)
                       : browseLocation ? { ...createObservedProjectRoute(browseLocation), view: "git" }
                         : createGitRoute(activeProjectId));
-                  }} />
+                  }} /> : null}
                   <section className="shrink-0 pb-3">
                     <WorkbenchSidebarSectionDisclosure
                       contentClassName="space-y-2"
@@ -2654,7 +2654,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   </section>
                 </WorkbenchThreadSidebarActionsProvider>
 
-                  {browseProjectId ? <section className="shrink-0 pb-3">
+                  {browseProjectId && (!route.logical || browseLocation) ? <section className="shrink-0 pb-3">
                     <WorkbenchSidebarSectionDisclosure
                       actions={(
                         <div className="flex items-center gap-1">

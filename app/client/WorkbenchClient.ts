@@ -474,9 +474,13 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     if (!facts) return { ok: false, pending: true };
     const logical = facts.projects.find(item => item.id === (logicalId ?? route.logical?.threadOwnerProjectId));
     const saved = target?.kind === "draft" ? presentation.draft(target.draftId) : null;
-    let location = explicit ?? saved?.target ?? (logical && presentation.snapshot().data
-      ? preferredLogicalLaunchLocation(logical, presentation.snapshot().data!) : null);
-    if (!location && logical) location = logical.locations.find(item => item.project)?.target
+    const draftRouteTarget = route.view === "thread" && (target?.kind === "new" || target?.kind === "draft");
+    const browseTarget = explicit ?? (logical?.locations.length === 1 ? logical.locations[0]!.target : null);
+    let location = draftRouteTarget
+      ? explicit ?? saved?.target ?? (logical && presentation.snapshot().data
+        ? preferredLogicalLaunchLocation(logical, presentation.snapshot().data!) : null)
+      : browseTarget;
+    if (!location && draftRouteTarget && logical) location = logical.locations.find(item => item.project)?.target
       ?? logical.locations[0]?.target ?? null;
     // Historical physical routes are resolved from app facts, never guessed across sources.
     if (!location && route.projectId) {
@@ -503,7 +507,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       }
       const project = threadProject(data.location);
       if (!project) return { ok: false, pending: true };
-      selectFolder(location ?? data.location);
+      selectFolder(route.logical ? browseTarget : location ?? data.location);
       selectRenderer(data.location);
       draftLocation = null;
       const outcome = await threadClient.openThread(data.identity.threadId, {
@@ -517,7 +521,12 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       emit();
       return { ok: true, ...(isSameWorkbenchRoute(route, canonical) ? {} : { canonicalRoute: canonical }) };
     }
-    const draftRouteTarget = route.view === "thread" && (target?.kind === "new" || target?.kind === "draft");
+    if (!location && logical && route.view === "project") {
+      selectFolder(null);
+      activePath = "";
+      threadClient.clearThreadSelection();
+      return { ok: true };
+    }
     if (!location || !(draftRouteTarget ? threadProject(location) : folder(location))) {
       const pending = facts.catalogues.some(item => item.phase === "pending" || item.phase === "stale");
       return pending ? { ok: false, pending: true }
@@ -527,7 +536,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       && !logical.observedLocations?.some(item => item.daemonId === location!.daemonId && item.projectId === location!.projectId)) {
       return { ok: false, error: "The chosen folder does not belong to this project." };
     }
-    selectFolder(location);
+    selectFolder(draftRouteTarget ? browseTarget : location);
     activePath = route.view === "file" ? route.filePath : "";
     if (route.view === "thread" && target && (target.kind === "new" || target.kind === "draft")) {
       if (target.kind === "draft" && !saved) {
@@ -550,7 +559,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       if (registered) {
         const viewedProjectId = route.logical?.threadOwnerProjectId ? route.logical.projectId : logicalId ?? registered.id;
         const canonical = createLogicalThreadRoute(viewedProjectId, registered.id,
-          saved ? null : location, saved ? { kind: "draft", draftId: DraftIdSchema.parse(saved.id) } : target);
+          saved ? null : browseTarget, saved ? { kind: "draft", draftId: DraftIdSchema.parse(saved.id) } : target);
         return { ok: true, ...(isSameWorkbenchRoute(route, canonical) ? {} : { canonicalRoute: canonical }) };
       }
       return { ok: true };
@@ -731,8 +740,10 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     if (!location) return null;
     const project = folder(location);
     const hostname = projectFacts()?.sources.find(item => item.daemonId === location.daemonId)?.hostname ?? location.daemonId;
+    const displayPath = projectFacts()?.projects.flatMap(item => item.locations)
+      .find(item => sameLocation(item.target, location))?.displayPath ?? project?.name ?? location.projectId;
     return { ...location, hostname, rootPath: project?.rootPath ?? "",
-      displayPath: `${hostname}:${project?.rootPath ?? location.projectId}` };
+      displayPath };
   };
   lifetime.addUnsubscribe(projectClient.subscribe(() => emit()));
   lifetime.addUnsubscribe(presentation.subscribe(factsChanged));
