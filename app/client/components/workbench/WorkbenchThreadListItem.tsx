@@ -372,7 +372,7 @@ export default function WorkbenchThreadListItem({
           {actionButton}
           {secondaryRow ? <div className="col-span-3 row-start-2 min-w-0 pb-1 text-[0.9em]">{secondaryRow}</div> : null}
         </div>
-      ) : (
+      ) : (<>
         <WorkbenchThreadListFullRowContent
           action={(
             <>
@@ -412,7 +412,8 @@ export default function WorkbenchThreadListItem({
           timestamp={<time dateTime={dateTime} title={exactTime}>{relativeTime}</time>}
           title={<span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold text-text" : ""}`}>{titleContent}</span>}
         />
-      )}
+        {secondaryRow ? <div className="pointer-events-none relative z-10 min-w-0 px-2 pb-1.5 text-[0.72rem] text-fg/muted">{secondaryRow}</div> : null}
+      </>)}
     </Container>
   );
 }

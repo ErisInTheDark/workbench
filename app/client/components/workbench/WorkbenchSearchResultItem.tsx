@@ -6,10 +6,10 @@
 
 import type { ComponentType } from "react";
 import type { WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
-import { FolderOpenIcon, GearIcon, OpenThreadIcon, ProjectIcon, SparkleIcon, type IconProps } from "./workbench-icons";
+import { FolderOpenIcon, GearIcon, ProjectIcon, SparkleIcon, type IconProps } from "./workbench-icons";
 
 const RESULT_PRESENTATION: Record<WorkbenchSearchResult["kind"], {
-  Icon: ComponentType<IconProps>;
+  Icon: ComponentType<IconProps> | null;
   iconSize: NonNullable<IconProps["size"]>;
   label: string;
 }> = {
@@ -17,7 +17,7 @@ const RESULT_PRESENTATION: Record<WorkbenchSearchResult["kind"], {
   file: { Icon: FolderOpenIcon, iconSize: 16, label: "File" },
   project: { Icon: ProjectIcon, iconSize: 16, label: "Project" },
   projectSetting: { Icon: GearIcon, iconSize: 20, label: "Project setting" },
-  thread: { Icon: OpenThreadIcon, iconSize: 16, label: "Thread" },
+  thread: { Icon: null, iconSize: 16, label: "Thread" },
 };
 
 export default function WorkbenchSearchResultItem({
@@ -32,6 +32,7 @@ export default function WorkbenchSearchResultItem({
   selected: boolean;
 }) {
   const { Icon, iconSize, label } = RESULT_PRESENTATION[result.kind];
+  const detail = result.kind === "thread" && result.detail === result.projectId ? "" : result.detail;
   return (
     <button
       aria-selected={selected}
@@ -42,7 +43,7 @@ export default function WorkbenchSearchResultItem({
       id={id}
       onClick={onActivate}
       role="option"
-      title={result.detail}
+      title={result.kind === "thread" && !detail ? undefined : detail}
       type="button"
     >
       <svg
@@ -54,9 +55,9 @@ export default function WorkbenchSearchResultItem({
       >
         <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="12.8" fill="color-mix(in srgb, var(--text) 4%, transparent)" stroke="currentColor" strokeWidth="1" strokeOpacity="0.24" />
       </svg>
-      <span aria-hidden="true" className="relative inline-flex shrink-0 items-center text-fg/muted"><Icon size={iconSize} /></span>
+      {Icon ? <span aria-hidden="true" className="relative inline-flex shrink-0 items-center text-fg/muted"><Icon size={iconSize} /></span> : null}
       <span className={`relative min-w-0 truncate ${selected ? "font-semibold" : "font-medium"}`}>{result.title}</span>
-      <span className="relative min-w-0 flex-1 truncate text-[0.72rem] text-fg/muted">{result.detail}</span>
+      <span className="relative min-w-0 flex-1 truncate text-[0.72rem] text-fg/muted">{detail}</span>
       <span className="relative shrink-0 text-[0.72rem] text-fg/muted">{label}</span>
     </button>
   );

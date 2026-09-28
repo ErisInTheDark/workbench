@@ -2335,7 +2335,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             projects={explorer.projects}
             logicalProjects={explorer.logicalProjects}
             logicalSummaries={explorer.logicalSummaries}
-            projectSidebars={projectThreadSidebars}
             projectSummaries={projectThreadSummaries}
           />
           {usesDesktopSidebarCollapse ? (

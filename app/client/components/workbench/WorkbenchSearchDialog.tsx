@@ -1,33 +1,82 @@
 /*
  * Exports:
  * - default WorkbenchSearchDialog: full-screen accessible search dialog and keyboard-driven result list.
+ * - getSearchThreadLocations: select distinct source locations for thread search hits.
+ * - findSearchThreadEntry: resolve a search hit against source-qualified thread rows.
  */
 "use client";
 
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchProjectOption } from "workbench-shared/types";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { createLogicalExistingThreadRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
-import type { WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries } from "workbench-shared/workbench/thread/thread-state";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import type { WorkbenchProjectThreadSummaries } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
 import type WorkbenchSearchController from "../../workbench/search/WorkbenchSearchController";
+import type { WorkbenchSearchHit } from "../../workbench/search/WorkbenchSearchController";
+import { useWorkbenchClientController } from "./workbench-client-context";
 import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchSearchResultItem from "./WorkbenchSearchResultItem";
 
-export default function WorkbenchSearchDialog({ controller, projects, logicalProjects, logicalSummaries, projectSidebars, projectSummaries }: {
+export function getSearchThreadLocations(results: readonly WorkbenchSearchHit[]): ProjectLocationReference[] {
+  const seen = new Set<string>();
+  return results.flatMap(result => {
+    if (result.kind !== "thread" || !result.source) return [];
+    const key = `${result.source.daemonId}/${result.source.projectId}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [result.source];
+  });
+}
+
+export function findSearchThreadEntry(rows: WorkspaceThreadRows["rows"], result: WorkbenchSearchHit) {
+  if (result.kind !== "thread" || !result.source) return undefined;
+  for (const row of rows) {
+    if (row.location.daemonId !== result.source.daemonId || row.location.projectId !== result.projectId) continue;
+    if (row.entry.entryKind === "draft") continue;
+    if (row.entry.identity.harness === result.harnessId && row.entry.identity.threadId === result.threadId) return row.entry;
+  }
+  return undefined;
+}
+
+export default function WorkbenchSearchDialog({ controller, projects, logicalProjects, logicalSummaries, projectSummaries }: {
   controller: WorkbenchSearchController;
   projects: readonly WorkbenchProjectOption[];
   logicalProjects?: readonly WorkbenchLogicalProject[];
   logicalSummaries?: Readonly<Record<string, WorkbenchLogicalProjectSummary>>;
-  projectSidebars: WorkbenchProjectThreadSidebars;
   projectSummaries: WorkbenchProjectThreadSummaries;
 }) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const client = useWorkbenchClientController();
   const projectHref = useWorkbenchProjectNavigation();
   const inputRef = useRef<HTMLInputElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const [threadRows, setThreadRows] = useState<{ key: string; rows: WorkspaceThreadRows["rows"] }>({ key: "", rows: [] });
+  const locations = getSearchThreadLocations(snapshot.results);
+  const locationsKey = locations.map(location => `${location.daemonId}/${location.projectId}`).join("\n");
+
+  useEffect(() => {
+    const workspace = client.mounted?.workspace;
+    if (!snapshot.isOpen || !workspace || !locations.length) {
+      setThreadRows({ key: "", rows: [] });
+      return;
+    }
+    const observation = workspace.observe({
+      kind: "projectThreads",
+      projects: locations.map(location => ({ kind: "location", location })),
+    });
+    const publish = () => {
+      const value = observation.getSnapshot().value;
+      setThreadRows({ key: locationsKey, rows: value?.kind === "projectThreads" ? value.data.rows : [] });
+    };
+    const stop = observation.subscribe(publish);
+    publish();
+    return () => { stop(); observation.release(); };
+  }, [client.mounted?.workspace, locationsKey, snapshot.isOpen]);
 
   useEffect(() => {
     if (!snapshot.isOpen) return;
@@ -111,11 +160,7 @@ export default function WorkbenchSearchDialog({ controller, projects, logicalPro
             const logicalProject = result.logicalProjectId
               ? logicalProjects?.find(item => item.id === result.logicalProjectId) : undefined;
             const summary = projectSummaries.projects.find(({ projectId }) => projectId === project?.id) ?? null;
-            const thread = result.kind === "thread"
-              ? projectSidebars.projects.find(({ projectId }) => projectId === result.projectId)?.entries.find((entry) => (
-                entry.entryKind !== "draft" && entry.identity.harness === result.harnessId && entry.identity.threadId === result.threadId
-              ))
-              : undefined;
+            const thread = findSearchThreadEntry(threadRows.key === locationsKey ? threadRows.rows : [], result);
             return (
               <div
                 className="shrink-0"
@@ -142,9 +187,9 @@ export default function WorkbenchSearchDialog({ controller, projects, logicalPro
                     selected={selected}
                     showTooltip={false}
                   />
-                ) : result.kind === "thread" && thread && thread.entryKind !== "draft" ? (
+                ) : result.kind === "thread" && thread ? (
                   <WorkbenchThreadListItem
-                    compact
+                    compact={false}
                     dimmedOverride={false}
                     entry={thread}
                     href={projectHref(result.logicalProjectId
@@ -154,15 +199,11 @@ export default function WorkbenchSearchDialog({ controller, projects, logicalPro
                         { kind: "provider", harness: thread.identity.harness, threadId: thread.identity.threadId }))}
                     id={id}
                     onActivate={() => controller.activate(result)}
-                    project={project}
+                    project={logicalProject ?? project}
                     projectId={ProjectIdSchema.parse(result.projectId)}
                     role="option"
-                    secondaryRow={(
-                      <span className="flex min-w-0 gap-2 pl-5 text-[0.72rem] leading-4 text-fg/muted">
-                        <span className="max-w-40 shrink-0 truncate">{project?.name || result.projectId}</span>
-                        {result.detail !== result.projectId ? <span className="min-w-0 truncate" title={result.detail}>{result.detail}</span> : null}
-                      </span>
-                    )}
+                    secondaryRow={result.detail !== result.projectId
+                      ? <span className="truncate" title={result.detail}>{result.detail}</span> : undefined}
                     selected={selected}
                     showTooltip={false}
                   />
