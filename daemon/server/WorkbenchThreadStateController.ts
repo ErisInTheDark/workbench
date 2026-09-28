@@ -131,6 +131,16 @@ function reconcileProviderLifecycle(
   providerEntry: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>,
   record: WorkbenchThreadStateRecord | undefined,
 ): WorkbenchThreadLifecycle {
+  if (
+    providerEntry.entryKind === "thread"
+    && providerEntry.lifecycle.kind === "working"
+    && record?.entryKind === "thread"
+    && record.lifecycle.kind === "needsAttention"
+    && record.lifecycle.reason !== "pendingInput"
+    && !record.pendingQuestionnaire
+  ) {
+    return providerEntry.lifecycle;
+  }
   if (!record || !isWorkbenchThreadStatusProviderOwned(record.lifecycle) || isWorkbenchThreadStatusProviderOwned(providerEntry.lifecycle)) {
     return record?.lifecycle ?? providerEntry.lifecycle;
   }

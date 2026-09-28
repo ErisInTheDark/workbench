@@ -2806,6 +2806,37 @@ test("inactive providers release stale questionnaire ownership without changing 
   await temporary.dispose();
 });
 
+test("active provider observation repairs stale top-level attention", async () => {
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    reconcileProject: async () => [],
+    storageRoot: "active-attention-repair",
+    threadStateStore: new MemoryThreadStatePersistence(),
+  });
+  const threadId = fixtureThreadIds["attention"];
+  const providerEntry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId },
+    lifecycle: { agent: { agentStatus: "working", turnId: fixtureTurnIds["turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Active thread",
+  };
+  try {
+    await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry);
+    for (const event of [{ kind: "providerSystemError" } as const, { kind: "agentStatus", status: "blocked" } as const]) {
+      await controller.applyLifecycle(fixtureProjectIds["project"], "codex", threadId, event);
+      const stale = await controller.getCanonicalThreadEntry(fixtureProjectIds["project"], threadId);
+      assert.equal(stale?.entryKind === "thread" ? stale.lifecycle.kind : null, "needsAttention");
+      await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry);
+      const healed = await controller.getCanonicalThreadEntry(fixtureProjectIds["project"], threadId);
+      assert.deepEqual(healed?.entryKind === "thread" ? healed.lifecycle : null, providerEntry.lifecycle);
+    }
+  } finally {
+    await controller.dispose();
+  }
+});
+
 test("proper questionnaires and late-response history survive controller restarts", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-questionnaire-");
   const root = temporary.path;
