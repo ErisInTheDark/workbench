@@ -173,7 +173,6 @@ export default function WorkbenchSearchDialog({ controller, projects, logicalPro
               >
                 {result.kind === "project" && (logicalProject || project) ? (
                   <WorkbenchProjectListItem
-                    compact
                     entry={logicalProject ? {
                       activityAt: logicalSummaries?.[logicalProject.id]?.lastThreadUpdateAt ?? null,
                       project: logicalProject, summary: logicalSummaries?.[logicalProject.id] ?? null,

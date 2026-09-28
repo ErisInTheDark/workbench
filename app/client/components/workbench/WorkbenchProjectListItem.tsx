@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchProjectListItem: canonical project row with compact and listbox presentation.
+ * - default WorkbenchProjectListItem: canonical compact project row with status counts or relative time.
  */
 "use client";
 
@@ -61,7 +61,6 @@ function ProjectTooltipContent({ entry, nowMs }: { entry: DisplaySidebarProject;
 
 export default function WorkbenchProjectListItem({
   active = false,
-  compact: compactOverride,
   entry,
   href,
   id,
@@ -73,7 +72,6 @@ export default function WorkbenchProjectListItem({
   tabIndex,
 }: {
   active?: boolean;
-  compact?: boolean;
   entry: DisplaySidebarProject;
   href?: string;
   id?: string;
@@ -87,59 +85,31 @@ export default function WorkbenchProjectListItem({
   const projectHref = useWorkbenchProjectNavigation();
   const { activityAt, project, summary } = entry;
   const counts = summary?.counts ?? WorkbenchThreadStatusCounts.emptyCounts;
-  const dominantStatus = WorkbenchThreadStatusCounts.items.find(({ key }) => (counts[key] ?? 0) > 0) ?? null;
-  const statusClassName = dominantStatus ? getWorkbenchThreadStatusClassName(dominantStatus.tone) : "text-fg/muted";
+  const hasStatuses = WorkbenchThreadStatusCounts.hasCounts(counts);
   const timestamp = activityAt === null ? null : new Date(activityAt);
   const logical = "matchKey" in project;
-  const compact = compactOverride ?? (!logical && project.kind === "workbench-library" || !dominantStatus);
   const projectTitle = <WorkbenchProjectLabel active={active} project={project} />;
-  const content = compact || !dominantStatus ? (
-    <div className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[auto minmax(0, 1fr) auto] items-center py-1 pr-2 pl-2 md:min-h-0">
-      {dominantStatus ? <dominantStatus.Icon className={`mr-1.5 size-3.5 ${statusClassName}`} /> : null}
-      <span className={dominantStatus ? "col-start-2 min-w-0" : "col-span-2 col-start-1 min-w-0"}>{projectTitle}</span>
-      <span className="col-start-3 row-start-1 ml-2 text-[0.72rem] text-fg/muted">
-        {timestamp ? (
+  const content = (
+    <div className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-0">
+      <span className="min-w-0 overflow-hidden">{projectTitle}</span>
+      <span className="ml-2 text-[0.72rem] text-fg/muted">
+        {hasStatuses ? <WorkbenchThreadStatusCounts counts={counts} /> : timestamp ? (
           <time dateTime={timestamp.toISOString()} title={timestamp.toLocaleString()}>
             {getProjectActivityLabel(activityAt, nowMs)}
           </time>
         ) : null}
       </span>
     </div>
-  ) : (
-    <div className="pointer-events-none relative z-10 min-w-0 pr-2">
-      <div className="grid min-w-0 grid-cols-[minmax(0, 1fr) auto] pt-1.5 pl-2">
-        {projectTitle}
-      </div>
-      <div className="mt-0.5 grid min-w-0 grid-cols-[auto minmax(0, 1fr) auto] items-center gap-1.5 pb-1.5 pl-2 text-[0.72rem] text-fg/muted">
-        <dominantStatus.Icon className={`size-3.5 ${statusClassName}`} />
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className={`inline-flex min-w-0 items-center gap-1 ${statusClassName}`}>
-            <span className="shrink-0 font-semibold">{counts[dominantStatus.key]}</span>
-            <span className="truncate">
-              {dominantStatus.key === "needsAttentionActive" ? "Needs attention" : dominantStatus.label}
-            </span>
-          </span>
-          <WorkbenchThreadStatusCounts counts={counts} excludeKey={dominantStatus.key} />
-        </span>
-        {timestamp ? (
-          <time dateTime={timestamp.toISOString()} title={timestamp.toLocaleString()}>
-            {getProjectActivityLabel(activityAt, nowMs)}
-          </time>
-        ) : <span />}
-      </div>
-    </div>
   );
   return (
     <WorkbenchTooltip content={<ProjectTooltipContent entry={entry} nowMs={nowMs} />} enabled={showTooltip} interactive>
       <div
-        className={`group/project-row relative isolate m-0 min-h-11 rounded-[0.8rem] ${compact ? "md:min-h-0" : ""}`}
-        data-project-status-tone={dominantStatus?.tone ?? "none"}
+        className="group/project-row relative isolate m-0 min-h-11 rounded-[0.8rem] md:min-h-0"
       >
         <svg
           aria-hidden="true"
           className={`
-            pointer-events-none absolute inset-0 z-0 size-full transition-opacity duration-75 ease-out
-            ${statusClassName}
+            pointer-events-none absolute inset-0 z-0 size-full text-fg/muted transition-opacity duration-75 ease-out
             ${active || selected ? "opacity-100" : "opacity-0 group-hover/project-row:opacity-100 group-has-[:focus-visible]/project-row:opacity-100"}
           `}
         >
@@ -148,8 +118,7 @@ export default function WorkbenchProjectListItem({
             height="calc(100% - 1px)"
             rx="12.8"
             stroke="currentColor"
-            strokeDasharray={dominantStatus?.dashed ? "6 4" : undefined}
-            strokeOpacity={dominantStatus ? 1 : 0.24}
+            strokeOpacity={0.24}
             strokeWidth="1"
             vectorEffect="non-scaling-stroke"
             width="calc(100% - 1px)"
