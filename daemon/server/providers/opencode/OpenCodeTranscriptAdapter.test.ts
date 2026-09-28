@@ -18,6 +18,76 @@ import WorkbenchTranscriptLiveController from "../../database/transcript/Workben
 import OpenCodeEventController from "./OpenCodeEventController";
 import { writeTranscriptText, readTranscriptText } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import type { SessionMessageInfo } from "@opencode/client";
+import WorkbenchTranscriptAssetStore from "../../database/transcript/WorkbenchTranscriptAssetStore";
+
+test("sent and native OpenCode user images survive transcript rereads without duplicates", async context => {
+  const fixture = createThreadStateTestDatabase();
+  context.after(() => fixture.sqlite.close());
+  fixture.admitThread(testProjectIds.project, "wb-thread", "opencode", "session", "C:/repo");
+  const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
+  const assets = new WorkbenchTranscriptAssetStore(fixture.sqlite);
+  const adapter = new OpenCodeTranscriptAdapter({
+    ...fixture.identities,
+    assets: { writeTranscriptAsset: async input => assets.write(input) },
+    transcript: { record: async observations => repository.settle(observations) },
+  });
+  const session = {
+    id: "session", projectID: "project", title: "Thread", cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 3 }, location: { directory: "C:/repo" },
+  };
+  const png = Buffer.from("image bytes");
+  const dataUrl = `data:image/png;base64,${png.toString("base64")}`;
+  const metadata = { workbench: {
+    version: 1 as const, delivery: "queue" as const,
+    itemId: WorkbenchItemIdSchema.parse("00000000-0000-4000-8000-000000000020"),
+    clientMessageId: "sent-image",
+    input: [{ type: "text" as const, text: "look", text_elements: [] }, { type: "image" as const, url: dataUrl }],
+  } };
+  const root: SessionMessageInfo = { id: "root", type: "user", text: "look", time: { created: 1 }, metadata };
+  const project = { id: testProjectIds.project, rootPath: "C:/repo" };
+  const read = () => {
+    const projected = projectWorkbenchTranscript(repository.read({ threadId: "wb-thread", turnLimit: 3 })!);
+    assert.ok(projected.success);
+    return projected.data.turns.flatMap(turn => turn.items).filter(
+      (item): item is Extract<typeof item, { type: "userMessage" }> => item.type === "userMessage",
+    );
+  };
+  await adapter.record(session, [root], project);
+  const [sent] = read();
+  assert.deepEqual(sent?.content.map(part => part.type), ["text", "image"]);
+  const imageUrl = sent?.content[1]?.type === "image" ? sent.content[1].url : null;
+  assert.match(imageUrl ?? "", /^\/api\/transcript-assets\//u);
+  const assetName = imageUrl!.split("/").at(-1)!;
+  assert.deepEqual(Buffer.from(assets.read({ threadId: "wb-thread", assetName })!.bytes), png);
+
+  const echoed: SessionMessageInfo = {
+    ...root, files: [{ data: png.toString("base64"), mime: "image/png", source: { type: "inline" } }],
+  };
+  const native: SessionMessageInfo = {
+    id: "native", type: "user", text: "native", time: { created: 2 },
+    files: [{ data: dataUrl, mime: "image/png", source: { type: "inline" } }],
+  };
+  const local: SessionMessageInfo = {
+    id: "local", type: "user", text: "local", time: { created: 3 },
+    metadata: { workbench: {
+      ...metadata.workbench,
+      itemId: WorkbenchItemIdSchema.parse("00000000-0000-4000-8000-000000000021"),
+      clientMessageId: "local-image",
+      input: [{ type: "text", text: "local", text_elements: [] },
+        { type: "localImage", path: "C:/repo/photo.png" }],
+    } },
+    files: [{ data: png.toString("base64"), mime: "image/png", source: { type: "uri", uri: "file:///C:/repo/photo.png" } }],
+  };
+  await adapter.record(session, [echoed, native, local], project);
+  const [reread, nativeRead, localRead] = read();
+  assert.deepEqual(reread?.content.map(part => part.type), ["text", "image"]);
+  assert.equal(reread?.content[1]?.type === "image" ? reread.content[1].url : null, imageUrl);
+  assert.deepEqual(nativeRead?.content.map(part => part.type), ["text", "image"]);
+  assert.equal(nativeRead?.content[1]?.type === "image" ? nativeRead.content[1].url : null, imageUrl);
+  assert.deepEqual(localRead?.content.map(part => part.type), ["text", "image"]);
+  assert.equal(localRead?.content[1]?.type === "image" ? localRead.content[1].url : null, imageUrl);
+});
 
 test("an obsolete canonical read cannot reopen a turn interrupted while its identities were resolving", async context => {
   const fixture = createThreadStateTestDatabase();

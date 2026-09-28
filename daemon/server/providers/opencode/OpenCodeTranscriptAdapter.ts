@@ -8,6 +8,8 @@
 import type {
   SessionInfo, SessionMessageAssistant, SessionMessageInfo, SessionMessageUser,
 } from "@opencode/client";
+import externalizeCodexTranscriptInlineImages from "../../codex-transcript-image-assets";
+import type WorkbenchDatabaseController from "../../database/WorkbenchDatabaseController";
 import { z } from "zod";
 import {
   NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema,
@@ -18,7 +20,7 @@ import {
 } from "workbench-shared/workbench/provider/provider-input";
 import type { TranscriptTextField, TranscriptToolPatchUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import type {
-  DynamicToolCallOutputContentItem, ThreadItem,
+  DynamicToolCallOutputContentItem, ThreadItem, UserInput,
 } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { WorkbenchQuestionnaireHistoryEntryState } from "workbench-shared/workbench/thread/thread-state";
@@ -38,6 +40,7 @@ export interface OpenCodeTranscriptOwners {
   threads: Pick<WorkbenchThreadIdentityController, "observe" | "observeTurns">;
   items: Pick<WorkbenchTranscriptIdentityController, "admit" | "itemIdForSource">;
   transcript: Pick<DaemonTranscriptRegistration, "acceptLiveUpdate" | "record">;
+  assets?: Pick<WorkbenchDatabaseController, "writeTranscriptAsset">;
   modelContext?(model: { id: string; providerID: string }, directory: string): Promise<number | null>;
 }
 
@@ -82,7 +85,7 @@ export function isOpenCodeTurnRoot(message: SessionMessageInfo) {
   return message.type === "user" && workbenchMetadata(message)?.delivery !== "steer";
 }
 
-function steerInput(inputs: readonly WorkbenchUserInput[]): WorkbenchSteerHistoryEntry["input"] {
+function steerInput(inputs: readonly WorkbenchUserInput[]): UserInput[] {
   return inputs.map((input) => {
     if (input.type !== "text") return { ...input };
     return {
@@ -153,6 +156,30 @@ export function openCodeToolContentItems(content: readonly {
   return error ? [{ type: "inputText", text: error.message.slice(0, 1000) }] : null;
 }
 
+function userContent(user: SessionMessageUser, metadata: WorkbenchMessageMetadata | null): UserInput[] {
+  const files = (user.files ?? []).flatMap((file): Extract<UserInput, { type: "image" }>[] => {
+    const mime = file.mime.toLowerCase() === "image/jpg" ? "image/jpeg" : file.mime.toLowerCase();
+    if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mime)) return [];
+    const url = file.data.startsWith("data:") ? file.data : `data:${mime};base64,${file.data}`;
+    const image = /^data:(image\/(?:png|jpeg|webp|gif));base64,([a-z0-9+/=\s]+)$/iu.exec(url);
+    if (!image || image[1]?.toLowerCase() !== mime) {
+      throw new Error("OpenCode returned an invalid user image.");
+    }
+    return [{ type: "image", url }];
+  });
+  if (!metadata) return [
+    ...(user.text || !files.length ? [{ type: "text" as const, text: user.text, text_elements: [] }] : []),
+    ...files,
+  ];
+  let fileIndex = 0;
+  const content = steerInput(metadata.input).map((part): UserInput => {
+    if (part.type !== "image" && part.type !== "localImage") return part;
+    const file = files[fileIndex++];
+    return file ?? part;
+  });
+  return [...content, ...files.slice(fileIndex)];
+}
+
 function messageItems(message: SessionMessageInfo): OpenCodeTranslatedItem[] {
   if (message.type === "user") {
     const user = message as SessionMessageUser;
@@ -171,7 +198,7 @@ function messageItems(message: SessionMessageInfo): OpenCodeTranslatedItem[] {
       preferredItemId: metadata?.itemId ?? null,
       item: {
         type: "userMessage", id: user.id, clientId: metadata?.clientMessageId ?? user.id,
-        content: [{ type: "text", text: user.text, text_elements: [] }],
+        content: userContent(user, metadata),
       },
     }];
   }
@@ -435,11 +462,23 @@ export default class OpenCodeTranscriptAdapter {
         startedAt: first.time.created,
       });
     }
-    const translated = groups.map((group, groupIndex) => group.messages.flatMap(message => (
-      messageItems(message).map(entry => ({
-        ...entry, message, turnId: turns[groupIndex]!.turnId,
-      }))
-    )));
+    const translated: Array<Array<OpenCodeTranslatedItem & { message: SessionMessageInfo; turnId: WorkbenchTurnId }>> = [];
+    for (const [groupIndex, group] of groups.entries()) {
+      const entries: typeof translated[number] = [];
+      for (const message of group.messages) {
+        for (const entry of messageItems(message)) {
+          const item = entry.kind === "item" && entry.item.type === "userMessage"
+            ? (await externalizeCodexTranscriptInlineImages(entry.item, {
+              assets: this.owners.assets, threadId: identity.threadId,
+            })).value
+            : null;
+          entries.push({
+            ...entry, ...(item ? { item } : {}), message, turnId: turns[groupIndex]!.turnId,
+          });
+        }
+      }
+      translated.push(entries);
+    }
     const flatTranslated = translated.flat();
     const itemIdentities = await this.owners.items.admit(flatTranslated.map((entry) => ({
       threadId: identity.threadId,

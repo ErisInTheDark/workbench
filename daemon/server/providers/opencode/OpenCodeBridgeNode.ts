@@ -31,6 +31,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       threads: build.get("threadIdentity"),
       items: build.get("transcriptIdentity"),
       transcript: build.get("transcript"),
+      assets: build.get("database"),
       modelContext: async (model, directory) => {
         const catalog = await service.readModelCatalog(directory);
         return catalog.models.find(candidate =>
@@ -113,6 +114,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/providers/opencode/OpenCodeThreadWindowLoader.ts",
     "daemon/server/providers/opencode/OpenCodeManagedSessionController.ts",
     "daemon/server/providers/opencode/OpenCodeTranscriptAdapter.ts",
+    "daemon/server/codex-transcript-image-assets.ts",
     "daemon/server/lib/workbench/instructions/instruction-context-filter.ts",
   ].join("\n"),
 });
