@@ -559,6 +559,49 @@ checkpointTest("dirty disown preserves inactive plans and proposals remain commi
   assert.equal(await git(repoRoot, ["show", "HEAD:literal1.txt"]), "proposal preserved after unclaim\n");
 });
 
+test("retained claims can propose and commit beneath an inactive future plan", async (context) => {
+  const bundle = await fixtureCache.copyFresh(CHECKPOINT_OPERATIONS_FIXTURE);
+  context.after(bundle.dispose);
+  const fixture = branchFixture(bundle, "dirtyRelease");
+  const repoRoot = fixture.root;
+  const { threadId, dirtyArcCheckpoint } = fixture.state;
+  const futurePlan = await addToGitPlan({
+    cwd: repoRoot,
+    paths: ["unrelated.txt"],
+    threadId,
+  });
+  const before = await controller.readScope({ cwd: repoRoot, threadId });
+  assert.equal(before?.phase, "plan");
+  assert.deepEqual(before?.claimedPaths, ["selected.txt"]);
+  assert.deepEqual(before?.plannedPaths, ["selected.txt", "unrelated.txt"]);
+
+  const proposal = await createGitCheckpointProposal({
+    cwd: repoRoot,
+    description: "",
+    threadId,
+    title: "Commit retained work",
+  });
+  assert.deepEqual(proposal.paths, ["selected.txt"]);
+  assert.equal(proposal.sourceCheckpoint, dirtyArcCheckpoint);
+  assert.equal((await controller.findPlanState({ cwd: repoRoot, threadId }))?.checkpointCommit, futurePlan.checkpointCommit);
+
+  const committed = await commitGitCheckpointProposal({
+    cwd: repoRoot,
+    description: "",
+    includeNewer: false,
+    proposalId: proposal.proposalId,
+    threadId,
+    title: "Commit retained work",
+  });
+  assert.equal(committed.status, "committed");
+  assert.equal(await git(repoRoot, ["show", "HEAD:selected.txt"]), "worktree dirty release\n");
+  assert.equal(await git(repoRoot, ["show", "HEAD:unrelated.txt"]), "unrelated checkpoint\n");
+  const after = await controller.readScope({ cwd: repoRoot, threadId });
+  assert.equal(after?.phase, "plan");
+  assert.equal(after?.checkpointCommit, futurePlan.checkpointCommit);
+  assert.deepEqual(after?.plannedPaths, ["selected.txt", "unrelated.txt"]);
+});
+
 checkpointTest("arc additions preserve claimed baselines while advancing unclaimed paths to current HEAD", 6, async (bundle) => {
   const fixture = branchFixture(bundle, "additions");
   const repoRoot = fixture.root;

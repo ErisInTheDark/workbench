@@ -743,8 +743,7 @@ export default class GitArcProposalController {
         title,
       });
     }
-    const { active, checkpoint, harness, metadata: checkpointMetadata, registry, repository } = await this.requireActiveArc({ cwd, harness: rawHarness, threadId });
-    const proposalIds = active.proposalIds ?? (active.proposalId ? [active.proposalId] : []);
+    const { active, arc, checkpoint, claimedPaths, harness, metadata: checkpointMetadata, proposalIds, registry, repository } = await this.requireProposableArc({ cwd, harness: rawHarness, threadId });
     const store = this.store(repository);
     let replacementTarget: StoredProposal | null = null;
     if (replaceProposalId) {
@@ -766,10 +765,10 @@ export default class GitArcProposalController {
     }
     const requestedPaths = rawPaths?.length
       ? repository.normalizePaths(rawPaths)
-      : repository.normalizePaths(checkpointMetadata.scopePaths);
+      : repository.normalizePaths(claimedPaths);
     if (rawPaths?.length) {
       const outsideClaim = requestedPaths.filter((candidate) => (
-        !checkpointMetadata.scopePaths.some((scopePath) => pathIsCoveredBy(candidate, scopePath))
+        !claimedPaths.some((scopePath) => pathIsCoveredBy(candidate, scopePath))
       ));
       if (outsideClaim.length) throw new GitArcRejectionError({ reason: "pathsOutsideClaims", paths: outsideClaim }, `Proposed paths must stay within the arc's claimed set: ${outsideClaim.join(", ")}`);
     }
@@ -829,8 +828,16 @@ export default class GitArcProposalController {
     await buildProposalFileChanges(this.proposalDiffs, repository, metadata, proposalTree);
     const registryMutation = await registry.prepareSet({
       ...active,
-      proposalId,
-      proposalIds: [...proposalIds, proposalId],
+      ...(active.phase === "plan" ? {
+        retainedArc: {
+          ...arc,
+          phase: "active" as const,
+          proposalIds: [...proposalIds, proposalId],
+        },
+      } : {
+        proposalId,
+        proposalIds: [...proposalIds, proposalId],
+      }),
     }, active.checkpointCommit);
     let supersededProposalUpdate: GitRefUpdate | null = null;
     if (replacementTarget) {
@@ -863,7 +870,7 @@ export default class GitArcProposalController {
       intentName: checkpointMetadata.intentName ?? null,
       paths: metadata.paths,
       proposalId,
-      scopePaths: checkpointMetadata.scopePaths,
+      scopePaths: claimedPaths,
       sourceCheckpoint: checkpoint.checkpointCommit,
       title: metadata.title,
     };
@@ -1334,18 +1341,34 @@ export default class GitArcProposalController {
     return updates.filter((update): update is GitRefUpdate => update !== null);
   }
 
-  private async requireActiveArc(input: ArcIdentityInput) {
+  private async requireProposableArc(input: ArcIdentityInput) {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
     const registry = this.registry(repository);
     const active = await registry.find({ harness, threadId: input.threadId });
-    if (!active || active.phase !== "active") throw new GitArcRejectionError({ reason: "missingActiveArc" }, "This thread does not own an active Git arc.");
-    const checkpoint = await this.store(repository).readCheckpoint(harness, input.threadId, active.checkpointCommit);
+    const arc = active?.phase === "plan" ? active.retainedArc : active;
+    if (!active || !arc || arc.phase !== "active" || !arc.claimedPaths.length) {
+      throw new GitArcRejectionError({ reason: "missingActiveArc" }, "This thread does not own active Git arc claims.");
+    }
+    const checkpoint = await this.store(repository).readCheckpoint(harness, input.threadId, arc.checkpointCommit);
     const metadata = requireArcMetadata(checkpoint.metadata);
-    if (
-      metadata.scopePaths.length !== active.claimedPaths.length
-      || metadata.scopePaths.some((scopePath, index) => scopePath !== active.claimedPaths[index])
-    ) throw new Error("The active Git arc registry does not match its checkpoint claim set.");
-    return { active, checkpoint, harness, metadata, registry, repository };
+    const claimsMatch = active.phase === "plan"
+      ? arc.claimedPaths.every((claimedPath) => metadata.scopePaths.includes(claimedPath))
+      : metadata.scopePaths.length === arc.claimedPaths.length
+        && metadata.scopePaths.every((scopePath, index) => scopePath === arc.claimedPaths[index]);
+    if (!claimsMatch) {
+      throw new Error("The Git arc registry does not match its checkpoint claim set.");
+    }
+    return {
+      active,
+      arc,
+      checkpoint,
+      claimedPaths: arc.claimedPaths,
+      harness,
+      metadata,
+      proposalIds: arc.proposalIds ?? (active.proposalId ? [active.proposalId] : []),
+      registry,
+      repository,
+    };
   }
 }
