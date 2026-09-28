@@ -37,7 +37,7 @@ const THREAD_PANEL_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 
 interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewportRef" | "thread"> {
   fallbackThreadSummary?: ThreadSummary | null;
-  hasSidebarRestoreInset?: boolean;
+  sidebarToggleInset?: "collapsed" | "expanded";
   isFocused: boolean;
   isMinimized?: boolean;
   isMinimizedVertical?: boolean;
@@ -55,7 +55,7 @@ interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewpor
 
 export default function WorkbenchThreadPanel ({
   fallbackThreadSummary = null,
-  hasSidebarRestoreInset = false,
+  sidebarToggleInset,
   isFocused,
   isMinimized = false,
   isMinimizedVertical = false,
@@ -149,7 +149,7 @@ export default function WorkbenchThreadPanel ({
       data-thread-daemon-id={ownerMetadata?.daemonId ?? launchContext?.daemonId}
       data-thread-project-id={ownerMetadata?.projectId ?? launchContext?.project.id}>
       <header
-        className={`sticky top-0 z-10 px-5 py-3 md:px-6${onHeaderPointerDragStart ? " cursor-grab active:cursor-grabbing" : ""}${hasSidebarRestoreInset ? " pl-28 md:pl-28" : ""}${isMinimizedVertical ? " flex h-full items-center justify-center" : ""}`}
+        className={`sticky top-0 z-10 py-3 ${sidebarToggleInset === "collapsed" ? "pl-28 pr-5 md:pl-28 md:pr-6" : sidebarToggleInset === "expanded" ? "pl-19 pr-5 md:pl-19 md:pr-6" : "px-5 md:px-6"}${onHeaderPointerDragStart ? " cursor-grab active:cursor-grabbing" : ""}${isMinimizedVertical ? " flex h-full items-center justify-center" : ""}`}
         onPointerDown={handleHeaderPointerDown}
       >
         <div

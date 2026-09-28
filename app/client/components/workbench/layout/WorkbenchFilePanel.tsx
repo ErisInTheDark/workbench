@@ -36,7 +36,7 @@ interface WorkbenchFilePanelProps {
   editorFontClassName: string;
   fontSizeRem: number;
   baseFontSizeRem?: number;
-  hasSidebarRestoreInset?: boolean;
+  sidebarToggleInset?: "collapsed" | "expanded";
   isFocused: boolean;
   isMinimized?: boolean;
   isMinimizedVertical?: boolean;
@@ -61,7 +61,7 @@ export default function WorkbenchFilePanel ({
   controls,
   editorFontClassName,
   fontSizeRem,
-  hasSidebarRestoreInset = false,
+  sidebarToggleInset,
   isFocused,
   isMinimized = false,
   isMinimizedVertical = false,
@@ -244,7 +244,7 @@ export default function WorkbenchFilePanel ({
       onPointerDownCapture={onFocus}
     >
       <header
-        className={`sticky top-0 z-10 -mx-5 px-5 py-3 md:-mx-6 md:px-6${onHeaderPointerDragStart ? " cursor-grab active:cursor-grabbing" : ""}${hasSidebarRestoreInset ? " pl-28 md:pl-28" : ""}${isMinimizedVertical ? " flex h-full items-center justify-center" : ""}`}
+        className={`sticky top-0 z-10 -mx-5 py-3 md:-mx-6 ${sidebarToggleInset === "collapsed" ? "pl-32 pr-5 md:pl-32 md:pr-6" : sidebarToggleInset === "expanded" ? "pl-19 pr-5 md:pl-19 md:pr-6" : "px-5 md:px-6"}${onHeaderPointerDragStart ? " cursor-grab active:cursor-grabbing" : ""}${isMinimizedVertical ? " flex h-full items-center justify-center" : ""}`}
         onPointerDown={handleHeaderPointerDown}
       >
         <div

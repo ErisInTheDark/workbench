@@ -24,10 +24,10 @@ import type {
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
-import type {
-    WorkbenchDropPlacement,
-    WorkbenchMainLayout as WorkbenchMainLayoutState,
-    WorkbenchPanelTarget,
+import WorkbenchMainLayout, {
+    type WorkbenchDropPlacement,
+    type WorkbenchMainLayout as WorkbenchMainLayoutState,
+    type WorkbenchPanelTarget,
 } from "workbench-shared/workbench/layout/workbench-layout";
 import {
     type WorkbenchMosaicNode,
@@ -172,6 +172,7 @@ import {
     HomeIcon,
     ProjectIcon,
     SaveIcon,
+    SearchIcon,
     SidebarCollapseIcon,
     SidebarExpandIcon,
     SparkleIcon,
@@ -193,7 +194,6 @@ import WorkbenchProjectIcon from "./workbench/WorkbenchProjectIcon";
 import WorkbenchProjectLocationLabel from "./workbench/WorkbenchProjectLocationLabel";
 import WorkbenchProjectLocationMenu from "./workbench/WorkbenchProjectLocationMenu";
 import WorkbenchSearchDialog from "./workbench/WorkbenchSearchDialog";
-import WorkbenchSearchInput from "./workbench/WorkbenchSearchInput";
 import WorkbenchSettingsView from "./workbench/WorkbenchSettingsView";
 import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
 import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
@@ -2316,6 +2316,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       >
         {({ preferences: sidebarPreferences, setSidebarCollapsed }) => {
           const isEffectiveDesktopSidebarCollapsed = usesDesktopSidebarCollapse && sidebarPreferences.sidebarCollapsed;
+          const topLeftMosaicPanelId = showMosaicView && mainLayoutForRender
+            ? WorkbenchMainLayout.panels(mainLayoutForRender)[0]?.id
+            : null;
           return (
       <WorkbenchDragProvider controller={workbenchDragController}>
         <WorkbenchContextMenuProvider>
@@ -2335,43 +2338,39 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             projectSidebars={projectThreadSidebars}
             projectSummaries={projectThreadSummaries}
           />
-          {isEffectiveDesktopSidebarCollapsed ? (
-            <>
-              <WorkbenchIconButton
-                type="button"
-                label="Show sidebar"
-                display="hover-border"
-                title="Show sidebar"
-                className="fixed left-3 top-3 z-40 hidden md:inline-flex"
-                onClick={() => {
-                  setSidebarCollapsed(false);
-                }}
-              >
-                <SidebarExpandIcon size={20} />
-                <span className="sr-only">Show sidebar</span>
-              </WorkbenchIconButton>
-              {showMosaicView ? (
-                <WorkbenchIconButton
-                  type="button"
-                  label="Drag to create a new thread panel"
-                  display="hover-border"
-                  title="Drag to create a new thread panel"
-                  className="fixed left-14 top-3 z-40 hidden cursor-grab active:cursor-grabbing md:inline-flex"
-                  onClick={(event) => {
-                    event.preventDefault();
-                  }}
-                  onPointerDown={(event) => {
-                    beginWorkbenchPointerDrag(event, {
-                      harness,
-                      type: "new-thread",
-                    });
-                  }}
-                >
-                  <SparkleIcon size={20} />
-                  <span className="sr-only">Drag to create a new thread panel</span>
-                </WorkbenchIconButton>
-              ) : null}
-            </>
+          {usesDesktopSidebarCollapse ? (
+            <WorkbenchIconButton
+              type="button"
+              label={isEffectiveDesktopSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+              display="hover-border"
+              title={isEffectiveDesktopSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+              className={`fixed top-3 z-40 hidden md:inline-flex ${isEffectiveDesktopSidebarCollapsed ? "left-3" : "left-[calc(21rem_-_1.5rem)]"}`}
+              onClick={() => setSidebarCollapsed(!isEffectiveDesktopSidebarCollapsed)}
+            >
+              {isEffectiveDesktopSidebarCollapsed ? <SidebarExpandIcon size={20} /> : <SidebarCollapseIcon size={20} />}
+              <span className="sr-only">{isEffectiveDesktopSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}</span>
+            </WorkbenchIconButton>
+          ) : null}
+          {isEffectiveDesktopSidebarCollapsed && showMosaicView ? (
+            <WorkbenchIconButton
+              type="button"
+              label="Drag to create a new thread panel"
+              display="hover-border"
+              title="Drag to create a new thread panel"
+              className="fixed left-14 top-3 z-40 hidden cursor-grab active:cursor-grabbing md:inline-flex"
+              onClick={(event) => {
+                event.preventDefault();
+              }}
+              onPointerDown={(event) => {
+                beginWorkbenchPointerDrag(event, {
+                  harness,
+                  type: "new-thread",
+                });
+              }}
+            >
+              <SparkleIcon size={20} />
+              <span className="sr-only">Drag to create a new thread panel</span>
+            </WorkbenchIconButton>
           ) : null}
           <div
             className="mobile-workbench-track flex h-dvh w-[200vw] overflow-hidden transition-transform duration-200 ease-out md:contents md:h-auto md:w-auto md:overflow-visible md:transform-none"
@@ -2380,7 +2379,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden pr-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:pr-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
                         <DropTargetBoundary className="scrollbar-hover-reveal flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto pt-3 pb-[calc(0.75rem+min(0.75rem,var(--workbench-safe-area-bottom,0px)))] pr-2">
-                <header className="-mr-2 grid shrink-0 grid-cols-[1fr auto auto auto auto] items-center gap-1 pb-2">
+                <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto_auto] items-center gap-1 pb-2">
                   <span className="min-w-0 truncate pl-5 text-xl font-semibold leading-tight text-text">workbench</span>
                   <WorkbenchIconButton
                     as="a"
@@ -2396,6 +2395,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   >
                     <HomeIcon size={20} />
                     <span className="sr-only">Open home</span>
+                  </WorkbenchIconButton>
+                  <WorkbenchIconButton
+                    label="Open workspace search"
+                    display="hover-border"
+                    onClick={() => searchController.open()}
+                    title="Open workspace search"
+                    type="button"
+                  >
+                    <SearchIcon size={20} />
+                    <span className="sr-only">Open workspace search</span>
                   </WorkbenchIconButton>
                   <WorkbenchIconButton
                     as="a"
@@ -2419,21 +2428,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     <GearIcon size={20} />
                     <span className="sr-only">Open settings</span>
                   </WorkbenchIconButton>
-                  {usesDesktopSidebarCollapse ? (
-                    <WorkbenchIconButton
-                      label="Hide sidebar"
-                      display="hover-border"
-                      className="hidden md:inline-flex"
-                      onClick={() => setSidebarCollapsed(true)}
-                      title="Hide sidebar"
-                      type="button"
-                    >
-                      <SidebarCollapseIcon size={20} />
-                      <span className="sr-only">Hide sidebar</span>
-                    </WorkbenchIconButton>
-                  ) : null}
                 </header>
-                <WorkbenchSearchInput onOpen={() => searchController.open()} />
                 <WorkbenchThreadSidebarActionsProvider
                   onPresentationDraftDeleted={(draftId, logicalProjectId) => {
                     const current = currentRouteRef.current;
@@ -2671,7 +2666,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               <header
                 ref={shellHeaderRef}
                 className={`
-              sticky top-0 z-10 transform-gpu py-3 transition-[translate,opacity] duration-200 ease-out will-change-translate motion-reduce:transition-none ${isDirectMobileThreadSurface ? "px-5" : "-mx-5 px-5"} md:-mx-6 md:px-6
+              sticky top-0 z-10 transform-gpu py-3 transition-[translate,opacity] duration-200 ease-out will-change-translate motion-reduce:transition-none ${isDirectMobileThreadSurface ? "pl-5 pr-5" : "-mx-5 pl-5 pr-5"} md:-mx-6 md:pr-6 ${isEffectiveDesktopSidebarCollapsed ? "md:pl-20" : "md:pl-11"}
               md:translate-y-0 md:opacity-100
               ${isMobileShellHeaderVisible
                     ? "-translate-y-1 opacity-100"
@@ -3013,9 +3008,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       const panelFontSizeRem = clampEditorFontSize(displayedEditorFontSize + panelZoomDelta * 0.08);
                       const isMinimized = Boolean(mosaicPanel?.minimized);
                       const isMinimizedVertical = isMinimized && mosaicPanel?.parentDirection === "horizontal";
-                      const hasSidebarRestoreInset = isEffectiveDesktopSidebarCollapsed
-                        && showMosaicView
-                        && panelId === mainLayoutForRender.focusedPanelId;
+                      const sidebarToggleInset = showMosaicView && panelId === topLeftMosaicPanelId
+                        ? isEffectiveDesktopSidebarCollapsed ? "collapsed" : "expanded"
+                        : undefined;
                       const updatePanelZoomDelta = (zoomDelta: number) => {
                         updateMosaicPanelOptions(panelId, { zoomDelta: zoomDelta || undefined });
                       };
@@ -3030,7 +3025,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             editorFontClassName={editorFontClassName}
                             fontSizeRem={panelFontSizeRem}
                             baseFontSizeRem={displayedEditorFontSize}
-                            hasSidebarRestoreInset={hasSidebarRestoreInset}
+                            sidebarToggleInset={sidebarToggleInset}
                             isFocused={isFocused}
                             isMinimized={isMinimized}
                             isMinimizedVertical={isMinimizedVertical}
@@ -3067,7 +3062,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                                 route.logical.browseLocation ?? null))
                               : undefined}
                             fontSizeRem={displayedEditorFontSize}
-                            hasSidebarRestoreInset={hasSidebarRestoreInset}
+                            sidebarToggleInset={sidebarToggleInset}
                             isFocused={isFocused}
                             isMinimized={isMinimized}
                             isMinimizedVertical={isMinimizedVertical}
