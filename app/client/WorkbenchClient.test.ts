@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import type { ExplorerSnapshot, WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkspaceProjects, WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
-import { DaemonIdSchema, FolderIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, DraftIdSchema, FolderIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createObservedProjectRoute, createProjectSelectionRoute, withProjectSelection } from "workbench-shared/workbench/navigation/workbench-route";
 import { createWorkspaceClientFixture } from "./workbench/app/workspace-client-fixture";
 import { WorkbenchClient } from "./WorkbenchClient";
@@ -213,7 +213,8 @@ test("a no-remote folder opens a draft while another source and unrelated app qu
   assert.deepEqual(tree.params.query, { kind: "projectTree", location });
 
   const reading = client.controls.listModels("codex");
-  const models = await socket.request("workspace/command", 0, request => request.params.method === "models/list");
+  const models = await socket.request("workspace/command", 0, request => request.params.method === "models/list"
+    && request.params.params?.provider === "codex");
   socket.reply(models, { data: [] });
   await reading;
   const next = facts(true);
@@ -222,10 +223,73 @@ test("a no-remote folder opens a draft while another source and unrelated app qu
   socket.observation(query, { kind: "projects", phase: "stale", failure: null, data: next }, 2);
   assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, draft.id);
   const refreshed = client.controls.listModels("codex");
-  const reloaded = await socket.request("workspace/command", offset, request => request.params.method === "models/list");
+  const reloaded = await socket.request("workspace/command", offset, request => request.params.method === "models/list"
+    && request.params.params?.provider === "codex");
   socket.reply(reloaded, { data: [] });
   await refreshed;
   assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, draft.id);
+});
+
+test("new-thread views warm opencode on their own daemon before provider selection", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (message: string) => { warnings.push(message); });
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
+  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
+  assert.equal((await client.controls.applyRoute(createLogicalThreadRoute(logicalId, logicalId, location, { kind: "new" }))).ok, true);
+  const warming = await socket.request("workspace/command", 0, request => request.params.method === "models/list"
+    && request.params.params?.provider === "opencode");
+  assert.deepEqual(warming.params.scope, { kind: "installation", daemonId });
+  socket.event({ kind: "threadEvent", notification: { method: "models/updated", params: {} }, harness: "opencode", daemonId });
+  socket.reply(warming, { data: [] });
+  await Promise.resolve();
+  assert.equal(warnings.some(message => message.includes("warm OpenCode models")), false);
+  const beforeReconnect = socket.sent.length;
+  const reconnected = facts(true);
+  reconnected.sources[0]!.generation++;
+  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: reconnected }, 2);
+  const warmingAgain = await socket.request("workspace/command", beforeReconnect,
+    request => request.params.method === "models/list" && request.params.params?.provider === "opencode");
+  assert.deepEqual(warmingAgain.params.scope, { kind: "installation", daemonId });
+  socket.reply(warmingAgain, { data: [] });
+});
+
+test("observed unsettled opencode threads warm their source but settled and codex rows do not", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
+  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
+  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
+  const rows = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projectThreads"
+    && request.params.query.projects?.length === 1);
+  const base = {
+    logicalProjectId: logicalId, location, hostname: "local", rootPath: project.rootPath,
+    entry: {
+      entryKind: "thread" as const, title: "thread", activityAt: 1,
+      identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse("thread") },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false },
+    },
+  } satisfies WorkspaceThreadRows["rows"][number];
+  socket.observation(rows, { kind: "projectThreads", phase: "current", failure: null,
+    data: { rows: [base, { ...base, entry: { ...base.entry,
+      identity: { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("settled") },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: true } } }], projects: [] } });
+  await Promise.resolve();
+  assert.equal(socket.sent.some(request => request.method === "workspace/command"
+    && request.params.method === "models/list" && request.params.params?.provider === "opencode"), false);
+  socket.observation(rows, { kind: "projectThreads", phase: "current", failure: null,
+    data: { rows: [{ ...base, entry: { ...base.entry,
+      identity: { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("unsettled") } } }], projects: [] } }, 2);
+  const warming = await socket.request("workspace/command", 0, request => request.params.method === "models/list"
+    && request.params.params?.provider === "opencode");
+  assert.deepEqual(warming.params.scope, { kind: "installation", daemonId });
+  socket.reply(warming, { data: [] });
 });
 
 test("a registered offline folder can open a draft without claiming live explorer metadata", async context => {
@@ -508,6 +572,26 @@ async function openRetainedDraft(context: TestContext) {
   } });
   return { socket, client, draft };
 }
+
+test("reopening a saved draft warms opencode on its original daemon", async context => {
+  const { socket, client, draft } = await openRetainedDraft(context);
+  const first = await socket.request("workspace/command", 0, request => request.params.method === "models/list"
+    && request.params.params?.provider === "opencode");
+  socket.reply(first, { data: [] });
+  assert.equal((await client.controls.applyRoute(createHomeRoute())).ok, true);
+  const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
+  const changed = facts(true);
+  changed.sources[0]!.generation++;
+  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: changed }, 2);
+  const offset = socket.sent.length;
+  assert.equal((await client.controls.applyRoute(createLogicalThreadRoute(logicalId, logicalId, location, {
+    kind: "draft", draftId: DraftIdSchema.parse(draft.id),
+  }))).ok, true);
+  const warmed = await socket.request("workspace/command", offset, request => request.params.method === "models/list"
+    && request.params.params?.provider === "opencode");
+  assert.deepEqual(warmed.params.scope, { kind: "installation", daemonId });
+  socket.reply(warmed, { data: [] });
+});
 
 test("accepted draft launch settles without a thread read and cannot steal a newer route", async context => {
   const { socket, client, draft } = await openRetainedDraft(context);

@@ -2,7 +2,7 @@
  * Exports:
  * - areExplorerSnapshotsEquivalent: compare visible explorer facts without thread activity timestamps.
  * - MountedWorkbenchClient: rendering, editor and interaction owners for the mounted workspace.
- * - WorkbenchClient: bind app-published facts to views without owning daemon connections or routing.
+ * - WorkbenchClient: bind app facts to views and warm source-scoped provider models on observed demand.
  */
 import type {
   ExplorerSnapshot, WorkbenchBindings, WorkbenchControls, WorkbenchLogicalThreadRow,
@@ -42,6 +42,7 @@ import LifecycleScope from "./workbench/state/LifecycleScope";
 import { DEFAULT_EDITOR_FONT_SIZE } from "./workbench/state/workbench-settings";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchThreadProject } from "./workbench/WorkbenchThreadClient";
+import { WorkbenchModelReadSupersededError } from "./workbench/WorkbenchAccountClient";
 import WorkbenchFilePanelClient, { type WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchNavigationController from "./workbench/WorkbenchNavigationController";
 import WorkbenchProjectNavigation from "./workbench/navigation/workbench-project-navigation";
@@ -146,6 +147,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   let rowSelection: WorkspaceProjectReference[] | null | undefined;
   const owners = new Map<string, QueryHandle<"threadOwner">>();
   const renderers = new Map<DaemonId, ThreadClient>();
+  const warmedOpenCodeSources = new Map<DaemonId, number>();
   const localDraftLocations = new Map<string, ProjectLocationReference>();
   const fileDrafts = new Map<string, ReturnType<typeof FileDraftStore>>();
   const panels = new Set<ReturnType<typeof WorkbenchFilePanelClient>>();
@@ -225,6 +227,19 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     return client;
   }
 
+  function warmOpenCode(location: ProjectLocationReference) {
+    const source = projectFacts()?.sources.find(item => item.daemonId === location.daemonId);
+    if (!source || source.connection !== "current"
+      || warmedOpenCodeSources.get(location.daemonId) === source.generation) return;
+    warmedOpenCodeSources.set(location.daemonId, source.generation);
+    void rendererFor(location).listModels("opencode").catch(error => {
+      if (error instanceof WorkbenchModelReadSupersededError) return;
+      if (!disposed && projectFacts()?.sources.find(item => item.daemonId === location.daemonId)?.generation === source.generation) {
+        warn("Unable to warm OpenCode models.", error);
+      }
+    });
+  }
+
   function rendererForThread(id: string) {
     const location = locationForThread(id) ?? localDraftLocations.get(id);
     return location ? renderers.get(location.daemonId) ?? threadClient : threadClient;
@@ -245,6 +260,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       return;
     }
     const location = node.target.source?.location;
+    if (location && node.target.kind === "thread"
+      && (node.target.target.kind === "new" || node.target.target.kind === "draft")) warmOpenCode(location);
     if (location && threadProject(location)) rendererFor(location);
   }
   const projectClient = WorkbenchProjectClient({
@@ -428,14 +445,28 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     if (disposed) return;
     retirePreviousRows();
     refreshProjectNavigator();
-    for (const source of projectFacts()?.sources ?? []) renderers.get(source.daemonId)?.acceptSourceGeneration(source.generation);
+    const sources = projectFacts()?.sources ?? [];
+    const present = new Set(sources.map(source => source.daemonId));
+    for (const daemonId of warmedOpenCodeSources.keys()) if (!present.has(daemonId)) warmedOpenCodeSources.delete(daemonId);
+    for (const source of sources) renderers.get(source.daemonId)?.acceptSourceGeneration(source.generation);
     if (browseLocation) {
       void projectClient.installCatalog(catalogueFor(browseLocation.daemonId))
         .catch(error => warn("Project facts could not be displayed.", error));
     }
     const route = navigation.getSnapshot().route;
     selectRowsForRoute(route);
-    sidebar.acceptFacts(browseLocation, visibleRows());
+    if (route.view === "thread" && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft")) {
+      const target = route.threadTarget;
+      const location = draftLocation ?? route.logical?.browseLocation ?? route.logical?.location
+        ?? (target.kind === "draft" ? presentation.draft(target.draftId)?.target ?? localDraftLocations.get(target.draftId) : null);
+      if (location) warmOpenCode(location);
+    }
+    const observedRows = visibleRows();
+    sidebar.acceptFacts(browseLocation, observedRows);
+    for (const row of observedRows?.rows ?? []) {
+      if (row.entry.entryKind === "thread" && row.entry.identity.harness === "opencode"
+        && !row.entry.lifecycle.settled) warmOpenCode(row.location);
+    }
     prepareMosaicRenderers(route.mosaicNode);
     const currentDraft = threadClient.getSnapshot().currentThread;
     if (route.logical && !route.logical.threadOwnerProjectId && route.logical.location
@@ -554,6 +585,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       if (candidates.length === 1) location = candidates[0]!.target;
       else if (candidates.length > 1) return { ok: false, error: "This old project address names more than one daemon folder." };
     }
+    if (draftRouteTarget && location) warmOpenCode(location);
     if (route.view === "mosaic") {
       // Each pane consumes its own owner and transcript facts. A slow pane cannot block its siblings.
       selectFolder(location);

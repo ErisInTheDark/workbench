@@ -87,6 +87,7 @@ export default class OpenCodeEventController {
 
   async reconcileConnection(signal: AbortSignal, wasTouched: (sessionID: string) => boolean) {
     if (!this.options.threads.reconcileActivity) throw new Error("OpenCode activity reconciliation is unavailable.");
+    this.announceModelCatalogChange();
     for (const fact of await this.options.threads.reconcileActivity(signal, wasTouched)) {
       signal.throwIfAborted();
       if (wasTouched(fact.sessionID) || fact.maintenance || !fact.turn) continue;
@@ -128,7 +129,7 @@ export default class OpenCodeEventController {
 
   async accept(event: OpenCodeEvent) {
     if (event.type === "model.updated" || event.type === "provider.updated") {
-      this.options.invalidateModelCatalogs?.();
+      this.announceModelCatalogChange();
       return;
     }
     const sessionID = "data" in event && event.data && "sessionID" in event.data
@@ -361,6 +362,11 @@ export default class OpenCodeEventController {
         });
       }
     }
+  }
+
+  private announceModelCatalogChange() {
+    this.options.invalidateModelCatalogs?.();
+    this.options.broadcast?.({ method: "models/updated", params: {} });
   }
 
   private broadcastThreadStatus(threadId: WorkbenchThreadId, status: ThreadStatus) {

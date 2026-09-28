@@ -17,7 +17,7 @@ import type { ThreadTokenUsage } from "../thread/thread-context-usage.ts";
 type ItemReference = { threadId: string; turnId: string; itemId: string };
 const publicMethods = new Set<string>([
   "thread/started", "thread/status/changed", "thread/name/updated", "thread/tokenUsage/updated",
-  "thread/goal/updated", "thread/goal/cleared", "account/updated", "account/rateLimits/updated",
+  "thread/goal/updated", "thread/goal/cleared", "account/updated", "account/rateLimits/updated", "models/updated",
   "turn/started", "turn/completed", "item/started", "item/completed",
   "item/agentMessage/delta", "item/plan/delta", "item/commandExecution/outputDelta",
   "item/fileChange/outputDelta", "item/fileChange/patchUpdated", "item/reasoning/summaryTextDelta",
@@ -37,6 +37,7 @@ export type WorkbenchTranscriptNotification =
   | { method: "thread/tokenUsage/updated"; params: { threadId: string; turnId: string; tokenUsage: ThreadTokenUsage } }
   | { method: "account/updated"; params: object }
   | { method: "account/rateLimits/updated"; params: { rateLimits: WorkbenchRateLimitSnapshot } }
+  | { method: "models/updated"; params: Record<string, never> }
   | { method: "thread/goal/updated"; params: { threadId: string; turnId?: string | null; goal: WorkbenchProviderGoal } }
   | { method: "thread/goal/cleared"; params: { threadId: string; turnId?: string | null } }
   | { method: "turn/started"; params: { threadId: string; turn: Turn } }

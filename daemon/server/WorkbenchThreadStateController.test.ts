@@ -1953,6 +1953,11 @@ test("draft targets are provider-agnostic and adopt any addressed provider", asy
     assert.deepEqual(await controller.readComposerProfileTarget(oldSlot), profileSelection);
     assert.deepEqual(await controller.readComposerProfileTarget({ ...oldSlot, harness: "opencode" }), profileSelection);
     assert.deepEqual(await controller.readComposerProfileTarget({ kind: "new-thread", projectId }), profileSelection);
+    const awaitingModels = { kind: "custom" as const, settings: { ...settings, harness: "opencode" as const, model: "" } };
+    assert.equal(await controller.setComposerProfileTarget(oldSlot, awaitingModels), true);
+    assert.deepEqual(await controller.readComposerProfileTarget(oldSlot), awaitingModels);
+    assert.deepEqual(await controller.readComposerProfileTarget({ kind: "new-thread", projectId }), awaitingModels);
+    await assert.rejects(controller.prepareComposerProfileTarget({ kind: "new-thread", projectId }), /model/u);
     const entry = (await controller.getSnapshot(projectId)).entries.find(entry => entry.entryKind === "draft");
     assert.equal(entry?.entryKind === "draft" ? entry.draft.prompt : null, "Keep this");
   } finally {
@@ -2040,6 +2045,9 @@ test("legacy profiles migrate and accepted provider work retains its configured 
   await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry);
   const threadSlot = { harness: "codex" as const, kind: "thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("materialized") };
   await controller.setComposerProfileTarget(threadSlot, selected);
+  assert.equal(await controller.setComposerProfileTarget(threadSlot, {
+    kind: "custom", settings: { ...selected.settings, model: "" },
+  }), false);
   await controller.acceptProviderIntent(fixtureProjectIds["project"], "codex", fixtureThreadIds["materialized"], fixtureTurnIds["turn"]);
   assert.deepEqual(await controller.readComposerProfileTarget(threadSlot), selected);
 

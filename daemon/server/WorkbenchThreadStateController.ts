@@ -649,6 +649,7 @@ export default class WorkbenchThreadStateController {
       const state = await this.getProject(slot.projectId);
       const selection = await this.resolveComposerProfileTarget(state, slot, true);
       if (!selection) throw new Error("The thread has no available daemon composer profile.");
+      if (!selection.settings.model.trim()) throw new Error("The thread has no available daemon composer model.");
       const entry = slot.kind === "thread" ? state.entries.get(`${slot.harness}:${slot.threadId}`) : null;
       return { selection, subagentName: entry?.entryKind === "subagent" ? entry.name : null };
     });
@@ -668,6 +669,7 @@ export default class WorkbenchThreadStateController {
       const state = await this.getProject(slot.projectId);
       const selection = await this.resolveComposerProfileTarget(state, slot, refresh);
       if (!selection) throw new Error("The thread has no available daemon composer profile.");
+      if (!selection.settings.model.trim()) throw new Error("The thread has no available daemon composer model.");
       const entry = state.entries.get(`${slot.harness}:${slot.threadId}`);
       const outcome = await admit({ selection, subagentName: entry?.entryKind === "subagent" ? entry.name : null });
       if (!outcome.accepted) return { ...outcome, profilePersistenceError: null };
@@ -717,7 +719,8 @@ export default class WorkbenchThreadStateController {
       selection = resolveLinkedProfileSelection((await this.options.readComposerProfiles()).profiles, link,
         slot.kind === "thread" ? { harness: slot.harness } : undefined);
     }
-    if (!selection || !selection.settings.model.trim()) return null;
+    if (!selection || !selection.settings.model.trim()
+      && (slot.kind === "thread" || selection.kind !== "custom" || selection.settings.harness !== "opencode")) return null;
     if (slot.kind === "thread" && selection.settings.harness !== slot.harness) {
       throw new Error("The daemon composer profile harness does not match the thread.");
     }
@@ -741,7 +744,8 @@ export default class WorkbenchThreadStateController {
     } else {
       const key = `${slot.harness}:${slot.threadId}`;
       const entry = state.entries.get(key);
-      if (!entry || entry.entryKind === "draft" || selection.settings.harness !== slot.harness) return false;
+      if (!entry || entry.entryKind === "draft" || selection.settings.harness !== slot.harness
+        || !selection.settings.model.trim()) return false;
       state.entries.set(key, { ...entry, profile: selection });
     }
     return true;

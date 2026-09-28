@@ -157,6 +157,7 @@ interface WorkbenchThreadClient {
     activeProjectSnapshot: WorkbenchThreadSidebarSnapshot | null;
   }) => void;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
+  subscribeModelUpdates: (listener: (harness: WorkbenchHarness) => void) => () => void;
   openThread: (threadId: string, options?: { harness?: WorkbenchHarness; project?: WorkbenchThreadProject; source?: "open" | "reload"; isCurrent?: () => boolean }) => Promise<ThreadPayloadFetchOutcome>;
   onReconnect: (listener: () => void) => () => void;
   onConnectionOpen: (listener: () => void) => () => void;
@@ -618,6 +619,11 @@ function WorkbenchThreadClient(
     reportError: message => emitStatusMessage(message),
     readRateLimits: async (harness) => await daemon.account.limits(harness),
   });
+  const modelUpdateListeners = new Set<(harness: WorkbenchHarness) => void>();
+  function subscribeModelUpdates(listener: (harness: WorkbenchHarness) => void) {
+    modelUpdateListeners.add(listener);
+    return () => { modelUpdateListeners.delete(listener); };
+  }
   const state = createInitialThreadState();
   const threadDocuments = ThreadDocumentStore({
     areDocumentsEquivalent: areThreadPayloadsEquivalent,
@@ -3746,6 +3752,7 @@ function WorkbenchThreadClient(
       case "browse/result/recorded":
       case "account/updated":
       case "account/rateLimits/updated":
+      case "models/updated":
         return false;
     }
 
@@ -4320,6 +4327,11 @@ function WorkbenchThreadClient(
     notification: WorkbenchClientNotification,
     harness: WorkbenchHarness,
   ) {
+    if (notification.method === "models/updated") {
+      account.invalidateModels(harness);
+      for (const listener of modelUpdateListeners) listener(harness);
+      return;
+    }
     if (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared") {
       threadGoals.observeNotification(notification);
     }
@@ -4586,6 +4598,7 @@ function WorkbenchThreadClient(
     transcripts.dispose();
     threadGoals.dispose();
     account.dispose();
+    modelUpdateListeners.clear();
     textPresentation.dispose();
     lifecycle.dispose();
   }
@@ -4623,6 +4636,7 @@ function WorkbenchThreadClient(
     isCurrentThreadUpToDate,
     isDraftThreadId,
     listModels,
+    subscribeModelUpdates,
     openThread,
     onReconnect,
     onConnectionOpen: listener => workspace.rpc.onOpen(listener),

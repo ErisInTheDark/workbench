@@ -64,6 +64,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   children: [],
   create: (_context, { get }) => {
     const service = get("openCodeService");
+    const modelCatalog = get("openCodeModelCatalog");
     const threads = get("openCodeThreadOperations");
     const shell = new CodexShellController({
       executor: get("codexExecutor"),
@@ -98,7 +99,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
             },
             models: {
               read: async () => {
-                const catalog = await service.readModelCatalog();
+                const catalog = await modelCatalog.read();
                 return catalog.models.map(model => openCodeModelOption(model, catalog.defaultModel?.id));
               },
             },
@@ -113,7 +114,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload the OpenCode provider definition.",
   lifecycle: "atomic",
   provides: ["openCodeProvider"],
-  requires: ["openCodeService", "openCodeThreadOperations", "codexExecutor", "codexThreadOperations"],
+  requires: ["openCodeService", "openCodeModelCatalog", "openCodeThreadOperations", "codexExecutor", "codexThreadOperations"],
   safeAll: true,
   scope: "server:opencode/def",
   sources: [

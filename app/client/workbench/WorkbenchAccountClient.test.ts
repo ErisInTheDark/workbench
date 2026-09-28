@@ -115,6 +115,43 @@ test("model demand coalesces and a retired source response cannot replace the ne
   } finally { client.dispose(); }
 });
 
+test("provider model invalidation retires an empty in-flight read without touching other providers", async () => {
+  const old = deferred<WorkbenchModelOption[]>();
+  let opencodeReads = 0;
+  let codexReads = 0;
+  const client = new WorkbenchAccountClient({
+    listModels: async harness => harness === "opencode"
+      ? ++opencodeReads === 1 ? old.promise : [model("ready")]
+      : (++codexReads, [model("codex")]),
+    readRateLimits: async () => rateLimits("unused"),
+  });
+  try {
+    await client.listModels("codex");
+    const first = client.listModels("opencode");
+    client.invalidateModels("opencode");
+    assert.deepEqual(await client.listModels("opencode"), [model("ready")]);
+    old.resolve([]);
+    await first;
+    assert.deepEqual(client.getModels("opencode"), [model("ready")]);
+    assert.deepEqual(await client.listModels("codex"), [model("codex")]);
+    assert.equal(codexReads, 1);
+  } finally { client.dispose(); }
+});
+
+test("an invalidated model read without a replacement reports expected supersession", async () => {
+  const pending = deferred<WorkbenchModelOption[]>();
+  const client = new WorkbenchAccountClient({
+    listModels: () => pending.promise,
+    readRateLimits: async () => rateLimits("unused"),
+  });
+  try {
+    const old = client.listModels("opencode");
+    client.invalidateModels("opencode");
+    pending.resolve([]);
+    await assert.rejects(old, { name: "WorkbenchModelReadSupersededError" });
+  } finally { client.dispose(); }
+});
+
 test("automatic rate-limit reads coalesce and throttle while explicit reads remain fresh", async () => {
   let now = 1_000;
   const reads = [deferred<WorkbenchAccountLimits>(), deferred<WorkbenchAccountLimits>()];

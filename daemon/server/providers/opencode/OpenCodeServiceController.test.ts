@@ -1,12 +1,14 @@
-/*
- * Exports:
- * - tests: protect dedicated service ownership, companion injection, capability verification, and client coalescing.
- */
+/* No production exports. Tests protect dedicated service ownership, companion readiness, and model warming. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import type { EnsureOptions } from "@opencode/client/service";
 import OpenCodeServiceController from "./OpenCodeServiceController";
+
+const modelApi = {
+  list: async () => ({ data: [{ id: "ready" }] }),
+  default: async () => ({ data: null }),
+};
 
 test("coalesces acquisition through the dedicated Workbench OpenCode service", async () => {
   let ensures = 0;
@@ -14,6 +16,7 @@ test("coalesces acquisition through the dedicated Workbench OpenCode service", a
   let stops = 0;
   let ensureOptions: EnsureOptions | undefined;
   const client = {
+    model: modelApi,
     plugin: {
       list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }),
     },
@@ -89,6 +92,7 @@ test("coalesces acquisition through the dedicated Workbench OpenCode service", a
 test("allows failed dedicated-service acquisition to be retried", async () => {
   let attempts = 0;
   const client = {
+    model: modelApi,
     plugin: {
       list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }),
     },
@@ -133,12 +137,64 @@ test("coalesces model catalogues by directory and invalidates provider changes",
       controller.readModelCatalog("C:/repo"),
     ]);
     assert.equal(first, second);
-    assert.equal(lists, 1);
+    assert.equal(lists, 2);
     controller.invalidateModelCatalogs();
-    assert.equal((await controller.readModelCatalog("C:/repo")).models[0]?.id, "model-2");
+    assert.equal((await controller.readModelCatalog("C:/repo")).models[0]?.id, "model-3");
   } finally {
     await controller.dispose();
   }
+});
+
+test("service acquisition warms models before a picker asks, and an empty warm result is reread", async () => {
+  const first = Promise.withResolvers<{ data: Array<{ id: string }> }>();
+  let lists = 0;
+  const client = {
+    plugin: { list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }) },
+    model: {
+      list: async () => ++lists === 1 ? first.promise : { data: [{ id: "ready" }] },
+      default: async () => ({ data: null }),
+    },
+  };
+  const controller = new OpenCodeServiceController({
+    prepareServiceDirectory: async () => undefined,
+    ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
+    createClient: () => client as never,
+    stopService: async () => undefined,
+  });
+  try {
+    await controller.acquire();
+    assert.equal(lists, 1);
+    first.resolve({ data: [] });
+    assert.equal((await controller.readModelCatalog()).models[0]?.id, "ready");
+    assert.equal(lists, 2);
+  } finally { await controller.dispose(); }
+});
+
+test("a failed background model warmup warns without losing the live service or a later read", async () => {
+  const warning = Promise.withResolvers<string>();
+  let lists = 0;
+  const controller = new OpenCodeServiceController({
+    prepareServiceDirectory: async () => undefined,
+    ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
+    createClient: () => ({
+      plugin: { list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }) },
+      model: {
+        list: async () => {
+          if (++lists === 1) throw new Error("private credential value");
+          return { data: [{ id: "ready" }] };
+        },
+        default: async () => ({ data: null }),
+      },
+    } as never),
+    stopService: async () => undefined,
+    warn: message => warning.resolve(message),
+  });
+  try {
+    await controller.acquire();
+    assert.match(await warning.promise, /model catalogue warmup failed/u);
+    assert.doesNotMatch(await warning.promise, /private credential value/u);
+    assert.equal((await controller.readModelCatalog()).models[0]?.id, "ready");
+  } finally { await controller.dispose(); }
 });
 
 test("stops a dedicated service that fails after its process starts", async () => {
@@ -181,6 +237,7 @@ test("preserves existing inline OpenCode config while adding the companion", asy
       return { url: "http://127.0.0.1:4096" };
     },
     createClient: () => ({
+      model: modelApi,
       plugin: {
         list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }),
       },
@@ -229,6 +286,7 @@ test("waits for configured companion readiness instead of sampling plugin state 
     prepareServiceDirectory: async () => undefined,
     ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
     createClient: () => ({
+      model: modelApi,
       config: {
         get: async () => [{
           type: "document",
@@ -267,6 +325,7 @@ test("warns when companion configuration inspection fails but plugin readiness r
     prepareServiceDirectory: async () => undefined,
     ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
     createClient: () => ({
+      model: modelApi,
       config: {
         get: async () => { throw new Error("config unavailable"); },
       },
@@ -304,6 +363,7 @@ test("aborts acquisition and disposes without waiting for service discovery", as
     prepareServiceDirectory: async () => undefined,
     ensureService: async () => await pending,
     createClient: () => ({
+      model: modelApi,
       plugin: { list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }) },
     } as never),
     stopService: async () => undefined,

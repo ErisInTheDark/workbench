@@ -260,6 +260,16 @@ test("launch validation follows the resolved definition's model", async context 
   assert.equal(f.requests.some(request => request.method === "thread/launch"), false);
 });
 
+test("a Custom draft cannot launch before its provider reports a model", async context => {
+  const f = await fixture(context, { kind: "custom", settings: settings("", "opencode") });
+  f.handle(async method => {
+    if (method === "models/list") return { data: [model] };
+    throw new Error(`Unexpected ${method}`);
+  });
+  await assert.rejects(f.owner.launch(f.draftId, f.draft().revision), /model/u);
+  assert.equal(f.requests.some(request => request.method === "thread/launch"), false);
+});
+
 test("a submitting retry replays the recorded applied selection", async context => {
   const f = await fixture(context, { kind: "profile", profileId: "profile-1", settings: settings("stale model") });
   const threadId = randomUUID();

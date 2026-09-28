@@ -2,6 +2,7 @@
  * Exports:
  * - WorkbenchAccountSnapshot: immutable provider model and rate-limit cache projection.
  * - WorkbenchAccountClientOptions: provider account transport and diagnostic ports.
+ * - WorkbenchModelReadSupersededError: expected retirement of an obsolete model read.
  * - default WorkbenchAccountClient: own model caches and rate-limit refresh lifecycle by harness.
  */
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
@@ -34,6 +35,13 @@ export interface WorkbenchAccountClientOptions {
   now?: () => number;
   reportError?: (message: string) => void;
   readRateLimits: (harness: WorkbenchHarness) => Promise<WorkbenchAccountLimits>;
+}
+
+export class WorkbenchModelReadSupersededError extends Error {
+  constructor() {
+    super("Model read was superseded by a newer source state.");
+    this.name = "WorkbenchModelReadSupersededError";
+  }
 }
 
 function remainingPercent(window: WorkbenchRateLimitSnapshot["primary"]) {
@@ -139,7 +147,7 @@ export default class WorkbenchAccountClient {
       if (this.disposed || generation !== this.contextGeneration || this.modelReads.get(harness) !== read) {
         const current = this.models.get(harness);
         if (current && !this.disposed) return current;
-        throw new Error("Model read was superseded by a newer source state.");
+        throw new WorkbenchModelReadSupersededError();
       }
       this.models.set(harness, models);
       this.publish();
@@ -149,6 +157,12 @@ export default class WorkbenchAccountClient {
     });
     this.modelReads.set(harness, read);
     return read;
+  }
+
+  invalidateModels(harness: WorkbenchHarness) {
+    this.models.delete(harness);
+    this.modelReads.delete(harness);
+    this.publish();
   }
 
   async refreshIfStale(harness: WorkbenchHarness) {

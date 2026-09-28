@@ -980,6 +980,7 @@ export default memo(function ThreadViewContent ({
       key={`${projectId}:${activeThread.id}`}
       composerSpellCheck={composerSpellCheck}
       onListModels={threads.listModels}
+      subscribeModelUpdates={threads.subscribeModelUpdates}
       highlightSources={inlineMentionSources}
       onHarnessSelect={handleComposerHarnessSelect}
       onSendMessage={handleSendMessage}

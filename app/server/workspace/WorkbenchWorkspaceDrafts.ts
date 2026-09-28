@@ -83,8 +83,9 @@ export default class WorkbenchWorkspaceDrafts {
           profile = resolved;
         }
         const settings = profile.settings;
+        if (!settings.model.trim()) throw new Error("The draft has no selected model yet.");
         const models = (await daemon.models.list(settings.harness)).data.filter(model => model.policyState !== "disabled");
-        if (!models.length || settings.model && !models.some(model => model.id === settings.model)) {
+        if (!models.some(model => model.id === settings.model)) {
           throw new Error("The destination daemon does not support this draft's model.");
         }
         if (settings.agentPath) {

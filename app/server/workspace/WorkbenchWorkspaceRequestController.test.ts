@@ -39,6 +39,7 @@ async function fixture(context: TestContext) {
   const threads = new WorkbenchWorkspaceThreads({ sources, presentation, warn: message => warnings.push(message) });
   const changes = new Set<() => void>();
   const updates: WorkspaceObservation[] = [];
+  const providerEvents: Array<{ method: string; harness: string; daemonId: string }> = [];
   const listeners = new Set<() => void>();
   let read: () => Promise<WorkbenchClientStateResponse> = async () => state(0);
   const owner = new WorkbenchWorkspaceRequestController({
@@ -49,14 +50,18 @@ async function fixture(context: TestContext) {
       changes.add(listener); return () => { changes.delete(listener); };
     } },
     publish: value => { updates.push(value); for (const listener of [...listeners]) listener(); },
-    publishVoice: () => {}, publishThreadEvent: () => {}, publishTranscript: () => {},
+    publishVoice: () => {},
+    publishThreadEvent: (notification, harness, daemonId) => {
+      providerEvents.push({ method: notification.method, harness, daemonId });
+    },
+    publishTranscript: () => {},
     warn: message => warnings.push(message),
   });
   context.after(async () => {
     owner.dispose(); threads.dispose(); workspace.dispose(); sources.dispose();
     presentation.close(); await repository.close(); await temporary.dispose();
   });
-  return { owner, updates, warnings, changes,
+  return { owner, updates, providerEvents, warnings, changes,
     read: (operation: typeof read) => { read = operation; },
     changed: () => { for (const changed of [...changes]) changed(); },
     wait: (predicate: (value: WorkspaceObservation) => boolean) => new Promise<WorkspaceObservation>(resolve => {
@@ -69,6 +74,22 @@ async function fixture(context: TestContext) {
     }),
   };
 }
+
+test("provider-wide model changes reach browsers without thread demand", async context => {
+  const f = await fixture(context);
+  let notify: (notification: { method: "models/updated"; params: object }, harness: "opencode") => void = () => {
+    throw new Error("Provider listener was not registered.");
+  };
+  f.owner["observeProvider"]({
+    id: "daemon",
+    socket: { onNotification: (listener: typeof notify) => {
+      notify = listener;
+      return () => {};
+    } },
+  } as never);
+  notify({ method: "models/updated", params: {} }, "opencode");
+  assert.deepEqual(f.providerEvents, [{ method: "models/updated", harness: "opencode", daemonId: "daemon" }]);
+});
 
 test("pending browser-state binding cannot block already-available app presentation", async context => {
   const f = await fixture(context);

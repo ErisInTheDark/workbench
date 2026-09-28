@@ -102,6 +102,7 @@ export default function ThreadComposer ({
   header,
   layout = "thread",
   onListModels,
+  subscribeModelUpdates,
   onHarnessSelect,
   onSendMessage,
   onStopThread,
@@ -139,6 +140,7 @@ export default function ThreadComposer ({
   header?: ReactNode;
   layout?: "thread" | "inline";
   onListModels: (harness: ThreadPayload["harness"], options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
+  subscribeModelUpdates?: (listener: (harness: ThreadPayload["harness"]) => void) => () => void;
   onHarnessSelect?: (harness: ThreadPayload["harness"]) => void;
   onSendMessage: (
     threadId: string,
@@ -194,7 +196,9 @@ export default function ThreadComposer ({
   const [profileEditor] = useState(() => new ThreadProfileEditorController());
   const editorState = useSyncExternalStore(profileEditor.subscribe, profileEditor.getSnapshot, profileEditor.getSnapshot);
   const [editorAnchor, setEditorAnchor] = useState<{ trigger: HTMLElement; ribbon: HTMLElement } | null>(null);
-  const availableModels = editorState.models;
+  const resolvedComposerSettings = profileSlot ? composerProfileController.resolveSettings(profileSlot) : null;
+  const activeHarness = resolvedComposerSettings?.harness ?? thread.harness;
+  const availableModels = editorState.modelsHarness === activeHarness ? editorState.models : [];
   const availableAgents = editorState.agents;
   const [localError, setError] = useState("");
   const error = localError || editing.error || composerProfileSnapshot.error;
@@ -223,7 +227,7 @@ export default function ThreadComposer ({
   const isThreadStateBroken = hasStaleApprovalState(thread);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
   const isActiveThread = getCurrentInProgressTurn(thread) !== null;
-  const hasEffectiveProfile = !profileSlot || Boolean(composerProfileController.resolveSettings(profileSlot)?.model);
+  const hasEffectiveProfile = !profileSlot || Boolean(resolvedComposerSettings?.model);
   const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(thread, threadLifecycle, hasPendingUserInputRequest, controlsMode);
   const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken;
   useLayoutEffect(() => {
@@ -274,9 +278,9 @@ export default function ThreadComposer ({
   const selectedModelOption = availableModels.find((model) => model.id === selectedModel) ?? null;
   const defaultModelOption = availableModels.find((model) => model.isDefault) ?? null;
   const modelOptionForControls = selectedModel ? selectedModelOption : defaultModelOption;
-  const modelButtonLabel = selectedModelOption?.displayName
-    ?? selectedModel
-    ?? "Default model";
+  const modelButtonLabel = activeHarness === "opencode" && !availableModels.length
+    ? editorState.modelsHarness === activeHarness && editorState.modelsError ? "Model unavailable" : "Loading..."
+    : selectedModelOption?.displayName ?? selectedModel ?? "Default model";
   const supportedReasoningEfforts = modelOptionForControls?.supportedReasoningEfforts ?? [];
   const currentReasoningEffort = thread.reasoningEffort;
   const showsThreadControls = !isCommentMode;
@@ -304,7 +308,7 @@ export default function ThreadComposer ({
   const profileButtonLabel = selectedProfile
     ? getComposerProfileDisplayLabel(selectedProfile, agentButtonLabel, modelButtonLabel)
     : "Custom";
-  const currentComposerSettings: WorkbenchComposerSettings = (profileSlot ? composerProfileController.resolveSettings(profileSlot) : null) ?? {
+  const currentComposerSettings: WorkbenchComposerSettings = resolvedComposerSettings ?? {
     agentPath: thread.agentPath,
     agentSource: selectedAgent?.source ?? null,
     harness: thread.harness,
@@ -323,12 +327,18 @@ export default function ThreadComposer ({
     const payload = await daemon.agents.list({ projectId });
     return payload.data ?? [];
   }), [daemon, profileEditor, projectId]);
-  const loadAvailableModels = useCallback((harness: WorkbenchComposerSettings["harness"] = thread.harness, forceRefresh = false) => profileEditor.loadModels(
-    () => onListModels(harness, { forceRefresh }),
-  ), [onListModels, profileEditor, thread.harness]);
+  const loadAvailableModels = useCallback(async (harness: WorkbenchComposerSettings["harness"] = activeHarness, forceRefresh = false) => {
+    const models = await profileEditor.loadModels(harness, () => onListModels(harness, { forceRefresh }));
+    if (models && profileSlot && harness === "opencode"
+      && await composerProfileController.fillMissingModel(profileSlot, harness, models)) {
+      const settings = composerProfileController.resolveSettings(profileSlot);
+      if (settings) onThreadSettingsChange?.(thread.id, settings);
+    }
+    return models;
+  }, [activeHarness, composerProfileController, onListModels, onThreadSettingsChange, profileEditor, profileSlot, thread.id]);
   const changeProfileHarness = (profileId: string, harness: WorkbenchComposerSettings["harness"]) => {
     void (async () => {
-      const models = await profileEditor.loadModels(() => onListModels(harness));
+      const models = await profileEditor.loadModels(harness, () => onListModels(harness));
       if (!models) return;
       const available = models.filter((entry) => entry.policyState !== "disabled");
       const model = available.find((entry) => entry.isDefault) ?? available[0];
@@ -367,6 +377,9 @@ export default function ThreadComposer ({
     if (!isCommentMode) void loadAvailableModels();
     return () => profileEditor.resetModels();
   }, [isCommentMode, profileEditor, loadAvailableModels]);
+  useEffect(() => subscribeModelUpdates?.((harness) => {
+    if (!isCommentMode && harness === currentComposerSettings.harness) void loadAvailableModels(harness);
+  }), [subscribeModelUpdates, isCommentMode, currentComposerSettings.harness, loadAvailableModels]);
   const wasEditorOpenRef = useRef(false);
   useEffect(() => {
     if (wasEditorOpenRef.current && !editorState.open) void loadAvailableModels();

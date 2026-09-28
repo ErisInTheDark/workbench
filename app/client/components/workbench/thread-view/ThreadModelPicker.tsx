@@ -122,7 +122,11 @@ export default function ThreadModelPicker ({
 				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
 			) : null}
 			{isLoading ? (
-				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-fg/muted">Loading models...</p>
+				<div role="status" aria-label="Loading models" className="mt-1 grid gap-2">
+					{Array.from({ length: 3 }, (_, index) => (
+						<div key={index} className="h-10 w-full rounded-lg workbench-skeleton" aria-hidden="true" />
+					))}
+				</div>
 			) : (
 				<div className="mt-1 space-y-2">
 					<div role="group" aria-label={`${harness} models`} className="grid gap-2">

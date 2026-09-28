@@ -754,7 +754,8 @@ export default class WorkbenchWorkspaceRequestController {
   private observeProvider(source: WorkbenchDaemonSource) {
     if (this.providerListeners.has(source.id)) return;
     this.providerListeners.set(source.id, source.socket.onNotification((notification, harness) => {
-      if (notification.method === "account/updated" || notification.method === "account/rateLimits/updated") {
+      if (notification.method === "account/updated" || notification.method === "account/rateLimits/updated"
+        || notification.method === "models/updated") {
         this.options.publishThreadEvent(notification, harness, source.id);
         return;
       }

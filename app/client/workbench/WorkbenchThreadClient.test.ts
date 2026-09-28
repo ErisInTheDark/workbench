@@ -2659,6 +2659,31 @@ test("project changes retain daemon account limits while connection reset fences
   assert.equal(client.getSnapshot().rateLimits, null);
 }));
 
+test("provider catalogue events invalidate only their model cache and notify mounted consumers", async () => withClient(async (client, socket) => {
+  const updates: string[] = [];
+  const unsubscribe = client.subscribeModelUpdates(harness => { updates.push(harness); });
+  FakeWebSocket.intercept = (connection, request) => {
+    if (request.method !== "models/list") return false;
+    queueMicrotask(() => connection.respond(request.id, { data: [] }));
+    return true;
+  };
+  try {
+    await client.listModels("codex");
+    await client.listModels("opencode");
+    socket.notify("models/updated", {}, "opencode");
+    assert.deepEqual(updates, ["opencode"]);
+    await client.listModels("opencode");
+    await client.listModels("codex");
+    assert.equal(socket.requests.filter(request => request.method === "models/list"
+      && request.params?.provider === "opencode").length, 2);
+    assert.equal(socket.requests.filter(request => request.method === "models/list"
+      && request.params?.provider === "codex").length, 1);
+    unsubscribe();
+    socket.notify("models/updated", {}, "opencode");
+    assert.deepEqual(updates, ["opencode"]);
+  } finally { FakeWebSocket.intercept = null; }
+}));
+
 test("a neutral sidebar label cannot erase an open thread's first-message preview", async () => withClient(async (client) => {
   const original = { ...activeThread("codex", "thread"), name: "New thread", preview: "First user message" };
   client.selectThreadPayload(original);

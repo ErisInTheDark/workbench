@@ -162,7 +162,9 @@ const executionLifecycle = {
 
 test("invalidates cached model catalogues on provider catalogue events", async () => {
   let invalidations = 0;
+  const notifications: string[] = [];
   const controller = new OpenCodeEventController({
+    broadcast: notification => { notifications.push(notification.method); },
     invalidateModelCatalogs: () => { invalidations++; },
     observe: async () => undefined,
     threads: {
@@ -180,6 +182,7 @@ test("invalidates cached model catalogues on provider catalogue events", async (
   await controller.accept({ type: "model.updated" } as never);
   await controller.accept({ type: "provider.updated" } as never);
   assert.equal(invalidations, 2);
+  assert.deepEqual(notifications, ["models/updated", "models/updated"]);
 });
 
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
@@ -273,12 +276,12 @@ test("connection reconciliation restores active work and settles missed terminal
     broadcast: notification => { calls.push(notification.method); },
   });
   await controller.reconcileConnection(new AbortController().signal, () => false);
-  assert.deepEqual(calls, ["started", "acceptedIntent", "thread/status/changed", "turn/started"]);
+  assert.deepEqual(calls, ["models/updated", "started", "acceptedIntent", "thread/status/changed", "turn/started"]);
   calls.length = 0;
   active = false;
   await controller.reconcileConnection(new AbortController().signal, () => false);
   assert.deepEqual(calls, [
-    "record:completed", "settled", "turnCompleted", "turn/completed", "thread/status/changed", "enforce",
+    "models/updated", "record:completed", "settled", "turnCompleted", "turn/completed", "thread/status/changed", "enforce",
   ]);
 });
 

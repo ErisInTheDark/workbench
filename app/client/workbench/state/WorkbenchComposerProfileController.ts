@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchComposerProfileController: own daemon profiles and guarded target projections.
+ * - default WorkbenchComposerProfileController: own daemon profiles and guarded Custom target projections.
  * - WorkbenchComposerProfileSnapshot: immutable profile, selection, and failure snapshot.
  */
 import type {
@@ -217,6 +217,12 @@ export default class WorkbenchComposerProfileController {
   }
   selectHarness(slot: WorkbenchComposerProfileSlot, harness: WorkbenchHarness, loadModels: () => Promise<WorkbenchModelOption[]>) {
     if (slot.kind === "thread" || this.getSelection(slot).kind === "profile") return Promise.resolve(false);
+    if (harness === "opencode") {
+      return this.persistSelection(slot, { kind: "custom", settings: {
+        agentPath: null, agentSource: null, harness, model: "",
+        reasoningEffort: null, serviceTier: null, contextWindowTokens: null,
+      } });
+    }
     const key = getSlotKey(slot);
     const previous = this.selectionWrites.get(key);
     const generation = this.selectionGenerations.get(key) ?? 0;
@@ -224,20 +230,20 @@ export default class WorkbenchComposerProfileController {
     const pending = (async () => {
       if (previous) await previous;
       try {
-        const models = (await loadModels()).filter((model) => model.policyState !== "disabled");
+        const models = (await loadModels()).filter(model => model.policyState !== "disabled");
         if (this.targetPersistence !== persistence || (this.selectionGenerations.get(key) ?? 0) !== generation) return false;
-        const model = models.find((entry) => entry.isDefault) ?? models[0];
+        const model = models.find(entry => entry.isDefault) ?? models[0];
         if (!model) throw new Error("No models are available for that provider.");
         return await this.writeSelection(slot, { kind: "custom", settings: {
           agentPath: null, agentSource: null, harness, model: model.id,
-          reasoningEffort: model.supportsReasoningEffort ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null : null,
+          reasoningEffort: model.supportsReasoningEffort
+            ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null : null,
           serviceTier: null,
           contextWindowTokens: model.contextWindow?.defaultTokens ?? null,
         } });
       } catch (error) {
-        if ((this.selectionGenerations.get(key) ?? 0) === generation) {
-          this.selectionFailures.set(key, error instanceof Error ? error.message : "Unable to change provider.");
-        }
+        if (this.selectionGenerations.get(key) !== generation) return false;
+        this.selectionFailures.set(key, error instanceof Error ? error.message : "Unable to change provider.");
         this.fail(error instanceof Error ? error.message : "Unable to change provider.");
         return false;
       }
@@ -250,6 +256,23 @@ export default class WorkbenchComposerProfileController {
         this.publish();
       }
     });
+  }
+  fillMissingModel(slot: WorkbenchComposerProfileSlot, harness: WorkbenchHarness, models: WorkbenchModelOption[]) {
+    const selection = this.getSelection(slot);
+    if (selection.kind !== "custom" || selection.settings?.harness !== harness || selection.settings.model.trim()) {
+      return Promise.resolve(false);
+    }
+    const available = models.filter(model => model.policyState !== "disabled");
+    const model = available.find(entry => entry.isDefault) ?? available[0];
+    if (!model) return Promise.resolve(false);
+    return this.persistSelection(slot, { kind: "custom", settings: {
+      ...selection.settings,
+      model: model.id,
+      reasoningEffort: model.supportsReasoningEffort
+        ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null : null,
+      serviceTier: null,
+      contextWindowTokens: model.contextWindow?.defaultTokens ?? null,
+    } });
   }
   selectProfile(slot: WorkbenchComposerProfileSlot, profileId: string) {
     const profile = this.getProfile(profileId);

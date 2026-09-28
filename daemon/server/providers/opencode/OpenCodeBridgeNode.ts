@@ -88,7 +88,15 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     });
     return {
       hasPendingWork: () => stream.hasPendingWork() || threads.hasPendingWork(),
-      registrations: { openCodeThreadOperations: threads },
+      registrations: {
+        openCodeThreadOperations: threads,
+        openCodeModelCatalog: {
+          read: async (directory?: string) => {
+            stream.start();
+            return service.readModelCatalog(directory);
+          },
+        },
+      },
       start: () => undefined,
       dispose: async () => {
         lifetime.abort(new Error("OpenCode bridge disposed."));
@@ -99,7 +107,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   },
   description: "Reload OpenCode request and event translation.",
   lifecycle: "atomic",
-  provides: ["openCodeThreadOperations"],
+  provides: ["openCodeThreadOperations", "openCodeModelCatalog"],
   requires: [
     "openCodeService", "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity",
     "threadState", "transcript", "transcriptReader", "providerObservations", "transcriptReconciliation", "database", "turnRecovery",

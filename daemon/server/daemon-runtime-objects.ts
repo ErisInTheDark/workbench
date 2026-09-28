@@ -209,6 +209,9 @@ export interface DaemonRuntimeObjects {
   codexExecutor: import("./CodexExecServer").default;
   codexProvider: WorkbenchProvider;
   openCodeService: import("./providers/opencode/OpenCodeServiceController").default;
+  openCodeModelCatalog: {
+    read(directory?: string): ReturnType<import("./providers/opencode/OpenCodeServiceController").default["readModelCatalog"]>;
+  };
   openCodeThreadOperations: import("./providers/opencode/OpenCodeThreadOperations").default;
   openCodeProvider: WorkbenchProvider;
   agentCommand: WorkbenchAgentCommandController;

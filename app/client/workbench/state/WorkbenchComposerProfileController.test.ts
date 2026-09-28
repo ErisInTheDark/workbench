@@ -13,6 +13,7 @@ import type {
   WorkbenchComposerProfileMutation,
   WorkbenchComposerProfileTargetSelection,
   WorkbenchComposerSettings,
+  WorkbenchModelOption,
 } from "workbench-shared/types";
 import type { WorkbenchComposerProfileSlot } from "workbench-shared/types";
 import type { ComposerProfilePersistence, ComposerProfileTargetPersistence } from "./composer-profile-api";
@@ -78,6 +79,12 @@ const CODEX_SETTINGS: WorkbenchComposerSettings = {
   model: "gpt-5.4",
   reasoningEffort: "high",
   serviceTier: "fast",
+};
+const OPENCODE_MODEL: WorkbenchModelOption = {
+  id: "native/default", displayName: "Default", description: "", hidden: false, isDefault: true,
+  supportsPersonality: false, supportsReasoningEffort: true, supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "high",
+  supportsVision: false, supportsFastMode: false, inputModalities: ["text"], maxContextWindowTokens: null, additionalSpeedTiers: [], policyState: null, billingMultiplier: null,
+  contextWindow: { defaultTokens: 200_000, maximumTokens: 400_000 },
 };
 
 function profile(overrides: Partial<WorkbenchComposerProfile> = {}): WorkbenchComposerProfile {
@@ -623,7 +630,7 @@ test("target persistence failure restores acknowledged settings and exposes the 
   controller.dispose();
 });
 
-test("provider changes await capability loading and install the draft snapshot", async () => {
+test("Custom provider changes persist before models arrive and only fill the current blank selection", async () => {
   const controller = new WorkbenchComposerProfileController();
   const slot = { kind: "draft" as const, projectId: fixtureIdentityValues.ProjectId["project-a"], draftId: fixtureIdentityValues.DraftId["draft-a"], harness: "codex" as const };
   let saved: WorkbenchComposerProfileTargetSelection = { kind: "custom", settings: CODEX_SETTINGS };
@@ -632,26 +639,61 @@ test("provider changes await capability loading and install the draft snapshot",
     write: async (_target, selection) => { saved = selection; },
   });
   await controller.loadSelection(slot);
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
-  const changing = controller.selectHarness(slot, "opencode", async () => {
-    await gate;
-    return [{
-      id: "native/default", displayName: "Default", description: "", hidden: false, isDefault: true,
-      supportsPersonality: false, supportsReasoningEffort: true, supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "high",
-      supportsVision: false, supportsFastMode: false, inputModalities: ["text"], maxContextWindowTokens: null, additionalSpeedTiers: [], policyState: null, billingMultiplier: null,
-      contextWindow: { defaultTokens: 200_000, maximumTokens: 400_000 },
-    }];
-  });
-  let ready = false;
-  const waiting = controller.waitForSelection(slot).then(() => { ready = true; });
-  await Promise.resolve();
-  assert.equal(ready, false);
-  release();
-  assert.equal(await changing, true);
-  await waiting;
+  assert.equal(await controller.selectHarness(slot, "opencode", async () => {
+    throw new Error("Selecting OpenCode must not wait for its models.");
+  }), true);
+  assert.deepEqual(saved, { kind: "custom", settings: {
+    harness: "opencode", model: "", agentPath: null, agentSource: null, reasoningEffort: null, serviceTier: null,
+    contextWindowTokens: null,
+  } });
+  assert.equal(await controller.fillMissingModel(slot, "opencode", [OPENCODE_MODEL]), true);
   assert.deepEqual(controller.resolveSettings({ ...slot, harness: "opencode" }), {
     harness: "opencode", model: "native/default", agentPath: null, agentSource: null, reasoningEffort: "high", serviceTier: null,
   });
+  assert.equal(await controller.selectHarness(slot, "codex", async () => [{ ...OPENCODE_MODEL, id: "codex/default" }]), true);
+  assert.equal(await controller.fillMissingModel(slot, "opencode", [OPENCODE_MODEL]), false);
+  assert.equal(controller.resolveSettings(slot)?.harness, "codex");
+  controller.dispose();
+});
+
+test("a cached model can fill a Custom provider while its blank selection write is still pending", async () => {
+  const controller = new WorkbenchComposerProfileController();
+  const slot = { kind: "draft" as const, projectId: fixtureIdentityValues.ProjectId["project-a"],
+    draftId: fixtureIdentityValues.DraftId["draft-a"], harness: "codex" as const };
+  let saved: WorkbenchComposerProfileTargetSelection = { kind: "custom", settings: CODEX_SETTINGS };
+  const blankWrite = Promise.withResolvers<void>();
+  await controller.initializeTargetPersistence({
+    read: async () => saved,
+    write: async (_target, selection) => {
+      if (!selection.settings.model) await blankWrite.promise;
+      saved = selection;
+    },
+  });
+  await controller.loadSelection(slot);
+  const selecting = controller.selectHarness(slot, "opencode", async () => []);
+  const filling = controller.fillMissingModel(slot, "opencode", [OPENCODE_MODEL]);
+  blankWrite.resolve();
+  assert.equal(await selecting, true);
+  assert.equal(await filling, true);
+  assert.equal(saved.settings.model, OPENCODE_MODEL.id);
+  controller.dispose();
+});
+
+test("other provider changes still wait for a supported model before saving", async () => {
+  const controller = new WorkbenchComposerProfileController();
+  const slot = { kind: "draft" as const, projectId: fixtureIdentityValues.ProjectId["project-a"],
+    draftId: fixtureIdentityValues.DraftId["draft-a"], harness: "opencode" as const };
+  let saved: WorkbenchComposerProfileTargetSelection = { kind: "custom", settings: { ...CODEX_SETTINGS, harness: "opencode" } };
+  await controller.initializeTargetPersistence({
+    read: async () => saved,
+    write: async (_target, selection) => { saved = selection; },
+  });
+  await controller.loadSelection(slot);
+  const models = Promise.withResolvers<WorkbenchModelOption[]>();
+  const changing = controller.selectHarness(slot, "codex", () => models.promise);
+  assert.equal(saved.settings.harness, "opencode");
+  models.resolve([]);
+  assert.equal(await changing, false);
+  assert.equal(saved.settings.harness, "opencode");
   controller.dispose();
 });

@@ -3,7 +3,7 @@
  * - default ThreadProfileEditorController: own editor disclosures and fenced catalogue loading, not profile settings.
  * - ProfileEditorSection: mutually exclusive configuration sections.
  */
-import type { WorkbenchAgentOption, WorkbenchModelOption } from "workbench-shared/types";
+import type { WorkbenchAgentOption, WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
 
 export type ProfileEditorSection = "profile" | "harness" | "model" | "agent";
 
@@ -15,6 +15,7 @@ export default class ThreadProfileEditorController {
     open: false,
     activeSection: null as ProfileEditorSection | null,
     models: [] as WorkbenchModelOption[],
+    modelsHarness: null as WorkbenchHarness | null,
     agents: [] as WorkbenchAgentOption[],
     modelsLoading: false,
     agentsLoading: false,
@@ -44,19 +45,22 @@ export default class ThreadProfileEditorController {
   reset() {
     this.modelGeneration++;
     this.agentGeneration++;
-    this.publish({ open: false, activeSection: null, models: [], agents: [], modelsLoading: false, agentsLoading: false, modelsError: "", agentsError: "" });
+    this.publish({ open: false, activeSection: null, models: [], modelsHarness: null, agents: [], modelsLoading: false, agentsLoading: false, modelsError: "", agentsError: "" });
   }
   resetModels() {
     this.modelGeneration++;
-    this.publish({ models: [], modelsLoading: false, modelsError: "" });
+    this.publish({ models: [], modelsHarness: null, modelsLoading: false, modelsError: "" });
   }
   resetAgents() {
     this.agentGeneration++;
     this.publish({ agents: [], agentsLoading: false, agentsError: "" });
   }
-  async loadModels(load: () => Promise<WorkbenchModelOption[]>): Promise<WorkbenchModelOption[] | null> {
+  async loadModels(harness: WorkbenchHarness, load: () => Promise<WorkbenchModelOption[]>): Promise<WorkbenchModelOption[] | null> {
     const generation = ++this.modelGeneration;
-    this.publish({ modelsLoading: true, modelsError: "" });
+    this.publish({
+      models: this.snapshot.modelsHarness === harness ? this.snapshot.models : [],
+      modelsHarness: harness, modelsLoading: true, modelsError: "",
+    });
     try {
       const models = await load();
       if (generation !== this.modelGeneration) return null;

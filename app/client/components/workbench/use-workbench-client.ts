@@ -467,6 +467,10 @@ export function useWorkbenchThreads(explicitClient?: WorkbenchClientController, 
   ) => (
     await (scoped?.listModels(harness, options) ?? controls?.listModels(harness, options)) ?? []
   ), [controls, scoped]);
+  const subscribeModelUpdates = useCallback(
+    (listener: (harness: WorkbenchHarness) => void) => scoped?.subscribeModelUpdates(listener) ?? (() => {}),
+    [scoped],
+  );
   const pendingQuestionnaire = useCallback(
     (threadId: string) => runtime.pendingUserInputRequestsByThreadId[threadId] ?? null,
     [runtime.pendingUserInputRequestsByThreadId],
@@ -500,6 +504,7 @@ export function useWorkbenchThreads(explicitClient?: WorkbenchClientController, 
     documents: runtime.threadDocuments,
     goals: scoped?.threadGoals ?? controls?.threadGoals ?? null,
     listModels,
+    subscribeModelUpdates,
     pendingQuestionnaire,
     pendingQuestionnairesByThreadId: runtime.pendingUserInputRequestsByThreadId,
     rateLimits: runtime.rateLimits,
@@ -511,6 +516,7 @@ export function useWorkbenchThreads(explicitClient?: WorkbenchClientController, 
     scoped,
     document,
     listModels,
+    subscribeModelUpdates,
     pendingQuestionnaire,
     read,
     runtime,

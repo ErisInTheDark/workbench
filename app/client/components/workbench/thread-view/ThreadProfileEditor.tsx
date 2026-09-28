@@ -79,7 +79,11 @@ export default function ThreadProfileEditor ({
       setFavouriteError("Unable to save model favourite. Please try again.");
     }
   };
-  const model = state.models.find((entry) => entry.id === settings.model);
+  const visibleModels = state.modelsHarness === settings.harness ? state.models : [];
+  const model = visibleModels.find((entry) => entry.id === settings.model);
+  const modelError = state.modelsHarness === settings.harness ? state.modelsError : "";
+  const modelsLoading = state.modelsHarness !== settings.harness || state.modelsLoading
+    || settings.harness === "opencode" && !visibleModels.length && !modelError;
   const efforts = model?.supportedReasoningEfforts ?? [];
   const capability = model?.contextWindow;
   const showsEffort = Boolean(model?.supportsReasoningEffort && efforts.length);
@@ -145,7 +149,7 @@ export default function ThreadProfileEditor ({
       style={{ gridTemplateRows: rows.map(row => row === state.activeSection ? "minmax(0,1fr)" : "auto").join(" ") }}
     >
       {block("profile", "Profile", profile?.name || (profile ? profile.model : "Custom"), <ThreadProfilePicker
-        agents={state.agents} currentSettings={settings} models={state.models} projectId={slot.projectId} slot={slot}
+        agents={state.agents} currentSettings={settings} models={visibleModels} projectId={slot.projectId} slot={slot}
       />)}
       {block("harness", "Provider", <ThreadHarnessControl harness={settings.harness} />, <div className="text-sm text-fg/muted">
         {profile
@@ -154,14 +158,14 @@ export default function ThreadProfileEditor ({
             ? <div className="grid gap-2">{installedProviderKeys.map((harness) => <WorkbenchOptionCard key={harness} density="tight" label={<ThreadHarnessControl harness={harness} />} isChecked={harness === settings.harness} onClick={() => onHarnessSelect(harness)} />)}</div>
             : <p className="m-0">The provider is fixed for this thread.</p>}
       </div>)}
-      {block("model", "Model", model?.displayName ?? settings.model, <>
+      {block("model", "Model", modelsLoading ? "Loading..." : modelError ? "Unavailable" : model?.displayName ?? settings.model, <>
         {!canSaveFavourites ? <p className="text-xs text-fg/muted">Reload the app database to enable saving model favourites.</p> : null}
         {favouriteError ? <p role="alert" className="text-sm text-danger">{favouriteError}</p> : null}
         <ThreadModelPicker
           appliesOnNextTurnOnly={slot.kind === "thread"} unfavouritedModelIds={unfavouritedModelIds}
           favouritesDisabled={!canSaveFavourites}
-          error={state.modelsError} harness={settings.harness} isLoading={state.modelsLoading}
-          models={state.models} selectedModelId={settings.model}
+          error={modelError} harness={settings.harness} isLoading={modelsLoading}
+          models={visibleModels} selectedModelId={settings.model}
           onToggleFavourite={(id) => { void toggleFavourite(id); }}
           onSelectModel={(selected) => update({
             model: selected.id,
