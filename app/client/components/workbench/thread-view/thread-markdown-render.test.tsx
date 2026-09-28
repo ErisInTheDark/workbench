@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { createElement, Fragment } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { renderThreadMarkdown } from "./thread-markdown-render";
+import { renderThreadInlineMarkdown, renderThreadMarkdown } from "./thread-markdown-render";
 
 test("SVG source mode does not load a hidden preview document", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
@@ -28,6 +28,59 @@ test("ordered lists render every source ordinal literally", () => {
   const ordinals = Array.from(html.matchAll(/<li[^>]*\svalue="(\d+)"[^>]*>/gu), (match) => match[1]);
 
   assert.deepEqual(ordinals, ["7", "7", "42"]);
+});
+
+test("consecutive file links collapse across punctuation and whitespace without swallowing prose", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
+    "#[a.ts], #[b.ts];\n#[c.ts] explain #[d.ts]",
+    { projectFilePaths: ["a.ts", "b.ts", "c.ts", "d.ts"], projectId: "project" },
+  )));
+
+  assert.match(html, /3 files/u);
+  assert.doesNotMatch(html, /a\.ts.*b\.ts.*c\.ts/u);
+  assert.match(html, /explain .*data-project-file-relative-path="d\.ts"/u);
+});
+
+test("a standalone and joins a file-link run but prose does not", () => {
+  const options = { projectFilePaths: ["a.ts", "b.ts", "c.ts"], projectId: "project" };
+  for (const separator of [" and ", ", and ", " and\n"]) {
+    const joined = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
+      `#[a.ts], #[b.ts]${separator}#[c.ts]`, options,
+    )));
+    assert.match(joined, /3 files/u);
+    assert.doesNotMatch(joined, />and</u);
+  }
+  for (const prose of ["andrew ", "and and ", "and"]) {
+    const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
+      `#[a.ts] ${prose}#[b.ts]`, options,
+    )));
+    assert.doesNotMatch(html, /2 files/u);
+  }
+});
+
+test("prose and formatting stop file-link grouping", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
+    "#[a.ts], note #[b.ts] **#[c.ts]**",
+    { projectFilePaths: ["a.ts", "b.ts", "c.ts"], projectId: "project" },
+  )));
+
+  assert.doesNotMatch(html, /[23] files/u);
+  assert.equal(Array.from(html.matchAll(/data-project-file-relative-path=/gu)).length, 3);
+});
+
+test("file grouping stays whole across an append boundary and outside thread mode stays unchanged", () => {
+  const markdown = "#[a.ts], #[b.ts]";
+  const options = { projectFilePaths: ["a.ts", "b.ts"], projectId: "project" };
+  const appended = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown(
+    markdown, options, { blockIndex: 0, kind: "inlineTail", revisionKey: "append", startNodeIndex: 1 },
+  )));
+  const editorInline = renderToStaticMarkup(createElement(Fragment, null,
+    renderThreadInlineMarkdown("[a.ts](a.ts), [b.ts](b.ts)", options, "editor-inline")));
+
+  assert.match(appended, /2 files/u);
+  assert.doesNotMatch(appended, /data-thread-markdown-append-reveal=/u);
+  assert.doesNotMatch(editorInline, /2 files/u);
+  assert.equal(Array.from(editorInline.matchAll(/data-project-file-relative-path=/gu)).length, 2);
 });
 
 test("thread alert markers render every supported semantic color", () => {

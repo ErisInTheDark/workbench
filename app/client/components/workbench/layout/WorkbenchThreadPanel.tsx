@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useContext, useEffect, useRef, useState, type ComponentProps, type PointerEvent } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type PointerEvent } from "react";
 
 import type { ThreadPayload, ThreadSummary } from "workbench-shared/types";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
@@ -14,6 +14,7 @@ import { useWorkbenchThread } from "../use-workbench-thread";
 import { useWorkbenchClientController } from "../workbench-client-context";
 import { WorkbenchOperationsContext as WorkbenchDaemonClientContext, WorkbenchDaemonAssetOriginContext, useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import WorkbenchWorkingTreeProvider from "../git/WorkbenchWorkingTreeProvider";
+import { FileScopeContext } from "../../../workbench/file/use-file";
 import WorkbenchComposerProfileProvider from "../WorkbenchComposerProfileProvider";
 import type WorkbenchComposerProfileController from "../../../workbench/state/WorkbenchComposerProfileController";
 import resolveThreadActivityTimestampMs from "../thread-view/thread-activity-timestamp";
@@ -78,6 +79,12 @@ export default function WorkbenchThreadPanel ({
     ? client.mounted?.threadContextFor(threadId) : null;
   const launchContext = location ? client.mounted?.launchContextFor(location) : null;
   const panelContext = threadContext ?? launchContext;
+  const fileScope = useMemo(() => ({
+    daemon: panelContext?.daemon ?? outerDaemon,
+    daemonId: panelContext?.daemonId ?? null,
+    projectId: panelContext?.project.id ?? threadViewProps.projectId,
+  }), [outerDaemon, panelContext?.daemon, panelContext?.daemonId, panelContext?.project.id,
+    threadViewProps.projectId]);
   const ownerMetadata = threadViewProps.threadTarget?.kind === "provider"
     || threadViewProps.threadTarget?.kind === "subagent"
     ? client.mounted?.threadOwnerFor(threadId) : null;
@@ -211,6 +218,7 @@ export default function WorkbenchThreadPanel ({
             </p>
             : <WorkbenchDaemonClientContext.Provider value={panelContext?.daemon ?? outerDaemon}>
             <WorkbenchDaemonAssetOriginContext.Provider value={panelContext?.assetSource ?? outerAssetSource}>
+              <FileScopeContext.Provider value={fileScope}>
               <WorkbenchWorkingTreeProvider
                 projectId={panelContext?.project.id ?? threadViewProps.projectId}
                 sourceDaemon={panelContext?.daemon ?? outerDaemon}
@@ -242,6 +250,7 @@ export default function WorkbenchThreadPanel ({
               />
               </WorkbenchComposerProfileProvider>
               </WorkbenchWorkingTreeProvider>
+              </FileScopeContext.Provider>
             </WorkbenchDaemonAssetOriginContext.Provider>
           </WorkbenchDaemonClientContext.Provider>}
         </ThreadScrollViewport>

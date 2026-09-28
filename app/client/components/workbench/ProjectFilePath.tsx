@@ -6,9 +6,9 @@
 "use client";
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { useFile } from "../../workbench/file/use-file";
 
 import {
-  getProjectFilePathDisplay,
   projectFilePathInteractiveClassName,
   projectFilePathLabelClassName,
   projectFilePathLocationClassName,
@@ -98,19 +98,24 @@ export default function ProjectFilePath ({
     : usesInheritedDisambiguation
       ? context?.disambiguationIndex ?? null
       : undefined;
-  const display = getProjectFilePathDisplay(path, {
+  const { display, isFileControl, open } = useFile({
+    absolutePath,
     columnNumber,
-    disambiguationIndex: resolvedDisambiguationIndex,
-    disambiguationKey: disambiguationKey ?? (usesInheritedDisambiguation ? context?.disambiguationKey : undefined),
-    disambiguationPaths: resolvedDisambiguationPaths,
-    label,
+    displayOptions: {
+      columnNumber,
+      disambiguationIndex: resolvedDisambiguationIndex,
+      disambiguationKey: disambiguationKey ?? (usesInheritedDisambiguation ? context?.disambiguationKey : undefined),
+      disambiguationPaths: resolvedDisambiguationPaths,
+      label,
+      lineNumber,
+      targetType,
+    },
     lineNumber,
+    openPath,
+    path,
+    projectId,
     targetType,
   });
-  const isFileControl = targetType === "file" && (
-    (typeof projectId === "string" && projectId.trim().length > 0)
-    || (typeof absolutePath === "string" && absolutePath.trim().length > 0)
-  );
   const content = (
     <>
       {display.rootPrefix ? (
@@ -142,6 +147,11 @@ export default function ProjectFilePath ({
         data-project-file-absolute-path={absolutePath ?? undefined}
         data-project-file-relative-path={openPath ?? path}
         data-thread-summary-action="true"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          open();
+        }}
         title={display.title}
       >
         {content}

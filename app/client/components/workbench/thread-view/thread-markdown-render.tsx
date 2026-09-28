@@ -33,6 +33,7 @@ import ProjectFilePath from "../ProjectFilePath";
 import { CheckIcon, CopyIcon, PreviewIcon, WrapTextIcon } from "../workbench-icons";
 import WorkbenchIconButton from "../WorkbenchIconButton";
 import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadFileList from "./ThreadFileList";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadInlineIcon from "./ThreadInlineIcon";
 import ThreadNotice from "./ThreadNotice";
@@ -106,6 +107,30 @@ function createSvgCodeBlockPreviewSrcDoc (svgSource: string) {
   ].join("");
 }
 
+function collectFileLinkRun(nodes: ParsedInlineNode[], start: number) {
+  const first = nodes[start];
+  if (first?.type !== "projectFileLink") return null;
+  const files: Array<Extract<ParsedInlineNode, { type: "projectFileLink" }>> = [first];
+  let end = start + 1;
+  while (end < nodes.length) {
+    let next = end;
+    let separatorText = "";
+    while (true) {
+      const separator = nodes[next];
+      if (separator?.type === "break") separatorText += "\n";
+      else if (separator?.type === "text") separatorText += separator.text;
+      else break;
+      next += 1;
+    }
+    const candidate = nodes[next];
+    if (candidate?.type !== "projectFileLink"
+      || !/^(?:[\s,;]*|[\s,;]+and[\s,;]+)$/iu.test(separatorText)) break;
+    files.push(candidate);
+    end = next + 1;
+  }
+  return files.length > 1 ? { end, files } : null;
+}
+
 function renderThreadInlineNodes (
   nodes: ParsedInlineNode[],
   keyPrefix: string,
@@ -115,6 +140,13 @@ function renderThreadInlineNodes (
   indexOffset = 0,
 ): ReactNode[] {
   if (appendTarget?.kind === "inlineTail" && path.length === 0) {
+    const crossesAppendBoundary = options.profile === "thread" && nodes.some((_, index) => {
+      const run = collectFileLinkRun(nodes, index);
+      return run && index < appendTarget.startNodeIndex && run.end > appendTarget.startNodeIndex;
+    });
+    if (crossesAppendBoundary) {
+      return renderThreadInlineNodes(nodes, keyPrefix, options);
+    }
     return [
       ...renderThreadInlineNodes(nodes.slice(0, appendTarget.startNodeIndex), keyPrefix, options),
       renderAppendReveal(
@@ -130,10 +162,17 @@ function renderThreadInlineNodes (
       ),
     ];
   }
+  let consumedThrough = -1;
   return nodes.map((node, index) => {
+    if (index < consumedThrough) return null;
     const actualIndex = index + indexOffset;
     const key = `${keyPrefix}-${actualIndex}`;
     const nodePath = [...path, actualIndex];
+    const run = options.profile === "thread" ? collectFileLinkRun(nodes, index) : null;
+    if (run) {
+      consumedThrough = run.end;
+      return <ThreadFileList files={run.files} key={key} projectId={options.projectId} />;
+    }
 
     switch (node.type) {
       case "text": {

@@ -11,12 +11,11 @@ import { defaultProviderKey } from "workbench-shared/workbench/provider/provider
 import { projectLogicalThreadDisplayOrder } from "workbench-shared/workbench/project/workbench-project-projection";
 import type {
     ExplorerSnapshot,
-    OpenFileInEditorRequest, RevealProjectEntryRequest, ThreadPayload, ThreadSummary, TreeNode,
+    RevealProjectEntryRequest, ThreadPayload, ThreadSummary, TreeNode,
     WorkbenchAppRuntimeStore,
     WorkbenchComposerInputDraft,
     WorkbenchComposerSettings,
     WorkbenchControls,
-    WorkbenchFileOpenTarget,
     WorkbenchHarness,
     WorkbenchLogicalThreadRow,
     WorkbenchProjectOption,
@@ -24,7 +23,7 @@ import type {
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
-import { ProjectLocationReferenceSchema, type ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type {
     WorkbenchDropPlacement,
     WorkbenchMainLayout as WorkbenchMainLayoutState,
@@ -73,6 +72,7 @@ import { replaceWorkbenchMosaicTarget } from "../workbench/layout/workbench-mosa
 import WorkbenchDragController from "../workbench/layout/WorkbenchDragController";
 import WorkbenchWorkspaceController from "../workbench/layout/WorkbenchWorkspaceController";
 import type { WorkspaceFileLinkRoot } from "../workbench/markdown/markdown-links";
+import { FileActionContext, FileScopeContext, useFileActions } from "../workbench/file/use-file";
 import { useWorkbenchProjectNavigation } from "../workbench/navigation/use-workbench-project-navigation";
 import { useWorkbenchRoute, useWorkbenchRouteIntent } from "../workbench/navigation/use-workbench-route";
 import WorkbenchProjectNavigation from "../workbench/navigation/workbench-project-navigation";
@@ -277,17 +277,6 @@ function createProjectFileLinkRoots (
   }
 
   return roots;
-}
-
-function createFileOpenTarget (path: string, projectId?: string | null): WorkbenchFileOpenTarget {
-  return { path, projectId };
-}
-
-function readPositiveIntegerDatasetValue (value: string | undefined) {
-  const numericValue = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(numericValue) && numericValue > 0
-    ? numericValue
-    : null;
 }
 
 function formatQuickOpenTimestamp (updatedAt: string | null | undefined) {
@@ -1049,78 +1038,28 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     navigateToRoute(logical ? createLogicalProjectRoute(projectId) : createProjectRoute(projectId));
   }, [explorer.currentProjectId, navigateToRoute, route.logical?.projectId]);
 
-  const openFileInWorkbench = useCallback(async (target: WorkbenchFileOpenTarget & {
-    location?: ProjectLocationReference;
-  }) => {
-    const path = target.path;
-    const targetProjectId = target.projectId ?? explorer.currentProjectId ?? route.projectId;
-    if (!isWorkbenchOpenableFile(path)) {
-      return false;
-    }
-
-    const targetLocation = target.location ?? browseLocation;
-    if (route.view === "file" && path === route.filePath
-      && (route.logical?.location?.daemonId ?? null) === (targetLocation?.daemonId ?? null)
-      && (route.logical?.location?.projectId ?? route.projectId) === targetProjectId) {
-      return true;
-    }
-
-    if (targetLocation) {
-      const source = { daemonId: targetLocation.daemonId, projectId: ProjectIdSchema.parse(targetProjectId) };
-      const owner = explorer.logicalProjects?.find(project => project.locations.some(location =>
-        location.target.daemonId === source.daemonId && location.target.projectId === source.projectId));
-      navigateToRoute(owner ? createLogicalFileRoute(owner.id, source, path)
-        : { ...createObservedProjectRoute(source), view: "file", filePath: path });
-    } else if (route.logical?.projectId) {
-      navigateToRoute(createLogicalFileRoute(route.logical.projectId, null, path));
-    } else navigateToRoute(createFileRoute(targetProjectId, path));
-    return true;
-  }, [browseLocation, explorer.currentProjectId, explorer.logicalProjects, navigateToRoute, route]);
-
-  const openFileInVsCode = useCallback(async (target: WorkbenchFileOpenTarget) => {
-    const payload: OpenFileInEditorRequest = {
-      absolutePath: target.absolutePath ?? null,
-      columnNumber: target.columnNumber ?? null,
-      lineNumber: target.lineNumber ?? null,
-      path: target.path,
-      projectId: target.projectId ?? explorer.currentProjectId ?? route.projectId,
-    };
-    if (!controls) return false;
-    try {
-      await (selectedDaemon ?? controls.daemon).nativeFiles.open(payload);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : "Unable to open file in VS Code.");
-      return false;
-    }
-    return true;
-  }, [controls, explorer.currentProjectId, route.projectId, selectedDaemon]);
-
-  const openFileByPolicy = useCallback(async (target: WorkbenchFileOpenTarget & {
-    location?: ProjectLocationReference;
-  }) => {
-    const path = target.path;
-    if (target.absolutePath) {
-      return await openFileInVsCode(target);
-    }
-
-    const isOpenableInWorkbench = isWorkbenchOpenableFile(path);
-    if (resolvedSettings.fileOpenBehavior === "vscode") {
-      return await openFileInVsCode(target);
-    }
-
-    if (isOpenableInWorkbench) {
-      return await openFileInWorkbench(target);
-    }
-
-    if (resolvedSettings.fileOpenBehavior === "workbench-or-vscode") {
-      return await openFileInVsCode(target);
-    }
-
-    return false;
-  }, [openFileInVsCode, openFileInWorkbench, resolvedSettings.fileOpenBehavior]);
+  const onInvalidFileLocation = useCallback(() => {
+    setSelectionError("The thread's file location is invalid.");
+  }, []);
+  const browseFileScope = useMemo(() => ({
+    daemon: browseDaemon,
+    daemonId: browseLocation?.daemonId,
+    projectId: browseProjectId,
+  }), [browseDaemon, browseLocation?.daemonId, browseProjectId]);
+  const openFileByPolicy = useFileActions({
+    behavior: resolvedSettings.fileOpenBehavior,
+    browseLocation,
+    currentProjectId: explorer.currentProjectId,
+    defaultDaemon: controls?.daemon ?? null,
+    logicalProjects: explorer.logicalProjects,
+    navigateToRoute,
+    onInvalidLocation: onInvalidFileLocation,
+    route,
+    selectedDaemon: selectedDaemon ?? null,
+  });
 
   const openFileFromExplorer = useCallback(async (path: string) => (
-    await openFileByPolicy(createFileOpenTarget(path, explorer.currentProjectId || route.projectId))
+    await openFileByPolicy({ path, projectId: explorer.currentProjectId || route.projectId })
   ), [explorer.currentProjectId, openFileByPolicy, route.projectId]);
 
   const openThreadFromExplorer = useCallback(async (target: WorkbenchThreadTarget, ownerProjectId?: string) => {
@@ -1227,52 +1166,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [searchActionContext]);
-  const handleWorkbenchProjectFileLinkClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
-    if (event.button !== 0) {
-      return;
-    }
-
-    if (!(event.target instanceof Element)) {
-      return;
-    }
-
-    const control = event.target.closest("button[data-project-file-relative-path]");
-    if (!(control instanceof HTMLButtonElement)) {
-      return;
-    }
-
-    if (!control.closest("[data-thread-project-file-link-boundary='true']")) {
-      return;
-    }
-
-    const path = control.dataset.projectFileRelativePath?.trim();
-    if (!path) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    const ownerElement = control.closest("[data-thread-daemon-id][data-thread-project-id]");
-    const ownerLocation = ownerElement instanceof HTMLElement
-      ? ProjectLocationReferenceSchema.safeParse({
-        daemonId: ownerElement.dataset.threadDaemonId,
-        projectId: control.dataset.projectFileProjectId?.trim()
-          || ownerElement.dataset.threadProjectId,
-      }) : null;
-    if (ownerLocation && !ownerLocation.success) {
-      setSelectionError("The thread's file location is invalid.");
-      return;
-    }
-    void openFileByPolicy({
-      absolutePath: control.dataset.projectFileAbsolutePath?.trim() || null,
-      columnNumber: readPositiveIntegerDatasetValue(control.dataset.projectFileColumnNumber),
-      lineNumber: readPositiveIntegerDatasetValue(control.dataset.projectFileLineNumber),
-      ...(ownerLocation?.success ? { location: ownerLocation.data } : {}),
-      path,
-      projectId: control.dataset.projectFileProjectId?.trim() || null,
-    });
-  }, [openFileByPolicy]);
-
   const sendThreadMessage = useCallback(async (
     thread: ThreadPayload,
     input: UserInput[],
@@ -1747,6 +1640,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   );
   const threadProjectId = routeThreadContext?.project.id ?? routeDraftContext?.project.id
     ?? (route.view === "thread" ? route.threadOwnerProjectId || route.projectId : route.projectId || activeProjectId);
+  const threadFileScope = useMemo(() => ({
+    daemon: selectedDaemon,
+    daemonId: routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? routeLaunchLocation?.daemonId,
+    projectId: threadProjectId,
+  }), [selectedDaemon, routeThreadContext?.daemonId, routeDraftContext?.daemonId,
+    routeLaunchLocation?.daemonId, threadProjectId]);
   const threadProject = routeThreadContext?.project ?? routeDraftContext?.project
     ?? explorer.projects.find((project) => project.id === threadProjectId) ?? null;
   const logicalThreadProject = explorer.logicalProjects?.find(project =>
@@ -2401,6 +2300,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   };
 
   return (
+    <FileActionContext.Provider value={openFileByPolicy}>
+    <FileScopeContext.Provider value={browseFileScope}>
     <WorkbenchNetworkClientContext.Provider value={workbenchClient.mounted?.networkClient ?? null}>
     <WorkbenchClientProvider client={workbenchClient}>
     <WorkbenchDaemonClientContext.Provider value={controls?.daemon ?? null}>
@@ -2420,7 +2321,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             ? " md:grid-cols-[minmax(0,1fr)]"
             : " md:grid-cols-[minmax(16rem, 21rem) 1fr]"
             }`}
-          onClick={handleWorkbenchProjectFileLinkClick}
         >
           {ambientCanvasVariant ? <WorkbenchAmbientCanvas variant={ambientCanvasVariant} /> : null}
           <WorkbenchTabIcon state={tabIconState} />
@@ -2884,6 +2784,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 {showThreadView && !shouldRenderMainLayout ? (
                   <WorkbenchDaemonClientContext.Provider value={selectedDaemon ?? null}>
                   <WorkbenchDaemonAssetOriginContext.Provider value={selectedAssetSource}>
+                    <FileScopeContext.Provider value={threadFileScope}>
                     <WorkbenchWorkingTreeProvider
                       projectId={threadProjectId}
                       sourceDaemon={selectedDaemon}
@@ -2988,6 +2889,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     />
                     </div>
                     </WorkbenchWorkingTreeProvider>
+                    </FileScopeContext.Provider>
                   </WorkbenchDaemonAssetOriginContext.Provider>
                   </WorkbenchDaemonClientContext.Provider>
                 ) : null}
@@ -3631,5 +3533,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     </WorkbenchDaemonClientContext.Provider>
     </WorkbenchClientProvider>
     </WorkbenchNetworkClientContext.Provider>
+    </FileScopeContext.Provider>
+    </FileActionContext.Provider>
   );
 }
