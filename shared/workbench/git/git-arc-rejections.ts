@@ -55,7 +55,6 @@ const simpleMessages = {
   emptyClaimOperand: "A claim change has no path.",
   tooManyPlanMessages: "The plan has more message values than it accepts.",
   duplicateInheritance: "The request repeats the inheritance option.",
-  unexpectedScopeArguments: "Reading the current arc scope does not accept extra arguments.",
   unsupportedCommand: "The requested Git arc action is not supported.",
   unexpectedTrailingArguments: "This request does not accept trailing arguments.",
   missingManagedIdentity: "The request has no managed thread identity.",

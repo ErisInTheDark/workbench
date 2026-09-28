@@ -23,7 +23,6 @@ export type WorkbenchAgentCommandResponseKind =
   | "git-arc-add"
   | "git-arc-adopt"
   | "git-arc-claims"
-  | "git-arc-scope"
   | "git-arc-status"
   | "git-arc-compare"
   | "git-arc-continue"

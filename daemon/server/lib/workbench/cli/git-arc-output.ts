@@ -44,12 +44,12 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
     : payload.phase === "resolved" ? "resolved"
     : payload.phase === "stashed" ? "stashed"
     : payload.phase === "plan" || payload.kind === "plan" || action === "plan" ? "plan" : "active";
-  const fullScope = action === "scope" || action === "stash" || action === "unstash";
+  const fullScope = action === "stash" || action === "unstash";
   const claimedPaths = action === "stash" ? []
     : action === "release" ? paths(payload, "scopePaths")
     : action === "compare" || action === "diff"
     ? sources.flatMap(member => member.phase === "resolved" || member.phase === "workspace" ? [] : paths(member, "scopePaths"))
-    : phase === "plan" || action === "scope" ? paths(payload, "claimedPaths") : paths(payload, "scopePaths");
+    : phase === "plan" ? paths(payload, "claimedPaths") : paths(payload, "scopePaths");
   const plannedPaths = phase === "plan" && action !== "release"
     ? paths(payload, "plannedPaths").length ? paths(payload, "plannedPaths") : paths(payload, "scopePaths")
     : undefined;
@@ -82,13 +82,6 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
       removedClaims: removals.filter((path) => !added.has(path)),
       ...(action === "stash" ? { stashedPaths: paths(payload, "stashedPaths") } : {}),
       ...(action === "unstash" ? { conflictedPaths: paths(payload, "conflictedPaths") } : {}),
-      ...(action === "scope" ? {
-        proposals: sources.flatMap((member) => rows(member, "proposals").flatMap((proposal) => {
-          const status = string(proposal, "status");
-          return status === "proposed" || status === "committed"
-            ? [{ proposalId: string(proposal, "proposalId"), status }] : [];
-        })),
-      } : {}),
       acceptedProposals: sources.flatMap((member) => rows(member, "acceptedProposals").map((accepted) => ({ proposalId: string(accepted, "proposalId"), commitSha: string(accepted, "commitSha") }))),
       planningDrift,
       memberRefs: members.flatMap((member) => {

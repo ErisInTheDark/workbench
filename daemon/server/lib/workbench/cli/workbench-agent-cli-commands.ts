@@ -92,7 +92,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "task set", "task get", "task completed", "task blocked",
   "thread recall", "thread recall search", "thread recall expand",
   "git add", "git unstage", "git commit", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
-  "git arc status", "git arc scope", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
+  "git arc status", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
   "browse run", "browse raw", "browse sessions", "browse stop", "browse forget",
 ] as const;
 
@@ -189,7 +189,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
   },
   {
     aliases: [["git", "plan"]],
-    commandOrder: ["git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims", "git arc status", "git arc scope", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore"],
+    commandOrder: ["git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims", "git arc status", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore"],
     footer: [
       "Pass paths after -- to restore only those files or directories from the arc snapshot.",
       "Use --confirm without paths only when the user explicitly requested a full arc restore.",

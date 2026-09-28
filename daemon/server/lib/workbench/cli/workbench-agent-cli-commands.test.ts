@@ -139,35 +139,6 @@ test("start receipts describe net scope changes rather than reacquired claims", 
   assert.equal(receipt?.claimedPathCount, 2);
 });
 
-test("scope output preserves proposal recovery across workspace members", async () => {
-  const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "scope"], gitArcOptions);
-  assert.equal(parsed.kind, "request");
-  const proposals = [{ proposalId: "pending-id", status: "proposed" }, { proposalId: "accepted-id", status: "committed" }];
-  const output = adaptWorkbenchAgentCliResponse({
-    httpOk: true, request: parsed.request,
-    text: JSON.stringify({
-      checkpointCommit: "a".repeat(40), phase: "active", claimedPaths: [],
-      members: proposals.map((proposal, index) => ({
-        rootId: `root-${index}`, checkpointCommit: "a".repeat(40), proposals: [proposal],
-      })),
-    }),
-  });
-  assert.deepEqual(parseGitArcReceipt(output.stdout)?.proposals, proposals);
-});
-
-test("scope output preserves planned and live inventory without duplicated transport JSON", async () => {
-  const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "scope"], gitArcOptions);
-  assert.equal(parsed.kind, "request");
-  const output = adaptWorkbenchAgentCliResponse({
-    httpOk: true, request: parsed.request,
-    text: JSON.stringify({ checkpointCommit: "a".repeat(40), intentName: "revise", phase: "plan", plannedPaths: ["new.ts"], claimedPaths: ["old.ts"], adoptedPaths: [] }),
-  });
-  const receipt = parseGitArcReceipt(output.stdout);
-  assert.deepEqual(receipt?.plannedPaths, ["new.ts"]);
-  assert.deepEqual(receipt?.claimedPaths, ["old.ts"]);
-  assert.equal(receipt?.phase, "plan");
-});
-
 test("combined claim CLI preserves addition, removal and adoption as separate arrays", async () => {
   const parsed = await parseWorkbenchAgentCliCommand([
     "git", "arc", "claims", "--inherit", "--", "new.ts", "-old.ts", "*dirty.ts", "./-literal.ts",

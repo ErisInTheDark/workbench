@@ -289,22 +289,6 @@ function stashCommand(action: "arcStash" | "arcUnstash", word: "stash" | "unstas
 const stash = stashCommand("arcStash", "stash");
 const unstash = stashCommand("arcUnstash", "unstash");
 
-const scope = defineWorkbenchAgentCommand({
-  description: "Read scope and current proposal IDs/statuses without changing Git. Recover a lost proposal response here before retrying.",
-  effects: { readOnly: true, idempotent: true }, helpGroups: ["git-arc"],
-  words: ["git", "arc", "scope"], usage: "wb git arc scope",
-  inputSchema: z.object({}).strict(),
-  parseCliArgs(args) {
-    if (args.length) throw new GitArcRejectionError({ reason: "unexpectedScopeArguments" }, "Scope reads the caller's lifecycle and accepts no parameters.");
-    return {};
-  },
-  buildRequest(_input, { callerHarness, callerThreadId, cwd }) {
-    return postWorkbenchAgentCommand("/api/git-checkpoint", {
-      ...baseBody(callerHarness, callerThreadId, cwd), action: "arcScope",
-    }, "git-arc-scope");
-  },
-});
-
 const status = defineWorkbenchAgentCommand({
   description: "Read compact proposals, dirty/clean claims and unclaimed dirt for the caller or another Workbench thread. On follow-ups use status before rereading; lost claims include changes since their exact loss boundary.",
   effects: { readOnly: true, idempotent: true },
@@ -338,7 +322,6 @@ export const WORKBENCH_GIT_ARC_COMMANDS = [
   wait,
   continueArc,
   claims,
-  scope,
   status,
   move,
   release,

@@ -327,7 +327,7 @@ On follow-ups, call `git_arc_status` before rereading prior work. Retained claim
 - After other resume or delay, verify newest request
 - If exact approval boundary known, keep approval; stale or missing arc ref alone does not invalidate it
 - If approval boundary missing or ambiguous, return to Brief
-- Use registered lifecycle defaults rather than copied refs; `git_arc_scope` provides full inventory only when needed
+- Use registered lifecycle defaults rather than copied refs; `git_arc_status` provides follow-up ownership facts
 - Require explicit approval for degraded arc safety
 
 ### Report rollbacks

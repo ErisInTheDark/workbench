@@ -20,7 +20,7 @@ Arc ref: immutable historical snapshot.
 
 Arc: registered changeset in plan, active, stashed or resolved phase. Missing phase means active.
 
-Ordinary operations resolve registered lifecycle; omit refs. `git_arc_status` provides compact ownership and recovery facts; `git_arc_scope` provides full lifecycle inventory.
+Ordinary operations resolve registered lifecycle; omit refs. `git_arc_status` provides ownership, proposal and recovery facts.
 
 `wb git arc status [--full=dirty,clean,unclaimed-dirt]`; MCP `full: ["dirty", "clean", "unclaimed-dirt"]`. Empty groups are omitted; file groups list up to five paths, otherwise counts. `full` expands selected groups. Pending proposals must remain valid; accepted proposals remain until the next implementation arc starts. Unclaimed dirt excludes all live owners, not older files.
 
@@ -96,7 +96,7 @@ Never use claim expansion to excuse vague planning. Never restore, release, uncl
 
 Use `mcp__wbex__git_arc_release` to release every live claim without changing workspace or Git content. It rejects dirty claims by default. Set `disown: true` only after explicit user direction to release dirty ownership. Releasing retained claims keeps the current inactive plan.
 
-Active claim edits mutate ownership; inactive planning publishes scope. Recover a lost proposal response with `git_arc_scope` before retrying, never as a preflight. Updates report phase, outcome, counts and net changes.
+Active claim edits mutate ownership; inactive planning publishes scope. Recover a lost proposal response with `git_arc_status` before retrying, never as a preflight. Updates report phase, outcome, counts and net changes.
 
 Use `mcp__wbex__git_arc_mv` for approved path moves. Source and destination stay claimed; ordinary Git index stays unchanged. Its `move` value accepts explicit operands, explicit source/destination mappings, or regex preview/confirmation. Regex mode previews at most 200 sorted mappings. Confirm the preview, then preview again when more matches remain.
 
