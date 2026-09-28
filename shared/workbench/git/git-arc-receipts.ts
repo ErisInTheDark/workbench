@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - GitArcAction/GitArcReceipt: describe persisted arc action presentation data.
- * - parseGitArcReceipt: decode current text or historical JSON receipts.
+ * - GitArcReceiptSchema/projectGitArcReceipt/parseGitArcReceipt: validate compact presentation facts and decode current or historical text.
  * - formatGitArcTextReceipt: emit one labelled plain-text result without duplicated JSON.
  * - escapeGitArcValue/readGitArcValue: preserve literal values without permitting output-section injection.
  */
@@ -10,7 +10,7 @@ import { DAEMON_RELOAD_SCOPE_PATTERN } from "../daemon-reload.ts";
 
 const RECEIPT_PREFIX = "Workbench arc receipt: ";
 
-const GitArcReceiptSchema = z.object({
+export const GitArcReceiptSchema = z.object({
   action: z.enum(["add", "adopt", "claims", "scope", "compare", "continue", "diff", "mv", "plan", "propose", "release", "remove", "restore", "stash", "start", "unstash"]),
   additionalClaims: z.array(z.string().min(1)).optional(),
   claimedPaths: z.array(z.string().min(1)),
@@ -45,6 +45,49 @@ const GitArcReceiptSchema = z.object({
 export type GitArcAction = z.infer<typeof GitArcReceiptSchema>["action"];
 export type GitArcReceipt = z.infer<typeof GitArcReceiptSchema>;
 
+export function projectGitArcReceipt(input: GitArcReceipt): GitArcReceipt {
+  const receipt = GitArcReceiptSchema.parse(input);
+  const fullScope = receipt.fullScope ?? receipt.action === "scope";
+  const visible = <T,>(values: T[] | undefined) => values?.length ? values : undefined;
+  const plannedCount = receipt.plannedPathCount ?? receipt.plannedPaths?.length;
+  const adoptedCount = receipt.adoptedPathCount ?? receipt.adoptedPaths?.length;
+  return GitArcReceiptSchema.parse({
+    action: receipt.action,
+    phase: receipt.phase ?? (receipt.action === "plan" ? "plan" : "active"),
+    fullScope,
+    claimedPaths: fullScope ? receipt.claimedPaths : [],
+    ...(!fullScope ? {
+      claimedPathCount: receipt.claimedPathCount ?? receipt.claimedPaths.length,
+      ...(plannedCount === undefined ? {} : { plannedPathCount: plannedCount }),
+      ...(adoptedCount === undefined ? {} : { adoptedPathCount: adoptedCount }),
+    } : {
+      ...(receipt.plannedPaths === undefined ? {} : { plannedPaths: receipt.plannedPaths }),
+      ...(receipt.adoptedPaths === undefined ? {} : { adoptedPaths: receipt.adoptedPaths }),
+    }),
+    intentName: receipt.intentName || null,
+    ref: receipt.ref,
+    version: 1,
+    ...(visible(receipt.additionalClaims) ? { additionalClaims: receipt.additionalClaims } : {}),
+    ...(visible(receipt.removedClaims) ? { removedClaims: receipt.removedClaims } : {}),
+    ...(visible(receipt.stashedPaths) ? { stashedPaths: receipt.stashedPaths } : {}),
+    ...(visible(receipt.conflictedPaths) ? { conflictedPaths: receipt.conflictedPaths } : {}),
+    ...(visible(receipt.selectedPaths) ? { selectedPaths: receipt.selectedPaths } : {}),
+    ...(visible(receipt.reloadScopes) ? { reloadScopes: receipt.reloadScopes } : {}),
+    ...(receipt.rootId ? { rootId: receipt.rootId } : {}),
+    ...(receipt.proposalId ? { proposalId: receipt.proposalId } : {}),
+    ...(receipt.proposals === undefined ? {} : { proposals: receipt.proposals }),
+    ...(receipt.unchanged ? { unchanged: true } : {}),
+    ...(visible(receipt.memberRefs) ? { memberRefs: receipt.memberRefs } : {}),
+    ...(visible(receipt.acceptedProposals) ? { acceptedProposals: receipt.acceptedProposals } : {}),
+    ...(receipt.planningDrift?.some((drift) => drift.paths.length)
+      ? { planningDrift: receipt.planningDrift.filter((drift) => drift.paths.length) } : {}),
+    ...(receipt.mode ? { mode: receipt.mode } : {}),
+    ...(receipt.matchedPathCount === undefined ? {} : { matchedPathCount: receipt.matchedPathCount }),
+    ...(receipt.remainingMatchCount === undefined ? {} : { remainingMatchCount: receipt.remainingMatchCount }),
+    ...(receipt.mappings === undefined ? {} : { mappings: receipt.mappings }),
+  });
+}
+
 export function escapeGitArcValue(value: string) {
   return /[\u0000-\u001f\u007f-\u009f]/u.test(value) || value.startsWith('"')
     ? JSON.stringify(value) : value;
@@ -58,7 +101,7 @@ export function readGitArcValue(value: string): string {
 }
 
 export function formatGitArcTextReceipt(input: GitArcReceipt) {
-  const receipt = GitArcReceiptSchema.parse(input);
+  const receipt = projectGitArcReceipt(input);
   const fullScope = receipt.fullScope ?? receipt.action === "scope";
   const lines = [`arc ${receipt.action} ${receipt.phase ?? (receipt.action === "plan" ? "plan" : "active")}`, `ref ${receipt.ref}`];
   const list = (name: string, values: string[] | undefined) => {

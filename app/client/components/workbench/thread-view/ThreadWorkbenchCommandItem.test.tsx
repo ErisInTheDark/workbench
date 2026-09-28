@@ -140,6 +140,74 @@ function makeItem(
   };
 }
 
+test("a typed steer interruption is not shown as a Git failure", () => {
+  const item = makeItem("git_arc_wait", {}, "", "failed");
+  item.result!.structuredContent = { kind: "interruptedBySteer", version: 1 };
+  const html = renderSpecialized(item);
+  assert.match(html, /Interrupted by your steer/u);
+  assert.doesNotMatch(html, /data-thread-git-arc-failure|Failed to start/u);
+  const oldItem = makeItem("git_arc_wait", {}, "", "failed");
+  assert.match(renderSpecialized(oldItem), /data-thread-git-arc-failure="operationRejected"/u);
+});
+
+test("a steered subagent wait is not shown as a failed wait", () => {
+  const item = makeItem("subagent_wait", { names: ["momo"] }, "", "failed");
+  item.result!.structuredContent = { kind: "interruptedBySteer", version: 1 };
+  const html = renderSpecialized(item);
+  assert.match(html, /Interrupted by your steer while waiting for/u);
+  assert.doesNotMatch(html, /Failed waiting for|interruptedBySteer/u);
+});
+
+test("damaged typed status preserves valid siblings without parsing text", (context) => {
+  const warnings: string[] = [];
+  context.mock.method(console, "error", (message: string) => { warnings.push(message); });
+  const item = makeItem("git_arc_status", {}, "Dirty claims: text-should-not-win.ts");
+  item.result!.structuredContent = {
+    kind: "success", version: 1, receipt: null, changes: [], diff: null,
+    status: { dirtyClaims: "invalid count", cleanClaims: ["kept.ts"] },
+  };
+  const html = renderSpecialized(item);
+  assert.match(html, /kept\.ts/u);
+  assert.match(html, /Some status facts are unavailable/u);
+  assert.doesNotMatch(html, /text-should-not-win\.ts|invalid count/u);
+  assert.equal(warnings.length, 1);
+  assert.doesNotMatch(warnings[0]!, /invalid count|kept\.ts/u);
+});
+
+test("typed Git failure wins over misleading output text and provider status", () => {
+  const item = makeItem("git_arc_start", {}, "Everything worked", "completed");
+  item.result!.structuredContent = {
+    kind: "failure", version: 1,
+    failure: createGitArcOperationRejected("arcStart", "actual failure"),
+  };
+  const html = renderSpecialized(item);
+  assert.match(html, /Failed to start/u);
+  assert.match(html, /data-thread-git-arc-failure="operationRejected"/u);
+  assert.doesNotMatch(html, /Everything worked/u);
+});
+
+test("unknown typed outcome cannot turn failed Git work into success", (context) => {
+  const warnings: string[] = [];
+  context.mock.method(console, "error", (message: string) => { warnings.push(message); });
+  const item = makeItem("git_arc_start", {}, "Started successfully", "failed");
+  item.result!.structuredContent = { kind: "unrecognised", version: 1 };
+  const html = renderSpecialized(item);
+  assert.match(html, /data-thread-git-arc-failure="operationRejected"/u);
+  assert.doesNotMatch(html, /Started successfully/u);
+  assert.equal(warnings.length, 1);
+});
+
+test("future typed result versions are not repaired into the current contract", (context) => {
+  const warnings: string[] = [];
+  context.mock.method(console, "error", (message: string) => { warnings.push(message); });
+  const item = makeItem("git_arc_status", {}, "Dirty claims: text-should-not-win.ts");
+  item.result!.structuredContent = { kind: "success", version: 2, status: { dirtyClaims: ["future.ts"] } };
+  const html = renderSpecialized(item);
+  assert.match(html, /data-thread-git-arc-failure="operationRejected"/u);
+  assert.doesNotMatch(html, /future\.ts|text-should-not-win\.ts/u);
+  assert.equal(warnings.length, 1);
+});
+
 const defaultOwnerLocation = {
   daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse(crypto.randomUUID()),
   projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),

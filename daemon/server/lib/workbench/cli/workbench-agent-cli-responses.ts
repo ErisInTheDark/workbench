@@ -1,18 +1,20 @@
 /*
  * Exports:
- * - WorkbenchAgentCliAdaptedResponse: semantic stdout, stderr, and exit status for one Workbench response.
+ * - WorkbenchAgentCliAdaptedResponse: semantic stdout, stderr, exit status and optional typed MCP facts.
  * - adaptWorkbenchAgentCliResponse: convert known server envelopes into command-oriented output.
  */
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands.ts";
-import { renderGitArcOutput } from "./git-arc-output";
+import { renderGitArcResponse } from "./git-arc-output";
 import { renderSubagentListOutput, renderSubagentSettleOutput } from "../subagent/subagent-output";
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
-import { formatGitArcFailureReceipt, GitArcFailureEnvelopeSchema } from "workbench-shared/workbench/git/git-arc-failures";
+import { createGitArcOperationRejected, formatGitArcFailureReceipt, GitArcFailureEnvelopeSchema } from "workbench-shared/workbench/git/git-arc-failures";
+import type { GitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
 
 export interface WorkbenchAgentCliAdaptedResponse {
   exitCode: number;
   stderr: string;
   stdout: string;
+  structuredContent?: GitArcMcpResult;
 }
 
 export function adaptWorkbenchAgentCliResponse({
@@ -28,11 +30,19 @@ export function adaptWorkbenchAgentCliResponse({
   if (!httpOk) {
     const failureEnvelope = GitArcFailureEnvelopeSchema.safeParse(payload);
     const message = readError(payload) || text || "Workbench request failed.";
-    return failed(failureEnvelope.success
-      ? formatGitArcFailureReceipt(failureEnvelope.data.gitArcFailure)
-      : message);
+    return failed(
+      failureEnvelope.success ? formatGitArcFailureReceipt(failureEnvelope.data.gitArcFailure) : message,
+      failureEnvelope.success
+        ? { kind: "failure", version: 1, failure: failureEnvelope.data.gitArcFailure }
+        : request.responseKind.startsWith("git-arc-")
+          ? { kind: "failure", version: 1, failure: createGitArcOperationRejected("unknown", message) }
+          : undefined,
+    );
   }
-  if (request.responseKind.startsWith("git-arc-")) return succeeded(renderGitArcOutput(request, payload));
+  if (request.responseKind.startsWith("git-arc-")) {
+    const rendered = renderGitArcResponse(request, payload);
+    return succeeded(rendered.text, rendered.structuredContent);
+  }
 
   switch (request.responseKind) {
     case "reload-dirt": {
@@ -169,10 +179,10 @@ function raw(stdout = ""): WorkbenchAgentCliAdaptedResponse {
   return { exitCode: 0, stderr: "", stdout };
 }
 
-function succeeded(stdout: string): WorkbenchAgentCliAdaptedResponse {
-  return { exitCode: 0, stderr: "", stdout: ensureNewline(stdout) };
+function succeeded(stdout: string, structuredContent?: GitArcMcpResult): WorkbenchAgentCliAdaptedResponse {
+  return { exitCode: 0, stderr: "", stdout: ensureNewline(stdout), ...(structuredContent ? { structuredContent } : {}) };
 }
 
-function failed(stderr: string): WorkbenchAgentCliAdaptedResponse {
-  return { exitCode: 1, stderr: ensureNewline(stderr), stdout: "" };
+function failed(stderr: string, structuredContent?: GitArcMcpResult): WorkbenchAgentCliAdaptedResponse {
+  return { exitCode: 1, stderr: ensureNewline(stderr), stdout: "", ...(structuredContent ? { structuredContent } : {}) };
 }

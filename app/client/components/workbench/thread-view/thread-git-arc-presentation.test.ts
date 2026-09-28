@@ -10,6 +10,7 @@ import type { WorkbenchGitArcLifecycleState } from "workbench-shared/workbench/t
 import getThreadGitArcProposalPresentation, {
   getHoistedThreadGitArc,
   proposalIntentOwnsMessage,
+  readThreadGitArcMcpProposalTranscriptItem,
 } from "./thread-git-arc-presentation";
 import { formatGitArcTextReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 
@@ -24,6 +25,25 @@ test("plain reword receipts preserve message-only intent without content amendme
   assert.equal(intents.get("new-id")?.amend, false);
   assert.deepEqual(intents.get("new-id")?.paths, []);
   assert.equal(intents.get("new-id")?.title, "correct message");
+});
+
+test("new MCP proposals take identity from typed facts instead of display text", () => {
+  const item: Extract<ThreadItem, { type: "mcpToolCall" }> = {
+    type: "mcpToolCall", id: "proposal-call", server: "wbex", tool: "git_arc_propose",
+    status: "completed", arguments: { title: "typed proposal" }, appContext: null, pluginId: null,
+    readOnlyHint: false, error: null, durationMs: 1,
+    result: {
+      content: [{ type: "text", text: "Proposal ready wrong-id" }], _meta: null,
+      structuredContent: {
+        kind: "success", version: 1, status: {}, changes: [], diff: null,
+        receipt: {
+          action: "propose", claimedPaths: [], intentName: null, ref: "a".repeat(40),
+          proposalId: "right-id", version: 1,
+        },
+      },
+    },
+  };
+  assert.equal(readThreadGitArcMcpProposalTranscriptItem(item)?.proposalId, "right-id");
 });
 
 function commandItem(id: string, command: string, aggregatedOutput: string | null): CommandItem {

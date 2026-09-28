@@ -177,6 +177,7 @@ test("MCP preserves typed Git rejections before and after dispatch", async () =>
     const dispatched = await client.callTool({ name: "git_arc_continue", arguments: {}, _meta: { threadId: "native-thread" } });
     const failure = parseGitArcFailureReceipt(responseText(dispatched));
     assert.equal(dispatched.isError, true);
+    assert.equal((dispatched.structuredContent as { kind?: string } | undefined)?.kind, "failure");
     assert.ok(failure && "rejection" in failure);
     assert.deepEqual(failure.rejection, { reason: "missingActiveArc" });
     assert.equal(dispatches, 1);
@@ -776,6 +777,32 @@ test("releases HTTP admission and propagates caller cancellation across controll
   }
 });
 
+test("MCP returns typed Git status without replacing its readable output", async () => {
+  const status = {
+    pending: [], accepted: [], dirtyClaims: ["a.ts"], cleanClaims: [], stashedClaims: [],
+    unclaimedDirt: [], recovery: [], unavailableRecovery: [],
+  };
+  const controller = codexController({
+    executeCommand: async () => Response.json(status),
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    requestCodex: async (request) => ({ id: request.id ?? null, result: { thread: { cwd: "C:/workspace" } } }),
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  try {
+    const result = await client.callTool({ name: "git_arc_status", arguments: {}, _meta: { threadId: "native-thread" } });
+    assert.equal(result.isError, false);
+    assert.match(responseText(result), /Dirty claims: a\.ts/u);
+    assert.deepEqual(result.structuredContent, {
+      kind: "success", version: 1, receipt: null, status: status, changes: [], diff: null,
+    });
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("keeps declared Code Mode waits alive with request-owned progress only", async () => {
   const executions = new Map<string, (response: Response) => void>();
   const started = deferred<void>();
@@ -966,6 +993,7 @@ test("thread steer interruption ends declared waits but preserves questionnaires
     const subagentResult = await subagentCall;
     assert.equal(subagentResult.isError, true);
     assert.equal(responseText(subagentResult), "");
+    assert.deepEqual(subagentResult.structuredContent, { kind: "interruptedBySteer", version: 1 });
     assert.equal(executions.get("thread-title-get")?.signal.aborted, false);
     assert.equal(executions.get("json")?.signal.aborted, false);
 

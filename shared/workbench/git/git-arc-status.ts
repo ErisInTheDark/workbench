@@ -3,7 +3,7 @@
  * - GitArcStatusFullSchema/GitArcStatusFull: selectable expanded status groups.
  * - GitArcClaimLossSchema/GitArcClaimLoss: exact persisted ownership-loss boundary metadata.
  * - GitArcStatusSchema/GitArcStatus: complete status facts shared by inspection and transport.
- * - GitArcStatusPresentation: parsed compact facts, preserving count-only groups.
+ * - GitArcStatusPresentationSchema/GitArcStatusPresentation/projectGitArcStatus: typed compact facts, preserving count-only groups.
  * - formatGitArcStatus/parseGitArcStatus: round-trip the compact status text used by agents and cards.
  */
 import { z } from "zod";
@@ -45,11 +45,23 @@ export const GitArcStatusSchema = z.object({
   unavailableRecovery: filePaths,
 }).strict();
 export type GitArcStatus = z.infer<typeof GitArcStatusSchema>;
-const presentationSchema = GitArcStatusSchema.extend({
+export const GitArcStatusPresentationSchema = GitArcStatusSchema.extend({
   dirtyClaims: summary, cleanClaims: summary, stashedClaims: summary, unclaimedDirt: summary,
   recovery: z.array(recovery.extend({ paths: summary })),
 });
-export type GitArcStatusPresentation = z.infer<typeof presentationSchema>;
+export type GitArcStatusPresentation = z.infer<typeof GitArcStatusPresentationSchema>;
+
+export function projectGitArcStatus(input: GitArcStatus, full: readonly GitArcStatusFull[] = []): GitArcStatusPresentation {
+  const compact = (paths: string[], selected = false) => !selected && paths.length > 5 ? paths.length : paths;
+  return GitArcStatusPresentationSchema.parse({
+    ...input,
+    dirtyClaims: compact(input.dirtyClaims, full.includes("dirty")),
+    cleanClaims: compact(input.cleanClaims, full.includes("clean")),
+    stashedClaims: compact(input.stashedClaims),
+    unclaimedDirt: compact(input.unclaimedDirt, full.includes("unclaimed-dirt")),
+    recovery: input.recovery.map((entry) => ({ ...entry, paths: compact(entry.paths) })),
+  });
+}
 
 function quote(value: string) {
   return !value || /[,"\u0000-\u001f\u007f-\u009f]/u.test(value) || /^\d+$/u.test(value) || value.trim() !== value
@@ -242,8 +254,8 @@ export function parseGitArcStatus(output: string) {
     }
     if (evidence?.kind === "restored") throw new Error("Missing restored guidance.");
     if (evidence) result.recovery.push(evidence);
-    return presentationSchema.safeParse(result);
+    return GitArcStatusPresentationSchema.safeParse(result);
   } catch {
-    return presentationSchema.safeParse(null);
+    return GitArcStatusPresentationSchema.safeParse(null);
   }
 }

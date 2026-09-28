@@ -11,6 +11,8 @@
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { ThreadPayload, WorkbenchSkillSummary } from "workbench-shared/types";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
+import { readGitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
+import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type { WorkbenchGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchProjectedTranscriptTurn } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ThreadGitArcProposalObservation } from "../../../workbench/WorkbenchThreadController";
@@ -84,6 +86,16 @@ export function readThreadGitArcMcpProposalTranscriptItem(
   });
   if (route?.kind !== "specialized" || route.operation.kind !== "gitArc" || route.operation.operation.action !== "propose") {
     return null;
+  }
+  if (item.result?.structuredContent !== null && item.result?.structuredContent !== undefined) {
+    const typed = readGitArcMcpResult(item.result.structuredContent);
+    if (typed?.error) reportClientSchemaError("Rejected Git arc proposal result", typed.error);
+    const receipt = typed?.kind === "valid" && typed.result.kind === "success" ? typed.result.receipt : null;
+    return {
+      intent: route.operation.operation.proposalIntent ?? null,
+      proposalId: receipt?.proposalId ?? null,
+      receipt,
+    };
   }
   const output = item.error?.message || formatToolCallOutput({
     content: item.result?.content,

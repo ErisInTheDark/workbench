@@ -4,9 +4,11 @@
  */
 "use client";
 
-import { useContext, type ReactNode } from "react";
+import { useContext, useMemo, type ReactNode } from "react";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { readGitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
+import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type { ThreadPayload, WorkbenchSubagentSummary } from "workbench-shared/types";
 import { parseGitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -90,6 +92,18 @@ export default function ThreadWorkbenchCommandItem({
   const output = getMcpOutput(item);
   const operation = route.operation;
   const gitArcPresentation = useContext(ThreadGitArcPresentationContext);
+  const typed = useMemo(() => {
+    const result = operation.kind === "gitArc" || operation.kind === "gitArcWait"
+      || operation.kind === "subagent" && operation.operation.action === "wait"
+      ? readGitArcMcpResult(item.result?.structuredContent ?? null)
+      : null;
+    if (result?.error) reportClientSchemaError("Rejected Workbench MCP result", result.error);
+    return result;
+  }, [item.result?.structuredContent, operation]);
+  const structured = typed?.kind === "valid" ? typed.result : null;
+  const hasStructuredResult = item.result?.structuredContent !== null && item.result?.structuredContent !== undefined;
+  const interruptedBySteer = structured?.kind === "interruptedBySteer";
+  const gitArcOutcome = structured?.kind === "failure" || interruptedBySteer || typed?.kind === "invalid" ? "failed" : outcome;
 
   if (operation.kind === "threadTitle") {
     return <ThreadTitleCommandItem failureText={output} outcome={outcome} title={operation.title} />;
@@ -112,7 +126,7 @@ export default function ThreadWorkbenchCommandItem({
     );
   }
   if (operation.kind === "gitArcWait") {
-    if (outcome !== "inProgress") {
+    if (gitArcOutcome !== "inProgress") {
       return (
         <ThreadGitArcItem
           commandIntent={{
@@ -123,12 +137,14 @@ export default function ThreadWorkbenchCommandItem({
           }}
           durationMs={item.durationMs}
           durationPresentation="waited"
-          failureReason={outcome === "failed" ? output : null}
-          outcome={outcome}
+          failureReason={hasStructuredResult ? typed?.kind === "invalid" ? "The tool result could not be read." : null : outcome === "failed" ? output : null}
+          interruptedBySteer={interruptedBySteer}
+          outcome={gitArcOutcome}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
-          receipt={parseGitArcReceipt(output)}
+          receipt={structured?.kind === "success" ? structured.receipt : hasStructuredResult ? null : parseGitArcReceipt(output)}
+          typedFailure={structured?.kind === "failure" ? structured.failure : null}
           workspaceRoots={workspaceRoots}
         />
       );
@@ -152,14 +168,15 @@ export default function ThreadWorkbenchCommandItem({
   }
   if (operation.kind === "gitArc") {
     const intent = operation.operation;
-    const receipt = parseGitArcReceipt(output);
-    const proposalId = parseGitCheckpointProposalId(output) ?? receipt?.proposalId ?? null;
+    const receipt = structured?.kind === "success" ? structured.receipt : hasStructuredResult ? null : parseGitArcReceipt(output);
+    const proposalId = receipt?.proposalId ?? (!hasStructuredResult ? parseGitCheckpointProposalId(output) : null);
     if (intent.action === "propose") {
       return (
         <ThreadCheckpointCommitItem
-          commandOutcome={outcome}
+          commandOutcome={gitArcOutcome}
           cwd={threadCwdPath ?? null}
-          failureReason={outcome === "failed" ? output : null}
+          failureReason={hasStructuredResult ? typed?.kind === "invalid" ? "The tool result could not be read." : null : outcome === "failed" ? output : null}
+          interruptedBySteer={interruptedBySteer}
           intent={intent.proposalIntent ?? null}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
@@ -168,15 +185,24 @@ export default function ThreadWorkbenchCommandItem({
           relocatable
           sourceItemId={item.id}
           threadId={threadId}
+          typedFailure={structured?.kind === "failure" ? structured.failure : null}
           workspaceRoots={workspaceRoots}
         />
       );
     }
     const compareChanges = intent.action === "compare" || intent.action === "start"
-      ? parseGitCheckpointCompareOutput(output)
+      ? structured?.kind === "success"
+        ? structured.changes?.map((change) => ({
+          additions: change.additions, deletions: change.deletions, path: change.path,
+          status: change.kind.type === "add" ? "A" as const : change.kind.type === "delete" ? "D" as const : "U" as const,
+        })) ?? []
+        : hasStructuredResult ? [] : parseGitCheckpointCompareOutput(output)
       : null;
-    const diffChanges = intent.action === "diff" ? parseGitCheckpointDiffOutput(output) : null;
-    const diffArtifactId = intent.action === "diff" ? parseGitCheckpointDiffArtifactId(output) : null;
+    const diffOutput = structured?.kind === "success" ? structured.diff ?? "" : output;
+    const diffChanges = intent.action === "diff"
+      ? hasStructuredResult && structured?.kind !== "success" ? [] : parseGitCheckpointDiffOutput(diffOutput)
+      : null;
+    const diffArtifactId = intent.action === "diff" && !hasStructuredResult ? parseGitCheckpointDiffArtifactId(output) : null;
     const operationDetails = compareChanges?.length ? (
       <ThreadCheckpointCompareItem
         changes={compareChanges}
@@ -188,7 +214,7 @@ export default function ThreadWorkbenchCommandItem({
     ) : threadCwdPath && diffChanges && (diffChanges.length || diffArtifactId) ? (
       <ThreadCheckpointDiffItem
         cwd={threadCwdPath}
-        output={output}
+        output={diffOutput}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
@@ -201,17 +227,21 @@ export default function ThreadWorkbenchCommandItem({
       <ThreadGitArcItem
         commandIntent={intent}
         durationMs={item.durationMs}
-        failureReason={outcome === "failed" ? output : null}
+        failureReason={hasStructuredResult ? typed?.kind === "invalid" ? "The tool result could not be read." : null : outcome === "failed" ? output : null}
+        interruptedBySteer={interruptedBySteer}
         operationDetails={operationDetails}
         operationSummaryRows={compareChanges?.length
           ? createThreadGitArcCompareSummaryRows(compareChanges)
           : diffChanges?.length ? createThreadGitArcDiffSummaryRows(diffChanges) : []}
-        outcome={outcome}
+        outcome={gitArcOutcome}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
         receipt={receipt}
+        statusFacts={structured?.kind === "success" ? structured.status : undefined}
+        statusIncomplete={Boolean(typed?.error)}
         statusOutput={intent.action === "status" ? output : undefined}
+        typedFailure={structured?.kind === "failure" ? structured.failure : null}
         workspaceRoots={workspaceRoots}
       />
     );
@@ -307,7 +337,7 @@ export default function ThreadWorkbenchCommandItem({
             threadCwdPath={threadCwdPath}
             workspaceRoots={workspaceRoots}
           />
-        ) : outcome === "failed" ? output : undefined}
+        ) : interruptedBySteer ? undefined : outcome === "failed" ? output : undefined}
         durationMs={item.durationMs}
         entries={targets.map((target) => ({
           content: renderSubagentActivity?.(target.threadId ? relatedThreadsById[target.threadId] : undefined),
@@ -316,7 +346,8 @@ export default function ThreadWorkbenchCommandItem({
           targetKey: target.targetKey,
           thread: target.threadId ? relatedThreadsById[target.threadId] : undefined,
         }))}
-        outcome={outcome}
+        outcome={interruptedBySteer ? "failed" : outcome}
+        interruptedBySteer={interruptedBySteer}
       />
     );
   }

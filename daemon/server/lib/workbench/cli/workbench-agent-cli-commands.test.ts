@@ -64,6 +64,8 @@ test("status selectors preserve equivalent CLI and MCP inputs", async () => {
     const status = { pending: [], accepted: [], dirtyClaims: ["a", "b", "c", "d", "e", "f"], cleanClaims: [], stashedClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [] };
     const output = adaptWorkbenchAgentCliResponse({ httpOk: true, request: parsed.request, text: JSON.stringify(status) });
     assert.deepEqual(parseGitArcStatus(output.stdout).data, status);
+    assert.equal(output.structuredContent?.kind, "success");
+    assert.deepEqual(output.structuredContent?.kind === "success" ? output.structuredContent.status.dirtyClaims : null, status.dirtyClaims);
     const empty = adaptWorkbenchAgentCliResponse({ httpOk: true, request: parsed.request, text: JSON.stringify({ ...status, dirtyClaims: [] }) });
     assert.equal(empty.stdout, "");
   }
@@ -90,6 +92,7 @@ test("claim updates return only net changes while retaining counts and recovery 
       });
       const receipt = parseGitArcReceipt(output.stdout);
       assert.ok(receipt);
+      assert.deepEqual(output.structuredContent?.kind === "success" ? output.structuredContent.receipt : null, receipt);
       assert.equal(receipt.fullScope, false);
       assert.equal(receipt.claimedPathCount, kind === "plan" ? 1 : 2);
       assert.equal(receipt.plannedPathCount, kind === "plan" ? 2 : undefined);
@@ -1467,6 +1470,23 @@ test("redirects a PATH-resolved wb command to the Workbench install in cwd", asy
   } finally {
     await new Promise<void>((resolve, reject) => cwdServer.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+test("compare keeps CLI text and MCP file facts from the same response", () => {
+  const change = { additions: 1, deletions: 0, diff: "diff --git a/a.ts b/a.ts", kind: { type: "add" }, path: "a.ts" };
+  const request: WorkbenchAgentCliRequest = {
+    body: { action: "compare" },
+    method: "POST",
+    path: "/daemon/git-arc",
+    responseKind: "git-arc-compare",
+  };
+  const output = adaptWorkbenchAgentCliResponse({
+    httpOk: true,
+    request,
+    text: JSON.stringify({ checkpointCommit: "a".repeat(40), scopePaths: ["a.ts"], changes: [change] }),
+  });
+  assert.match(output.stdout, /A\t\+1\t-0\ta\.ts/u);
+  assert.deepEqual(output.structuredContent?.kind === "success" ? output.structuredContent.changes : null, [change]);
 });
 
 test("stash commands are argument-free whole-arc operations with conflict guidance", async () => {

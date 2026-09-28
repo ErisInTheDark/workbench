@@ -15,6 +15,7 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   createGitArcOperationRejected,
   GitArcFailureException,
+  type GitArcFailure,
 } from "workbench-shared/workbench/git/git-arc-failures";
 import type {
   GitCheckpointCommitCommandIntent,
@@ -33,6 +34,8 @@ import type { ThreadGitArcProposalObservation } from "../../../workbench/Workben
 export interface ThreadCheckpointCommitControllerProps {
   commandOutcome: ThreadCommandExecutionOutcome;
   failureReason?: string | null;
+  interruptedBySteer?: boolean;
+  typedFailure?: GitArcFailure | null;
   cwd: string | null;
   embedded?: boolean;
   harness?: WorkbenchHarness;
@@ -377,11 +380,13 @@ export default function ThreadCheckpointCommitControllerRoot(props: ThreadCheckp
         commandIntent={{ action: "propose", intentName: null, paths: [], ref: null }}
         durationMs={null}
         failureReason={props.failureReason}
+        interruptedBySteer={props.interruptedBySteer}
         outcome={props.commandOutcome}
         projectFilePaths={props.projectFilePaths}
         projectId={props.projectId}
         projectRootPath={props.projectRootPath}
         receipt={null}
+        typedFailure={props.typedFailure}
         workspaceRoots={props.workspaceRoots}
       />
     );

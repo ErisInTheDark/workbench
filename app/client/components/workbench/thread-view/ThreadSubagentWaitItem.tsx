@@ -30,6 +30,7 @@ export default function ThreadSubagentWaitItem ({
   durationMs,
   entries,
   exitCode,
+  interruptedBySteer = false,
   outcome,
 }: {
   disclosureContent?: ReactNode;
@@ -37,6 +38,7 @@ export default function ThreadSubagentWaitItem ({
   durationMs?: number | null;
   entries: ThreadSubagentWaitEntry[];
   exitCode?: number | null;
+  interruptedBySteer?: boolean;
   outcome: ThreadCommandExecutionOutcome;
 }) {
   const tabSetId = useId();
@@ -50,7 +52,8 @@ export default function ThreadSubagentWaitItem ({
   if (!selectedEntry) return null;
   const summary = (
     <span>
-      {outcome === "inProgress" ? "Waiting for "
+      {interruptedBySteer ? "Interrupted by your steer while waiting for "
+        : outcome === "inProgress" ? "Waiting for "
         : outcome === "timedOut" ? "Timed out waiting for "
         : outcome === "failed" ? "Failed waiting for "
         : outcome === "declined" ? "Declined waiting for "

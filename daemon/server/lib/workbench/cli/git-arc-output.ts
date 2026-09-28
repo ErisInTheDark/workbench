@@ -1,12 +1,14 @@
 /*
  * Exports:
- * - renderGitArcOutput: render status, compact lifecycle receipts and inspection details.
+ * - renderGitArcOutput/renderGitArcResponse: render CLI text and typed MCP facts from one Git arc response.
  */
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands";
-import { escapeGitArcValue, formatGitArcTextReceipt, type GitArcAction, type GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
+import { escapeGitArcValue, formatGitArcTextReceipt, projectGitArcReceipt, type GitArcAction, type GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import { GIT_ARC_DIFF_TRAILER_PREFIX } from "workbench-shared/workbench/git/git-arc-diff-pages";
 import { normalizeDaemonReloadScopes } from "workbench-shared/workbench/daemon-reload";
-import { formatGitArcStatus, GitArcStatusFullSchema, GitArcStatusSchema } from "workbench-shared/workbench/git/git-arc-status";
+import { formatGitArcStatus, GitArcStatusFullSchema, GitArcStatusSchema, projectGitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
+import { GitCheckpointFileChangeSchema } from "workbench-shared/workbench/git/git-checkpoint-file-change";
+import type { GitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
 
 type Payload = Record<string, unknown>;
 const record = (value: unknown): value is Payload => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -16,10 +18,25 @@ const rows = (value: Payload | null | undefined, key: string) => Array.isArray(v
 const number = (value: Payload | null | undefined, key: string) => typeof value?.[key] === "number" ? value[key] as number : undefined;
 
 export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: Payload | null) {
+  return renderGitArcResponse(request, payload).text;
+}
+
+export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload: Payload | null): {
+  text: string;
+  structuredContent: Extract<GitArcMcpResult, { kind: "success" }>;
+} {
   if (request.responseKind === "git-arc-status") {
-    return formatGitArcStatus(GitArcStatusSchema.parse(payload), paths(request.body, "full").map(value => GitArcStatusFullSchema.parse(value)));
+    const status = GitArcStatusSchema.parse(payload);
+    const full = paths(request.body, "full").map(value => GitArcStatusFullSchema.parse(value));
+    return {
+      text: formatGitArcStatus(status, full),
+      structuredContent: { kind: "success", version: 1, receipt: null, status: projectGitArcStatus(status, full), changes: [], diff: null },
+    };
   }
-  if (!payload) return "No registered Git arc.";
+  if (!payload) return {
+    text: "No registered Git arc.",
+    structuredContent: { kind: "success", version: 1, receipt: null, status: {}, changes: [], diff: null },
+  };
   const action = (request.responseKind === "git-arc-wait" ? "start" : request.responseKind.replace("git-arc-", "")) as GitArcAction;
   const members = rows(payload, "members");
   const sources = members.length ? members : [payload];
@@ -50,9 +67,10 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
   });
   const ref = string(payload, action === "propose" ? "sourceCheckpoint" : "checkpointCommit");
   const lines: string[] = [];
+  let receipt: GitArcReceipt | null = null;
   const inspectsProposal = (action === "compare" || action === "diff") && sources.some((member) => Boolean(string(member, "proposalId")));
   if (ref && !inspectsProposal) {
-    const receipt: GitArcReceipt = {
+    receipt = {
       action, phase, fullScope, claimedPaths, claimedPathCount: claimedPaths.length, ref, version: 1,
       intentName: string(payload, "intentName") || null,
       ...(fullScope ? { plannedPaths, adoptedPaths: paths(payload, "adoptedPaths") } : {
@@ -86,6 +104,7 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
         matchedPathCount: number(payload, "matchedPathCount"), remainingMatchCount: number(payload, "remainingMatchCount"),
       } : {}),
     };
+    receipt = projectGitArcReceipt(receipt);
     lines.push(formatGitArcTextReceipt(receipt));
   }
   const ignored = paths(payload, "skippedIgnoredPaths");
@@ -151,5 +170,12 @@ export function renderGitArcOutput(request: WorkbenchAgentCliRequest, payload: P
       "Set disown to also release dirty claims.",
     );
   }
-  return lines.join("\n");
+  return {
+    text: lines.join("\n"),
+    structuredContent: {
+      kind: "success", version: 1, receipt, status: {},
+      changes: action === "compare" ? GitCheckpointFileChangeSchema.array().parse(payload.changes ?? []) : [],
+      diff: action === "diff" ? string(payload, "diff") : null,
+    },
+  };
 }

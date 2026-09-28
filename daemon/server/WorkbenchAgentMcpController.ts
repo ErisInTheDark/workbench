@@ -472,15 +472,21 @@ export default class WorkbenchAgentMcpController {
       return {
         content: [{ type: "text" as const, text: success ? adapted.stdout : adapted.stderr }],
         isError: !success,
+        ...(adapted.structuredContent ? { structuredContent: adapted.structuredContent } : {}),
       };
     } catch (error) {
       if (isWorkbenchAgentMcpSteerInterruption(error)) {
-        return { content: [], isError: true };
+        return { content: [], isError: true, structuredContent: { kind: "interruptedBySteer", version: 1 } };
       }
       const message = sanitizeError(error) || "Workbench MCP tool call failed.";
       if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);
       if (definition.words[0] === "git" && (definition.words[1] === "arc" || definition.words[1] === "plan")) {
-        return { content: [{ type: "text" as const, text: formatGitArcFailureReceipt(createGitArcFailureFromError("unknown", error)) }], isError: true };
+        const failure = createGitArcFailureFromError("unknown", error);
+        return {
+          content: [{ type: "text" as const, text: formatGitArcFailureReceipt(failure) }],
+          isError: true,
+          structuredContent: { kind: "failure", version: 1, failure },
+        };
       }
       return { content: [{ type: "text" as const, text: `Workbench tool call failed: ${message}` }], isError: true };
     } finally {

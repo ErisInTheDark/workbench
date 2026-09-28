@@ -9,9 +9,11 @@ import { useContext, useState, type MouseEvent, type ReactNode } from "react";
 import {
   createGitArcOperationRejected,
   parseGitArcFailureReceipt,
+  type GitArcFailure,
   type GitArcFailureAction,
 } from "workbench-shared/workbench/git/git-arc-failures";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
+import type { GitArcStatusPresentation } from "workbench-shared/workbench/git/git-arc-status";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { GitArcCommandAction, GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 import GitArcIcon from "./GitArcIcon";
@@ -107,6 +109,7 @@ export default function ThreadGitArcItem ({
   durationMs,
   durationPresentation = "default",
   failureReason,
+  interruptedBySteer = false,
   operationDetails,
   outcome,
   operationSummaryRows = [],
@@ -114,13 +117,17 @@ export default function ThreadGitArcItem ({
   projectId,
   projectRootPath,
   receipt,
+  statusFacts,
+  statusIncomplete = false,
   statusOutput,
+  typedFailure,
   workspaceRoots,
 }: {
   commandIntent: GitArcCommandIntent;
   durationMs: number | null;
   durationPresentation?: "default" | "waited";
   failureReason?: string | null;
+  interruptedBySteer?: boolean;
   operationDetails?: ReactNode;
   outcome: ThreadCommandExecutionOutcome;
   operationSummaryRows?: readonly ThreadFileChangeListChange[];
@@ -128,10 +135,13 @@ export default function ThreadGitArcItem ({
   projectId?: string | null;
   projectRootPath?: string;
   receipt: GitArcReceipt | null;
+  statusFacts?: Partial<GitArcStatusPresentation> | null;
+  statusIncomplete?: boolean;
   statusOutput?: string;
+  typedFailure?: GitArcFailure | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const state = actionState(outcome);
+  const state = interruptedBySteer ? "interrupted" : actionState(outcome);
   const defaultOpen = commandIntent.action === "status"
     || commandIntent.action === "unknown"
     || Boolean(receipt?.conflictedPaths?.length);
@@ -172,7 +182,7 @@ export default function ThreadGitArcItem ({
               : ACTION_LABELS[commandIntent.action];
   const moveMappings = commandIntent.action === "mv" ? receipt?.mappings ?? attemptedMoveMappings(commandIntent) : [];
   const receiptFailure = state === "failed" || state === "timedOut" ? parseGitArcFailureReceipt(failureReason ?? "") : null;
-  const failure = receiptFailure ?? (state === "failed"
+  const failure = interruptedBySteer ? null : typedFailure ?? receiptFailure ?? (state === "failed"
     ? createGitArcOperationRejected(failureAction(commandIntent.action), failureReason?.trim() || "This Git arc action did not complete.")
     : null);
   const currentPlan = presentationContext?.gitArcPlan ?? null;
@@ -350,7 +360,8 @@ export default function ThreadGitArcItem ({
         summary={(
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
             <span className={state === "failed" || state === "timedOut" ? "text-[color:var(--danger)]" : "text-text"}>
-              {commandIntent.action === "mv" && state === "completed"
+              {state === "interrupted" ? "Interrupted by your steer"
+                : commandIntent.action === "mv" && state === "completed"
                 ? movePreview
                   ? `Previewed ${moveMappings.length} ${moveMappings.length === 1 ? "move" : "moves"}`
                   : `Moved ${moveMappings.length} ${moveMappings.length === 1 ? "path" : "paths"}`
@@ -380,8 +391,8 @@ export default function ThreadGitArcItem ({
           />
         ) : null}
         {operationDetails && !ignoredFailure && !failedStartDrift ? <div>{operationDetails}</div> : null}
-        {commandIntent.action === "status" && state === "completed" && statusOutput !== undefined ? (
-          <ThreadGitArcStatusDetails output={statusOutput} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
+        {commandIntent.action === "status" && state === "completed" && (statusOutput !== undefined || statusFacts !== undefined) ? (
+          <ThreadGitArcStatusDetails output={statusOutput ?? ""} status={statusFacts} incomplete={statusIncomplete} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
         ) : null}
         {memberRefs.length > 1 ? (
           <div className="space-y-0.5 py-1 pl-6 text-[0.78em] text-fg/muted" data-thread-git-arc-members="true">
