@@ -26,14 +26,10 @@ function formatContextStatusTitle ({
   contextWindow,
   remainingTokens,
 }: {
-  contextTokens: number | null;
-  contextWindow: number | null;
-  remainingTokens: number | null;
+  contextTokens: number;
+  contextWindow: number;
+  remainingTokens: number;
 }) {
-  if (contextTokens === null || contextWindow === null || remainingTokens === null) {
-    return "Context window usage unavailable";
-  }
-
   return `Last reported context usage: ${formatTokenCount(remainingTokens)} tokens left of ${formatTokenCount(contextWindow)}. ${formatTokenCount(contextTokens)} used.`;
 }
 
@@ -64,11 +60,9 @@ export default function ThreadContextStatus ({
   const usedPercent = contextTokens !== null && contextWindow !== null && contextWindow > 0
     ? (contextTokens / contextWindow) * 100
     : null;
-  const contextStatusTitle = formatContextStatusTitle({
-    contextTokens,
-    contextWindow,
-    remainingTokens,
-  });
+  const contextStatusTitle = usedPercent !== null && contextTokens !== null && contextWindow !== null && remainingTokens !== null
+    ? formatContextStatusTitle({ contextTokens, contextWindow, remainingTokens })
+    : undefined;
   const canCompact = !thread.isDraft;
   const inactiveByWorkbenchState = lifecycle?.kind === "stopped"
     || (lifecycle?.kind === "needsAttention"
@@ -91,9 +85,7 @@ export default function ThreadContextStatus ({
             <span className="font-semibold text-text">{formatPercent(usedPercent)}</span>
             <span>window size</span>
           </span>
-        ) : (
-          <span>Context unavailable</span>
-        )}
+        ) : null}
         {canCompact ? (
           <button
             type="button"

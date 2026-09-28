@@ -34,14 +34,37 @@ const thread: ThreadPayload = {
   updatedAt: 1,
 };
 
-function render(lifecycle?: WorkbenchThreadLifecycle, snoozed = false) {
+function render(lifecycle?: WorkbenchThreadLifecycle, snoozed = false, currentThread = thread) {
   return renderToStaticMarkup(createElement(ThreadContextStatus, {
     lifecycle,
     onCompactThread: async () => thread,
     snoozed,
-    thread,
+    thread: currentThread,
   }));
 }
+
+test("missing context usage stays silent without hiding compact", () => {
+  const markup = render();
+  assert.doesNotMatch(markup, /context.*unavailable/i);
+  assert.match(markup, /aria-label="Compact is unavailable while the thread is active"/u);
+});
+
+test("measured context usage remains visible", () => {
+  const usage = {
+    cacheWriteInputTokens: 0,
+    cachedInputTokens: 0,
+    inputTokens: 25,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalTokens: 25,
+  };
+  const markup = render(undefined, false, {
+    ...thread,
+    tokenUsage: { last: usage, total: usage, modelContextWindow: 100 },
+  });
+  assert.match(markup, /25%/u);
+  assert.match(markup, /window size/u);
+});
 
 test("interrupted Workbench state overrides stale active provider status for context compaction", () => {
   const stopped = render({
