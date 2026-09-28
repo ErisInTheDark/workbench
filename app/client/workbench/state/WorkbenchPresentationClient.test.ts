@@ -1,193 +1,103 @@
-/*
- * No production exports. Protect app presentation freshness and visible mutation failure.
- */
+/* No production exports. Protect pushed state freshness, mutation failures and same-tab draft deletion receipts. */
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import test from "node:test";
 import type { PresentationDraftInput, PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { createWorkspaceClientFixture } from "../app/workspace-client-fixture";
 import WorkbenchPresentationClient from "./WorkbenchPresentationClient";
-import type WorkbenchAppRpcClient from "../app/WorkbenchAppRpcClient";
 
-const daemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
-
-function snapshot(revision: number): PresentationSnapshot {
-  return {
-    daemons: [], defaults: [], divergences: [], drafts: [], folders: [],
-    locations: [], members: [], projects: [], revision, sourceMappings: [],
-  };
-}
-
-test("burst presentation notices share one read and retain the newest revision", async () => {
-  const release = Promise.withResolvers<Response>();
-  let reads = 0;
-  const client = new WorkbenchPresentationClient({ fetcher: async () => {
-    reads++;
-    return reads === 1 ? Response.json(snapshot(1)) : await release.promise;
-  } });
-  try {
-    await client.refresh();
-    const updated = Promise.withResolvers<void>();
-    const unsubscribe = client.subscribe(() => {
-      if (client.snapshot().data?.revision === 3) updated.resolve();
-    });
-    client.noticeRevision(2);
-    client.noticeRevision(3);
-    assert.equal(reads, 2);
-    release.resolve(Response.json(snapshot(3)));
-    await updated.promise;
-    unsubscribe();
-    assert.equal(reads, 2);
-  } finally {
-    release.resolve(Response.json(snapshot(3)));
-    client.dispose();
-  }
-});
-
-test("a stale presentation read stops a notice drain instead of spinning", async () => {
-  let reads = 0;
-  const client = new WorkbenchPresentationClient({ fetcher: async () => {
-    reads++;
-    return reads <= 2 ? Response.json(snapshot(1))
-      : Response.json({ error: "still stale" }, { status: 500 });
-  } });
-  try {
-    await client.refresh();
-    const failed = new Promise<void>(resolve => {
-      const release = client.subscribe(() => {
-        if (client.snapshot().phase !== "failed") return;
-        release();
-        resolve();
-      });
-    });
-    client.noticeRevision(2);
-    await failed;
-    assert.equal(reads, 2);
-    assert.match(client.snapshot().error ?? "", /not visible/u);
-  } finally { client.dispose(); }
-});
-
-test("a late presentation read cannot replace a newer mutation result", async () => {
-  let releaseRead!: (response: Response) => void;
-  const readResponse = new Promise<Response>(resolve => { releaseRead = resolve; });
-  const fetcher: typeof fetch = async (_input, options) => options?.method === "POST"
-    ? Response.json(snapshot(2)) : await readResponse;
-  const client = new WorkbenchPresentationClient({ fetcher });
-  try {
-    const read = client.refresh();
-    await client.mutate({ kind: "registerLocations",
-      daemonId, hostname: "desktop", catalog: { data: [] } });
-    releaseRead(Response.json(snapshot(1)));
-    await read;
-    assert.equal(client.snapshot().data?.revision, 2);
-  } finally { client.dispose(); }
-});
-
-test("a rejected presentation mutation refreshes current state and still fails visibly", async () => {
-  let revision = 0;
-  const fetcher: typeof fetch = async (_input, options) => {
-    if (options?.method === "POST") {
-      revision = 3;
-      return Response.json({ error: "Draft revision changed." }, { status: 400 });
-    }
-    return Response.json(snapshot(revision));
-  };
-  const client = new WorkbenchPresentationClient({ fetcher });
-  try {
-    await client.refresh();
-    await assert.rejects(client.mutate({ kind: "registerLocations",
-      daemonId, hostname: "desktop", catalog: { data: [] } }),
-    /Draft revision changed/u);
-    assert.equal(client.snapshot().data?.revision, 3);
-  } finally { client.dispose(); }
-});
-
-test("new-process presentation reads and mutations use tab RPC without HTTP", async () => {
-  const methods: string[] = [];
-  const rpc = {
-    available: true,
-    requestRaw: async (intent: { method: string }) => {
-      methods.push(intent.method);
-      return snapshot(methods.length);
-    },
-  } as unknown as WorkbenchAppRpcClient;
-  const client = new WorkbenchPresentationClient({
-    rpc,
-    fetcher: async () => { throw new Error("Unexpected presentation HTTP request."); },
-  });
-  try {
-    await client.refresh();
-    await client.mutate({ kind: "registerLocations",
-      daemonId, hostname: "desktop", catalog: { data: [] } });
-    assert.deepEqual(methods, ["app/presentation/read", "app/presentation/mutate"]);
-  } finally { client.dispose(); }
-});
-
-test("own delete retains its exact revision even when a newer snapshot arrives first", async () => {
-  const draft: PresentationDraftInput = {
-    id: DraftIdSchema.parse(crypto.randomUUID()),
-    logicalProjectId: LogicalProjectIdSchema.parse(crypto.randomUUID()),
-    target: { daemonId, projectId: ProjectIdSchema.parse("project") },
-    prompt: "first words", updatedAt: 1,
-    selection: { kind: "custom", settings: {
-      agentPath: null, agentSource: null, harness: "codex", model: "model",
-      reasoningEffort: null, serviceTier: null, contextWindowTokens: null,
-    } },
-  };
-  const initial: PresentationSnapshot = { ...snapshot(40), drafts: [{
+const draft: PresentationDraftInput = {
+  id: DraftIdSchema.parse("00000000-0000-4000-8000-000000000001"),
+  logicalProjectId: LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000002"),
+  target: { daemonId: DaemonIdSchema.parse("00000000-0000-4000-8000-000000000003"),
+    projectId: ProjectIdSchema.parse("local-folder") },
+  prompt: "saved words", updatedAt: 1,
+  selection: { kind: "custom", settings: { harness: "codex", model: "",
+    agentPath: null, agentSource: null, reasoningEffort: null, serviceTier: null } },
+};
+function snapshot(revision: number, includeDraft = false): PresentationSnapshot {
+  return { daemons: [], defaults: [], divergences: [], drafts: includeDraft ? [{
     ...draft, revision: 5, phase: "unsent", pinned: false, snoozed: false,
     launchId: null, acceptedThreadId: null, attachments: [],
-  }] };
-  const deleteResponse = Promise.withResolvers<Response>();
-  let reads = 0;
-  let reopenedWith: number | null = null;
-  const client = new WorkbenchPresentationClient({ fetcher: async (_input, options) => {
-    if (options?.method !== "POST") return Response.json(reads++ === 0 ? initial : snapshot(43));
-    const mutation = JSON.parse(String(options.body)) as { kind: string; expectedRevision: number | null };
-    if (mutation.kind === "deleteDraft") return await deleteResponse.promise;
-    reopenedWith = mutation.expectedRevision;
-    return Response.json(snapshot(44));
-  } });
-  try {
-    await client.refresh();
-    const removal = client.removeDraft(draft.id);
-    await client.refresh();
-    deleteResponse.resolve(Response.json(snapshot(42)));
-    await removal;
-    await client.putDraft({ ...draft, prompt: "new words" });
-    assert.equal(reopenedWith, 42);
-  } finally {
-    deleteResponse.resolve(Response.json(snapshot(42)));
-    client.dispose();
-  }
+  }] : [], folders: [], locations: [], members: [], projects: [], revision, sourceMappings: [] };
+}
+
+test("presentation readiness joins one pushed query and disposal releases pending readers", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const client = new WorkbenchPresentationClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const socket = await fixture.open();
+  const first = client.ready();
+  const second = client.ready();
+  const query = await socket.request("workspace/observe", 0, request => request.params.query.kind === "presentation");
+  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(1) });
+  assert.equal(await first, await second);
+  assert.equal(socket.sent.filter(request => request.method === "workspace/observe").length, 1);
+
+  const other = createWorkspaceClientFixture();
+  const pending = new WorkbenchPresentationClient({ workspace: other.workspace });
+  context.after(() => { pending.dispose(); other.dispose(); });
+  const waiting = pending.ready();
+  pending.dispose();
+  await assert.rejects(waiting, /closed/);
 });
 
-test("another client's deletion does not give this client a reopen token", async () => {
-  const draft: PresentationDraftInput = {
-    id: DraftIdSchema.parse(crypto.randomUUID()),
-    logicalProjectId: LogicalProjectIdSchema.parse(crypto.randomUUID()),
-    target: { daemonId, projectId: ProjectIdSchema.parse("project") },
-    prompt: "words", updatedAt: 1,
-    selection: { kind: "custom", settings: {
-      agentPath: null, agentSource: null, harness: "codex", model: "model",
-      reasoningEffort: null, serviceTier: null, contextWindowTokens: null,
-    } },
-  };
-  let expectedRevision: number | null | undefined;
-  let reads = 0;
-  const client = new WorkbenchPresentationClient({ fetcher: async (_input, options) => {
-    if (options?.method !== "POST") return Response.json(reads++ === 0
-      ? { ...snapshot(10), drafts: [{
-        ...draft, revision: 5, phase: "unsent", pinned: false, snoozed: false,
-        launchId: null, acceptedThreadId: null, attachments: [],
-      }] }
-      : snapshot(12));
-    expectedRevision = (JSON.parse(String(options.body)) as { expectedRevision: number | null }).expectedRevision;
-    return Response.json({ error: "Draft changed in another browser." }, { status: 400 });
-  } });
-  try {
-    await client.refresh();
-    await client.refresh();
-    await assert.rejects(client.putDraft(draft), /another browser/u);
-    assert.equal(expectedRevision, null);
-  } finally { client.dispose(); }
+test("pushed facts do not refetch and a delayed write response cannot regress them", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const client = new WorkbenchPresentationClient({ workspace: fixture.workspace,
+    fetcher: async () => { throw new Error("Unexpected HTTP state read"); } });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const socket = await fixture.open();
+  client.start();
+  const query = await socket.request("workspace/observe");
+  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(1) });
+  const write = client.putDraft(draft);
+  const request = await socket.request("app/presentation/mutate");
+  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(3, true) }, 2);
+  socket.reply(request, snapshot(2, true));
+  await write;
+  assert.equal(client.snapshot().data?.revision, 3);
+  assert.equal(socket.sent.filter(item => item.method === "workspace/observe").length, 1);
+});
+
+test("own delete receipt remains exact when a newer publication overtakes its acknowledgement", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const client = new WorkbenchPresentationClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const socket = await fixture.open();
+  client.start();
+  const query = await socket.request("workspace/observe");
+  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(40, true) });
+  const removing = client.removeDraft(draft.id);
+  const removal = await socket.request("app/presentation/mutate");
+  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(43) }, 2);
+  socket.reply(removal, snapshot(42));
+  await removing;
+  const offset = socket.sent.length;
+  const writing = client.putDraft({ ...draft, prompt: "new words" });
+  const reopen = await socket.request("app/presentation/mutate", offset);
+  assert.equal(reopen.params.mutation.kind, "putDraft");
+  assert.equal(reopen.params.mutation.expectedRevision, 42);
+  socket.reply(reopen, snapshot(44, true));
+  await writing;
+});
+
+test("another client's deletion grants no reopen token and conflicting edits remain failed without retry", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const client = new WorkbenchPresentationClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const socket = await fixture.open();
+  client.start();
+  const query = await socket.request("workspace/observe");
+  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(10, true) });
+  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(12) }, 2);
+  const write = client.putDraft(draft);
+  const failed = assert.rejects(write, /another browser/);
+  const mutation = await socket.request("app/presentation/mutate");
+  assert.equal(mutation.params.mutation.expectedRevision, null);
+  socket.fail(mutation, "Draft changed in another browser.");
+  await failed;
+  assert.equal(client.snapshot().phase, "failed");
+  assert.equal(socket.sent.filter(item => item.method === "app/presentation/mutate").length, 1);
+  assert.equal(socket.sent.filter(item => item.method === "workspace/observe").length, 1);
 });

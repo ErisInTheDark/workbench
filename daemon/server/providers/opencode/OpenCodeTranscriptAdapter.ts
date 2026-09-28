@@ -367,6 +367,7 @@ export default class OpenCodeTranscriptAdapter {
     messages: readonly SessionMessageInfo[],
     project: { id: string; rootPath: string; launchId?: string },
     options: {
+      canCommit?: (latestTurnId: WorkbenchTurnId | null) => boolean;
       keepLatestTurnOpen?: boolean;
       settleUsage?: boolean;
       window?: { previousCursor: string | null; gapIds: readonly string[]; latest: boolean; successor?: WorkbenchTurnIdentityMetadata };
@@ -391,11 +392,15 @@ export default class OpenCodeTranscriptAdapter {
       const assistant = [...group.messages].reverse().find(message => message.type === "assistant") as SessionMessageAssistant | undefined;
       const latestSteerIndex = group.messages.findLastIndex(message => workbenchMetadata(message)?.delivery === "steer");
       const latestAssistantIndex = group.messages.findLastIndex(message => message.type === "assistant");
+      const latestExecutionMessage = [...group.messages].reverse().find(message =>
+        ["idle", "user", "assistant", "synthetic", "shell", "compaction"].includes(message.type));
+      const idle = latestExecutionMessage?.type === "idle" ? latestExecutionMessage : null;
       const keepOpen = index === groups.length - 1
-        && (options.keepLatestTurnOpen || latestSteerIndex > latestAssistantIndex);
+        && (options.keepLatestTurnOpen || !idle && latestSteerIndex > latestAssistantIndex);
       const completedAt = keepOpen
         ? null
-        : assistant?.time.completed ?? (index < groups.length - 1 || options.window?.latest === false ? last.time.created : null);
+        : idle?.time.created ?? assistant?.time.completed
+          ?? (index < groups.length - 1 || options.window?.latest === false ? last.time.created : null);
       return {
         kind: "turn" as const,
         threadId: identity.threadId,
@@ -404,7 +409,9 @@ export default class OpenCodeTranscriptAdapter {
         nativeThreadId,
         nativeLocation,
         harnessId: "opencode",
-        state: completedAt === null ? "inProgress" as const : assistant?.error ? "failed" as const : "completed" as const,
+        state: completedAt === null ? "inProgress" as const
+          : idle?.outcome === "interrupted" ? "interrupted" as const
+          : idle?.outcome === "failed" || assistant?.error ? "failed" as const : "completed" as const,
         createdAt: first.time.created,
         startedAt: first.time.created,
         endedAt: completedAt,
@@ -552,7 +559,7 @@ export default class OpenCodeTranscriptAdapter {
     const window = options.window;
     // Admit chronological interaction slots before reconciling the provider-only body scope.
     // Both passes settle atomically, preserving steers between their surrounding native items.
-    await this.owners.transcript.record(window ? [
+    if (options.canCommit?.(turns.at(-1)?.turnId ?? null) !== false) await this.owners.transcript.record(window ? [
       ...observations as WorkbenchTranscriptAtomicObservation[],
       {
         kind: "providerTurnScope",
@@ -573,6 +580,9 @@ export default class OpenCodeTranscriptAdapter {
       ...identity,
       latestTurnId: turns.at(-1)?.turnId ?? null,
       latestTurnState: turnObservations.at(-1)?.state ?? null,
+      latestOperation: [...messages].reverse().find(message =>
+        ["user", "synthetic", "shell", "compaction"].includes(message.type))?.type === "compaction"
+        ? "compaction" as const : "prompt" as const,
       deliveredSteerClientMessageIds,
     };
   }

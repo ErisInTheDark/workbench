@@ -32,14 +32,54 @@ type GitEntry = {
 };
 type ArcMember = NonNullable<WorkbenchGitArcLifecycleState["members"]>[number];
 type PlanMember = NonNullable<WorkbenchGitArcPlanState["members"]>[number];
+type GitObservationRow = { id: string; thread_id: string; observation_kind: ObservationKind; has_value: 0 | 1 };
+type GitPathRow = { entry_id: string; path_index: number; path: string };
+type GitRootRow = { entry_id: string; root_index: number; root_id: string };
+type GitProposalRow = { entry_id: string; proposal_index: number; proposal_id: string; root_id: string | null; status: "committed" | "proposed" };
+interface GitReadBatch {
+  entries: Map<string, GitEntry[]>;
+  paths: Map<string, GitPathRow[]>;
+  roots: Map<string, GitRootRow[]>;
+  proposals: Map<string, GitProposalRow[]>;
+}
 
 export default class WorkbenchThreadStateGitRepository {
   constructor(private readonly database: Database.Database) {}
 
   read(threadId: string): WorkbenchThreadGitObservations {
-    const observations = this.database.prepare(`
-      SELECT id, observation_kind, has_value FROM workbench_thread_git_observations WHERE thread_id = ?
-    `).all(threadId) as Array<{ id: string; observation_kind: ObservationKind; has_value: 0 | 1 }>;
+    return this.readMany([threadId]).get(threadId)!;
+  }
+
+  readMany(threadIds: readonly string[]): Map<string, WorkbenchThreadGitObservations> {
+    const result = new Map<string, WorkbenchThreadGitObservations>();
+    for (let offset = 0; offset < threadIds.length; offset += 400) {
+      const ids = threadIds.slice(offset, offset + 400);
+      const placeholders = ids.map(() => "?").join(",");
+      const observationSelection = `SELECT id FROM workbench_thread_git_observations WHERE thread_id IN (${placeholders})`;
+      const entrySelection = `SELECT id FROM workbench_thread_git_entries WHERE observation_id IN (${observationSelection})`;
+      const observations = this.database.prepare(`SELECT * FROM workbench_thread_git_observations WHERE thread_id IN (${placeholders})`)
+        .all(...ids) as GitObservationRow[];
+      const entries = this.database.prepare(`SELECT * FROM workbench_thread_git_entries WHERE observation_id IN (${observationSelection}) ORDER BY entry_kind, entry_index`)
+        .all(...ids) as Array<GitEntry & { observation_id: string }>;
+      const paths = this.database.prepare(`SELECT * FROM workbench_thread_git_paths WHERE entry_id IN (${entrySelection}) ORDER BY path_index`)
+        .all(...ids) as GitPathRow[];
+      const roots = this.database.prepare(`SELECT * FROM workbench_thread_git_member_roots WHERE entry_id IN (${entrySelection}) ORDER BY root_index`)
+        .all(...ids) as GitRootRow[];
+      const proposals = this.database.prepare(`SELECT * FROM workbench_thread_git_proposals WHERE entry_id IN (${entrySelection}) ORDER BY proposal_index`)
+        .all(...ids) as GitProposalRow[];
+      const batch: GitReadBatch = {
+        entries: Map.groupBy(entries, entry => entry.observation_id),
+        paths: Map.groupBy(paths, entry => entry.entry_id),
+        roots: Map.groupBy(roots, entry => entry.entry_id),
+        proposals: Map.groupBy(proposals, entry => entry.entry_id),
+      };
+      const byThread = Map.groupBy(observations, observation => observation.thread_id);
+      for (const id of ids) result.set(id, this.decode(byThread.get(id) ?? [], batch));
+    }
+    return result;
+  }
+
+  private decode(observations: readonly GitObservationRow[], batch: GitReadBatch): WorkbenchThreadGitObservations {
     const result: WorkbenchThreadGitObservations = {};
     for (const observation of observations) {
       if (!observation.has_value) {
@@ -47,9 +87,7 @@ export default class WorkbenchThreadStateGitRepository {
         else result.gitArcPlan = null;
         continue;
       }
-      const entries = this.database.prepare(`
-        SELECT * FROM workbench_thread_git_entries WHERE observation_id = ? ORDER BY entry_kind, entry_index
-      `).all(observation.id) as GitEntry[];
+      const entries = batch.entries.get(observation.id) ?? [];
       const summaries = entries.filter((entry) => entry.entry_kind === "summary");
       if (summaries.length !== 1) throw new Error("Git observation has no unique summary.");
       const summary = summaries[0]!;
@@ -58,22 +96,22 @@ export default class WorkbenchThreadStateGitRepository {
       if (observation.observation_kind === "arc") {
         result.gitArc = WorkbenchGitArcLifecycleStateSchema.parse({
           ...this.readBase(summary),
-          ...this.readArcPaths(summary),
-          proposals: this.readProposals(summary.id),
+          ...this.readArcPaths(summary, batch),
+          proposals: this.readProposals(summary.id, batch),
           ...(members.length ? {
             members: members.map((entry) => ({
-              ...this.readBase(entry), ...this.readMember(entry), ...this.readArcPaths(entry),
-              proposals: this.readProposals(entry.id),
+              ...this.readBase(entry), ...this.readMember(entry, batch), ...this.readArcPaths(entry, batch),
+              proposals: this.readProposals(entry.id, batch),
             })),
           } : {}),
         });
       } else {
         result.gitArcPlan = WorkbenchGitArcPlanStateSchema.parse({
           ...this.readBase(summary),
-          scopePaths: this.readPaths(summary.id),
+          scopePaths: this.readPaths(summary.id, batch),
           ...(members.length ? {
             members: members.map((entry) => ({
-              ...this.readBase(entry), ...this.readMember(entry), scopePaths: this.readPaths(entry.id),
+              ...this.readBase(entry), ...this.readMember(entry, batch), scopePaths: this.readPaths(entry.id, batch),
             })),
           } : {}),
         });
@@ -164,10 +202,8 @@ export default class WorkbenchThreadStateGitRepository {
     };
   }
 
-  private readMember(entry: GitEntry) {
-    const roots = this.database.prepare(`
-      SELECT root_index, root_id FROM workbench_thread_git_member_roots WHERE entry_id = ? ORDER BY root_index
-    `).all(entry.id) as Array<{ root_index: number; root_id: string }>;
+  private readMember(entry: GitEntry, batch: GitReadBatch) {
+    const roots = batch.roots.get(entry.id) ?? [];
     this.requireOrdered(roots.map((root) => root.root_index));
     return {
       harness: entry.harness, threadId: entry.thread_id, repoRoot: entry.repo_root, rootId: entry.root_id,
@@ -175,28 +211,21 @@ export default class WorkbenchThreadStateGitRepository {
     };
   }
 
-  private readArcPaths(entry: GitEntry) {
-    const paths = this.readPaths(entry.id);
+  private readArcPaths(entry: GitEntry, batch: GitReadBatch) {
+    const paths = this.readPaths(entry.id, batch);
     return entry.phase === "stashed"
       ? { claimedPaths: [], phase: entry.phase, stashedPaths: paths }
       : { claimedPaths: paths, phase: entry.phase };
   }
 
-  private readPaths(entryId: string) {
-    const paths = this.database.prepare(`
-      SELECT path_index, path FROM workbench_thread_git_paths WHERE entry_id = ? ORDER BY path_index
-    `).all(entryId) as Array<{ path_index: number; path: string }>;
+  private readPaths(entryId: string, batch: GitReadBatch) {
+    const paths = batch.paths.get(entryId) ?? [];
     this.requireOrdered(paths.map((path) => path.path_index));
     return paths.map((path) => path.path);
   }
 
-  private readProposals(entryId: string) {
-    const proposals = this.database.prepare(`
-      SELECT proposal_index, proposal_id, root_id, status FROM workbench_thread_git_proposals
-      WHERE entry_id = ? ORDER BY proposal_index
-    `).all(entryId) as Array<{
-      proposal_index: number; proposal_id: string; root_id: string | null; status: "committed" | "proposed";
-    }>;
+  private readProposals(entryId: string, batch: GitReadBatch) {
+    const proposals = batch.proposals.get(entryId) ?? [];
     this.requireOrdered(proposals.map((proposal) => proposal.proposal_index));
     return proposals.map((proposal) => ({
       proposalId: proposal.proposal_id, status: proposal.status,

@@ -98,6 +98,7 @@ export const PresentationMutationSchema = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({
     kind: z.literal("putDraft"), expectedRevision: revision.nullable(), draft: PresentationDraftInputSchema,
+    placement: z.object({ folderId: uuid, priority: z.enum(["pinned", "snoozed"]) }).strict().optional(),
   }).strict(),
   z.object({
     kind: z.literal("deleteDraft"), draftId: uuid, expectedRevision: revision,

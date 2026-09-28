@@ -31,13 +31,8 @@ function fixture() {
   const requests: Array<{ subscriptionId: string; resolve: (value: object) => void }> = [];
   const releases: string[] = [];
   const observations = new ThreadObservationController({
-    request: (method, params) => {
-      if (method.endsWith("/release")) {
-        releases.push((params as { subscriptionId: string }).subscriptionId);
-        return Promise.resolve({ accepted: true });
-      }
-      return new Promise<object>(resolve => requests.push({ ...params as { subscriptionId: string }, resolve }));
-    },
+    observe: params => new Promise<object>(resolve => requests.push({ ...params, resolve })),
+    release: async subscriptionId => { releases.push(subscriptionId); },
   });
   const target = { kind: "provider" as const, harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };
   const document: ThreadPayload = {
@@ -122,7 +117,7 @@ function fixture() {
         metadata: { archived: false, pinned: true, snoozed: false },
         lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
       }, ...children],
-      revision: 1, version: 1, updateKind: "threadObservation", freshness: "fresh", error: null,
+      revision: 1, version: 2, updateKind: "threadObservation", freshness: "fresh", error: null,
     };
     observations.accept(snapshot);
     requests[index]!.resolve({ observation: snapshot });
@@ -542,7 +537,6 @@ test("reconnection preserves an accepted view while native caches rebuild", () =
   f.publish(f.document);
   const release = f.owner.acquire("view");
   f.admit();
-  f.observations.disconnect();
   f.publish(null);
   assert.equal(f.owner.getSnapshot().status, "ready");
   assert.equal(f.owner.getSnapshot().document, f.document);
@@ -554,12 +548,10 @@ test("recovery replaces an in-flight read and fences its obsolete admission", as
   const f = fixture();
   const release = f.owner.acquire("view");
   const oldRead = f.owner.read();
-  f.observations.disconnect();
-  f.observations.reset();
   const recovered = f.owner.recover();
   assert.equal(f.reads.length, 2);
   await assert.rejects(f.reads[0]!.admit(), /cancelled/);
-  f.admit(1);
+  f.admit();
   await f.reads[1]!.admit();
   f.publish(f.document);
   f.reads[1]!.resolve(f.document);

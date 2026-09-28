@@ -110,6 +110,7 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
       operations.push("read:project");
       return repository.readProject(projectId);
     },
+    readThreadStateNavigationSummary: async projectId => repository.readNavigationSummary(projectId),
     readThreadStateTitleHistories: async projectId => repository.readTitleHistories(projectId),
     writeThreadStateProject: async (projectId, document, titleHistories) => {
       operations.push("commit");

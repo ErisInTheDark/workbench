@@ -8,16 +8,17 @@ import path from "node:path";
 import test from "node:test";
 import WorkbenchThreadStateControllerOwner, { type WorkbenchThreadStateControllerOptions } from "./WorkbenchThreadStateController";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
-import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
-import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
+import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "workbench-shared/types";
 import { getProjectQualifiedThreadDisplayKey, getThreadDisplayFolderKey, getThreadDisplayThreadKey } from "workbench-shared/workbench/thread/thread-display-layout";
-import { getWorkbenchHomeFolderKey } from "workbench-shared/workbench/thread/home-thread-display-order";
 import { projectWorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
-import { WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadObservationResultSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchThreadStateStore, { type WorkbenchStoredThreadTitleHistory, type WorkbenchThreadStateGlobalDocumentId, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 import { normalizeProviderSidebarEntry as normalizeSidebarEntry } from "./WorkbenchThreadStateFeature";
 import { parseProjectDocument } from "./database/thread-state/workbench-thread-state-document-source";
+import { createWorkbenchProjectThreadSummary } from "workbench-shared/workbench/thread/thread-state";
+import { projectWorkbenchThreadStateEntry } from "./workbench-thread-state-record";
+import { projectWorkbenchThreadDraft } from "./WorkbenchThreadDraftStore";
 
 import { ProjectIdSchema, WorkbenchTurnIdSchema, WorkbenchThreadIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -93,6 +94,7 @@ type TestControllerOptions = Omit<WorkbenchThreadStateControllerOptions, "resolv
   & Partial<Pick<WorkbenchThreadStateControllerOptions, "resolveProjectId" | "hasGitArcBlockingSettlement" | "resolveGitArc" | "resolveGitArcPlan" | "runGitArcReadTransition" | "threadStateStore">>
   & {
     storageRoot: string;
+    onProject?: (snapshot: WorkbenchThreadSidebarSnapshot) => void;
   };
 
 class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
@@ -147,6 +149,19 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
     return structuredClone(this.projects.get(ProjectIdSchema.parse(projectId)) ?? null);
   }
 
+  async readNavigationSummary(projectId: ProjectId) {
+    const stored = parseProjectDocument(JSON.stringify(this.projects.get(projectId)
+      ?? { version: 4, records: [], drafts: [] }), projectId);
+    return createWorkbenchProjectThreadSummary(projectId, [
+      ...stored.records.flatMap(record => {
+        const entry = projectWorkbenchThreadStateEntry(record);
+        return entry ? [entry] : [];
+      }),
+      ...stored.drafts.filter(draft => draft.pinned && !draft.snoozed).map(draft =>
+        projectWorkbenchThreadDraft(draft, { archived: false, pinned: true, snoozed: false })),
+    ], 0, stored.displayOrder ?? {});
+  }
+
   async writeGlobal(id: WorkbenchThreadStateGlobalDocumentId, document: object) {
     this.globals.set(id, structuredClone(document));
   }
@@ -159,68 +174,11 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
 
 const testPersistenceByRoot = new Map<string, MemoryThreadStatePersistence>();
 
-test("new global observation admits Home before a slow project loads", async () => {
-  const persistence = new MemoryThreadStatePersistence();
-  const slowProject = fixtureProjectIds.beta;
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const published = Promise.withResolvers<WorkbenchThreadStateSnapshot>();
-  const readProject = persistence.readProject.bind(persistence);
-  persistence.readProject = async projectId => {
-    if (projectId === slowProject) {
-      entered.resolve();
-      await release.promise;
-      throw new Error("slow project failed");
-    }
-    return await readProject(projectId);
-  };
-  const controller = new WorkbenchThreadStateController({
-    storageRoot: "progressive-global-open", threadStateStore: persistence,
-    getProjectCatalog: () => ({
-      data: [
-        projectOption(fixtureProjectIds.alpha, "C:/alpha"),
-        projectOption(slowProject, "C:/beta"),
-      ],
-      rootPath: "C:/",
-    }),
-    projectState: projectState(),
-    publish: (_connectionId, update) => {
-      if ("updateKind" in update && update.updateKind === "projectThreadSidebar"
-        && update.sidebar.projectId === slowProject) published.resolve(update);
-    },
-    reconcileProject: async () => [],
-  });
-  try {
-    let opened = false;
-    const opening = controller.openGlobal("viewer", 8).then(result => {
-      opened = true;
-      return result;
-    });
-    await entered.promise;
-    try {
-      await Promise.resolve();
-      await Promise.resolve();
-      assert.equal(opened, true, "a slow project must not hold the global bootstrap response");
-    } finally {
-      release.resolve();
-    }
-    const result = await opening;
-    assert.equal(result.catalog.data.length, 2);
-    const update = await published.promise;
-    assert.equal("updateKind" in update && update.updateKind === "projectThreadSidebar"
-      ? update.sidebar.error : null, "slow project failed");
-  } finally {
-    release.resolve();
-    await controller.dispose();
-  }
-});
-
-test("retained project requests share one observation and move drafts between canonical owners", async () => {
+test("retained project reads and mutations use canonical ownership without creating alias storage", async context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
   const persistence = new MemoryThreadStatePersistence();
   const source = testProjectIds.project;
   const destination = testProjectIds.other;
-  const observations: string[] = [];
-  const stopped: string[] = [];
   const controller = new WorkbenchThreadStateController({
     storageRoot: "canonical-project-requests", threadStateStore: persistence,
     resolveProjectId: id => {
@@ -229,42 +187,27 @@ test("retained project requests share one observation and move drafts between ca
       throw new Error("Project ownership has not been admitted.");
     },
     getProjectCatalog: () => ({ data: [projectOption(source, "C:/source"), projectOption(destination, "C:/destination")], rootPath: "C:/" }),
-    projectState: { ...projectState(), observe: id => { observations.push(id); return () => { stopped.push(id); }; } },
-    publish: () => undefined, reconcileProject: async () => [],
+    reconcileProject: async () => [],
   });
-  const draft = {
-    draftId: "eb83014c-5b6c-4bd0-963b-27c5641a0f93", projectId: fixtureProjectIds.alpha, prompt: "retain me",
-    profileId: null, attachments: [],
-    composerSettings: { harness: "codex", agentPath: null, agentSource: null, model: "model", reasoningEffort: null, serviceTier: null },
-    clientUpdatedAt: 1, createdAt: 1, updatedAt: 1,
-  };
   try {
-    const opened = await controller.open("connection", fixtureProjectIds.alpha, 1);
+    const opened = await controller.readProject(fixtureProjectIds.alpha);
     assert.equal(opened.projectId, source);
     const before = structuredClone({ projects: persistence.projects, globals: persistence.globals });
     for (const id of ["remote:/example.test/source", "remote://example.test/unknown"]) {
-      await assert.rejects(controller.open("connection", ProjectIdSchema.parse(id)), /project/i);
-      await assert.rejects(controller.handleRequest("connection", {
-        method: "workbench/thread-state/open", projectId: id, version: 2,
-      }), /project/i);
+      await assert.rejects(controller.readProject(ProjectIdSchema.parse(id)), /project/i);
     }
-    assert.deepEqual(stopped, []);
     assert.deepEqual({ projects: persistence.projects, globals: persistence.globals }, before);
-    await controller.handleRequest("connection", { method: "workbench/thread-state/draft/upsert", projectId: fixtureProjectIds.alpha, draft });
+    const entry = pinnedRecord("thread", "retained");
+    await controller.ensureProviderEntry(fixtureProjectIds.alpha, entry);
     assert.equal((await controller.getSnapshot(source)).entries.length, 1);
     assert.ok(!persistence.projects.has(fixtureProjectIds.alpha));
     await controller.handleRequest("connection", {
-      method: "workbench/thread-state/draft/move", sourceProjectId: fixtureProjectIds.alpha,
-      destinationProjectId: fixtureProjectIds.beta, draftId: draft.draftId,
+      method: "workbench/thread-state/pin/set", projectId: fixtureProjectIds.alpha,
+      identity: entry.identity, pinned: false,
     });
-    assert.equal((await controller.getSnapshot(source)).entries.length, 0);
-    const moved = (await controller.getSnapshot(destination)).entries[0];
-    assert.ok(moved?.entryKind === "draft");
-    assert.equal(moved.draft.projectId, destination);
-    assert.equal(moved.draft.prompt, draft.prompt);
-    await controller.close("connection", fixtureProjectIds.alpha);
-    assert.deepEqual(observations, [source]);
-    assert.deepEqual(stopped, [source]);
+    assert.equal(controller.peekProject(fixtureProjectIds.alpha)?.projectId, source);
+    assert.equal((await controller.getProjectThreadSummary(fixtureProjectIds.alpha)).projectId, source);
+    assert.equal((await controller.readProject(destination)).entries.length, 0);
   } finally { await controller.dispose(); }
 });
 
@@ -272,8 +215,7 @@ test("thread mutations do not replace their project document", async () => {
   const persistence = new MemoryThreadStatePersistence();
   const controller = new WorkbenchThreadStateController({
     storageRoot: "isolated-thread-writes", threadStateStore: persistence,
-    getProjectCatalog: () => ({ data: [], rootPath: "" }), projectState: projectState(),
-    publish: () => undefined, reconcileProject: async () => [],
+    getProjectCatalog: () => ({ data: [], rootPath: "" }), reconcileProject: async () => [],
   });
   const provider = normalizeProviderSidebarEntry("codex", { id: "isolated", name: "original", updatedAt: 1 });
   assert.ok(provider && provider.entryKind === "thread");
@@ -286,7 +228,7 @@ test("thread mutations do not replace their project document", async () => {
       kind: "custom", settings: { ...EMPTY_CODEX_SETTINGS, model: "isolated-model" },
     });
     await controller.refresh(fixtureProjectIds["project"]);
-    await controller.open("isolated-viewer", fixtureProjectIds["project"], 4);
+    await controller.readProject(fixtureProjectIds["project"]);
     const writeChanges = persistence.writeChanges.bind(persistence);
     persistence.writeChanges = async (projectId, changes) => {
       assert.ok(changes.records?.every(record => record.identity.threadId === provider.identity.threadId) ?? true,
@@ -323,8 +265,7 @@ test("failed provider installation does not leave a new entry in project memory"
   const persistence = new MemoryThreadStatePersistence();
   const controller = new WorkbenchThreadStateController({
     storageRoot: "failed-provider-install", threadStateStore: persistence,
-    getProjectCatalog: () => ({ data: [], rootPath: "" }), projectState: projectState(),
-    publish: () => undefined, reconcileProject: async () => [],
+    getProjectCatalog: () => ({ data: [], rootPath: "" }), reconcileProject: async () => [],
   });
   const provider = normalizeProviderSidebarEntry("codex", { id: "rejected-install", name: "rejected", updatedAt: 1 });
   assert.ok(provider && provider.entryKind === "thread");
@@ -351,8 +292,7 @@ test("a queued title write retains the profile committed ahead of it", async () 
   const controller = new WorkbenchThreadStateController({
     storageRoot: "queued-thread-facts", threadStateStore: persistence,
     now: () => { onNow(); return 10; },
-    getProjectCatalog: () => ({ data: [], rootPath: "" }), projectState: projectState(),
-    publish: () => undefined, reconcileProject: async () => [],
+    getProjectCatalog: () => ({ data: [], rootPath: "" }), reconcileProject: async () => [],
   });
   const provider = normalizeProviderSidebarEntry("codex", { id: "queued-profile", name: "original", updatedAt: 1 });
   assert.ok(provider && provider.entryKind === "thread");
@@ -399,8 +339,7 @@ test("failed discovery rollback preserves a newer title and its eventual save", 
   const controller = new WorkbenchThreadStateController({
     storageRoot: "discovery-write-race", threadStateStore: persistence,
     now: () => { onNow(); return 10; },
-    getProjectCatalog: () => ({ data: [], rootPath: "" }), projectState: projectState(),
-    publish: () => undefined,
+    getProjectCatalog: () => ({ data: [], rootPath: "" }),
     reconcileProject: async (_projectId, _signal, accept) => {
       if (discover) await accept("codex", [{ ...provider, title: "discovery title" }], { complete: false });
       return [];
@@ -445,16 +384,17 @@ for (const scope of ["project", "global"] as const) {
     const controller = new WorkbenchThreadStateController({
       storageRoot: `retired-${scope}`, threadStateStore: persistence,
       getProjectCatalog: () => ({ data: [], rootPath: "" }),
-      projectState: projectState(), publish() {}, reconcileProject: async () => [],
+      reconcileProject: async () => [],
     });
-    const reading = scope === "project" ? controller.getSnapshot(fixtureProjectIds["project"]) : controller.openGlobal("viewer", 6);
+    const reading = controller.getSnapshot(fixtureProjectIds["project"]);
     const rejected = assert.rejects(reading, /retired/);
     await entered;
+    const writesBeforeRetirement = persistence.projects.size + persistence.globals.size;
     const disposing = controller.dispose();
     await disposing;
     release(null);
     await rejected;
-    assert.equal(persistence.projects.size + persistence.globals.size, 0);
+    assert.equal(persistence.projects.size + persistence.globals.size, writesBeforeRetirement);
   });
 }
 
@@ -469,7 +409,7 @@ test("thread-state retirement retains an already-issued document write", async (
   const controller = new WorkbenchThreadStateController({
     storageRoot: "retired-issued-write", threadStateStore: persistence,
     getProjectCatalog: () => ({ data: [], rootPath: "" }),
-    projectState: projectState(), publish() {}, reconcileProject: async () => [],
+    reconcileProject: async () => [],
   });
   const reading = controller.getSnapshot(fixtureProjectIds["project"]);
   const settlement = Promise.allSettled([reading]);
@@ -504,8 +444,6 @@ test("first explicit title is durable before a rename and keeps its timestamp af
     threadStateStore: persistence,
     now: () => 10,
     getProjectCatalog: () => ({ data: [], rootPath: "" }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
   };
   const first = new WorkbenchThreadStateController(options);
@@ -538,8 +476,6 @@ test("title history records user renames, ignores repeated observations, and sur
     storageRoot: "title-history-owner",
     now: () => now,
     getProjectCatalog: () => ({ data: [], rootPath: "" }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
     renameThread: async (_project, _harness, _thread, title) => {
       if (title === "rejected") throw new Error("Provider rejected rename.");
@@ -555,7 +491,7 @@ test("title history records user renames, ignores repeated observations, and sur
     title: "original",
   };
   try {
-    await controller.open("viewer", fixtureProjectIds["project"]);
+    await controller.readProject(fixtureProjectIds["project"]);
     const originalProvider = normalizeProviderSidebarEntry("codex", { id: provider.identity.threadId, name: provider.title, updatedAt: 1 });
     assert.ok(originalProvider && originalProvider.entryKind !== "draft");
     await controller.ensureProviderEntry(fixtureProjectIds["project"], originalProvider);
@@ -582,9 +518,7 @@ test("title history records user renames, ignores repeated observations, and sur
     const dismissRequest = {
       method: "workbench/thread-state/title/dismiss" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: provider.identity, title: "original",
     };
-    const denied = await controller.handleRequest("stranger", dismissRequest);
-    assert.ok(denied.error);
-    const dismissed = await controller.handleRequest("viewer", dismissRequest);
+    const dismissed = await controller.handleRequest("another-socket", dismissRequest);
     assert.equal(dismissed.error, undefined);
     await controller.ensureProviderEntry(fixtureProjectIds["project"], renamedProvider);
     const afterDismissal = (await snapshot()).entries[0]!;
@@ -609,8 +543,6 @@ test("fallback displays never enter history through load, reconciliation, lifecy
     threadStateStore: persistence,
     now: () => 10,
     getProjectCatalog: () => ({ data: [], rootPath: "" }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
   };
   const first = new WorkbenchThreadStateController(options);
@@ -655,8 +587,6 @@ test("renaming to a drifted provider label still advances the recorded title", a
     storageRoot: "explicit-title-drift-rename",
     now: () => now,
     getProjectCatalog: () => ({ data: [], rootPath: "" }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
   });
   const identity = { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("drift-thread") };
@@ -669,7 +599,7 @@ test("renaming to a drifted provider label still advances the recorded title", a
     return observed;
   };
   try {
-    await controller.open("viewer", fixtureProjectIds["project"]);
+    await controller.readProject(fixtureProjectIds["project"]);
     await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry("A"));
     await controller.setTitle(fixtureProjectIds["project"], "codex", identity.threadId, "A");
     now = 20;
@@ -694,8 +624,6 @@ test("dismissal protects the recorded title rather than a drifted provider label
     storageRoot: "explicit-title-drift-dismiss",
     now: () => now,
     getProjectCatalog: () => ({ data: [], rootPath: "" }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
   });
   const identity = { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("drift-dismiss-thread") };
@@ -711,7 +639,7 @@ test("dismissal protects the recorded title rather than a drifted provider label
     method: "workbench/thread-state/title/dismiss", projectId: fixtureProjectIds["project"], identity, title,
   });
   try {
-    await controller.open("viewer", fixtureProjectIds["project"]);
+    await controller.readProject(fixtureProjectIds["project"]);
     await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry("A"));
     await controller.setTitle(fixtureProjectIds["project"], "codex", identity.threadId, "A");
     now = 20;
@@ -742,6 +670,7 @@ class WorkbenchThreadStateController extends WorkbenchThreadStateControllerOwner
   constructor(options: TestControllerOptions) {
     const {
       storageRoot,
+      onProject,
       threadStateStore = testPersistence(storageRoot),
       ...controllerOptions
     } = options;
@@ -754,35 +683,11 @@ class WorkbenchThreadStateController extends WorkbenchThreadStateControllerOwner
       ...controllerOptions,
       threadStateStore,
     });
+    if (onProject) this.subscribeProjects(projectId => {
+      const snapshot = this.peekProject(projectId);
+      if (snapshot) onProject(snapshot);
+    });
   }
-}
-
-function projectUpdate(projectId: string, revision = 1): WorkbenchProjectStateUpdate {
-  return {
-    projectId,
-    revision,
-    snapshot: {
-      changes: {},
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
-      root: projectId,
-      rootPath: `C:/projects/${projectId}`,
-      roots: [{ id: projectId, isPrimary: true, name: projectId, relativePath: projectId, rootPath: `C:/projects/${projectId}` }],
-      tree: [],
-      workbenchStorageRootPath: "C:/projects/workbench",
-    },
-    updateKind: "project",
-  };
-}
-
-function projectState(overrides: {
-  getCurrentUpdate?: (projectId: string) => WorkbenchProjectStateUpdate | null;
-  observe?: (projectId: string, publish: (update: WorkbenchProjectStateUpdate) => void) => () => void;
-} = {}) {
-  return {
-    getCurrentUpdate: overrides.getCurrentUpdate ?? (() => null),
-    handleRequest: async () => ({ accepted: true }),
-    observe: overrides.observe ?? (() => () => undefined),
-  };
 }
 
 function projectCatalog() {
@@ -806,12 +711,12 @@ test("settlement publishes the affected entry while discovery is held, including
   let entered!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const started = new Promise<void>(resolve => { entered = resolve; });
-  const publications: WorkbenchThreadStateSnapshot[] = [];
+  const publications: WorkbenchThreadSidebarSnapshot[] = [];
   const observed: WorkbenchThreadSidebarEntry[] = [];
   const controller = new WorkbenchThreadStateController({
-    storageRoot: "immediate-incremental-settlement", projectState: projectState(),
+    storageRoot: "immediate-incremental-settlement",
     getProjectCatalog: () => ({ data: [projectOption("project", "C:/project")], rootPath: "C:/" }),
-    publish: (_connection, snapshot) => publications.push(snapshot),
+    onProject: snapshot => publications.push(snapshot),
     reconcileProject: async () => { entered(); await gate; return []; },
   });
   let refreshing: Promise<WorkbenchThreadSidebarSnapshot> | null = null;
@@ -821,31 +726,25 @@ test("settlement publishes the affected entry while discovery is held, including
       metadata: { archived: false, pinned: false, snoozed: false },
       lifecycle: { kind: "completed", reason: "userCompleted", settled: false },
     });
-    await controller.open("viewer", fixtureProjectIds["project"], 5);
+    await controller.readProject(fixtureProjectIds["project"]);
     refreshing = controller.refresh(fixtureProjectIds["project"]);
     await started;
     publications.length = 0;
     await controller.handleRequest("viewer", {
       method: "workbench/thread-state/settle", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("changed") },
     });
-    const delta = publications.find(snapshot => "updateKind" in snapshot && snapshot.updateKind === "threadStateDelta");
-    assert.ok(delta && "upserts" in delta);
-    assert.equal(delta.upserts.length, 1);
-    assert.equal(delta.upserts[0]?.entryKind !== "draft" && delta.upserts[0]?.lifecycle.settled, true);
+    const settled = publications.at(-1)?.entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === "changed");
+    assert.ok(settled && settled.entryKind !== "draft" && settled.lifecycle.settled);
     publications.length = 0;
     await controller.handleRequest("viewer", {
       method: "workbench/thread-state/priority/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), sourceKey: "codex:unrelated", priority: "pinned",
     });
-    const priority = publications.find(snapshot => "updateKind" in snapshot && snapshot.updateKind === "threadStateDelta");
-    assert.ok(priority && "upserts" in priority);
-    assert.equal(priority.upserts.length, 1);
-    assert.equal(priority.upserts[0]?.entryKind === "thread" && priority.upserts[0].metadata.pinned, true);
+    const priority = publications.at(-1)?.entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === "unrelated");
+    assert.ok(priority?.entryKind === "thread" && priority.metadata.pinned);
     publications.length = 0;
     await controller.setTitle(fixtureProjectIds["project"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("unrelated"), "visible title");
-    const title = publications.find(snapshot => "updateKind" in snapshot && snapshot.updateKind === "threadStateDelta");
-    assert.ok(title && "upserts" in title);
-    assert.equal(title.upserts[0]?.title, "visible title");
-    await controller.close("viewer", fixtureProjectIds["project"]);
+    const title = publications.at(-1)?.entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === "unrelated");
+    assert.equal(title?.title, "visible title");
     const stop = controller.subscribe((_projectId, entry) => observed.push(entry));
     await controller.setTitle(fixtureProjectIds["project"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("unrelated"), "headless change");
     stop();
@@ -857,14 +756,13 @@ test("settlement publishes the affected entry while discovery is held, including
   }
 });
 
-test("a pinned thread observation receives full live state without observing its project sidebar", async () => {
+test("a demanded thread read includes questionnaire state independently of project discovery failure", async () => {
   const identity = { harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("foreign-thread") };
   const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1, entryKind: "thread", title: "Foreign", identity,
     metadata: { archived: false, pinned: true, snoozed: false },
     lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
   };
-  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
   const controller = new WorkbenchThreadStateController({
     storageRoot: "foreign-thread-observation",
     threadStateStore: new MemoryThreadStatePersistence(),
@@ -872,27 +770,22 @@ test("a pinned thread observation receives full live state without observing its
       data: [projectOption("alpha", "C:/alpha"), projectOption("beta", "C:/beta")],
       rootPath: "C:/",
     }),
-    projectState: projectState(),
-    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
     reconcileProject: async () => [{ harness: "opencode", message: "Unrelated provider is unavailable." }],
   });
   try {
     await controller.ensureProviderEntry(fixtureProjectIds["beta"], provider);
     await controller.refresh(fixtureProjectIds["beta"]);
-    await controller.open("viewer", fixtureProjectIds["alpha"], 4);
+    await controller.readProject(fixtureProjectIds["alpha"]);
     const subscriptionId = "4f603f09-c04c-43ab-b879-6fbe4133b94a";
-    const response = await controller.handleRequest("viewer", {
-      method: "workbench/thread-state/observe",
+    const read = () => controller.readWorkspaceThread({
       projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"),
       subscriptionId,
       target: { kind: "provider", ...identity },
-      version: 1,
     });
-    assert.ok("result" in response, "a visible foreign pin must acquire its own observation");
-    const result = WorkbenchThreadObservationResultSchema.parse(response.result);
-    assert.equal(result.observation.entries[0]?.entryKind, "thread");
-    assert.equal(result.observation.error, null);
-    assert.equal(result.observation.freshness, "fresh");
+    const result = await read();
+    assert.equal(result.entries[0]?.entryKind, "thread");
+    assert.equal(result.error, null);
+    assert.equal(result.freshness, "fresh");
     assert.ok((await controller.getSnapshot(fixtureProjectIds["beta"])).error, "the project retains its own reconciliation failure");
     const question = {
       itemId: "6f78b24c-db99-4161-a768-40f1cab6b58d",
@@ -905,22 +798,13 @@ test("a pinned thread observation receives full live state without observing its
     await controller.observeLifecycle("codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(identity.threadId), {
       kind: "pendingInput", questionnaire: question, requestKey: question.requestKey, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(question.turnId),
     });
-    const observationUpdates = () => publications.flatMap(({ connectionId, snapshot }) => (
-      connectionId === "viewer" && "updateKind" in snapshot && snapshot.updateKind === "threadObservation"
-        ? [snapshot]
-        : []
-    ));
-    const pending = observationUpdates().at(-1)?.entries[0];
+    const pending = (await read()).entries[0];
     assert.ok(pending && pending.entryKind !== "draft");
     assert.deepEqual(pending.pendingQuestionnaire, question);
     await controller.observeLifecycle("codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(identity.threadId), { kind: "inputResolved", requestKey: question.requestKey });
-    const cleared = observationUpdates().at(-1)?.entries[0];
+    const cleared = (await read()).entries[0];
     assert.ok(cleared && cleared.entryKind !== "draft");
     assert.equal(cleared.pendingQuestionnaire, null);
-    await controller.handleRequest("viewer", { method: "workbench/thread-state/release", subscriptionId });
-    const count = observationUpdates().length;
-    await controller.setTitle(fixtureProjectIds["beta"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(identity.threadId), "Updated");
-    assert.equal(observationUpdates().length, count);
   } finally {
     await controller.dispose();
   }
@@ -958,15 +842,13 @@ test("accepted questionnaire response returns its thread to working", async () =
     publishAgentContext: async (_harness, _threadId, text) => { notices.push(text); },
     threadStateStore: new MemoryThreadStatePersistence(),
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => {},
     reconcileProject: async (_project, _signal, accept) => {
       await accept("codex", [provider], { complete: true });
       return [];
     },
   });
   try {
-    await controller.open("observer", fixtureProjectIds["project"]);
+    await controller.readProject(fixtureProjectIds["project"]);
     await controller.refresh(fixtureProjectIds["project"]);
     const response = { answers: { choice: { answers: ["yes"] } } };
     const result = await controller.resolvePendingQuestionnaire({
@@ -1053,8 +935,6 @@ test("status notices follow committed input transitions, not repeats or notifica
     storageRoot: "status-notices",
     threadStateStore: new MemoryThreadStatePersistence(),
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => {},
     reconcileProject: async () => [],
     publishAgentContext: async (_harness, threadId, text) => {
       notices.push(text);
@@ -1113,7 +993,7 @@ test("questionnaire completion revalidates the captured item after interruption 
     } : provider;
     const controller = new WorkbenchThreadStateController({
       storageRoot: `questionnaire-completion-${outcome}`, threadStateStore: new MemoryThreadStatePersistence(),
-      getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => {},
+      getProjectCatalog: projectCatalog,
       reconcileProject: async (_project, _signal, accept) => {
         await accept("codex", [record], { complete: true });
         return [];
@@ -1129,7 +1009,7 @@ test("questionnaire completion revalidates the captured item after interruption 
       },
     });
     try {
-      await controller.open("observer", fixtureProjectIds["project"]);
+      await controller.readProject(fixtureProjectIds["project"]);
       await controller.refresh(fixtureProjectIds["project"]);
       await controller.ensureProviderEntry(fixtureProjectIds["project"], record);
       await controller.observeLifecycle("codex", fixtureThreadIds["thread"], {
@@ -1169,7 +1049,7 @@ test("overdue settlement archives retroactively except pinned threads and restor
   await persistence.writeProject("project", { drafts: [], records, version: 4 });
   const controller = new WorkbenchThreadStateController({
     storageRoot: "retroactive-archive", threadStateStore: persistence, now: () => now,
-    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => {},
+    getProjectCatalog: projectCatalog,
     reconcileProject: async () => [],
   });
   const read = async (id: string) => (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(entry => entry.entryKind === "thread" && entry.identity.threadId === id);
@@ -1217,7 +1097,7 @@ test("failed retroactive archival preserves the visible thread and its settled f
   };
   const controller = new WorkbenchThreadStateController({
     storageRoot: "archive-save-failure", threadStateStore: persistence, now: () => 20 * 24 * 60 * 60 * 1_000,
-    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => {},
+    getProjectCatalog: projectCatalog,
     reconcileProject: async () => [],
   });
   try {
@@ -1246,7 +1126,7 @@ test("questionnaire snooze retains input through interruption, then stop dismiss
   let interrupts = 0;
   const controller = new WorkbenchThreadStateController({
     storageRoot: "questionnaire-snooze", threadStateStore: new MemoryThreadStatePersistence(),
-    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => {},
+    getProjectCatalog: projectCatalog,
     reconcileProject: async (_project, _signal, accept) => { await accept("codex", [provider], { complete: true }); return []; },
     interruptQuestionnaire: async () => {
       interrupts++;
@@ -1255,7 +1135,7 @@ test("questionnaire snooze retains input through interruption, then stop dismiss
     },
   });
   try {
-    await controller.open("observer", fixtureProjectIds["project"]);
+    await controller.readProject(fixtureProjectIds["project"]);
     await controller.refresh(fixtureProjectIds["project"]);
     const response = await controller.handleRequest("observer", {
       method: "workbench/thread-state/questionnaire/snooze", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: provider.identity, requestKey: question.requestKey,
@@ -1319,12 +1199,10 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, message: str
   }
 }
 
-test("UI subscribers share headless observation and warm snapshots without owning reconciliation", async () => {
+test("independent project subscribers and warm reads do not own background reconciliation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-state-"));
   const published: Array<{ connectionId: string; revision: number }> = [];
   let reconciliations = 0;
-  let projectObservationStarts = 0;
-  let projectObservationStops = 0;
   const knownEntry: WorkbenchThreadSidebarEntry = {
     activityAt: 1,
     entryKind: "thread",
@@ -1335,10 +1213,6 @@ test("UI subscribers share headless observation and warm snapshots without ownin
   };
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState({ observe: () => { projectObservationStarts += 1; return () => { projectObservationStops += 1; }; } }),
-    publish: (connectionId, snapshot) => {
-      if (!("updateKind" in snapshot)) published.push({ connectionId, revision: snapshot.revision });
-    },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       reconciliations += 1;
       await acceptProviderSnapshot("codex", [knownEntry], { complete: true });
@@ -1346,16 +1220,20 @@ test("UI subscribers share headless observation and warm snapshots without ownin
     },
     storageRoot: root,
   });
-  const first = await controller.open("a", fixtureProjectIds["project"]);
-  assert.equal(first.sidebar.freshness, "loading");
+  const observe = (connectionId: string) => controller.subscribeProjects(projectId => {
+    const snapshot = controller.peekProject(projectId);
+    if (snapshot) published.push({ connectionId, revision: snapshot.revision });
+  });
+  const stopA = observe("a");
+  const first = await controller.readProject(fixtureProjectIds["project"]);
+  assert.equal(first.freshness, "loading");
   await waitFor(() => reconciliations === 1, "Initial reconciliation did not start.");
   await new Promise<void>((resolve) => setImmediate(resolve));
-  const second = await controller.open("b", fixtureProjectIds["project"]);
-  assert.equal(second.sidebar.freshness, "fresh", second.sidebar.error ?? "Reconciliation did not become fresh.");
-  assert.equal(second.sidebar.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "known"), true);
-  assert.deepEqual(second.catalog, projectCatalog());
+  const stopB = observe("b");
+  const second = await controller.readProject(fixtureProjectIds["project"]);
+  assert.equal(second.freshness, "fresh", second.error ?? "Reconciliation did not become fresh.");
+  assert.equal(second.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "known"), true);
   assert.equal(reconciliations, 1);
-  assert.equal(projectObservationStarts, 1);
   await controller.refresh(fixtureProjectIds["project"]);
   assert.equal(reconciliations, 2);
   assert.deepEqual(new Set(published.map((entry) => entry.connectionId)), new Set(["a", "b"]));
@@ -1364,19 +1242,18 @@ test("UI subscribers share headless observation and warm snapshots without ownin
     assert.deepEqual(revisions, [...revisions].sort((left, right) => left - right));
     assert.equal(new Set(revisions).size, revisions.length);
   }
-  await controller.close("a");
-  assert.equal(projectObservationStops, 0);
-  await controller.close("b");
-  assert.equal(projectObservationStops, 1);
-  await controller.open("c", fixtureProjectIds["project"]);
-  assert.equal(projectObservationStarts, 2);
-  await controller.close("c");
-  assert.equal(projectObservationStops, 2);
+  stopA();
+  const before = published.filter(item => item.connectionId === "a").length;
+  await controller.refresh(fixtureProjectIds["project"]);
+  assert.equal(published.filter(item => item.connectionId === "a").length, before);
+  assert.ok(published.filter(item => item.connectionId === "b").length > 0);
+  stopB();
+  await controller.readProject(fixtureProjectIds["project"]);
+  assert.equal(reconciliations, 2, "Removing and adding consumers must not restart the in-flight refresh.");
   await controller.dispose();
-  assert.equal(projectObservationStops, 2);
 });
 
-test("global pinned folders import project layout, accept mixed-project members, broadcast, and remove snoozed members", async () => {
+test("retained project folders import into the legacy pinned export with source-qualified members", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-global-pinned-layout-"));
   const folderId = fixtureIdentitySchemas.FolderIdSchema.parse("00000000-0000-4000-8000-000000000041");
   const projects = ["project-a", "project-b"];
@@ -1394,60 +1271,21 @@ test("global pinned folders import project layout, accept mixed-project members,
     }],
     version: 3,
   });
-  const published: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: () => ({ data: projects.map((id) => projectOption(id, path.join(root, id))), rootPath: root }),
-    projectState: projectState(),
-    publish: (connectionId, snapshot) => { published.push({ connectionId, snapshot }); },
     reconcileProject: async () => [],
     storageRoot: root,
   });
-  const opened = await controller.open("observer-a", fixtureProjectIds["project-a"], 3);
-  await controller.open("observer-b", fixtureProjectIds["project-b"], 3);
-  await waitFor(
-    () => published.some(({ snapshot }) => "updateKind" in snapshot && snapshot.updateKind === "projectThreadSummary" && snapshot.summary.projectId === "project-b"),
-    "The cold project summary did not hydrate.",
-  );
-  assert.equal(opened.pinnedThreadLayout.displayOrder.folders?.[0]?.title, "Everywhere");
+  await controller.readProject(fixtureProjectIds["project-a"]);
+  await controller.readProject(fixtureProjectIds["project-b"]);
   const keyA = getProjectQualifiedThreadDisplayKey(fixtureProjectIds["project-a"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:a"));
-  const keyB = getProjectQualifiedThreadDisplayKey(fixtureProjectIds["project-b"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:b"));
-  const movedAcrossPriority = await controller.handleRequest("observer-a", {
-    beforeKey: getThreadDisplayFolderKey(folderId),
-    destinationFolderId: null,
-    method: "workbench/thread-state/pinned-display-order/move",
-    sourceKey: keyB,
-  });
-  assert.equal("result" in movedAcrossPriority ? WorkbenchThreadStateMutationResultSchema.parse(movedAcrossPriority.result).accepted : false, true);
-  const movedProject = await controller.getSnapshot(fixtureProjectIds["project-b"]);
-  const movedEntry = movedProject.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "b");
-  assert.deepEqual(movedEntry?.entryKind === "thread" ? movedEntry.metadata : null, { archived: false, pinned: true, snoozed: false });
-  const movedLayout = await readGlobalState<{ displayOrder: { pinned?: Record<string, { below: string[] }> } }>(root, "pinnedLayout");
-  assert.equal(movedLayout.displayOrder.pinned?.[keyB]?.below.includes(getThreadDisplayFolderKey(folderId)), true);
-  const moved = await controller.handleRequest("observer-a", {
-    destinationFolderId: folderId,
-    folderId: null,
-    method: "workbench/thread-state/pinned-display-order/folder/drop",
-    sourceKey: keyB,
-    targetKey: keyA,
-  });
-  assert.equal("result" in moved ? WorkbenchThreadStateMutationResultSchema.parse(moved.result).accepted : false, true);
   const stored = await readGlobalState<{ displayOrder: { folders?: Array<{ threadKeys: string[] }> } }>(root, "pinnedLayout");
-  assert.deepEqual(stored.displayOrder.folders?.[0]?.threadKeys, [keyB, keyA]);
-  const layoutObservers = new Set(published.filter(({ snapshot }) => "updateKind" in snapshot && snapshot.updateKind === "pinnedThreadLayout").map(({ connectionId }) => connectionId));
-  assert.deepEqual(layoutObservers, new Set(["observer-a", "observer-b"]));
-  await controller.handleRequest("observer-a", {
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("b") },
-    method: "workbench/thread-state/snooze/set",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-b"),
-    snoozed: true,
-  });
-  const afterSnooze = await readGlobalState<{ displayOrder: { folders?: Array<{ threadKeys: string[] }> } }>(root, "pinnedLayout");
-  assert.deepEqual(afterSnooze.displayOrder.folders?.[0]?.threadKeys, [keyA]);
+  assert.deepEqual(stored.displayOrder.folders?.[0]?.threadKeys, [keyA]);
   await controller.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });
 
-test("a failed cross-priority pinned move restores the loaded project state", async () => {
+test("a failed priority write restores the loaded project state", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-pinned-move-rollback-"));
   const persistence = testPersistence(root);
   await persistence.writeProject("project", {
@@ -1460,12 +1298,10 @@ test("a failed cross-priority pinned move restores the loaded project state", as
   });
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: () => ({ data: [projectOption("project", root)], rootPath: root }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"], 3);
+  await controller.readProject(fixtureProjectIds["project"]);
   const writeChanges = persistence.writeChanges.bind(persistence);
   persistence.writeChanges = async () => {
     persistence.writeChanges = writeChanges;
@@ -1474,10 +1310,10 @@ test("a failed cross-priority pinned move restores the loaded project state", as
 
   await assert.rejects(
     controller.handleRequest("observer", {
-      beforeKey: null,
-      destinationFolderId: null,
-      method: "workbench/thread-state/pinned-display-order/move",
-      sourceKey: getProjectQualifiedThreadDisplayKey(fixtureProjectIds["project"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:thread")),
+      method: "workbench/thread-state/priority/set",
+      projectId: fixtureProjectIds["project"],
+      priority: "pinned",
+      sourceKey: "codex:thread",
     }),
     /Project persistence unavailable/u,
   );
@@ -1487,7 +1323,7 @@ test("a failed cross-priority pinned move restores the loaded project state", as
   await fs.rm(root, { force: true, recursive: true });
 });
 
-test("project, pinned, and home thread state persist authoritatively in SQLite across controller restart", async () => {
+test("reconciled project thread state persists authoritatively in SQLite across controller restart", async () => {
   const projectId = testProjectIds.project;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-sqlite-authority-"));
   await fs.mkdir(path.join(root, ".workbench"), { recursive: true });
@@ -1503,8 +1339,6 @@ test("project, pinned, and home thread state persist authoritatively in SQLite a
   ];
   const createController = () => new WorkbenchThreadStateController({
     getProjectCatalog: () => ({ data: [{ ...projectOption("project", root), id: projectId }], rootPath: root }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", providerEntries, { complete: true });
       return [];
@@ -1514,43 +1348,15 @@ test("project, pinned, and home thread state persist authoritatively in SQLite a
   });
   let controller = createController();
   try {
-    await controller.openGlobal("global", 6);
+    await controller.readProject(projectId);
     await waitFor(async () => (await controller.getSnapshot(projectId)).entries.length === 2, "Provider entries did not reconcile.");
-    const alphaKey = getProjectQualifiedThreadDisplayKey(projectId, getThreadDisplayThreadKey("codex", alpha!.threadId));
-    const betaKey = getProjectQualifiedThreadDisplayKey(projectId, getThreadDisplayThreadKey("codex", beta!.threadId));
-    const pinnedFolderId = "00000000-0000-4000-8000-000000000301";
-    const pinnedResult = await controller.handleRequest("global", {
-      folderId: pinnedFolderId,
-      method: "workbench/thread-state/pinned-display-order/folder/create",
-      sourceKey: alphaKey,
-      title: "Pinned group",
-    });
-    assert.equal("result" in pinnedResult && (pinnedResult.result as { accepted?: boolean }).accepted, true);
-    const homeResult = await controller.handleRequest("global", {
-      beforeKey: alphaKey,
-      destinationFolderKey: null,
-      method: "workbench/thread-state/home-display-order/move",
-      section: "pinned",
-      sourceKey: betaKey,
-    });
-    assert.equal("result" in homeResult && (homeResult.result as { accepted?: boolean }).accepted, true);
-
     const projectDocument = await store.readProject(projectId) as { records?: unknown[] } | null;
-    const pinnedDocument = await store.readGlobal("pinnedLayout") as { revision?: number } | null;
-    const homeDocument = await store.readGlobal("homeDisplayOrder") as { revision?: number } | null;
     assert.equal(projectDocument?.records?.length, 2);
-    assert.equal((pinnedDocument?.revision ?? 0) > 0, true);
-    assert.equal((homeDocument?.revision ?? 0) > 0, true);
 
     await controller.dispose();
     controller = createController();
-    const reopened = await controller.openGlobal("reopened", 6);
-    assert.equal(reopened.projectSidebars.projects[0]?.entries.length, 2);
-    assert.equal(reopened.pinnedThreadLayout.revision, pinnedDocument?.revision);
-    assert.equal("homeThreadDisplayOrder" in reopened, true);
-    if ("homeThreadDisplayOrder" in reopened) {
-      assert.equal(reopened.homeThreadDisplayOrder.revision, homeDocument?.revision);
-    }
+    const reopened = await controller.getSnapshot(projectId);
+    assert.deepEqual(reopened.entries.map(entry => entry.title).sort(), ["Private alpha title", "Private beta title"]);
   } finally {
     await controller.dispose();
     await database.close();
@@ -1564,8 +1370,6 @@ test("authoritative SQLite read and write failures surface at the controller bou
   readStore.readProject = async () => { throw new Error("sqlite read unavailable"); };
   const readController = new WorkbenchThreadStateController({
     getProjectCatalog: () => ({ data: [projectOption("project", readRoot)], rootPath: readRoot }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
     storageRoot: readRoot,
     threadStateStore: readStore,
@@ -1581,25 +1385,15 @@ test("authoritative SQLite read and write failures surface at the controller bou
   const writeStore = new MemoryThreadStatePersistence();
   const writeController = new WorkbenchThreadStateController({
     getProjectCatalog: () => ({ data: [projectOption("project", writeRoot)], rootPath: writeRoot }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
     storageRoot: writeRoot,
     threadStateStore: writeStore,
   });
   try {
-    await writeController.open("observer", fixtureProjectIds["project"], 4);
+    await writeController.readProject(fixtureProjectIds["project"]);
     writeStore.writeChanges = async () => { throw new Error("sqlite write unavailable"); };
-    const draftId = "00000000-0000-4000-8000-000000000302";
-    await assert.rejects(writeController.handleRequest("observer", {
-      draft: {
-        agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 1,
-        draftId, harness: "codex", model: null, profileId: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), prompt: "Rejected draft",
-        reasoningEffort: null, serviceTier: null, updatedAt: 1,
-      },
-      method: "workbench/thread-state/draft/upsert",
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    }), /sqlite write unavailable/u);
+    await assert.rejects(writeController.ensureProviderEntry(fixtureProjectIds["project"],
+      pinnedRecord("thread", "Rejected write")), /sqlite write unavailable/u);
   } finally {
     await writeController.dispose();
     await fs.rm(writeRoot, { force: true, recursive: true });
@@ -1619,15 +1413,13 @@ test("repairable global pinned layout drift cannot block thread-state open", asy
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: () => ({ data: [projectOption("project", root)], rootPath: root }),
     log: (message) => { logs.push(message); },
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
     storageRoot: root,
   });
 
-  const opened = await controller.open("observer", fixtureProjectIds["project"], 3);
-
-  assert.equal(opened.pinnedThreadLayout.revision, 0);
+  await controller.readProject(fixtureProjectIds["project"]);
+  const stored = await readGlobalState<{ revision: number }>(root, "pinnedLayout");
+  assert.equal(stored.revision, 0);
   assert.match(logs.join("\n"), /Conformed stored pinned thread layout/u);
   assert.match(logs.join("\n"), /revision/u);
   assert.doesNotMatch(logs.join("\n"), /must-not-be-logged/u);
@@ -1635,8 +1427,10 @@ test("repairable global pinned layout drift cannot block thread-state open", asy
   await fs.rm(root, { force: true, recursive: true });
 });
 
-test("managed wait state is projected live and never persisted", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-waiting-"));
+test("project subscribers receive activity and transient wait state without socket-owned observations", async context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const root = "workspace-activity-and-wait";
+  let now = 10;
   const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1,
     entryKind: "thread",
@@ -1645,290 +1439,38 @@ test("managed wait state is projected live and never persisted", async () => {
     metadata: { archived: false, pinned: false, snoozed: false },
     title: "Waiting thread",
   };
-  let reconciled = false;
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
+    now: () => now,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", [entry], { complete: true });
-      reconciled = true;
       return [];
     },
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
-  await waitFor(() => reconciled, "Waiting-state provider thread was not reconciled.");
+  context.after(() => controller.dispose());
+  await controller.refresh(fixtureProjectIds.project);
+  const received: WorkbenchThreadSidebarSnapshot[] = [];
+  let otherUpdates = 0;
+  const stop = controller.subscribeProjects(projectId => received.push(controller.peekProject(projectId)!));
+  controller.subscribeProjects(() => otherUpdates++);
+  now = 20;
+  await controller.observeActivity("codex", entry.identity.threadId, undefined, fixtureProjectIds.project);
+  assert.equal(received.at(-1)?.entries[0]?.activityAt, now);
   controller.setThreadWaitState("codex", "waiting-thread", ["subagent_wait"]);
   const waiting = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread");
   assert.equal(waiting?.entryKind === "thread" ? waiting.waitingFor : null, "subagents");
   await controller.observeDisplayLabel("codex", fixtureThreadIds["waiting-thread"], "Still waiting");
-  const stored = await readProjectState<object>(root, "project");
-  assert.equal(JSON.stringify(stored).includes("waitingFor"), false);
+  const stored = await readProjectState<{ records: Array<{ waitingFor?: string }> }>(root, "project");
+  assert.equal(stored.records[0]?.waitingFor, undefined);
+  stop();
+  const releasedCount = received.length;
+  const liveCount = otherUpdates;
   controller.setThreadWaitState("codex", "waiting-thread", []);
   const cleared = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread");
   assert.equal(cleared?.entryKind === "thread" ? cleared.waitingFor : null, undefined);
-  await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
-});
-
-test("version 3 bootstraps every project summary and publishes cross-project changes only to version 3 observers", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-project-summaries-"));
-  const reconcileCounts = new Map<string, number>();
-  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({
-      data: [
-        projectOption("alpha", path.join(root, "alpha")),
-        projectOption("beta", path.join(root, "beta")),
-      ],
-      rootPath: root,
-    }),
-    projectState: projectState(),
-    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
-    reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
-      const reconciliation = (reconcileCounts.get(projectId) ?? 0) + 1;
-      reconcileCounts.set(projectId, reconciliation);
-      const lifecycle = projectId === "beta" && reconciliation > 1
-        ? { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const }
-        : { agent: { agentStatus: "working" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const };
-      await acceptProviderSnapshot("codex", [{
-        activityAt: reconciliation,
-        entryKind: "thread",
-        identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(`${projectId}-thread`) },
-        lifecycle,
-        metadata: { archived: false, pinned: false, snoozed: false },
-        title: projectId,
-      }], { complete: true });
-      return [];
-    },
-    storageRoot: root,
-  });
-
-  await controller.open("warm-alpha", fixtureProjectIds["alpha"], 2);
-  await controller.open("warm-beta", fixtureProjectIds["beta"], 2);
-  await waitFor(() => reconcileCounts.get("alpha") === 1 && reconcileCounts.get("beta") === 1, "Project summaries did not warm.");
-  await new Promise<void>((resolve) => setImmediate(resolve));
-
-  const v2 = await controller.open("v2", fixtureProjectIds["alpha"], 2);
-  assert.equal("projectThreads" in v2, false);
-  const v3 = await controller.open("v3", fixtureProjectIds["alpha"], 3);
-  assert.deepEqual(v3.projectThreads.projects.map(({ counts, lastThreadUpdateAt, projectId, unsettledThreads }) => ({
-    lastThreadUpdateAt,
-    projectId,
-    threadStatuses: unsettledThreads.map(({ status }) => status),
-    working: counts.working,
-  })), [
-    { lastThreadUpdateAt: 1, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"), threadStatuses: ["working"], working: 1 },
-    { lastThreadUpdateAt: 1, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"), threadStatuses: ["working"], working: 1 },
-  ]);
-
-  publications.length = 0;
-  await controller.refresh(fixtureProjectIds["beta"]);
-  await waitFor(() => publications.some(({ snapshot }) => "updateKind" in snapshot
-    && snapshot.updateKind === "projectThreadSummary" && snapshot.summary.projectId === "beta"
-    && snapshot.summary.counts.needsAttentionActive === 1), "Refreshed project summary was not published.");
-  const summaryPublications = publications.filter((publication) => "updateKind" in publication.snapshot
-    && publication.snapshot.updateKind === "projectThreadSummary");
-  assert.equal(summaryPublications.length > 0, true);
-  assert.equal(summaryPublications.every(({ connectionId }) => connectionId === "v3"), true);
-  const update = summaryPublications.at(-1)?.snapshot;
-  assert.deepEqual(update && "updateKind" in update && update.updateKind === "projectThreadSummary"
-    ? {
-      lastThreadUpdateAt: update.summary.lastThreadUpdateAt,
-      needsAttention: update.summary.counts.needsAttentionActive,
-      threadStatuses: update.summary.unsettledThreads.map(({ status }) => status),
-    }
-    : null, {
-    lastThreadUpdateAt: 1,
-    needsAttention: 1,
-    threadStatuses: ["needsAttentionActive"],
-  });
-  await controller.dispose();
-});
-
-test("version 3 returns loaded summaries before cold projects and fences progressive pushes to the live observation", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-progressive-summaries-"));
-  let releaseBeta = () => undefined;
-  let releaseGamma = () => undefined;
-  const betaRead = new Promise<void>((resolve) => { releaseBeta = resolve; });
-  const gammaRead = new Promise<void>((resolve) => { releaseGamma = resolve; });
-  const persistence = testPersistence(root);
-  const readProject = persistence.readProject.bind(persistence);
-  persistence.readProject = async (projectId) => {
-    if (projectId === "beta") await betaRead;
-    if (projectId === "gamma") await gammaRead;
-    return await readProject(projectId);
-  };
-  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({
-      data: [
-        projectOption("alpha", path.join(root, "alpha")),
-        projectOption("beta", path.join(root, "beta")),
-        projectOption("gamma", path.join(root, "gamma")),
-      ],
-      rootPath: root,
-    }),
-    projectState: projectState(),
-    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
-    reconcileProject: async () => [],
-    storageRoot: root,
-  });
-
-  const opened = await controller.open("progressive", fixtureProjectIds["alpha"], 3);
-  assert.deepEqual(opened.projectThreads.projects.map(({ projectId }) => projectId), ["alpha"]);
-
-  releaseBeta();
-  await waitFor(() => publications.some(({ snapshot }) => (
-    "updateKind" in snapshot
-    && snapshot.updateKind === "projectThreadSummary"
-    && snapshot.summary.projectId === "beta"
-  )), "The first cold project summary was not pushed progressively.");
-
-  await controller.close("progressive");
-  releaseGamma();
-  await controller.dispose();
-  assert.equal(publications.some(({ snapshot }) => (
-    "updateKind" in snapshot
-    && snapshot.updateKind === "projectThreadSummary"
-    && snapshot.summary.projectId === "gamma"
-  )), false);
-  await fs.rm(root, { force: true, recursive: true });
-});
-
-test("pinned image presence is sent only to version 6 project observers", async context => {
-  const persistence = new MemoryThreadStatePersistence();
-  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000401");
-  const draft = {
-    attachments: [{ id: "shot", url: "image:shot" }],
-    clientUpdatedAt: 1,
-    composerSettings: EMPTY_CODEX_SETTINGS,
-    createdAt: 1,
-    draftId,
-    pinned: true,
-    profileId: null,
-    projectId: fixtureProjectIds.beta,
-    prompt: "picture",
-    snoozed: false,
-    updatedAt: 1,
-  };
-  persistence.projects.set(fixtureProjectIds.beta, { version: 4, records: [], drafts: [draft] });
-  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({
-      data: [projectOption("alpha", "C:/alpha"), projectOption("beta", "C:/beta")],
-      rootPath: "C:/",
-    }),
-    projectState: projectState(),
-    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
-    reconcileProject: async () => [],
-    storageRoot: "pinned-image-presence",
-    threadStateStore: persistence,
-  });
-  context.after(() => controller.dispose());
-  await controller.open("warm-beta", fixtureProjectIds.beta, 2);
-  const oldClient = await controller.open("v5", fixtureProjectIds.alpha, 5);
-  const newClient = await controller.open("v6", fixtureProjectIds.alpha, 6);
-  const pinned = (result: typeof oldClient) => {
-    const entry = result.projectThreads.projects
-      .find(({ projectId }) => projectId === fixtureProjectIds.beta)?.pinnedThreads
-      .find(({ entryKind }) => entryKind === "draft");
-    return entry?.entryKind === "draft" ? entry : null;
-  };
-  assert.equal(Object.hasOwn(pinned(oldClient) ?? {}, "hasAttachments"), false);
-  assert.equal(pinned(newClient)?.hasAttachments, true);
-
-  publications.length = 0;
-  const { pinned: _pinned, snoozed: _snoozed, ...draftInput } = draft;
-  const written = await controller.handleRequest("warm-beta", {
-    method: "workbench/thread-state/draft/upsert",
-    projectId: fixtureProjectIds.beta,
-    draft: { ...draftInput, clientUpdatedAt: 2, updatedAt: 2 },
-  });
-  const updates = publications.filter(({ snapshot }) => "updateKind" in snapshot
-    && snapshot.updateKind === "projectThreadSummary"
-    && snapshot.summary.projectId === fixtureProjectIds.beta);
-  assert.equal(written.error, undefined);
-  const updatedDraft = (connectionId: string) => {
-    const update = updates.find((candidate) => candidate.connectionId === connectionId)?.snapshot;
-    if (!update || !("updateKind" in update) || update.updateKind !== "projectThreadSummary") return null;
-    const entry = update.summary.pinnedThreads.find(({ entryKind }) => entryKind === "draft");
-    return entry?.entryKind === "draft" ? entry : null;
-  };
-  assert.ok(updatedDraft("v5"));
-  assert.equal(Object.hasOwn(updatedDraft("v5")!, "hasAttachments"), false);
-  assert.equal(updatedDraft("v6")?.hasAttachments, true);
-
-  publications.length = 0;
-  await controller.handleRequest("warm-beta", {
-    method: "workbench/thread-state/draft/upsert",
-    projectId: fixtureProjectIds.beta,
-    draft: { ...draftInput, attachments: [], clientUpdatedAt: 3, updatedAt: 3 },
-  });
-  const clearedUpdate = publications.find(({ connectionId, snapshot }) => connectionId === "v6"
-    && "updateKind" in snapshot && snapshot.updateKind === "projectThreadSummary"
-    && snapshot.summary.projectId === fixtureProjectIds.beta)?.snapshot;
-  assert.ok(clearedUpdate && "updateKind" in clearedUpdate && clearedUpdate.updateKind === "projectThreadSummary");
-  const clearedDraft = clearedUpdate.summary.pinnedThreads.find(({ entryKind }) => entryKind === "draft");
-  assert.equal(clearedDraft?.entryKind === "draft" ? clearedDraft.hasAttachments : null, false);
-});
-
-test("cold pinned draft summaries keep the image flag version-gated", async context => {
-  const persistence = new MemoryThreadStatePersistence();
-  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000402");
-  persistence.projects.set(fixtureProjectIds.beta, {
-    version: 4,
-    records: [],
-    drafts: [{
-      attachments: [{ id: "shot", url: "image:shot" }],
-      clientUpdatedAt: 1,
-      composerSettings: EMPTY_CODEX_SETTINGS,
-      createdAt: 1,
-      draftId,
-      pinned: true,
-      profileId: null,
-      projectId: fixtureProjectIds.beta,
-      prompt: "picture",
-      snoozed: false,
-      updatedAt: 1,
-    }],
-  });
-  let releaseBeta = () => undefined;
-  const betaRead = new Promise<void>((resolve) => { releaseBeta = resolve; });
-  const readProject = persistence.readProject.bind(persistence);
-  persistence.readProject = async (projectId) => {
-    if (projectId === fixtureProjectIds.beta) await betaRead;
-    return await readProject(projectId);
-  };
-  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({
-      data: [projectOption("alpha", "C:/alpha"), projectOption("beta", "C:/beta")],
-      rootPath: "C:/",
-    }),
-    projectState: projectState(),
-    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
-    reconcileProject: async () => [],
-    storageRoot: "cold-pinned-image-presence",
-    threadStateStore: persistence,
-  });
-  context.after(() => controller.dispose());
-  await controller.open("v5", fixtureProjectIds.alpha, 5);
-  await controller.open("v6", fixtureProjectIds.alpha, 6);
-  releaseBeta();
-  await controller.open("warm-beta", fixtureProjectIds.beta, 2);
-  const coldDraft = (connectionId: string) => {
-    const publication = publications.find(({ connectionId: id, snapshot }) => id === connectionId
-      && "updateKind" in snapshot && snapshot.updateKind === "projectThreadSummary"
-      && snapshot.summary.projectId === fixtureProjectIds.beta)?.snapshot;
-    if (!publication || !("updateKind" in publication) || publication.updateKind !== "projectThreadSummary") return null;
-    const entry = publication.summary.pinnedThreads.find(({ entryKind }) => entryKind === "draft");
-    return entry?.entryKind === "draft" ? entry : null;
-  };
-  assert.ok(coldDraft("v5"));
-  assert.equal(Object.hasOwn(coldDraft("v5")!, "hasAttachments"), false);
-  assert.equal(coldDraft("v6")?.hasAttachments, true);
+  assert.equal(received.length, releasedCount);
+  assert.ok(otherUpdates > liveCount);
 });
 
 test("an observed project represents a missing thread as an empty observation", async () => {
@@ -1939,15 +1481,12 @@ test("an observed project represents a missing thread as an empty observation", 
       data: [projectOption("alpha", "C:/alpha")],
       rootPath: "C:/",
     }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
   });
   try {
-    await controller.open("viewer", fixtureProjectIds["alpha"], 4);
+    await controller.readProject(fixtureProjectIds["alpha"]);
     const expectedFreshness = (await controller.getSnapshot(fixtureProjectIds["alpha"])).freshness;
-    const response = await controller.handleRequest("viewer", {
-      method: "workbench/thread-state/observe",
+    const observation = await controller.readWorkspaceThread({
       projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
       subscriptionId: "709113f5-ca7c-4ba0-b26b-10bd31af8648",
       target: {
@@ -1955,18 +1494,15 @@ test("an observed project represents a missing thread as an empty observation", 
         kind: "provider",
         threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("missing-thread"),
       },
-      version: 1,
     });
-    assert.ok("result" in response);
-    const result = WorkbenchThreadObservationResultSchema.parse(response.result);
-    assert.deepEqual(result.observation.entries, []);
-    assert.equal(result.observation.freshness, expectedFreshness);
+    assert.deepEqual(observation.entries, []);
+    assert.equal(observation.freshness, expectedFreshness);
   } finally {
     await controller.dispose();
   }
 });
 
-test("pinned context admits only an unsnoozed root and its direct subagents, then fences foreign mutations to that observation", async () => {
+test("a subagent observation includes its root without granting authority through socket selection", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-pinned-context-"));
   const pinnedRoot: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 3,
@@ -1998,8 +1534,6 @@ test("pinned context admits only an unsnoozed root and its direct subagents, the
       data: [projectOption("viewed", path.join(root, "viewed")), projectOption("owner", path.join(root, "owner"))],
       rootPath: root,
     }),
-    projectState: projectState(),
-    publish: () => undefined,
     renameThread: async (_projectId, _harness, _threadId, title) => title,
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
       if (projectId === "owner") {
@@ -2010,32 +1544,15 @@ test("pinned context admits only an unsnoozed root and its direct subagents, the
     },
     storageRoot: root,
   });
-  await controller.open("owner-loader", fixtureProjectIds["owner"]);
+  await controller.readProject(fixtureProjectIds["owner"]);
   await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["owner"])).entries.length === 2, "Pinned owner did not load.");
-  await controller.open("viewer", fixtureProjectIds["viewed"]);
-
-  const observed = await controller.handleRequest("viewer", {
-    method: "workbench/thread-state/observe", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"), version: 1,
+  const observed = await controller.readWorkspaceThread({
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
     subscriptionId: "8a1f2219-334a-48ce-a016-bd3c595402ee",
     target: { harness: "opencode", kind: "subagent", parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child-thread") },
   });
-  assert.deepEqual(WorkbenchThreadObservationResultSchema.parse(observed.result).observation.entries.map(entry =>
+  assert.deepEqual(observed.entries.map(entry =>
     entry.entryKind === "draft" ? entry.draft.draftId : entry.identity.threadId), ["root-thread", "child-thread"]);
-  const readingDoesNotGrantMutation = await controller.handleRequest("viewer", {
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread") },
-    method: "workbench/thread-state/title/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"), title: "Must not rename from child observation",
-  });
-  assert.equal(readingDoesNotGrantMutation.error?.code, "invalidProjectObservation");
-
-  const opened = await controller.handleRequest("viewer", {
-    method: "workbench/thread-state/pin/open",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
-    target: { harness: "opencode", kind: "subagent", parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child-thread") },
-  });
-  const openedContext = WorkbenchPinnedThreadContextResultSchema.parse(opened.result);
-  assert.deepEqual(openedContext.context
-    ? openedContext.context.entries.map((entry) => entry.entryKind === "draft" ? entry.draft.draftId : entry.identity.threadId)
-    : null, ["root-thread", "child-thread"]);
 
   const renamed = await controller.handleRequest("viewer", {
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread") },
@@ -2051,28 +1568,19 @@ test("pinned context admits only an unsnoozed root and its direct subagents, the
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
     snoozed: true,
   });
-  await controller.open("new-viewer", fixtureProjectIds["viewed"]);
-  const snoozed = await controller.handleRequest("new-viewer", {
-    method: "workbench/thread-state/pin/open",
+  const snoozed = await controller.readWorkspaceThread({
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
-    target: { kind: "provider", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread") },
-  });
-  assert.equal(WorkbenchPinnedThreadContextResultSchema.parse(snoozed.result).context, null);
-  await assert.rejects(controller.handleRequest("new-viewer", {
-    method: "workbench/thread-state/observe", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"), version: 1,
     subscriptionId: "bb7efb3d-4670-4198-a8ab-8926782c4ed3",
     target: { kind: "provider", harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread") },
-  }), /requestedProject=owner.*observedProject=viewed.*target=provider:root-thread.*missing, snoozed, or not pinned/iu);
-
-  await controller.close("viewer");
-  await controller.open("viewer", fixtureProjectIds["viewed"]);
-  const rejectedAfterReopen = await controller.handleRequest("viewer", {
+  });
+  assert.ok(snoozed.entries.some(entry => entry.entryKind === "thread" && entry.metadata.snoozed));
+  const foreign = await controller.handleRequest("viewer", {
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("root-thread") },
     method: "workbench/thread-state/title/set",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("viewed"),
     title: "Must not rename",
   });
-  assert.equal(rejectedAfterReopen.error?.code, "invalidProjectObservation");
+  assert.equal(foreign.error?.code, "invalidThreadOwner");
   await controller.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });
@@ -2094,8 +1602,6 @@ test("provider omission retains saved threads through partial, complete, and reo
   const finalGate = Promise.withResolvers<void>();
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", [oldEntry], { complete: true });
       initialInstalled.resolve();
@@ -2104,13 +1610,11 @@ test("provider omission retains saved threads through partial, complete, and reo
     storageRoot: root,
   });
   try {
-    await controller.open("observer", fixtureProjectIds["project"]);
+    await controller.readProject(fixtureProjectIds["project"]);
     await initialInstalled.promise;
     await controller.dispose();
     const refreshing = new WorkbenchThreadStateController({
       getProjectCatalog: projectCatalog,
-      projectState: projectState(),
-      publish: () => undefined,
       reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
         await acceptProviderSnapshot("codex", [newEntry], { complete: false });
         incompleteInstalled.resolve();
@@ -2122,7 +1626,7 @@ test("provider omission retains saved threads through partial, complete, and reo
       storageRoot: root,
     });
     try {
-      await refreshing.open("observer", fixtureProjectIds["project"]);
+      await refreshing.readProject(fixtureProjectIds["project"]);
       await incompleteInstalled.promise;
       const incomplete = await refreshing.getSnapshot(fixtureProjectIds["project"]);
       assert.deepEqual(incomplete.entries.filter((entry) => entry.entryKind !== "draft").map((entry) => entry.identity.threadId).sort(), ["new", "old"]);
@@ -2135,7 +1639,7 @@ test("provider omission retains saved threads through partial, complete, and reo
       await refreshing.dispose();
     }
     const reopened = new WorkbenchThreadStateController({
-      getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+      getProjectCatalog: projectCatalog,
       reconcileProject: async () => [], storageRoot: root,
     });
     try {
@@ -2151,7 +1655,7 @@ test("provider omission retains saved threads through partial, complete, and reo
   }
 });
 
-test("concurrent first opens share one project initialization and observation", async () => {
+test("concurrent first reads share one project initialization and reconciliation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-concurrent-open-"));
   let releaseRead = () => undefined;
   const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
@@ -2164,33 +1668,22 @@ test("concurrent first opens share one project initialization and observation", 
     return await readProject(projectId);
   };
   let reconciliations = 0;
-  let observationStarts = 0;
-  let observationStops = 0;
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState({
-      observe: () => { observationStarts += 1; return () => { observationStops += 1; }; },
-    }),
-    publish: () => undefined,
     reconcileProject: async () => { reconciliations += 1; return []; },
     storageRoot: root,
   });
-  const firstOpen = controller.open("first", fixtureProjectIds["project"]);
-  const secondOpen = controller.open("second", fixtureProjectIds["project"]);
+  const firstOpen = controller.readProject(fixtureProjectIds["project"]);
+  const secondOpen = controller.readProject(fixtureProjectIds["project"]);
   await waitFor(() => projectLoads === 1, "Shared project initialization did not read persisted state.");
   assert.equal(projectLoads, 1);
   releaseRead();
   await Promise.all([firstOpen, secondOpen]);
-  await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(projectLoads, 1);
-  assert.equal(observationStarts, 1);
+  await waitFor(() => reconciliations === 1, "Shared reconciliation did not start.");
   assert.equal(reconciliations, 1);
-  await controller.close("first");
-  assert.equal(observationStops, 0);
-  await controller.close("second");
-  assert.equal(observationStops, 1);
   await controller.dispose();
-  assert.equal(observationStops, 1);
+  await fs.rm(root, { force: true, recursive: true });
 });
 
 test("missing SQLite project state initializes empty and the first mutation persists", async () => {
@@ -2198,99 +1691,24 @@ test("missing SQLite project state initializes empty and the first mutation pers
   const persistence = testPersistence(storageRoot);
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: () => ({ data: [projectOption("project", storageRoot)], rootPath: storageRoot }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
     storageRoot,
   });
 
   assert.equal(await persistence.readProject("project"), null);
-  const opened = await controller.open("observer", fixtureProjectIds["project"]);
-  assert.deepEqual(opened.sidebar.entries, []);
+  const opened = await controller.readProject(fixtureProjectIds["project"]);
+  assert.deepEqual(opened.entries, []);
   assert.deepEqual(await persistence.readProject("project"), {
     drafts: [],
     newThreadProfile: null,
     records: [],
     version: 4,
   });
-  const draftId = "00000000-0000-4000-8000-000000000011";
-  await controller.handleRequest("observer", {
-    draft: {
-      agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 1,
-      draftId, harness: "codex", model: null, profileId: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), prompt: "Persisted draft",
-      reasoningEffort: null, serviceTier: null, updatedAt: 1,
-    },
-    method: "workbench/thread-state/draft/upsert",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-  });
-  const stored = await persistence.readProject("project") as { drafts?: Array<{ draftId: string }> };
-  assert.deepEqual(stored.drafts?.map((draft) => draft.draftId), [draftId]);
+  await controller.ensureProviderEntry(fixtureProjectIds.project, pinnedRecord("thread", "Persisted thread"));
+  const stored = await persistence.readProject("project") as { records: Array<{ identity: { threadId: string } }> };
+  assert.deepEqual(stored.records.map(record => record.identity.threadId), ["thread"]);
   await controller.dispose();
   await fs.rm(storageRoot, { force: true, recursive: true });
-});
-
-test("reload dirt remains only on legacy project and global observations", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dirt-"));
-  let dirt: WorkbenchReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
-  let dirtListener = () => undefined;
-  let unsubscribed = false;
-  const published: Array<{ connectionId: string; update: WorkbenchThreadStateSnapshot }> = [];
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({
-      data: [projectOption("project", root)],
-      rootPath: root,
-    }),
-    getReloadDirt: () => dirt!,
-    projectState: projectState(),
-    publish: (connectionId, update) => { published.push({ connectionId, update }); },
-    reconcileProject: async () => [],
-    storageRoot: root,
-    subscribeReloadDirt: (listener) => {
-      dirtListener = listener;
-      return () => { unsubscribed = true; };
-    },
-  });
-  try {
-    const legacy = await controller.open("legacy-project", fixtureProjectIds["project"], 3);
-    const current = await controller.open("current-project", fixtureProjectIds["project"], 4);
-    const legacyGlobal = await controller.openGlobal("legacy-global", 5);
-    const currentGlobal = await controller.openGlobal("current-global", 6);
-    assert.deepEqual(legacy.sidebar.reloadDirt, dirt);
-    assert.equal(current.sidebar.reloadDirt, undefined);
-    assert.deepEqual(legacyGlobal.projectSidebars.projects[0]?.reloadDirt, dirt);
-    assert.equal(currentGlobal.projectSidebars.projects[0]?.reloadDirt, undefined);
-    published.length = 0;
-    dirt = {
-      dirtyScopes: [{
-        dependantScopes: ["server:websocket"],
-        description: "Core",
-        destructive: false,
-        scope: "server:core",
-      }],
-      error: null,
-      pendingScopes: [],
-    };
-    dirtListener();
-    await waitFor(() => published.some(({ connectionId, update }) => (
-      connectionId === "legacy-project"
-      && !("updateKind" in update)
-      && update.reloadDirt?.dirtyScopes[0]?.scope === "server:core"
-    )), "Legacy reload dirt did not publish.");
-    assert.equal(published.some(({ connectionId }) => connectionId === "current-project" || connectionId === "current-global"), false);
-    const legacyUpdate = published.find(({ connectionId, update }) => (
-      connectionId === "legacy-project" && !("updateKind" in update)
-    ))?.update;
-    assert.equal(
-      legacyUpdate && !("updateKind" in legacyUpdate)
-        ? legacyUpdate.reloadDirt?.dirtyScopes[0]?.dependantScopes
-        : null,
-      undefined,
-    );
-  } finally {
-    await controller.dispose();
-    assert.equal(unsubscribed, true);
-    await fs.rm(root, { force: true, recursive: true });
-  }
 });
 
 test("stored state repairs invalid leaves without erasing thread or draft siblings", async () => {
@@ -2338,8 +1756,6 @@ test("stored state repairs invalid leaves without erasing thread or draft siblin
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     log: (message) => logs.push(message),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       reconciliations += 1;
       await acceptProviderSnapshot("codex", [{
@@ -2355,9 +1771,9 @@ test("stored state repairs invalid leaves without erasing thread or draft siblin
     storageRoot: root,
   });
 
-  const opened = await controller.open("observer", fixtureProjectIds["project"]);
-  const openedThread = opened.sidebar.entries.find((entry) => entry.entryKind === "thread");
-  const openedDraft = opened.sidebar.entries.find((entry) => entry.entryKind === "draft");
+  const opened = await controller.readProject(fixtureProjectIds["project"]);
+  const openedThread = opened.entries.find((entry) => entry.entryKind === "thread");
+  const openedDraft = opened.entries.find((entry) => entry.entryKind === "draft");
   assert.deepEqual(openedThread?.entryKind === "thread" ? {
     gitArc: openedThread.gitArc,
     lifecycle: openedThread.lifecycle,
@@ -2390,57 +1806,10 @@ test("stored state repairs invalid leaves without erasing thread or draft siblin
   await fs.rm(root, { force: true, recursive: true });
 });
 
-test("draft saves update defaults atomically without defaults rewriting other drafts", async (context) => {
-  const persistence = new MemoryThreadStatePersistence();
-  const options = {
-    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
-    reconcileProject: async () => [], storageRoot: "draft-defaults", threadStateStore: persistence,
-  };
-  const controller = new WorkbenchThreadStateController(options);
-  context.after(() => controller.dispose());
-  const projectId = fixtureProjectIds.project;
-  const defaults = { kind: "new-thread" as const, projectId };
-  const firstId = fixtureIdentitySchemas.DraftIdSchema.parse("11111111-1111-4111-8111-111111111111");
-  const secondId = fixtureIdentitySchemas.DraftIdSchema.parse("22222222-2222-4222-8222-222222222222");
-  const draft = {
-    draftId: firstId, projectId, profileId: null, composerSettings: { ...EMPTY_CODEX_SETTINGS, model: "first" },
-    prompt: "draft", attachments: [], clientUpdatedAt: 2, createdAt: 1, updatedAt: 2,
-  };
-  const save = async (value: typeof draft) => {
-    const response = await controller.handleRequest("observer", {
-      method: "workbench/thread-state/draft/upsert", projectId, draft: value,
-    });
-    assert.equal(response.error, undefined, "draft save request");
-    return response;
-  };
-  await save(draft);
-  await save({ ...draft, draftId: secondId, composerSettings: { ...draft.composerSettings, model: "second" } });
-  const firstSlot = { kind: "draft" as const, projectId, draftId: firstId, harness: "codex" as const };
-  const secondSlot = { ...firstSlot, draftId: secondId };
-  await controller.setComposerProfileTarget(defaults, { kind: "custom", settings: { ...draft.composerSettings, model: "new-default" } });
-  assert.equal((await controller.readComposerProfileTarget(firstSlot))?.settings.model, "first");
-  assert.equal((await controller.readComposerProfileTarget(secondSlot))?.settings.model, "second");
-  await save({ ...draft, clientUpdatedAt: 1, prompt: "stale" });
-  assert.equal((await controller.readComposerProfileTarget(defaults))?.settings.model, "new-default");
-  await save({ ...draft, clientUpdatedAt: 3, prompt: "accepted autosave" });
-  assert.equal((await controller.readComposerProfileTarget(defaults))?.settings.model, "first");
-  const write = persistence.writeChanges.bind(persistence);
-  persistence.writeChanges = async () => { throw new Error("Draft disk failure"); };
-  await assert.rejects(save({ ...draft, clientUpdatedAt: 4, composerSettings: { ...draft.composerSettings, model: "unsaved" } }), /Draft disk failure/);
-  assert.equal((await controller.readComposerProfileTarget(defaults))?.settings.model, "first");
-  assert.equal((await controller.readComposerProfileTarget(firstSlot))?.settings.model, "first");
-  persistence.writeChanges = write;
-  await controller.dispose();
-  const reopened = new WorkbenchThreadStateController(options);
-  context.after(() => reopened.dispose());
-  assert.equal((await reopened.readComposerProfileTarget(defaults))?.settings.model, "first");
-  assert.equal((await reopened.readComposerProfileTarget(secondSlot))?.settings.model, "second");
-});
-
 test("legacy presentation export pages drafts and reads inline attachments without copying full data URLs", async context => {
   const persistence = new MemoryThreadStatePersistence();
   const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+    getProjectCatalog: projectCatalog,
     reconcileProject: async () => [], storageRoot: "presentation-export", threadStateStore: persistence,
   });
   context.after(() => controller.dispose());
@@ -2453,12 +1822,8 @@ test("legacy presentation export pages drafts and reads inline attachments witho
     prompt: "preserve", attachments: [{ id: "image-1", url: `data:image/png;base64,${image.toString("base64")}` }],
     clientUpdatedAt: 1, createdAt: 1, updatedAt: 1,
   };
-  for (const draftId of [firstId, secondId]) {
-    const response = await controller.handleRequest("observer", {
-      method: "workbench/thread-state/draft/upsert", projectId, draft: { ...draft, draftId },
-    });
-    assert.equal(response.error, undefined);
-  }
+  persistence.projects.set(projectId, { version: 4, records: [],
+    drafts: [firstId, secondId].map(draftId => ({ ...draft, draftId })) });
   const first = await controller.exportPresentationPage({ projectId, limit: 1 });
   assert.equal(first.drafts.length, 1);
   assert.equal(first.drafts[0]?.attachments[0]?.kind, "inline");
@@ -2478,10 +1843,8 @@ test("legacy presentation export pages drafts and reads inline attachments witho
   });
   assert.equal(JSON.parse(Buffer.from(layout.bytes, "base64").toString("utf8")).displayOrder !== undefined, true);
   assert.equal(layout.nextOffset, null);
-  await controller.handleRequest("observer", {
-    method: "workbench/thread-state/draft/upsert", projectId,
-    draft: { ...draft, draftId: firstId, clientUpdatedAt: 2, prompt: "changed", updatedAt: 2 },
-  });
+  await controller.ensureProviderEntry(projectId, pinnedRecord("thread", "export-revision"));
+  await controller.setTitle(projectId, "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"), "changed revision");
   await assert.rejects(controller.exportPresentationPage({ projectId, cursor: first.nextCursor, limit: 1 }),
     /source changed/u);
   await assert.rejects(controller.exportPresentationLayoutChunk({
@@ -2493,23 +1856,20 @@ test("presentation manifest identifies missing sources without exporting every e
   const projectId = fixtureProjectIds.alpha;
   const emptyProjectId = fixtureProjectIds.beta;
   const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("11111111-1111-4111-8111-111111111111");
+  const persistence = new MemoryThreadStatePersistence();
+  persistence.projects.set(projectId, { version: 4, records: [], drafts: [{
+    draftId, projectId, profileId: null, composerSettings: EMPTY_CODEX_SETTINGS,
+    prompt: "keep", attachments: [], clientUpdatedAt: 1, createdAt: 1, updatedAt: 1,
+  }] });
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: () => ({
       data: [projectOption(projectId, "C:/alpha"), projectOption(emptyProjectId, "C:/beta")],
       rootPath: "C:/",
     }),
-    projectState: projectState(), publish: () => undefined,
     reconcileProject: async () => [], storageRoot: "presentation-manifest",
-    threadStateStore: new MemoryThreadStatePersistence(),
+    threadStateStore: persistence,
   });
   context.after(() => controller.dispose());
-  await controller.handleRequest("observer", {
-    method: "workbench/thread-state/draft/upsert", projectId,
-    draft: {
-      draftId, projectId, profileId: null, composerSettings: EMPTY_CODEX_SETTINGS,
-      prompt: "keep", attachments: [], clientUpdatedAt: 1, createdAt: 1, updatedAt: 1,
-    },
-  });
   const manifest = await controller.exportPresentationManifestPage({ limit: 100 });
   assert.deepEqual(manifest.sources, [
     { kind: "draft", projectId, sourceId: draftId },
@@ -2526,7 +1886,7 @@ test("legacy layout export keeps each socket response bounded across a large ret
       [`codex:thread-${index}`, { above: [], below: [] }])) },
   });
   const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+    getProjectCatalog: projectCatalog,
     reconcileProject: async () => [], storageRoot: "presentation-large-layout", threadStateStore: persistence,
   });
   context.after(() => controller.dispose());
@@ -2563,7 +1923,7 @@ test("draft targets are provider-agnostic and adopt any addressed provider", asy
     records: [], version: 3, newThreadProfile: selection,
   });
   const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog, projectState: projectState(), publish() {},
+    getProjectCatalog: projectCatalog,
     reconcileProject: async () => [], storageRoot: root,
     readComposerProfiles: async () => ({ profiles: [{ id: "named", name: "Named", scope: { kind: "global" }, createdAt: 1, updatedAt: 1, agentPath: null, agentSource: null, harness: "opencode", model: "opencode-model", reasoningEffort: null, serviceTier: null }] }),
   });
@@ -2588,7 +1948,7 @@ test("draft targets are provider-agnostic and adopt any addressed provider", asy
   }
 });
 
-test("daemon thread state owns profile migration, draft defaults, materialization, and reconciliation", async () => {
+test("legacy profiles migrate and accepted provider work retains its configured profile", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-profiles-"));
   const profiles: WorkbenchComposerProfile[] = [];
   const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("11111111-1111-4111-8111-111111111111");
@@ -2614,13 +1974,11 @@ test("daemon thread state owns profile migration, draft defaults, materializatio
   });
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
     readComposerProfiles: async () => ({ profiles }),
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
+  await controller.readProject(fixtureProjectIds["project"]);
 
   const migrated = {
     kind: "profile",
@@ -2657,22 +2015,6 @@ test("daemon thread state owns profile migration, draft defaults, materializatio
   );
   assert.deepEqual(await controller.readComposerProfileTarget({ kind: "new-thread", projectId: fixtureProjectIds["project"] }), selected);
 
-  const savedDraft = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "draft");
-  assert.ok(savedDraft?.entryKind === "draft");
-  await controller.handleRequest("observer", {
-    method: "workbench/thread-state/draft/upsert", projectId: fixtureProjectIds["project"],
-    draft: { ...savedDraft.draft, clientUpdatedAt: 3, prompt: "Autosaved draft" },
-  });
-  assert.deepEqual(await controller.readComposerProfileTarget({ kind: "new-thread", projectId: fixtureProjectIds["project"] }), selected);
-
-  await controller.acceptIntent("observer", {
-    draftId,
-    harness: "codex",
-    projectId: fixtureProjectIds["project"],
-    threadId: fixtureThreadIds["materialized"],
-    title: "Profile draft",
-    turnId: fixtureTurnIds["turn"],
-  });
   const providerEntry: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> = {
     activityAt: 3,
     entryKind: "thread",
@@ -2683,6 +2025,8 @@ test("daemon thread state owns profile migration, draft defaults, materializatio
   };
   await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry);
   const threadSlot = { harness: "codex" as const, kind: "thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("materialized") };
+  await controller.setComposerProfileTarget(threadSlot, selected);
+  await controller.acceptProviderIntent(fixtureProjectIds["project"], "codex", fixtureThreadIds["materialized"], fixtureTurnIds["turn"]);
   assert.deepEqual(await controller.readComposerProfileTarget(threadSlot), selected);
 
   const stored = await readProjectState<{
@@ -2692,237 +2036,13 @@ test("daemon thread state owns profile migration, draft defaults, materializatio
     version: number;
   }>(root, "project");
   assert.equal(stored.version, 4);
-  assert.deepEqual(stored.drafts, []);
+  assert.equal(stored.drafts.length, 1, "Provider acceptance does not consume legacy import data.");
   assert.deepEqual(stored.newThreadProfile, selected);
   assert.deepEqual(stored.records.find((record) => record.identity.threadId === "materialized")?.profile, selected);
   await controller.setComposerProfileTarget({ kind: "new-thread", projectId: fixtureProjectIds["project"] }, migrated);
-  await controller.acceptIntent("observer", {
-    harness: "codex", projectId: fixtureProjectIds["project"], threadId: fixtureThreadIds["materialized"], turnId: fixtureTurnIds["next-turn"],
-  });
+  await controller.acceptProviderIntent(fixtureProjectIds["project"], "codex", fixtureThreadIds["materialized"], fixtureTurnIds["next-turn"]);
   assert.deepEqual(await controller.readComposerProfileTarget(threadSlot), selected);
   await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
-});
-
-test("global observation returns full project sidebars and moves durable drafts without selecting a project", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-global-"));
-  const draftId = "22222222-2222-4222-8222-222222222222";
-  await seedProjectState(root, "alpha", {
-    drafts: [{
-      agent: "profile-agent.md",
-      attachments: [],
-      clientUpdatedAt: 2,
-      composerSettings: { ...EMPTY_CODEX_SETTINGS, agentPath: "profile-agent.md", model: "gpt-profile" },
-      createdAt: 1,
-      draftId,
-      harness: "codex",
-      model: "gpt-profile",
-      profileId: "profile-one",
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-      prompt: "Move this durable draft",
-      reasoningEffort: null,
-      serviceTier: null,
-      updatedAt: 2,
-    }],
-    newThreadProfile: null,
-    records: [],
-    version: 4,
-  });
-  await seedProjectState(root, "beta", { drafts: [], newThreadProfile: null, records: [], version: 4 });
-  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
-  let projectObservationStarts = 0;
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({
-      data: [projectOption("alpha", path.join(root, "alpha")), projectOption("beta", path.join(root, "beta"))],
-      rootPath: root,
-    }),
-    projectState: projectState({
-      observe: () => {
-        projectObservationStarts += 1;
-        return () => undefined;
-      },
-    }),
-    publish: (connectionId, snapshot) => { publications.push({ connectionId, snapshot }); },
-    reconcileProject: async () => [],
-    storageRoot: root,
-  });
-
-  const opened = await controller.openGlobal("global");
-  assert.deepEqual(opened.projectSidebars.projects.map(({ projectId }) => projectId), ["alpha", "beta"]);
-  assert.equal(opened.projectSidebars.projects.find(({ projectId }) => projectId === "alpha")?.entries.some((entry) => entry.entryKind === "draft"), true);
-  assert.equal(publications.some(({ snapshot }) => "updateKind" in snapshot && snapshot.updateKind === "project"), false);
-  assert.equal(projectObservationStarts, 0);
-
-  const response = await controller.handleRequest("global", {
-    destinationProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"),
-    draftId,
-    method: "workbench/thread-state/draft/move",
-    sourceProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-  });
-  const moved = WorkbenchThreadStateMutationResultSchema.parse("result" in response ? response.result : null);
-  assert.equal(moved.accepted, true);
-  assert.equal((await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.some((entry) => entry.entryKind === "draft"), false);
-  const destinationDraft = (await controller.getSnapshot(fixtureProjectIds["beta"])).entries.find((entry) => entry.entryKind === "draft");
-  assert.deepEqual(destinationDraft?.entryKind === "draft" ? {
-    agentPath: destinationDraft.draft.composerSettings.agentPath,
-    model: destinationDraft.draft.composerSettings.model,
-    profileId: destinationDraft.draft.profileId,
-    projectId: destinationDraft.draft.projectId,
-  } : null, {
-    agentPath: "profile-agent.md",
-    model: "gpt-profile",
-    profileId: "profile-one",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"),
-  });
-  assert.equal(publications.some(({ connectionId, snapshot }) => (
-    connectionId === "global"
-    && "updateKind" in snapshot
-    && snapshot.updateKind === "projectThreadSidebar"
-    && snapshot.sidebar.projectId === "beta"
-  )), true);
-
-  const storedSource = await readProjectState<{ drafts: unknown[] }>(root, "alpha");
-  const storedDestination = await readProjectState<{ drafts: Array<{ projectId?: string }> }>(root, "beta");
-  assert.deepEqual(storedSource.drafts, []);
-  assert.equal(storedDestination.drafts[0]?.projectId, "beta");
-  await controller.dispose();
-  await fs.rm(root, { force: true, recursive: true });
-});
-
-test("home order persists folder blocks and rejects foreign-project folder membership", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-home-thread-order-"));
-  const persistence = testPersistence(root);
-  const writeGlobal = persistence.writeGlobal.bind(persistence);
-  let rejectNextHomeWrite = false;
-  persistence.writeGlobal = async (id, document) => {
-    if (id === "homeDisplayOrder" && rejectNextHomeWrite) {
-      rejectNextHomeWrite = false;
-      throw new Error("Home display order persistence unavailable.");
-    }
-    await writeGlobal(id, document);
-  };
-  const pinned = (threadId: string, orderAt: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
-    activityAt: orderAt,
-    entryKind: "thread",
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) },
-    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
-    metadata: { archived: false, pinned: true, snoozed: false },
-    orderAt,
-    title: threadId,
-  });
-  const entriesByProject = new Map<string, WorkbenchThreadSidebarEntry[]>([
-    ["alpha", [pinned("a", 20), pinned("b", 10)]],
-    ["beta", [{
-      ...pinned("c", 30),
-      metadata: { archived: false, pinned: false, snoozed: true },
-    }]],
-  ]);
-  const publications: WorkbenchThreadStateSnapshot[] = [];
-  const createController = () => new WorkbenchThreadStateController({
-    getProjectCatalog: () => ({
-      data: [projectOption("alpha", path.join(root, "alpha")), projectOption("beta", path.join(root, "beta"))],
-      rootPath: root,
-    }),
-    projectState: projectState(),
-    publish: (_connectionId, snapshot) => { publications.push(snapshot); },
-    reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
-      await acceptProviderSnapshot("codex", entriesByProject.get(projectId) ?? [], { complete: true });
-      return [];
-    },
-    storageRoot: root,
-  });
-  const controller = createController();
-  const opened = await controller.openGlobal("global", 5);
-  assert.equal("homeThreadDisplayOrder" in opened, true);
-  await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.length === 2, "Alpha threads were not discovered.");
-  await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["beta"])).entries.length === 1, "Beta threads were not discovered.");
-
-  const folderId = fixtureIdentitySchemas.FolderIdSchema.parse("00000000-0000-4000-8000-000000000202");
-  const created = await controller.handleRequest("global", {
-    folderId,
-    method: "workbench/thread-state/display-order/folder/create",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    sourceKey: "codex:a",
-    title: "Alpha only",
-  });
-  assert.equal("result" in created && (created.result as { accepted?: boolean }).accepted, true);
-
-  const alphaA = getProjectQualifiedThreadDisplayKey(fixtureProjectIds["alpha"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:a"));
-  const alphaB = getProjectQualifiedThreadDisplayKey(fixtureProjectIds["alpha"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:b"));
-  const betaC = getProjectQualifiedThreadDisplayKey(fixtureProjectIds["beta"], fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:c"));
-  const alphaFolder = getWorkbenchHomeFolderKey(fixtureProjectIds["alpha"], folderId);
-  const movedAcrossPriority = await controller.handleRequest("global", {
-    beforeKey: alphaA,
-    destinationFolderKey: null,
-    method: "workbench/thread-state/home-display-order/move",
-    section: "pinned",
-    sourceKey: betaC,
-  });
-  assert.equal("result" in movedAcrossPriority && (movedAcrossPriority.result as { accepted?: boolean }).accepted, true);
-  const movedProject = await controller.getSnapshot(fixtureProjectIds["beta"]);
-  const movedEntry = movedProject.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "c");
-  assert.deepEqual(movedEntry?.entryKind === "thread" ? movedEntry.metadata : null, { archived: false, pinned: true, snoozed: false });
-  const movedHomeOrder = await readGlobalState<{ displayOrder: { pinned?: Record<string, { below: string[] }> } }>(root, "homeDisplayOrder");
-  assert.equal(movedHomeOrder.displayOrder.pinned?.[betaC]?.below.includes(alphaA), true);
-  rejectNextHomeWrite = true;
-  await assert.rejects(controller.handleRequest("global", {
-    beforeKey: null,
-    destinationFolderKey: alphaFolder,
-    method: "workbench/thread-state/home-display-order/move",
-    section: "pinned",
-    sourceKey: alphaB,
-  }));
-  assert.deepEqual((await controller.getSnapshot(fixtureProjectIds["alpha"])).displayOrder.folders?.[0]?.threadKeys, ["codex:a"]);
-
-  const filled = await controller.handleRequest("global", {
-    beforeKey: null,
-    destinationFolderKey: alphaFolder,
-    method: "workbench/thread-state/home-display-order/move",
-    section: "pinned",
-    sourceKey: alphaB,
-  });
-  assert.equal("result" in filled && (filled.result as { accepted?: boolean }).accepted, true);
-  assert.deepEqual((await controller.getSnapshot(fixtureProjectIds["alpha"])).displayOrder.folders?.[0]?.threadKeys, ["codex:a", "codex:b"]);
-
-  const foreign = await controller.handleRequest("global", {
-    beforeKey: null,
-    destinationFolderKey: alphaFolder,
-    method: "workbench/thread-state/home-display-order/move",
-    section: "pinned",
-    sourceKey: betaC,
-  });
-  assert.equal("result" in foreign && (foreign.result as { accepted?: boolean }).accepted, false);
-  assert.deepEqual((await controller.getSnapshot(fixtureProjectIds["alpha"])).displayOrder.folders?.[0]?.threadKeys, ["codex:a", "codex:b"]);
-
-  const movedFolder = await controller.handleRequest("global", {
-    beforeKey: betaC,
-    destinationFolderKey: null,
-    method: "workbench/thread-state/home-display-order/move",
-    section: "pinned",
-    sourceKey: alphaFolder,
-  });
-  assert.equal("result" in movedFolder && (movedFolder.result as { accepted?: boolean }).accepted, true);
-  assert.equal(publications.some((snapshot) => "updateKind" in snapshot && snapshot.updateKind === "homeThreadDisplayOrder"), true);
-
-  const removedFromFolder = await controller.handleRequest("global", {
-    beforeKey: betaC,
-    destinationFolderKey: null,
-    method: "workbench/thread-state/home-display-order/move",
-    section: "pinned",
-    sourceKey: alphaA,
-  });
-  assert.equal("result" in removedFromFolder && (removedFromFolder.result as { accepted?: boolean }).accepted, true);
-  assert.deepEqual((await controller.getSnapshot(fixtureProjectIds["alpha"])).displayOrder.folders?.[0]?.threadKeys, ["codex:b"]);
-  await controller.dispose();
-
-  const reopened = createController();
-  const reopenedResult = await reopened.openGlobal("reopened", 5);
-  assert.equal("homeThreadDisplayOrder" in reopenedResult, true);
-  if ("homeThreadDisplayOrder" in reopenedResult) {
-    assert.equal(reopenedResult.homeThreadDisplayOrder.revision > 0, true);
-    assert.equal(Boolean(reopenedResult.homeThreadDisplayOrder.displayOrder.pinned?.[alphaA]), true);
-  }
-  await reopened.dispose();
   await fs.rm(root, { force: true, recursive: true });
 });
 
@@ -2944,13 +2064,11 @@ test("an unidentified stored record cannot reconcile or overwrite its source fil
   let reconciliations = 0;
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => { reconciliations += 1; return []; },
     storageRoot: root,
   });
 
-  await assert.rejects(controller.open("observer", fixtureProjectIds["project"]), /without a recoverable identity/u);
+  await assert.rejects(controller.readProject(fixtureProjectIds["project"]), /without a recoverable identity/u);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(reconciliations, 0);
   assert.deepEqual(await readProjectState(root, "project"), source);
@@ -2970,8 +2088,6 @@ test("headless provider refresh preserves Git lifecycle and MCP generation witho
   };
   const createController = () => new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
     resolveGitArc: async () => gitArc,
     resolveGitArcPlan: async () => gitArcPlan,
@@ -3027,8 +2143,6 @@ test("legacy settled thread metadata receives a fresh persisted retention grace 
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     now: () => 1_234,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
     storageRoot: root,
   });
@@ -3070,7 +2184,6 @@ test("continuous settlement prunes once per durable epoch, retries failures, and
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     now: () => now,
-    projectState: projectState(),
     pruneExpiredGitState: async (_projectId, identities) => {
       if (deferNextPrune) {
         deferNextPrune = false;
@@ -3082,14 +2195,13 @@ test("continuous settlement prunes once per durable epoch, retries failures, and
       }
       pruned.push(identities);
     },
-    publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", [providerEntry], { complete: true });
       return [];
     },
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
+  await controller.readProject(fixtureProjectIds["project"]);
   await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["project"])).freshness === "fresh", "Initial reconciliation did not finish.");
   await controller.handleRequest("observer", {
     identity: providerEntry.identity, method: "workbench/thread-state/settle", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
@@ -3167,8 +2279,6 @@ test("constructing and disposing does not enumerate projects or start migration"
   let catalogReads = 0;
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: () => { catalogReads += 1; throw new Error("catalog unavailable"); },
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
     storageRoot: root,
   });
@@ -3180,7 +2290,7 @@ test("constructing and disposing does not enumerate projects or start migration"
 
 test("disposal fences late reconciliation without awaiting its provider request", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-dispose-reconcile-"));
-  const publications: WorkbenchThreadStateSnapshot[] = [];
+  const publications: WorkbenchThreadSidebarSnapshot[] = [];
   let reconciliationStarted = false;
   let releaseReconciliation = () => undefined;
   const reconciliationGate = new Promise<void>((resolve) => { releaseReconciliation = resolve; });
@@ -3194,8 +2304,7 @@ test("disposal fences late reconciliation without awaiting its provider request"
   };
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: (_connectionId, snapshot) => { publications.push(snapshot); },
+    onProject: snapshot => { publications.push(snapshot); },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       reconciliationStarted = true;
       await reconciliationGate;
@@ -3204,72 +2313,16 @@ test("disposal fences late reconciliation without awaiting its provider request"
     },
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
+  await controller.readProject(fixtureProjectIds["project"]);
   await waitFor(() => reconciliationStarted, "Reconciliation did not start.");
   let disposed = false;
   await controller.dispose().then(() => { disposed = true; });
   assert.equal(disposed, true);
+  publications.length = 0;
   releaseReconciliation();
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(publications, []);
   await fs.rm(root, { force: true, recursive: true });
-});
-
-test("a late project observer receives the best-known snapshot without starting another observation", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-late-observer-"));
-  const update = projectUpdate("project", 7);
-  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
-  let currentUpdateReads = 0;
-  let observationStarts = 0;
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog,
-    projectState: projectState({
-      getCurrentUpdate: () => { currentUpdateReads += 1; return update; },
-      observe: () => { observationStarts += 1; return () => undefined; },
-    }),
-    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
-    reconcileProject: async () => [],
-    storageRoot: root,
-  });
-  await controller.open("first", fixtureProjectIds["project"]);
-  const late = await controller.open("late", fixtureProjectIds["project"]);
-  const projectPublications = publications.flatMap((entry) => "updateKind" in entry.snapshot && entry.snapshot.updateKind === "project"
-    ? [{ connectionId: entry.connectionId, revision: entry.snapshot.revision }]
-    : []);
-  assert.deepEqual(projectPublications, [
-    { connectionId: "first", revision: 7 },
-    { connectionId: "late", revision: 7 },
-  ]);
-  assert.equal(late.project?.revision, 7);
-  assert.deepEqual(late.catalog, projectCatalog());
-  assert.equal(currentUpdateReads, 2);
-  assert.equal(observationStarts, 1);
-  await controller.dispose();
-});
-
-test("an observer joining before the first project snapshot receives the normal shared publication", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-building-observer-"));
-  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
-  let publishProject = (_update: WorkbenchProjectStateUpdate) => undefined;
-  const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog,
-    projectState: projectState({
-      observe: (_projectId, publish) => { publishProject = publish; return () => undefined; },
-    }),
-    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
-    reconcileProject: async () => [],
-    storageRoot: root,
-  });
-  await controller.open("first", fixtureProjectIds["project"]);
-  await controller.open("joining", fixtureProjectIds["project"]);
-  assert.equal(publications.some((entry) => "updateKind" in entry.snapshot), false);
-  publishProject(projectUpdate("project", 1));
-  const projectRecipients = publications
-    .filter((entry) => "updateKind" in entry.snapshot && entry.snapshot.updateKind === "project")
-    .map((entry) => entry.connectionId)
-    .sort();
-  assert.deepEqual(projectRecipients, ["first", "joining"]);
-  await controller.dispose();
 });
 
 test("background reconciliation survives UI disconnect and a warm reopen", async () => {
@@ -3287,8 +2340,6 @@ test("background reconciliation survives UI disconnect and a warm reopen", async
   };
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       reconciliationCount += 1;
       if (reconciliationCount === 1) {
@@ -3300,7 +2351,8 @@ test("background reconciliation survives UI disconnect and a warm reopen", async
     },
     storageRoot: root,
   });
-  await controller.open("first", fixtureProjectIds["project"]);
+  const stop = controller.subscribeProjects(() => {});
+  await controller.readProject(fixtureProjectIds["project"]);
   await waitFor(() => reconciliationCount === 1, "Initial reconciliation did not start.");
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal((await controller.getSnapshot(fixtureProjectIds["project"])).freshness, "fresh");
@@ -3308,10 +2360,10 @@ test("background reconciliation survives UI disconnect and a warm reopen", async
   await controller.refresh(fixtureProjectIds["project"]);
   assert.equal(reconciliationCount, 2);
   assert.equal((await controller.getSnapshot(fixtureProjectIds["project"])).freshness, "fresh");
-  await controller.close("first");
-  const reopened = await controller.open("reopened", fixtureProjectIds["project"]);
-  assert.equal(reopened.sidebar.freshness, "fresh");
-  assert.equal(reopened.sidebar.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "known"), true);
+  stop();
+  const reopened = await controller.readProject(fixtureProjectIds["project"]);
+  assert.equal(reopened.freshness, "fresh");
+  assert.equal(reopened.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "known"), true);
   assert.equal(reconciliationCount, 2);
 
   staleAccept?.("codex", [{ ...known, identity: { harness: "codex", threadId: fixtureThreadIds["stale"] }, title: "Stale" }], { complete: true });
@@ -3328,8 +2380,6 @@ test("request telemetry reports bounded validation evidence without logging requ
     getProjectCatalog: projectCatalog,
     log: (message) => logs.push(message),
     now: () => now++,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", [], { complete: true });
       return [];
@@ -3345,21 +2395,19 @@ test("request telemetry reports bounded validation evidence without logging requ
   await controller.dispose();
 });
 
-test("invalid accepted intent telemetry identifies strict-contract drift without logging field values", async () => {
+test("invalid title intent telemetry identifies strict-contract drift without logging field values", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-invalid-intent-"));
   const logs: string[] = [];
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     log: (message) => logs.push(message),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
     storageRoot: root,
   });
   const response = await controller.handleRequest("observer", {
     correlationHandle: "secret-correlation-value",
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("secret-thread-id") },
-    method: "workbench/thread-state/intent/accept",
+    method: "workbench/thread-state/title/set",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("secret-project-id"),
     title: "secret title contents",
     turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("secret-turn-id"),
@@ -3377,93 +2425,37 @@ test("invalid accepted intent telemetry identifies strict-contract drift without
   await controller.dispose();
 });
 
-test("draft priority survives autosave and controller restart without a storage migration", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-draft-priority-"));
-  const draftId = "00000000-0000-4000-8000-000000000001";
-  const createController = () => new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
-    reconcileProject: async () => [],
-    storageRoot: root,
-  });
-  const original = createController();
-  await original.open("observer", fixtureProjectIds["project"]);
-  const value = {
-    agent: null, attachments: [], clientUpdatedAt: 1, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 1,
-    draftId, harness: "codex" as const, model: null, profileId: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), prompt: "Priority draft",
-    reasoningEffort: null, serviceTier: null, updatedAt: 1,
-  };
-  await original.handleRequest("observer", { draft: value, method: "workbench/thread-state/draft/upsert", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") });
-  await original.handleRequest("observer", { draftId, method: "workbench/thread-state/draft/pin/set", pinned: true, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") });
-  await original.handleRequest("observer", { draftId, method: "workbench/thread-state/draft/snooze/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), snoozed: true });
-  await original.handleRequest("observer", { draft: { ...value, clientUpdatedAt: 2, prompt: "Updated priority draft", updatedAt: 2 }, method: "workbench/thread-state/draft/upsert", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") });
-  let entry = (await original.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === draftId);
-  assert.deepEqual(entry?.entryKind === "draft" ? entry.metadata : null, { archived: false, pinned: true, snoozed: true });
-  await original.dispose();
-
-  const reopened = createController();
-  const opened = await reopened.open("reopened", fixtureProjectIds["project"]);
-  entry = opened.sidebar.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === draftId);
-  assert.equal(entry?.entryKind === "draft" ? entry.draft.prompt : null, "Updated priority draft");
-  assert.deepEqual(entry?.entryKind === "draft" ? entry.metadata : null, { archived: false, pinned: true, snoozed: true });
-  const stored = await readProjectState<{ drafts: Array<{ pinned?: boolean; snoozed?: boolean }>; version?: number }>(root, "project");
-  assert.equal(stored.version, 4);
-  assert.deepEqual(stored.drafts.map(({ pinned, snoozed }) => ({ pinned, snoozed })), [{ pinned: true, snoozed: true }]);
-  await reopened.dispose();
-});
-
 test("accepted intent survives provider discovery lag and remains visible after its lifecycle advances", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-accepted-"));
   const published: WorkbenchThreadSidebarEntry[] = [];
-  const publishedSnapshots: WorkbenchThreadStateSnapshot[] = [];
+  const publishedSnapshots: WorkbenchThreadSidebarSnapshot[] = [];
   let now = 42;
   let providerEntries: WorkbenchThreadSidebarEntry[] = [];
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     now: () => now,
-    publish: (_connectionId, snapshot) => {
+    onProject: snapshot => {
       publishedSnapshots.push(snapshot);
       if (!("entries" in snapshot)) return;
       const entry = snapshot.entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider");
       if (entry) published.push(entry);
     },
-    projectState: projectState(),
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", providerEntries, { complete: true });
       return [];
     },
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
+  await controller.readProject(fixtureProjectIds["project"]);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const draftId = "00000000-0000-4000-8000-000000000001";
-  await controller.handleRequest("observer", {
-    draft: {
-      agent: null, attachments: [], clientUpdatedAt: 2, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 1,
-      draftId, harness: "codex", model: null, profileId: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-      prompt: "First user message", reasoningEffort: null, serviceTier: null, updatedAt: 2,
-    },
-    method: "workbench/thread-state/draft/upsert",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-  });
-  await controller.handleRequest("observer", { draftId, method: "workbench/thread-state/draft/pin/set", pinned: true, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") });
-  await controller.handleRequest("observer", { draftId, method: "workbench/thread-state/draft/snooze/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), snoozed: true });
   publishedSnapshots.length = 0;
-  const response = await controller.handleRequest("observer", {
-    draftId,
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("provider") },
-    method: "workbench/thread-state/intent/accept",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    title: "First user message",
-    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
-  });
-  assert.equal("error" in response, false);
+  await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.provider,
+    fixtureTurnIds.turn, "First user message");
   const entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider");
   assert.ok(entry && entry.entryKind !== "draft");
   assert.equal(entry?.title, "First user message");
   assert.equal(entry.lifecycle.kind, "working");
-  assert.deepEqual(entry.entryKind === "thread" ? entry.metadata : null, { archived: false, pinned: true, snoozed: false });
+  assert.deepEqual(entry.entryKind === "thread" ? entry.metadata : null, { archived: false, pinned: false, snoozed: false });
   assert.equal(entry?.activityAt, 42);
   assert.equal(entry.entryKind === "thread" ? entry.orderAt : null, 42);
   assert.equal(published.at(-1)?.title, "First user message");
@@ -3485,8 +2477,9 @@ test("accepted intent survives provider discovery lag and remains visible after 
   observed = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider");
   assert.equal(observed?.activityAt, 60);
   assert.equal(observed?.entryKind === "thread" ? observed.orderAt : null, 55);
-  const turnStartUpdate = publishedSnapshots.at(-1);
-  assert.equal(turnStartUpdate && "orderAt" in turnStartUpdate ? turnStartUpdate.orderAt : null, 55);
+  const turnStartUpdate = publishedSnapshots.at(-1)?.entries.find(candidate => candidate.entryKind === "thread"
+    && candidate.identity.threadId === "provider");
+  assert.equal(turnStartUpdate?.entryKind === "thread" ? turnStartUpdate.orderAt : null, 55);
   now = 70;
   await controller.observeActivity("codex", fixtureThreadIds["provider"]);
   observed = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider");
@@ -3526,8 +2519,7 @@ test("accepted intent replaces only a neutral headless provider title with the f
   const published: WorkbenchThreadSidebarEntry[] = [];
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: (_connectionId, snapshot) => {
+    onProject: snapshot => {
       if (!("entries" in snapshot)) return;
       published.push(...snapshot.entries.filter((entry) => entry.entryKind !== "draft"));
     },
@@ -3543,15 +2535,13 @@ test("accepted intent replaces only a neutral headless provider title with the f
     title,
   });
 
-  await controller.open("observer", fixtureProjectIds["project"]);
+  await controller.readProject(fixtureProjectIds["project"]);
   await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry("neutral", "New thread"));
-  await controller.acceptIntent("observer", {
-    harness: "codex", projectId: fixtureProjectIds["project"], threadId: fixtureThreadIds["neutral"], title: "First user message", turnId: fixtureTurnIds["neutral-turn"],
-  });
+  await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.neutral,
+    fixtureTurnIds["neutral-turn"], "First user message");
   await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry("named", "Meaningful provider title"));
-  await controller.acceptIntent("observer", {
-    harness: "codex", projectId: fixtureProjectIds["project"], threadId: fixtureThreadIds["named"], title: "Different user message", turnId: fixtureTurnIds["named-turn"],
-  });
+  await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.named,
+    fixtureTurnIds["named-turn"], "Different user message");
 
   const snapshot = await controller.getSnapshot(fixtureProjectIds["project"]);
   assert.equal(snapshot.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "neutral")?.title, "First user message");
@@ -3570,8 +2560,6 @@ test("accepted intent replaces only a neutral headless provider title with the f
 test("provider admission keeps a first-message display fallback separate from explicit titles", async () => {
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async () => [],
     storageRoot: "launch-display-fallback",
     threadStateStore: new MemoryThreadStatePersistence(),
@@ -3634,8 +2622,7 @@ test("successful user input wakes snoozed threads without changing questionnaire
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     now: () => now,
-    projectState: projectState(),
-    publish: (_connectionId, snapshot) => {
+    onProject: snapshot => {
       if ("entries" in snapshot && snapshot.entries.length === 2) discovered = true;
     },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
@@ -3644,16 +2631,11 @@ test("successful user input wakes snoozed threads without changing questionnaire
     },
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
+  await controller.readProject(fixtureProjectIds["project"]);
   await waitFor(() => discovered, "Snoozed threads were not discovered.");
 
-  await controller.acceptIntent("observer", {
-    harness: "codex",
-    projectId: fixtureProjectIds["project"],
-    threadId: fixtureThreadIds["accepted"],
-    title: "Accepted",
-    turnId: fixtureTurnIds["new-turn"],
-  });
+  await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.accepted,
+    fixtureTurnIds["new-turn"], "Accepted");
   let entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "accepted");
   assert.equal(entry?.entryKind === "thread" ? entry.metadata.snoozed : null, false);
   assert.equal(entry?.entryKind === "thread" ? entry.metadata.pinned : null, true);
@@ -3673,7 +2655,7 @@ test("successful user input wakes snoozed threads without changing questionnaire
 
 test("replayed questionnaire lifecycle does not invent fresh thread activity", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-questionnaire-replay-"));
-  const publications: WorkbenchThreadStateSnapshot[] = [];
+  const publications: WorkbenchThreadSidebarSnapshot[] = [];
   let now = 20;
   const providerEntry: WorkbenchThreadSidebarEntry = {
     activityAt: 10,
@@ -3686,15 +2668,14 @@ test("replayed questionnaire lifecycle does not invent fresh thread activity", a
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     now: () => now,
-    projectState: projectState(),
-    publish: (_connectionId, snapshot) => { publications.push(snapshot); },
+    onProject: snapshot => { publications.push(snapshot); },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", [providerEntry], { complete: true });
       return [];
     },
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
+  await controller.readProject(fixtureProjectIds["project"]);
   await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "questionnaire")), "Questionnaire thread was not discovered.");
   publications.length = 0;
 
@@ -3745,8 +2726,7 @@ test("inactive providers release stale questionnaire ownership without changing 
   let freshRevision = -1;
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: (_connectionId, snapshot) => {
+    onProject: snapshot => {
       if ("entries" in snapshot) publishedEntries = snapshot.entries;
       if (!("updateKind" in snapshot) && snapshot.freshness === "fresh") freshRevision = snapshot.revision;
     },
@@ -3756,7 +2736,7 @@ test("inactive providers release stale questionnaire ownership without changing 
     },
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
+  await controller.readProject(fixtureProjectIds["project"]);
   await waitFor(() => publishedEntries.length === 2, "Provider threads were not discovered.");
   await controller.observeLifecycle("codex", fixtureThreadIds["top"], { kind: "pendingInput", questionnaire: null, requestKey: "top-request", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("top-turn") });
   await controller.observeLifecycle("codex", fixtureThreadIds["child"], { kind: "pendingInput", questionnaire: null, requestKey: "child-request", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("child-turn") });
@@ -3811,8 +2791,6 @@ test("proper questionnaires and late-response history survive controller restart
   };
   const createController = () => new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", [providerEntry], { complete: true });
       return [];
@@ -3833,7 +2811,7 @@ test("proper questionnaires and late-response history survive controller restart
   };
 
   const first = createController();
-  await first.open("first", fixtureProjectIds["project"]);
+  await first.readProject(fixtureProjectIds["project"]);
   await waitFor(async () => (await first.getSnapshot(fixtureProjectIds["project"])).entries.length > 0, "Provider thread was not discovered.");
   const writeChanges = persistence.writeChanges.bind(persistence);
   let writes = 0;
@@ -3850,7 +2828,7 @@ test("proper questionnaires and late-response history survive controller restart
   await first.dispose();
 
   const second = createController();
-  await second.open("second", fixtureProjectIds["project"]);
+  await second.readProject(fixtureProjectIds["project"]);
   await waitFor(async () => {
     const entry = (await second.getSnapshot(fixtureProjectIds["project"])).entries.find(
       (candidate): candidate is Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => candidate.entryKind === "thread",
@@ -3885,7 +2863,7 @@ test("proper questionnaires and late-response history survive controller restart
   await second.dispose();
 
   const third = createController();
-  await third.open("third", fixtureProjectIds["project"]);
+  await third.readProject(fixtureProjectIds["project"]);
   await waitFor(async () => (await third.getSnapshot(fixtureProjectIds["project"])).entries.some((entry) => entry.entryKind === "thread"), "Dismissed questionnaire thread was not restored.");
   const reloadedDismissal = (await third.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "thread");
   assert.equal(reloadedDismissal?.entryKind === "thread" ? reloadedDismissal.pendingQuestionnaire ?? null : null, null);
@@ -4011,7 +2989,7 @@ test("proper questionnaires and late-response history survive controller restart
   await third.dispose();
 
   const fourth = createController();
-  await fourth.open("fourth", fixtureProjectIds["project"]);
+  await fourth.readProject(fixtureProjectIds["project"]);
   await waitFor(async () => {
     const entry = (await fourth.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread");
     return entry?.entryKind === "thread" && entry.questionnaireHistory?.[0]?.requestKey === "request-key";
@@ -4041,7 +3019,7 @@ test("wake waits for every unsnoozed row to become settlement-ready, then wakes 
     title: threadId,
   });
   const providerEntries: WorkbenchThreadSidebarEntry[] = [
-    snoozed("a", 3), snoozed("b", 2), snoozed("c", 1),
+    snoozed("a", 3), snoozed("b", 2), snoozed("c", 9),
     {
       activityAt: 4, createdAt: 4, cwd: root, directSubagentIndex: 0, entryKind: "subagent",
       identity: { harness: "codex", threadId: fixtureThreadIds["child"] },
@@ -4060,35 +3038,20 @@ test("wake waits for every unsnoozed row to become settlement-ready, then wakes 
   ];
   const createController = () => new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", providerEntries, { complete: true });
       return [];
     },
     storageRoot: root,
   });
-  const controller = createController();
-  await controller.open("observer", fixtureProjectIds["project"]);
-  await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["project"])).entries.length === providerEntries.length, "Threads were not discovered.");
-  const reordered = await controller.handleRequest("observer", {
-    beforeKey: "codex:a",
-    destinationFolderId: null,
-    method: "workbench/thread-state/display-order/move",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    section: "snoozed",
-    sourceKey: "codex:c",
-  });
-  assert.equal("result" in reordered && (reordered.result as { accepted?: boolean }).accepted, true);
   const folderId = "00000000-0000-4000-8000-000000000042";
-  const foldered = await controller.handleRequest("observer", {
-    folderId,
-    method: "workbench/thread-state/display-order/folder/create",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    sourceKey: "codex:c",
-    title: "Keep asleep",
+  await seedProjectState(root, "project", {
+    version: 4, records: providerEntries, drafts: [],
+    displayOrder: { folders: [{ folderId, section: "snoozed", threadKeys: ["codex:c"], title: "Keep asleep" }] },
   });
-  assert.equal("result" in foldered && (foldered.result as { accepted?: boolean }).accepted, true);
+  const controller = createController();
+  await controller.readProject(fixtureProjectIds["project"]);
+  await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["project"])).entries.length === providerEntries.length, "Threads were not discovered.");
   const afterReorder = await readProjectState<{ displayOrder?: unknown }>(root, "project");
   assert.ok(afterReorder.displayOrder);
   await controller.observeLifecycle("codex", fixtureThreadIds["child"], { kind: "turnCompleted", status: "completed", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("child-turn") });
@@ -4106,7 +3069,7 @@ test("wake waits for every unsnoozed row to become settlement-ready, then wakes 
   await controller.dispose();
 
   const reopened = createController();
-  await reopened.open("reopened", fixtureProjectIds["project"]);
+  await reopened.readProject(fixtureProjectIds["project"]);
   await waitFor(async () => (await reopened.getSnapshot(fixtureProjectIds["project"])).entries.length === providerEntries.length, "Reopened threads were not discovered.");
   const reopenedSnapshot = await reopened.getSnapshot(fixtureProjectIds["project"]);
   const reopenedSnoozeState = new Map(reopenedSnapshot.entries.flatMap((entry) => entry.entryKind === "thread" ? [[entry.identity.threadId, entry.metadata.snoozed] as const] : []));
@@ -4118,7 +3081,7 @@ test("wake waits for every unsnoozed row to become settlement-ready, then wakes 
   await fs.rm(root, { force: true, recursive: true });
 });
 
-test("thread folders persist across restart and reconcile members that leave their section", async () => {
+test("retained legacy folders reconcile members that leave their section", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-folders-"));
   const pinned = (threadId: string, orderAt: number): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
     activityAt: orderAt,
@@ -4132,8 +3095,6 @@ test("thread folders persist across restart and reconcile members that leave the
   const providerEntries: WorkbenchThreadSidebarEntry[] = [pinned("a", 2), pinned("b", 1)];
   const createController = () => new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", providerEntries, { complete: true });
       return [];
@@ -4141,44 +3102,18 @@ test("thread folders persist across restart and reconcile members that leave the
     storageRoot: root,
   });
   const folderId = "00000000-0000-4000-8000-000000000030";
-  const controller = createController();
-  await controller.open("observer", fixtureProjectIds["project"]);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const created = await controller.handleRequest("observer", { folderId, method: "workbench/thread-state/display-order/folder/create", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), sourceKey: "codex:a", title: "New folder" });
-  assert.equal("result" in created && (created.result as { accepted?: boolean }).accepted, true);
-  const renamed = await controller.handleRequest("observer", { folderId, method: "workbench/thread-state/display-order/folder/title/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), title: "Important" });
-  assert.equal("result" in renamed && (renamed.result as { accepted?: boolean }).accepted, true);
-  const filled = await controller.handleRequest("observer", { beforeKey: null, destinationFolderId: folderId, method: "workbench/thread-state/display-order/move", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), section: "pinned", sourceKey: "codex:b" });
-  assert.equal("result" in filled && (filled.result as { accepted?: boolean }).accepted, true);
-  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000031");
-  const drafted = await controller.handleRequest("observer", {
-    draft: {
-      agent: null, attachments: [], clientUpdatedAt: 3, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 3,
-      draftId, harness: "codex", model: null, profileId: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), prompt: "folder draft",
-      reasoningEffort: null, serviceTier: null, updatedAt: 3,
-    },
-    folderId,
-    method: "workbench/thread-state/draft/upsert",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+  await seedProjectState(root, "project", {
+    version: 4, drafts: [], records: providerEntries,
+    displayOrder: { folders: [{ folderId, section: "pinned", title: "Important", threadKeys: ["codex:a", "codex:b"] }] },
   });
-  assert.equal("result" in drafted && (drafted.result as { accepted?: boolean }).accepted, true);
-  await controller.dispose();
-
   const reopened = createController();
-  await reopened.open("reopened", fixtureProjectIds["project"]);
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await reopened.readProject(fixtureProjectIds["project"]);
   const restoredFolder = (await reopened.getSnapshot(fixtureProjectIds["project"])).displayOrder?.folders?.[0];
   assert.equal(restoredFolder?.title, "Important");
-  assert.deepEqual(restoredFolder?.threadKeys, [`draft:${draftId}`, "codex:a", "codex:b"]);
-  const restoredDraft = (await reopened.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "draft");
-  assert.deepEqual(restoredDraft?.entryKind === "draft" ? restoredDraft.metadata : null, { archived: false, pinned: true, snoozed: false });
-  await reopened.acceptIntent("reopened", { draftId, harness: "codex", projectId: fixtureProjectIds["project"], threadId: fixtureThreadIds["materialized"], title: "Materialized", turnId: fixtureTurnIds["turn"] });
-  assert.deepEqual((await reopened.getSnapshot(fixtureProjectIds["project"])).displayOrder?.folders?.[0]?.threadKeys, ["codex:materialized", "codex:a", "codex:b"]);
+  assert.deepEqual(restoredFolder?.threadKeys, ["codex:a", "codex:b"]);
   await reopened.handleRequest("reopened", { identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("b") }, method: "workbench/thread-state/pin/set", pinned: false, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") });
-  assert.deepEqual((await reopened.getSnapshot(fixtureProjectIds["project"])).displayOrder?.folders?.[0]?.threadKeys, ["codex:materialized", "codex:a"]);
+  assert.deepEqual((await reopened.getSnapshot(fixtureProjectIds["project"])).displayOrder?.folders?.[0]?.threadKeys, ["codex:a"]);
   await reopened.handleRequest("reopened", { identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("a") }, method: "workbench/thread-state/pin/set", pinned: false, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") });
-  assert.deepEqual((await reopened.getSnapshot(fixtureProjectIds["project"])).displayOrder?.folders?.[0]?.threadKeys, ["codex:materialized"]);
-  await reopened.handleRequest("reopened", { identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("materialized") }, method: "workbench/thread-state/pin/set", pinned: false, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") });
   assert.deepEqual((await reopened.getSnapshot(fixtureProjectIds["project"])).displayOrder, {});
   await reopened.dispose();
   await fs.rm(root, { force: true, recursive: true });
@@ -4218,8 +3153,6 @@ test("a held questionnaire never leaves the thread in the automatic recovery sta
     storageRoot: "held-questionnaire-recovery",
     threadStateStore: new MemoryThreadStatePersistence(),
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (_projectId, _signal, accept) => {
       await accept("codex", [waiting, settled], { complete: true });
       return [];
@@ -4237,7 +3170,7 @@ test("a held questionnaire never leaves the thread in the automatic recovery sta
     entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput"
       ? entry.lifecycle.requestKey : null;
   try {
-    await controller.open("observer", fixtureProjectIds["project"]);
+    await controller.readProject(fixtureProjectIds["project"]);
     await controller.refresh(fixtureProjectIds["project"]);
 
     // A provider failure walks an idle thread to needsAttention/noActiveTurn, the one state the
@@ -4285,7 +3218,7 @@ test("profile-less threads use defaults and reads cannot overtake a failed profi
     await write(projectId, changes);
   };
   const controller = new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+    getProjectCatalog: projectCatalog,
     reconcileProject: async () => [], storageRoot: root, threadStateStore: persistence,
   });
   context.after(async () => { release(); await controller.dispose(); await fs.rm(root, { recursive: true, force: true }); });
@@ -4315,7 +3248,7 @@ test("restarted preview refreshes linked profiles, retains deleted snapshots and
     createdAt: 1, updatedAt: 1, scope: { kind: "global" },
   }];
   const create = () => new WorkbenchThreadStateController({
-    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+    getProjectCatalog: projectCatalog,
     readComposerProfiles: async () => ({ profiles }),
     reconcileProject: async () => [], storageRoot: root, threadStateStore: persistence,
   });
@@ -4368,7 +3301,7 @@ test("profile admission publishes only accepted candidates and orders later edit
   const latest = { ...original.settings, model: "new" };
   const controller = new WorkbenchThreadStateController({
     storageRoot: "profile-admission", threadStateStore: persistence,
-    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+    getProjectCatalog: projectCatalog,
     reconcileProject: async () => [],
     now: () => 1234,
     recordComposerProfileUsage: async (id: string, at: number) => { usage.push({ id, at }); },
@@ -4423,7 +3356,7 @@ test("usage failure retains accepted success and still saves the applied profile
   const original = { kind: "profile" as const, profileId: "named", settings: { ...EMPTY_CODEX_SETTINGS, model: "old" } };
   const controller = new WorkbenchThreadStateController({
     storageRoot: "profile-usage-failure", threadStateStore: persistence,
-    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+    getProjectCatalog: projectCatalog,
     reconcileProject: async () => [], log: message => logs.push(message),
     readComposerProfiles: async () => ({ profiles: [{ ...original.settings, model: "new", id: "named", name: "Named", scope: { kind: "global" }, createdAt: 1, updatedAt: 1 }] }),
     recordComposerProfileUsage: async () => { usages++; throw new Error("Usage unavailable"); },
@@ -4454,7 +3387,7 @@ test("profile persistence failure after native acceptance retains success and ex
   const logs: string[] = [];
   const controller = new WorkbenchThreadStateController({
     storageRoot: "profile-failed-commit", threadStateStore: persistence,
-    getProjectCatalog: projectCatalog, projectState: projectState(), publish: () => undefined,
+    getProjectCatalog: projectCatalog,
     reconcileProject: async () => [], log: (message) => logs.push(message),
   });
   context.after(() => controller.dispose());
@@ -4471,7 +3404,7 @@ test("profile persistence failure after native acceptance retains success and ex
   assert.deepEqual(await controller.readComposerProfileTarget(slot), original);
 });
 
-test("drag priority and folder drops update one project-owned state atomically", async () => {
+test("priority transitions retain pins while snoozed and clear both when returning to main", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-drag-priority-"));
   const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 2,
@@ -4490,23 +3423,19 @@ test("drag priority and folder drops update one project-owned state atomically",
   };
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", [source, target], { complete: true });
       return [];
     },
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
+  await controller.readProject(fixtureProjectIds["project"]);
   await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["project"])).freshness === "fresh", "Project did not reconcile.");
 
   const crossPriorityMove = await controller.handleRequest("observer", {
-    beforeKey: "codex:target",
-    destinationFolderId: null,
-    method: "workbench/thread-state/display-order/move",
+    method: "workbench/thread-state/priority/set",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    section: "snoozed",
+    priority: "snoozed",
     sourceKey: "codex:source",
   });
   assert.equal("result" in crossPriorityMove && (crossPriorityMove.result as { accepted?: boolean }).accepted, true);
@@ -4528,21 +3457,16 @@ test("drag priority and folder drops update one project-owned state atomically",
   moved = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "source");
   assert.deepEqual(moved?.entryKind === "thread" ? moved.metadata : null, { archived: false, pinned: true, snoozed: false });
 
-  const folderId = "00000000-0000-4000-8000-000000000077";
-  const folderDrop = await controller.handleRequest("observer", {
-    destinationFolderId: null,
-    folderId,
-    method: "workbench/thread-state/display-order/folder/drop",
+  const snoozed = await controller.handleRequest("observer", {
+    method: "workbench/thread-state/priority/set",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    section: "snoozed",
+    priority: "snoozed",
     sourceKey: "codex:source",
-    targetKey: "codex:target",
   });
-  assert.equal("result" in folderDrop && (folderDrop.result as { accepted?: boolean }).accepted, true);
+  assert.equal("result" in snoozed && (snoozed.result as { accepted?: boolean }).accepted, true);
   snapshot = await controller.getSnapshot(fixtureProjectIds["project"]);
   moved = snapshot.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "source");
   assert.deepEqual(moved?.entryKind === "thread" ? moved.metadata : null, { archived: false, pinned: true, snoozed: true });
-  assert.deepEqual(snapshot.displayOrder.folders?.[0]?.threadKeys, ["codex:source", "codex:target"]);
 
   await controller.handleRequest("observer", {
     method: "workbench/thread-state/priority/set",
@@ -4588,8 +3512,6 @@ test("cross-project dependent snooze waits for completion and the final live cla
       data: [projectOption("alpha", "C:/projects/alpha"), projectOption("beta", "C:/projects/beta")],
       rootPath: "C:/projects",
     }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot, acceptGitArcSnapshot) => {
       await acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
       await acceptGitArcSnapshot({
@@ -4601,7 +3523,7 @@ test("cross-project dependent snooze waits for completion and the final live cla
     resolveGitArc: async (_projectId, _harness, threadId) => threadId === "target" ? targetArc : null,
     storageRoot: root,
   });
-  await controller.openGlobal("observer", 6);
+  await Promise.all([controller.readProject(fixtureProjectIds.alpha), controller.readProject(fixtureProjectIds.beta)]);
   await waitFor(async () => (
     (await controller.getSnapshot(fixtureProjectIds["alpha"])).freshness === "fresh"
     && (await controller.getSnapshot(fixtureProjectIds["beta"])).freshness === "fresh"
@@ -4662,8 +3584,6 @@ test("dependent snooze also wakes when claims leave before manual completion", a
       data: [projectOption("alpha", "C:/projects/alpha"), projectOption("beta", "C:/projects/beta")],
       rootPath: "C:/projects",
     }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot, acceptGitArcSnapshot) => {
       await acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
       await acceptGitArcSnapshot({
@@ -4675,7 +3595,7 @@ test("dependent snooze also wakes when claims leave before manual completion", a
     resolveGitArc: async (_projectId, _harness, threadId) => threadId === "target" ? targetArc : null,
     storageRoot: root,
   });
-  await controller.openGlobal("observer", 6);
+  await Promise.all([controller.readProject(fixtureProjectIds.alpha), controller.readProject(fixtureProjectIds.beta)]);
   await waitFor(async () => (
     (await controller.getSnapshot(fixtureProjectIds["alpha"])).freshness === "fresh"
     && (await controller.getSnapshot(fixtureProjectIds["beta"])).freshness === "fresh"
@@ -4732,21 +3652,20 @@ test("dependent snooze keeps multiple targets, survives missing targets, and cle
   const targetA = thread("target-a", { archived: false, pinned: false, snoozed: false }, { kind: "needsAttention", reason: "noActiveTurn", settled: false }, 2);
   const targetB = thread("target-b", { archived: false, pinned: false, snoozed: false }, { kind: "needsAttention", reason: "noActiveTurn", settled: false }, 1);
   let betaEntries = [targetA, targetB];
-  const publications: Array<{ connectionId: string; snapshot: WorkbenchThreadStateSnapshot }> = [];
+  const publications: WorkbenchThreadSidebarSnapshot[] = [];
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: () => ({
       data: [projectOption("alpha", "C:/projects/alpha"), projectOption("beta", "C:/projects/beta")],
       rootPath: "C:/projects",
     }),
-    projectState: projectState(),
-    publish: (connectionId, snapshot) => publications.push({ connectionId, snapshot }),
+    onProject: snapshot => { publications.push(snapshot); },
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", projectId === "alpha" ? [source, ordinary, active] : betaEntries, { complete: true });
       return [];
     },
     storageRoot: root,
   });
-  await controller.openGlobal("observer", 6);
+  await Promise.all([controller.readProject(fixtureProjectIds.alpha), controller.readProject(fixtureProjectIds.beta)]);
   await waitFor(async () => (
     (await controller.getSnapshot(fixtureProjectIds["alpha"])).freshness === "fresh"
     && (await controller.getSnapshot(fixtureProjectIds["beta"])).freshness === "fresh"
@@ -4774,33 +3693,15 @@ test("dependent snooze keeps multiple targets, survives missing targets, and cle
   assert.deepEqual(waitingEntry?.entryKind === "thread"
     ? waitingEntry.waitingOnThreads?.map(wait => wait.identity.threadId) : null,
   [targetA.identity.threadId, targetB.identity.threadId]);
-  const oldGlobal = await controller.openGlobal("old-global", 8);
-  const newGlobal = await controller.openGlobal("new-global", 9);
-  const sourceFrom = (opened: typeof oldGlobal) => opened.projectSidebars.projects
-    .find(project => project.projectId === fixtureProjectIds["alpha"])?.entries
-    .find(entry => entry.entryKind === "thread" && entry.identity.threadId === source.identity.threadId);
-  assert.equal("waitingOnThreads" in (sourceFrom(oldGlobal) ?? {}), false);
-  const newGlobalSource = sourceFrom(newGlobal);
-  assert.equal(newGlobalSource?.entryKind === "thread" ? newGlobalSource.waitingOnThreads?.length : null, 2);
-  const oldProject = await controller.open("old-project", fixtureProjectIds["alpha"], 6);
-  const newProject = await controller.open("new-project", fixtureProjectIds["alpha"], 7);
-  const projectSource = (opened: typeof oldProject) => opened.sidebar.entries.find(
-    entry => entry.entryKind === "thread" && entry.identity.threadId === source.identity.threadId,
-  );
-  assert.equal("waitingOnThreads" in (projectSource(oldProject) ?? {}), false);
-  const newProjectSource = projectSource(newProject);
-  assert.equal(newProjectSource?.entryKind === "thread" ? newProjectSource.waitingOnThreads?.length : null, 2);
-  const observeSource = async (connectionId: string, version: 1 | 2) => {
-    const response = await controller.handleRequest(connectionId, {
-      method: "workbench/thread-state/observe", projectId: fixtureProjectIds["alpha"],
+  const observeSource = async () => {
+    const response = await controller.readWorkspaceThread({
+      projectId: fixtureProjectIds["alpha"],
       subscriptionId: crypto.randomUUID(),
       target: { harness: "codex", kind: "provider", threadId: source.identity.threadId },
-      version,
     });
-    return (response.result as { observation: { entries: WorkbenchThreadSidebarEntry[] } }).observation.entries[0];
+    return response.entries[0];
   };
-  assert.equal("waitingOnThreads" in (await observeSource("old-global", 1) ?? {}), false);
-  const newObservation = await observeSource("new-global", 2);
+  const newObservation = await observeSource();
   assert.equal(newObservation?.entryKind === "thread" ? newObservation.waitingOnThreads?.length : null, 2);
   await controller.handleRequest("observer", {
     identity: source.identity,
@@ -4812,19 +3713,8 @@ test("dependent snooze keeps multiple targets, survives missing targets, and cle
   assert.deepEqual(stored.records.find(({ identity }) => identity.threadId === "source")?.snoozedUntil, {
     targets: [{ identity: targetA.identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"), title: targetA.title }],
   });
-  const latestPublishedSource = (connectionId: string) => {
-    const update = publications.findLast(publication =>
-      publication.connectionId === connectionId && "updateKind" in publication.snapshot
-        && (publication.snapshot.updateKind === "threadStateDelta"
-          || publication.snapshot.updateKind === "projectThreadSidebar"))?.snapshot;
-    const entries = update && "updateKind" in update
-      ? update.updateKind === "threadStateDelta" ? update.upserts
-        : update.updateKind === "projectThreadSidebar" ? update.sidebar.entries : []
-      : [];
-    return entries.find(entry => entry.entryKind === "thread" && entry.identity.threadId === source.identity.threadId);
-  };
-  assert.equal("waitingOnThreads" in (latestPublishedSource("old-global") ?? {}), false);
-  const newPublishedSource = latestPublishedSource("new-global");
+  const newPublishedSource = publications.findLast(publication => publication.projectId === fixtureProjectIds.alpha)
+    ?.entries.find(entry => entry.entryKind === "thread" && entry.identity.threadId === source.identity.threadId);
   assert.equal(newPublishedSource?.entryKind === "thread" ? newPublishedSource.waitingOnThreads?.length : null, 1);
   await controller.handleRequest("observer", {
     identity: source.identity,
@@ -4921,6 +3811,7 @@ test("restart reevaluates a persisted dependency when its ready target loaded fi
   let releaseSourceRead = () => undefined;
   const sourceReadGate = new Promise<void>((resolve) => { releaseSourceRead = resolve; });
   const gatedPersistence: WorkbenchThreadStatePersistence = {
+    readNavigationSummary: projectId => persistence.readNavigationSummary(projectId),
     writeChanges: (projectId, changes) => persistence.writeChanges(projectId, changes),
     readNextArchiveEligibility: () => persistence.readNextArchiveEligibility(),
     readArchiveEligible: before => persistence.readArchiveEligible(before),
@@ -4938,8 +3829,6 @@ test("restart reevaluates a persisted dependency when its ready target loaded fi
       data: [projectOption("beta", "C:/projects/beta"), projectOption("alpha", "C:/projects/alpha")],
       rootPath: "C:/projects",
     }),
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
       return [];
@@ -4947,7 +3836,7 @@ test("restart reevaluates a persisted dependency when its ready target loaded fi
     storageRoot: root,
     threadStateStore: gatedPersistence,
   });
-  const opening = controller.openGlobal("observer", 6);
+  const opening = Promise.all([controller.readProject(fixtureProjectIds.beta), controller.readProject(fixtureProjectIds.alpha)]);
   await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["beta"])).freshness === "fresh", "Target did not reconcile first.");
   releaseSourceRead();
   await opening;
@@ -4976,15 +3865,13 @@ test("provider completion auto-completes subagents while top-level turns still n
   const parent: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = { ...working("parent"), lifecycle: { kind: "completed", reason: "providerInactive", settled: true } };
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: () => undefined,
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", [parent, working("top"), child], { complete: true });
       return [];
     },
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
+  await controller.readProject(fixtureProjectIds["project"]);
   await new Promise((resolve) => setTimeout(resolve, 0));
   const lifecycleOf = (snapshot: Awaited<ReturnType<typeof controller.getSnapshot>>, threadId: string) => {
     const entry = snapshot.entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === threadId);
@@ -5014,15 +3901,14 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
   };
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
-    projectState: projectState(),
-    publish: (_connectionId, snapshot) => { if ("entries" in snapshot) publications += 1; },
+    onProject: () => { publications += 1; },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", [terminal], { complete: true });
       return [];
     },
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
+  await controller.readProject(fixtureProjectIds["project"]);
   await new Promise((resolve) => setTimeout(resolve, 0));
   publications = 0;
   const writeChanges = persistence.writeChanges.bind(persistence);
@@ -5051,7 +3937,7 @@ test("restoring a terminal thread persists across provider reconciliation", asyn
 
 test("manual status persists, restores settled threads, and rejects provider-owned lifecycles", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-manual-attention-"));
-  const published: WorkbenchThreadStateSnapshot[] = [];
+  const published: WorkbenchThreadSidebarSnapshot[] = [];
   let insideGitArcTransition = false;
   let gitArcTransitions = 0;
   let terminalHasGitArc = false;
@@ -5084,8 +3970,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
       assert.equal(insideGitArcTransition, true);
       return terminalHasGitArc && !terminalGitArcResolved && threadId === "terminal";
     },
-    projectState: projectState(),
-    publish: (_connectionId, snapshot) => published.push(snapshot),
+    onProject: snapshot => { published.push(snapshot); },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", [terminal, pending, working], { complete: true });
       return [];
@@ -5101,7 +3986,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
     },
     storageRoot: root,
   });
-  await controller.open("observer", fixtureProjectIds["project"]);
+  await controller.readProject(fixtureProjectIds["project"]);
   await controller.refresh(fixtureProjectIds["project"]);
   const settledSameStatus = await controller.handleRequest("observer", {
     identity: terminal.identity, method: "workbench/thread-state/status/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), status: "completed",

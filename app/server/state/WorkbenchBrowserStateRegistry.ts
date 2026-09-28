@@ -19,6 +19,7 @@ import {
 import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
 import type { WorkbenchDatabaseDiagnostic } from "workbench-shared/database/workbench-database-migration";
+import type { WorkbenchProjectAlias } from "workbench-shared/types";
 
 export interface WorkbenchBrowserStateRegistryOptions {
   browserStateDirectoryPath?: string;
@@ -69,6 +70,10 @@ function sharedSeedMutation(
       action: "delete",
       identity: withDaemonRegistrationId(mutation.identity, daemonRegistrationId),
     };
+}
+
+class BrowserStateRetiredError extends Error {
+  constructor() { super("Workbench browser state registry is closed."); }
 }
 
 export default class WorkbenchBrowserStateRegistry {
@@ -147,6 +152,40 @@ export default class WorkbenchBrowserStateRegistry {
     });
   }
 
+  async readWorkspaceBrowser(
+    browserStateId: string | undefined,
+    sources: readonly { daemonId: string; attachedLocal: boolean; aliases?: readonly WorkbenchProjectAlias[] }[],
+  ) {
+    const controller = await this.#controllerFor(browserStateId);
+    if (controller !== this.#sharedController) {
+      const before = this.#sharedController.revision;
+      const attached = sources.filter(source => source.attachedLocal);
+      if (attached.length) {
+        const shared = await this.#sharedController.bindDaemons(attached);
+        for (const source of attached) {
+          const registration = shared.registrations?.find(item => item.daemonId === source.daemonId);
+          if (registration && source.aliases?.length) await this.#sharedController.remapProjects({
+            daemonRegistrationId: registration.id, aliases: [...source.aliases],
+          });
+        }
+        if (this.#sharedController.revision !== before) this.#notifyBrowser(undefined, this.#sharedController.revision);
+      }
+    }
+    const before = controller.revision;
+    const bound = await controller.bindDaemons(sources);
+    for (const source of sources) {
+      const registration = bound.registrations?.find(item => item.daemonId === source.daemonId);
+      if (registration && source.aliases?.length) await controller.remapProjects({
+        daemonRegistrationId: registration.id, aliases: [...source.aliases],
+      });
+    }
+    const response = controller.read(undefined, {
+      attachmentsAsUrls: true, browserStateId: browserStateId ?? "shared",
+    });
+    if (response.revision !== before) this.#notifyBrowser(browserStateId, response.revision);
+    return response;
+  }
+
   async mutateBrowser(browserStateId: string | undefined, mutation: WorkbenchClientStateMutation, attachmentsAsUrls = false) {
     const controller = await this.#controllerFor(browserStateId);
     const response = await controller.mutate(mutation, {
@@ -222,7 +261,7 @@ export default class WorkbenchBrowserStateRegistry {
   async close() {
     this.#disposed = true;
     const failures = (await Promise.allSettled(this.#openingControllers.values()))
-      .flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+      .flatMap((result) => result.status === "rejected" && !(result.reason instanceof BrowserStateRetiredError) ? [result.reason] : []);
     await this.#seedQueue;
     for (const controller of this.#controllers.values()) {
       try {
@@ -237,11 +276,11 @@ export default class WorkbenchBrowserStateRegistry {
   }
 
   async #controllerFor(browserStateId: string | undefined) {
-    if (this.#disposed) throw new Error("Workbench browser state registry is closed.");
+    if (this.#disposed) throw new BrowserStateRetiredError();
     await this.#seedQueue;
     if (!browserStateId) return this.#sharedController;
     if (!isWorkbenchBrowserStateId(browserStateId)) throw new Error("Workbench browser state ID is invalid.");
-    if (this.#disposed) throw new Error("Workbench browser state registry is closed.");
+    if (this.#disposed) throw new BrowserStateRetiredError();
     const existing = this.#controllers.get(browserStateId);
     if (existing) return existing;
     const opening = this.#openingControllers.get(browserStateId);
@@ -257,7 +296,7 @@ export default class WorkbenchBrowserStateRegistry {
 
   async #openController(browserStateId: string) {
     await this.#seedQueue;
-    if (this.#disposed) throw new Error("Workbench browser state registry is closed.");
+    if (this.#disposed) throw new BrowserStateRetiredError();
     const browserStateDirectoryPath = this.#browserStateDirectoryPath;
     if (!browserStateDirectoryPath) throw new Error("Workbench browser state storage is unavailable.");
     await fs.mkdir(browserStateDirectoryPath, { recursive: true });
@@ -315,7 +354,7 @@ export default class WorkbenchBrowserStateRegistry {
     do {
       boundary = this.#seedQueue;
       await boundary;
-      if (this.#disposed) throw new Error("Workbench browser state registry is closed.");
+      if (this.#disposed) throw new BrowserStateRetiredError();
       await controller.remapProjects({
         daemonRegistrationId: controller.daemonRegistrationId,
         aliases: this.#sharedController.readProjectAliases(),

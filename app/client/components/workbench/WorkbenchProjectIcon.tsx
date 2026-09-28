@@ -4,15 +4,15 @@
  */
 "use client";
 
-import { useContext, useEffect, useState, useSyncExternalStore } from "react";
+import { useContext, useEffect, useState } from "react";
 
-import { getWorkbenchProjectIconUrl, workbenchDaemonConnection } from "workbench-shared/workbench/workbench-connection";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { getIdentityAccentHue, type IdentityAccentStyle } from "../../workbench/identity-accent-color";
 import {
   resolveWorkbenchDaemonAssetOrigin, WorkbenchDaemonAssetOriginContext,
   type WorkbenchDaemonAssetSource,
-} from "./WorkbenchDaemonClientContext";
+  getWorkbenchProjectIconUrl,
+} from "./WorkbenchWorkspaceContext";
 
 const VARIANT_CLASS_NAMES = {
   card: {
@@ -46,7 +46,6 @@ export default function WorkbenchProjectIcon ({
   variant?: keyof typeof VARIANT_CLASS_NAMES;
 }) {
   const assetKey = project.icon ? `${project.id}:${project.icon.rootId}:${project.icon.path}` : project.id;
-  useSyncExternalStore(workbenchDaemonConnection.subscribe, workbenchDaemonConnection.getSnapshot, workbenchDaemonConnection.getSnapshot);
   const contextSource = useContext(WorkbenchDaemonAssetOriginContext);
   const origin = resolveWorkbenchDaemonAssetOrigin(assetSource ?? contextSource);
   const assetUrl = getWorkbenchProjectIconUrl(project.id, assetKey, origin);

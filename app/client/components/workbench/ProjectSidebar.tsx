@@ -15,6 +15,10 @@ import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButton";
+import { useWorkbenchClientController } from "./workbench-client-context";
+import { createObservedProjectRoute, createWorkbenchHref } from "workbench-shared/workbench/navigation/workbench-route";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import { WorkbenchDaemonAssetOriginContext } from "./WorkbenchWorkspaceContext";
 
 export default function ProjectSidebar ({
   activeProjectId,
@@ -24,6 +28,7 @@ export default function ProjectSidebar ({
   logicalLoading,
   onConfigureGitRoots,
   onProjectLinkClick,
+  onObservedProjectLinkClick,
   projects,
   showGitRootsSetup,
 }: {
@@ -34,10 +39,13 @@ export default function ProjectSidebar ({
   logicalLoading?: boolean;
   onConfigureGitRoots: () => void;
   onProjectLinkClick (event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
+  onObservedProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, location: ProjectLocationReference): void;
   projects: readonly WorkbenchProjectOption[];
   showGitRootsSetup: boolean;
 }) {
   const { preferences, setProjectTimeGroupCount } = useWorkbenchSidebarPreferences();
+  const workspace = useWorkbenchClientController().explorer.workspaceProjects;
+  const observed = workspace?.observedProjects.flatMap(item => item.locations) ?? [];
   const summaries = useWorkbenchProjectThreadSummaries();
   const displayedProjects = logicalProjects ?? projects;
   const grouped = useMemo<DisplaySidebarGroups>(() => logicalProjects
@@ -98,6 +106,19 @@ export default function ProjectSidebar ({
               Set Git roots
             </button>
           ) : null}
+          {observed.map(item => (
+            <WorkbenchDaemonAssetOriginContext.Provider
+              key={`${item.location.daemonId}/${item.location.projectId}`}
+              value={{ kind: "source", daemonId: item.location.daemonId }}
+            >
+            <WorkbenchProjectListItem
+              entry={{ project: item.project, summary: null, activityAt: item.project.lastCommitTimeMs }}
+              nowMs={nowMs}
+              href={createWorkbenchHref(createObservedProjectRoute(item.location))}
+              onProjectLinkClick={event => onObservedProjectLinkClick(event, item.location)}
+            />
+            </WorkbenchDaemonAssetOriginContext.Provider>
+          ))}
           {hasMoreTimeGroups ? (
             <button
               className="w-full rounded-lg px-2 py-1.5 text-left text-[0.78rem] font-medium text-fg/muted transition hover:(bg-accent-soft text-accent) focus-visible:(bg-accent-soft text-accent outline-none)"
@@ -108,8 +129,9 @@ export default function ProjectSidebar ({
             </button>
           ) : null}
           {logicalError ? <p role="alert" className="m-0 px-2 text-[0.8rem] leading-5 text-danger">{logicalError}</p> : null}
-          {!displayedProjects.length && !logicalError ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">
-            {logicalLoading ? "Loading projects..." : "No projects were found."}
+          {!displayedProjects.length && !observed.length && !logicalError ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">
+            {logicalLoading || !workspace || workspace.catalogues.some(item => item.phase === "pending")
+              ? "Loading projects..." : "No projects were found."}
           </p> : null}
         </nav>
       </WorkbenchSidebarSectionDisclosure>

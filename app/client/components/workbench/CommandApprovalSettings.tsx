@@ -6,7 +6,7 @@
 "use client";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import CommandApprovalSettingsController from "../../workbench/CommandApprovalSettingsController";
-import { useWorkbenchDaemonClient } from "./WorkbenchDaemonClientContext";
+import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
 import { XIcon } from "./workbench-icons";
 import WorkbenchIconButton from "./WorkbenchIconButton";
 

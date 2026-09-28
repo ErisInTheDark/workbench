@@ -55,12 +55,8 @@ export default class WorkbenchAppPortRoutes {
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL) {
     if (url.pathname !== WORKBENCH_APP_PORT_PATH) return false;
-    if (request.method === "GET") {
-      sendJson(response, 200, this.read(request, url));
-      return true;
-    }
     if (request.method !== "PUT") {
-      response.writeHead(405, { Allow: "GET, PUT" });
+      response.writeHead(405, { Allow: "PUT" });
       response.end();
       return true;
     }
@@ -70,7 +66,7 @@ export default class WorkbenchAppPortRoutes {
         sendJson(response, 409, { error: "Finish or cancel the pending network settings change first." });
         return true;
       }
-      sendJson(response, 200, this.project(await this.options.appPort.update(update.port), request, url));
+      sendJson(response, 200, this.project(await this.options.appPort.update(update.port), request));
     } catch (error) {
       const expected = expectedUpdateFailure(error);
       if (expected) {
@@ -88,13 +84,11 @@ export default class WorkbenchAppPortRoutes {
     return true;
   }
 
-  private project(snapshot: ReturnType<WorkbenchAppPortControl["read"]>, request: IncomingMessage, url: URL) {
-    return url.searchParams.get("version") === "2"
-      ? { ...snapshot, stableOrigin: this.options.stableOrigin?.(request) ?? null }
-      : snapshot;
+  private project(snapshot: ReturnType<WorkbenchAppPortControl["read"]>, request: IncomingMessage) {
+    return { ...snapshot, stableOrigin: this.options.stableOrigin?.(request) ?? null };
   }
 
-  read(request: IncomingMessage, url: URL) {
-    return this.project(this.options.appPort.read(), request, url);
+  read(request: IncomingMessage) {
+    return this.project(this.options.appPort.read(), request);
   }
 }

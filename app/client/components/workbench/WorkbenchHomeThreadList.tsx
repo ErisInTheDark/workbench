@@ -11,7 +11,7 @@ import type { WorkbenchControls, WorkbenchLogicalProject, WorkbenchLogicalThread
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import {
   projectLogicalHomeDisplayOrder, projectLogicalThreadDisplayOrder,
-} from "../../workbench/WorkbenchProjectProjection";
+} from "workbench-shared/workbench/project/workbench-project-projection";
 import {
   canMoveWorkbenchThreadRowToSection,
   isWorkbenchThreadRowDragPayload,
@@ -193,85 +193,12 @@ export default function WorkbenchHomeThreadList({
     sourceKey: string, section: WorkbenchThreadDisplaySection,
     destinationFolderKey: string | null, beforeKey: string | null,
   ) => {
-    if (!logicalProjects || !presentation || !controls || !logicalThreads) {
+    if (!controls) {
       actions.onHomeMove(sourceKey, section, destinationFolderKey, beforeKey);
       return;
     }
     try {
-      const allItems = [...currentList.pinnedItems, ...currentList.snoozedItems, ...currentList.settledItems];
-      const sourceItem = allItems.find(item => homeItemKey(item) === sourceKey);
-      const sourceKeys = sourceItem?.itemKind === "folder" ? sourceItem.threadKeys : [sourceKey];
-      const sourceRow = logicalThreads.find(row =>
-        getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry) === sourceKey);
-      const destination = destinationFolderKey
-        ? allItems.find(item => item.itemKind === "folder"
-          && homeItemKey(item) === destinationFolderKey) : null;
-      if (destinationFolderKey && (!destination || destination.itemKind !== "folder")) {
-        throw new Error("That folder is unavailable.");
-      }
-      if (destination?.itemKind === "folder"
-        && (!sourceRow || sourceRow.logicalProjectId !== destination.projectId)) {
-        throw new Error("That folder belongs to another project.");
-      }
-      const sourceSection = sourceRow && getWorkbenchThreadDisplaySection(sourceRow.entry);
-      if (sourceRow && sourceSection !== section) {
-        if (section === "settled" || sourceRow.entry.entryKind === "subagent"
-          || sourceRow.entry.metadata.archived) {
-          throw new Error("This thread cannot move to that section.");
-        }
-        const priority = section === "pinned" ? "pinned" : "snoozed";
-        if (sourceRow.entry.entryKind === "draft") {
-          await controls.setPresentationDraftPriority(sourceRow.entry.draft.draftId, {
-            pinned: priority === "pinned", snoozed: priority === "snoozed",
-          });
-        } else {
-          const accepted = await controls.threadAction(sourceRow.entry.identity.threadId,
-            { kind: "priority", priority });
-          if (!accepted) throw new Error("The source daemon rejected this priority change.");
-        }
-      }
-      const rows: WorkbenchLogicalThreadRow[] = logicalThreads.map(row => row !== sourceRow || sourceSection === section
-        || row.entry.entryKind === "subagent" ? row : {
-        ...row, entry: {
-          ...row.entry, metadata: {
-            archived: false as const, pinned: section === "pinned", snoozed: section === "snoozed",
-          },
-        },
-      } satisfies WorkbenchLogicalThreadRow);
-      const layoutEntries = rows.flatMap(row => {
-        const itemSection = getWorkbenchThreadDisplaySection(row.entry);
-        return itemSection ? [{
-          key: getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry), section: itemSection,
-        }] : [];
-      });
-      const nextHome = moveWorkbenchHomeThreadDisplayItem(
-        layoutEntries, currentList.displayOrder, section, sourceKeys, beforeKey,
-      );
-      if (!nextHome) throw new Error("The home position is no longer available.");
-      if (sourceRow) {
-        const projectOrder = projectLogicalThreadDisplayOrder(
-          sourceRow.logicalProjectId, logicalThreads, presentation,
-        );
-        const localKey = getWorkbenchThreadDisplayKey(sourceRow.entry);
-        const sourceFolder = findWorkbenchThreadFolder(projectOrder, localKey);
-        const destinationFolder = destination?.itemKind === "folder" ? destination.folder : null;
-        if (destinationFolder || sourceFolder) {
-          const beforeRow = beforeKey ? rows.find(row =>
-            getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry) === beforeKey) : null;
-          await controls.updatePresentationProjectLayout(
-            sourceRow.logicalProjectId, rows, {
-              kind: "move", section, sourceKey: localKey,
-              destinationFolderId: destinationFolder?.folderId ?? null,
-              beforeKey: beforeRow?.logicalProjectId === sourceRow.logicalProjectId
-                ? getWorkbenchThreadDisplayKey(beforeRow.entry) : null,
-            }, nextHome,
-          );
-        } else {
-          await controls.savePresentationHomeLayout(rows, nextHome);
-        }
-      } else {
-        await controls.savePresentationHomeLayout(rows, nextHome);
-      }
+      await controls.updatePresentationHomeLayout({ sourceKey, section, destinationFolderKey, beforeKey });
       setLayoutError("");
     } catch (error) {
       const message = error instanceof Error ? error.message.slice(0, 500) : "Home layout could not be saved.";

@@ -12,6 +12,11 @@ import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProce
 import type WorkbenchAppHttpRouter from "./WorkbenchAppHttpRouter.ts";
 import type WorkbenchAppReloadController from "./WorkbenchAppReloadController.ts";
 import type WorkbenchAppReloadDirtController from "./WorkbenchAppReloadDirtController.ts";
+import type WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
+import type WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
+import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
+import type WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
+import type WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController";
 
 export interface AppRuntimeObjects {
   compiler: WorkbenchFrontendCompiler;
@@ -25,4 +30,9 @@ export interface AppRuntimeObjects {
   reloadDirt: WorkbenchAppReloadDirtController;
   state: WorkbenchBrowserStateRegistry;
   topology: object;
+  sources: WorkbenchDaemonSources;
+  workspace: WorkbenchWorkspaceController;
+  workspaceThreads: WorkbenchWorkspaceThreads;
+  workspaceDrafts: WorkbenchWorkspaceDrafts;
+  presentationImport: WorkbenchPresentationImportController;
 }

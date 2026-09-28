@@ -58,8 +58,6 @@ type CaptureGapControllerConstructor = new (
   options: import("./database/transcript/WorkbenchTranscriptCaptureGapController").WorkbenchTranscriptCaptureGapControllerOptions,
 ) => CaptureGapController;
 
-const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
-
 function loadDatabaseControllers() {
   const CommandApprovalController = (
     require("./WorkbenchCommandApprovalController") as { default: typeof import("./WorkbenchCommandApprovalController").default }
@@ -178,12 +176,15 @@ export default ReloadableNode.define<
         signal?.throwIfAborted();
         await mkdir(dirname(databasePath), { recursive: true });
         signal?.throwIfAborted();
-        if (startupDiagnostics) console.info("[startup] daemon database opening");
+        const databaseStartedAt = performance.now();
+        if (process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1") console.info("[startup] daemon database opening and verifying retained state");
         await transcript.start();
+        if (process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1") console.info(`[startup] daemon database and transcript ready in ${Math.round(performance.now() - databaseStartedAt)}ms`);
         signal?.throwIfAborted();
+        const identitiesStartedAt = performance.now();
         await threadIdentity.start();
         signal?.throwIfAborted();
-        if (startupDiagnostics) console.info("[startup] daemon database ready");
+        if (process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1") console.info(`[startup] daemon thread identities ready in ${Math.round(performance.now() - identitiesStartedAt)}ms`);
       },
       detachForReload: shutdown,
       dispose: shutdown,

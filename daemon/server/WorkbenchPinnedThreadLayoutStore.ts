@@ -1,23 +1,16 @@
 /*
  * Exports:
- * - default WorkbenchPinnedThreadLayoutStore: own global pinned folders, row drops, ordering, retained-layout import and SQLite persistence.
+ * - default WorkbenchPinnedThreadLayoutStore: conform and consolidate retained pin layouts for app presentation import.
  */
 
 import { z } from "zod";
-import { ThreadDisplayKeySchema, type ProjectId, type ThreadDisplayKey } from "workbench-shared/workbench/identity";
+import { ThreadDisplayKeySchema, type ProjectId } from "workbench-shared/workbench/identity";
 
-import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
-  createThreadDisplayFolder,
   getProjectQualifiedThreadDisplayKey,
-  moveThreadDisplayLayoutItem,
   normalizeThreadDisplayLayout,
-  removeThreadDisplayLayoutMember,
-  renameThreadDisplayFolder,
-  replaceThreadDisplayFolderMember,
   ThreadDisplayLayoutSchema,
   type ThreadDisplayLayout,
-  type ThreadDisplayLayoutEntry,
 } from "workbench-shared/workbench/thread/thread-display-layout";
 import {
   getWorkbenchThreadDisplayKey,
@@ -28,7 +21,6 @@ import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-confor
 import type {
   WorkbenchPinnedThreadLayoutSnapshot,
   WorkbenchThreadSidebarEntry,
-  WorkbenchThreadStateRequest,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 
@@ -49,24 +41,6 @@ const EMPTY_STORED_LAYOUT: StoredPinnedThreadLayout = {
   revision: 0,
   version: 1,
 };
-
-type PinnedLayoutMutation = Extract<WorkbenchThreadStateRequest, {
-  method:
-    | "workbench/thread-state/pinned-display-order/folder/create"
-    | "workbench/thread-state/pinned-display-order/folder/title/set"
-    | "workbench/thread-state/pinned-display-order/move";
-}>;
-type PinnedFolderDrop = Extract<WorkbenchThreadStateRequest, {
-  method: "workbench/thread-state/pinned-display-order/folder/drop";
-}>;
-
-function projectLayoutEntries(projectId: ProjectId, entries: readonly WorkbenchThreadSidebarEntry[]) {
-  return entries.flatMap((entry): ThreadDisplayLayoutEntry[] => (
-    getWorkbenchThreadDisplaySection(entry) === "pinned"
-      ? [{ key: getProjectQualifiedThreadDisplayKey(projectId, getWorkbenchThreadDisplayKey(entry)), section: "pinned" }]
-      : []
-  ));
-}
 
 function qualifyProjectPinnedOrder(projectId: ProjectId, entries: readonly WorkbenchThreadSidebarEntry[], candidate: unknown) {
   const localKeys = new Set<string>(entries.filter((entry) => getWorkbenchThreadDisplaySection(entry) === "pinned").map(getWorkbenchThreadDisplayKey));
@@ -130,71 +104,6 @@ export default class WorkbenchPinnedThreadLayoutStore {
         revision: state.revision + 1,
         version: 1,
       });
-    });
-  }
-
-  async mutate(entries: readonly ThreadDisplayLayoutEntry[], request: PinnedLayoutMutation) {
-    return await this.enqueue(async () => {
-      const state = await this.load();
-      const next = request.method === "workbench/thread-state/pinned-display-order/folder/create"
-        ? createThreadDisplayFolder(entries, state.displayOrder, request.folderId, request.sourceKey, request.title, { preserveMissing: true })
-        : request.method === "workbench/thread-state/pinned-display-order/folder/title/set"
-          ? renameThreadDisplayFolder(state.displayOrder, request.folderId, request.title)
-          : moveThreadDisplayLayoutItem(entries, state.displayOrder, "pinned", request.sourceKey, request.destinationFolderId, request.beforeKey, { preserveMissing: true });
-      if (!next) return { accepted: false, snapshot: null };
-      if (areDeeplyEqual(next, state.displayOrder)) return { accepted: true, snapshot: null };
-      const snapshot = await this.commit({ ...state, displayOrder: next, revision: state.revision + 1 });
-      return { accepted: true, snapshot };
-    });
-  }
-
-  async remove(projectId: ProjectId, threadKey: ThreadDisplayKey) {
-    return await this.enqueue(async () => {
-      const state = await this.load();
-      const next = removeThreadDisplayLayoutMember(state.displayOrder, getProjectQualifiedThreadDisplayKey(projectId, threadKey));
-      if (areDeeplyEqual(next, state.displayOrder)) return null;
-      return await this.commit({ ...state, displayOrder: next, revision: state.revision + 1 });
-    });
-  }
-
-  async replace(projectId: ProjectId, sourceThreadKey: ThreadDisplayKey, replacementThreadKey: ThreadDisplayKey) {
-    return await this.enqueue(async () => {
-      const state = await this.load();
-      const next = replaceThreadDisplayFolderMember(
-        state.displayOrder,
-        getProjectQualifiedThreadDisplayKey(projectId, sourceThreadKey),
-        getProjectQualifiedThreadDisplayKey(projectId, replacementThreadKey),
-      );
-      if (areDeeplyEqual(next, state.displayOrder)) return null;
-      return await this.commit({ ...state, displayOrder: next, revision: state.revision + 1 });
-    });
-  }
-
-  async waitForIdle() {
-    await this.operationQueue;
-  }
-
-  async dropThread(entries: readonly ThreadDisplayLayoutEntry[], request: PinnedFolderDrop) {
-    return await this.enqueue(async () => {
-      const state = await this.load();
-      if (request.sourceKey === request.targetKey) return { accepted: false, snapshot: null };
-      let next: ThreadDisplayLayout | null = state.displayOrder;
-      if (request.destinationFolderId) {
-        const folder = state.displayOrder.folders?.find(({ folderId }) => folderId === request.destinationFolderId);
-        if (!folder || folder.section !== "pinned" || !folder.threadKeys.includes(request.targetKey)) {
-          return { accepted: false, snapshot: null };
-        }
-        next = moveThreadDisplayLayoutItem(entries, state.displayOrder, "pinned", request.sourceKey, folder.folderId, folder.threadKeys[0] ?? null, { preserveMissing: true });
-      } else if (request.folderId) {
-        next = createThreadDisplayFolder(entries, state.displayOrder, request.folderId, request.targetKey, "New folder", { preserveMissing: true });
-        if (next) {
-          next = moveThreadDisplayLayoutItem(entries, next, "pinned", request.sourceKey, request.folderId, request.targetKey, { preserveMissing: true });
-        }
-      }
-      if (!next) return { accepted: false, snapshot: null };
-      if (areDeeplyEqual(next, state.displayOrder)) return { accepted: true, snapshot: null };
-      const snapshot = await this.commit({ ...state, displayOrder: next, revision: state.revision + 1 });
-      return { accepted: true, snapshot };
     });
   }
 

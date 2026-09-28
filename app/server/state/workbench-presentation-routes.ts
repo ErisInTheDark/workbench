@@ -1,10 +1,9 @@
 /*
  * Exports:
- * - default WorkbenchPresentationRoutes: bounded app-local presentation and attachment HTTP admission.
+ * - default WorkbenchPresentationRoutes: bounded app-local attachment upload and streaming.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
-import { PresentationMutationSchema } from "workbench-shared/state/workbench-presentation-state";
 import WorkbenchPresentationController from "./WorkbenchPresentationController.ts";
 
 const MAX_JSON_BYTES = 1_000_000;
@@ -49,15 +48,6 @@ export default class WorkbenchPresentationRoutes {
     const base = "/api/workbench-presentation";
     if (url.pathname !== base && !url.pathname.startsWith(`${base}/`)) return false;
     try {
-      if (url.pathname === base && request.method === "GET") {
-        respond(response, 200, this.owner.read());
-        return true;
-      }
-      if (url.pathname === `${base}/mutate` && request.method === "POST") {
-        const input = PresentationMutationSchema.parse(JSON.parse((await readBody(request, MAX_JSON_BYTES)).toString("utf8")));
-        respond(response, 200, this.owner.mutate(input));
-        return true;
-      }
       const match = attachmentPath.exec(url.pathname);
       if (match) {
         const draftId = decodeURIComponent(match[1]!);

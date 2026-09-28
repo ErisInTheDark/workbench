@@ -25,7 +25,7 @@ function testName(data) {
 
 function errorText(data) {
   const error = data?.details?.error ?? data?.error;
-  if (error instanceof Error) return error.stack ?? error.message;
+  if (error instanceof Error) return inspect(error, { colors: false, depth: 6 });
   return typeof error === "string" ? error : inspect(error, { colors: false, depth: 6 });
 }
 
@@ -56,7 +56,6 @@ function summaryLine(counts, elapsedMs) {
 export default async function* conciseTestReporter(source) {
   const startedAt = performance.now();
   const activeByFile = new Map();
-  const failures = [];
   const noise = [];
   const slow = [];
   const counts = { fail: 0, pass: 0, skip: 0, tests: 0 };
@@ -77,7 +76,8 @@ export default async function* conciseTestReporter(source) {
         counts.fail += 1;
         const bounded = boundedFailure(errorText(data), FAILURE_TOTAL_LIMIT - failureCharacters);
         failureCharacters += bounded.text.length;
-        failures.push({ elapsed, error: bounded.text, file: location(data), name: testName(data), omitted: bounded.omitted });
+        const truncation = bounded.omitted > 0 ? `\n[truncated ${bounded.omitted} failure characters]` : "";
+        yield `FAIL ${location(data)} :: ${testName(data)} (${elapsed.toFixed(1)}ms)\n${bounded.text}${truncation}\n`;
       } else if (data.skip !== undefined || data.todo !== undefined) counts.skip += 1;
       else counts.pass += 1;
       if (activeByFile.get(location(data)) === testName(data)) activeByFile.delete(location(data));
@@ -103,12 +103,8 @@ export default async function* conciseTestReporter(source) {
     }
   }
 
-  if (failures.length > 0) {
-    yield `\nFAILURES (${failures.length})\n`;
-    for (const failure of failures) {
-      const truncation = failure.omitted > 0 ? `\n[truncated ${failure.omitted} failure characters]` : "";
-      yield `FAIL ${failure.file} :: ${failure.name} (${failure.elapsed.toFixed(1)}ms)\n${failure.error}${truncation}\n`;
-    }
+  if (counts.fail > 0) {
+    yield `\nFAILURES (${counts.fail})\n`;
     if (failureCharacters >= FAILURE_TOTAL_LIMIT) yield `[additional failure details omitted after ${FAILURE_TOTAL_LIMIT} characters]\n`;
   }
   if (noise.length > 0) {

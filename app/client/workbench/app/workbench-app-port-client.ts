@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchAppPortClientSnapshot: server snapshot plus old-process compatibility state for the browser.
- * - readWorkbenchAppPort/updateWorkbenchAppPort: typed same-origin app-port HTTP client.
+ * - WorkbenchAppPortClientSnapshot: app listener and handoff capabilities.
+ * - readWorkbenchAppPort/updateWorkbenchAppPort: app RPC reads and connection-changing HTTP updates.
  * - createWorkbenchAppPortRedirectUrl: retain stable network origins or follow listener ports without losing browser route/state.
  */
 import {
@@ -19,25 +19,7 @@ const ErrorResponseSchema = z.object({
   error: z.string().max(500),
 }).passthrough();
 
-export type WorkbenchAppPortClientSnapshot =
-  | WorkbenchAppPortSnapshot
-  | {
-    appOrigin: string;
-    currentPort: number;
-    editable: false;
-    source: "unavailable";
-  };
-
-function currentOriginSnapshot(currentHref: string): WorkbenchAppPortClientSnapshot {
-  const current = new URL(currentHref);
-  const currentPort = Number(current.port);
-  return {
-    appOrigin: current.origin,
-    currentPort: Number.isSafeInteger(currentPort) && currentPort > 0 ? currentPort : 80,
-    editable: false,
-    source: "unavailable",
-  };
-}
+export type WorkbenchAppPortClientSnapshot = WorkbenchAppPortSnapshot;
 
 async function responseError(response: Response) {
   const parsed = ErrorResponseSchema.safeParse(await response.json().catch(() => null));
@@ -54,24 +36,19 @@ function snapshotResponse(value: unknown) {
 }
 
 export async function readWorkbenchAppPort(
-  fetcher: typeof fetch = fetch,
-  currentHref: string = window.location.href,
-  rpc?: WorkbenchAppRpcClient,
+  rpc: WorkbenchAppRpcClient | null,
 ): Promise<WorkbenchAppPortClientSnapshot> {
-  if (rpc?.available) return snapshotResponse(await rpc.requestRaw({
+  if (!rpc) throw new Error("App listener settings require the app connection.");
+  return snapshotResponse(await rpc.requestRaw({
     method: "app/port/read", params: {},
   }));
-  const response = await fetcher(`${WORKBENCH_APP_PORT_PATH}?version=2`, { cache: "no-store" });
-  if (response.status === 404) return currentOriginSnapshot(currentHref);
-  if (!response.ok) throw new Error(await responseError(response));
-  return snapshotResponse(await response.json().catch(() => null));
 }
 
 export async function updateWorkbenchAppPort(
   port: number,
   fetcher: typeof fetch = fetch,
 ): Promise<WorkbenchAppPortSnapshot> {
-  const response = await fetcher(`${WORKBENCH_APP_PORT_PATH}?version=2`, {
+  const response = await fetcher(WORKBENCH_APP_PORT_PATH, {
     body: JSON.stringify({ port }),
     cache: "no-store",
     headers: { "Content-Type": "application/json" },

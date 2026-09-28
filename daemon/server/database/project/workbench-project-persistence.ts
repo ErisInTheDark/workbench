@@ -56,6 +56,7 @@ export interface WorkbenchProjectIconSettlement {
 }
 
 export interface WorkbenchProjectPersistence {
+  readRetainedProjectCatalog(discoveryRoots: readonly string[]): Promise<WorkbenchProjectStartup>;
   reconcileProjectCatalog(discovery: WorkbenchProjectDiscovery): Promise<WorkbenchProjectStartup>;
   readProjectAliases(): Promise<WorkbenchProjectAlias[]>;
   resolveProjectIdentity(projectId: string): Promise<ProjectId>;

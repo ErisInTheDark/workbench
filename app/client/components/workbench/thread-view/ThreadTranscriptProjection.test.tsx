@@ -10,7 +10,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { mergeThreadItem, normalizeThreadItems } from "workbench-shared/workbench/thread/thread-item-normalization";
 import { createWorkbenchAgentMessageOutput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
-import { getWorkbenchTranscriptAssetUrl, workbenchDaemonConnection } from "workbench-shared/workbench/workbench-connection";
+import { DaemonIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkbenchBrowseResultEntry } from "workbench-shared/types";
 import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
@@ -22,7 +22,9 @@ import type {
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import ThreadUserImage from "./ThreadUserImage";
-import { WorkbenchDaemonAssetOriginContext } from "../WorkbenchDaemonClientContext";
+import { WorkbenchDaemonAssetOriginContext, getWorkbenchTranscriptAssetUrl } from "../WorkbenchWorkspaceContext";
+
+const assetDaemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000123");
 
 function turn(id: string, turnIndex: number, items: ThreadItem[]): WorkbenchProjectedTranscriptTurn {
   return {
@@ -93,6 +95,7 @@ function renderItems(
     turns,
   };
   return renderToStaticMarkup(
+    <WorkbenchDaemonAssetOriginContext.Provider value={{ kind: "source", daemonId: assetDaemonId }}>
     <ThreadTranscriptProjection
       canLoadPreviousTurn={false}
       hiddenReasoningStep={hiddenReasoningStep}
@@ -107,7 +110,8 @@ function renderItems(
       relatedThreadsById={{}}
       subagents={[]}
       workspaceRoots={[]}
-    />,
+    />
+    </WorkbenchDaemonAssetOriginContext.Provider>,
   );
 }
 
@@ -153,16 +157,8 @@ test("canonical projection removes a proposal source while its card is hoisted",
 });
 
 test("native incoming messages and screenshots render once per identity after provider echo reconciliation", async () => {
-  const originalEndpoint = process.env.WORKBENCH_CODEX_APP_SERVER_URL;
-  try {
-    process.env.WORKBENCH_CODEX_APP_SERVER_URL = "ws://transcript.test";
-    await workbenchDaemonConnection.resolve();
-  } finally {
-    if (originalEndpoint === undefined) delete process.env.WORKBENCH_CODEX_APP_SERVER_URL;
-    else process.env.WORKBENCH_CODEX_APP_SERVER_URL = originalEndpoint;
-  }
   const assetUrl = "/api/transcript-assets/codex/thread/screenshot.png";
-  const expectedUrl = getWorkbenchTranscriptAssetUrl(assetUrl);
+  const expectedUrl = getWorkbenchTranscriptAssetUrl(assetUrl, `/api/workspace/assets/${assetDaemonId}`);
   assert.ok(expectedUrl);
   const message = { message: "check cancellation cleanup", senderName: "iris", senderThreadId: "child" };
   const incoming: ThreadItem = { ...createWorkbenchAgentMessageOutput(message), id: "incoming", type: "functionCallOutput" };
@@ -187,28 +183,20 @@ test("native incoming messages and screenshots render once per identity after pr
   }
 });
 
-test("attached transcript images keep their daemon asset URL while a missing peer origin does not fall back", async () => {
-  const previous = process.env.WORKBENCH_CODEX_APP_SERVER_URL;
-  try {
-    process.env.WORKBENCH_CODEX_APP_SERVER_URL = "ws://transcript.test";
-    await workbenchDaemonConnection.resolve();
-  } finally {
-    if (previous === undefined) delete process.env.WORKBENCH_CODEX_APP_SERVER_URL;
-    else process.env.WORKBENCH_CODEX_APP_SERVER_URL = previous;
-  }
+test("transcript assets use the selected app source and never fall back to another source", () => {
   const src = "/api/transcript-assets/codex/thread/screenshot.png";
   const attached = renderToStaticMarkup(createElement(
     WorkbenchDaemonAssetOriginContext.Provider,
-    { value: { kind: "attached" } },
+    { value: { kind: "source", daemonId: assetDaemonId } },
     createElement(ThreadUserImage, { alt: "screenshot", src }),
   ));
-  assert.match(attached, /http:\/\/transcript\.test\/daemon\/transcript-assets\/codex\/thread\/screenshot\.png/u);
+  assert.ok(attached.includes(`/api/workspace/assets/${assetDaemonId}/daemon/transcript-assets/`));
   const unavailablePeer = renderToStaticMarkup(createElement(
     WorkbenchDaemonAssetOriginContext.Provider,
-    { value: { kind: "peer", origin: null } },
+    { value: { kind: "unavailable" } },
     createElement(ThreadUserImage, { alt: "screenshot", src }),
   ));
-  assert.doesNotMatch(unavailablePeer, /transcript\.test/u);
+  assert.doesNotMatch(unavailablePeer, /<img\b/u);
 });
 
 test("SQLite projection preserves canonical order with initially closed Browse details", () => {

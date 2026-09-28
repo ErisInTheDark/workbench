@@ -63,9 +63,17 @@ const client = {
   controls: null,
   explorer: {} as WorkbenchClientController["explorer"],
   mounted: {
+    networkClient: {} as NonNullable<WorkbenchClientController["mounted"]>["networkClient"],
+    presentationClient: {} as NonNullable<WorkbenchClientController["mounted"]>["presentationClient"],
+    workspace: {} as NonNullable<WorkbenchClientController["mounted"]>["workspace"],
+    voice: { settings: { subscribe: () => () => {}, enabled: false } } as unknown as NonNullable<WorkbenchClientController["mounted"]>["voice"],
+    projectFileIndexStore: {} as NonNullable<WorkbenchClientController["mounted"]>["projectFileIndexStore"],
     getThreadController: (projectId, target) => new WorkbenchThreadController(projectId, target, {
       getChild: () => { throw new Error("Unexpected child."); },
-      observations: new ThreadObservationController({ request: async () => { throw new Error("Unexpected observation during static rendering."); } }),
+      observations: new ThreadObservationController({
+        observe: async () => { throw new Error("Unexpected observation during static rendering."); },
+        release: async () => {},
+      }),
       releaseHistoricalTurns: () => null,
       controls: {} as NonNullable<WorkbenchClientController["controls"]>,
       readNative: () => ({ document: null, pendingQuestionnaire: null, rateLimits: null }),
@@ -83,12 +91,6 @@ const client = {
     selectBrowseLocation: async () => undefined,
     navigation: {} as NonNullable<WorkbenchClientController["mounted"]>["navigation"],
     routeIntents: {} as NonNullable<WorkbenchClientController["mounted"]>["routeIntents"],
-    startup: {
-      getSnapshot: () => ({ phase: "ready" as const, error: null }),
-      subscribe: () => () => undefined,
-      start: async () => undefined,
-      retry: async () => undefined,
-    },
     controls: {} as NonNullable<WorkbenchClientController["mounted"]>["controls"],
     dispose: () => undefined,
     threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],

@@ -12,6 +12,8 @@ import WorkbenchClientStateController from "./workbench/state/WorkbenchClientSta
 import WorkbenchAppRuntimeClient from "./workbench/app/WorkbenchAppRuntimeClient.ts";
 import WorkbenchAppRpcContext from "./workbench/app/WorkbenchAppRpcContext";
 import type WorkbenchAppRpcClient from "./workbench/app/WorkbenchAppRpcClient";
+import type WorkbenchWorkspaceClient from "./workbench/app/WorkbenchWorkspaceClient";
+import WorkbenchWorkspaceContext from "./components/workbench/WorkbenchWorkspaceContext";
 import { usePathname } from "./workbench/navigation/browser-navigation.ts";
 
 const SAFE_AREA_BOTTOM_PROPERTY = "--workbench-safe-area-bottom";
@@ -86,10 +88,12 @@ export default function WorkbenchBrowserApp({
   controller,
   runtime,
   rpc,
+  workspace,
 }: {
   controller: WorkbenchClientStateController;
   runtime: WorkbenchAppRuntimeClient;
   rpc?: WorkbenchAppRpcClient | null;
+  workspace: WorkbenchWorkspaceClient;
 }) {
   useWorkbenchSafeAreaBottom();
   const pathname = usePathname();
@@ -102,10 +106,12 @@ export default function WorkbenchBrowserApp({
     content = <Workbench appRuntime={runtime} />;
   }
   return (
+    <WorkbenchWorkspaceContext.Provider value={workspace}>
     <WorkbenchAppRpcContext.Provider value={rpc ?? null}>
       <WorkbenchClientStateProvider controller={controller}>
         {content}
       </WorkbenchClientStateProvider>
     </WorkbenchAppRpcContext.Provider>
+    </WorkbenchWorkspaceContext.Provider>
   );
 }

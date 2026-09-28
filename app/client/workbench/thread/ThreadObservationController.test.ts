@@ -17,19 +17,20 @@ const fixtureIdentityValues = {
 const target = { kind: "provider" as const, harness: "codex" as const, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };
 
 function fixture(releaseRequest: () => Promise<unknown> = async () => ({ accepted: true })) {
-  const opens: Array<{ projectId: string; subscriptionId: string; target: typeof target; version: 1 | 2; resolve: (value: object) => Promise<void>; reject: (error: Error) => Promise<void> }> = [];
+  const opens: Array<{ projectId: string; subscriptionId: string; target: typeof target; version: 2; resolve: (value: object) => Promise<void>; reject: (error: Error) => Promise<void> }> = [];
   const releases: string[] = [];
   const owner = new ThreadObservationController({
-    request: (method, params) => {
-      if (method === "workbench/thread-state/release") {
-        releases.push((params as { subscriptionId: string }).subscriptionId);
-        return releaseRequest();
-      }
+    release: async subscriptionId => {
+      releases.push(subscriptionId);
+      await releaseRequest();
+    },
+    observe: params => {
       let resolve!: (value: object) => void;
       let reject!: (error: Error) => void;
       const response = new Promise<object>((accept, fail) => { resolve = accept; reject = fail; });
       opens.push({
         ...params as typeof opens[number],
+        version: 2,
         resolve: value => { resolve(value); return response.then(() => {}); },
         reject: error => { reject(error); return response.then(() => {}, () => {}); },
       });
@@ -71,19 +72,6 @@ test("root and child consumers share a subscription until the final lease releas
   owner.dispose();
 });
 
-test("new observations fall back only when an older daemon rejects their version", async () => {
-  const { owner, opens, snapshot } = fixture();
-  const lease = owner.acquire("project", target);
-  assert.equal(opens[0]?.version, 2);
-  await opens[0]!.reject(new WorkbenchDaemonRequestError(
-    "Unsupported observation version", "invalidThreadStateMutation" as never,
-  ));
-  assert.equal(opens[1]?.version, 1);
-  await opens[1]!.resolve({ observation: snapshot(1, 1) });
-  assert.equal(owner.getSnapshot(lease.key).status, "ready");
-  owner.dispose();
-});
-
 test("an invalid observation target does not masquerade as an older protocol", async t => {
   t.mock.method(console, "warn", () => {});
   const { owner, opens } = fixture();
@@ -107,31 +95,27 @@ test("a child on another provider opens its real family and shares the root leas
   owner.dispose();
 });
 
-test("an absent family is restored by connection recovery", async () => {
+test("an absent family becomes available through pushed facts", async () => {
   const { owner, opens, snapshot } = fixture();
   const lease = owner.acquire("project", target);
   await opens[0]!.resolve({ observation: snapshot(0, 1, false) });
   assert.equal(owner.getSnapshot(lease.key).status, "absent");
-  owner.reset();
-  assert.equal(opens.length, 2);
-  await opens[1]!.resolve({ observation: snapshot(1, 2) });
+  owner.accept(snapshot(0, 2));
+  assert.equal(opens.length, 1);
   assert.equal(owner.getSnapshot(lease.key).status, "ready");
   owner.dispose();
 });
 
-test("reconnecting retains mounted content but withholds readiness until the new subscription answers", async () => {
+test("stale workspace facts retain mounted content without opening another subscription", async () => {
   const { owner, opens, snapshot } = fixture();
   const lease = owner.acquire("project", target);
   await opens[0]!.resolve({ observation: snapshot(0, 9) });
-  const content = owner.getSnapshot(lease.key).observation;
-  owner.disconnect();
+  owner.accept({ ...snapshot(0, 10), freshness: "loading" });
   assert.equal(owner.getSnapshot(lease.key).status, "loading");
-  assert.equal(owner.getSnapshot(lease.key).observation, content);
-  owner.reset();
-  assert.equal(owner.getSnapshot(lease.key).observation, content);
-  await opens[1]!.resolve({ observation: snapshot(1, 1) });
+  assert.equal(owner.getSnapshot(lease.key).observation?.entries.length, 1);
+  owner.accept(snapshot(0, 11));
   assert.equal(owner.getSnapshot(lease.key).status, "ready");
-  assert.equal(owner.getSnapshot(lease.key).observation?.revision, 1);
+  assert.equal(opens.length, 1);
   owner.dispose();
 });
 
@@ -149,27 +133,26 @@ test("newer pushes beat bootstrap and other projects do not invalidate a consume
   owner.dispose();
 });
 
-test("disconnect and reset replace tokens only for retained leases and ignore old replies", async () => {
+test("replacing a view ignores retired replies and leaves other released views closed", async () => {
   const { owner, opens, snapshot } = fixture();
   const retained = owner.acquire("project", target);
   const closed = owner.acquire("other", target);
   assert.equal(opens.length, 2);
   closed.release();
-  owner.disconnect();
-  assert.equal(owner.getSnapshot(retained.key).status, "loading");
-  owner.reset();
+  retained.release();
+  const replacement = owner.acquire("project", target);
   assert.equal(opens.length, 3);
   assert.notEqual(opens[0]!.subscriptionId, opens[2]!.subscriptionId);
   await opens[0]!.resolve({ observation: snapshot(0, 90) });
   await opens[1]!.resolve({ observation: snapshot(1, 90) });
   owner.accept(snapshot(0, 91));
   await opens[2]!.resolve({ observation: snapshot(2, 1, false) });
-  assert.equal(owner.getSnapshot(retained.key).status, "absent");
+  assert.equal(owner.getSnapshot(replacement.key).status, "absent");
   assert.equal(owner.getSnapshot(closed.key).status, "idle");
   owner.dispose();
 });
 
-test("failed bootstrap waits for connection recovery and disposal fences its replacement", async t => {
+test("failed bootstrap waits for a new view lease and disposal fences its replacement", async t => {
   t.mock.method(console, "warn", () => {});
   const { owner, opens, snapshot } = fixture();
   const lease = owner.acquire("project", target);
@@ -177,7 +160,8 @@ test("failed bootstrap waits for connection recovery and disposal fences its rep
   await opens[0]!.reject(new Error("unsupported operation"));
   assert.equal(owner.getSnapshot(lease.key).status, "failed");
   assert.equal(opens.length, 1);
-  owner.reset();
+  lease.release();
+  owner.acquire("project", target);
   assert.equal(opens.length, 2);
   owner.dispose();
   await opens[1]!.resolve({ observation: snapshot(1, 1) });
@@ -196,14 +180,15 @@ test("a mismatched reply cannot install a different project's state", async t =>
   owner.dispose();
 });
 
-test("connection recovery releases a failed subscription before replacing it", async () => {
+test("a recovered publication clears a source failure without replacing its read interest", async () => {
   const { owner, opens, releases, snapshot } = fixture();
   const lease = owner.acquire("project", target);
   await opens[0]!.resolve({ observation: { ...snapshot(0, 1), freshness: "partial", error: "Provider state unavailable." } });
   assert.equal(owner.getSnapshot(lease.key).status, "failed");
-  owner.reset();
-  assert.deepEqual(releases, [opens[0]!.subscriptionId]);
-  assert.equal(opens.length, 2);
+  owner.accept(snapshot(0, 2));
+  assert.deepEqual(releases, []);
+  assert.equal(opens.length, 1);
+  assert.equal(owner.getSnapshot(lease.key).status, "ready");
   owner.dispose();
 });
 
@@ -219,16 +204,15 @@ test("invalid live state is reported and makes the matching observation unavaila
   owner.dispose();
 });
 
-test("release failures surface while connected but socket closure owns cleanup after disconnect", async t => {
+test("release failures surface rather than assuming ownership of a shared connection", async t => {
   const warnings = t.mock.method(console, "warn", () => {});
-  for (const disconnect of [false, true]) {
+  {
     let fail!: (error: Error) => void;
     const release = new Promise<unknown>((_resolve, reject) => { fail = reject; });
     const { owner, opens, snapshot } = fixture(() => release);
     const lease = owner.acquire("project", target);
     await opens[0]!.resolve({ observation: snapshot(0, 1) });
     lease.release();
-    if (disconnect) owner.disconnect();
     fail(new Error("connection closed"));
     await release.catch(() => {});
     owner.dispose();

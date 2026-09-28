@@ -4,6 +4,7 @@
  * - WorkbenchRouteView/WorkbenchSettingsScope/WorkbenchRoute/WorkbenchRouteParseResult: normalized route contracts.
  * - createHomeRoute/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
  * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute/createLogicalMosaicRoute: internal project, target and UUID routes.
+ * - createObservedProjectRoute: address a verified folder before durable logical registration.
  * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse URL state without changing history.
  * - createWorkbenchHref/createHomeHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createHomeThreadHref/createSettingsHref/createStatsHref/createMosaicHref: build hrefs.
@@ -94,6 +95,13 @@ export function createLogicalProjectRoute(logicalProjectId: string, location: Pr
     threadOwnerProjectId: null,
     location: location ? ProjectLocationReferenceSchema.parse(location) : null,
     browseLocation: null,
+  } };
+}
+
+export function createObservedProjectRoute(location: ProjectLocationReference): WorkbenchRoute {
+  return { ...createProjectRoute(""), logical: {
+    projectId: null, threadOwnerProjectId: null,
+    location: ProjectLocationReferenceSchema.parse(location), browseLocation: null,
   } };
 }
 
@@ -508,6 +516,19 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
 }
 
 export function parseWorkbenchRouteFromPath(pathname: string, search = ""): WorkbenchRouteParseResult {
+  const observed = /^\/@\/location\/([^/]+)\/([^/]+)(\/.*)?$/u.exec(pathname);
+  if (observed) {
+    try {
+      const location = ProjectLocationReferenceSchema.parse({
+        daemonId: decodeURIComponent(observed[1]!), projectId: decodeURIComponent(observed[2]!),
+      });
+      const route = observed[3]
+        ? parseWorkbenchRouteFromPath(`/${encodeURIComponent(location.projectId)}/@${observed[3]}`, search)
+        : createProjectRoute("");
+      return { ...route, projectId: "", threadOwnerProjectId: "",
+        logical: { projectId: null, threadOwnerProjectId: null, location, browseLocation: null } };
+    } catch { return createInvalidWorkbenchRoute("Observed folder address is invalid."); }
+  }
   const searchParams = parseSearch(search);
   const segments = pathname.split("/").filter((segment) => segment.length > 0);
   if (!segments.length) {
@@ -539,6 +560,13 @@ export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike 
 }
 
 export function createWorkbenchHref(route: WorkbenchRoute): string {
+  if (route.logical && !route.logical.projectId && route.logical.location) {
+    const location = route.logical.location;
+    const legacy = createWorkbenchHref({ ...route, logical: undefined,
+      projectId: location.projectId, threadOwnerProjectId: location.projectId });
+    const marker = legacy.indexOf("/@");
+    return `/@/location/${encodeURIComponent(location.daemonId)}/${encodeURIComponent(location.projectId)}${marker < 0 ? "" : legacy.slice(marker + 2)}`;
+  }
   if (route.logical) throw new Error("Logical routes need project-address resolution before serialisation.");
   const projectPath = encodeWorkbenchRoutePath(route.projectId);
   const markedPath = projectPath ? `/${projectPath}/${WORKBENCH_ROUTE_MARKER}` : `/${WORKBENCH_ROUTE_MARKER}`;

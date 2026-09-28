@@ -13,7 +13,7 @@ import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseRow } from "..
 import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-database-schema";
 import IsolatedWorkbench from "./IsolatedWorkbench";
 import { captureThreadStateMigrationSource, isolateThreadStateMigrationSource, verifyThreadStateMigrationSource } from "./thread-state-migration-fixture";
-import type { WorkbenchComposerProfile, WorkbenchProjectsPayload, WorkbenchPendingUserInputRequest } from "../../shared/types";
+import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchPendingUserInputRequest } from "../../shared/types";
 import type { ThreadPayload } from "../../shared/types";
 import type { Turn } from "../../shared/workbench/thread/workbench-thread-turn";
 import { workbenchTranscriptNotifications, type WorkbenchTranscriptSnapshot } from "../../shared/workbench/database/transcript/workbench-transcript-contract";
@@ -21,7 +21,6 @@ import { projectWorkbenchTranscript } from "../../shared/workbench/transcript/wo
 import ThreadTranscriptProjectionController, { type ThreadTranscriptProjectionState } from "../../app/client/workbench/transcript/ThreadTranscriptProjectionController";
 import type { WorkbenchTranscriptProjection } from "../../shared/workbench/transcript/workbench-transcript-projection";
 import type { ThreadItem } from "../../shared/workbench/thread/workbench-thread-items";
-import type { WorkbenchThreadStateOpenResult } from "../../shared/workbench/thread/thread-state";
 import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
 import {
   createProviderBoundaryJourney, PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE, PROVIDER_SHELL_PROOF_FILE,
@@ -94,19 +93,26 @@ await new Promise((resolve, reject) => {
 `);
     await runtime.start([profile], prefixProof);
     console.log("isolated daemon initialised");
-    const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
-    const project = catalog.data.find((entry) => path.resolve(entry.rootPath) === runtime.project);
+    await runtime.request("project/discovery-settings/update", { paths: [path.dirname(runtime.project)] });
+    const catalog = await runtime.waitForProjects([runtime.project]);
+    const project = catalog.find((entry) => path.resolve(entry.rootPath) === runtime.project);
     assert.ok(project, "Isolated project must be discoverable");
-    const { agentPath, agentSource, harness, model, reasoningEffort, serviceTier } = profile;
-    const selection = { kind: "profile", profileId: profile.id, settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier } };
-    await runtime.request("workbench/thread-state/open", { projectId: project.id, version: 4 });
-    await runtime.request("profiles/target/set", { slot: { kind: "new-thread", projectId: project.id }, selection });
-    const started = { thread: await runtime.daemon.threads.create({
-      projectId: project.id,
-      context: { workflowIds: [] },
-      profile: { kind: "target", slot: { kind: "new-thread", projectId: project.id } },
-    }) };
-    threadId = started.thread.id;
+    const { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens } = profile;
+    const selection: WorkbenchComposerProfileTargetSelection = { kind: "profile", profileId: profile.id, settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens } };
+    await runtime.projectThreads(project.id);
+    const prompt = [
+      "This is an authorised Workbench scenario. Follow these steps exactly, in order.",
+      "1. Report the prefix proof from project instructions in commentary.",
+      "2. Call native exec_command with `node .workbench/transcript-gate.mjs && wb task get`. Do not use the Workbench shell tool.",
+      "3. Wait for that command to finish. The scenario releases it. Do not bypass the gate.",
+      "4. Call Workbench MCP task_get to read this task's title.",
+      "5. Report the title and prefix proof together in commentary.",
+      "6. Call Workbench MCP task_completed, then end with an empty final response. This completion is authorised.",
+      "Do not edit files, spawn agents, ask questions or make plans.",
+    ].join("\n");
+    console.log("starting paid luna.low draft through app workspace");
+    threadId = await runtime.launchDraft(project.id, selection, prompt);
+    const started = await runtime.daemon.threads.page({ threadId, cursor: null });
     console.log("scenario WB thread", threadId);
     assert.match(threadId, /^[0-9a-f-]{36}$/iu);
     assert.equal(path.resolve(started.thread.cwd), runtime.project);
@@ -119,7 +125,10 @@ await new Promise((resolve, reject) => {
         JOIN workbench_projects AS project ON project.id = thread.project_id WHERE thread.id = ?
       `).get(threadId);
       assert.deepEqual(owner, { project_id: project.id, kind: "git" }, "New provider admission must use the migrated project owner");
-      const native = database.prepare("SELECT native_thread_id FROM workbench_pending_import_threads WHERE thread_id = ?").get(threadId) as { native_thread_id: string } | undefined;
+      const native = database.prepare(`
+        SELECT native_thread_id FROM thread_turns WHERE thread_id = ? AND harness_id = 'codex'
+        UNION SELECT native_thread_id FROM workbench_pending_import_threads WHERE thread_id = ? AND harness_id = 'codex'
+      `).get(threadId, threadId) as { native_thread_id: string } | undefined;
       assert.ok(native, "Public thread must own a private provider binding immediately after creation");
       nativeThreadId = native.native_thread_id;
       assert.notEqual(threadId, nativeThreadId);
@@ -151,14 +160,14 @@ await new Promise((resolve, reject) => {
       onText: () => { observed.texts++; },
       transcripts: {
         unsubscribe: params => runtime.transcripts.unsubscribe(params),
-        subscribe: async (params, _legacy, stream) => {
+        subscribe: async (params, _legacy, stream, failure, state) => {
           try {
             await runtime.transcripts.subscribe(params, () => {
               errors.push(new Error("Live scenario received a legacy transcript snapshot"));
             }, update => {
               if (update.kind === "structure" && update.reset) observed.resets++;
               stream?.(update);
-            });
+            }, failure, state);
           } finally {
             subscriptions.emit("settled");
           }
@@ -169,27 +178,11 @@ await new Promise((resolve, reject) => {
     controller.select(transcriptSelection);
     await initialSubscription;
     const healthy = () => { assert.deepEqual(errors, [], "Projection errors must fail the scenario"); };
-    const prompt = [
-      "This is an authorised Workbench scenario. Follow these steps exactly, in order.",
-      "1. Report the prefix proof from project instructions in commentary.",
-      "2. Call Workbench MCP task_get to read this task's title.",
-      "3. Call native exec_command with `wb task get && node .workbench/transcript-gate.mjs`. Do not use the Workbench shell tool.",
-      "4. Wait for that command to finish. The scenario releases it. Do not bypass the gate.",
-      "5. Report the title and prefix proof together in commentary.",
-      "6. Call Workbench MCP task_completed, then end with an empty final response. This completion is authorised.",
-      "Do not edit files, spawn agents, ask questions or make plans.",
-    ].join("\n");
-    console.log("starting paid luna.low turn");
-    const response = await runtime.daemon.threads.message({
-      threadId, clientMessageId: randomUUID(), intent: "newTurn",
-      input: [{ type: "text", text: prompt, text_elements: [] }],
-      context: { workflowIds: [] },
-    });
-    assert.equal(response.kind, "started");
-    assert.ok(response.kind === "started");
-    const turnId = response.turn.id;
+    const firstTurn = started.thread.turns.at(-1);
+    assert.ok(firstTurn, "App draft launch must admit the first provider turn");
+    const turnId = firstTurn.id;
     // Match the app's admitted turn selection; an empty exact window excludes this turn.
-    transcriptSelection = { ...transcriptSelection, thread: { ...started.thread, turns: [response.turn] } };
+    transcriptSelection = { ...transcriptSelection, thread: { ...started.thread, turns: [firstTurn] } };
     controller.select(transcriptSelection);
     await runtime.until(() => {
       healthy();
@@ -283,7 +276,7 @@ await new Promise((resolve, reject) => {
         await runtime.until(() => runtime.events.slice(offset).some(event =>
           ["questionnaire/requested", "questionnaire/resolved",
             "turn/completed", "item/completed"].includes(event.method ?? "")
-          || event.method === "workbench/thread-state/updated"
+          || event.method === "workspace/updated"
           || event.method === workbenchTranscriptNotifications.streamed.method
             && (event.params?.update as { kind?: string } | undefined)?.kind === "structure"));
       }
@@ -322,10 +315,8 @@ await new Promise((resolve, reject) => {
       return result.turn.id;
     };
     const readQuestions = async () => {
-      const state = await runtime.request<WorkbenchThreadStateOpenResult>("workbench/thread-state/open", {
-        projectId: project.id, version: 4,
-      });
-      return { data: state.sidebar.entries.flatMap(entry =>
+      const state = await runtime.projectThreads(project.id);
+      return { data: state.rows.flatMap(({ entry }) =>
         entry.entryKind === "thread" && entry.pendingQuestionnaire
           ? [{
             ...entry.pendingQuestionnaire, ...entry.identity,
@@ -377,10 +368,10 @@ await new Promise((resolve, reject) => {
     const restart = async () => {
       await runtime.stop();
       await runtime.start([profile], prefixProof);
-      await runtime.request("workbench/thread-state/open", { projectId: project.id, version: 4 });
+      await runtime.projectThreads(project.id);
       await watchTranscript();
     };
-    await runtime.request("workbench/thread-state/open", { projectId: project.id, version: 4 });
+    await runtime.projectThreads(project.id);
     assert.ok((await runtime.daemon.models.list("codex")).data.some(entry => entry.id === profile.model));
     await runtime.daemon.account.limits("codex");
 
@@ -440,7 +431,7 @@ await new Promise((resolve, reject) => {
     await runtime.daemon.threads.stop({ threadId, intent: "snooze", requestKey: dismissQuestion.requestKey });
     const beforeDismiss = await waitTurn(continuationTurn, "interrupted");
     await runtime.daemon.threads.stop({ threadId, intent: "stop", requestKey: dismissQuestion.requestKey });
-    assert.ok(!(await readQuestions()).data.some(question => question.threadId === threadId));
+    await waitForFact(readQuestions, value => !value.data.some(question => question.threadId === threadId));
     assert.ok(!(await runtime.daemon.questionnaires.pending()).data.some(question => question.threadId === threadId));
     assert.deepEqual((await durable()).turns.map(turn => ({ id: turn.id, status: turn.status })),
       beforeDismiss.turns.map(turn => ({ id: turn.id, status: turn.status })),
@@ -470,7 +461,16 @@ await new Promise((resolve, reject) => {
     assert.ok(hasText(finalItems, finalProof) && hasText(finalItems, prefixProof) && hasText(finalItems, title));
     assert.ok(finalItems.some(item => item.type === "mcpToolCall"
       && item.tool === "rg" && item.status === "completed"), "Codex must complete WB search");
-    assert.ok(finalItems.some(item => item.type === "mcpToolCall" && item.tool === "task_completed" && item.status === "completed"));
+    const lifecycleDatabase = new Database(path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"), { readonly: true });
+    try {
+      assert.deepEqual(lifecycleDatabase.prepare(`
+        SELECT lifecycle_kind, reason, agent_status FROM workbench_thread_lifecycle WHERE thread_id = ?
+      `).get(threadId), {
+        lifecycle_kind: "completed", reason: "agentCompleted", agent_status: "completed",
+      }, `The agent must durably complete the managed task; observed tools: ${finalItems
+        .filter(item => item.type === "mcpToolCall")
+        .map(item => `${item.tool}:${item.status}`).join(", ").slice(0, 1000)}`);
+    } finally { lifecycleDatabase.close(); }
     assert.equal(await fs.readFile(path.join(runtime.project, PROVIDER_SHELL_PROOF_FILE), "utf8"), finalProof);
     const finalPage = await runtime.daemon.threads.page({ threadId, cursor: null });
     assert.equal(finalPage.thread.model, profile.model);
@@ -491,14 +491,21 @@ await new Promise((resolve, reject) => {
     try {
       await fs.writeFile(release, "");
       await controller?.dispose();
-      if (threadId && nativeThreadId) {
+      if (threadId) {
         // Separate cleanup budget survives the paid-turn deadline. Only the exact
         // response-created thread is eligible; no search, inferred ID or user input.
         const cleanup = AbortSignal.timeout(45_000);
         const current = await runtime.request<ThreadPayload>("thread/metadata/read", { threadId }, {}, cleanup);
         assert.equal(current.id, threadId);
         assert.equal(path.resolve(current.cwd), runtime.project);
-        const retained = await runtime.transcripts.read({ threadId, turnLimit: 20 });
+        await runtime.request("thread/stop", { threadId, intent: "stop" }, {}, cleanup);
+        let retained: WorkbenchTranscriptSnapshot | null;
+        for (;;) {
+          const offset = runtime.events.length;
+          retained = await runtime.transcripts.read({ threadId, turnLimit: 20 });
+          if (!retained?.turns.some(turn => turn.state === "inProgress")) break;
+          await runtime.until(() => runtime.events.length > offset, cleanup);
+        }
         await runtime.request("thread/provider/delete", { threadId }, {}, cleanup);
         await assert.rejects(runtime.request("thread/metadata/read", { threadId }, {}, cleanup), /thread not loaded|not found|unavailable/iu);
         assert.deepEqual(await runtime.transcripts.read({ threadId, turnLimit: 20 }), retained, "Provider deletion must retain WB transcript history");

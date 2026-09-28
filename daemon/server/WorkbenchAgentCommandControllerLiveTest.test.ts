@@ -5,8 +5,10 @@ import assert from "node:assert/strict";
 import { ChildProcess, type SpawnOptions } from "node:child_process";
 import { PassThrough } from "node:stream";
 import test from "node:test";
+import fs from "node:fs/promises";
 
 import WorkbenchAgentCommandLiveTestController from "./WorkbenchAgentCommandControllerLiveTest";
+import WorkbenchTestProcessResources from "./WorkbenchTestProcessResources";
 
 function child() {
   const process = new ChildProcess();
@@ -122,4 +124,39 @@ test("cancellation during spawn still retires the child", async () => {
     provider: "opencode",
   }, abort.signal), /cancelled while spawning/u);
   assert.deepEqual(retired, [42]);
+});
+
+test("cancellation remains owned until the detached service cleanup finishes", async context => {
+  const running = child();
+  const spawned = Promise.withResolvers<NodeJS.ProcessEnv>();
+  const cleanupStarted = Promise.withResolvers<void>();
+  const cleanupFinished = Promise.withResolvers<void>();
+  context.mock.method(WorkbenchTestProcessResources, "retireService", async (file: string) => {
+    assert.equal(file, "owned-service-record");
+    cleanupStarted.resolve();
+    await cleanupFinished.promise;
+  });
+  const controller = new WorkbenchAgentCommandLiveTestController("C:/git/web/workbench", {
+    realpath: async value => value,
+    retireProcess: async () => {},
+    spawnProcess: (_command, _args, options) => {
+      spawned.resolve(options.env!);
+      return running;
+    },
+  });
+  const request = {
+    cwd: "C:/git/web/workbench",
+    file: "test/scenarios/opencode.scenario.test.ts",
+    provider: "opencode",
+  };
+  const execution = controller.execute(request, new AbortController().signal);
+  const rejected = assert.rejects(execution, /cancelled/u);
+  const environment = await spawned.promise;
+  await fs.appendFile(environment.WORKBENCH_TEST_SERVICE_RECORDS!, `${JSON.stringify("owned-service-record")}\n`);
+  controller.cancel();
+  running.emit("close", null, "SIGTERM");
+  await cleanupStarted.promise;
+  await assert.rejects(controller.execute(request, new AbortController().signal), /already running/u);
+  cleanupFinished.resolve();
+  await rejected;
 });

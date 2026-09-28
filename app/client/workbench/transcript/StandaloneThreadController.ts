@@ -1,17 +1,19 @@
 /*
  * Exports:
  * - StandaloneThreadState: selected SQL transcript, page progress and scoped read failure.
- * - default StandaloneThreadController: own bounded standalone paging and one socket using shared SQL/text controllers.
+ * - default StandaloneThreadController: own standalone paging and rendering over the shared app workspace.
  */
-import WorkbenchSocketClient from "workbench-shared/workbench/WorkbenchSocketClient";
-import { isWorkbenchRpcFailure } from "workbench-shared/workbench/workbench-rpc";
-import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import type WorkbenchWorkspaceClient from "../app/WorkbenchWorkspaceClient";
+import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED, type WorkbenchThreadPageResult } from "workbench-shared/workbench/thread/thread-actions";
 import type { ThreadPayload } from "workbench-shared/types";
 import { workbenchTranscriptOperations } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import WorkbenchTranscriptClient from "../database/transcript/WorkbenchTranscriptClient";
 import ThreadTextPresentationController from "../thread/ThreadTextPresentationController";
 import ThreadTranscriptProjectionController, { type ThreadTranscriptProjectionState } from "./ThreadTranscriptProjectionController";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 
 export interface StandaloneThreadState {
   thread: ThreadPayload | null;
@@ -19,35 +21,35 @@ export interface StandaloneThreadState {
   loading: boolean;
   error: string | null;
   nextCursor: string | null;
+  location: ProjectLocationReference | null;
 }
-
-type Client = Pick<WorkbenchSocketClient, "connectSocket" | "sendRequest" | "onWorkbenchNotification" | "onConnectionClose" | "onReconnect" | "close">;
 
 export default class StandaloneThreadController {
   readonly text: ThreadTextPresentationController;
-  readonly #client: Client;
+  readonly #client: WorkbenchWorkspaceClient;
+  readonly #cancellation = new AbortController();
   readonly #daemon: WorkbenchDaemonClient;
   readonly #threadId: string;
   readonly #transcripts: WorkbenchTranscriptClient;
   readonly #projection: ThreadTranscriptProjectionController;
   readonly #stops: Array<() => void>;
   readonly #listeners = new Set<() => void>();
-  #state: StandaloneThreadState = { thread: null, source: { status: "idle" }, loading: false, error: null, nextCursor: null };
+  #state: StandaloneThreadState = { thread: null, source: { status: "idle" }, loading: false, error: null, nextCursor: null, location: null };
   #generation = 0;
   #disposed = false;
 
   constructor(threadId: string, {
-    client = new WorkbenchSocketClient(),
+    workspace,
     text = new ThreadTextPresentationController(),
-  }: { client?: Client; text?: ThreadTextPresentationController } = {}) {
+  }: { workspace: WorkbenchWorkspaceClient; text?: ThreadTextPresentationController }) {
     this.#threadId = threadId;
-    this.#client = client;
-    this.#daemon = new WorkbenchDaemonClient({ request: (method, params) => this.#request(method, params) });
+    this.#client = workspace;
+    this.#daemon = workspace.daemon({ kind: "thread", threadId });
     this.text = text;
     this.#transcripts = new WorkbenchTranscriptClient({
       transport: {
-        onNotification: listener => client.onWorkbenchNotification(listener),
-        onDisconnect: listener => client.onConnectionClose(listener),
+        onNotification: listener => workspace.onWorkbenchNotification(listener),
+        onDisconnect: listener => workspace.onDisconnect(listener),
         request: (method, params) => this.#request(method, params),
       },
       reportConformance: report => {
@@ -72,12 +74,19 @@ export default class StandaloneThreadController {
     });
     this.#stops = [
       this.#transcripts.onAvailabilityChange(available => this.#projection.setAvailable(available)),
-      client.onConnectionClose(() => {
+      workspace.onDisconnect(() => {
         this.#generation++;
         this.#publish({ loading: false });
       }),
-      client.onReconnect(() => { void this.refresh(); }),
+      workspace.rpc.onReconnect(() => { void this.refresh(); }),
     ];
+    const updateOwner = () => {
+      const owner = ownerQuery.getSnapshot().value?.data;
+      this.#publish({ location: owner?.phase === "current" ? owner.location : null });
+    };
+    const ownerQuery = workspace.observe({ kind: "threadOwner", threadId: ThreadReferenceSchema.parse(threadId) }, updateOwner);
+    this.#stops.push(ownerQuery.release);
+    updateOwner();
   }
 
   getSnapshot = () => this.#state;
@@ -98,14 +107,13 @@ export default class StandaloneThreadController {
     void this.#projection.dispose();
     this.#transcripts.dispose();
     this.text.dispose();
-    this.#client.close();
+    this.#cancellation.abort(new Error("Standalone view closed."));
     this.#listeners.clear();
   }
 
   async #request<T>(method: string, params: unknown): Promise<T> {
-    const response = await this.#client.sendRequest<T>({ method, params });
-    if (isWorkbenchRpcFailure(response)) throw new WorkbenchDaemonRequestError(response.error.message, response.error.code);
-    return response.result;
+    if (!params || typeof params !== "object" || Array.isArray(params)) throw new Error("Transcript parameters are invalid.");
+    return this.#client.request<T>(method, params, { kind: "thread", threadId: this.#threadId });
   }
 
   async #read(cursor: string | null) {
@@ -114,7 +122,7 @@ export default class StandaloneThreadController {
     if (this.#state.source.status === "failed") this.#projection.select(null);
     this.#publish({ loading: true, error: null });
     try {
-      await this.#client.connectSocket();
+      await this.#client.connect(this.#cancellation.signal);
       if (this.#disposed || generation !== this.#generation) return;
       const input = { threadId: this.#state.thread?.id ?? this.#threadId, cursor, recoveryAware: true };
       let page: WorkbenchThreadPageResult | null = null;

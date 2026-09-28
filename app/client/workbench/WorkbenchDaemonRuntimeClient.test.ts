@@ -1,123 +1,60 @@
-/*
- * No production exports. Tests protect ordered reload dirt, reconnect reset, mixed-version fallback, and user reload admission.
- */
+/* No exports. Protect source-scoped runtime facts, ordered reload completion and app-routed intent. */
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import test from "node:test";
+import { DaemonIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
+import type { WorkspaceObservation } from "workbench-shared/workbench/workspace/workspace-observation";
+import WorkbenchDaemonRuntimeClient from "./WorkbenchDaemonRuntimeClient";
+import { createWorkspaceClientFixture } from "./app/workspace-client-fixture";
 
-import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import {
-  WORKBENCH_RELOAD_DIRT_READ_METHOD,
-  WORKBENCH_RELOAD_METHOD,
-} from "workbench-shared/workbench/daemon-reload";
-import WorkbenchDaemonRuntimeClient from "./WorkbenchDaemonRuntimeClient.ts";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((settle) => { resolve = settle; });
-  return { promise, resolve };
-}
-
-function envelope(revision: number, scope: string) {
-  return {
-    revision,
-    snapshot: {
-      dirtyScopes: [{ description: scope, destructive: false, scope }],
-      error: null as string | null,
-      pendingScopes: [] as string[],
-    },
+test("newer runtime facts cannot be replaced by an old response and only successful server completion notifies", async context => {
+  const f = createWorkspaceClientFixture();
+  const daemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
+  const owner = new WorkbenchDaemonRuntimeClient({ workspace: f.workspace, daemonId });
+  context.after(() => { owner.dispose(); f.dispose(); });
+  const socket = await f.open();
+  await owner.open();
+  const request = await socket.request("workspace/observe");
+  assert.deepEqual(request.params.query, { kind: "daemonRuntime", daemonId });
+  let completed = 0;
+  owner.subscribeServerReloadCompleted(() => { completed++; });
+  const update = (revision: number, pendingScopes: WorkbenchReloadScope[], error: string | null = null, response = false) => {
+    const data: Extract<WorkspaceObservation, { kind: "daemonRuntime" }>["data"] = {
+      dirtyScopes: [{ dependantScopes: [], description: "Core", destructive: false, scope: "server:core" }], pendingScopes, error,
+    };
+    socket.observation(request, { kind: "daemonRuntime", daemonId, data, phase: "current", failure: null }, revision, response);
   };
-}
-
-test("a newer notification cannot be rolled back by an older bootstrap response", async () => {
-  const read = deferred<unknown>();
-  const client = new WorkbenchDaemonRuntimeClient({
-    request: async (method) => {
-      assert.equal(method, WORKBENCH_RELOAD_DIRT_READ_METHOD);
-      return await read.promise;
-    },
-  });
-  const opening = client.open();
-  assert.equal(client.acceptUpdate(envelope(2, "server:websocket")), true);
-  read.resolve(envelope(1, "server:core"));
-  assert.equal(await opening, true);
-  assert.equal(client.getSnapshot().dirtyScopes[0]?.scope, "server:websocket");
-});
-
-test("connection reset admits a lower revision from the replacement server", async () => {
-  const responses = [envelope(8, "server:core"), envelope(0, "server:database")];
-  const client = new WorkbenchDaemonRuntimeClient({
-    request: async () => responses.shift(),
-  });
-  await client.open();
-  client.resetConnection();
-  await client.open();
-  assert.equal(client.getSnapshot().dirtyScopes[0]?.scope, "server:database");
-});
-
-test("only an ordered successful server reload completion notifies its owner", () => {
-  const client = new WorkbenchDaemonRuntimeClient({ request: async () => ({}) });
-  const completed: number[] = [];
-  const unsubscribe = client.subscribeServerReloadCompleted(() => completed.push(1));
-  const update = (revision: number, pendingScopes: string[], error: string | null = null) => {
-    const value = envelope(revision, "server:core");
-    value.snapshot.pendingScopes = pendingScopes;
-    value.snapshot.error = error;
-    client.acceptUpdate(value);
-  };
-  update(1, ["server:core"]);
-  update(0, []);
-  update(2, [], "reload failed");
-  update(3, ["client:compiler"]);
-  update(4, []);
-  update(5, ["server:database"]);
+  update(2, ["server:core"]);
+  update(1, [], null, true);
+  assert.deepEqual(owner.getSnapshot().pendingScopes, ["server:core"]);
+  update(3, [], "reload failed");
+  update(4, ["client:compiler"]);
   update(5, []);
-  client.resetConnection();
-  update(0, []);
-  assert.deepEqual(completed, []);
-  update(1, ["server:core"]);
-  update(2, []);
-  assert.deepEqual(completed, [1]);
-  unsubscribe();
-  update(3, ["server:core"]);
-  update(4, []);
-  assert.deepEqual(completed, [1]);
+  assert.equal(completed, 0);
+  update(6, ["server:database"]);
+  update(7, []);
+  assert.equal(completed, 1);
+  update(7, []);
+  assert.equal(completed, 1);
+  owner.dispose();
+  update(8, ["server:core"]);
+  assert.deepEqual(owner.getSnapshot().pendingScopes, []);
+  assert.equal(socket.readyState, WebSocket.OPEN);
 });
 
-test("an old server enables legacy thread dirt without hiding unsupported reads", async () => {
-  const client = new WorkbenchDaemonRuntimeClient({
-    request: async () => {
-      throw new WorkbenchDaemonRequestError("Method not found.", -32601);
-    },
-  });
-  assert.equal(await client.open(), false);
-  client.acceptLegacy({
-    dirtyScopes: [{ description: "Core", destructive: false, scope: "server:core" }],
-    error: null,
-    pendingScopes: [],
-  });
-  assert.equal(client.getSnapshot().dirtyScopes[0]?.scope, "server:core");
-});
-
-test("reload admission stays on the runtime owner and conforms its response", async () => {
-  const requests: Array<{ method: string; params: unknown }> = [];
-  const client = new WorkbenchDaemonRuntimeClient({
-    request: async (method, params) => {
-      requests.push({ method, params });
-      return {
-        appliedScopes: [],
-        completedAt: null,
-        error: null,
-        ok: true,
-        queuedScopes: ["server:core"],
-        requestedScopes: ["server:core"],
-        startedAt: 1,
-        state: "running",
-      };
-    },
-  });
-  assert.equal((await client.reloadScopes(["server:core"])).state, "running");
-  assert.deepEqual(requests, [{
-    method: WORKBENCH_RELOAD_METHOD,
-    params: { scopes: ["server:core"] },
-  }]);
+test("reload commands retain the selected daemon and do not infer completion from admission", async context => {
+  const f = createWorkspaceClientFixture();
+  const daemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000002");
+  const owner = new WorkbenchDaemonRuntimeClient({ workspace: f.workspace, daemonId });
+  context.after(() => { owner.dispose(); f.dispose(); });
+  const socket = await f.open();
+  let completed = false;
+  owner.subscribeServerReloadCompleted(() => { completed = true; });
+  const reload = owner.reloadScopes(["server:core"]);
+  const request = await socket.request("workspace/daemon/reload");
+  assert.deepEqual(request.params, { daemonId, request: { scopes: ["server:core"] } });
+  socket.reply(request, { appliedScopes: [], completedAt: null, error: null, ok: true,
+    queuedScopes: ["server:core"], requestedScopes: ["server:core"], startedAt: 1, state: "running" });
+  assert.equal((await reload).state, "running");
+  assert.equal(completed, false);
 });

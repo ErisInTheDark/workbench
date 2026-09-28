@@ -12,10 +12,11 @@ import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import AppCompilerNode from "./AppCompilerNode.ts";
 import AppNetworkNode from "./AppNetworkNode.ts";
 import AppHttpNode from "./AppHttpNode.ts";
+import AppWorkspaceNode from "./AppWorkspaceNode.ts";
 
 export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never>()({
   access: "operator",
-  children: [AppCompilerNode, AppNetworkNode, AppHttpNode],
+  children: [AppCompilerNode, AppNetworkNode, AppWorkspaceNode, AppHttpNode],
   create: (context, build) => {
     const logger = context.processLogger.withMessageFormatter(formatWorkbenchAppLogMessage);
     const state = new WorkbenchBrowserStateRegistry(build.get("database"), {

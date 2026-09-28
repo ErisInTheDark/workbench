@@ -29,30 +29,34 @@ export default function WorkbenchReactDevelopmentModeSetting() {
 
   useEffect(() => {
     let cancelled = false;
-    void readWorkbenchAppSettings(fetch, rpc ?? undefined)
+    let generation = 0;
+    const load = () => {
+      const current = ++generation;
+      void readWorkbenchAppSettings(rpc)
       .then((snapshot) => {
-        if (cancelled) return;
-        if (!snapshot) {
-          setIsAvailable(false);
-          return;
-        }
+        if (cancelled || current !== generation) return;
+        setError("");
         setIsAvailable(true);
         setApplied(snapshot.appliedReactDevelopmentMode);
         setRequested(snapshot.requestedReactDevelopmentMode);
       })
       .catch((loadError: unknown) => {
-        if (!cancelled) setError(boundedError(loadError));
+        if (!cancelled && current === generation) setError(boundedError(loadError));
       })
       .finally(() => {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled && current === generation) setIsLoading(false);
       });
+    };
+    const stop = rpc?.onOpen(load);
+    if (!rpc || rpc.connected) load();
     return () => {
       cancelled = true;
+      stop?.();
     };
   }, [rpc]);
 
   const description = !isAvailable
-    ? "Restart Workbench to load the app process that supports this setting."
+    ? "Waiting for app settings."
     : restartRequired
       ? `${requested ? "Development" : "Production"} React is saved. Restart Workbench to apply it.`
       : requested
@@ -64,7 +68,7 @@ export default function WorkbenchReactDevelopmentModeSetting() {
     setIsSaving(true);
     setError("");
     try {
-      const snapshot = await updateWorkbenchAppSettings(!requested, fetch, rpc ?? undefined);
+      const snapshot = await updateWorkbenchAppSettings(!requested, rpc);
       setApplied(snapshot.appliedReactDevelopmentMode);
       setRequested(snapshot.requestedReactDevelopmentMode);
     } catch (updateError) {

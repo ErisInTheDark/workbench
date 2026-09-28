@@ -22,7 +22,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     return {
       dispose: () => undefined,
       registrations: {},
-      start: async () => { await environment.install(); },
+      start: async () => {
+        const startedAt = performance.now();
+        if (process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1") console.info("[startup] daemon CLI setup");
+        await environment.install();
+        if (process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1") console.info(`[startup] daemon CLI ready in ${Math.round(performance.now() - startedAt)}ms`);
+      },
     };
   },
   description: "Reload daemon-discovering wb command shims without replacing command or provider state.",

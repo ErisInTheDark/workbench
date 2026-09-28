@@ -392,6 +392,13 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     return response.snapshot;
   }
 
+  async readRetainedProjectCatalog(discoveryRoots: readonly string[]) {
+    await this.start();
+    const response = await this.#request({ type: "readRetainedProjectCatalog", discoveryRoots });
+    if (response.type !== "projectCatalog") throw new WorkbenchDatabaseFailure(`Unexpected retained catalogue response: ${response.type}`);
+    return response.projects;
+  }
+
   async reconcileProjectCatalog(discovery: WorkbenchProjectDiscovery) {
     await this.start();
     const response = await this.#request({ type: "reconcileProjectCatalog", discovery });
@@ -488,6 +495,13 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     const response = await this.#request({ type: "readThreadStateProject", projectId });
     if (response.type !== "threadStateProject") throw new WorkbenchDatabaseFailure(`Unexpected project response: ${response.type}`);
     return response.document;
+  }
+
+  async readThreadStateNavigationSummary(projectId: ProjectId) {
+    await this.start();
+    const response = await this.#request({ type: "readThreadStateNavigationSummary", projectId });
+    if (response.type !== "threadStateNavigationSummary") throw new WorkbenchDatabaseFailure(`Unexpected navigation response: ${response.type}`);
+    return response.summary;
   }
 
   async readThreadStateTitleHistories(projectId: ProjectId) {

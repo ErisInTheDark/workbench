@@ -1,0 +1,125 @@
+/* No production exports. Protect partial queries, shared demand and stale-result fencing. */
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createWorkspaceClientFixture } from "./workspace-client-fixture";
+
+const runtime = {
+  kind: "runtime" as const, phase: "current" as const, failure: null,
+  data: { frontendGeneration: null, reloadDirt: { dirtyScopes: [], pendingScopes: [], error: null } },
+};
+
+test("an available query publishes while an unrelated query remains pending", async context => {
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const blocked = fixture.workspace.observe({ kind: "network" });
+  const ready = fixture.workspace.observe({ kind: "runtime" });
+  const request = socket.sent.find(item => item.method === "workspace/observe" && item.params.query.kind === "runtime");
+  assert.ok(request?.method === "workspace/observe");
+  socket.observation(request, runtime, 1, true);
+  await fixture.workspace.waitFor(ready);
+  assert.equal(ready.getSnapshot().phase, "current");
+  assert.equal(blocked.getSnapshot().phase, "pending");
+  assert.equal(blocked.getSnapshot().value, null);
+});
+
+test("matching interests share work and releasing one does not retire the other", async context => {
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  let publications = 0;
+  const first = fixture.workspace.observe({ kind: "runtime" });
+  const second = fixture.workspace.observe({ kind: "runtime" }, () => publications++);
+  const request = await socket.request("workspace/observe");
+  assert.equal(socket.sent.filter(item => item.method === "workspace/observe").length, 1);
+  socket.observation(request, runtime);
+  const accepted = second.getSnapshot();
+  const count = publications;
+  socket.observation(request, runtime);
+  assert.equal(second.getSnapshot(), accepted);
+  assert.equal(publications, count);
+  first.release();
+  assert.equal(socket.sent.filter(item => item.method === "workspace/release").length, 0);
+  socket.observation(request, { ...runtime, data: { ...runtime.data,
+    reloadDirt: { ...runtime.data.reloadDirt, error: "reload failed" } } }, 2);
+  assert.equal(second.getSnapshot().value?.data?.reloadDirt.error, "reload failed");
+  second.release();
+  assert.equal(socket.sent.filter(item => item.method === "workspace/release").length, 1);
+});
+
+test("replaced interest ignores a delayed acknowledgement and cancels its waiter", async context => {
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const first = fixture.workspace.observe({ kind: "runtime" });
+  const old = await socket.request("workspace/observe");
+  const rejected = assert.rejects(fixture.workspace.waitFor(first));
+  first.release();
+  await rejected;
+  const offset = socket.sent.length;
+  const replacement = fixture.workspace.observe({ kind: "runtime" });
+  const current = await socket.request("workspace/observe", offset);
+  socket.observation(current, runtime);
+  const accepted = replacement.getSnapshot();
+  socket.observation(old, { ...runtime, phase: "failed", failure: "old query failed", data: null }, 99, true);
+  assert.equal(replacement.getSnapshot(), accepted);
+});
+
+test("reconnect retains facts as stale, restores reads and fences the old generation", async context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const query = fixture.workspace.observe({ kind: "runtime" });
+  const initial = await socket.request("workspace/observe");
+  socket.observation(initial, runtime);
+  socket.reply(initial, { malformedRetiredReply: true });
+  socket.close();
+  assert.equal(query.getSnapshot().phase, "stale");
+  assert.ok(query.getSnapshot().value?.data);
+  context.mock.timers.tick(60_000);
+  const next = await fixture.nextSocket(1);
+  const connected = fixture.workspace.connect();
+  next.open();
+  await connected;
+  const restored = await next.request("workspace/observe");
+  assert.ok(restored.params.generation > initial.params.generation);
+  const stale = query.getSnapshot();
+  next.observation(initial, { ...runtime, phase: "failed", failure: "retired", data: null }, 100);
+  assert.equal(query.getSnapshot(), stale);
+  next.observation(restored, runtime);
+  assert.equal(query.getSnapshot().phase, "current");
+  assert.equal(query.getSnapshot().failure, null);
+});
+
+test("bad pushed data fails only its current query and retains its last good facts", async context => {
+  context.mock.method(console, "error", () => {});
+  context.mock.method(console, "warn", () => {});
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const query = fixture.workspace.observe({ kind: "runtime" });
+  const other = fixture.workspace.observe({ kind: "network" });
+  const request = await socket.request("workspace/observe");
+  const invalid = (generation = request.params.generation) => socket.dispatchEvent(new MessageEvent("message", {
+    data: JSON.stringify({ kind: "workspace", observation: {
+      subscriptionId: request.params.subscriptionId, generation, kind: "runtime", data: "invalid",
+    } }),
+  }));
+  invalid();
+  assert.equal(query.getSnapshot().phase, "failed");
+  await assert.rejects(fixture.workspace.waitFor(query), /invalid/u);
+  assert.equal(other.getSnapshot().phase, "pending");
+  socket.observation(request, runtime);
+  const value = query.getSnapshot().value;
+  invalid();
+  assert.equal(query.getSnapshot().phase, "stale");
+  assert.equal(query.getSnapshot().value, value);
+  socket.observation(request, runtime, 2);
+  const restored = query.getSnapshot();
+  invalid(request.params.generation - 1);
+  assert.equal(query.getSnapshot(), restored);
+  socket.observation(request, { kind: "network", phase: "pending", failure: null, data: null }, 3);
+  assert.equal(query.getSnapshot().phase, "stale");
+  assert.equal(query.getSnapshot().value, restored.value);
+});

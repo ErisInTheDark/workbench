@@ -27,6 +27,7 @@ import AppCompilerNode from "./AppCompilerNode.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import type { ReloadableNodeBuild } from "workbench-shared/reload/ReloadableNode";
+import { WorkspaceObservationSchema, type WorkspaceQuery } from "workbench-shared/workbench/workspace/workspace-observation";
 
 const appDirectoryPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const execFileAsync = promisify(execFile);
@@ -43,6 +44,22 @@ function nextSocketFrame(socket: WebSocket, match: (frame: Record<string, unknow
     };
     socket.on("message", receive);
   });
+}
+
+async function observeWorkspace(socket: WebSocket, id: number, query: WorkspaceQuery) {
+  const subscriptionId = randomUUID();
+  const received = nextSocketFrame(socket, frame => {
+    if (frame.id === id && frame.error) return true;
+    const parsed = WorkspaceObservationSchema.safeParse(frame.result ?? frame.observation);
+    return parsed.success && parsed.data.subscriptionId === subscriptionId
+      && (parsed.data.phase === "current" || parsed.data.phase === "failed");
+  });
+  socket.send(JSON.stringify({ id, method: "workspace/observe", params: { subscriptionId, generation: 1, query } }));
+  const frame = await received;
+  assert.equal(frame.error, undefined);
+  const observation = WorkspaceObservationSchema.parse(frame.result ?? frame.observation);
+  assert.equal(observation.phase, "current", observation.failure ?? "Workspace observation failed.");
+  return observation;
 }
 
 function localRequest(chunks: string[]) {
@@ -155,8 +172,19 @@ test("compiler source changes require only its reloadable node", () => {
 test("separates reloadable imports, stable process imports and external build inputs", () => {
   const target = runtime();
   const owners = (path: string) => target.getReloadScopesForPaths([path]).sort();
-  assert.deepEqual(owners("app/server/state/WorkbenchAppStateRepository.ts"), ["client:database", "client:state"]);
-  assert.deepEqual(owners("app/server/state/WorkbenchAppStateController.ts"), ["client:state"]);
+  for (const [file, owner] of [
+    ["app/server/state/WorkbenchAppStateRepository.ts", "client:database"],
+    ["app/server/state/WorkbenchAppStateController.ts", "client:state"],
+    ["shared/state/workbench-app-state-schema.ts", "client:database"],
+    ["shared/state/workbench-app-state-releases.ts", "client:database"],
+    ["app/server/workspace/WorkbenchWorkspaceController.ts", "client:workspace"],
+    ["shared/http/workbench-app-port.ts", "client:http"],
+    ["shared/http/workbench-app-settings.ts", "client:http"],
+  ]) {
+    const scopes = owners(file!);
+    assert.ok(scopes.includes(owner!));
+    assert.equal(scopes.includes("client:process"), false, `${file} must remain reloadable`);
+  }
   assert.deepEqual(owners("app/server/runtime/WorkbenchAppHttpRouter.ts"), ["client:http"]);
   assert.deepEqual(owners("app/server/runtime/workbench-app-runtime-snapshot.ts"), ["client:process"]);
   assert.deepEqual(owners("app/server/WorkbenchFrontendCompiler.ts"), ["client:compiler"]);
@@ -168,12 +196,8 @@ test("separates reloadable imports, stable process imports and external build in
   assert.deepEqual(owners("app/tsconfig.json"), ["client:process"]);
   assert.deepEqual(owners("package.json"), ["client:process"]);
   assert.deepEqual(owners("shared/http/StaticHttpRequestController.ts"), ["client:http"]);
-  assert.deepEqual(owners("shared/http/workbench-app-port.ts"), ["client:http"]);
-  assert.deepEqual(owners("shared/http/workbench-app-settings.ts"), ["client:http"]);
   assert.deepEqual(owners("shared/http/HttpServer.ts"), ["client:process"]);
-  assert.deepEqual(owners("shared/state/workbench-app-state-schema.ts"), ["client:database", "client:state"]);
-  assert.deepEqual(owners("shared/state/workbench-app-state-releases.ts"), ["client:database", "client:state"]);
-  assert.deepEqual(owners("shared/workbench-data-root.ts"), ["client:database", "client:network", "client:process", "client:state"]);
+  assert.ok(owners("shared/workbench-data-root.ts").includes("client:process"));
   assert.deepEqual(owners("app/server/workbench-runtime-root.ts"), ["client:compiler", "client:process"]);
   assert.equal(owners("shared/reload/ReloadableNodeHost.ts").includes("client:process"), true);
   assert.deepEqual(owners("shared/package.json"), ["client:process"]);
@@ -208,6 +232,7 @@ test("reloads the database with a fresh repository constructor and no process re
     resolveReload = resolve;
     rejectReload = reject;
   });
+  const daemonId = randomUUID();
   const target = new WorkbenchAppRuntime({
     appPort: {
       read: () => ({
@@ -267,9 +292,10 @@ test("reloads the database with a fresh repository constructor and no process re
         subscribe: () => () => {},
         getSnapshot: () => ({
           phase: "ready",
+          generation: 1,
           failure: null,
           snapshot: {
-            identity: { protocol: 1, daemonId: randomUUID(), hostname: "fixture", state: "sleeping", wakeEnabled: false },
+            identity: { protocol: 1, daemonId, hostname: "fixture", state: "sleeping", wakeEnabled: false },
             failure: null, daemonOrigin: null, discovery: { refreshing: false, peers: [] },
             network: {
               configuration: { hostServe: { enabled: false, port: 8080 }, privateAccess: null, members: [] },
@@ -306,10 +332,8 @@ test("reloads the database with a fresh repository constructor and no process re
 
   let started = false;
   let frontend: WorkbenchFrontendServer | null = null;
-  let lifetimeSocket: WebSocket | null = null;
   let appSocket: WebSocket | null = null;
   let replacementAppSocket: WebSocket | null = null;
-  const lifetimeResponse = new TestResponse();
   try {
     await target.start();
     started = true;
@@ -321,30 +345,26 @@ test("reloads the database with a fresh repository constructor and no process re
       },
     });
     const address = await frontend.start();
-    lifetimeSocket = new WebSocket(
-      `${address.url.replace(/^http/u, "ws")}/api/workbench-app-lifetime/socket`,
-      { origin: address.url },
-    );
-    const [ready] = await once(lifetimeSocket, "message");
-    assert.deepEqual(JSON.parse(ready.toString()), { kind: "ready" });
     appSocket = new WebSocket(
-      `${address.url.replace(/^http/u, "ws")}/api/workbench-network/socket?capabilities=6`,
+      `${address.url.replace(/^http/u, "ws")}/api/workbench-network/socket`,
       { origin: address.url },
     );
-    await nextSocketFrame(appSocket, frame => frame.kind === "network");
-    const initialRuntime = nextSocketFrame(appSocket, frame => frame.id === 1);
-    appSocket.send(JSON.stringify({ id: 1, method: "app/runtime/read", params: {} }));
-    const httpRuntime = await fetch(`${address.url}/api/workbench-app-runtime?version=4`);
-    assert.deepEqual((await initialRuntime).result, await httpRuntime.json(),
-      "RPC and HTTP must project the same runtime facts");
-    const initialState = nextSocketFrame(appSocket, frame => frame.id === 3);
-    appSocket.send(JSON.stringify({ id: 3, method: "app/state/read",
-      params: { browserStateId: null, sinceRevision: null } }));
-    const state = (await initialState).result as { daemonRegistrationId: string; revision: number };
-    const stateNotice = nextSocketFrame(appSocket, frame => frame.kind === "state");
+    await once(appSocket, "open");
+    const runtime = await observeWorkspace(appSocket, 1, { kind: "runtime" });
+    assert.ok(runtime.kind === "runtime" && runtime.data);
+    assert.deepEqual(runtime.data.frontendGeneration, { javascript: "javascript-one", stylesheet: "stylesheet-one" });
+    const browserStateId = randomUUID();
+    const initial = await observeWorkspace(appSocket, 3, { kind: "appState", browserStateId });
+    assert.ok(initial.kind === "appState" && initial.data);
+    const state = initial.data;
+    const stateNotice = nextSocketFrame(appSocket, frame => {
+      if (frame.kind !== "workspace") return false;
+      const value = WorkspaceObservationSchema.parse(frame.observation);
+      return value.kind === "appState" && (value.data?.revision ?? 0) > state.revision;
+    });
     const savedDraft = nextSocketFrame(appSocket, frame => frame.id === 4);
     appSocket.send(JSON.stringify({ id: 4, method: "app/state/mutate", params: {
-      browserStateId: null,
+      browserStateId,
       mutation: { action: "put", record: {
         kind: "composerDraft", daemonRegistrationId: state.daemonRegistrationId,
         projectId: "workbench", threadId: "draft",
@@ -353,40 +373,13 @@ test("reloads the database with a fresh repository constructor and no process re
     } }));
     const saveResult = (await savedDraft).result as { revision: number };
     assert.ok(saveResult.revision > state.revision);
-    assert.equal((await stateNotice).revision, saveResult.revision);
-    const lifetimeRequest = localRequest([]);
-    lifetimeRequest.method = "GET";
-    lifetimeRequest.url = "/api/workbench-app-lifetime";
-    await target.handleRequest(lifetimeRequest, lifetimeResponse as unknown as import("node:http").ServerResponse);
-    assert.equal(lifetimeResponse.statusCode, 200);
+    const noticedState = WorkspaceObservationSchema.parse((await stateNotice).observation);
+    assert.equal(noticedState.kind === "appState" && noticedState.data?.revision, saveResult.revision);
     await target.writeAppPort(43_211);
 
-    const settingsRequest = localRequest([
-      JSON.stringify({ reactDevelopmentMode: true }),
-    ]);
-    settingsRequest.method = "PUT";
-    settingsRequest.url = "/api/workbench-app-settings";
-    const settingsResponse = new TestResponse();
-    const settingsNotice = nextSocketFrame(appSocket, frame => frame.kind === "runtime");
-    await target.handleRequest(
-      settingsRequest,
-      settingsResponse as unknown as import("node:http").ServerResponse,
-    );
-    assert.equal(settingsResponse.statusCode, 200);
-    await settingsNotice;
-
-    const dirtyRequest = localRequest([]);
-    dirtyRequest.method = "GET";
-    dirtyRequest.url = "/api/workbench-app-runtime?version=2";
-    const dirtyResponse = new TestResponse();
-    await target.handleRequest(
-      dirtyRequest,
-      dirtyResponse as unknown as import("node:http").ServerResponse,
-    );
-    assert.deepEqual(
-      JSON.parse(dirtyResponse.body).reloadDirt.dirtyScopes.map(({ scope }: { scope: string }) => scope),
-      ["client:process"],
-    );
+    const settingsResponse = nextSocketFrame(appSocket, frame => frame.id === 5);
+    appSocket.send(JSON.stringify({ id: 5, method: "app/settings/update", params: { reactDevelopmentMode: true } }));
+    assert.equal((await settingsResponse).error, undefined);
 
     const request = localRequest([JSON.stringify({ scopes: ["client:database"] })]);
     request.method = "POST";
@@ -397,9 +390,6 @@ test("reloads the database with a fresh repository constructor and no process re
     assert.equal(response.statusCode, 202);
     await reloaded;
     await appClosed;
-    assert.equal(lifetimeResponse.writableFinished, false, "scoped reload must not end app lifetime");
-    assert.equal(lifetimeSocket.readyState, WebSocket.OPEN,
-      "scoped reload must not end the stable app lifetime socket");
 
     assert.equal(constructors.length, 2);
     assert.deepEqual(compilerModes, [false, false]);
@@ -412,56 +402,20 @@ test("reloads the database with a fresh repository constructor and no process re
     assert.match(reloadLine, /client:http/u);
     assert.doesNotMatch(reloadLine, /client:process/u);
     replacementAppSocket = new WebSocket(
-      `${address.url.replace(/^http/u, "ws")}/api/workbench-network/socket?capabilities=6`,
+      `${address.url.replace(/^http/u, "ws")}/api/workbench-network/socket`,
       { origin: address.url },
     );
-    await nextSocketFrame(replacementAppSocket, frame => frame.kind === "network");
-    const afterReload = nextSocketFrame(replacementAppSocket, frame => frame.id === 2);
-    replacementAppSocket.send(JSON.stringify({ id: 2, method: "app/runtime/read", params: {} }));
-    assert.equal((await afterReload).id, 2);
-
-    const restoreRequest = localRequest([
-      JSON.stringify({ reactDevelopmentMode: false }),
-    ]);
-    restoreRequest.method = "PUT";
-    restoreRequest.url = "/api/workbench-app-settings";
-    const restoreResponse = new TestResponse();
-    const restoredNotice = nextSocketFrame(replacementAppSocket, frame => frame.kind === "runtime");
-    await target.handleRequest(
-      restoreRequest,
-      restoreResponse as unknown as import("node:http").ServerResponse,
-    );
-    assert.equal(restoreResponse.statusCode, 200);
-    await restoredNotice;
-
-    const cleanRequest = localRequest([]);
-    cleanRequest.method = "GET";
-    cleanRequest.url = "/api/workbench-app-runtime?version=2";
-    const cleanResponse = new TestResponse();
-    await target.handleRequest(
-      cleanRequest,
-      cleanResponse as unknown as import("node:http").ServerResponse,
-    );
-    assert.deepEqual(JSON.parse(cleanResponse.body).reloadDirt.dirtyScopes, []);
-
-    const generationRequest = localRequest([]);
-    generationRequest.method = "GET";
-    generationRequest.url = "/api/workbench-app-runtime?version=3";
-    const generationResponse = new TestResponse();
-    await target.handleRequest(
-      generationRequest,
-      generationResponse as unknown as import("node:http").ServerResponse,
-    );
-    assert.deepEqual(JSON.parse(generationResponse.body).frontendGeneration, {
-      javascript: "javascript-one",
-      stylesheet: "stylesheet-one",
-    });
+    await once(replacementAppSocket, "open");
+    const retained = await observeWorkspace(replacementAppSocket, 2, { kind: "appState", browserStateId });
+    assert.ok(retained.kind === "appState" && retained.data);
+    assert.equal(retained.data.rows.composerDrafts[0]?.text, "saved through app RPC");
+    const restoreResponse = nextSocketFrame(replacementAppSocket, frame => frame.id === 6);
+    replacementAppSocket.send(JSON.stringify({ id: 6, method: "app/settings/update", params: { reactDevelopmentMode: false } }));
+    assert.equal((await restoreResponse).error, undefined);
   } finally {
     if (started) await target.close();
-    lifetimeSocket?.terminate();
     appSocket?.terminate();
     replacementAppSocket?.terminate();
     await frontend?.close();
   }
-  assert.equal(lifetimeResponse.writableFinished, true);
 });

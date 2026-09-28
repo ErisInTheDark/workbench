@@ -12,6 +12,25 @@ import test from "node:test";
 const execute = promisify(execFile);
 const reporter = new URL("./concise-test-reporter.mjs", import.meta.url).href;
 
+test("a failure is visible while the remaining test stream is still pending", async () => {
+  const { default: report } = await import("./concise-test-reporter.mjs");
+  const remaining = Promise.withResolvers<void>();
+  const source = (async function* () {
+    yield { type: "test:fail", data: { file: "first.test.ts", name: "failed case",
+      details: { duration_ms: 1, error: new Error("visible failure") } } };
+    await remaining.promise;
+  })();
+  const output = report(source);
+  try {
+    const first = await output.next();
+    assert.equal(first.done, false);
+    assert.ok(first.value?.includes("visible failure"));
+  } finally {
+    remaining.resolve();
+    for await (const _line of output) {}
+  }
+});
+
 for (const scenario of [
   { name: "silent passing tests", body: "", succeeds: true },
   { name: "uncaptured stdout", body: "process.stdout.write('stdout sentinel\\n');", succeeds: false },

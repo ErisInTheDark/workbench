@@ -245,9 +245,6 @@ function createWorkbenchCoreFeature(
     gitArcs: gitArc,
     listSubagents: (projectId) => subagents.listRelationships(projectId),
     log: logThreadStateWarning,
-    projectState: projectSnapshot,
-    reloadDirt,
-    publish: (connectionId, snapshot) => { if (lease.isCurrent()) context.publishThreadState(connectionId, snapshot); },
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     transitions: worktreeGitTransitions,
@@ -455,13 +452,13 @@ function createWorkbenchCoreFeature(
       if (startupDiagnostics) console.info("[startup] daemon project catalogue loading");
       if (initialCatalog) {
         reportPhase("validate retained project catalog");
-        await projectCatalog.ensureLoaded();
+        await projectCatalog.start();
         if (startupDiagnostics) console.info("[startup] daemon project catalogue ready");
         if (startupDiagnostics) console.info("[startup] daemon core ready");
         return;
       }
       reportPhase("prepared project catalog");
-      await projectCatalog.ensureLoaded();
+      await projectCatalog.start();
       if (startupDiagnostics) console.info("[startup] daemon project catalogue ready");
       reportPhase("composer profile startup");
       await profileStore.start();

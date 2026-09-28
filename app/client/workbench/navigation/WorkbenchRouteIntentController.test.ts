@@ -9,13 +9,11 @@ async function flush() {
 }
 
 test("a late source retries the retained intent and emits its canonical route", async () => {
-  let available = false;
   const route = createLogicalProjectRoute("00000000-0000-4000-8000-000000000001");
   const canonical = createLogicalProjectRoute("00000000-0000-4000-8000-000000000002");
   const attempts: string[] = [];
   const published: string[] = [];
   const controller = new WorkbenchRouteIntentController({
-    available: () => available,
     apply: async requested => {
       attempts.push(requested.logical?.projectId ?? "");
       return attempts.length === 1
@@ -25,16 +23,13 @@ test("a late source retries the retained intent and emits its canonical route", 
   });
   controller.subscribeCanonical(next => published.push(next.logical?.projectId ?? ""));
   controller.request(route);
-  assert.deepEqual(attempts, []);
-  available = true;
-  controller.sourceAvailable();
   await Promise.resolve();
   assert.deepEqual(attempts, [route.logical!.projectId]);
-  controller.sourceAvailable();
+  controller.factsChanged();
   await Promise.resolve();
   assert.deepEqual(attempts, [route.logical!.projectId, route.logical!.projectId]);
   assert.deepEqual(published, [canonical.logical!.projectId]);
-  controller.sourceAvailable();
+  controller.factsChanged();
   await flush();
   assert.equal(attempts.length, 2, "source changes must not reopen an already admitted route");
   controller.dispose();
@@ -45,14 +40,13 @@ test("source arrival during a failed attempt retries once", async () => {
   const route = createLogicalProjectRoute("00000000-0000-4000-8000-000000000001");
   const attempts: string[] = [];
   const controller = new WorkbenchRouteIntentController({
-    available: () => true,
     apply: async requested => {
       attempts.push(requested.logical?.projectId ?? "");
       return attempts.length === 1 ? await first.promise : { ok: true };
     },
   });
   controller.request(route);
-  controller.sourceAvailable();
+  controller.factsChanged();
   first.resolve({ ok: false, error: "source unavailable" });
   await flush();
   assert.deepEqual(attempts, [route.logical!.projectId, route.logical!.projectId]);
@@ -66,7 +60,6 @@ test("a newer route wins when the previous source read completes late", async ()
   const published: string[] = [];
   const attempts: string[] = [];
   const controller = new WorkbenchRouteIntentController({
-    available: () => true,
     apply: async route => {
       attempts.push(route.logical?.projectId ?? "");
       return attempts.length === 1 ? await old.promise : { ok: true, canonicalRoute: second };
@@ -89,13 +82,12 @@ test("direct navigation retires an older failed URL intent", async () => {
   const other = createLogicalProjectRoute("00000000-0000-4000-8000-000000000002");
   let attempts = 0;
   const controller = new WorkbenchRouteIntentController({
-    available: () => true,
     apply: async () => { attempts++; return { ok: false, error: "unavailable" }; },
   });
   controller.request(first);
   await flush();
   controller.supersede(other);
-  controller.sourceAvailable();
+  controller.factsChanged();
   await flush();
   assert.equal(attempts, 1);
   controller.dispose();

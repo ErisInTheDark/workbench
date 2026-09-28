@@ -7,11 +7,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { ThreadSummary, WorkbenchHarness, WorkbenchLogicalThreadRow } from "workbench-shared/types";
-import { projectLogicalPinnedDisplayOrder, projectLogicalThreadDisplayOrder } from "../../workbench/WorkbenchProjectProjection";
+import { projectLogicalPinnedDisplayOrder, projectLogicalThreadDisplayOrder } from "workbench-shared/workbench/project/workbench-project-projection";
 import type { WorkbenchThreadRowDragPayload } from "../../workbench/layout/workbench-drag";
 import { writeTextToClipboard } from "../../workbench/dom/clipboard";
 import { getWorkbenchThreadDisplayKey, type WorkbenchThreadDisplayOrder, type WorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
-import { getProjectQualifiedThreadDisplayKey, getThreadDisplayDraftKey } from "workbench-shared/workbench/thread/thread-display-layout";
+import { getProjectQualifiedThreadDisplayKey, getThreadDisplayDraftKey, parseProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import { FolderIdSchema, LogicalProjectIdSchema, ProjectIdSchema, type DraftId, type ProjectId, type ThreadDisplayKey, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import {
   getThreadSidebarGroup,
@@ -162,6 +162,22 @@ function WorkbenchThreadSidebarActionsProvider({
   const entryCount = projectThreadSidebars.projects.reduce((total, sidebar) => total + sidebar.entries.length, 0);
   const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
   const [autoFocusFolderId, setAutoFocusFolderId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState("");
+
+  const layoutProject = useCallback((id: string) => {
+    const projects = client.explorer.logicalProjects ?? [];
+    const exact = projects.find(project => project.id === id);
+    if (exact) return exact.id;
+    const matches = projects.filter(project => project.locations.some(location => location.target.projectId === id));
+    if (matches.length !== 1) throw new Error("The folder's app project identity is not available.");
+    return matches[0]!.id;
+  }, [client.explorer.logicalProjects]);
+  const layoutKey = useCallback((key: string) => {
+    if (key.startsWith("folder:")) return key;
+    const qualified = parseProjectQualifiedThreadDisplayKey(key);
+    if (!qualified) throw new Error("The layout item has no project identity.");
+    return getProjectQualifiedThreadDisplayKey(layoutProject(qualified.projectId), qualified.threadKey);
+  }, [layoutProject]);
 
   useEffect(() => {
     if (!entries.length) return;
@@ -180,24 +196,17 @@ function WorkbenchThreadSidebarActionsProvider({
     if (!controls || !ownerProjectId) return;
     if (entry.entryKind === "draft") {
       const draftId = isPinnedDraftSummaryEntry(entry) ? entry.draftId : entry.draft.draftId;
-      if (source && (method === "pin/set" || method === "snooze/set")) {
+      if (method === "pin/set" || method === "snooze/set") {
         await controls.setPresentationDraftPriority(draftId, {
           pinned: method === "pin/set" ? Boolean(value) : entry.metadata.pinned,
           snoozed: method === "snooze/set" ? Boolean(value) : entry.metadata.snoozed,
         });
         return;
       }
-      if (method === "pin/set") await controls.updateThreadState({
-        draftId, method: "workbench/thread-state/draft/pin/set", pinned: Boolean(value), projectId: ownerProjectId,
-      });
-      if (method === "snooze/set") await controls.updateThreadState({
-        draftId, method: "workbench/thread-state/draft/snooze/set", projectId: ownerProjectId, snoozed: Boolean(value),
-      });
       return;
     }
     const identity = entry.identity;
-    if (source) {
-      const intent = method === "pin/set"
+    const intent = method === "pin/set"
         ? { kind: "pin" as const, pinned: Boolean(value) }
         : method === "snooze/set"
           ? { kind: "snooze" as const, snoozed: Boolean(value) }
@@ -207,36 +216,22 @@ function WorkbenchThreadSidebarActionsProvider({
               ? { kind: "status" as const, status: value === "needsAttention" ? "needsAttention" as const
                 : value === "stopped" ? "stopped" as const : "completed" as const }
               : { kind: method === "restore" ? "restore" as const : "settle" as const };
-      const accepted = await controls.threadAction(identity.threadId, intent);
-      if (method === "settle" && accepted) {
-        onThreadSettled({ harness: identity.harness, kind: "provider", threadId: identity.threadId }, ownerProjectId);
-      }
-      return;
-    }
-    const request = method === "pin/set"
-      ? { identity, method: "workbench/thread-state/pin/set" as const, pinned: Boolean(value), projectId: ownerProjectId }
-      : method === "snooze/set"
-        ? { identity, method: "workbench/thread-state/snooze/set" as const, projectId: ownerProjectId, snoozed: Boolean(value) }
-        : method === "archive/set"
-          ? { archived: Boolean(value), identity, method: "workbench/thread-state/archive/set" as const, projectId: ownerProjectId }
-          : method === "status/set"
-            ? { identity, method: "workbench/thread-state/status/set" as const, projectId: ownerProjectId, status: value === "needsAttention" ? "needsAttention" as const : value === "stopped" ? "stopped" as const : "completed" as const }
-            : method === "restore"
-              ? { identity, method: "workbench/thread-state/restore" as const, projectId: ownerProjectId }
-              : { identity, method: "workbench/thread-state/settle" as const, projectId: ownerProjectId };
-    const accepted = await controls.updateThreadStateWithAcceptance(request);
+    const accepted = await controls.threadAction(identity.threadId, intent);
     if (method === "settle" && accepted) {
       onThreadSettled({ harness: identity.harness, kind: "provider", threadId: identity.threadId }, ownerProjectId);
     }
   }, [controls, onThreadSettled]);
 
-  const runDragMutation = useCallback((request: Parameters<NonNullable<typeof controls>["updateThreadStateWithAcceptance"]>[0], failureLabel: string, folderId?: string) => {
+  const runDragMutation = useCallback((operation: () => Promise<void | boolean>, failureLabel: string, folderId?: string) => {
     if (!controls) return;
-    void controls.updateThreadStateWithAcceptance(request).then((accepted) => {
-      if (!accepted && folderId) setAutoFocusFolderId((current) => current === folderId ? null : current);
+    void Promise.resolve().then(operation).then((accepted) => {
+      if (accepted === false) throw new Error("The owning daemon rejected this action.");
+      setActionError("");
     }).catch((error: unknown) => {
       if (folderId) setAutoFocusFolderId((current) => current === folderId ? null : current);
-      console.error(failureLabel, boundedFolderMutationError(error));
+      const message = boundedFolderMutationError(error);
+      setActionError(message);
+      console.error(failureLabel, message);
     });
   }, [controls]);
 
@@ -333,15 +328,15 @@ function WorkbenchThreadSidebarActionsProvider({
             });
             return;
           }
-          const request = group === "pinned" && !useProjectFolder
-            ? { folderId, method: "workbench/thread-state/pinned-display-order/folder/create" as const, sourceKey: displayKey, title: "New folder" }
-            : { folderId, method: "workbench/thread-state/display-order/folder/create" as const, projectId: ownerProjectId, sourceKey: localDisplayKey, title: "New folder" };
-          void controls.updateThreadStateWithAcceptance(request).then((accepted) => {
-            if (!accepted) setAutoFocusFolderId((current) => current === folderId ? null : current);
-          }).catch((error: unknown) => {
-            setAutoFocusFolderId((current) => current === folderId ? null : current);
-            console.error("Unable to create the thread folder.", boundedFolderMutationError(error));
-          });
+          runDragMutation(() => group === "pinned" && !useProjectFolder
+            ? controls.updatePresentationPinnedLayout(logicalThreads ?? [], {
+              kind: "drop", sourceKey: layoutKey(displayKey), targetKey: layoutKey(displayKey),
+              destinationFolderId: null, folderId,
+            })
+            : controls.updatePresentationProjectLayout(layoutProject(ownerProjectId), logicalThreads ?? [], {
+              kind: "drop", section: group === "snoozed" ? "snoozed" : group === "settled" ? "settled" : "pinned",
+              sourceKey: localDisplayKey, targetKey: localDisplayKey, destinationFolderId: null, folderId,
+            }), "Unable to create the thread folder.", folderId);
         },
       });
     }
@@ -468,13 +463,13 @@ function WorkbenchThreadSidebarActionsProvider({
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}`, placementScope: "thread-list" };
   }, [controls, logicalPinnedOrder, logicalProjectOrders, logicalThreads, mutateEntry, onOpenQualifiedThread, onOpenThread,
     onPresentationDraftDeleted, pinnedThreadLayout.displayOrder, presentation, projectId,
-    projectThreadSidebars.projects, stopThread, threadSummariesById]);
+    projectThreadSidebars.projects, stopThread, threadSummariesById, layoutKey, layoutProject, runDragMutation]);
 
   const value = useMemo<WorkbenchThreadSidebarActionsValue>(() => ({
     autoFocusFolderId,
     displayOrder: currentSidebar?.displayOrder ?? {},
     entries,
-    error: currentSidebar?.error ?? "",
+    error: actionError || currentSidebar?.error || "",
     getThreadContextMenu,
     getThreadContextMenuFor: (entry, folderScope) => {
       const row = qualifiedForEntry(entry);
@@ -533,100 +528,76 @@ function WorkbenchThreadSidebarActionsProvider({
     },
     onAutoFocusFolderComplete: () => setAutoFocusFolderId(null),
     onMove: (sourceKey, section, destinationFolderId, beforeKey, ownerProjectId = projectId || undefined) => {
-      if (!ownerProjectId) return;
-      void controls?.updateThreadStateWithAcceptance({
-        beforeKey,
-        destinationFolderId,
-        method: "workbench/thread-state/display-order/move",
-        projectId: ownerProjectId,
-        section,
-        sourceKey,
-      });
+      if (!ownerProjectId || !controls) return;
+      runDragMutation(() => controls.updatePresentationProjectLayout(layoutProject(ownerProjectId), logicalThreads ?? [], {
+        kind: "move", beforeKey, destinationFolderId, section, sourceKey,
+      }), "Unable to move the thread.");
     },
     onProjectFolderDrop: (payload, targetProjectId, targetKey, section, destinationFolderId) => {
-      if (payload.ownerProjectId !== targetProjectId) return;
-      const folderId = destinationFolderId ? null : crypto.randomUUID();
+      if (payload.ownerProjectId !== targetProjectId || !controls) return;
+      const folderId = destinationFolderId ? undefined : crypto.randomUUID();
       if (folderId) setAutoFocusFolderId(folderId);
-      runDragMutation({
-        destinationFolderId,
-        folderId,
-        method: "workbench/thread-state/display-order/folder/drop",
-        projectId: targetProjectId,
-        section,
-        sourceKey: payload.projectSourceKey,
-        targetKey,
-      }, "Unable to group the dragged thread.", folderId ?? undefined);
+      runDragMutation(() => controls.updatePresentationProjectLayout(layoutProject(targetProjectId), logicalThreads ?? [], {
+        kind: "drop", destinationFolderId, folderId, section, sourceKey: payload.projectSourceKey, targetKey,
+      }), "Unable to group the dragged thread.", folderId);
     },
     onPinnedFolderDrop: (payload, targetProjectId, targetKey, destinationFolderId) => {
-      const folderId = destinationFolderId ? null : crypto.randomUUID();
+      if (!controls) return;
+      const folderId = destinationFolderId ? undefined : crypto.randomUUID();
       if (folderId) setAutoFocusFolderId(folderId);
-      runDragMutation({
-        destinationFolderId,
-        folderId,
-        method: "workbench/thread-state/pinned-display-order/folder/drop",
-        sourceKey: getProjectQualifiedThreadDisplayKey(payload.ownerProjectId, payload.projectSourceKey),
-        targetKey: getProjectQualifiedThreadDisplayKey(targetProjectId, targetKey),
-      }, "Unable to group the dragged pinned thread.", folderId ?? undefined);
+      runDragMutation(() => controls.updatePresentationPinnedLayout(logicalThreads ?? [], {
+        kind: "drop", destinationFolderId, folderId,
+        sourceKey: getProjectQualifiedThreadDisplayKey(layoutProject(payload.ownerProjectId), payload.projectSourceKey),
+        targetKey: getProjectQualifiedThreadDisplayKey(layoutProject(targetProjectId), targetKey),
+      }), "Unable to group the dragged pinned thread.", folderId);
     },
     onSetPriority: (payload, priority) => {
-      runDragMutation({
-        method: "workbench/thread-state/priority/set",
-        priority,
-        projectId: ProjectIdSchema.parse(payload.ownerProjectId),
-        sourceKey: payload.projectSourceKey,
+      if (!controls || payload.target.kind !== "thread") return;
+      const target = payload.target.target;
+      runDragMutation(async () => {
+        if (target.kind === "draft") return controls.setPresentationDraftPriority(target.draftId, {
+          pinned: priority === "pinned", snoozed: priority === "snoozed",
+        });
+        if (target.kind !== "provider" && target.kind !== "subagent") throw new Error("This item cannot change sidebar priority.");
+        return controls.threadAction(target.threadId, { kind: "priority", priority });
       }, "Unable to change the dragged thread priority.");
     },
     onSnoozeUntil: (payload, targetProjectId, targetIdentity) => {
       const source = payload.target.kind === "thread" ? payload.target.target : null;
-      if (source?.kind !== "provider" || !source.harness) return;
-      runDragMutation({
-        identity: { harness: source.harness, threadId: source.threadId },
-        method: "workbench/thread-state/snooze/until",
-        projectId: ProjectIdSchema.parse(payload.ownerProjectId),
-        target: { identity: targetIdentity, projectId: ProjectIdSchema.parse(targetProjectId) },
-      }, "Unable to change the dragged thread's wait target.");
+      if (source?.kind !== "provider" || !controls) return;
+      runDragMutation(() => controls.threadAction(source.threadId, {
+        kind: "snoozeUntil", targetThreadId: targetIdentity.threadId,
+      }), "Unable to change the dragged thread's wait target.");
     },
     onHomeMove: (sourceKey, section, destinationFolderKey, beforeKey) => {
-      void controls?.updateThreadStateWithAcceptance({
-        beforeKey,
-        destinationFolderKey,
-        method: "workbench/thread-state/home-display-order/move",
-        section,
-        sourceKey,
-      });
+      if (!controls) return;
+      runDragMutation(() => controls.updatePresentationHomeLayout({
+        beforeKey: beforeKey ? layoutKey(beforeKey) : null,
+        destinationFolderKey: destinationFolderKey ? layoutKey(destinationFolderKey) : null,
+        section, sourceKey: layoutKey(sourceKey),
+      }), "Unable to move the home item.");
     },
     onPinnedMove: (sourceKey, destinationFolderId, beforeKey) => {
-      void controls?.updateThreadStateWithAcceptance({
-        beforeKey,
-        destinationFolderId,
-        method: "workbench/thread-state/pinned-display-order/move",
-        sourceKey,
-      });
+      if (!controls) return;
+      runDragMutation(() => controls.updatePresentationPinnedLayout(logicalThreads ?? [], {
+        kind: "move", beforeKey: beforeKey ? layoutKey(beforeKey) : null,
+        destinationFolderId, sourceKey: layoutKey(sourceKey),
+      }), "Unable to move the pinned item.");
     },
     onRenamePinnedFolder: async (folderId, title) => {
-      const accepted = await controls?.updateThreadStateWithAcceptance({
-        folderId,
-        method: "workbench/thread-state/pinned-display-order/folder/title/set",
-        title,
-      });
-      if (!accepted) throw new Error("Unable to update the pinned thread folder name.");
+      if (!controls) throw new Error("The app connection is unavailable.");
+      await controls.updatePresentationPinnedLayout(logicalThreads ?? [], { kind: "rename", folderId, title });
       return title.trim();
     },
     onRenameFolder: async (folderId, title, ownerProjectId = projectId || undefined) => {
-      if (!ownerProjectId) throw new Error("A project must be selected before renaming a folder.");
-      const accepted = await controls?.updateThreadStateWithAcceptance({
-        folderId,
-        method: "workbench/thread-state/display-order/folder/title/set",
-        projectId: ownerProjectId,
-        title,
-      });
-      if (!accepted) throw new Error("Unable to update the folder name.");
+      if (!ownerProjectId || !controls) throw new Error("A project must be selected before renaming a folder.");
+      await controls.updatePresentationProjectLayout(layoutProject(ownerProjectId), logicalThreads ?? [], { kind: "rename", folderId, title });
       return title.trim();
     },
     pinnedDisplayOrder: pinnedThreadLayout.displayOrder,
     projectThreadSidebars,
     projectThreadSummaries,
-  }), [autoFocusFolderId, controls, currentSidebar, entries, getThreadContextMenu, homeDisplayOrderSupported, homeThreadDisplayOrder.displayOrder, mutateEntry, onPresentationDraftDeleted, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars, projectThreadSummaries, qualifiedForEntry, relativeTimeNowMs, runDragMutation]);
+  }), [actionError, autoFocusFolderId, controls, currentSidebar, entries, getThreadContextMenu, homeDisplayOrderSupported, homeThreadDisplayOrder.displayOrder, mutateEntry, onPresentationDraftDeleted, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars, projectThreadSummaries, qualifiedForEntry, relativeTimeNowMs, runDragMutation, layoutKey, layoutProject, logicalThreads]);
 
   return (
     <WorkbenchComposerDraftPresenceProvider>

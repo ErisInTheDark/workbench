@@ -14,7 +14,7 @@ import {
   removeProjectDiscoveryRow,
 } from "../../workbench/project-discovery-path-editor";
 import InputList from "./InputList";
-import { useWorkbenchDaemonClient } from "./WorkbenchDaemonClientContext";
+import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
 
 const ISSUE_LABELS: Record<Extract<ProjectDiscoverySettingsResult, { accepted: false }>["issues"][number]["reason"], string> = {
   relative: "Enter an absolute folder path.",

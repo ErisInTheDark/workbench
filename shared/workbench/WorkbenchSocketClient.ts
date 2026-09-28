@@ -14,8 +14,8 @@ import {
   WORKBENCH_EVENT_STREAM_ACK_METHOD,
   WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD,
 } from "../workbench/websocket-stream.ts";
-import type { WorkbenchTranscriptNotification } from "../workbench/provider/provider-observation.ts";
-import { workbenchDaemonConnection } from "./workbench-connection.ts";
+import { isWorkbenchPublicNotification, type WorkbenchTranscriptNotification } from "../workbench/provider/provider-observation.ts";
+import { WORKSPACE_UPDATED_METHOD } from "./workspace/workspace-observation";
 import type { WorkbenchRpcResponse } from "./workbench-rpc.ts";
 import WorkbenchRpcSocketClient from "./WorkbenchRpcSocketClient.ts";
 
@@ -25,6 +25,7 @@ type WorkbenchNotification = {
     | "voice/event"
     | "workbench/thread-state/reset"
     | "workbench/thread-state/updated"
+    | typeof WORKSPACE_UPDATED_METHOD
     | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
     | (typeof workbenchTranscriptNotifications)[keyof typeof workbenchTranscriptNotifications]["method"]
     | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
@@ -33,23 +34,6 @@ type WorkbenchNotification = {
 type Timer = ReturnType<typeof setTimeout>;
 
 const EVENT_STREAM_ACK_BATCH_MS = 50;
-const publicMethods = new Set<string>([
-  "thread/started", "thread/status/changed", "thread/name/updated", "thread/tokenUsage/updated",
-  "thread/goal/updated", "thread/goal/cleared", "account/updated", "account/rateLimits/updated",
-  "turn/started", "turn/completed", "item/started", "item/completed",
-  "item/agentMessage/delta", "item/plan/delta", "item/commandExecution/outputDelta",
-  "item/fileChange/outputDelta", "item/fileChange/patchUpdated", "item/reasoning/summaryTextDelta",
-  "item/reasoning/summaryPartAdded", "item/reasoning/textDelta",
-  "questionnaire/requested", "questionnaire/resolved", "browse/result/recorded",
-] satisfies WorkbenchClientNotification["method"][]);
-
-function isWorkbenchPublicNotification(message: unknown): message is WorkbenchClientNotification {
-  return !!message && typeof message === "object"
-    && "method" in message && typeof message.method === "string" && publicMethods.has(message.method)
-    && "params" in message && !!message.params && typeof message.params === "object"
-    && !("id" in message);
-}
-
 export default class WorkbenchSocketClient {
   private readonly cancelEventStreamAck: (timer: Timer) => void;
   private readonly notificationListeners = new Set<(
@@ -68,15 +52,17 @@ export default class WorkbenchSocketClient {
   constructor({
     clearEventStreamAckTimeout: cancelEventStreamAck = (timer) => globalThis.clearTimeout(timer),
     setEventStreamAckTimeout: scheduleEventStreamAck = (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
-    resolveUrl = () => workbenchDaemonConnection.resolve(),
+    resolveUrl = async () => { throw new Error("An explicit daemon endpoint is required."); },
+    createSocket,
   }: {
     clearEventStreamAckTimeout?: (timer: Timer) => void;
     setEventStreamAckTimeout?: (callback: () => void, delayMs: number) => Timer;
-    resolveUrl?: () => Promise<string>;
+    resolveUrl?: (signal: AbortSignal) => Promise<string>;
+    createSocket?: (url: string) => WebSocket;
   } = {}) {
     this.cancelEventStreamAck = cancelEventStreamAck;
     this.scheduleEventStreamAck = scheduleEventStreamAck;
-    this.transport = new WorkbenchRpcSocketClient(resolveUrl, "Workbench");
+    this.transport = new WorkbenchRpcSocketClient(resolveUrl, "Workbench", createSocket);
     this.transport.onMessage(message => this.handleIncomingMessage(message));
     this.transport.onOpen(reconnected => {
       for (const listener of this.connectionOpenListeners) listener();
@@ -91,6 +77,11 @@ export default class WorkbenchSocketClient {
   async connect(url?: string) {
     await this.transport.connect(url);
   }
+
+  get isOpen() { return this.transport.isOpen; }
+  get url() { return this.transport.url; }
+  getSnapshot = () => this.transport.getSnapshot();
+  subscribeConnection = (listener: () => void) => this.transport.subscribe(listener);
 
   async connectSocket(url?: string) {
     await this.transport.connect(url);
@@ -146,16 +137,21 @@ export default class WorkbenchSocketClient {
 
   async sendRequest<TResponse = unknown>(
     message: { id?: number; method: string; params?: unknown } & Record<string, unknown>,
-    options: { socketOnly?: boolean } = {},
+    options: { socketOnly?: boolean; requireOpen?: boolean; signal?: AbortSignal } = {},
   ): Promise<WorkbenchRpcResponse<TResponse>> {
-    return this.transport.sendRequest<TResponse>(message);
+    return this.transport.sendRequest<TResponse>(message, { requireOpen: options.requireOpen, signal: options.signal });
   }
 
   private handleIncomingMessage(parsed: unknown) {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      console.error("Rejected daemon message envelope.");
+      return;
+    }
     const workbenchMessage = parsed as { method?: string };
     if (workbenchMessage.method === "workbench/thread-state/updated"
       || workbenchMessage.method === "voice/event"
       || workbenchMessage.method === "workbench/thread-state/reset"
+      || workbenchMessage.method === WORKSPACE_UPDATED_METHOD
       || workbenchMessage.method === WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
       || Object.values(workbenchTranscriptNotifications).some(notification => notification.method === workbenchMessage.method)
       || workbenchMessage.method === WORKBENCH_STATS_IMPORT_UPDATED_METHOD) {

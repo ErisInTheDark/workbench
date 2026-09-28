@@ -1054,3 +1054,173 @@ test("retains a questionnaire while interrupting its exact OpenCode session", as
     "state:interrupted",
   ]);
 });
+
+for (const succeeds of [true, false]) {
+  test(`continuing after ${succeeds ? "accepted" : "rejected"} interruption uses the correct execution state`, async () => {
+    const deliveries: string[] = [];
+    const owner = operations({
+      session: {
+        interrupt: async () => { if (!succeeds) throw new Error("interrupt rejected"); },
+        prompt: async (input: { delivery: string }) => { deliveries.push(input.delivery); return {}; },
+      },
+      message: { list: async () => ({ data: [], cursor: {} }) },
+    }, {
+      record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "inProgress" }),
+      recordTurnState: async () => undefined,
+      recordSteer: async () => undefined,
+    });
+    await owner.syncNative(nativeThreadId);
+    if (succeeds) await owner.interrupt(threadId, turnId);
+    else await assert.rejects(owner.interrupt(threadId, turnId), /interrupt rejected/u);
+    await owner.submit({
+      threadId, clientMessageId: "after-interrupt", intent: "continue",
+      input: [{ type: "text", text: "next message", text_elements: [] }],
+    });
+    assert.deepEqual(deliveries, [succeeds ? "queue" : "steer"]);
+    await owner.settle();
+  });
+}
+
+test("a late interruption cannot mark a newly admitted execution idle", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const nextTurn = WorkbenchTurnIdSchema.parse("next-turn");
+  const deliveries: string[] = [];
+  const owner = operations({
+    session: {
+      interrupt: async () => { entered.resolve(); await release.promise; },
+      prompt: async (input: { delivery: string }) => { deliveries.push(input.delivery); return {}; },
+    },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, {
+    record: async (_session: object, messages: object[]) => ({
+      threadId, latestTurnId: messages.length ? nextTurn : turnId, latestTurnState: "inProgress",
+    }),
+    recordTurnState: async () => undefined,
+    recordSteer: async () => undefined,
+  });
+  await owner.syncNative(nativeThreadId);
+  const stopping = owner.interrupt(threadId, turnId);
+  await entered.promise;
+  try {
+    await owner.submit({ threadId, clientMessageId: "new-turn", intent: "newTurn",
+      input: [{ type: "text", text: "new turn", text_elements: [] }] });
+  } finally { release.resolve(); }
+  await stopping;
+  const steered = await owner.submit({ threadId, clientMessageId: "current-turn", intent: "continue",
+    input: [{ type: "text", text: "keep working", text_elements: [] }] });
+  assert.deepEqual(steered, { kind: "steered", turnId: nextTurn });
+  assert.deepEqual(deliveries, ["queue", "steer"]);
+  await owner.settle();
+});
+
+test("session interruption settles the active continuation rather than an older requested turn", async () => {
+  const continuationTurn = WorkbenchTurnIdSchema.parse("continuation-turn");
+  const interrupted: string[] = [];
+  const deliveries: string[] = [];
+  const owner = operations({
+    session: {
+      interrupt: async () => undefined,
+      prompt: async (input: { delivery: string }) => { deliveries.push(input.delivery); return {}; },
+    },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, {
+    record: async () => ({
+      threadId, latestTurnId: continuationTurn, latestTurnState: "inProgress",
+    }),
+    recordTurnState: async (input: { turnId: string }) => { interrupted.push(input.turnId); },
+    recordSteer: async () => undefined,
+  });
+  await owner.syncNative(nativeThreadId);
+  await owner.interrupt(threadId, turnId);
+  assert.deepEqual(interrupted, [continuationTurn]);
+  await owner.submit({ threadId, clientMessageId: "after-stop", intent: "continue",
+    input: [{ type: "text", text: "new work", text_elements: [] }] });
+  assert.deepEqual(deliveries, ["queue"]);
+  await owner.settle();
+});
+
+test("a native read begun before interruption loses permission to commit or reactivate execution", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let hold = false;
+  const commits: boolean[] = [];
+  const deliveries: string[] = [];
+  const owner = operations({
+    session: {
+      interrupt: async () => undefined,
+      prompt: async (input: { delivery: string }) => { deliveries.push(input.delivery); return {}; },
+    },
+    message: { list: async () => {
+      if (hold) { hold = false; entered.resolve(); await release.promise; }
+      return { data: [], cursor: {} };
+    } },
+  }, {
+    record: async (_session: object, _messages: object[], _project: object, options?: {
+      canCommit?: () => boolean;
+    }) => {
+      if (options?.canCommit) commits.push(options.canCommit());
+      return { threadId, latestTurnId: turnId, latestTurnState: "inProgress" };
+    },
+    recordTurnState: async () => undefined,
+    recordSteer: async () => undefined,
+  });
+  await owner.syncNative(nativeThreadId);
+  hold = true;
+  const stale = owner.syncNative(nativeThreadId);
+  await entered.promise;
+  try { await owner.interrupt(threadId, turnId); }
+  finally { release.resolve(); }
+  await stale;
+  assert.equal(commits.at(-1), false);
+  await owner.submit({ threadId, clientMessageId: "after-fenced-stop", intent: "continue",
+    input: [{ type: "text", text: "new work", text_elements: [] }] });
+  assert.deepEqual(deliveries, ["queue"]);
+  await owner.settle();
+});
+
+test("a current-generation native read cannot commit the old turn while a newer root awaits delivery", async () => {
+  const nextTurn = WorkbenchTurnIdSchema.parse("queued-new-turn");
+  const commits: boolean[] = [];
+  const owner = operations({
+    session: { prompt: async () => ({}) },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, {
+    record: async (_session: object, messages: object[], _project: object, options?: {
+      canCommit?: (id: typeof turnId) => boolean;
+    }) => {
+      const latestTurnId = messages.length ? nextTurn : turnId;
+      if (options?.canCommit) commits.push(options.canCommit(latestTurnId));
+      return { threadId, latestTurnId, latestTurnState: "inProgress" };
+    },
+    recordSteer: async () => undefined,
+  });
+  await owner.syncNative(nativeThreadId);
+  await owner.submit({ threadId, clientMessageId: "queued-root", intent: "newTurn",
+    input: [{ type: "text", text: "new work", text_elements: [] }] });
+  await owner.syncNative(nativeThreadId);
+  assert.equal(commits.at(-1), false);
+  assert.equal(owner.currentTurn(nativeThreadId)?.turnId, nextTurn);
+  await owner.settle();
+});
+
+test("a message during compaction queues a user turn instead of steering maintenance", async () => {
+  const deliveries: string[] = [];
+  const owner = operations({
+    session: { prompt: async (input: { delivery: string }) => { deliveries.push(input.delivery); return {}; } },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, {
+    record: async (_session: object, messages: object[]) => ({
+      threadId, latestTurnId: turnId, latestTurnState: "inProgress",
+      latestOperation: messages.length ? "prompt" : "compaction",
+    }),
+    recordSteer: async () => undefined,
+  });
+  assert.equal((await owner.syncNative(nativeThreadId)).maintenance, true);
+  for (const id of ["next-task", "steer-task"]) {
+    await owner.submit({ threadId, clientMessageId: id, intent: "continue",
+      input: [{ type: "text", text: id, text_elements: [] }] });
+  }
+  assert.deepEqual(deliveries, ["queue", "steer"]);
+  await owner.settle();
+});

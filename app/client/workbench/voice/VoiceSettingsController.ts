@@ -9,6 +9,7 @@ import { defaultProviderKey, installedProviderKeys } from "workbench-shared/work
 import { createVoiceConfiguration, readVoiceModelSelection, type VoiceModelSelection } from "workbench-shared/workbench/voice/voice-session-contract";
 import type WorkbenchClientStateController from "../state/WorkbenchClientStateController";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
+import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 
 export interface VoiceSettingsSnapshot {
   selection: VoiceModelSelection | null;
@@ -110,6 +111,7 @@ export default class VoiceSettingsController {
       if (this.disposed || revision !== this.catalogueRevision) return;
       this.publish({ models: result.data, catalogue: "ready" });
     } catch (error) {
+      if (error instanceof WorkbenchRpcRequestInterruptedError && (this.disposed || revision !== this.catalogueRevision)) return;
       console.warn("[voice] model catalogue could not load");
       if (this.disposed || revision !== this.catalogueRevision) return;
       this.publish({ catalogue: "failed", catalogueError: this.message(error) });
@@ -168,6 +170,7 @@ export default class VoiceSettingsController {
   }
   private current(revision: number) { return !this.disposed && revision === this.configurationRevision; }
   private failConfiguration(revision: number, error: unknown) {
+    if (error instanceof WorkbenchRpcRequestInterruptedError && !this.current(revision)) return;
     console.warn("[voice] configuration operation failed");
     if (this.current(revision)) this.publish({ status: "failed", error: this.message(error) });
   }

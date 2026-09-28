@@ -1,23 +1,21 @@
 /*
  * Exports:
- * - WorkbenchThreadStateFeatureContext: stable database, sidebar, lifecycle, Git retention, and shared project-observation ports.
+ * - WorkbenchThreadStateFeatureContext: database, provider lifecycle, project identity and Git retention ports.
  * - WorkbenchProviderLifecycleObservation: provider event plus its persisted lifecycle result.
  * - normalizeProviderSidebarEntry: normalize provider sidebar rows.
  * - normalizeSubagentProviderLifecycle: resolve subagent lifecycle defaults.
- * - default WorkbenchThreadStateFeature: own reconciliation, project observation, SQLite state, workbench-owned titles, thread-owned status commands, and provider notifications.
+ * - default WorkbenchThreadStateFeature: own reconciliation, SQLite state, workbench-owned titles, thread-owned status commands, and provider notifications.
  */
 import { normalizeThreadTitle } from "./lib/thread-bootstrap";
 import type { ThreadPayload, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship, WorkbenchThreadCreationProfile } from "workbench-shared/types";
 import type { GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "./lib/workbench/git/WorkbenchGitCheckpointController";
-import type { WorkbenchProjectStateRequest, WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
-import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, WorkbenchGitArcLifecycleStateSchema, type WorkbenchDurableQuestionnaire, type WorkbenchThreadLifecycle, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, WorkbenchGitArcLifecycleStateSchema, type WorkbenchDurableQuestionnaire, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import { currentThreadTitleName } from "workbench-shared/workbench/thread/thread-title-history";
 import type { HarnessKind, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
-import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchObservedThreadEntry, type WorkbenchThreadGitArcSnapshot, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
 import WorkbenchThreadStateStore, {
   type WorkbenchThreadStateStoreDatabase,
@@ -81,13 +79,6 @@ export interface WorkbenchThreadStateFeatureContext {
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   listSubagents(projectId: ProjectId): Promise<SubagentRelationshipList>;
   log?: (message: string) => void;
-  projectState: {
-    getCurrentUpdate(projectId: string): WorkbenchProjectStateUpdate | null;
-    handleRequest(projectId: string, request: WorkbenchProjectStateRequest): Promise<unknown>;
-    observe(projectId: string, publish: (update: WorkbenchProjectStateUpdate) => void): () => void;
-  };
-  reloadDirt?: Pick<WorkbenchReloadDirtController, "getSnapshot" | "subscribe">;
-  publish(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
   resolveProjectById(projectId: string): Promise<ProjectRecord>;
   resolveProjectFromCwd(cwd: string, options?: { endpointName?: string }): Promise<ProjectResolution>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
@@ -178,10 +169,6 @@ export default class WorkbenchThreadStateFeature {
       resolveProjectId: projectId => this.canonicalProjectId(projectId),
       readComposerProfiles: context.readComposerProfiles,
       recordComposerProfileUsage: context.recordComposerProfileUsage,
-      ...(context.reloadDirt ? {
-        getReloadDirt: () => context.reloadDirt!.getSnapshot(),
-        subscribeReloadDirt: (listener: () => void) => context.reloadDirt!.subscribe(listener),
-      } : {}),
       log: context.log,
       publishAgentContext: async (harness, threadId, text) => {
         const key = installedProviderKeys.find(key => key === harness);
@@ -189,8 +176,6 @@ export default class WorkbenchThreadStateFeature {
       },
       interruptQuestionnaire: (projectId, harness, threadId, questionnaire) => this.interruptQuestionnaire(projectId, harness, threadId, questionnaire),
       getProjectCatalog: context.getProjectCatalog,
-      projectState: context.projectState,
-      publish: context.publish,
       ...(context.gitArcs.pruneThreadHistories ? {
         pruneExpiredGitState: async (projectId, identities) => {
           const project = await context.resolveProjectById(projectId);

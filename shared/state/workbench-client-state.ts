@@ -27,6 +27,7 @@
  * - WorkbenchProjectRemapSchema: validate project-address adoption.
  * - WorkbenchProjectRemap: daemon-scoped address adoption.
  * - WorkbenchDaemonRegistrationRequestSchema/WorkbenchDaemonRegistrationSchema: durable peer-to-browser registration mapping.
+ * - WorkbenchClientStateProjectAliasesSchema: app-owned source-qualified canonical project addresses.
  */
 import { appStateClientTables } from "./workbench-app-state-schema.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
@@ -45,6 +46,10 @@ export const WorkbenchDaemonRegistrationSchema = z.object({
   kind: z.enum(["local", "remote"]),
 }).strict();
 export type WorkbenchDaemonRegistration = z.infer<typeof WorkbenchDaemonRegistrationSchema>;
+export const WorkbenchClientStateProjectAliasesSchema = z.array(z.object({
+  daemonRegistrationId: z.string().min(1),
+  aliases: z.array(WorkbenchProjectAliasSchema),
+}).strict()).default([]);
 
 export const WorkbenchProjectRemapSchema = z.object({
   daemonRegistrationId: z.string().min(1).max(256),
@@ -174,6 +179,7 @@ interface WorkbenchClientStateVersion {
   attachmentsAsUrls?: boolean;
   daemonRegistrationId: string;
   registrations?: z.infer<typeof WorkbenchDaemonRegistrationSchema>[];
+  projectAliases?: z.infer<typeof WorkbenchClientStateProjectAliasesSchema>;
   oldestAvailableRevision: number;
   revision: number;
   schemaVersion?: number;

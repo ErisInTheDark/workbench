@@ -1,9 +1,7 @@
 /* Exports: default ThreadUserImage resolves stored transcript assets for thumbnail and lightbox display. */
 "use client";
 
-import { useSyncExternalStore } from "react";
-import { getWorkbenchTranscriptAssetUrl, workbenchDaemonConnection } from "workbench-shared/workbench/workbench-connection";
-import { useWorkbenchDaemonAssetOrigin } from "../WorkbenchDaemonClientContext";
+import { getWorkbenchTranscriptAssetUrl, useWorkbenchDaemonAssetOrigin } from "../WorkbenchWorkspaceContext";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 
 export default function ThreadUserImage({
@@ -15,7 +13,6 @@ export default function ThreadUserImage({
   className?: string;
   src: string;
 }) {
-  useSyncExternalStore(workbenchDaemonConnection.subscribe, workbenchDaemonConnection.getSnapshot, workbenchDaemonConnection.getSnapshot);
   const resolvedSrc = getWorkbenchTranscriptAssetUrl(src, useWorkbenchDaemonAssetOrigin());
   if (!resolvedSrc) return <span className={className}>Image unavailable.</span>;
   return (

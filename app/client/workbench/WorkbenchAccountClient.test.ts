@@ -12,6 +12,24 @@ import type {
   WorkbenchRateLimitSnapshot,
 } from "workbench-shared/workbench/provider/provider-account";
 import WorkbenchAccountClient from "./WorkbenchAccountClient.ts";
+import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
+
+test("retired account reads ignore owned interruption but still report unexpected failure", async () => {
+  for (const interruption of [true, false]) {
+    const pending = Promise.withResolvers<WorkbenchAccountLimits>();
+    const errors: string[] = [];
+    const client = new WorkbenchAccountClient({
+      listModels: async () => [], readRateLimits: () => pending.promise,
+      reportError: message => { errors.push(message); },
+    });
+    const reading = client.refresh("codex");
+    client.dispose();
+    pending.reject(interruption ? new WorkbenchRpcRequestInterruptedError("disposed", true)
+      : new Error("unexpected storage failure"));
+    await reading;
+    assert.equal(errors.length, interruption ? 0 : 1);
+  }
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -74,6 +92,27 @@ test("model reads reuse the owned cache until force refresh", async () => {
   assert.equal(readCount, 1);
   assert.equal((await client.listModels("codex", { forceRefresh: true }))[0]?.id, "second");
   assert.equal(client.getSnapshot().modelsByHarness.get("codex")?.[0]?.id, "second");
+});
+
+test("model demand coalesces and a retired source response cannot replace the new cache", async () => {
+  const old = deferred<WorkbenchModelOption[]>();
+  let reads = 0;
+  const client = new WorkbenchAccountClient({
+    listModels: async () => ++reads === 1 ? old.promise : [model("new source")],
+    readRateLimits: async () => rateLimits("unused"),
+  });
+  try {
+    const first = client.listModels("codex");
+    const shared = client.listModels("codex");
+    assert.equal(reads, 1);
+    client.reset();
+    const current = await client.listModels("codex");
+    old.resolve([model("old source")]);
+    assert.deepEqual(await first, current);
+    assert.deepEqual(await shared, current);
+    assert.deepEqual(client.getModels("codex"), current);
+    assert.equal(reads, 2);
+  } finally { client.dispose(); }
 });
 
 test("automatic rate-limit reads coalesce and throttle while explicit reads remain fresh", async () => {

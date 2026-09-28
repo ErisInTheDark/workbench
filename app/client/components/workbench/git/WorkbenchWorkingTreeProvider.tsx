@@ -7,7 +7,7 @@
 "use client";
 import { createContext, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import WorkbenchWorkingTreeState from "../../../workbench/git/WorkbenchWorkingTreeState";
-import WorkbenchDaemonClientContext from "../WorkbenchDaemonClientContext";
+import { WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "../WorkbenchWorkspaceContext";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 
 const Context = createContext<WorkbenchWorkingTreeState | null>(null);

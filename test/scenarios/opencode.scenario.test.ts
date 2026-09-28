@@ -8,7 +8,7 @@ import path from "node:path";
 import test from "node:test";
 import Database from "better-sqlite3";
 import type {
-  WorkbenchComposerProfile, WorkbenchPendingUserInputRequest, WorkbenchProjectsPayload,
+  WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection, WorkbenchPendingUserInputRequest, WorkbenchProjectsPayload,
 } from "../../shared/types";
 import type { TranscriptTextUpdate } from "../../shared/workbench/transcript/thread-transcript-stream";
 import { workbenchTranscriptNotifications } from "../../shared/workbench/database/transcript/workbench-transcript-contract";
@@ -32,48 +32,6 @@ function passphrase() {
     "peach", "pencil", "rabbit", "river", "silver", "star", "tiger", "window",
   ];
   return Array.from({ length: 4 }, () => words.splice(randomInt(words.length), 1)[0]).join(" ");
-}
-
-type OpenCodeSession = Awaited<
-  ReturnType<WorkbenchOpenCodeClient["session"]["list"]>
->["data"][number];
-
-function isAbandonedTestSession(session: OpenCodeSession) {
-  const workbench = session.metadata?.workbench;
-  const testRunMarker = `${path.sep}.workbench${path.sep}test-runs${path.sep}wb-scenario-`;
-  return session.title?.startsWith("opencode live ") === true
-    && session.location.directory.includes(testRunMarker)
-    && workbench !== null
-    && typeof workbench === "object"
-    && !Array.isArray(workbench)
-    && workbench.managed === true
-    && workbench.provider === "opencode";
-}
-
-async function removeAbandonedTestSessions(environment: NodeJS.ProcessEnv, dataRoot: string) {
-  const service = new OpenCodeServiceController({
-    environment: { ...environment, WORKBENCH_DATA_ROOT: dataRoot },
-  });
-  try {
-    const client = await service.acquire();
-    let cursor: string | undefined;
-    do {
-      const page = await client.session.list({
-        cursor,
-        limit: 100,
-        order: "desc",
-        search: "opencode live ",
-      });
-      for (const session of page.data) {
-        if (isAbandonedTestSession(session)) {
-          await client.session.remove({ sessionID: session.id });
-        }
-      }
-      cursor = page.cursor.next;
-    } while (cursor);
-  } finally {
-    await service.dispose();
-  }
 }
 
 test("OpenCode creates, streams, persists, reopens, and safely removes one real session", {
@@ -112,7 +70,6 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
       database: database.trim(),
     },
   });
-  await removeAbandonedTestSessions(openCodeEnvironment, runtime.dataRootPath);
   let threadId: string | null = null;
   let nativeThreadId: string | null = null;
   let nativeSessionDeleted = false;
@@ -120,10 +77,11 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
   try {
     await runtime.start([profile], prefixProof);
     console.log("[opencode live] isolated runtime started");
-    const catalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
-    const project = catalog.data.find(entry => path.resolve(entry.rootPath) === runtime.project);
+    await runtime.request("project/discovery-settings/update", { paths: [path.dirname(runtime.project)] });
+    const catalog = await runtime.waitForProjects([runtime.project]);
+    const project = catalog.find(entry => path.resolve(entry.rootPath) === runtime.project);
     assert.ok(project, "Isolated project must be discoverable");
-    const selection = {
+    const selection: WorkbenchComposerProfileTargetSelection = {
       kind: "profile" as const,
       profileId: profile.id,
       settings: {
@@ -135,17 +93,17 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
         serviceTier: null,
       },
     };
-    await runtime.request("workbench/thread-state/open", { projectId: project.id, version: 4 });
-    await runtime.request("profiles/target/set", {
-      slot: { kind: "new-thread", projectId: project.id },
-      selection,
+    await runtime.projectThreads(project.id);
+    const journey = createProviderBoundaryJourney({
+      search: "the wb_rg tool",
+      shell: "the wb_shell tool",
+      taskGet: "the wb_task_get tool",
+      taskComplete: "the wb_task_completed tool",
+      questionnaire: "the wb_request_user_input tool",
     });
-    const thread = await runtime.daemon.threads.create({
-      projectId: project.id,
-      context: { workflowIds: [] },
-      profile: { kind: "target", slot: { kind: "new-thread", projectId: project.id } },
-    });
-    threadId = thread.id;
+    const sleepProof = passphrase();
+    threadId = await runtime.launchDraft(project.id, selection, journey.active(prefixProof, sleepProof));
+    const { thread } = await runtime.daemon.threads.page({ threadId, cursor: null });
     console.log("[opencode live] WB thread and native session created");
     assert.equal(thread.harness, "opencode");
     assert.match(threadId, /^[0-9a-f-]{36}$/iu);
@@ -157,8 +115,9 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
     });
     try {
       const binding = database.prepare(
-        "SELECT native_thread_id FROM workbench_pending_import_threads WHERE thread_id = ? AND harness_id = 'opencode'",
-      ).get(threadId) as { native_thread_id: string } | undefined;
+        `SELECT native_thread_id FROM thread_turns WHERE thread_id = ? AND harness_id = 'opencode'
+         UNION SELECT native_thread_id FROM workbench_pending_import_threads WHERE thread_id = ? AND harness_id = 'opencode'`,
+      ).get(threadId, threadId) as { native_thread_id: string } | undefined;
       assert.ok(binding, "The WB thread must own its OpenCode session immediately");
       nativeThreadId = binding.native_thread_id;
       assert.notEqual(nativeThreadId, threadId);
@@ -180,13 +139,6 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
     console.log("[opencode live] managed CLI identity verified");
 
     await fs.writeFile(path.join(runtime.project, PROVIDER_SEARCH_PROOF_FILE), PROVIDER_SEARCH_PROOF);
-    const journey = createProviderBoundaryJourney({
-      search: "the wb_rg tool",
-      shell: "the wb_shell tool",
-      taskGet: "the wb_task_get tool",
-      taskComplete: "the wb_task_completed tool",
-      questionnaire: "the wb_request_user_input tool",
-    });
     const subscriptionId = `opencode-${randomUUID()}`;
     const liveText = new Map<string, TranscriptTextUpdate>();
     const subscribe = () => runtime.transcripts.subscribe(
@@ -213,7 +165,7 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
           ["questionnaire/requested", "questionnaire/resolved", "turn/completed", "item/completed"]
             .includes(event.method ?? "")
           || event.method === workbenchTranscriptNotifications.streamed.method
-          || event.method === "workbench/thread-state/updated"));
+          || event.method === "workspace/updated"));
       }
     };
     const durable = async () => {
@@ -243,10 +195,8 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
       return value;
     };
     const readRetainedQuestions = async () => {
-      const state = await runtime.request<import("../../shared/workbench/thread/thread-state").WorkbenchThreadStateOpenResult>(
-        "workbench/thread-state/open", { projectId: project.id, version: 4 },
-      );
-      return state.sidebar.entries.flatMap(entry =>
+      const state = await runtime.projectThreads(project.id);
+      return state.rows.flatMap(({ entry }) =>
         entry.entryKind !== "draft" && entry.pendingQuestionnaire ? [{
           ...entry.pendingQuestionnaire,
           ...entry.identity,
@@ -275,9 +225,10 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
         } : {}),
       });
 
-    const sleepProof = passphrase();
     const steerProof = passphrase();
-    const activeTurn = await submit(journey.active(prefixProof, sleepProof), "newTurn");
+    const initialTurn = thread.turns.at(-1);
+    assert.ok(initialTurn, "App draft launch must admit the first OpenCode turn");
+    const activeTurn = initialTurn.id;
     await waitForFact(durable, value => JSON.stringify(value).includes(sleepProof));
     const steer = await runtime.daemon.threads.message({
       threadId,
@@ -300,7 +251,7 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
 
     await runtime.stop();
     await runtime.start([profile], prefixProof);
-    await runtime.request("workbench/thread-state/open", { projectId: project.id, version: 4 });
+    await runtime.projectThreads(project.id);
     await subscribe();
     const retainedQuestions = await waitForFact(
       readRetainedQuestions,
@@ -318,11 +269,14 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
     const dismissQuestion = await pending("dismiss_preserved");
     const continuedProjection = await durable();
     assert.ok(JSON.stringify(continuedProjection).includes(heldProof));
+    const continuedTurnId = dismissQuestion.turnId;
+    assert.ok(continuedTurnId, "The retained question must identify its owning turn");
     await runtime.daemon.threads.stop({ threadId, intent: "snooze", requestKey: dismissQuestion.requestKey });
     await runtime.daemon.threads.stop({ threadId, intent: "stop", requestKey: dismissQuestion.requestKey });
-    assert.ok(!(await readRetainedQuestions()).some(
-      question => question.requestKey === dismissQuestion.requestKey,
-    ));
+    await waitTurn(continuedTurnId, "interrupted");
+    await waitForFact(durable, value => value.turns.every(turn => turn.status !== "inProgress"));
+    await waitForFact(readRetainedQuestions, questions =>
+      !questions.some(question => question.requestKey === dismissQuestion.requestKey));
 
     const stopProof = passphrase();
     const stoppedTurn = await submit(journey.stop(stopProof));
@@ -331,9 +285,12 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
     await waitTurn(stoppedTurn, "interrupted");
     const beforeCompact = await durable();
     await runtime.daemon.threads.compact({ threadId });
-    await waitForFact(durable, value =>
-      value.turns.flatMap(turn => turn.items).some(item => item.type === "contextCompaction")
-      && value.turns.every(turn => turn.status !== "inProgress"));
+    await waitForFact(durable, value => {
+      assert.ok(value.turns.slice(0, -1).every(turn => turn.status !== "inProgress"),
+        "Compaction must not reopen an older stopped turn");
+      return value.turns.flatMap(turn => turn.items).some(item => item.type === "contextCompaction")
+        && value.turns.every(turn => turn.status !== "inProgress");
+    });
     assert.deepEqual(
       (await durable()).turns.flatMap(turn => turn.items).filter(item => item.type === "userMessage"),
       beforeCompact.turns.flatMap(turn => turn.items).filter(item => item.type === "userMessage"),
@@ -397,16 +354,8 @@ test("OpenCode creates, streams, persists, reopens, and safely removes one real 
     console.log("[opencode live] exact native deletion and WB history retention verified");
   } finally {
     const removeNativeSession = async () => {
-      if (!threadId || !nativeThreadId || nativeSessionDeleted) return;
-      const cleanupService = new OpenCodeServiceController({
-        environment: { ...openCodeEnvironment, WORKBENCH_DATA_ROOT: runtime.dataRootPath },
-      });
-      try {
-        const cleanupClient = await cleanupService.acquire();
-        await cleanupClient.session.remove({ sessionID: nativeThreadId });
-      } finally {
-        await cleanupService.dispose();
-      }
+      if (!threadId || nativeSessionDeleted) return;
+      await runtime.request("thread/provider/delete", { threadId }, {}, AbortSignal.timeout(45_000));
     };
     try {
       await removeNativeSession();

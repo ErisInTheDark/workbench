@@ -33,7 +33,7 @@ import {
   useWorkbenchClientStateSnapshot,
 } from "./workbench-client-state-context";
 import { ResetIcon } from "./workbench-icons";
-import { useWorkbenchDaemonClient } from "./WorkbenchDaemonClientContext";
+import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
 import WorkbenchIconButton from "./WorkbenchIconButton";
 import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
 import WorkbenchOptionCards, { WorkbenchOptionCard } from "./WorkbenchOptionCards";

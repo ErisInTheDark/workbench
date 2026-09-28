@@ -942,8 +942,7 @@ export interface WorkbenchSendThreadMessageOptions {
   additionalWritableRoots?: string[];
   composerProfileSlot?: WorkbenchComposerProfileSlot;
   instructionInjections?: Record<string, string>;
-  onThreadCreated?: (thread: ThreadPayload) => void;
-  onThreadMaterialized?: (thread: ThreadPayload) => void;
+  onThreadLaunched?: (thread: Pick<ThreadPayload, "id" | "harness">) => void;
   onTurnAdmitted?: (turnId: string) => void;
   selectThread?: boolean;
   startNewTurn?: boolean;
@@ -1124,6 +1123,8 @@ export interface ProjectSnapshot {
 }
 
 export interface ExplorerSnapshot {
+  workspaceProjects?: import("./workbench/workspace/workspace-observation").WorkspaceProjects;
+  workspaceThreads?: import("./workbench/workspace/workspace-observation").WorkspaceThreadRows;
   browseLocation?: ProjectLocationReference | null;
   configuredDiscoveryRootPath: string | null;
   currentProjectId: ProjectId | "";
@@ -1186,6 +1187,7 @@ export interface WorkbenchRouteLoadResult {
   canonicalRoute?: WorkbenchRoute;
   error?: string;
   ok: boolean;
+  pending?: boolean;
 }
 
 export type WorkbenchThreadIntent =
@@ -1253,6 +1255,9 @@ export interface WorkbenchControls {
     rows: readonly WorkbenchLogicalThreadRow[],
     displayOrder: import("./workbench/thread/home-thread-display-order.ts").WorkbenchHomeThreadDisplayOrder,
   ) => Promise<void>;
+  updatePresentationHomeLayout: (
+    intent: import("./workbench/workspace/workspace-commands.ts").WorkspaceHomeLayoutIntent,
+  ) => Promise<void>;
   savePresentationHomeAndProjectLayouts: (
     logicalProjectId: LogicalProjectId,
     rows: readonly WorkbenchLogicalThreadRow[],
@@ -1279,8 +1284,6 @@ export interface WorkbenchControls {
         folderId?: string }
       | { kind: "rename"; folderId: string; title: string },
   ) => Promise<void>;
-  editThreadDraft: (draft: WorkbenchThreadDraft, options?: { folderId?: FolderId }) => void;
-  flushThreadDraft: (projectId: ProjectId, draftId: DraftId) => Promise<void>;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
   setDraftThreadHarnessAt: (location: ProjectLocationReference, harness: WorkbenchHarness) => void;
 }

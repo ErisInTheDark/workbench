@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 
+import { projectLogicalThreadDisplayOrder } from "workbench-shared/workbench/project/workbench-project-projection";
 import type {
     ExplorerSnapshot,
     OpenFileInEditorRequest, RevealProjectEntryRequest, ThreadPayload, ThreadSummary, TreeNode,
@@ -38,6 +39,7 @@ import {
     createGitRoute,
     createHomeHref,
     createHomeRoute,
+    createObservedProjectRoute,
     createHomeThreadRoute,
     createLogicalExistingThreadRoute,
     createLogicalProjectRoute,
@@ -84,7 +86,7 @@ import { WorkbenchNetworkClientContext } from "../workbench/app/WorkbenchNetwork
 import { useWorkbenchAppRpc } from "../workbench/app/WorkbenchAppRpcContext";
 import { createComposerProfilePersistence, createComposerProfileTargetPersistence } from "../workbench/state/composer-profile-api";
 import {
-    clearComposerDraft, presentationDraftToInput, projectComposerDrafts, saveComposerDraft, sidebarDraftToInput,
+    clearComposerDraft, presentationDraftToInput, projectComposerDrafts, saveComposerDraft,
     type ComposerDraftTarget,
 } from "../workbench/state/draft-persistence";
 import {
@@ -183,7 +185,7 @@ import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfi
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
-import WorkbenchDaemonClientContext, { WorkbenchDaemonAssetOriginContext } from "./workbench/WorkbenchDaemonClientContext";
+import { WorkbenchOperationsContext as WorkbenchDaemonClientContext, WorkbenchDaemonAssetOriginContext } from "./workbench/WorkbenchWorkspaceContext";
 import WorkbenchIconButton from "./workbench/WorkbenchIconButton";
 import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
@@ -461,9 +463,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const [threadRelativeTimeNowMs, setThreadRelativeTimeNowMs] = useState(() => Date.now());
   const harnessUserInputRequestsByThreadId = threads.pendingQuestionnairesByThreadId;
   const [localSelectionError, setSelectionError] = useState("");
+  useEffect(() => {
+    if (navigationState?.phase === "ready") setSelectionError("");
+  }, [navigationState?.phase, navigationState?.generation]);
   const presentationState = workbenchClient.mounted?.presentationClient?.snapshot();
-  const selectionError = localSelectionError
-    || (navigationState?.phase === "failed" ? navigationState.error ?? "" : "")
+  const selectionError = (navigationState?.phase === "failed" ? navigationState.error ?? "" : "")
+    || localSelectionError
     || (workbenchClient.startup.phase === "failed" ? workbenchClient.startup.error ?? "" : "")
     || (presentationState?.phase === "failed" ? presentationState.error ?? "" : "");
   const retryPresentation = useCallback(() => {
@@ -494,26 +499,20 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const routeOwnerMetadata = routeExistingThreadId
     ? workbenchClient.mounted?.threadOwnerFor(routeExistingThreadId) : null;
   const browseLocation = route.logical ? explorer.browseLocation ?? null : null;
-  const browseDaemon = browseLocation
-    ? workbenchClient.mounted?.daemonSessions?.get(browseLocation.daemonId)?.daemon
-      ?? (workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId === browseLocation.daemonId
-        ? controls?.daemon : null)
-    : route.logical ? null : controls?.daemon ?? null;
-  const browseAssetOrigin = browseLocation
-    ? workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId === browseLocation.daemonId
-      ? undefined
-      : workbenchClient.mounted?.daemonSessions?.httpOrigin(browseLocation.daemonId) ?? null
-    : undefined;
+  const browseDaemon = useMemo(() => browseLocation
+    ? workbenchClient.mounted?.workspace.daemon({ kind: "folder", location: browseLocation }) ?? null
+    : route.logical ? null : controls?.daemon ?? null,
+  [workbenchClient.mounted, browseLocation?.daemonId, browseLocation?.projectId, Boolean(route.logical), controls]);
   const selectedDaemon = routeExistingThreadId
     ? routeThreadContext?.daemon ?? null
     : routeDraftContext?.daemon ?? (route.view === "thread" && route.logical
       ? routeLaunchLocation ? workbenchClient.mounted?.launchContextFor(routeLaunchLocation)?.daemon ?? null : null
       : browseDaemon);
   const selectedAssetSource = routeExistingThreadId
-    ? routeThreadContext?.assetSource ?? { kind: "attached" as const }
-    : routeDraftContext?.assetSource ?? (browseAssetOrigin === undefined
-      ? { kind: "attached" as const }
-      : { kind: "peer" as const, origin: browseAssetOrigin });
+    ? routeThreadContext?.assetSource ?? { kind: "unavailable" as const }
+    : routeDraftContext?.assetSource ?? (browseLocation
+      ? { kind: "source" as const, daemonId: browseLocation.daemonId }
+      : { kind: "unavailable" as const });
   const profileScopeKey = routeThreadContext?.daemonId ?? routeDraftContext?.daemonId
     ?? routeLaunchLocation?.daemonId
     ?? workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId
@@ -531,49 +530,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     composerProfileControllers.clear();
   }, [composerProfileControllers]);
   useEffect(() => {
-    if (!controls || selectedDaemon !== controls.daemon) return;
+    const presentation = workbenchClient.mounted?.presentationClient;
+    const source = DaemonIdSchema.safeParse(profileScopeKey);
+    if (!controls || !selectedDaemon || !presentation || !source.success) return;
     void composerProfileController.initializeTargetPersistence(createComposerProfileTargetPersistence(
-      controls.daemon, controls.flushThreadDraft,
-      route.logical ? workbenchClient.mounted?.presentationClient ?? null : false,
-      DaemonIdSchema.safeParse(profileScopeKey).data ?? null,
+      selectedDaemon, presentation, source.data,
     ));
-    void composerProfileController.initializePersistence(createComposerProfilePersistence(controls.daemon));
+    void composerProfileController.initializePersistence(createComposerProfilePersistence(selectedDaemon));
     return () => { composerProfileController.disconnectPersistence(); };
-  }, [composerProfileController, controls, selectedDaemon, workbenchClient.mounted?.presentationClient, Boolean(route.logical)]);
-  useEffect(() => {
-    const sessions = workbenchClient.mounted?.daemonSessions;
-    if (!sessions || !controls) return;
-    const active = new Map<DaemonId, typeof controls.daemon>();
-    const reconcile = () => {
-      const ready = new Map(sessions.list().filter(session => session.getSnapshot().phase === "ready")
-        .map(session => [session.getSnapshot().daemonId, session.daemon] as const));
-      for (const [id, daemon] of active) {
-        if (ready.get(id) === daemon) continue;
-        composerProfileControllers.get(id)?.disconnectPersistence();
-        active.delete(id);
-      }
-      for (const [id, daemon] of ready) {
-        if (active.get(id) === daemon) continue;
-        const controller = profileControllerFor(id);
-        active.set(id, daemon);
-        void controller.initializeTargetPersistence(createComposerProfileTargetPersistence(
-          daemon, controls.flushThreadDraft,
-          workbenchClient.mounted?.presentationClient ?? null,
-          id,
-        )).catch(error => console.error("Peer profile targets unavailable",
-          error instanceof Error ? error.message.slice(0, 512) : "Profile target loading failed."));
-        void controller.initializePersistence(createComposerProfilePersistence(daemon))
-          .catch(error => console.error("Peer profiles unavailable",
-            error instanceof Error ? error.message.slice(0, 512) : "Profile loading failed."));
-      }
-    };
-    reconcile();
-    const unsubscribe = sessions.subscribe(reconcile);
-    return () => {
-      unsubscribe();
-      for (const id of active.keys()) composerProfileControllers.get(id)?.disconnectPersistence();
-    };
-  }, [composerProfileControllers, controls, profileControllerFor, workbenchClient.mounted]);
+  }, [composerProfileController, controls, selectedDaemon, workbenchClient.mounted?.presentationClient, profileScopeKey]);
   const [harness, setHarness] = useState<WorkbenchHarness>(() => (
     clientStateController.records("globalPreference").find((record) => (
       record.preference.key === "harness"
@@ -641,67 +606,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const searchActivationRef = useRef<(result: WorkbenchSearchHit) => void>(() => undefined);
   const searchController = useMemo(() => new WorkbenchSearchController({
     activate: (result) => searchActivationRef.current(result),
-    request: async request => {
-      if (!controls) return { results: [] };
-      const presentation = workbenchClient.mounted?.presentationClient?.snapshot().data;
-      const attachedId = workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId;
-      if (!presentation || !attachedId) return await controls.daemon.search.query(request);
-      const selectedLogical = presentation.projects.find(project => project.id === request.projectId);
-      const targets = [
-        { daemonId: attachedId, daemon: controls.daemon },
-        ...(workbenchClient.mounted?.daemonSessions?.list() ?? [])
-          .filter(session => session.getSnapshot().phase === "ready")
-          .map(session => ({ daemonId: session.getSnapshot().daemonId, daemon: session.daemon })),
-      ];
-      const searches = targets.flatMap(target => {
-        const locations = selectedLogical
-          ? presentation.locations.filter(item => item.logicalProjectId === selectedLogical.id
-            && item.target.daemonId === target.daemonId)
-          : request.projectId ? target.daemonId === attachedId ? presentation.locations.filter(item =>
-            item.target.daemonId === attachedId && item.target.projectId === request.projectId) : []
-          : [null];
-        return locations.map(location => ({
-          ...target, projectId: location?.target.projectId ?? null,
-        }));
-      });
-      const settled = await Promise.allSettled(searches.map(async target => ({
-        target,
-        response: await target.daemon.search.query({ query: request.query, projectId: target.projectId }),
-      })));
-      const locationsBySource = new Map(presentation.locations.map(location => [
-        `${location.target.daemonId}:${location.target.projectId}`, location,
-      ]));
-      const seenProjects = new Set<string>();
-      const results: WorkbenchSearchHit[] = [];
-      for (const result of settled) {
-        if (result.status !== "fulfilled") continue;
-        const { target, response } = result.value;
-        for (const hit of response.results) {
-          if (hit.kind === "action") {
-            if (target.daemonId === attachedId && !results.some(item => item.kind === "action" && item.actionId === hit.actionId)) results.push(hit);
-            continue;
-          }
-          if (hit.kind === "projectSetting" && target.daemonId !== attachedId) continue;
-          const location = locationsBySource.get(`${target.daemonId}:${hit.projectId}`);
-          if (!location) continue;
-          if (hit.kind === "project") {
-            if (seenProjects.has(location.logicalProjectId)) continue;
-            seenProjects.add(location.logicalProjectId);
-          }
-          results.push({
-            ...hit, id: `${target.daemonId}:${hit.id}`,
-            source: location.target, logicalProjectId: location.logicalProjectId,
-            ...(target.daemonId !== attachedId ? {
-              detail: `${presentation.daemons.find(item => item.id === target.daemonId)?.hostname ?? target.daemonId} · ${location.rootPath} · ${hit.detail}`,
-            } : {}),
-          });
-        }
+    observe: (request, publish) => {
+      if (!workbenchClient.mounted) {
+        publish({ phase: "pending", failure: null, value: null });
+        return () => {};
       }
-      const failures = settled.filter(result => result.status === "rejected").length;
-      if (failures && !results.length) throw new Error(`Search failed on ${failures} daemon${failures === 1 ? "" : "s"}.`);
-      return { results: results.slice(0, 50), ...(failures ? {
-        warning: `Results may be incomplete: ${failures} daemon search${failures === 1 ? "" : "es"} failed.`,
-      } : {}) };
+      const query = workbenchClient.mounted.workspace.observe({ kind: "search", request });
+      const stop = query.subscribe(() => publish(query.getSnapshot()));
+      publish(query.getSnapshot());
+      return () => { stop(); query.release(); };
     },
   }), [controls, workbenchClient.mounted]);
   const workbenchDragController = useMemo(() => new WorkbenchDragController(), []);
@@ -891,13 +804,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const selectedLogicalProject = explorer.logicalProjects?.find(project =>
     project.id === route.logical?.projectId) ?? null;
   const viewedProjectId = route.logical ? route.logical.projectId ?? "" : activeProjectId;
-  const browseProjectId = route.logical
-    ? route.logical.projectId && browseLocation
-      && selectedLogicalProject?.locations.some(location =>
-        location.target.daemonId === browseLocation.daemonId
-        && location.target.projectId === browseLocation.projectId)
-      ? browseLocation.projectId : ""
-    : explorer.currentProjectId;
+  const browseProjectId = browseLocation?.projectId ?? explorer.currentProjectId;
   const attachedProjectId = route.logical
     ? browseProjectId && browseLocation?.daemonId === workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId
       ? browseProjectId : ""
@@ -1162,8 +1069,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       const source = { daemonId: targetLocation.daemonId, projectId: ProjectIdSchema.parse(targetProjectId) };
       const owner = explorer.logicalProjects?.find(project => project.locations.some(location =>
         location.target.daemonId === source.daemonId && location.target.projectId === source.projectId));
-      if (!owner) return false;
-      navigateToRoute(createLogicalFileRoute(owner.id, source, path));
+      navigateToRoute(owner ? createLogicalFileRoute(owner.id, source, path)
+        : { ...createObservedProjectRoute(source), view: "file", filePath: path });
     } else if (route.logical?.projectId) {
       navigateToRoute(createLogicalFileRoute(route.logical.projectId, null, path));
     } else navigateToRoute(createFileRoute(targetProjectId, path));
@@ -1233,6 +1140,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         project.id === route.logical?.threadOwnerProjectId
         || project.id === route.logical?.projectId
         || project.locations.some(location => location.target.projectId === targetProjectId));
+      if (!owner && route.logical.location) {
+        navigateToRoute({ ...createObservedProjectRoute(route.logical.location),
+          view: "thread", threadTarget: target, threadId: target.kind === "draft" ? target.draftId : "new" });
+        return true;
+      }
       if (!owner) return false;
       navigateToRoute(createLogicalThreadRoute(route.logical.projectId, owner.id, null, target));
       return true;
@@ -1384,13 +1296,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
     const submittedOptions = isActiveSteer
       ? { ...options, composerProfileSlot: undefined } : options;
-    const createdThreadRef: { current: ThreadPayload | null } = { current: null };
-    let didMaterialize = false;
-
-    const replaceMosaicDraftThread = (materializedThread: ThreadPayload, removeDraftState: boolean) => {
-      if (removeDraftState) {
-        workspaceController.removeDraftThreads(thread.id, "new");
-      }
+    const replaceMosaicDraftThread = (materializedThread: Pick<ThreadPayload, "id" | "harness">) => {
+      workspaceController.removeDraftThreads(thread.id);
 
       const currentRoute = currentRouteRef.current;
       if (currentRoute.view === "mosaic"
@@ -1412,12 +1319,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       return false;
     };
 
-    const replaceCurrentDraftThreadRoute = (materializedThread: ThreadPayload, removeDraftState: boolean) => {
+    const replaceCurrentDraftThreadRoute = (materializedThread: Pick<ThreadPayload, "id" | "harness">) => {
       if (materializedThread.id === thread.id) {
         return false;
       }
 
-      if (replaceMosaicDraftThread(materializedThread, removeDraftState)) {
+      if (replaceMosaicDraftThread(materializedThread)) {
         return true;
       }
 
@@ -1447,8 +1354,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     const materializedOptions: WorkbenchSendThreadMessageOptions | undefined = thread.isDraft
       ? {
         ...submittedOptions,
-        onThreadCreated: (materializedThread) => {
-          createdThreadRef.current = materializedThread;
+        onThreadLaunched: (materializedThread) => {
           const projectId = submittedRoute.threadOwnerProjectId || submittedRoute.projectId || explorer.currentProjectId;
           const submittedThreadKey = `${projectId}:${thread.harness}:${thread.id}`;
           const materializedThreadKey = `${projectId}:${materializedThread.harness}:${materializedThread.id}`;
@@ -1456,43 +1362,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             materializedThreadKey,
             threadViewInstanceKeysByThreadIdRef.current.get(submittedThreadKey) ?? thread.id,
           );
-          options?.onThreadCreated?.(materializedThread);
-          replaceCurrentDraftThreadRoute(materializedThread, false);
-        },
-        onThreadMaterialized: (materializedThread) => {
-          didMaterialize = true;
-          if (!submittedRoute.logical && !materializedThread.isDraft && options?.composerProfileSlot) {
-            void submissionProfiles.loadSelection({ kind: "thread", projectId: options.composerProfileSlot.projectId, harness: materializedThread.harness, threadId: materializedThread.id });
-          }
-          options?.onThreadMaterialized?.(materializedThread);
-          replaceCurrentDraftThreadRoute(materializedThread, true);
+          replaceCurrentDraftThreadRoute(materializedThread);
+          options?.onThreadLaunched?.(materializedThread);
         },
       }
       : submittedOptions;
-    let payload: ThreadPayload | null;
-    try {
-      const resolvedInput = await Promise.all(input.map(async item => item.type === "image"
-        ? { ...item, url: await clientStateController.resolveDraftAttachmentUrl(item.url) }
-        : item));
-      payload = await controls.sendThreadMessage(thread, resolvedInput, materializedOptions);
-    } catch (error) {
-      const currentRoute = currentRouteRef.current;
-      const createdThread = createdThreadRef.current;
-      if (!didMaterialize && createdThread && isWorkbenchRouteOwnerOfThread(currentRoute, createdThread.id)) {
-        navigateToRoute(submittedRoute, { replace: true });
-      }
-      throw error;
-    }
-    if (payload) {
-      if (!submittedRoute.logical && thread.isDraft && !payload.isDraft && options?.composerProfileSlot) {
-        await submissionProfiles.loadSelection({ kind: "thread", projectId: options.composerProfileSlot.projectId, harness: payload.harness, threadId: payload.id });
-      }
-      if (thread.isDraft) {
-        replaceCurrentDraftThreadRoute(payload, true);
-      }
-    }
-
-    return payload;
+    const resolvedInput = thread.isDraft ? input : await Promise.all(input.map(async item => item.type === "image"
+      ? { ...item, url: await clientStateController.resolveDraftAttachmentUrl(item.url) }
+      : item));
+    return await controls.sendThreadMessage(thread, resolvedInput, materializedOptions);
   }, [clientStateController, composerProfileController, controls, navigateToRoute, profileControllerFor, workbenchClient.mounted, workspaceController]);
 
   const activeSidebarDraftId = route.view === "thread" && route.threadTarget?.kind === "draft"
@@ -1511,44 +1389,31 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     : null;
   const activeRouteDraft = selectedPinnedThreadDraft ?? activeSidebarDraft;
 
-  const getSidebarDraftComposerInput = useCallback((draft: WorkbenchThreadDraft | null): WorkbenchComposerInputDraft | null => {
-    if (!draft) return null;
-    const latest = workbenchClient?.mounted?.threadSidebar.getDraft?.(draft.projectId, draft.draftId) ?? draft;
-    return sidebarDraftToInput(latest);
-  }, [workbenchClient]);
-
   const getThreadComposerDraftForTarget = useCallback((target: WorkbenchThreadTarget | null | undefined): WorkbenchComposerInputDraft | null => {
     if (!target || target.kind === "new") return null;
     if (target.kind === "provider" || target.kind === "subagent") return threadComposerDraftsByThreadId[target.threadId] ?? null;
-    if (route.logical && workbenchClient.mounted?.presentationClient) {
+    if (workbenchClient.mounted?.presentationClient) {
       return presentationDraftToInput(workbenchClient.mounted.presentationClient, target.draftId);
     }
-    const entry = selectedThreadSidebar?.entries.find((candidate) => candidate.entryKind === "draft" && candidate.draft.draftId === target.draftId);
-    return entry?.entryKind === "draft" ? getSidebarDraftComposerInput(entry.draft) : null;
-  }, [getSidebarDraftComposerInput, route.logical, selectedThreadSidebar, threadComposerDraftsByThreadId, workbenchClient.mounted]);
+    return null;
+  }, [threadComposerDraftsByThreadId, workbenchClient.mounted]);
 
-  const activeThreadComposerDraft = route.view === "thread" && route.threadTarget?.kind === "draft"
-    ? route.logical && workbenchClient.mounted?.presentationClient
-      ? presentationDraftToInput(workbenchClient.mounted.presentationClient, route.threadTarget.draftId)
-      : getSidebarDraftComposerInput(activeRouteDraft)
-    : getThreadComposerDraftForTarget(route.view === "thread" ? route.threadTarget : null);
+  const activeThreadComposerDraft = getThreadComposerDraftForTarget(route.view === "thread" ? route.threadTarget : null);
 
   const getComposerDraftTarget = useCallback((projectId: string, threadId: string, originTarget?: WorkbenchThreadTarget): ComposerDraftTarget => {
     if (!projectId) throw new Error("The composer draft has no project identity.");
     const ownerProjectId = ProjectIdSchema.parse(projectId);
     if (originTarget?.kind !== "new" && originTarget?.kind !== "draft") {
-      const ownerIdentity = route.logical ? workbenchClient.mounted?.threadDraftIdentityFor(threadId) : null;
-      const daemonRegistrationId = route.logical
-        ? ownerIdentity?.daemonRegistrationId : clientState.daemonRegistrationId;
-      if (!daemonRegistrationId) throw new Error("The thread daemon is not registered in app state.");
-      return { kind: "thread", daemonRegistrationId,
-        projectId: ownerIdentity?.projectId ?? ownerProjectId,
+      const ownerIdentity = workbenchClient.mounted?.threadDraftIdentityFor(threadId);
+      if (!ownerIdentity) throw new Error("The thread daemon is not registered in app state.");
+      return { kind: "thread", daemonRegistrationId: ownerIdentity.daemonRegistrationId,
+        projectId: ownerIdentity.projectId,
         threadId: ThreadReferenceSchema.parse(threadId) };
     }
     const draftId = originTarget.kind === "draft" ? originTarget.draftId : DraftIdSchema.parse(threadId);
     if (!draftId || !controls) throw new Error("The new-thread draft owner is unavailable.");
     const isNew = originTarget.kind === "new";
-    if (route.logical) {
+    {
       const findPaneSource = (node: WorkbenchMosaicNode | null): WorkbenchMosaicPanelTarget["source"] | null => {
         if (!node) return null;
         if (node.type === "split") {
@@ -1563,16 +1428,28 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
           ? node.target.source ?? null : null;
       };
       const paneSource = findPaneSource(route.mosaicNode);
-      const logicalProjectId = paneSource?.logicalProjectId ?? route.logical.threadOwnerProjectId;
       const owner = workbenchClient.mounted?.presentationClient;
       const location = paneSource?.location
         ?? workbenchClient.mounted?.draftLocationFor(draftId)
-        ?? route.logical.location;
-      if (!logicalProjectId || !location || !owner) throw new Error("The selected draft location is unavailable.");
+        ?? route.logical?.location;
+      if (!location || !owner) throw new Error("The selected draft location is unavailable.");
+      const logicalProjectId = paneSource?.logicalProjectId ?? route.logical?.threadOwnerProjectId
+        ?? owner.snapshot().data?.locations.find(item => item.target.daemonId === location.daemonId
+          && item.target.projectId === location.projectId)?.logicalProjectId;
+      if (!logicalProjectId) throw new Error("This folder is waiting for its app project identity. Draft text remains local.");
       const draftThread = workspaceController.getSnapshot().draftThreadsById[draftId] ?? currentThread;
       const draftProfiles = profileControllerFor(location.daemonId);
+      let placement: Extract<ComposerDraftTarget, { kind: "presentation" }>["placement"];
+      if (originTarget.kind === "new" && originTarget.folderId && !owner.draft(draftId)) {
+        const presentation = owner.snapshot().data;
+        const folder = presentation && projectLogicalThreadDisplayOrder(
+          logicalProjectId, explorer.logicalThreads ?? [], presentation,
+        ).folders?.find(item => item.folderId === originTarget.folderId);
+        if (!folder || folder.section === "settled") throw new Error("The draft folder is unavailable. Draft text remains local.");
+        placement = { folderId: folder.folderId, priority: folder.section };
+      }
       return {
-        kind: "presentation", draftId, isNew, logicalProjectId, location, owner,
+        kind: "presentation", draftId, isNew, logicalProjectId, location, owner, placement,
         selection: () => {
           const slot = isNew
             ? { kind: "new-thread" as const, projectId: ownerProjectId }
@@ -1600,71 +1477,27 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         materialize: () => {
           const current = currentRouteRef.current;
           if (current.view !== "thread" || current.threadTarget?.kind !== "new"
-            || !route.logical || !current.logical
-            || current.logical.projectId !== route.logical.projectId
-            || current.logical.threadOwnerProjectId !== logicalProjectId
-            || !isWorkbenchThreadTargetSelected(route.threadTarget!, current.threadTarget)
+            || !current.logical
+            || (current.logical.threadOwnerProjectId
+              ? current.logical.threadOwnerProjectId !== logicalProjectId
+              : current.logical.location?.daemonId !== location.daemonId
+                || current.logical.location.projectId !== location.projectId)
             || workbenchClient.mounted?.threadRuntime.getSnapshot().currentThread?.id !== draftId) return;
-          navigateToRoute(createLogicalThreadRoute(current.logical.projectId,
+          navigateToRoute(createLogicalThreadRoute(current.logical.threadOwnerProjectId
+            ? current.logical.projectId : logicalProjectId,
             logicalProjectId, null, { draftId, kind: "draft" }), { replace: true });
         },
         dematerialize: () => {
           const current = currentRouteRef.current;
           if (current.view !== "thread" || current.threadTarget?.kind !== "draft"
-            || current.threadTarget.draftId !== draftId || !route.logical || !current.logical
-            || current.logical.projectId !== route.logical.projectId
+            || current.threadTarget.draftId !== draftId || !current.logical
             || current.logical.threadOwnerProjectId !== logicalProjectId) return;
           navigateToRoute(createLogicalThreadRoute(current.logical.projectId,
             logicalProjectId, current.logical.location ?? location, { kind: "new" }), { replace: true });
         },
       };
     }
-    return {
-      kind: "sidebar", projectId: ownerProjectId, draftId, isNew,
-      ...(originTarget?.kind === "new" && originTarget.folderId ? { folderId: originTarget.folderId } : {}),
-      owner: {
-        read: (ownerProjectId, id) => {
-          const owner = workbenchClient?.mounted?.threadSidebar;
-          if (owner?.getDraft) return owner.getDraft(ownerProjectId, id);
-          const sidebar = owner?.getProjectSnapshot(ownerProjectId);
-          const entry = sidebar?.entries.find((entry) => entry.entryKind === "draft" && entry.draft.draftId === id);
-          if (entry?.entryKind === "draft") return entry.draft;
-          const pinned = controls.getSelectedThreadDraft();
-          return pinned?.projectId === ownerProjectId && pinned.draftId === id ? pinned : null;
-        },
-        create: (ownerProjectId, id) => {
-          const profileSlot = isNew
-            ? { kind: "new-thread" as const, projectId: ownerProjectId }
-            : { kind: "draft" as const, projectId: ownerProjectId, draftId: id, harness: currentThread?.harness ?? defaultProviderKey };
-          const selection = composerProfileController.getSelection(profileSlot);
-          const settings: WorkbenchComposerSettings = composerProfileController.resolveSettings(profileSlot) ?? {
-            agentPath: null, agentSource: null, harness: currentThread?.harness ?? defaultProviderKey, model: "", reasoningEffort: null, serviceTier: null,
-          };
-          const now = Date.now();
-          return {
-            attachments: [], clientUpdatedAt: now, composerSettings: settings,
-            createdAt: now, draftId: id,
-            profileId: selection.kind === "profile" ? selection.profileId : null, projectId: ownerProjectId,
-            prompt: "", updatedAt: now,
-          };
-        },
-        write: async (draft, folderId) => {
-          controls.editThreadDraft(draft, folderId ? { folderId } : undefined);
-          await controls.flushThreadDraft(draft.projectId, draft.draftId);
-        },
-        remove: async (ownerProjectId, id) => {
-          await controls.deleteThreadDraft(id, ownerProjectId);
-        },
-        materialize: (draft) => {
-          if (currentRouteRef.current !== route) return;
-          composerProfileController.materializeDraftSelection(draft);
-          navigateToRoute(!route.projectId
-            ? createHomeThreadRoute(projectId, { draftId: draft.draftId, kind: "draft" })
-            : createThreadRoute(projectId, { draftId: draft.draftId, kind: "draft" }), { replace: true });
-        },
-      },
-    };
-  }, [clientState.daemonRegistrationId, composerProfileController, controls, currentThread?.harness, navigateToRoute, profileControllerFor, route, threads, workbenchClient, workspaceController]);
+  }, [controls, currentThread, explorer.logicalThreads, navigateToRoute, profileControllerFor, route, workbenchClient, workspaceController]);
 
   const handleThreadComposerDraftChange = useCallback(async (
     projectId: string, threadId: string, update: (draft: WorkbenchComposerInputDraft) => WorkbenchComposerInputDraft,
@@ -1674,7 +1507,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       const draftTarget = getComposerDraftTarget(projectId, threadId, target);
       const profiles = draftTarget.kind === "presentation"
         ? profileControllerFor(draftTarget.location.daemonId) : composerProfileController;
-      if (draftTarget.kind === "sidebar" && draftTarget.isNew) await composerProfileController.waitForSelection({ kind: "new-thread", projectId: draftTarget.projectId });
       if (draftTarget.kind === "presentation" && draftTarget.isNew) {
         await profiles.waitForSelection({ kind: "new-thread", projectId: draftTarget.location.projectId });
       }
@@ -1747,12 +1579,17 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const showGitView = route.view === "git";
   const sidebarCreateProjectId = workbenchClient.mounted?.presentationClient
     ? (selectedLogicalProject ?? firstLogicalSidebarProjectGroup[0])?.locations
-      .find(location => location.project)?.target.projectId ?? ""
+      .find(location => location.project)?.target.projectId ?? browseLocation?.projectId ?? ""
     : activeProjectId || firstSidebarProjectGroup[0]?.id || "";
   const showFullBleedMainView = showMosaicView;
   const createThreadFromSidebar = useCallback((ownerProjectId: string, folderId?: FolderId) => {
     if (showMosaicView || !controls) return;
     const target = folderId ? { folderId, kind: "new" as const } : { kind: "new" as const };
+    if (route.logical && !route.logical.projectId && route.logical.location) {
+      navigateToRoute({ ...createObservedProjectRoute(route.logical.location),
+        view: "thread", threadTarget: target, threadId: "new" });
+      return;
+    }
     if (workbenchClient.mounted?.presentationClient) {
       if (!explorer.logicalProjects?.length) {
         setSelectionError("Project identities are not ready yet.");
@@ -1970,7 +1807,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       setIsProjectRotationPending(false);
     }
   }, [controls, firstLogicalSidebarProjectGroup, firstSidebarProjectGroup, isHomeDraftRoute, navigateToRoute, route, threadProjectId]);
-  const homeRotatorProject = route.logical ? logicalThreadProject : threadProject;
+  const homeRotatorProject = route.logical ? logicalThreadProject
+    : explorer.projects.find(project => project.id === threadProject?.id);
   const projectRotator = isHomeDraftRoute && homeRotatorProject ? (
     <WorkbenchProjectControl
       disabled={isProjectRotationPending || (route.logical
@@ -2742,12 +2580,17 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     logicalLoading={workbenchClient.mounted?.presentationClient?.snapshot().phase === "loading"}
                     onConfigureGitRoots={() => navigateToRoute(createSettingsRoute("", "global"))}
                     onProjectLinkClick={selectProjectFromLink}
+                    onObservedProjectLinkClick={(event, location) => {
+                      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                      event.preventDefault();
+                      navigateToRoute(createObservedProjectRoute(location));
+                    }}
                     projects={explorer.projects}
                     showGitRootsSetup={explorer.configuredDiscoveryRootPath === ""}
                   />
-                  {selectedLogicalProject || !route.logical && viewedProjectId && currentProject ? (
+                  {selectedLogicalProject || browseLocation && currentProject || !route.logical && viewedProjectId && currentProject ? (
                     <WorkbenchCurrentProjectHeading
-                      project={route.logical ? null : currentProject}
+                      project={selectedLogicalProject ? null : currentProject}
                       logicalProject={selectedLogicalProject}
                     />
                   ) : null}
@@ -2756,7 +2599,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     event.preventDefault();
                     navigateToRoute(route.logical?.projectId
                       ? createLogicalGitRoute(route.logical.projectId, browseLocation)
-                      : createGitRoute(activeProjectId));
+                      : browseLocation ? { ...createObservedProjectRoute(browseLocation), view: "git" }
+                        : createGitRoute(activeProjectId));
                   }} />
                   <section className="shrink-0 pb-3">
                     <WorkbenchSidebarSectionDisclosure
@@ -2765,7 +2609,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       preferenceKey="threadsOpen"
                       title="Threads"
                     >
-                      {viewedProjectId || selectedLogicalProject ? (
+                      {viewedProjectId || selectedLogicalProject || browseLocation ? (
                         <WorkbenchThreadSidebar
                           activeDragPayload={activeWorkbenchDrag?.payload ?? null}
                           logicalProject={selectedLogicalProject}
@@ -3055,7 +2899,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       thread={threadForThreadView}
                       threadOwnerContent={routeOwnerMetadata ? (
                         <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 text-fg/muted" title={`${routeOwnerMetadata.hostname}: ${routeOwnerMetadata.rootPath}`}>
-                          {routeThreadContext?.project
+                          {routeThreadContext?.project && "kind" in routeThreadContext.project
                             ? <WorkbenchProjectIcon project={routeThreadContext.project} variant="thread" />
                             : <ProjectIcon className="shrink-0" size={16} />}
                           <span className="min-w-0 truncate">
@@ -3185,12 +3029,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">Route</p>
                       <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open route</p>
                       <p className="m-0 break-all text-[0.84rem] leading-6 text-fg/muted">{selectionError}</p>
-                      {workbenchClient.startup.phase === "failed" ? (
-                        <button className="w-fit rounded-md px-2 py-1 text-[0.84rem] text-text hover:bg-fg/10"
-                          type="button" onClick={() => { void workbenchClient.mounted?.startup.retry(); }}>
-                          Retry connection
-                        </button>
-                      ) : presentationState?.phase === "failed" ? (
+                      {presentationState?.phase === "failed" ? (
                         <button className="w-fit rounded-md px-2 py-1 text-[0.84rem] text-text hover:bg-fg/10"
                           type="button" onClick={retryPresentation}>
                           Retry project identities
@@ -3205,7 +3044,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         type="button"
                         className={`${workbenchOptionRowClassName} ${workbenchOptionHoverClassName} w-fit border-transparent px-4 py-2 text-[0.84rem] text-text md:py-2`}
                         disabled={!controls || !sidebarCreateProjectId
-                          || Boolean(workbenchClient.mounted?.presentationClient && !firstLogicalSidebarProjectGroup.length)}
+                          || Boolean(workbenchClient.mounted?.presentationClient && !firstLogicalSidebarProjectGroup.length && !browseLocation)}
                         onClick={() => {
                           if (!controls || !sidebarCreateProjectId) return;
                           createThreadFromSidebar(sidebarCreateProjectId);

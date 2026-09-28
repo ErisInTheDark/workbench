@@ -92,6 +92,7 @@ export default class WorkbenchProjectNavigation {
     if (resolved.view === "invalid" || resolved.view === "mosaic") return undefined;
     if (resolved.logical) {
       const logical = resolved.logical;
+      if (!logical.projectId && logical.location) return createWorkbenchHref(resolved);
       const selected = this.logicalProjects.find(project => project.id === logical.projectId);
       let owner = this.logicalProjects.find(project => project.id === logical.threadOwnerProjectId);
       if (resolved.view === "thread" && !owner

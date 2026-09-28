@@ -65,7 +65,7 @@ function fixture(providerWarning?: string) {
         stopOrder.push("mutation");
         return titleFailure
           ? { error: { code: "invalidProjectObservation", message: "The connection does not observe this project." } }
-          : { result: { ok: true } };
+          : { result: { accepted: true, revision: 1 } };
       },
     },
     warn: message => warnings.push(message),

@@ -11,21 +11,31 @@ import { appendFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import WorkbenchTestProcessResources from "../../daemon/server/WorkbenchTestProcessResources";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { createSpawnOptions } from "../../daemon/server/process-helpers";
 import IsolatedWorkbenchProcess from "./IsolatedWorkbenchProcess";
 import WorkbenchSocketClient from "../../shared/workbench/WorkbenchSocketClient";
+import WorkbenchAppRpcClient from "../../app/client/workbench/app/WorkbenchAppRpcClient";
+import WorkbenchWorkspaceClient from "../../app/client/workbench/app/WorkbenchWorkspaceClient";
+import WorkbenchPresentationClient from "../../app/client/workbench/state/WorkbenchPresentationClient";
+import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, type DaemonId } from "../../shared/workbench/identity";
+import { workspaceCommandRoutes, type WorkspaceCommandMethod } from "../../shared/workbench/workspace/workspace-commands";
 import { isWorkbenchRpcFailure } from "../../shared/workbench/workbench-rpc";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "../../shared/workbench/daemon/WorkbenchDaemonClient";
 import WorkbenchTranscriptClient from "../../app/client/workbench/database/transcript/WorkbenchTranscriptClient";
-import type { WorkbenchComposerProfile } from "../../shared/types";
+import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "../../shared/types";
 import { WorkbenchDaemonReadySchema, type WorkbenchDaemonEndpoint } from "../../shared/http/workbench-daemon-endpoint";
 import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient";
 import { readDaemonEndpoint } from "../../shared/process/workbench-daemon-endpoint";
 import { WORKBENCH_RELOAD_METHOD } from "../../shared/workbench/daemon-reload";
 import { WorkbenchProjectsPayloadSchema } from "../../shared/workbench/project/project-state";
+
+const NodeWebSocket = createRequire(new URL("../../app/package.json", import.meta.url))("ws") as
+  new (url: string, options: { origin: string }) => WebSocket;
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message: string }; workbenchEventStreamSequence?: number };
 
@@ -132,7 +142,11 @@ export default class IsolatedWorkbench {
   private serviceChild: IsolatedWorkbenchProcess | null = null;
   private appLog = "";
   private appAddress: string | null = null;
-  private client: WorkbenchSocketClient | null = null;
+  private client: WorkbenchAppRpcClient | null = null;
+  private workspaceClient: WorkbenchWorkspaceClient | null = null;
+  private presentationClient: WorkbenchPresentationClient | null = null;
+  private attachedId: DaemonId | null = null;
+  private readonly observations = new Set<{ release(): void }>();
   readonly daemon = new WorkbenchDaemonClient({ request: (method, params) => this.request(method, params) });
   private transcriptClient: WorkbenchTranscriptClient | null = null;
   private log = "";
@@ -182,6 +196,24 @@ export default class IsolatedWorkbench {
     return this.endpoint;
   }
   get origin() { return this.daemonEndpoint.origin; }
+  get workspace() {
+    assert.ok(this.workspaceClient, "Scenario workspace must be connected through the app");
+    return this.workspaceClient;
+  }
+  get presentation() {
+    assert.ok(this.presentationClient, "Scenario presentation must be connected through the app");
+    return this.presentationClient;
+  }
+  get daemonId() {
+    assert.ok(this.attachedId, "Scenario must resolve its attached installation through the app");
+    return this.attachedId;
+  }
+  createAppRpcClient() {
+    return new WorkbenchAppRpcClient({
+      origin: this.appOrigin,
+      socket: url => new NodeWebSocket(url, { origin: this.appOrigin }),
+    });
+  }
 
   static async create(source: string, signal: AbortSignal, options: IsolatedWorkbenchOptions = {}) {
     signal.throwIfAborted();
@@ -268,11 +300,13 @@ export default class IsolatedWorkbench {
         throw error;
       }
     }
+    const dataRoot = path.join(root, "data", "inthedark", "wb");
+    await WorkbenchTestProcessResources.track(path.join(dataRoot, "daemon/providers/opencode/state/opencode/service.json"));
     return new IsolatedWorkbench(
       fixtures,
       root,
       project,
-      path.join(root, "data", "inthedark", "wb"),
+      dataRoot,
       signal,
       codexIdentity,
       openCodeIdentity,
@@ -282,9 +316,25 @@ export default class IsolatedWorkbench {
   }
 
   async start(profiles: readonly WorkbenchComposerProfile[] = [], prefixProof = "lifecycle") {
-    return await this.phase("daemon startup and transcript readiness", async signal => {
-      await this.startDaemon(profiles, prefixProof, signal);
+    return await this.phase("app workspace and daemon readiness", async signal => {
+      await this.startDaemon(prefixProof, signal);
+      await this.startApp();
+      await this.connectWorkspace(signal);
+      for (const profile of profiles) await this.withSignal(this.daemon.profiles.upsert({ profile }), signal);
     });
+  }
+
+  async stopDaemon() {
+    assert.ok(this.child, "Scenario daemon must be running");
+    const code = await this.child.stop(false);
+    this.child = null;
+    this.endpoint = null;
+    return code;
+  }
+
+  async restartDaemon() {
+    if (this.child) await this.stopDaemon();
+    await this.startDaemon("lifecycle", this.signal);
   }
 
   async exerciseManagedProcessReload(expectedProjectRoot: string) {
@@ -311,10 +361,10 @@ export default class IsolatedWorkbench {
       const initial = await readDaemonEndpoint(endpointPath);
       assert.ok(initial, "Managed daemon must publish its initial endpoint");
       const request = async (endpoint: WorkbenchDaemonEndpoint, method: string, params: object) => {
-        const socket = new WorkbenchSocketClient();
+        const socket = new WorkbenchSocketClient({ resolveUrl: async () => endpoint.origin.replace("http:", "ws:") });
         try {
-          await this.withSignal(socket.connect(endpoint.origin.replace("http:", "ws:")), this.signal);
-          const response = await this.withSignal(socket.sendRequest({ method, params }, { socketOnly: true }), this.signal);
+          await this.withSignal(socket.connect(), this.signal);
+          const response = await this.withSignal(socket.sendRequest({ method, params }), this.signal);
           if (isWorkbenchRpcFailure(response)) throw new Error(response.error.message);
           return response.result;
         } finally { socket.dispose(); }
@@ -342,7 +392,7 @@ export default class IsolatedWorkbench {
     } finally { await control.close(); }
   }
 
-  private async startDaemon(profiles: readonly WorkbenchComposerProfile[], prefixProof: string, signal: AbortSignal) {
+  private async startDaemon(prefixProof: string, signal: AbortSignal) {
     signal.throwIfAborted();
     assert.equal(this.child, null, "Stop the existing daemon before reopening");
     this.closed = false;
@@ -384,42 +434,50 @@ export default class IsolatedWorkbench {
     }, signal);
     signal.throwIfAborted();
     assert.equal(this.closed, false, "Scenario stopped before connecting");
-    const client = new WorkbenchSocketClient();
+  }
+
+  private async connectWorkspace(signal: AbortSignal) {
+    const client = this.createAppRpcClient();
+    const workspace = new WorkbenchWorkspaceClient(client);
     this.client = client;
+    this.workspaceClient = workspace;
     this.transcriptClient = new WorkbenchTranscriptClient({
       transport: {
-        onDisconnect: (listener) => client.onConnectionClose(listener),
-        onNotification: (listener) => client.onWorkbenchNotification(listener),
+        onDisconnect: listener => workspace.onDisconnect(listener),
+        onNotification: listener => workspace.onWorkbenchNotification(listener),
         request: (method, params) => this.request(method, params),
       },
       reportConformance: (report) => console.error("Scenario transcript conformance failure", report),
     });
-    client.onNotification((message) => {
+    workspace.onThreadEvent((message) => {
       this.events.push(message as Message);
       for (const observer of this.observers) observer();
     });
-    client.onWorkbenchNotification((message) => {
+    workspace.onWorkbenchNotification((message) => {
       this.events.push(message as Message);
       for (const observer of this.observers) observer();
     });
-    let stopAvailability = () => {};
-    const ready = new Promise<void>(resolve => {
-      stopAvailability = this.transcripts.onAvailabilityChange(available => { if (available) resolve(); });
+    client.onEvent(event => {
+      if (event.kind !== "workspace") return;
+      this.events.push({ method: "workspace/updated", params: event.observation });
+      for (const observer of this.observers) observer();
     });
-    try {
-      this.markPhase("connecting daemon socket");
-      await this.withSignal(client.connect(this.origin.replace("http:", "ws:")), signal);
-      // The daemon announces capabilities on the first WB request, not socket open.
-      this.markPhase("reading project catalogue and transcript capabilities");
-      await this.withSignal(this.daemon.projects.catalog(), signal);
-      await this.withSignal(ready, signal);
-      for (const profile of profiles) {
-        signal.throwIfAborted();
-        await this.withSignal(this.daemon.profiles.upsert({ profile }), signal);
-      }
-    } finally {
-      stopAvailability();
-    }
+    client.start();
+    this.markPhase("connecting production workspace client to app socket");
+    await this.withSignal(workspace.connect(signal), signal);
+    const network = workspace.observe({ kind: "network" });
+    this.observations.add(network);
+    const facts = await this.withSignal(workspace.waitFor(network), signal);
+    assert.ok(facts.data?.daemon, "App must discover its attached daemon");
+    this.attachedId = DaemonIdSchema.parse(facts.data.daemon.daemonId);
+    const projects = workspace.observe({ kind: "projects", daemonIds: [this.attachedId] });
+    this.observations.add(projects);
+    await this.withSignal(workspace.waitFor(projects), signal);
+    this.presentationClient = new WorkbenchPresentationClient({
+      workspace, fetcher: (input, init) => fetch(new URL(String(input), this.appOrigin), init),
+    });
+    this.presentationClient.start();
+    await this.withSignal(this.presentationClient.refresh(), signal);
   }
 
   private async prepareDaemonEnvironment(prefixProof: string, signal: AbortSignal) {
@@ -497,6 +555,7 @@ export default class IsolatedWorkbench {
   }
 
   async startApp() {
+    if (this.appChild) { this.appChild.assertRunning(); return; }
     return await this.phase("host and app readiness", async signal => {
       this.closed = false;
       this.releaseSignalCleanup ??= isolatedWorkbenchSignalCleanup.register(async () => {
@@ -541,11 +600,62 @@ export default class IsolatedWorkbench {
   }
 
   async request<T = unknown>(method: string, params: unknown = {}, fields: object = {}, signal = this.signal): Promise<T> {
-    if (this.closed || !this.client) throw new Error("Isolated runtime is not connected");
+    if (this.closed || !this.workspaceClient || !this.attachedId) throw new Error("Isolated app workspace is not connected");
     signal.throwIfAborted();
-    const response = await this.withSignal(this.client.sendRequest<T>({ method, params, ...fields }), signal);
-    if (isWorkbenchRpcFailure(response)) throw new WorkbenchDaemonRequestError(response.error.message, response.error.code);
-    return response.result;
+    assert.equal(Object.keys(fields).length, 0, "Scenarios use semantic app operations, not daemon envelope fields");
+    assert.ok(params && typeof params === "object" && !Array.isArray(params));
+    const route = workspaceCommandRoutes[method as WorkspaceCommandMethod];
+    const projectId = "projectId" in params && typeof params.projectId === "string" ? params.projectId : null;
+    const scope = route === "folder"
+      ? { kind: "folder" as const, location: { daemonId: this.attachedId, projectId: ProjectIdSchema.parse(projectId) } }
+      : { kind: "installation" as const, daemonId: this.attachedId };
+    return this.withSignal(this.workspaceClient.request<T>(method, params, scope), signal);
+  }
+
+  async projectThreads(projectId: string, signal = this.signal) {
+    const observation = this.workspace.observe({ kind: "projectThreads", projects: [{
+      kind: "location", location: { daemonId: this.daemonId, projectId: ProjectIdSchema.parse(projectId) },
+    }] });
+    this.observations.add(observation);
+    return (await this.withSignal(this.workspace.waitFor(observation), signal)).data;
+  }
+
+  async waitForProjects(rootPaths: readonly string[], signal = this.signal) {
+    const observation = this.workspace.observe({ kind: "projects", daemonIds: [this.daemonId] });
+    this.observations.add(observation);
+    const read = () => {
+      const data = observation.getSnapshot().value?.data;
+      const locations = [
+        ...data?.projects.flatMap(project => project.locations.flatMap(location =>
+          location.daemonId === this.daemonId && location.project ? [location.project] : [])) ?? [],
+        ...data?.observedProjects.flatMap(project => project.locations.flatMap(location =>
+          location.location.daemonId === this.daemonId ? [location.project] : [])) ?? [],
+      ];
+      return { data, projects: [...new Map(locations.map(project => [project.id, project])).values()] };
+    };
+    await this.until(() => {
+      const { data, projects } = read();
+      const catalogue = data?.catalogues.find(source => source.daemonId === this.daemonId);
+      if (catalogue?.phase === "failed") throw new Error(catalogue.failure ?? "Isolated catalogue failed.");
+      return catalogue?.phase === "current" && rootPaths.every(rootPath => projects.some(project =>
+        path.resolve(project.rootPath).toLowerCase() === path.resolve(rootPath).toLowerCase()));
+    }, signal);
+    return read().projects;
+  }
+
+  async launchDraft(projectId: string, selection: WorkbenchComposerProfileTargetSelection, prompt: string) {
+    await this.until(() => !!this.presentation.snapshot().data?.locations.some(item =>
+      item.target.daemonId === this.daemonId && item.target.projectId === projectId));
+    const location = this.presentation.snapshot().data!.locations.find(item =>
+      item.target.daemonId === this.daemonId && item.target.projectId === projectId)!;
+    const id = DraftIdSchema.parse(randomUUID());
+    await this.presentation.putDraft({
+      id, logicalProjectId: location.logicalProjectId, target: location.target,
+      selection, prompt, updatedAt: Date.now(),
+    });
+    const draft = this.presentation.draft(id);
+    assert.ok(draft?.phase === "unsent", "The app must persist the draft before launch");
+    return this.workspace.launchDraft(id, draft.revision, { workflowIds: [] });
   }
 
   markPhase(label: string) {
@@ -618,6 +728,13 @@ export default class IsolatedWorkbench {
     this.closed = true;
     this.transcriptClient?.dispose();
     this.transcriptClient = null;
+    for (const observation of this.observations) observation.release();
+    this.observations.clear();
+    this.presentationClient?.dispose();
+    this.presentationClient = null;
+    this.workspaceClient?.dispose();
+    this.workspaceClient = null;
+    this.attachedId = null;
     this.client?.dispose();
     this.client = null;
     const children = { app: this.appChild, daemon: this.child };
@@ -634,6 +751,11 @@ export default class IsolatedWorkbench {
       this.releaseSignalCleanup = null;
     }
     const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+    try {
+      await WorkbenchTestProcessResources.retireService(path.join(
+        this.dataRootPath, "daemon/providers/opencode/state/opencode/service.json",
+      ));
+    } catch (error) { errors.push(error); }
     if (errors.length) throw new AggregateError(errors, "Isolated process cleanup failed");
     return { app: children.app?.exitCode, daemon: children.daemon?.exitCode };
   }

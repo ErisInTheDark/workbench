@@ -1,123 +1,53 @@
-/*
- * No production exports. Protect early RPC selection, response validation and uncertain-write failure.
- */
+/* No production exports. Protect independent app connection facts and non-replayed mutations. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import WorkbenchAppRpcClient from "./WorkbenchAppRpcClient";
+import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
+import { createWorkspaceClientFixture } from "./workspace-client-fixture";
 
-test("old app processes select HTTP without opening an RPC socket", async () => {
-  let sockets = 0;
-  const client = new WorkbenchAppRpcClient({
-    fetcher: async () => new Response(null, { status: 200 }),
-    socket: () => { sockets++; throw new Error("Unexpected socket."); },
-  });
-  try {
-    await client.start();
-    assert.equal(client.available, false);
-    assert.equal(sockets, 0);
-  } finally { client.dispose(); }
+test("the transport rejects an undispatched mutation without waiting behind startup", async context => {
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  await assert.rejects(fixture.rpc.requestRaw({ method: "app/settings/read", params: {} }),
+    error => error instanceof WorkbenchRpcRequestInterruptedError && !error.dispatched);
+  assert.equal(fixture.sockets.length, 0);
+  await fixture.open();
+  assert.equal(fixture.rpc.connected, true);
 });
 
-test("a failed capability probe is not mistaken for an old app process", async () => {
-  const client = new WorkbenchAppRpcClient({
-    fetcher: async () => new Response(null, { status: 503 }),
+test("an initial import warning reaches a later settings subscriber", async context => {
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  socket.event({ kind: "presentation-import", status: { phase: "partial", scanned: 2, imported: 1, failed: 1 } });
+  const observed: number[] = [];
+  fixture.rpc.onEvent(event => {
+    if (event.kind === "presentation-import") observed.push(event.status.failed);
   });
-  try {
-    await assert.rejects(client.start(), /capability could not be read/u);
-  } finally { client.dispose(); }
+  assert.deepEqual(observed, [1]);
 });
 
-test("an initial import warning survives the gap before its network owner subscribes", async () => {
-  class Socket extends EventTarget {
-    readyState: number = WebSocket.CONNECTING;
-    constructor() {
-      super();
-      queueMicrotask(() => {
-        this.readyState = WebSocket.OPEN;
-        this.dispatchEvent(new Event("open"));
-      });
-    }
-    send() {}
-    close() { this.readyState = WebSocket.CLOSED; this.dispatchEvent(new Event("close")); }
-    publish(value: object) {
-      this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(value) }));
-    }
-  }
-  let socket!: Socket;
-  const client = new WorkbenchAppRpcClient({
-    fetcher: async () => new Response(null, { status: 200,
-      headers: { "X-Workbench-App-Rpc": "1" } }),
-    socket: () => {
-      socket = new Socket();
-      return socket as unknown as WebSocket;
-    },
-  });
-  try {
-    await client.start();
-    socket.publish({ kind: "presentation-import",
-      status: { phase: "partial", scanned: 2, imported: 1, failed: 1 } });
-    const observed: number[] = [];
-    client.onEvent(event => {
-      if (event.kind === "presentation-import") observed.push(event.status.failed);
-    });
-    assert.deepEqual(observed, [1]);
-  } finally { client.dispose(); }
-});
-
-test("a pending app write fails on socket loss instead of replaying after reconnect", async () => {
-  class Socket extends EventTarget {
-    readyState: number = WebSocket.CONNECTING;
-    sent: object[] = [];
-    sentRequest = Promise.withResolvers<void>();
-    constructor() {
-      super();
-      queueMicrotask(() => {
-        this.readyState = WebSocket.OPEN;
-        this.dispatchEvent(new Event("open"));
-      });
-    }
-    send(value: string) {
-      this.sent.push(JSON.parse(value) as object);
-      this.sentRequest.resolve();
-    }
-    publish(value: object) {
-      this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(value) }));
-    }
-    close() {
-      this.readyState = WebSocket.CLOSED;
-      this.dispatchEvent(new Event("close"));
-    }
-  }
-  const sockets: Socket[] = [];
-  const secondSocket = Promise.withResolvers<Socket>();
-  const client = new WorkbenchAppRpcClient({
-    fetcher: async () => new Response(null, { status: 200,
-      headers: { "X-Workbench-App-Rpc": "1" } }),
-    socket: () => {
-      const socket = new Socket();
-      sockets.push(socket);
-      if (sockets.length === 2) secondSocket.resolve(socket);
-      return socket as unknown as WebSocket;
-    },
-  });
-  try {
-    await client.start();
-    assert.equal(client.available, true);
-    const pending = client.requestRaw({
-      method: "app/state/mutate",
-      params: { browserStateId: null, mutation: { action: "put",
-        record: { kind: "globalPreference", preference: { key: "theme", value: "winter" } } } },
-    });
-    assert.equal(sockets[0]?.sent.length, 1);
-    assert.equal((sockets[0]?.sent[0] as { method: string }).method, "app/state/mutate");
-    sockets[0]?.close();
-    await assert.rejects(pending, /connection closed/u);
-    assert.equal(sockets[0]?.sent.length, 1);
-    const next = client.requestRaw({ method: "app/network/read", params: {} });
-    const replacement = await secondSocket.promise;
-    await replacement.sentRequest.promise;
-    assert.deepEqual(replacement.sent.map(item => (item as { method: string }).method), ["app/network/read"]);
-    replacement.publish({ id: 2, result: {} });
-    await next;
-  } finally { client.dispose(); }
+test("socket loss reports uncertain dispatch and reconnect never replays the mutation", async context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const pending = fixture.rpc.requestRaw({ method: "app/state/mutate",
+    params: { browserStateId: null, mutation: { action: "put",
+      record: { kind: "globalPreference", preference: { key: "theme", value: "winter" } } } } });
+  const failed = assert.rejects(pending,
+    error => error instanceof WorkbenchRpcRequestInterruptedError && error.dispatched);
+  await socket.request("app/state/mutate");
+  socket.close();
+  await failed;
+  context.mock.timers.tick(60_000);
+  const replacement = await fixture.nextSocket(1);
+  const connected = fixture.workspace.connect();
+  replacement.open();
+  await connected;
+  assert.deepEqual(replacement.sent, []);
+  const read = fixture.rpc.requestRaw({ method: "app/settings/read", params: {} });
+  const request = await replacement.request("app/settings/read");
+  replacement.reply(request, { reactDevelopmentMode: true });
+  await read;
+  assert.equal(socket.sent.filter(item => item.method === "app/state/mutate").length, 1);
 });

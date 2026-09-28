@@ -3,7 +3,6 @@
  * - WORKBENCH_DAEMON_TAILNET_PORT: stable tailnet discovery port, independent of the local listener.
  * - WorkbenchDaemonEndpointSchema/WorkbenchDaemonEndpoint: process-instance-bound local daemon publication.
  * - WorkbenchDaemonReadySchema: typed daemon-to-host readiness message.
- * - WorkbenchDaemonConnectionSchema: app-projected local and tailnet daemon ports for browser connection resolution.
  */
 import { z } from "zod";
 
@@ -27,9 +26,4 @@ export type WorkbenchDaemonEndpoint = z.infer<typeof WorkbenchDaemonEndpointSche
 export const WorkbenchDaemonReadySchema = z.object({
   type: z.literal("workbench-daemon-ready"),
   endpoint: WorkbenchDaemonEndpointSchema,
-}).strict();
-
-export const WorkbenchDaemonConnectionSchema = z.object({
-  localPort: z.number().int().min(1).max(65_535).nullable(),
-  tailnetPort: z.literal(WORKBENCH_DAEMON_TAILNET_PORT),
 }).strict();

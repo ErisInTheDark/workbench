@@ -14,10 +14,15 @@ import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import WorkbenchAppStateRoutes from "../state/workbench-app-state-routes.ts";
 import WorkbenchPresentationRoutes from "../state/workbench-presentation-routes.ts";
 import type WorkbenchPresentationController from "../state/WorkbenchPresentationController.ts";
-import WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController.ts";
+import type WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController.ts";
+import type WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
+import type WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
+import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
+import type WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
+import WorkbenchWorkspaceAssetRoutes from "../workspace/WorkbenchWorkspaceAssetRoutes";
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
-import WorkbenchAppSettingsRoutes from "./WorkbenchAppSettingsRoutes.ts";
+import WorkbenchAppSettingsController from "./WorkbenchAppSettingsController.ts";
 import type WorkbenchNetworkController from "../network/WorkbenchNetworkController.ts";
 import WorkbenchNetworkRoutes from "../network/WorkbenchNetworkRoutes.ts";
 import WorkbenchAppEventSocketController from "./WorkbenchAppEventSocketController.ts";
@@ -84,13 +89,14 @@ function parseClientLogs(value: unknown) {
 
 export default class WorkbenchAppHttpRouter {
   private readonly portRoutes: WorkbenchAppPortRoutes;
-  private readonly settingsRoutes: WorkbenchAppSettingsRoutes | null;
+  private readonly settingsRoutes: WorkbenchAppSettingsController | null;
   private readonly stateRoutes: WorkbenchAppStateRoutes;
   private readonly presentationRoutes: WorkbenchPresentationRoutes | null;
   private readonly staticRequests: StaticHttpRequestController;
   private readonly networkRoutes: WorkbenchNetworkRoutes | null;
   private readonly eventSockets: WorkbenchAppEventSocketController | null;
   private readonly importController: WorkbenchPresentationImportController | null;
+  private readonly assets: WorkbenchWorkspaceAssetRoutes | null;
 
   constructor(private readonly options: {
     appPort: WorkbenchAppPortControl;
@@ -100,16 +106,20 @@ export default class WorkbenchAppHttpRouter {
     readAppliedReactDevelopmentMode?: () => boolean;
     state: WorkbenchBrowserStateRegistry;
     presentation?: WorkbenchPresentationController;
+    sources?: WorkbenchDaemonSources;
+    workspace?: WorkbenchWorkspaceController;
+    workspaceThreads?: WorkbenchWorkspaceThreads;
+    workspaceDrafts?: WorkbenchWorkspaceDrafts;
+    presentationImport?: WorkbenchPresentationImportController;
     runtime?: { read(): object; subscribe(listener: () => void): () => void };
     supportsAppWebSockets?: boolean;
   }) {
-    this.importController = options.network && options.presentation
-      ? new WorkbenchPresentationImportController({
-          network: options.network, presentation: options.presentation, logger: options.logger,
-        }) : null;
+    this.assets = options.sources ? new WorkbenchWorkspaceAssetRoutes({
+      sources: options.sources, warn: message => options.logger.error("app", message),
+    }) : null;
+    this.importController = options.presentationImport ?? null;
     this.networkRoutes = options.network
-      ? new WorkbenchNetworkRoutes(options.network, options.presentation, this.importController ?? undefined,
-          options.supportsAppWebSockets === true) : null;
+      ? new WorkbenchNetworkRoutes(options.network) : null;
     this.portRoutes = new WorkbenchAppPortRoutes({
       appPort: {
         read: () => options.appPort.read(),
@@ -124,8 +134,7 @@ export default class WorkbenchAppHttpRouter {
       onDiagnostic: (message) => options.logger.error("app", `http ${message}`),
     });
     this.settingsRoutes = options.readAppliedReactDevelopmentMode
-      ? new WorkbenchAppSettingsRoutes({
-          onDiagnostic: (message) => options.logger.error("app", `http ${message}`),
+      ? new WorkbenchAppSettingsController({
           readAppliedReactDevelopmentMode: options.readAppliedReactDevelopmentMode,
           readRequestedReactDevelopmentMode: () => (
             options.state.readGlobalPreference("reactDevelopmentMode")
@@ -141,8 +150,7 @@ export default class WorkbenchAppHttpRouter {
           },
         })
       : null;
-    this.stateRoutes = new WorkbenchAppStateRoutes(options.state,
-      daemonId => options.network?.snapshot().daemon?.daemonId === daemonId);
+    this.stateRoutes = new WorkbenchAppStateRoutes(options.state);
     this.presentationRoutes = options.presentation ? new WorkbenchPresentationRoutes(options.presentation) : null;
     this.eventSockets = options.network && this.networkRoutes
       ? new WorkbenchAppEventSocketController({
@@ -150,7 +158,8 @@ export default class WorkbenchAppHttpRouter {
           presentation: options.presentation, presentationImport: this.importController ?? undefined,
           state: options.state, runtime: options.runtime,
           settings: this.settingsRoutes, port: this.portRoutes,
-          verifyAttachedDaemon: daemonId => options.network?.snapshot().daemon?.daemonId === daemonId,
+          sources: options.sources, workspace: options.workspace,
+          workspaceThreads: options.workspaceThreads, workspaceDrafts: options.workspaceDrafts,
         }) : null;
     this.staticRequests = new StaticHttpRequestController({
       cacheSeconds: 0,
@@ -161,12 +170,11 @@ export default class WorkbenchAppHttpRouter {
 
   async start() {
     await this.staticRequests.start();
-    this.importController?.start();
   }
 
   async close() {
+    this.assets?.dispose();
     this.eventSockets?.close();
-    await this.importController?.close();
     await this.presentationRoutes?.close();
     this.networkRoutes?.close();
     this.staticRequests.close();
@@ -230,7 +238,7 @@ export default class WorkbenchAppHttpRouter {
       return;
     }
     if (await this.portRoutes.handle(request, response, url)) return;
-    if (this.settingsRoutes && await this.settingsRoutes.handle(request, response, url)) return;
+    if (this.assets && await this.assets.handle(request, response, url)) return;
     if (await this.stateRoutes.handle(request, response, url)) return;
     if (this.presentationRoutes && await this.presentationRoutes.handle(request, response, url)) return;
     if (url.pathname.startsWith("/api/")) {

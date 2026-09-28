@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import WorkbenchSocketClient from "./WorkbenchSocketClient.ts";
+import { WorkbenchRpcRequestInterruptedError } from "./WorkbenchRpcSocketClient.ts";
 import { workbenchTranscriptNotifications } from "../workbench/database/transcript/workbench-transcript-contract.ts";
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "../workbench/daemon-reload.ts";
 import { WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD } from "../workbench/websocket-stream.ts";
@@ -60,6 +61,10 @@ class FakeWebSocket {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
 
+  removeEventListener(type: string, listener: Listener) {
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter(candidate => candidate !== listener));
+  }
+
   close() {
     this.closeCalls += 1;
     this.readyState = 3;
@@ -105,13 +110,13 @@ test("app suspension fences late address resolution and rejects pending requests
     resolveAddress("ws://fixture");
     await assert.rejects(opening, /suspended/);
     assert.equal(sockets.length, 0);
-    await assert.rejects(client.sendRequest({ method: "unavailable" }), /unavailable/);
+    await assert.rejects(client.sendRequest({ method: "unavailable" }), WorkbenchRpcRequestInterruptedError);
     client.setSuspended(false);
     await client.connect();
     assert.equal(sockets.length, 1);
     const pending = client.sendRequest({ method: "pending" });
     client.setSuspended(true);
-    await assert.rejects(pending, /unavailable/);
+    await assert.rejects(pending, WorkbenchRpcRequestInterruptedError);
     assert.equal(sockets[0]!.closeCalls, 1);
   } finally { client.dispose(); globalThis.WebSocket = original; }
 });
@@ -415,7 +420,9 @@ test("batches cumulative receipts after notification listeners consume events", 
   }
 });
 
-test("does not acknowledge failed dispatch or cancelled receipt work", async () => {
+test("does not acknowledge failed dispatch or cancelled receipt work", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "error", (message: string) => { warnings.push(message); });
   const originalWebSocket = globalThis.WebSocket;
   const clock = new FakeClock();
   let socket!: FakeWebSocket;
@@ -437,12 +444,13 @@ test("does not acknowledge failed dispatch or cancelled receipt work", async () 
       if (notification.method === "item/agentMessage/delta" && notification.params.delta === "fail") throw new Error("render dispatch failed");
     });
 
-    assert.throws(() => socket?.notify({
+    socket.notify({
       [WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD]: 1,
       method: "item/agentMessage/delta",
       params: { delta: "fail", itemId: "item", threadId: "thread", turnId: "turn" },
       workbenchHarness: "codex",
-    }), /render dispatch failed/u);
+    });
+    assert.ok(warnings.some(message => message.includes("render dispatch failed")));
     clock.advance(100);
     assert.deepEqual(socket.sent, []);
 

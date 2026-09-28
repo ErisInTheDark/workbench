@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - WorkbenchAppPortSetting: render and apply the global foreground app-port setting with reload-order compatibility.
+ * - WorkbenchAppPortSetting: render app-port facts and perform the connection-changing handoff.
  */
 "use client";
 
@@ -32,7 +32,6 @@ function sourceDescription(snapshot: WorkbenchAppPortClientSnapshot | null) {
     case "environment": return "Controlled by WORKBENCH_APP_PORT. Remove that environment override and restart Workbench to edit this setting.";
     case "random": return "Workbench chose this port for the current launch. Apply to save it or choose another available port.";
     case "setting": return "Workbench will reuse this port on future launches.";
-    case "unavailable": return "Restart Workbench to load the app process that supports changing ports.";
     default: return "Choose the local port used by the Workbench app.";
   }
 }
@@ -49,20 +48,30 @@ export default function WorkbenchAppPortSetting({ inline = false }: { inline?: b
 
   useEffect(() => {
     let cancelled = false;
-    void readWorkbenchAppPort(fetch, window.location.href, rpc ?? undefined)
+    let loaded = false;
+    let generation = 0;
+    const load = () => {
+      const current = ++generation;
+      void readWorkbenchAppPort(rpc)
       .then((nextSnapshot) => {
-        if (cancelled) return;
+        if (cancelled || current !== generation) return;
         setSnapshot(nextSnapshot);
-        setDraft(String(nextSnapshot.currentPort));
+        if (!loaded) setDraft(String(nextSnapshot.currentPort));
+        loaded = true;
+        setError("");
       })
       .catch((loadError: unknown) => {
-        if (!cancelled) setError(boundedError(loadError));
+        if (!cancelled && current === generation) setError(boundedError(loadError));
       })
       .finally(() => {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled && current === generation) setIsLoading(false);
       });
+    };
+    const stop = rpc?.onOpen(load);
+    if (!rpc || rpc.connected) load();
     return () => {
       cancelled = true;
+      stop?.();
     };
   }, [rpc]);
 

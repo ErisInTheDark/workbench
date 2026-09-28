@@ -1,13 +1,12 @@
 /*
  * Exports:
  * - WorkbenchAppRuntimeOptions: process-owned compiler, database, logging, and port configuration.
- * - default WorkbenchAppRuntime: own the stable graph host, lifetime upgrades and reload ingress.
+ * - default WorkbenchAppRuntime: own the stable graph host, runtime facts and reload ingress.
  */
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
-import { WORKBENCH_APP_LIFETIME_SOCKET_PATH } from "workbench-shared/http/workbench-app-events";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 
 import ReloadableNodeHost from "workbench-shared/reload/ReloadableNodeHost";
@@ -25,7 +24,6 @@ import type WorkbenchFrontendCompiler from "../WorkbenchFrontendCompiler.ts";
 import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateRepository.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
-import WorkbenchAppLifetime from "./WorkbenchAppLifetime.ts";
 import { projectWorkbenchAppRuntimeSnapshot } from "./workbench-app-runtime-snapshot.ts";
 
 const RUNTIME_PATH = "/api/workbench-app-runtime";
@@ -79,7 +77,6 @@ async function readReloadScopes(request: IncomingMessage) {
 }
 
 export default class WorkbenchAppRuntime {
-  private readonly lifetime: WorkbenchAppLifetime;
   private appliedReactDevelopmentMode: boolean | null = null;
   private readonly host: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
   private readonly runtimeListeners = new Set<() => void>();
@@ -89,7 +86,6 @@ export default class WorkbenchAppRuntime {
   private runtimeSourcesReady = false;
 
   constructor(private readonly options: WorkbenchAppRuntimeOptions) {
-    this.lifetime = new WorkbenchAppLifetime(options.logger);
     let host!: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
     const context: AppProcessContext = {
       daemonEndpointPath: options.daemonEndpointPath ?? path.join(resolveWorkbenchDataRoot(), "daemon", "runtime.json"),
@@ -117,7 +113,7 @@ export default class WorkbenchAppRuntime {
       },
       outputDirectoryPath: options.outputDirectoryPath,
       processLogger: options.logger,
-      readAppRuntimeSnapshot: () => this.readRuntimeSnapshot("4"),
+      readAppRuntimeSnapshot: () => this.readRuntimeSnapshot(),
       readAppliedReactDevelopmentMode: () => {
         if (this.appliedReactDevelopmentMode === null) {
           throw new Error("Workbench frontend mode is unavailable before compiler startup.");
@@ -197,11 +193,10 @@ export default class WorkbenchAppRuntime {
     for (const unsubscribe of this.runtimeSourceUnsubscribers) unsubscribe();
     this.runtimeSourceUnsubscribers = [];
     this.runtimeListeners.clear();
-    this.lifetime.close();
     await this.host.dispose();
   }
 
-  private readRuntimeSnapshot(version: string | null) {
+  private readRuntimeSnapshot() {
     return projectWorkbenchAppRuntimeSnapshot({
       allScopes: this.host.getReloadScopeCatalog().map(({ scope }) => scope),
       appliedReactDevelopmentMode: this.appliedReactDevelopmentMode,
@@ -210,7 +205,7 @@ export default class WorkbenchAppRuntime {
       reloadDirt: this.host.get("reloadDirt").getSnapshot(),
       requestedReactDevelopmentMode: this.host.get("state")
         .readGlobalPreference("reactDevelopmentMode") === true,
-    }, version);
+    });
   }
 
   private bindRuntimeSources() {
@@ -270,15 +265,6 @@ export default class WorkbenchAppRuntime {
   async handleRequest(request: IncomingMessage, response: ServerResponse) {
     if (!await this.host.get("http").admitHttp(request, response)) return;
     const url = new URL(request.url ?? "/", "http://workbench.local");
-    if (url.pathname === "/api/workbench-app-lifetime") {
-      this.lifetime.handle(request, response);
-      return;
-    }
-    if (url.pathname === RUNTIME_PATH && request.method === "GET") {
-      const responseVersion = url.searchParams.get("version");
-      sendJson(response, 200, this.readRuntimeSnapshot(responseVersion));
-      return;
-    }
     if (url.pathname === RUNTIME_PATH && request.method === "POST") {
       try {
         const scopes = await readReloadScopes(request);
@@ -336,15 +322,6 @@ export default class WorkbenchAppRuntime {
 
   async handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer) {
     const url = new URL(request.url ?? "/", "http://workbench.local");
-    if (url.pathname === WORKBENCH_APP_LIFETIME_SOCKET_PATH) {
-      if (!this.host.get("http").admitConnection(request)) {
-        this.options.logger.error("app", "WS lifetime upgrade rejected: app ingress unavailable.");
-        socket.destroy();
-        return;
-      }
-      this.lifetime.handleUpgrade(request, socket, head);
-      return;
-    }
     await this.host.run("http", router => router.handleUpgrade(request, socket, head),
       `app WS: ${url.pathname}`);
   }

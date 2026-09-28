@@ -12,7 +12,7 @@ import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread
 import { isSyntheticQuestionnaireHistoryItem } from "workbench-shared/workbench/thread/thread-questionnaire-history";
 import { getWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { withWorkbenchThreadItemIdentity } from "workbench-shared/workbench/thread/thread-item-identity";
-import WorkbenchThreadClient, { type WorkbenchAcceptedIntent } from "./WorkbenchThreadClient.ts";
+import WorkbenchThreadClient from "./WorkbenchThreadClient.ts";
 import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { ThreadMessageNotSentError } from "./thread/thread-message-submission.ts";
 import type {
@@ -20,6 +20,8 @@ import type {
   WorkbenchThreadSidebarSnapshot,
 } from "workbench-shared/workbench/thread/thread-state";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import WorkbenchSocketClient from "workbench-shared/workbench/WorkbenchSocketClient";
+import type WorkbenchWorkspaceClient from "./app/WorkbenchWorkspaceClient";
 
 const originalDaemonUrl = process.env.WORKBENCH_CODEX_APP_SERVER_URL;
 before(() => { process.env.WORKBENCH_CODEX_APP_SERVER_URL = "ws://127.0.0.1:43210"; });
@@ -107,6 +109,10 @@ class FakeWebSocket {
 
   addEventListener(type: string, listener: Listener) {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  removeEventListener(type: string, listener: Listener) {
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter(candidate => candidate !== listener));
   }
 
   close() {
@@ -236,12 +242,6 @@ function isContinueRequest(request: SocketRequest) {
   return request.method === "thread/message/submit" && request.params?.intent === "continue";
 }
 
-test("a daemon session resolves its own socket address", async () => {
-  await withClient(async (_client, socket) => {
-    assert.equal(socket.url, "wss://peer.wb.inthedark.boo:52739/");
-  }, { resolveDaemonUrl: async () => "wss://peer.wb.inthedark.boo:52739/" });
-});
-
 function isAdmissionRequest(request: SocketRequest) {
   return request.method === "thread/message/submit"
     && (request.params?.intent === "continue" || request.params?.intent === "newTurn");
@@ -307,7 +307,7 @@ async function installProjectThreadState(
 
 async function withClient(
   run: (client: ReturnType<typeof WorkbenchThreadClient>, socket: FakeWebSocket) => Promise<void>,
-  clientOptions: Parameters<typeof WorkbenchThreadClient>[0] = {},
+  clientOptions: Partial<Parameters<typeof WorkbenchThreadClient>[0]> = {},
 ) {
   const originalWindow = globalThis.window;
   const originalWebSocket = globalThis.WebSocket;
@@ -328,7 +328,41 @@ async function withClient(
       socket = this;
     }
   } as unknown as typeof WebSocket;
+  // These are renderer-owner tests. The fake edge retains their controlled provider
+  // replies; app routing and protocol admission have separate real-socket scenarios.
+  const transport = new WorkbenchSocketClient({ resolveUrl: async () => "ws://renderer.test" });
+  const pendingReleases = new Set<Promise<object>>();
+  const request = async (method: string, params: object) => {
+    const operation = transport.sendRequest({ method, params }).then(response => {
+      if ("error" in response) throw new Error(response.error.message);
+      return response.result as object;
+    });
+    if (method === "workbench/thread-state/release" || method === "workbench/transcript/unsubscribe") {
+      pendingReleases.add(operation);
+    }
+    try { return await operation; }
+    finally { pendingReleases.delete(operation); }
+  };
+  const workspace = {
+    rpc: {
+      onReconnect: (listener: () => void) => transport.onReconnect(listener),
+      onOpen: (listener: () => void) => transport.onConnectionOpen(listener),
+    },
+    connect: () => transport.connect(),
+    onDisconnect: (listener: () => void) => transport.onConnectionClose(listener),
+    onWorkbenchNotification: (listener: Parameters<WorkbenchSocketClient["onWorkbenchNotification"]>[0]) =>
+      transport.onWorkbenchNotification(listener),
+    onThreadEvent: (listener: Parameters<WorkbenchSocketClient["onNotification"]>[0]) =>
+      transport.onNotification(listener),
+    request,
+    observeThread: (params: Parameters<WorkbenchWorkspaceClient["observeThread"]>[0]) =>
+      request("workbench/thread-state/observe", { ...params, version: 2 }),
+    releaseThread: async (subscriptionId: string) => {
+      await request("workbench/thread-state/release", { subscriptionId });
+    },
+  } as unknown as WorkbenchWorkspaceClient;
   const client = WorkbenchThreadClient({
+    workspace,
     getProjectById: projectId => projectId === "owner" ? {
       id: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"), kind: "git", lastCommitTimeMs: null, name: "owner", relativePath: "owner", rootPath: "C:/owner",
       roots: [{ id: "owner", isPrimary: true, name: "owner", relativePath: "owner", rootPath: "C:/owner" }],
@@ -336,6 +370,7 @@ async function withClient(
     ...clientOptions,
   });
   try {
+    await transport.connect();
     client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), root: "repo", rootPath: "C:/repo" });
     await client.refreshRateLimits();
     assert.ok(socket);
@@ -343,6 +378,8 @@ async function withClient(
   } finally {
     FakeWebSocket.intercept = null;
     client.dispose();
+    while (pendingReleases.size) await Promise.allSettled([...pendingReleases]);
+    transport.dispose();
     globalThis.WebSocket = originalWebSocket;
     globalThis.window = originalWindow;
   }
@@ -472,7 +509,7 @@ test("normal message admission stays independent until transcript capability is 
   assert.equal(socket.requests.some((request) => request.method === "turn/start"), false);
   assert.equal(socket.requests.some((request) => request.method.startsWith("workbench/transcript/")), false);
 
-  socket.notify(workbenchTranscriptNotifications.capabilities.method, { protocolVersion: 1 });
+  socket.notify(workbenchTranscriptNotifications.capabilities.method, { protocolVersion: 4 });
   await waitForRequest(socket, "workbench/transcript/subscribe");
   release();
 }));
@@ -538,8 +575,7 @@ test("failed new-turn admission removes only its pending projection", async () =
   assert.equal(client.getSnapshot().currentThread?.turns.flatMap((turn) => turn.items).some((item) => getWorkbenchInputState(item)?.kind === "optimistic"), false);
 }));
 
-test("daemon-side steer admission moves the pending message without publishing browser lifecycle", async () => {
-  const acceptedIntents: WorkbenchAcceptedIntent[] = [];
+test("daemon-side steer admission moves the pending message into the active turn", async () => {
   await withClient(async (client, socket) => {
     const source = activeThread("codex", "idle", "completed");
     client.selectThreadPayload(source);
@@ -564,9 +600,6 @@ test("daemon-side steer admission moves the pending message without publishing b
       placement: "steer",
       status: "pending",
     });
-    assert.deepEqual(acceptedIntents, []);
-  }, {
-    publishAcceptedIntent: async (event) => { acceptedIntents.push(event); },
   });
 });
 
@@ -580,7 +613,7 @@ test("SQLite transcript source lifecycle publishes through the thread client and
       publications.push({ status: state.status, threadId: "threadId" in state ? state.threadId : null });
     });
     const release = owner.acquire("view");
-    socket.notify(workbenchTranscriptNotifications.capabilities.method, { protocolVersion: 1 });
+    socket.notify(workbenchTranscriptNotifications.capabilities.method, { protocolVersion: 4 });
     await waitForRequest(socket, "workbench/transcript/subscribe");
     assert.deepEqual(publications.at(-1), { status: "loading", threadId: "thread" });
 
@@ -648,22 +681,7 @@ test("sidebar title changes reconcile the open thread document title", async () 
   assert.equal(document?.preview, "Workbench title");
 }));
 
-test("selected active Codex steers settle at admission and canonical notification owns placement", async () => {
-  const originalWindow = globalThis.window;
-  const originalWebSocket = globalThis.WebSocket;
-  let socket!: FakeWebSocket;
-  globalThis.window = {
-    clearTimeout: globalThis.clearTimeout,
-    setTimeout: globalThis.setTimeout,
-  } as unknown as Window & typeof globalThis;
-  globalThis.WebSocket = class extends FakeWebSocket {
-    constructor(url: string) {
-      super(url);
-      socket = this;
-    }
-  } as unknown as typeof WebSocket;
-  const client = WorkbenchThreadClient();
-  try {
+test("selected active Codex steers settle at admission and canonical notification owns placement", async () => withClient(async (client, socket) => {
     const source = activeThread();
     client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), root: "repo", rootPath: "C:/repo" });
     client.selectThreadPayload(source);
@@ -722,12 +740,7 @@ test("selected active Codex steers settle at admission and canonical notificatio
     assert.ok(backgroundSteerIndex >= 0);
     assert.ok(backgroundPreparationIndex === -1 || backgroundSteerIndex < backgroundPreparationIndex);
     assert.equal(backgroundRequests[backgroundSteerIndex]?.params?.intent, "continue");
-  } finally {
-    client.dispose();
-    globalThis.WebSocket = originalWebSocket;
-    globalThis.window = originalWindow;
-  }
-});
+}));
 
 test("cumulative file-change patches dedupe repeated snapshots and yield to canonical lifecycle items", async () => withClient(async (client, socket) => {
   client.selectThreadPayload(activeThread());
@@ -1279,48 +1292,6 @@ test("foreign pinned thread context owns provider cwd, subagents, and late-read 
   assert.equal(client.getSnapshot().currentThread?.id, replacement.id);
   assert.equal(client.getSnapshot().subagents.length, 0);
 }));
-
-test("foreign pinned draft admission sends and publishes accepted intent through the owning project", async () => {
-  const acceptedIntents: WorkbenchAcceptedIntent[] = [];
-  await withClient(async (client, socket) => {
-    const ownerProject = {
-      id: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
-      kind: "git" as const,
-      lastCommitTimeMs: null,
-      name: "owner",
-      relativePath: "owner",
-      rootPath: "C:/owner",
-      roots: [{ id: "owner", isPrimary: true, name: "owner", relativePath: "owner", rootPath: "C:/owner" }],
-    };
-    const draft = client.createThread("codex", fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000091"), { project: ownerProject });
-    FakeWebSocket.intercept = (target, request) => {
-      if (request.method === "thread/create") {
-        const thread = wireThread("foreign-materialized", "bootstrap", "completed");
-        thread.cwd = "C:/owner";
-        queueMicrotask(() => target.respond(request.id, { thread }));
-        return true;
-      }
-      if (isAdmissionRequest(request)) {
-        queueMicrotask(() => target.respond(request.id, { kind: "started", turn: wireThread("foreign-materialized", "started").turns[0] }));
-        return true;
-      }
-      if (request.method === "thread/resume") {
-        const thread = wireThread("foreign-materialized", "started");
-        thread.cwd = "C:/owner";
-        queueMicrotask(() => target.respond(request.id, { model: "model", reasoningEffort: null, serviceTier: null, thread }));
-        return true;
-      }
-      return false;
-    };
-
-    await client.sendThreadMessage(draft, [{ text: "from owner", text_elements: [], type: "text" }]);
-    const start = socket.requests.find((request) => request.method === "thread/create");
-    assert.equal(start?.params?.projectId, "owner");
-    assert.equal(acceptedIntents[0]?.projectId, "owner");
-  }, {
-    publishAcceptedIntent: async (event) => { acceptedIntents.push(event); },
-  });
-});
 
 test("missing SQL bodies reconcile once and are admitted only after the canonical reread", async () => withClient(async (client, socket) => {
   let pages = 0;
@@ -2673,51 +2644,6 @@ test("a neutral sidebar label cannot erase an open thread's first-message previe
   assert.equal(client.getSnapshot().currentThread?.preview, "First user message");
 }));
 
-test("project changes during draft materialization prevent stale dispatch without list polling", async () => withClient(async (client, socket) => {
-  const draft = { ...activeThread("codex", "draft", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("draft"), isDraft: true as const, source: "draft" };
-  client.selectThreadPayload(draft);
-  let startRequest: SocketRequest | null = null;
-  FakeWebSocket.intercept = (_target, request) => {
-    if (request.method === "thread/create") {
-      startRequest = request;
-      return true;
-    }
-    return false;
-  };
-  const send = client.sendThreadMessage(draft, [{ text: "draft", text_elements: [], type: "text" }]);
-  await waitForRequest(socket, "thread/create");
-  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
-  socket.respond(startRequest!.id, { thread: wireThread("materialized") });
-  await assert.rejects(send, ThreadMessageNotSentError);
-  assert.equal(socket.requests.some((request) => request.method === "thread/list"), false);
-  assert.equal(socket.requests.some((request) => request.method === "thread/metadata/read" && request.params?.threadId === "materialized"), false);
-  assert.equal(socket.requests.some((request) => isContinueRequest(request) && request.params?.threadId === "materialized"), false);
-}));
-
-test("navigation during creation profile acknowledgement cannot select or send the old draft", async () => withClient(async (client, socket) => {
-  const draft = { ...activeThread("codex", "draft", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("draft"), isDraft: true as const, source: "draft" };
-  client.selectThreadPayload(draft);
-  FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/create") {
-      queueMicrotask(() => target.respond(request.id, { thread: wireThread("created") }));
-      return true;
-    }
-    return request.method === "profiles/target/read";
-  };
-  const created: string[] = [];
-  const send = client.sendThreadMessage(draft, [{ text: "draft", text_elements: [], type: "text" }], {
-    composerProfileSlot: { kind: "new-thread", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") },
-    onThreadCreated: thread => created.push(thread.id),
-  });
-  const profileRead = await waitForRequest(socket, "profiles/target/read");
-  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
-  socket.respond(profileRead.id, { selection: null });
-  await assert.rejects(send, ThreadMessageNotSentError);
-  assert.deepEqual(created, []);
-  assert.notEqual(client.getSnapshot().currentThread?.id, "created");
-  assert.equal(socket.requests.some(request => request.method === "turn/start" || isContinueRequest(request)), false);
-}));
-
 for (const defect of ["predecessor", "identity", "boundary"] as const) {
 test(`active history reads report malformed ${defect} instead of silently superseding them`, async () => withClient(async (client, socket) => {
   const history = [historyEntry("older", "unloaded"), historyEntry("turn", "loaded")];
@@ -2776,202 +2702,6 @@ test("native plan snapshots and notifications stay out while tagged agent markdo
   assert.deepEqual(items.map(({ id }) => id), ["tagged-message"]);
   assert.equal(items[0]?.type === "agentMessage" ? items[0].text : null, "<plan>\n# retained tagged plan\n</plan>");
 }));
-
-test("project changes after draft turn dispatch preserve durable acceptance without stale materialization", async () => {
-  const acceptedIntents: WorkbenchAcceptedIntent[] = [];
-  await withClient(async (client, socket) => {
-    const draft = { ...activeThread("codex", "00000000-0000-4000-8000-000000000002", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000002"), isDraft: true as const, source: "draft" };
-    const materialized: string[] = [];
-    let startRequest: SocketRequest | null = null;
-    client.selectThreadPayload(draft);
-    FakeWebSocket.intercept = (target, request) => {
-      if (request.method === "thread/create") {
-        queueMicrotask(() => target.respond(request.id, { thread: wireThread("materialized-after-dispatch", "old", "completed") }));
-        return true;
-      }
-      if (isAdmissionRequest(request)) {
-        startRequest = request;
-        return true;
-      }
-      return false;
-    };
-
-    const send = client.sendThreadMessage(draft, [{ text: "draft", text_elements: [], type: "text" }], {
-      onThreadMaterialized: (thread) => materialized.push(thread.id),
-    });
-    await waitForRequest(socket, "admission");
-    client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
-    socket.respond(startRequest!.id, { kind: "started", turn: wireThread("materialized-after-dispatch", "new-turn").turns[0] });
-
-    assert.equal(await send, null);
-    assert.deepEqual(acceptedIntents, [{
-      draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000002"),
-      harness: "codex",
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-      threadId: "materialized-after-dispatch",
-      title: "draft",
-      turnId: "new-turn",
-    }]);
-    assert.deepEqual(materialized, []);
-  }, {
-    publishAcceptedIntent: async (event) => { acceptedIntents.push(event); },
-  });
-});
-
-test("native turn admission settles a draft when the turn-start response is lost", async () => {
-  const acceptedIntents: WorkbenchAcceptedIntent[] = [];
-  await withClient(async (client, socket) => {
-    const draft = { ...activeThread("codex", "00000000-0000-4000-8000-000000000003", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000003"), isDraft: true as const, source: "draft" };
-    const materialized: string[] = [];
-    let startRequest: SocketRequest | null = null;
-    client.selectThreadPayload(draft);
-    FakeWebSocket.intercept = (target, request) => {
-      if (request.method === "thread/create") {
-        queueMicrotask(() => target.respond(request.id, { thread: wireThread("materialized-after-response-loss", "bootstrap", "completed") }));
-        return true;
-      }
-      if (isAdmissionRequest(request)) {
-        startRequest = request;
-        return true;
-      }
-      return false;
-    };
-
-    const send = client.sendThreadMessage(draft, [{ text: "draft", text_elements: [], type: "text" }], {
-      onThreadMaterialized: (thread) => materialized.push(thread.id),
-    });
-    await waitForRequest(socket, "admission");
-    const admittedTurn = wireThread("materialized-after-response-loss", "native-turn", "inProgress").turns[0]!;
-    socket.notify("turn/started", { threadId: "materialized-after-response-loss", turn: admittedTurn });
-    socket.fail(startRequest!.id, "response lost after admission");
-
-    assert.equal(await send, null);
-    assert.deepEqual(materialized, ["materialized-after-response-loss"]);
-    assert.deepEqual(acceptedIntents, [{
-      draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000003"),
-      harness: "codex",
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-      threadId: "materialized-after-response-loss",
-      title: "draft",
-      turnId: "native-turn",
-    }]);
-    assert.deepEqual(client.getSnapshot().currentThread?.turns.map((turn) => turn.id), ["native-turn"]);
-    assert.equal(client.getSnapshot().currentThread?.turns.some((turn) => getWorkbenchTurnAdmission(turn) === "connecting"), false);
-  }, {
-    publishAcceptedIntent: async (event) => { acceptedIntents.push(event); },
-  });
-});
-
-test("draft projection precedes admission and materialization is skipped on start failure", async () => {
-  const acceptedIntents: WorkbenchAcceptedIntent[] = [];
-  let markAcceptedIntentObserved!: () => void;
-  const acceptedIntentObserved = new Promise<void>((resolve) => { markAcceptedIntentObserved = resolve; });
-  let releaseAcceptedIntent: (() => void) | null = null;
-  const acceptedIntentPending = new Promise<void>((resolve) => { releaseAcceptedIntent = resolve; });
-  await withClient(async (client, socket) => {
-  const draft = { ...activeThread("codex", "00000000-0000-4000-8000-000000000001", "completed"), id: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000001"), isDraft: true as const, source: "draft" };
-  client.selectThreadPayload(draft);
-  const created: string[] = [];
-  const materialized: string[] = [];
-  let startRequest: SocketRequest | null = null;
-  FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/create") {
-      queueMicrotask(() => target.respond(request.id, { thread: wireThread("materialized", "old", "completed") }));
-      return true;
-    }
-    if (isAdmissionRequest(request)) {
-      startRequest = request;
-      return true;
-    }
-    return false;
-  };
-
-  const send = client.sendThreadMessage(draft, [{ text: "draft", text_elements: [], type: "text" }], {
-    onThreadCreated: (thread) => created.push(thread.id),
-    onThreadMaterialized: (thread) => materialized.push(thread.id),
-  });
-  await waitForRequest(socket, "admission");
-  assert.deepEqual(created, ["materialized"]);
-  assert.equal(materialized.length, 0);
-  assert.equal(client.getSnapshot().currentThread?.id, "materialized");
-  assert.equal(client.getSnapshot().currentThread?.preview, "draft");
-  assert.equal(client.getSnapshot().currentThread?.turns.length, 1);
-  assert.equal(getWorkbenchTurnAdmission(client.getSnapshot().currentThread!.turns[0]!), "connecting");
-  const startedNotificationThread = wireThread("materialized", "old", "completed");
-  startedNotificationThread.name = "New thread";
-  socket.notify("thread/started", { thread: startedNotificationThread });
-  assert.equal(client.getSnapshot().currentThread?.preview, "draft");
-  const failedPendingItem = client.getSnapshot().currentThread!.turns.at(-1)!.items[0]!;
-  assert.deepEqual(getWorkbenchInputState(failedPendingItem), { kind: "optimistic", placement: "initial", status: "pending" });
-  socket.fail(startRequest!.id, "start failed");
-  await assert.rejects(send, /start failed/u);
-  assert.equal(materialized.length, 0);
-  assert.equal(client.getSnapshot().currentThread?.turns.some((turn) => getWorkbenchTurnAdmission(turn) === "connecting"), false);
-  assert.equal(client.getSnapshot().currentThread?.turns.flatMap((turn) => turn.items).some((item) => getWorkbenchInputState(item)?.kind === "optimistic"), false);
-
-  client.selectThreadPayload(draft);
-  let admittedStartRequest!: SocketRequest;
-  FakeWebSocket.intercept = (target, request) => {
-    if (request.method === "thread/create") {
-      queueMicrotask(() => target.respond(request.id, { thread: wireThread("materialized", "old", "completed") }));
-      return true;
-    }
-    if (isAdmissionRequest(request)) {
-      admittedStartRequest = request;
-      return true;
-    }
-    return false;
-  };
-  const admittedInput = [
-    { text: "draft", text_elements: [], type: "text" as const },
-    { type: "image" as const, url: "data:image/png;base64,AAAA" },
-  ];
-  const admittedSend = client.sendThreadMessage(draft, admittedInput, {
-    onThreadCreated: (thread) => created.push(thread.id),
-    onThreadMaterialized: (thread) => materialized.push(thread.id),
-  });
-  await waitForRequest(socket, "admission", 1);
-  assert.equal(client.getSnapshot().currentThread?.turns.length, 1);
-  assert.equal(getWorkbenchTurnAdmission(client.getSnapshot().currentThread!.turns[0]!), "connecting");
-  const admittedPendingItem = client.getSnapshot().currentThread!.turns.at(-1)!.items[0]!;
-  assert.deepEqual(getWorkbenchInputState(admittedPendingItem), { kind: "optimistic", placement: "initial", status: "pending" });
-  const clientUserMessageId = String(admittedStartRequest?.params?.clientMessageId ?? "");
-  assert.ok(clientUserMessageId);
-  const admittedTurn = wireThread("materialized", "new-turn").turns[0]!;
-  socket.notify("turn/started", { threadId: "materialized", turn: admittedTurn });
-  socket.notify("item/started", {
-    item: { clientId: clientUserMessageId, content: admittedInput, id: "canonical-draft", type: "userMessage" },
-    threadId: "materialized",
-    turnId: "new-turn",
-  });
-  socket.respond(admittedStartRequest!.id, { kind: "started", turn: admittedTurn });
-  await acceptedIntentObserved;
-  assert.deepEqual(acceptedIntents, [{
-    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000001"),
-    harness: "codex",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    threadId: "materialized",
-    title: "draft",
-    turnId: "new-turn",
-  }]);
-  assert.deepEqual(materialized, ["materialized"]);
-  releaseAcceptedIntent?.();
-  const admitted = await admittedSend;
-  assert.ok(admitted);
-  assert.equal(admitted.preview, "draft");
-  assert.equal(client.getSnapshot().currentThread?.preview, "draft");
-  assert.deepEqual(created, ["materialized", "materialized"]);
-  assert.deepEqual(materialized, ["materialized"]);
-  assert.deepEqual(admitted.turns.map((turn) => turn.id), ["new-turn"]);
-  assert.deepEqual(admitted.turns.at(-1)?.items.filter((item) => item.type === "userMessage").map((item) => item.id), ["canonical-draft"]);
-  }, {
-    publishAcceptedIntent: async (event) => {
-      acceptedIntents.push(event);
-      markAcceptedIntentObserved();
-      await acceptedIntentPending;
-    },
-  });
-});
 
 test("steer-history reads are latest-wins, retain the last success, and warn once per failure streak", async () => {
   const statusMessages: string[] = [];
@@ -3569,19 +3299,6 @@ test("clearing project selection releases its observation rather than retaining 
   client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
   assert.equal(client.getSnapshot().currentThread, null);
   assert.equal(client.threadObservations.getObservations().length, 0);
-}));
-
-test("server reset waits for restored project admission before reopening retained observations", async () => withClient(async (client, socket) => {
-  await client.openThread("thread", { harness: "codex" });
-  const count = () => socket.requests.filter(request => request.method === "workbench/thread-state/observe").length;
-  assert.equal(count(), 1);
-  socket.notify("workbench/thread-state/reset", {});
-  // An acknowledged socket request drains earlier sends without a timer or guessed delay.
-  await client.requestWorkbench("workbench/thread-state/release", { subscriptionId: "unused" });
-  assert.equal(count(), 1);
-  client.threadObservations.reset();
-  await client.requestWorkbench("workbench/thread-state/release", { subscriptionId: "unused" });
-  assert.equal(count(), 2);
 }));
 
 test("live observed questionnaires arrive and clear without sidebar questionnaire installation", async () => withClient(async (client, socket) => {

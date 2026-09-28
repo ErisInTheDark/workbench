@@ -1,11 +1,10 @@
 /*
  * Exports:
  * - ClientDraftIdentity: project-qualified client-state address.
- * - ComposerDraftTarget: existing-thread, app-owned unsent, or legacy-sidebar destination.
- * - SidebarDraftPersistence: access the existing sidebar and profile owners.
- * - sidebarDraftToInput/presentationDraftToInput: project persisted prompt and image attachments into composer input.
+ * - ComposerDraftTarget: existing-thread or app-owned unsent destination.
+ * - presentationDraftToInput: project saved prompt and image attachments into composer input.
  * - projectComposerDrafts: select only composer records matching each UUID's registered owner.
- * - saveComposerDraft: merge edits and materialise eligible sidebar drafts.
+ * - saveComposerDraft: merge edits and materialise eligible app drafts.
  * - clearComposerDraft: remove only the captured composer destination.
  * - saveQuestionnaireDraft: merge edits into the latest questionnaire record.
  * - clearQuestionnaireDraft: remove only the captured questionnaire record.
@@ -13,11 +12,11 @@
 import type { WorkbenchComposerInputDraft, WorkbenchComposerProfileTargetSelection, WorkbenchQuestionnaireDraft } from "workbench-shared/types";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { LogicalProjectId } from "workbench-shared/workbench/identity";
-import { countDraftPromptTokens, hasWorkbenchThreadDraftContent, type WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
+import { countDraftPromptTokens, hasWorkbenchThreadDraftContent } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchClientStateController from "./WorkbenchClientStateController";
 import type { WorkbenchClientStateSnapshot } from "./WorkbenchClientStateController";
 import type WorkbenchPresentationClient from "./WorkbenchPresentationClient";
-import type { DraftId, FolderId, ProjectId, ThreadReference, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { DraftId, ProjectId, ThreadReference, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 export interface ClientDraftIdentity {
   daemonRegistrationId: string;
@@ -28,14 +27,6 @@ export interface ClientDraftIdentity {
 type QuestionnaireDraftIdentity = ClientDraftIdentity & { requestKey: string };
 type QuestionnaireDraftIdentityResolver = () => QuestionnaireDraftIdentity | null;
 
-export interface SidebarDraftPersistence {
-  read: (projectId: ProjectId, draftId: DraftId) => WorkbenchThreadDraft | null;
-  create: (projectId: ProjectId, draftId: DraftId) => WorkbenchThreadDraft;
-  write: (draft: WorkbenchThreadDraft, folderId?: FolderId) => Promise<void> | void;
-  remove: (projectId: ProjectId, draftId: DraftId) => Promise<void>;
-  materialize: (draft: WorkbenchThreadDraft) => void;
-}
-
 export type ComposerDraftTarget =
   | (ClientDraftIdentity & { kind: "thread" })
   | {
@@ -43,18 +34,10 @@ export type ComposerDraftTarget =
     logicalProjectId: LogicalProjectId; location: ProjectLocationReference;
     selection: () => WorkbenchComposerProfileTargetSelection;
     owner: WorkbenchPresentationClient;
+    placement?: Parameters<WorkbenchPresentationClient["putDraft"]>[1];
     materialize: () => void;
     dematerialize: () => void;
-  }
-  | { kind: "sidebar"; projectId: ProjectId; draftId: DraftId; isNew: boolean; folderId?: FolderId; owner: SidebarDraftPersistence };
-
-export function sidebarDraftToInput(draft: WorkbenchThreadDraft | null): WorkbenchComposerInputDraft {
-  return {
-    text: draft?.prompt ?? "",
-    attachments: draft?.attachments.map(({ id, url }) => ({ id, url })) ?? [],
-    updatedAt: draft?.updatedAt ?? 0,
   };
-}
 
 export function presentationDraftToInput(owner: WorkbenchPresentationClient, id: string): WorkbenchComposerInputDraft | null {
   const draft = owner.draft(id);
@@ -90,7 +73,7 @@ export async function saveComposerDraft(
     const identity = { kind: "composerDraft" as const, daemonRegistrationId, projectId, threadId };
     const current = state.records("composerDraft").find((record) => (
       record.daemonRegistrationId === daemonRegistrationId && record.projectId === projectId && record.threadId === threadId
-    ))?.value ?? sidebarDraftToInput(null);
+    ))?.value ?? { text: "", attachments: [], updatedAt: 0 };
     const draft = { ...update(current), updatedAt: Date.now() };
     if (!draft.text.trim() && !draft.attachments.length) {
       await state.delete(identity);
@@ -121,10 +104,10 @@ export async function saveComposerDraft(
       })),
     };
   }
-  if (target.kind === "presentation") {
+  else {
     const existing = target.owner.draft(target.draftId);
     const input = { ...update(presentationDraftToInput(target.owner, target.draftId)
-      ?? sidebarDraftToInput(null)), updatedAt: Date.now() };
+      ?? { text: "", attachments: [], updatedAt: 0 }), updatedAt: Date.now() };
     if (!hasWorkbenchThreadDraftContent({ attachments: input.attachments, prompt: input.text })) {
       if (existing) await target.owner.removeDraft(target.draftId);
       if (existing && !options.detached) target.dematerialize();
@@ -139,7 +122,7 @@ export async function saveComposerDraft(
       prompt: input.text,
       selection: target.selection(),
       updatedAt: input.updatedAt,
-    });
+    }, target.placement);
     for (const attachment of input.attachments) {
       if (target.owner.draft(target.draftId)?.attachments.some(item => item.id === attachment.id)) continue;
       await target.owner.uploadAttachment(target.draftId, attachment.id, attachment.url);
@@ -157,33 +140,10 @@ export async function saveComposerDraft(
       id: item.id, url: target.owner.attachmentUrl(target.draftId, item.id),
     })) };
   }
-  const existing = target.owner.read(target.projectId, target.draftId);
-  const input = { ...update(sidebarDraftToInput(existing)), updatedAt: Date.now() };
-  if (!hasWorkbenchThreadDraftContent({ attachments: input.attachments, prompt: input.text })) {
-    if (existing) await target.owner.remove(target.projectId, target.draftId);
-    return existing || options.reason !== "autosave" ? input : null;
-  }
-  if (target.isNew && !existing && options.reason === "autosave"
-    && !input.attachments.length && countDraftPromptTokens(input.text) < 3) return null;
-  const draftId = target.draftId;
-  const baseline = existing ?? target.owner.create(target.projectId, draftId);
-  const draft: WorkbenchThreadDraft = {
-    ...baseline,
-    draftId,
-    projectId: target.projectId,
-    prompt: input.text,
-    attachments: input.attachments.map(({ id, url }) => ({ id, url })),
-    clientUpdatedAt: input.updatedAt,
-    updatedAt: input.updatedAt,
-  };
-  await target.owner.write(draft, target.folderId);
-  if (target.isNew && !existing && !options.detached) target.owner.materialize(draft);
-  return input;
 }
 
 export async function clearComposerDraft(state: WorkbenchClientStateController, target: ComposerDraftTarget) {
   if (target.kind === "presentation") return await target.owner.removeDraft(target.draftId);
-  if (target.kind === "sidebar") return await target.owner.remove(target.projectId, target.draftId);
   const { daemonRegistrationId, projectId, threadId } = target;
   await state.delete({ kind: "composerDraft", daemonRegistrationId, projectId, threadId });
 }

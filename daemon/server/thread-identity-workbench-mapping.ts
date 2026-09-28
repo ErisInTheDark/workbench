@@ -2,19 +2,15 @@
  * Exports:
  * - resolveNativeReference: resolve retained or canonical thread identity with bounded failure context.
  * - mapNativeQuestionnaire/mapNativeQuestionnaireHistory: project retained questionnaire identities.
- * - mapNativeThreadStateSnapshot: retain canonical state and derive legacy draft wire aliases.
- * - mapNativeThreadStateResult: derive draft wire aliases in canonical open and context responses.
- * - mapWorkbenchThreadStateRequest: validate project ownership and admit canonical mutation and observation targets.
+ * - mapWorkbenchThreadStateRequest: validate project ownership and admit canonical mutation targets.
  * - NativeThreadStateIdentityOwners: committed identity lookup plus metadata-only cold admission.
  * - createWorkbenchQuestionnaireStatePorts: validate WB questionnaire ownership without live-turn admission.
  */
 import type { WorkbenchHarness, WorkbenchQuestionnaireHistoryEntry } from "workbench-shared/types";
-import { getWorkbenchLifecycleTurnId, serializeLegacyThreadDraft, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
 import type {
-  WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateSnapshot, WorkbenchDurableQuestionnaire,
-  WorkbenchThreadStateRequest, WorkbenchThreadStateOpenResult, WorkbenchGlobalThreadStateOpenResult,
-  WorkbenchPinnedThreadContextResult, WorkbenchThreadTarget,
+  WorkbenchDurableQuestionnaire, WorkbenchThreadStateRequest,
 } from "workbench-shared/workbench/thread/thread-state";
 import {
   getProjectQualifiedThreadDisplayKey, parseProjectQualifiedThreadDisplayKey,
@@ -174,62 +170,6 @@ async function mapThreadDisplayKey(
   return qualified ? getProjectQualifiedThreadDisplayKey(qualified.projectId, mapped) : mapped;
 }
 
-function mapNativeSidebar(sidebar: WorkbenchThreadSidebarSnapshot): WorkbenchThreadSidebarSnapshot {
-  return {
-    ...sidebar,
-    entries: sidebar.entries.map(entry => entry.entryKind === "draft"
-      ? { ...entry, draft: serializeLegacyThreadDraft(entry.draft) } : entry),
-  };
-}
-
-export async function mapNativeThreadStateSnapshot(_owners: NativeThreadStateIdentityOwners, snapshot: WorkbenchThreadStateSnapshot): Promise<WorkbenchThreadStateSnapshot> {
-  if (!("updateKind" in snapshot)) return mapNativeSidebar(snapshot);
-  switch (snapshot.updateKind) {
-    case "threadStateDelta": return {
-      ...snapshot,
-      upserts: snapshot.upserts.map(entry => entry.entryKind === "draft"
-        ? { ...entry, draft: serializeLegacyThreadDraft(entry.draft) } : entry),
-    };
-    case "projectThreadSidebar": return { ...snapshot, sidebar: mapNativeSidebar(snapshot.sidebar) };
-    default: return snapshot;
-  }
-}
-
-async function mapThreadTarget(owners: NativeTranscriptIdentityOwners, target: WorkbenchThreadTarget, projectId: string | undefined): Promise<WorkbenchThreadTarget> {
-  if (target.kind === "draft" || target.kind === "new") return target;
-  const harness = target.harness ?? "codex";
-  const map = async (threadId: string) => (await resolveNativeReference(owners, { harness, threadId }, projectId)).threadId;
-  return {
-    ...target, threadId: await map(target.threadId),
-    ...(target.kind === "subagent" ? { parentThreadId: (await resolveNativeReference(owners, { threadId: target.parentThreadId }, projectId)).threadId } : {}),
-  };
-}
-
-export async function mapNativeThreadStateResult(owners: NativeThreadStateIdentityOwners, value: unknown): Promise<unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  let result = value as Record<string, unknown>;
-  if ("sidebar" in result) {
-    const opened = value as WorkbenchThreadStateOpenResult;
-    result = { ...result, sidebar: mapNativeSidebar(opened.sidebar) };
-  }
-  if ("projectSidebars" in result) {
-    const opened = value as WorkbenchGlobalThreadStateOpenResult;
-    result = { ...result, projectSidebars: { ...opened.projectSidebars,
-      projects: opened.projectSidebars.projects.map(mapNativeSidebar),
-    } };
-  }
-  if ("context" in result) {
-    const { context } = value as WorkbenchPinnedThreadContextResult;
-    if (context) {
-      result = { ...result, context: {
-        ...context, entries: context.entries.map(entry => entry.entryKind === "draft"
-          ? { ...entry, draft: serializeLegacyThreadDraft(entry.draft) } : entry),
-      } };
-    }
-  }
-  return result;
-}
-
 export async function mapWorkbenchThreadStateRequest(owners: NativeTranscriptIdentityOwners, request: WorkbenchThreadStateRequest): Promise<WorkbenchThreadStateRequest> {
   const projectId = "projectId" in request ? request.projectId : undefined;
   let result = request;
@@ -242,23 +182,14 @@ export async function mapWorkbenchThreadStateRequest(owners: NativeTranscriptIde
       ...("turnId" in request ? { turnId: turn?.turnId ?? request.turnId } : {}),
     } as WorkbenchThreadStateRequest;
   }
-  if (request.method === "workbench/thread-state/pin/open") {
-    result = { ...request, target: await mapThreadTarget(owners, request.target, request.projectId) };
-  } else if (request.method === "workbench/thread-state/observe") {
-    const target = await mapThreadTarget(owners, request.target, request.projectId);
-    if (target.kind === "draft" || target.kind === "new") throw new Error("Thread observation routing changed its target kind.");
-    result = { ...request, target };
-  } else if (request.method === "workbench/thread-state/snooze/until") {
+  if (request.method === "workbench/thread-state/snooze/until") {
     const thread = await resolveNativeReference(owners, request.target.identity, request.target.projectId);
     result = { ...result, target: { ...request.target,
       identity: { ...request.target.identity, threadId: thread.threadId },
     } } as WorkbenchThreadStateRequest;
   }
-  for (const field of ["sourceKey", "targetKey", "beforeKey", "destinationFolderKey"] as const) {
-    if (field in request && typeof request[field as keyof typeof request] === "string") {
-      const key = (request as Record<string, unknown>)[field] as string;
-      result = { ...result, [field]: await mapThreadDisplayKey(owners, key, projectId) };
-    }
+  if (request.method === "workbench/thread-state/priority/set") {
+    result = { ...request, sourceKey: await mapThreadDisplayKey(owners, request.sourceKey, projectId) as typeof request.sourceKey };
   }
   if (request.method === "workbench/thread-state/questionnaire/resolve") {
     result = { ...result, entry: await mapNativeQuestionnaireHistory(owners, request.identity, {

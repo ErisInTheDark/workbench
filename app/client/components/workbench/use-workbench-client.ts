@@ -56,6 +56,7 @@ import ThreadTextPresentationContext from "./ThreadTextPresentationContext";
 import { useWorkbenchThread } from "./use-workbench-thread";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchProjectFileIndexSnapshot } from "../../workbench/project/WorkbenchProjectFileIndexStore";
+import { useWorkbenchWorkspace } from "./WorkbenchWorkspaceContext";
 
 const MISSING_THREAD_FILE_INDEX: WorkbenchProjectFileIndexSnapshot = {
   candidates: [], paths: [], id: "project-files:missing-owner",
@@ -134,9 +135,6 @@ const EMPTY_THREAD_RUNTIME_SNAPSHOT: WorkbenchThreadRuntimeSnapshot = {
 };
 const EMPTY_SUBSCRIBE = (_listener: () => void) => () => {};
 const EMPTY_PROJECT_SOURCE_ERROR = () => "";
-const INITIAL_STARTUP: ReturnType<MountedWorkbenchClient["startup"]["getSnapshot"]> = {
-  phase: "loading", error: null,
-};
 const INITIAL_PRESENTATION: ReturnType<NonNullable<MountedWorkbenchClient["presentationClient"]>["snapshot"]> = {
   phase: "idle", error: null, data: null,
 };
@@ -162,9 +160,10 @@ interface WorkbenchClientMountOptions {
 }
 
 export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): WorkbenchClientController & {
-  startup: ReturnType<MountedWorkbenchClient["startup"]["getSnapshot"]>;
+  startup: { phase: "loading" | "ready" | "failed"; error: string | null };
   projectSourceError: string;
 } {
+  const workspace = useWorkbenchWorkspace();
   const [mounted, setMounted] = useState<MountedWorkbenchClient | null>(null);
   const [mountError, setMountError] = useState<string | null>(null);
   const [explorer, setExplorer] = useState(INITIAL_EXPLORER_SNAPSHOT);
@@ -178,6 +177,7 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): W
       void import("../../WorkbenchClient").then(({ WorkbenchClient }) => {
         const current = optionsRef.current;
         const nextMounted = WorkbenchClient({
+          workspace,
           appRpc: current.appRpc,
           clientStateController: current.clientStateController,
           dom: current.getDomSurfaces(),
@@ -209,13 +209,8 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): W
       window.clearTimeout(timeoutId);
       mountedClient?.dispose();
     };
-  }, [options.clientStateController]);
+  }, [options.clientStateController, workspace]);
 
-  const startup = useSyncExternalStore(
-    mounted?.startup.subscribe ?? EMPTY_SUBSCRIBE,
-    mounted?.startup.getSnapshot ?? (() => INITIAL_STARTUP),
-    () => INITIAL_STARTUP,
-  );
   const presentation = useSyncExternalStore(
     mounted?.presentationClient?.subscribe ?? EMPTY_SUBSCRIBE,
     mounted?.presentationClient?.snapshot ?? (() => INITIAL_PRESENTATION),
@@ -227,12 +222,12 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): W
     EMPTY_PROJECT_SOURCE_ERROR,
   );
   return useMemo(() => ({
-    controls: startup.phase === "ready" ? mounted?.controls ?? null : null,
+    controls: mounted?.controls ?? null,
     explorer,
     mounted,
     projectSourceError,
-    startup: mountError ? { phase: "failed" as const, error: mountError } : startup,
-  }), [explorer, mountError, mounted, presentation, projectSourceError, startup]);
+    startup: { phase: mountError ? "failed" as const : mounted ? "ready" as const : "loading" as const, error: mountError },
+  }), [explorer, mountError, mounted, presentation, projectSourceError]);
 }
 
 export function useWorkbenchThreadTextPresentationField(

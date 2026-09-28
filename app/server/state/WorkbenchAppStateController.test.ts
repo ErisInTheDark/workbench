@@ -14,7 +14,7 @@ import { appStateSchema } from "workbench-shared/state/workbench-app-state-schem
 
 import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
-import { conformWorkbenchClientStateResponse } from "../../client/workbench/state/workbench-client-state-conformance";
+import { conformWorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state-conformance";
 
 test("fractional font sizes survive global and project saves, browser conformance and restart", async context => {
   const fixture = await controllerFixture(context);

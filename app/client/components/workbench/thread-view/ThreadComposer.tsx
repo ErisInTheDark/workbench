@@ -19,7 +19,7 @@ import type {
   WorkbenchSkillSummary,
   WorkbenchComposerInputDraft,
 } from "workbench-shared/types";
-import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
+import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import {
   areWorkbenchAgentPathsEqual,
   getWorkbenchAgentPathLabel,

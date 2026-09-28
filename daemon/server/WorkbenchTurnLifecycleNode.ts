@@ -90,7 +90,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       listRuntimeDrainPending: () => turnRecovery.listRuntimeDrainPending(),
       registrations: { toolRevision, reloadController, reloadDirt, turnRecovery, daemonSleep },
       start: async () => {
+        const startedAt = performance.now();
+        if (process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1") console.info("[startup] daemon reload-source baseline loading");
         await reloadDirt.start();
+        if (process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1") console.info(`[startup] daemon reload-source baseline ready in ${Math.round(performance.now() - startedAt)}ms`);
         daemonSleep.refresh();
       },
     };

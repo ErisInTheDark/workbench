@@ -3,32 +3,26 @@
  * - default WorkbenchPresentationClient: own app presentation reads, mutations, attachment transfer, and freshness.
  */
 import type {
-  PresentationDraftInput, PresentationMutation, PresentationSnapshot,
+  PresentationDraftInput, PresentationSnapshot,
 } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchControls, WorkbenchLogicalThreadRow } from "workbench-shared/types";
 import {
-  PresentationMutationSchema, PresentationSnapshotSchema,
+  PresentationSnapshotSchema,
 } from "workbench-shared/state/workbench-presentation-state";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type { LogicalProjectId } from "workbench-shared/workbench/identity";
-import {
-  createWorkbenchThreadFolder, getWorkbenchThreadDisplayKey, moveWorkbenchThreadDisplayItem,
-  projectWorkbenchThreadDisplaySection, renameWorkbenchThreadFolder,
-} from "workbench-shared/workbench/thread/thread-display-order";
-import { projectLogicalPinnedDisplayOrder, projectLogicalThreadDisplayOrder } from "../WorkbenchProjectProjection";
-import {
-  createThreadDisplayFolder, getProjectQualifiedThreadDisplayKey,
-  moveThreadDisplayLayoutItem, projectThreadDisplayLayoutSection, renameThreadDisplayFolder,
-} from "workbench-shared/workbench/thread/thread-display-layout";
-import { getThreadSidebarGroup } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadDisplayOrder } from "workbench-shared/workbench/thread/thread-display-order";
-import {
-  getWorkbenchHomeThreadKey, resolveWorkbenchHomeThreadSectionKeys,
-  type WorkbenchHomeThreadDisplayOrder,
-} from "workbench-shared/workbench/thread/home-thread-display-order";
-import { getWorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
+import type { WorkbenchHomeThreadDisplayOrder } from "workbench-shared/workbench/thread/home-thread-display-order";
 import { z } from "zod";
-import type WorkbenchAppRpcClient from "../app/WorkbenchAppRpcClient";
+import type WorkbenchWorkspaceClient from "../app/WorkbenchWorkspaceClient";
+import type { WorkspaceQueryHandle } from "../app/WorkbenchWorkspaceClient";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import type { WorkspaceHomeLayoutIntent, WorkspaceLayoutRequest } from "workbench-shared/workbench/workspace/workspace-commands";
+import { WorkbenchPresentationIntentSchema, type WorkbenchPresentationIntent } from "workbench-shared/http/workbench-app-rpc";
+
+type LayoutIntent = {
+  [Action in WorkspaceLayoutRequest["action"]]: Omit<Extract<WorkspaceLayoutRequest, { action: Action }>, "expectedRevision">;
+}[WorkspaceLayoutRequest["action"]];
 
 const path = "/api/workbench-presentation";
 const failureSchema = z.object({ error: z.string().max(512) }).strict();
@@ -44,10 +38,9 @@ export default class WorkbenchPresentationClient {
   private readonly requests = new Set<AbortController>();
   private readonly deletedDraftRevisions = new Map<string, number>();
   private closed = false;
-  private notifiedRevision = -1;
-  private notificationRefresh: Promise<void> | null = null;
+  private observation: WorkspaceQueryHandle<"presentation"> | null = null;
 
-  constructor(private readonly options: { fetcher?: typeof fetch; rpc?: WorkbenchAppRpcClient } = {}) {}
+  constructor(private readonly options: { fetcher?: typeof fetch; workspace: WorkbenchWorkspaceClient }) {}
 
   readonly snapshot = () => this.state;
   readonly subscribe = (listener: () => void) => {
@@ -55,31 +48,34 @@ export default class WorkbenchPresentationClient {
     return () => { this.listeners.delete(listener); };
   };
 
-  noticeRevision(revision: number) {
-    if (this.closed || revision <= (this.state.data?.revision ?? -1)) return;
-    this.notifiedRevision = Math.max(this.notifiedRevision, revision);
-    if (this.notificationRefresh) return;
-    const operation = this.drainRevisions();
-    const settled = operation.finally(() => {
-      if (this.notificationRefresh === settled) this.notificationRefresh = null;
-    });
-    this.notificationRefresh = settled;
+  start() {
+    this.assertOpen();
+    if (this.observation) return;
+    const update = () => {
+      const fact = observation.getSnapshot();
+      if (fact.value?.data) this.accept(fact.value.data);
+      if (fact.failure) this.publish({ ...this.state, error: fact.failure, phase: "failed" });
+    };
+    const observation = this.options.workspace.observe({ kind: "presentation" }, update);
+    this.observation = observation;
+    update();
   }
 
-  private async drainRevisions() {
-    while (!this.closed && this.notifiedRevision > (this.state.data?.revision ?? -1)) {
-      const before = this.state.data?.revision ?? -1;
-      const noticeBefore = this.notifiedRevision;
-      try {
-        await this.refresh();
-        if ((this.state.data?.revision ?? -1) <= before) {
-          if (this.notifiedRevision > noticeBefore) continue;
-          this.publish({ ...this.state, error: "Presentation update is not visible yet.", phase: "failed" });
-          return;
-        }
-      }
-      catch { return; } // refresh retains the bounded failure in presentation state.
-    }
+  ready(): Promise<PresentationSnapshot> {
+    this.assertOpen();
+    this.start();
+    if (this.state.data) return Promise.resolve(this.state.data);
+    return new Promise((resolve, reject) => {
+      const changed = () => {
+        if (!this.closed && !this.state.data && !this.state.error) return;
+        this.listeners.delete(changed);
+        if (this.closed) reject(new Error("Presentation state has closed."));
+        else if (this.state.data) resolve(this.state.data);
+        else reject(new Error(this.state.error ?? "Presentation state is unavailable."));
+      };
+      this.listeners.add(changed);
+      changed();
+    });
   }
 
   draft(id: string) {
@@ -90,10 +86,11 @@ export default class WorkbenchPresentationClient {
     return `${path}/drafts/${encodeURIComponent(draftId)}/attachments/${encodeURIComponent(attachmentId)}`;
   }
 
-  async putDraft(draft: PresentationDraftInput) {
+  async putDraft(draft: PresentationDraftInput,
+    placement?: Extract<WorkbenchPresentationIntent, { kind: "putDraft" }>["placement"]) {
     const existing = this.draft(draft.id);
     const result = await this.mutate({ kind: "putDraft",
-      expectedRevision: existing?.revision ?? this.deletedDraftRevisions.get(draft.id) ?? null, draft });
+      expectedRevision: existing?.revision ?? this.deletedDraftRevisions.get(draft.id) ?? null, draft, placement });
     this.deletedDraftRevisions.delete(draft.id);
     return result;
   }
@@ -115,223 +112,53 @@ export default class WorkbenchPresentationClient {
   }
 
   async saveProjectLayout(logicalProjectId: LogicalProjectId,
-    rows: readonly WorkbenchLogicalThreadRow[], displayOrder: WorkbenchThreadDisplayOrder) {
-    await this.mutate(this.projectLayoutMutation(logicalProjectId, rows, displayOrder));
+    _rows: readonly WorkbenchLogicalThreadRow[], displayOrder: WorkbenchThreadDisplayOrder) {
+    await this.layout({ action: "projectSave", logicalProjectId, order: displayOrder });
   }
 
-  async saveHomeLayout(rows: readonly WorkbenchLogicalThreadRow[], order: WorkbenchHomeThreadDisplayOrder) {
-    await this.mutate(this.homeLayoutMutation(rows, order));
+  async saveHomeLayout(_rows: readonly WorkbenchLogicalThreadRow[], order: WorkbenchHomeThreadDisplayOrder) {
+    await this.layout({ action: "homeSave", order });
+  }
+
+  async updateHomeLayout(intent: WorkspaceHomeLayoutIntent) {
+    await this.layout({ action: "homeEdit", intent });
   }
 
   async saveHomeAndProjectLayouts(logicalProjectId: LogicalProjectId,
-    rows: readonly WorkbenchLogicalThreadRow[], projectOrder: WorkbenchThreadDisplayOrder,
+    _rows: readonly WorkbenchLogicalThreadRow[], projectOrder: WorkbenchThreadDisplayOrder,
     homeOrder: WorkbenchHomeThreadDisplayOrder) {
-    const project = this.projectLayoutMutation(logicalProjectId, rows, projectOrder);
-    const home = this.homeLayoutMutation(rows, homeOrder);
-    await this.mutate({
-      kind: "saveLayouts", expectedRevision: project.expectedRevision,
-      layouts: [
-        { scope: project.scope, logicalProjectId: project.logicalProjectId,
-          folders: project.folders, members: project.members },
-        { scope: home.scope, logicalProjectId: home.logicalProjectId,
-          folders: home.folders, members: home.members },
-      ],
-    });
+    await this.layout({ action: "projectAndHomeSave", logicalProjectId, order: projectOrder, homeOrder });
   }
 
   async updateProjectLayout(logicalProjectId: LogicalProjectId,
-    rows: readonly WorkbenchLogicalThreadRow[],
+    _rows: readonly WorkbenchLogicalThreadRow[],
     intent: Parameters<WorkbenchControls["updatePresentationProjectLayout"]>[2],
     homeOrder?: WorkbenchHomeThreadDisplayOrder) {
-    const snapshot = this.state.data;
-    if (!snapshot) throw new Error("Project layout is unavailable.");
-    const scopedRows = rows.filter(row => row.logicalProjectId === logicalProjectId);
-    const entries = scopedRows.map(row => row.entry);
-    const current = projectLogicalThreadDisplayOrder(logicalProjectId, scopedRows, snapshot);
-    let next: WorkbenchThreadDisplayOrder | null;
-    if (intent.kind === "rename") {
-      next = renameWorkbenchThreadFolder(entries, current, intent.folderId, intent.title);
-    } else if (intent.kind === "drop") {
-      const folderId = intent.destinationFolderId ?? intent.folderId ?? crypto.randomUUID();
-      const withFolder = intent.destinationFolderId ? current : createWorkbenchThreadFolder(
-        entries, current, folderId, intent.targetKey, "New folder",
-      );
-      next = withFolder ? moveWorkbenchThreadDisplayItem(
-        entries, withFolder, intent.section, intent.sourceKey, folderId, null,
-      ) : null;
-    } else {
-      next = moveWorkbenchThreadDisplayItem(
-        entries, current, intent.section, intent.sourceKey,
-        intent.destinationFolderId, intent.beforeKey,
-      );
-    }
-    if (!next) throw new Error("Project layout position is no longer available.");
-    if (homeOrder) await this.saveHomeAndProjectLayouts(logicalProjectId, rows, next, homeOrder);
-    else await this.saveProjectLayout(logicalProjectId, rows, next);
+    await this.layout({ action: "projectEdit", logicalProjectId, intent, homeOrder });
   }
 
   async updatePinnedLayout(
-    rows: readonly WorkbenchLogicalThreadRow[],
+    _rows: readonly WorkbenchLogicalThreadRow[],
     intent:
       | { kind: "move"; sourceKey: string; destinationFolderId: string | null; beforeKey: string | null }
       | { kind: "drop"; sourceKey: string; targetKey: string; destinationFolderId: string | null;
         folderId?: string }
       | { kind: "rename"; folderId: string; title: string },
   ) {
-    const snapshot = this.state.data;
-    if (!snapshot) throw new Error("Pinned layout is unavailable.");
-    const entries = rows.filter(row => getThreadSidebarGroup(row.entry) === "pinned").map(row => ({
-      key: getProjectQualifiedThreadDisplayKey(row.logicalProjectId, getWorkbenchThreadDisplayKey(row.entry)),
-      section: "pinned" as const,
-    }));
-    const current = projectLogicalPinnedDisplayOrder(rows, snapshot);
-    let next: WorkbenchThreadDisplayOrder | null;
-    if (intent.kind === "rename") {
-      next = renameThreadDisplayFolder(current, intent.folderId, intent.title);
-    } else if (intent.kind === "drop") {
-      const folderId = intent.destinationFolderId ?? intent.folderId ?? crypto.randomUUID();
-      const withFolder = intent.destinationFolderId ? current : createThreadDisplayFolder(
-        entries, current, folderId, intent.targetKey, "New folder",
-      );
-      next = withFolder ? moveThreadDisplayLayoutItem(
-        entries, withFolder, "pinned", intent.sourceKey, folderId, null,
-      ) : null;
-    } else {
-      next = moveThreadDisplayLayoutItem(
-        entries, current, "pinned", intent.sourceKey, intent.destinationFolderId, intent.beforeKey,
-      );
-    }
-    if (!next) throw new Error("Pinned layout position is no longer available.");
-    await this.savePinnedLayout(rows, next);
+    await this.layout({ action: "pinnedEdit", intent });
   }
 
-  async savePinnedLayout(rows: readonly WorkbenchLogicalThreadRow[], order: WorkbenchThreadDisplayOrder) {
-    const snapshot = this.state.data;
-    if (!snapshot) throw new Error("Pinned layout is unavailable.");
-    const pinned = rows.filter(row => getThreadSidebarGroup(row.entry) === "pinned");
-    const entries = pinned.map(row => ({
-      key: getProjectQualifiedThreadDisplayKey(row.logicalProjectId, getWorkbenchThreadDisplayKey(row.entry)),
-      section: "pinned" as const,
-    }));
-    const byKey = new Map(pinned.map(row => [
-      getProjectQualifiedThreadDisplayKey(row.logicalProjectId, getWorkbenchThreadDisplayKey(row.entry)), row,
-    ]));
-    const folders: Extract<PresentationMutation, { kind: "saveLayout" }>["folders"] = [];
-    const members: Extract<PresentationMutation, { kind: "saveLayout" }>["members"] = [];
-    for (const item of projectThreadDisplayLayoutSection(entries, entries, order, "pinned")) {
-      const folderId = item.itemKind === "folder" ? item.folder.folderId : null;
-      if (item.itemKind === "folder") folders.push({
-        id: item.folder.folderId, scope: "pinned", logicalProjectId: null,
-        title: item.folder.title, position: folders.length,
-      });
-      for (const entry of item.itemKind === "folder" ? item.entries : [item.entry]) {
-        const row = byKey.get(entry.key);
-        if (!row) throw new Error("A pinned row lost its daemon source.");
-        const existing = snapshot.members.find(member => member.scope === "pinned"
-          && (row.entry.entryKind === "draft"
-            ? member.kind === "draft" && member.draftId === row.entry.draft.draftId
-            : member.kind === "thread" && member.thread?.threadId === row.entry.identity.threadId
-              && member.thread.location.daemonId === row.location.daemonId
-              && member.thread.location.projectId === row.location.projectId));
-        members.push({
-          id: existing?.id ?? crypto.randomUUID(), scope: "pinned", logicalProjectId: null,
-          folderId, position: members.length,
-          kind: row.entry.entryKind === "draft" ? "draft" : "thread",
-          draftId: row.entry.entryKind === "draft" ? row.entry.draft.draftId : null,
-          thread: row.entry.entryKind === "draft" ? null : {
-            location: row.location, threadId: row.entry.identity.threadId,
-          },
-        });
-      }
-    }
-    await this.mutate({
-      kind: "saveLayout", scope: "pinned", logicalProjectId: null,
-      expectedRevision: snapshot.revision, folders, members,
+  async savePinnedLayout(_rows: readonly WorkbenchLogicalThreadRow[], order: WorkbenchThreadDisplayOrder) {
+    await this.layout({ action: "pinnedSave", order });
+  }
+
+  private async layout(intent: LayoutIntent) {
+    this.assertOpen();
+    if (!this.state.data) throw new Error("Layout facts are unavailable.");
+    const result = await this.options.workspace.rpc.requestRaw({
+      method: "workspace/layout", params: { ...intent, expectedRevision: this.state.data.revision },
     });
-  }
-
-  private projectLayoutMutation(logicalProjectId: LogicalProjectId,
-    rows: readonly WorkbenchLogicalThreadRow[], displayOrder: WorkbenchThreadDisplayOrder):
-    Extract<PresentationMutation, { kind: "saveLayout" }> {
-    const snapshot = this.state.data;
-    if (!snapshot) throw new Error("Project layout is unavailable.");
-    const scopedRows = rows.filter(row => row.logicalProjectId === logicalProjectId);
-    const rowByKey = new Map(scopedRows.map(row => [getWorkbenchThreadDisplayKey(row.entry), row]));
-    const existingMemberId = (row: WorkbenchLogicalThreadRow) =>
-      snapshot.members.find(member => member.scope === "project"
-        && member.logicalProjectId === logicalProjectId
-        && (row.entry.entryKind === "draft"
-          ? member.kind === "draft" && member.draftId === row.entry.draft.draftId
-          : member.kind === "thread" && member.thread?.threadId === row.entry.identity.threadId
-            && member.thread.location.daemonId === row.location.daemonId
-            && member.thread.location.projectId === row.location.projectId))?.id ?? crypto.randomUUID();
-    const folders: Extract<PresentationMutation, { kind: "saveLayout" }>["folders"] = [];
-    const members: Extract<PresentationMutation, { kind: "saveLayout" }>["members"] = [];
-    for (const section of ["pinned", "snoozed", "settled"] as const) {
-      for (const item of projectWorkbenchThreadDisplaySection(
-        scopedRows.map(row => row.entry), displayOrder, section,
-      )) {
-        const folderId = item.itemKind === "folder" ? item.folder.folderId : null;
-        if (item.itemKind === "folder") folders.push({
-          id: item.folder.folderId, scope: "project", logicalProjectId,
-          title: item.folder.title, position: folders.length,
-        });
-        for (const entry of item.itemKind === "folder" ? item.entries : [item.entry]) {
-          const row = rowByKey.get(getWorkbenchThreadDisplayKey(entry));
-          if (!row) throw new Error("A project layout row lost its source.");
-          members.push({
-            id: existingMemberId(row), scope: "project", logicalProjectId,
-            folderId, position: members.length,
-            kind: entry.entryKind === "draft" ? "draft" : "thread",
-            draftId: entry.entryKind === "draft" ? entry.draft.draftId : null,
-            thread: entry.entryKind === "draft" ? null : {
-              location: row.location, threadId: entry.identity.threadId,
-            },
-          });
-        }
-      }
-    }
-    return {
-      kind: "saveLayout", scope: "project", logicalProjectId,
-      expectedRevision: snapshot.revision, folders, members,
-    };
-  }
-
-  private homeLayoutMutation(rows: readonly WorkbenchLogicalThreadRow[], order: WorkbenchHomeThreadDisplayOrder):
-    Extract<PresentationMutation, { kind: "saveLayout" }> {
-    const snapshot = this.state.data;
-    if (!snapshot) throw new Error("Home layout is unavailable.");
-    const entries = rows.flatMap(row => {
-      const section = getWorkbenchThreadDisplaySection(row.entry);
-      return section ? [{ key: getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry), section, row }] : [];
-    });
-    const byKey = new Map(entries.map(entry => [entry.key, entry.row]));
-    const members: Extract<PresentationMutation, { kind: "saveLayout" }>["members"] = [];
-    for (const section of ["pinned", "snoozed", "settled"] as const) {
-      for (const key of resolveWorkbenchHomeThreadSectionKeys(entries, order, section)) {
-        const row = byKey.get(key);
-        if (!row) throw new Error("A home layout row lost its daemon source.");
-        const existing = snapshot.members.find(member => member.scope === "home"
-          && (row.entry.entryKind === "draft"
-            ? member.kind === "draft" && member.draftId === row.entry.draft.draftId
-            : member.kind === "thread" && member.thread?.threadId === row.entry.identity.threadId
-              && member.thread.location.daemonId === row.location.daemonId
-              && member.thread.location.projectId === row.location.projectId));
-        members.push({
-          id: existing?.id ?? crypto.randomUUID(), scope: "home", logicalProjectId: null,
-          folderId: null, position: members.length,
-          kind: row.entry.entryKind === "draft" ? "draft" : "thread",
-          draftId: row.entry.entryKind === "draft" ? row.entry.draft.draftId : null,
-          thread: row.entry.entryKind === "draft" ? null : {
-            location: row.location, threadId: row.entry.identity.threadId,
-          },
-        });
-      }
-    }
-    return {
-      kind: "saveLayout", scope: "home", logicalProjectId: null,
-      expectedRevision: snapshot.revision, folders: [], members,
-    };
+    this.accept(this.parseSnapshot(result));
   }
 
   async uploadAttachment(draftId: string, attachmentId: string, sourceUrl: string, signal?: AbortSignal) {
@@ -379,55 +206,23 @@ export default class WorkbenchPresentationClient {
 
   async refresh(): Promise<PresentationSnapshot> {
     this.assertOpen();
-    const revisionBeforeRead = this.state.data?.revision ?? -1;
-    if (!this.state.data) this.publish({ ...this.state, phase: "loading" });
-    const controller = new AbortController();
-    this.requests.add(controller);
-    try {
-      let value: unknown;
-      if (this.options.rpc?.available) {
-        value = await this.options.rpc.requestRaw({ method: "app/presentation/read", params: {} });
-      } else {
-        const response = await (this.options.fetcher ?? fetch)(path, { cache: "no-store", signal: controller.signal });
-        if (!response.ok) throw await this.responseError(response);
-        value = await response.json();
-      }
-      const data = this.parseSnapshot(value);
-      controller.signal.throwIfAborted();
-      this.accept(data);
-      return this.state.data!;
-    } catch (error) {
-      if (!this.closed && (this.state.data?.revision ?? -1) <= revisionBeforeRead) {
-        this.publish({ ...this.state, error: this.message(error), phase: "failed" });
-      }
-      throw error;
-    } finally {
-      this.requests.delete(controller);
-    }
+    this.start();
+    const value = await this.options.workspace.waitFor(this.observation!);
+    if (value.kind !== "presentation" || !value.data) throw new Error("Presentation facts are unavailable.");
+    this.accept(value.data);
+    return value.data;
   }
 
-  async mutate(input: PresentationMutation, signal?: AbortSignal): Promise<PresentationSnapshot> {
+  async mutate(input: WorkbenchPresentationIntent, signal?: AbortSignal): Promise<PresentationSnapshot> {
     this.assertOpen();
     signal?.throwIfAborted();
-    const mutation = PresentationMutationSchema.parse(input);
+    const mutation = WorkbenchPresentationIntentSchema.parse(input);
     const controller = new AbortController();
     this.requests.add(controller);
     try {
-      let value: unknown;
-      if (this.options.rpc?.available) {
-        value = await this.options.rpc.requestRaw({
+      const value = await this.options.workspace.rpc.requestRaw({
           method: "app/presentation/mutate", params: { mutation },
-        });
-      } else {
-        const response = await (this.options.fetcher ?? fetch)(`${path}/mutate`, {
-          method: "POST", cache: "no-store",
-          signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(mutation),
-        });
-        if (!response.ok) throw await this.responseError(response);
-        value = await response.json();
-      }
+        }, { signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal });
       signal?.throwIfAborted();
       const data = this.parseSnapshot(value);
       signal?.throwIfAborted();
@@ -437,11 +232,7 @@ export default class WorkbenchPresentationClient {
     } catch (error) {
       if (this.closed) throw error;
       if (signal?.aborted) throw error;
-      try {
-        await this.refresh();
-      } catch (refreshError) {
-        throw new AggregateError([error, refreshError], "Presentation write and reconciliation both failed.");
-      }
+      this.publish({ ...this.state, error: this.message(error), phase: "failed" });
       throw error;
     } finally {
       this.requests.delete(controller);
@@ -475,6 +266,7 @@ export default class WorkbenchPresentationClient {
 
   private publish(state: PresentationState) {
     if (this.closed) return;
+    if (areDeeplyEqual(this.state, state)) return;
     this.state = state;
     for (const listener of this.listeners) listener();
   }
@@ -484,10 +276,13 @@ export default class WorkbenchPresentationClient {
   }
 
   dispose() {
+    if (this.closed) return;
     this.closed = true;
+    this.observation?.release();
     this.deletedDraftRevisions.clear();
     for (const controller of this.requests) controller.abort();
     this.requests.clear();
+    for (const listener of [...this.listeners]) listener();
     this.listeners.clear();
   }
 }

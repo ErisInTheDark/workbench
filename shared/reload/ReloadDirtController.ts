@@ -128,8 +128,12 @@ export default class ReloadDirtController {
   }
 
   async start() {
+    const diagnostic = (stage: string) => {
+      if (process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1") console.info(`[startup] reload sources: ${stage}`);
+    };
     if (!this.state) {
       const sourceState = this.options.getSourceState();
+      diagnostic("capturing Git baseline");
       const snapshotCommit = await this.writeSnapshot("load reload node graph");
       this.state = {
         baselines: new Map(sourceState.descriptors.map(({ scope }) => [scope, snapshotCommit])),
@@ -144,13 +148,16 @@ export default class ReloadDirtController {
     const state = this.requireState();
     state.refreshAbort = this.refreshAbort;
     this.connectSourceObserver();
+    diagnostic("connecting filesystem watcher");
     await this.connectWatcher();
     if (!this.attached) return;
     if (state.pendingScopes.length) {
       this.publish({ dirtyScopes: [], error: state.error, pendingScopes: state.pendingScopes });
     } else {
+      diagnostic("comparing initial source state");
       await this.refresh();
     }
+    diagnostic("ready");
   }
 
   getSnapshot() {

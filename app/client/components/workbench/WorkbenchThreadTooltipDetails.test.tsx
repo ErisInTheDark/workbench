@@ -74,22 +74,21 @@ async function renderDetails(
   let admit!: () => void;
   const admission = new Promise<void>(resolve => { admit = resolve; });
   if (!options.observationPending) admit();
-  const owner = new ThreadObservationController({ request: async (method, params) => {
-    if (method.endsWith("/release")) return {};
+  const owner = new ThreadObservationController({ observe: async params => {
     await admission;
-    return { observation: { ...params, entries: [observedEntry], error: null, freshness: "fresh", revision: 1, updateKind: "threadObservation" } };
-  } });
+    return { observation: { ...params, entries: [observedEntry], error: null, freshness: options.disconnected ? "loading" : "fresh",
+      revision: 1, version: 2, updateKind: "threadObservation" } };
+  }, release: async () => {} });
   let ready!: () => void;
   const loaded = new Promise<void>(resolve => { ready = resolve; });
   const key = getThreadObservationKey("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] });
   const consumer = owner.acquire("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, () => {
-    if (["ready", "failed"].includes(owner.getSnapshot(key).status)) ready();
+    if (owner.getSnapshot(key).observation || owner.getSnapshot(key).status === "failed") ready();
   });
   if (!options.observationPending) {
     await loaded;
-    assert.equal(owner.getSnapshot(key).status, "ready");
+    assert.equal(owner.getSnapshot(key).status, options.disconnected ? "loading" : "ready");
   }
-  if (options.disconnected) owner.disconnect();
   const client = createClient(options.sidebarStore ?? null);
   client.controls = canRead ? {} as NonNullable<WorkbenchClientController["controls"]> : null;
   client.mounted!.threadRuntime = WorkbenchThreadRuntimeStore({
@@ -140,6 +139,11 @@ function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClien
     controls: null,
     explorer: {} as WorkbenchClientController["explorer"],
     mounted: {
+      networkClient: {} as NonNullable<WorkbenchClientController["mounted"]>["networkClient"],
+      presentationClient: {} as NonNullable<WorkbenchClientController["mounted"]>["presentationClient"],
+      workspace: {} as NonNullable<WorkbenchClientController["mounted"]>["workspace"],
+      voice: { settings: { subscribe: () => () => {}, enabled: false } } as unknown as NonNullable<WorkbenchClientController["mounted"]>["voice"],
+      projectFileIndexStore: {} as NonNullable<WorkbenchClientController["mounted"]>["projectFileIndexStore"],
       getThreadController: () => { throw new Error("Unexpected thread view during static rendering."); },
       threadOwnerFor: () => null,
       threadDraftIdentityFor: () => null,
@@ -150,12 +154,6 @@ function createClient(store: WorkbenchThreadSidebarStore | null): WorkbenchClien
       selectBrowseLocation: async () => undefined,
       navigation: {} as NonNullable<WorkbenchClientController["mounted"]>["navigation"],
       routeIntents: {} as NonNullable<WorkbenchClientController["mounted"]>["routeIntents"],
-      startup: {
-        getSnapshot: () => ({ phase: "ready" as const, error: null }),
-        subscribe: () => () => undefined,
-        start: async () => undefined,
-        retry: async () => undefined,
-      },
       controls: {} as NonNullable<WorkbenchClientController["mounted"]>["controls"],
       dispose: () => undefined,
       threadRuntime: {} as NonNullable<WorkbenchClientController["mounted"]>["threadRuntime"],

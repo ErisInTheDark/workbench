@@ -35,6 +35,44 @@ const emptySnapshot = {
   rows: {},
 };
 
+test("source freshness fences only its subscription and a fresh baseline restores incremental delivery", async () => {
+  let notify!: (notification: { method: string; params: unknown }) => void;
+  const updates: Array<[string, string]> = [];
+  const states: string[] = [];
+  let subscriptions = 0;
+  const client = new WorkbenchTranscriptClient({ transport: {
+    onNotification: listener => { notify = listener; return () => {}; },
+    request: async () => { subscriptions++; return { subscribed: true }; },
+  } });
+  try {
+    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 4 } });
+    for (const id of ["left", "right"]) await client.subscribe(
+      { subscriptionId: id, threadId: "thread", turnLimit: 1 }, () => {},
+      update => { if (update.kind === "structure") updates.push([id, update.snapshot.thread.title]); },
+      undefined, state => states.push(`${id}/${state.phase}`),
+    );
+    const frame = (id: string, reset: boolean, title: string) => notify({
+      method: workbenchTranscriptNotifications.streamed.method,
+      params: { subscriptionId: id, update: {
+        kind: "structure", reset, snapshot: { ...emptySnapshot, thread: { ...emptySnapshot.thread, title } },
+        removedItemIds: [], layout: {}, hasPreviousTurns: false,
+      } },
+    });
+    frame("left", true, "initial");
+    frame("right", true, "initial");
+    notify({ method: "workspace/transcript/state", params: { subscriptionId: "left", phase: "stale", failure: null } });
+    frame("left", false, "untrusted");
+    frame("right", false, "healthy");
+    frame("left", true, "recovered");
+    frame("left", false, "later");
+    assert.deepEqual(updates, [
+      ["left", "initial"], ["right", "initial"], ["right", "healthy"], ["left", "recovered"], ["left", "later"],
+    ]);
+    assert.deepEqual(states, ["left/stale"]);
+    assert.equal(subscriptions, 2);
+  } finally { client.dispose(); }
+});
+
 test("incremental subscriptions negotiate independently and reject malformed stream updates without admitting them", async () => {
   let notify!: (notification: { method: string; params: unknown }) => void;
   let disconnect!: () => void;
@@ -50,10 +88,10 @@ test("incremental subscriptions negotiate independently and reject malformed str
     },
   });
   try {
-    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 3 } });
+    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 4 } });
     await client.subscribe({ threadId: "thread", turnLimit: 1, subscriptionId: "live" }, () => assert.fail("not a snapshot"), update => updates.push(update));
     await client.subscribe({ threadId: "thread", turnLimit: 1, subscriptionId: "snapshot" }, () => {});
-    assert.deepEqual(requests.map(value => (value as { protocolVersion: number }).protocolVersion), [3, 2]);
+    assert.deepEqual(requests.map(value => (value as { protocolVersion: number }).protocolVersion), [4, 2]);
     const update = { kind: "text", threadId: "thread", turnId: "turn", itemId: "item",
       field: "reasoningSummary", index: 0, append: true, text: "visible" };
     notify({ method: workbenchTranscriptNotifications.streamed.method, params: { subscriptionId: "live", update: { ...update, index: -1 } } });
@@ -82,7 +120,7 @@ test("a rejected structure fails only its subscription and suppresses dependent 
     },
   });
   try {
-    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 3 } });
+    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 4 } });
     await client.subscribe({ threadId: "thread", turnLimit: 1, subscriptionId: "bad" },
       () => {}, update => updates.push(update), error => failures.push(error));
     await client.subscribe({ threadId: "thread", turnLimit: 1, subscriptionId: "good" },
@@ -109,7 +147,7 @@ test("a rejected structure fails only its subscription and suppresses dependent 
   }
 });
 
-test("native-item support follows server capabilities and is cleared on reconnect", async () => {
+test("current transcript support is cleared on disconnect while snapshot consumers keep snapshot delivery", async () => {
   const requests: Array<{ method: string; params: unknown }> = [];
   let notify!: (notification: { method: string; params: unknown }) => void;
   let disconnect!: () => void;
@@ -124,15 +162,15 @@ test("native-item support follows server capabilities and is cleared on reconnec
     },
   });
   try {
-    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 2 } });
+    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 4 } });
     await client.read({ threadId: "thread", turnLimit: 1 });
     await client.subscribe({ threadId: "thread", turnLimit: 1, subscriptionId: "sub" }, () => undefined);
-    assert.deepEqual(requests.map(({ params }) => (params as { protocolVersion?: number }).protocolVersion), [2, 2]);
+    assert.deepEqual(requests.map(({ params }) => (params as { protocolVersion?: number }).protocolVersion), [4, 2]);
     disconnect();
     await assert.rejects(client.read({ threadId: "thread", turnLimit: 1 }), /unavailable/);
-    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 1 } });
+    notify({ method: workbenchTranscriptNotifications.capabilities.method, params: { protocolVersion: 4 } });
     await client.read({ threadId: "thread", turnLimit: 1 });
-    assert.equal((requests.at(-1)!.params as { protocolVersion?: number }).protocolVersion, undefined);
+    assert.equal((requests.at(-1)!.params as { protocolVersion?: number }).protocolVersion, 4);
   } finally {
     client.dispose();
   }
@@ -157,7 +195,7 @@ test("transcript client uses operation identities but never trusts their matchin
   });
   receiveNotification?.({
     method: workbenchTranscriptNotifications.capabilities.method,
-    params: { protocolVersion: 1 },
+    params: { protocolVersion: 4 },
   });
 
   await assert.rejects(
@@ -166,7 +204,7 @@ test("transcript client uses operation identities but never trusts their matchin
   );
   assert.deepEqual(requests, [{
     method: workbenchTranscriptOperations.read.method,
-    params: { threadId: "thread", turnLimit: 20 },
+    params: { threadId: "thread", turnLimit: 20, protocolVersion: 4 },
   }]);
   assert.equal(reports.length, 1);
   assert.ok(reports[0].issues.length > 0);
@@ -189,7 +227,7 @@ test("transcript client ignores a method-matched malformed notification after bo
   });
   receiveNotification?.({
     method: workbenchTranscriptNotifications.capabilities.method,
-    params: { protocolVersion: 1 },
+    params: { protocolVersion: 4 },
   });
 
   await client.subscribe({ subscriptionId: "sub", threadId: "thread", turnLimit: 20 }, () => publications += 1);
@@ -233,7 +271,7 @@ test("transcript subscription owns its listener before the server publishes init
   });
   receiveNotification?.({
     method: workbenchTranscriptNotifications.capabilities.method,
-    params: { protocolVersion: 1 },
+    params: { protocolVersion: 4 },
   });
 
   await client.subscribe(
@@ -244,7 +282,7 @@ test("transcript subscription owns its listener before the server publishes init
   client.dispose();
 });
 
-test("transcript capability gates requests and reset or connection loss revokes connection-owned state", async () => {
+test("transcript capability gates requests and app connection loss revokes connection-owned state", async () => {
   let receiveNotification: ((notification: { method: string; params: unknown }) => void) | undefined;
   let disconnect: (() => void) | undefined;
   const availability: boolean[] = [];
@@ -286,16 +324,13 @@ test("transcript capability gates requests and reset or connection loss revokes 
 
   receiveNotification?.({
     method: workbenchTranscriptNotifications.capabilities.method,
-    params: { protocolVersion: 1, futureField: true },
+    params: { protocolVersion: 4, futureField: true },
   });
   await client.subscribe(
     { subscriptionId: "sub", threadId: "thread", turnLimit: 20 },
     () => publications += 1,
   );
-  receiveNotification?.({
-    method: "workbench/thread-state/reset",
-    params: {},
-  });
+  disconnect?.();
   receiveNotification?.({
     method: workbenchTranscriptNotifications.updated.method,
     params: {
@@ -312,7 +347,7 @@ test("transcript capability gates requests and reset or connection loss revokes 
 
   receiveNotification?.({
     method: workbenchTranscriptNotifications.capabilities.method,
-    params: { protocolVersion: 1 },
+    params: { protocolVersion: 4 },
   });
   disconnect?.();
   assert.deepEqual(availability, [false, true, false, true, false]);

@@ -21,6 +21,7 @@ import { CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
 import { WorkbenchProjectFileIndexRequestSchema } from "workbench-shared/workbench/project/project-file-index";
 import ProjectTreeFileIndex from "workbench-shared/workbench/project/ProjectTreeFileIndex";
+import { WorkbenchProjectStateRequestSchema } from "workbench-shared/workbench/project/project-state";
 import { WorkbenchThreadLaunchReadSchema, WorkbenchThreadLaunchRequestSchema } from "workbench-shared/workbench/thread/thread-launch";
 import {
   WorkbenchPresentationAttachmentChunkRequestSchema,
@@ -75,6 +76,7 @@ export interface WorkbenchBrowseSessionPort {
 }
 
 const METHODS = new Set([
+  "project/tree/refresh", "project/entry/create", "project/file/delete",
   "git/working-tree/read", "git/working-tree/diff", "git/working-tree/preview", "git/working-tree/mutate",
   ...Object.keys(workbenchThreadActions),
   "models/context/read",
@@ -231,7 +233,7 @@ export default class WorkbenchDaemonRequestController {
     profiles: Pick<WorkbenchComposerProfileStore, "mutate" | "read">;
     profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
     projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "readLocations" | "resolveProjectById" | "readDiscoverySettings" | "updateDiscoverySettings">;
-    projectSnapshot: Pick<WorkbenchProjectSnapshotController, "readProjectSnapshot">;
+    projectSnapshot: Pick<WorkbenchProjectSnapshotController, "readProjectSnapshot" | "handleRequest">;
     search: Pick<WorkbenchSearchController, "search">;
     stats: Pick<WorkbenchStatsController, "read" | "readDetailed" | "refreshRateLimits" | "startImport">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
@@ -262,6 +264,21 @@ export default class WorkbenchDaemonRequestController {
       }
       let result: object;
       switch (request.method) {
+        case "project/tree/refresh":
+        case "project/entry/create":
+        case "project/file/delete": {
+          const project = await this.owners.projects.resolveProjectById(requiredString(params, "projectId"));
+          const methods = {
+            "project/tree/refresh": "workbench/thread-state/project/refresh",
+            "project/entry/create": "workbench/thread-state/project/entry/create",
+            "project/file/delete": "workbench/thread-state/project/file/delete",
+          } as const;
+          const operation = WorkbenchProjectStateRequestSchema.parse({
+            ...params, projectId: project.id, method: methods[request.method],
+          });
+          result = await this.owners.projectSnapshot.handleRequest(project.id, operation);
+          break;
+        }
         case "project/discovery-settings/read": {
           result = await this.owners.projects.readDiscoverySettings();
           break;

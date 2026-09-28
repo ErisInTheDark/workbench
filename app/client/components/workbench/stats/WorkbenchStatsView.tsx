@@ -25,7 +25,7 @@ import type {
 import { STATS_TOKEN_TYPES, hasStatsCategoryCosts, type StatsTokenType, type WorkbenchStatsDetailedReadRequest } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import WorkbenchStatsLoadController from "../../../workbench/WorkbenchStatsLoadController";
 import WorkbenchStatsClient from "../../../workbench/WorkbenchStatsClient";
-import WorkbenchDaemonClientContext from "../WorkbenchDaemonClientContext";
+import { WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "../WorkbenchWorkspaceContext";
 import WorkbenchClaimHotspots from "./WorkbenchClaimHotspots";
 import WorkbenchCacheEfficiency from "./WorkbenchCacheEfficiency";
 import WorkbenchCostUsage from "./WorkbenchCostUsage";

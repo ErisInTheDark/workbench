@@ -3,11 +3,8 @@
  * - WorkbenchPresentationImportController: reconcile attached-daemon legacy presentation once per app connection.
  */
 import { createHash } from "node:crypto";
-import WorkbenchSocketClient from "workbench-shared/workbench/WorkbenchSocketClient";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import { isWorkbenchRpcFailure } from "workbench-shared/workbench/workbench-rpc";
 import {
-  WorkbenchGlobalThreadStateOpenResultSchema,
   WorkbenchHomeThreadDisplayOrderSchema,
   type WorkbenchProjectThreadSidebars,
 } from "workbench-shared/workbench/thread/thread-state";
@@ -21,7 +18,9 @@ import {
 } from "workbench-shared/state/workbench-presentation-legacy-layout";
 import { DaemonIdSchema, type DaemonId, type DraftId, type ProjectId } from "workbench-shared/workbench/identity";
 import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
-import type WorkbenchNetworkController from "../network/WorkbenchNetworkController";
+import type WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
+import type WorkbenchDaemonSource from "../workspace/WorkbenchDaemonSource";
+import type { DaemonWorkspaceQuery, DaemonWorkspaceObservation } from "workbench-shared/workbench/workspace/workspace-observation";
 import type WorkbenchPresentationController from "./WorkbenchPresentationController";
 
 type Source = WorkbenchPresentationManifestPage["sources"][number];
@@ -42,10 +41,9 @@ const expectedImportFailures = new Set([
 ]);
 type Owner = Pick<WorkbenchPresentationController,
   "read" | "readImportReceipts" | "mutate" | "mutateImportBatch" | "putAttachmentChunk" | "completeAttachment">;
-type Network = Pick<WorkbenchNetworkController, "snapshot" | "connection" | "subscribe">;
 interface ImportSourceConnection {
   daemon: WorkbenchDaemonClient;
-  request<TResponse>(method: string, params: object): Promise<TResponse>;
+  read(query: DaemonWorkspaceQuery): Promise<DaemonWorkspaceObservation>;
   close(): void;
 }
 
@@ -53,7 +51,7 @@ export default class WorkbenchPresentationImportController {
   private readonly cancellation = new AbortController();
   private unsubscribe: (() => void) | null = null;
   private running: Promise<void> | null = null;
-  private requested: { daemonId: DaemonId; port: number; hostname: string } | null = null;
+  private requested: { daemonId: DaemonId; generation: number; hostname: string; source: WorkbenchDaemonSource } | null = null;
   private lastReadyKey: string | null = null;
   private activeKey: string | null = null;
   private source: ImportSourceConnection | null = null;
@@ -63,14 +61,13 @@ export default class WorkbenchPresentationImportController {
   private readonly listeners = new Set<(status: WorkbenchPresentationImportStatus) => void>();
 
   constructor(private readonly options: {
-    network: Network;
+    sources: WorkbenchDaemonSources;
     presentation: Owner;
     logger: WorkbenchProcessLogger;
-    openSource?: (port: number, signal: AbortSignal) => ImportSourceConnection;
   }) {}
 
   start() {
-    this.unsubscribe = this.options.network.subscribe(() => this.observe());
+    this.unsubscribe = this.options.sources.subscribe(() => this.observe());
     this.observe();
     return this.running;
   }
@@ -93,17 +90,17 @@ export default class WorkbenchPresentationImportController {
 
   private observe() {
     if (this.cancellation.signal.aborted) return;
-    const daemon = this.options.network.snapshot().daemon;
-    const port = this.options.network.connection().localPort;
-    if (!daemon || daemon.state !== "ready" || !port) {
+    const source = this.options.sources.attached;
+    const daemon = source?.getSnapshot();
+    if (!source || !daemon || !source.available) {
       this.retireSource();
       return;
     }
-    const key = `${daemon.daemonId}:${port}`;
+    const key = `${daemon.daemonId}:${daemon.generation}`;
     if (this.activeKey && this.activeKey !== key) this.retireSource();
     if (this.lastReadyKey === key) return;
     this.lastReadyKey = key;
-    this.requested = { daemonId: DaemonIdSchema.parse(daemon.daemonId), port, hostname: daemon.hostname };
+    this.requested = { daemonId: DaemonIdSchema.parse(daemon.daemonId), generation: daemon.generation, hostname: daemon.hostname, source };
     if (this.running) return;
     this.drive();
   }
@@ -128,23 +125,23 @@ export default class WorkbenchPresentationImportController {
     });
   }
 
-  private async reconcile(target: { daemonId: DaemonId; port: number; hostname: string }) {
+  private async reconcile(target: { daemonId: DaemonId; generation: number; hostname: string; source: WorkbenchDaemonSource }) {
     const startedAt = Date.now();
     this.publishStatus({ phase: "running", scanned: 0, imported: 0, failed: 0 });
-    const source = this.options.openSource?.(target.port, this.cancellation.signal)
-      ?? this.openSource(target.port);
+    const source = this.openSource(target.source);
     this.source = source;
-    this.activeKey = `${target.daemonId}:${target.port}`;
-    const { daemon, request } = source;
+    this.activeKey = `${target.daemonId}:${target.generation}`;
+    const { daemon } = source;
     let scanned = 0;
     let imported = 0;
     let skipped = 0;
     let failed = 0;
-    let globalOpened = false;
     this.options.logger.line("app", "presentation import started");
     try {
-      const locations = await daemon.projects.locations();
-      this.assertCurrent(target.daemonId, target.port);
+      const catalogue = await source.read({ kind: "catalogue" });
+      if (catalogue.kind !== "catalogue" || !catalogue.locations) throw new Error("Attached project catalogue is unavailable.");
+      const locations = catalogue.locations;
+      this.assertCurrent(target.daemonId, target.generation);
       this.options.presentation.mutate({
         kind: "registerLocations", daemonId: target.daemonId, hostname: target.hostname, catalog: locations,
       });
@@ -153,7 +150,7 @@ export default class WorkbenchPresentationImportController {
       let sidebars: WorkbenchProjectThreadSidebars | null = null;
       do {
         const page = await daemon.presentationExport.manifest({ cursor, limit: 200 });
-        this.assertCurrent(target.daemonId, target.port);
+        this.assertCurrent(target.daemonId, target.generation);
         scanned += page.sources.length;
         const receiptSources = page.sources.map(source => ({
           kind: source.kind === "draft" ? "draft" as const : "layout" as const,
@@ -189,10 +186,11 @@ export default class WorkbenchPresentationImportController {
           index++;
           try {
             if (!sidebars) {
-              const result = WorkbenchGlobalThreadStateOpenResultSchema.parse(
-                await request("workbench/thread-state/global/open", { version: 7 }));
-              globalOpened = true;
-              sidebars = result.projectSidebars;
+              const result = await this.source!.read({
+                kind: "projectThreads", projectIds: locations.data.map(item => item.project.id),
+              });
+              if (result.kind !== "projectThreads") throw new Error("Attached project rows are unavailable.");
+              sidebars = { projects: result.projects.flatMap(project => project.sidebar ? [project.sidebar] : []) };
             }
             await this.importLayout(target.daemonId, source, daemon, snapshot, sidebars);
             imported++;
@@ -207,14 +205,7 @@ export default class WorkbenchPresentationImportController {
       } while (cursor !== null);
       this.publishStatus({ phase: failed ? "partial" : "complete", scanned, imported, failed });
       this.options.logger.line("app", `presentation import ${failed ? "partial" : "complete"}: ${imported} added, ${skipped} present, ${failed} failed of ${scanned} in ${Date.now() - startedAt}ms`);
-    } catch (error) {
-      if (this.lastReadyKey === `${target.daemonId}:${target.port}`) this.lastReadyKey = null;
-      throw error;
     } finally {
-      if (globalOpened && !this.cancellation.signal.aborted) {
-        try { await request("workbench/thread-state/global/close", {}); }
-        catch (error) { this.warn("observation close", error); }
-      }
       if (this.source === source) this.retireSource();
       this.activeKey = null;
     }
@@ -226,39 +217,53 @@ export default class WorkbenchPresentationImportController {
     source?.close();
   }
 
-  private assertCurrent(daemonId: DaemonId, port: number) {
+  private assertCurrent(daemonId: DaemonId, generation: number) {
     this.cancellation.signal.throwIfAborted();
-    const current = this.options.network.snapshot().daemon;
-    if (!this.source || current?.daemonId !== daemonId
-      || this.options.network.connection().localPort !== port) {
+    const current = this.options.sources.attached?.getSnapshot();
+    if (!this.source || current?.daemonId !== daemonId || current.generation !== generation
+      || current.connection !== "current") {
       throw new Error("Attached daemon changed during presentation import.");
     }
   }
 
   private assertActive(daemonId: DaemonId) {
-    const port = this.options.network.connection().localPort;
-    if (!port || this.activeKey !== `${daemonId}:${port}`) {
+    const generation = this.options.sources.attached?.getSnapshot().generation;
+    if (generation === undefined || this.activeKey !== `${daemonId}:${generation}`) {
       throw new Error("Attached daemon changed during presentation import.");
     }
-    this.assertCurrent(daemonId, port);
+    this.assertCurrent(daemonId, generation);
   }
 
-  private openSource(port: number): ImportSourceConnection {
-    const socket = new WorkbenchSocketClient({
-      resolveUrl: async () => `ws://127.0.0.1:${port}`,
-    });
-    const request = async <TResponse>(method: string, params: object): Promise<TResponse> => {
-      this.cancellation.signal.throwIfAborted();
-      const response = await socket.sendRequest<TResponse>({ method, params });
-      this.cancellation.signal.throwIfAborted();
-      if (isWorkbenchRpcFailure(response)) {
-        const data = response.error.data && typeof response.error.data === "object" && !Array.isArray(response.error.data)
-          ? response.error.data : null;
-        throw new WorkbenchDaemonRequestError(response.error.message, response.error.code, data);
-      }
-      return response.result;
+  private openSource(source: WorkbenchDaemonSource): ImportSourceConnection {
+    const cancellation = new AbortController();
+    const release = source.retain();
+    return {
+      daemon: new WorkbenchDaemonClient({
+        request: (method, params) => source.request(method, params, {}, { signal: cancellation.signal }),
+      }),
+      read: query => new Promise((resolve, reject) => {
+        let observation: ReturnType<WorkbenchDaemonSource["observe"]> | null = null;
+        const finish = () => {
+          observation?.release();
+          cancellation.signal.removeEventListener("abort", abort);
+        };
+        const abort = () => { finish(); reject(new Error("Presentation import source changed.")); };
+        const changed = () => {
+          if (!observation) return;
+          const fact = observation.getSnapshot();
+          if (fact.phase === "current" && fact.value) { finish(); resolve(fact.value); }
+          else if (fact.phase === "failed" || fact.phase === "unavailable" || fact.failure) {
+            finish();
+            reject(new Error(fact.failure ?? "Presentation import source is unavailable."));
+          }
+        };
+        cancellation.signal.addEventListener("abort", abort, { once: true });
+        observation = source.observe(query, changed);
+        if (cancellation.signal.aborted) abort();
+        else changed();
+      }),
+      close: () => { cancellation.abort(); release(); },
     };
-    return { daemon: new WorkbenchDaemonClient({ request }), request, close: () => socket.dispose() };
   }
 
   private async importDrafts(

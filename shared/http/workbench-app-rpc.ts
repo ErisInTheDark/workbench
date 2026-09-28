@@ -2,16 +2,18 @@
  * Exports:
  * - WorkbenchAppRpcRequestSchema/WorkbenchAppRpcRequest/WorkbenchAppRpcIntent: bounded browser-to-app JSON intents.
  * - WorkbenchAppRuntimeResponseSchema: validated app reload and frontend projection.
+ * - WorkbenchPresentationIntent/WorkbenchPresentationIntentSchema: browser-owned draft edits only.
  */
 import { z } from "zod";
 import { WorkbenchNetworkActionSchema } from "./workbench-network";
-import {
-  WorkbenchClientStateMutationSchema, WorkbenchDaemonRegistrationRequestSchema,
-  WorkbenchProjectRemapSchema,
-} from "../state/workbench-client-state";
+import { WorkbenchClientStateMutationSchema } from "../state/workbench-client-state";
 import { WORKBENCH_RELOAD_SCOPE_PATTERN } from "../reload/workbench-reload";
-import { PresentationMutationSchema } from "../state/workbench-presentation-state";
+import { PresentationMutationSchema, type PresentationMutation } from "../state/workbench-presentation-state";
 import { WorkbenchAppSettingsUpdateRequestSchema } from "./workbench-app-settings";
+import { DaemonReloadRequestSchema } from "../workbench/daemon-reload";
+import { DaemonIdSchema } from "../workbench/identity";
+import { WorkspaceObserveSchema, WorkspaceReleaseSchema } from "../workbench/workspace/workspace-observation";
+import { WorkspaceCommandSchema, WorkspaceTranscriptRequestSchema, WorkspaceThreadMutationSchema, WorkspaceDraftLaunchSchema, WorkspaceLayoutRequestSchema, WorkspaceThreadActionSchema } from "../workbench/workspace/workspace-commands";
 
 export const WorkbenchAppRuntimeResponseSchema = z.object({
   frontendGeneration: z.object({
@@ -32,44 +34,36 @@ export const WorkbenchAppRuntimeResponseSchema = z.object({
 
 const browserStateId = z.uuid().nullable();
 const id = z.number().int().positive();
+export type WorkbenchPresentationIntent = Extract<PresentationMutation,
+  { kind: "putDraft" | "deleteDraft" | "setDraftPriority" | "deleteAttachment" }>;
+export const WorkbenchPresentationIntentSchema = PresentationMutationSchema.refine(
+  value => ["putDraft", "deleteDraft", "setDraftPriority", "deleteAttachment"].includes(value.kind),
+  "This presentation operation belongs to the app workspace.",
+).transform(value => value as WorkbenchPresentationIntent);
 
 export const WorkbenchAppRpcRequestSchema = z.discriminatedUnion("method", [
-  z.object({
-    id,
-    method: z.literal("app/network/read"),
-    params: z.object({}).strict(),
-  }).strict(),
+  z.object({ id, method: z.literal("workspace/thread/action"), params: WorkspaceThreadActionSchema }).strict(),
+  z.object({ id, method: z.literal("workspace/daemon/reload"), params: z.object({
+    daemonId: DaemonIdSchema.optional(), request: DaemonReloadRequestSchema,
+  }).strict() }).strict(),
+  z.object({ id, method: z.literal("workspace/command"), params: WorkspaceCommandSchema }).strict(),
+  z.object({ id, method: z.literal("workspace/transcript"), params: WorkspaceTranscriptRequestSchema }).strict(),
+  z.object({ id, method: z.literal("workspace/thread/mutate"), params: WorkspaceThreadMutationSchema }).strict(),
+  z.object({ id, method: z.literal("workspace/layout"), params: WorkspaceLayoutRequestSchema }).strict(),
+  z.object({ id, method: z.literal("workspace/observe"), params: WorkspaceObserveSchema }).strict(),
+  z.object({ id, method: z.literal("workspace/release"), params: WorkspaceReleaseSchema }).strict(),
+  z.object({ id, method: z.literal("workspace/draft/launch"), params: WorkspaceDraftLaunchSchema }).strict(),
   z.object({
     id, method: z.literal("app/network/action"),
     params: z.object({ action: WorkbenchNetworkActionSchema }).strict(),
-  }).strict(),
-  z.object({
-    id, method: z.literal("app/state/read"),
-    params: z.object({ browserStateId, sinceRevision: z.number().int().nonnegative().nullable() }).strict(),
   }).strict(),
   z.object({
     id, method: z.literal("app/state/mutate"),
     params: z.object({ browserStateId, mutation: WorkbenchClientStateMutationSchema }).strict(),
   }).strict(),
   z.object({
-    id, method: z.literal("app/state/register"),
-    params: z.object({ browserStateId, request: WorkbenchDaemonRegistrationRequestSchema }).strict(),
-  }).strict(),
-  z.object({
-    id, method: z.literal("app/state/remap"),
-    params: z.object({ browserStateId, request: WorkbenchProjectRemapSchema }).strict(),
-  }).strict(),
-  z.object({
-    id, method: z.literal("app/runtime/read"),
-    params: z.object({}).strict(),
-  }).strict(),
-  z.object({
-    id, method: z.literal("app/presentation/read"),
-    params: z.object({}).strict(),
-  }).strict(),
-  z.object({
     id, method: z.literal("app/presentation/mutate"),
-    params: z.object({ mutation: PresentationMutationSchema }).strict(),
+    params: z.object({ mutation: WorkbenchPresentationIntentSchema }).strict(),
   }).strict(),
   z.object({
     id, method: z.literal("app/settings/read"),

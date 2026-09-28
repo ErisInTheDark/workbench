@@ -4,6 +4,7 @@
  * - WorkbenchAccountClientOptions: provider account transport and diagnostic ports.
  * - default WorkbenchAccountClient: own model caches and rate-limit refresh lifecycle by harness.
  */
+import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 import type {
   WorkbenchHarness,
   WorkbenchListModelsOptions,
@@ -89,6 +90,7 @@ export default class WorkbenchAccountClient {
   private readonly generations = new Map<WorkbenchHarness, number>();
   private readonly listeners = new Set<() => void>();
   private readonly models = new Map<WorkbenchHarness, WorkbenchModelOption[]>();
+  private readonly modelReads = new Map<WorkbenchHarness, Promise<WorkbenchModelOption[]>>();
   private readonly now: () => number;
   private readonly options: WorkbenchAccountClientOptions;
   private readonly rateLimits = new Map<WorkbenchHarness, RateLimitEntry>();
@@ -130,12 +132,23 @@ export default class WorkbenchAccountClient {
     }
     const cached = this.models.get(harness);
     if (cached && !options.forceRefresh) return cached;
-    const models = await this.options.listModels(harness);
-    if (!this.disposed) {
+    const pending = this.modelReads.get(harness);
+    if (pending && !options.forceRefresh) return pending;
+    const generation = this.contextGeneration;
+    const read = this.options.listModels(harness).then(models => {
+      if (this.disposed || generation !== this.contextGeneration || this.modelReads.get(harness) !== read) {
+        const current = this.models.get(harness);
+        if (current && !this.disposed) return current;
+        throw new Error("Model read was superseded by a newer source state.");
+      }
       this.models.set(harness, models);
       this.publish();
-    }
-    return models;
+      return models;
+    }).finally(() => {
+      if (this.modelReads.get(harness) === read) this.modelReads.delete(harness);
+    });
+    this.modelReads.set(harness, read);
+    return read;
   }
 
   async refreshIfStale(harness: WorkbenchHarness) {
@@ -170,6 +183,8 @@ export default class WorkbenchAccountClient {
         this.publish();
       })
       .catch((error: unknown) => {
+        if (error instanceof WorkbenchRpcRequestInterruptedError
+          && (this.disposed || contextGeneration !== this.contextGeneration)) return;
         const detail = error instanceof Error ? error.message : "unknown failure";
         this.options.reportError?.(`Unable to refresh ${harness} account limits: ${detail.slice(0, 500)}`);
       })
@@ -184,6 +199,9 @@ export default class WorkbenchAccountClient {
     this.contextGeneration += 1;
     this.generations.clear();
     this.refreshes.clear();
+    this.refreshStartedAt.clear();
+    this.models.clear();
+    this.modelReads.clear();
     this.rateLimits.clear();
     this.publish();
   }
@@ -193,6 +211,7 @@ export default class WorkbenchAccountClient {
     this.contextGeneration += 1;
     this.generations.clear();
     this.refreshes.clear();
+    this.modelReads.clear();
     this.listeners.clear();
   }
 

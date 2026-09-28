@@ -1,14 +1,14 @@
 /*
  * Exports:
  * - ComposerProfilePersistence: typed browser boundary for daemon-owned composer profiles.
- * - ComposerProfileTargetPersistence: typed browser boundary for daemon-owned target profile snapshots.
+ * - ComposerProfileTargetPersistence: typed browser boundary for app drafts and daemon target profile snapshots.
  * - createComposerProfilePersistence: create the daemon-backed composer-profile persistence adapter.
  * - createComposerProfileTargetPersistence: read daemon targets, app drafts, and same-daemon folder-default fallbacks.
  */
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileMutation, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection } from "workbench-shared/types";
 import type { WorkbenchComposerProfileSlot } from "workbench-shared/types";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import type { DaemonId, DraftId, ProjectId } from "workbench-shared/workbench/identity";
+import type { DaemonId } from "workbench-shared/workbench/identity";
 import type WorkbenchPresentationClient from "./WorkbenchPresentationClient";
 
 export interface ComposerProfilePersistence {
@@ -32,20 +32,18 @@ export function createComposerProfilePersistence(daemon: WorkbenchDaemonClient):
 
 export function createComposerProfileTargetPersistence(
   daemon: Pick<WorkbenchDaemonClient, "profiles">,
-  flushDraft: (projectId: ProjectId, draftId: DraftId) => Promise<void>,
-  appDrafts: WorkbenchPresentationClient | null | false = false,
-  daemonId: DaemonId | null = null,
+  appDrafts: WorkbenchPresentationClient,
+  daemonId: DaemonId,
 ): ComposerProfileTargetPersistence {
   return {
     read: async (slot) => {
-      if (slot.kind === "draft" && appDrafts !== false) {
-        if (!appDrafts) throw new Error("App draft presentation state is unavailable.");
+      if (slot.kind === "draft") {
+        await appDrafts.ready();
         return appDrafts.draft(slot.draftId)?.selection ?? null;
       }
-      if (slot.kind === "draft") await flushDraft(slot.projectId, slot.draftId);
       const own = (await daemon.profiles.target.read({ slot })).selection;
-      if (own || slot.kind !== "new-thread" || !appDrafts || !daemonId) return own;
-      const presentation = appDrafts.snapshot().data ?? await appDrafts.refresh();
+      if (own || slot.kind !== "new-thread") return own;
+      const presentation = await appDrafts.ready();
       const location = presentation.locations.find(item =>
         item.target.daemonId === daemonId && item.target.projectId === slot.projectId);
       if (!location) return null;
@@ -74,8 +72,8 @@ export function createComposerProfileTargetPersistence(
         } };
     },
     write: async (slot, selection) => {
-      if (slot.kind === "draft" && appDrafts !== false) {
-        if (!appDrafts) throw new Error("App draft presentation state is unavailable.");
+      if (slot.kind === "draft") {
+        await appDrafts.ready();
         const draft = appDrafts.draft(slot.draftId);
         if (!draft || draft.phase !== "unsent") throw new Error("This unsent draft is unavailable.");
         await appDrafts.putDraft({
@@ -84,7 +82,6 @@ export function createComposerProfileTargetPersistence(
         });
         return;
       }
-      if (slot.kind === "draft") await flushDraft(slot.projectId, slot.draftId);
       await daemon.profiles.target.set({ selection, slot });
     },
   };

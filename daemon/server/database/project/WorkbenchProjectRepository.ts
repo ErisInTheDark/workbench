@@ -97,6 +97,62 @@ export default class WorkbenchProjectRepository {
     if (!previous || previous === projectId) this.retainAlias(alias, projectId);
   }
 
+  readRetained(discoveryRoots: readonly string[]): WorkbenchProjectStartup {
+    const projects = this.database.prepare(
+      "SELECT * FROM workbench_projects WHERE kind <> 'historical' ORDER BY relative_path, id",
+    ).all() as ProjectSchemaRows["projects"][];
+    const rootsByProject = new Map<string, ProjectSchemaRows["roots"][]>();
+    for (const root of this.database.prepare(
+      "SELECT * FROM workbench_project_roots ORDER BY project_id, root_index",
+    ).all() as ProjectSchemaRows["roots"][]) {
+      const roots = rootsByProject.get(root.project_id) ?? [];
+      roots.push(root);
+      rootsByProject.set(root.project_id, roots);
+    }
+    const withinDiscovery = (location: string) => discoveryRoots.some(root => {
+      const relative = path.relative(root, location);
+      return relative === "" || relative !== ".."
+        && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    });
+    const catalog: WorkbenchProjectStartup["catalog"] = [];
+    for (const row of projects) {
+      const roots = rootsByProject.get(row.id) ?? [];
+      if (!roots.length) continue;
+      if (row.kind !== "workbench-library"
+        && !withinDiscovery(row.workspace_path ?? roots[0]!.root_path)) continue;
+      if (!row.identity_key || roots.some(root => !root.identity_key) || !row.icon_source_key) {
+        console.warn("[projects] retained catalogue entry needs identity rediscovery");
+        continue;
+      }
+      const project = WorkbenchProjectOptionSchema.parse({
+        id: row.id,
+        kind: row.kind,
+        name: row.name,
+        relativePath: row.relative_path,
+        rootPath: roots[0]!.root_path,
+        lastCommitTimeMs: row.last_commit_time_ms,
+        ...(row.workspace_path === null ? {} : { workspacePath: row.workspace_path }),
+        roots: roots.map((root, index) => ({
+          id: root.root_id, isPrimary: index === 0, name: root.name,
+          relativePath: root.relative_path, rootPath: root.root_path,
+        })),
+        ...(row.icon_root_id !== null && row.icon_path !== null
+          ? { icon: { rootId: row.icon_root_id, path: row.icon_path } } : {}),
+      });
+      catalog.push({
+        project,
+        identityKey: ProjectIdentityKeySchema.parse(row.identity_key),
+        rootIdentityKeys: roots.map(root => ProjectIdentityKeySchema.parse(root.identity_key)),
+        sourceKey: row.icon_source_key,
+        checkedAt: row.icon_checked_at,
+      });
+    }
+    return {
+      catalog, aliases: this.readAliases(), excludedRootPaths: [],
+      rootPath: discoveryRoots[0] ?? "", discoveryRoots: [...discoveryRoots],
+    };
+  }
+
   reconcile(discovery: WorkbenchProjectDiscovery): WorkbenchProjectStartup {
     const parsed = discovery.data.map(candidate => ({
       ...candidate,

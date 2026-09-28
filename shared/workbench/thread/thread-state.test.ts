@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isWorkbenchSidebarThreadCompletionAvailable, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema } from "./thread-state.ts";
-import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchPinnedThreadContextResultSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, WorkbenchThreadStateSnapshotSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
+import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -30,15 +30,6 @@ const fixtureIdentityValues = {
     "wait-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("wait-turn"),
     "work-turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("work-turn"),
   },
-};
-
-const EMPTY_CODEX_SETTINGS = {
-  agentPath: null,
-  agentSource: null,
-  harness: "codex" as const,
-  model: "",
-  reasoningEffort: null,
-  serviceTier: null,
 };
 
 test("thread status applies without a turn and remains until new work is accepted", () => {
@@ -80,7 +71,7 @@ test("observations carry a complete entry without admitting a different thread f
   const observation = {
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), subscriptionId: "7a74a3d2-8223-4cf1-b348-92d299480570",
     target: { kind: "provider", harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
-    entries: [entry], error: null, freshness: "fresh", revision: 1, updateKind: "threadObservation", version: 1,
+    entries: [entry], error: null, freshness: "fresh", revision: 1, updateKind: "threadObservation", version: 2,
   };
   assert.deepEqual(WorkbenchThreadObservationSnapshotSchema.parse(observation).entries, [{ ...entry, waitingOnThreads: [] }]);
   assert.equal(WorkbenchThreadObservationSnapshotSchema.safeParse({ ...observation, entries: [] }).success, true);
@@ -151,33 +142,6 @@ test("live claims prevent thread settlement while proposals do not", () => {
   assert.equal(gitArcPreventsThreadSettlement(stashed), true);
   assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "pending", status: "proposed" }] }), false);
   assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "accepted", status: "committed" }] }), false);
-});
-
-test("current project and global observation versions stay distinct from draft moves", () => {
-  assert.deepEqual(WorkbenchThreadStateRequestSchema.parse({
-    method: "workbench/thread-state/global/open",
-    version: 6,
-  }), {
-    method: "workbench/thread-state/global/open",
-    version: 6,
-  });
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    method: "workbench/thread-state/global/open",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("must-not-select"),
-    version: 6,
-  }).success, false);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    destinationProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"),
-    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("22222222-2222-4222-8222-222222222222"),
-    method: "workbench/thread-state/draft/move",
-    sourceProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-  }).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    destinationProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("22222222-2222-4222-8222-222222222222"),
-    method: "workbench/thread-state/draft/move",
-    sourceProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-  }).success, false);
 });
 
 test("current Git arc schemas reject retired reload scopes", () => {
@@ -256,72 +220,12 @@ test("draft threshold and title follow prompt text only", () => {
   assert.equal(createDraftTitle("\n  First   line \nsecond"), "First line");
 });
 
-test("durable draft writes require prompt or attachment content while stored drafts remain readable", () => {
-  const draft = {
-    attachments: [],
-    clientUpdatedAt: 2,
-    composerSettings: EMPTY_CODEX_SETTINGS,
-    createdAt: 1,
-    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000022"),
-    profileId: null,
-    projectId: fixtureIdentityValues.ProjectId.project,
-    prompt: " ",
-    updatedAt: 2,
-  };
-  assert.equal(WorkbenchThreadDraftSchema.safeParse(draft).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    draft,
-    method: "workbench/thread-state/draft/upsert",
-    projectId: draft.projectId,
-  }).success, false);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    draft: { ...draft, attachments: [{ id: "shot", url: "image:shot" }] },
-    method: "workbench/thread-state/draft/upsert",
-    projectId: draft.projectId,
-  }).success, true);
-});
-
 test("thread titles ignore identifier-shaped provider names and prefer the first user preview", () => {
   const id = "123e4567-e89b-42d3-a456-426614174000";
   assert.equal(resolveWorkbenchThreadTitle({ id, name: id, preview: "  First user message\nsecond line" }), "First user message");
   assert.equal(resolveWorkbenchThreadTitle({ id, name: "New thread", preview: "First user message" }), "First user message");
   assert.equal(resolveWorkbenchThreadTitle({ id, name: "Useful title", preview: "First user message" }), "Useful title");
   assert.equal(resolveWorkbenchThreadTitle({ id, name: "550e8400-e29b-41d4-a716-446655440000", preview: "" }), "New thread");
-});
-
-test("multiplexed updates strictly distinguish sidebar, activity, and project payloads", () => {
-  assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
-    entries: [], error: null, freshness: "fresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 1,
-  }).success, true);
-  assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
-    activityAt: 10, identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") }, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 2, updateKind: "activity",
-  }).success, true);
-  assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
-    activityAt: 10, identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") }, orderAt: 9, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 2, updateKind: "activity",
-  }).success, true);
-  assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
-    displayOrder: {}, revision: 2, updateKind: "homeThreadDisplayOrder",
-  }).success, true);
-  const projectUpdate = WorkbenchThreadStateSnapshotSchema.safeParse({
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    revision: 3,
-    snapshot: {
-      changes: {}, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), root: "Project", rootPath: "C:/project",
-      roots: [{ id: "project", isPrimary: true, name: "Project", relativePath: "project", rootPath: "C:/project" }],
-      tree: [{ isIgnored: true, name: ".env.local", path: ".env.local", type: "file" }], workbenchStorageRootPath: "C:/workbench",
-    },
-    updateKind: "project",
-  });
-  assert.equal(projectUpdate.success, true);
-  assert.equal(projectUpdate.success && "snapshot" in projectUpdate.data && projectUpdate.data.snapshot.tree[0]?.type === "file"
-    ? projectUpdate.data.snapshot.tree[0].isIgnored
-    : null, true);
-  assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
-    activityAt: 10, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 4, updateKind: "activity",
-  }).success, false);
-  assert.equal(WorkbenchThreadStateSnapshotSchema.safeParse({
-    entries: [], error: null, freshness: "fresh", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), revision: 5, updateKind: "sidebar",
-  }).success, false);
 });
 
 test("strict lifecycle rejects impossible combinations", () => {
@@ -340,11 +244,8 @@ test("manual status request accepts exactly the three radio statuses", () => {
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, status: "idle" }).success, false);
 });
 
-test("draft priority requests use draft identity and drive shared grouping and ordering", () => {
+test("snoozed draft grouping takes precedence over its retained pin", () => {
   const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000001");
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draftId, method: "workbench/thread-state/draft/pin/set", pinned: true, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") }).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draftId, method: "workbench/thread-state/draft/snooze/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), snoozed: true }).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ method: "workbench/thread-state/draft/pin/set", pinned: true, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") }).success, false);
   const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> = {
     activityAt: 1,
     draft: {
@@ -357,19 +258,6 @@ test("draft priority requests use draft identity and drive shared grouping and o
   };
   assert.equal(getThreadSidebarGroup(entry), "snoozed");
   assert.equal(entry.metadata.pinned, true);
-});
-
-test("home display-order request requires qualified source and optional destination keys", () => {
-  const request = {
-    beforeKey: "beta/codex%3Ab",
-    destinationFolderKey: null,
-    method: "workbench/thread-state/home-display-order/move",
-    section: "pinned",
-    sourceKey: "alpha/codex%3Aa",
-  };
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse(request).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, sourceKey: "" }).success, false);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, section: "main" }).success, false);
 });
 
 test("legacy draft settings conform from reload-compatible flattened fields", () => {
@@ -399,73 +287,7 @@ test("legacy draft settings conform from reload-compatible flattened fields", ()
   });
 });
 
-test("pinned context requests preserve full target identity and responses admit full durable drafts", () => {
-  const draftId = "00000000-0000-4000-8000-000000000019";
-  const request = {
-    method: "workbench/thread-state/pin/open",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
-    target: { harness: "opencode", kind: "subagent", parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child") },
-  };
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse(request).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, target: { kind: "subagent", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("child") } }).success, false);
-  assert.equal(WorkbenchPinnedThreadContextResultSchema.safeParse({
-    context: {
-      entries: [{
-        activityAt: 2,
-        draft: {
-          agent: null,
-          attachments: [{ id: "attachment", url: "data:text/plain,hello" }],
-          clientUpdatedAt: 2,
-          composerSettings: EMPTY_CODEX_SETTINGS,
-          createdAt: 1,
-          draftId,
-          harness: "codex",
-          model: null,
-          profileId: null,
-          projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
-          prompt: "Private pinned prompt",
-          reasoningEffort: null,
-          serviceTier: null,
-          updatedAt: 2,
-        },
-        entryKind: "draft",
-        metadata: { archived: false, pinned: true, snoozed: false },
-        title: "Private pinned prompt",
-      }],
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("owner"),
-      target: { draftId, kind: "draft" },
-    },
-  }).success, true);
-});
-
-test("display-order moves require a reorderable section and explicit insertion key", () => {
-  const request = { beforeKey: null, destinationFolderId: null, method: "workbench/thread-state/display-order/move", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), section: "snoozed", sourceKey: "codex:thread" };
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse(request).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, beforeKey: "codex:other" }).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, section: "main" }).success, false);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...request, sourceKey: "" }).success, false);
-});
-
-test("folder mutations require canonical ids, durable thread keys, and non-empty bounded names", () => {
-  const folderId = "00000000-0000-4000-8000-000000000020";
-  const folderDraft = {
-    agent: null, attachments: [], clientUpdatedAt: 2, composerSettings: EMPTY_CODEX_SETTINGS, createdAt: 2,
-    draftId: fixtureIdentitySchemas.DraftIdSchema.parse("00000000-0000-4000-8000-000000000021"), harness: "codex", model: null,
-    profileId: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), prompt: "folder draft", reasoningEffort: null, serviceTier: null, updatedAt: 2,
-  };
-  const create = { folderId, method: "workbench/thread-state/display-order/folder/create", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), sourceKey: "codex:thread", title: "Work" };
-  const rename = { folderId, method: "workbench/thread-state/display-order/folder/title/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), title: "Later" };
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse(create).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse(rename).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...create, folderId: fixtureIdentitySchemas.FolderIdSchema.parse("folder") }).success, false);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...create, sourceKey: "" }).success, false);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ ...rename, title: " " }).success, false);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draft: folderDraft, folderId, method: "workbench/thread-state/draft/upsert", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") }).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({ draft: folderDraft, folderId: fixtureIdentitySchemas.FolderIdSchema.parse("folder"), method: "workbench/thread-state/draft/upsert", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") }).success, false);
-});
-
-test("drag mutations strictly identify priority, folder, and dependent-snooze intent", () => {
-  const folderId = "00000000-0000-4000-8000-000000000022";
+test("priority and dependent-snooze requests reject invalid intent", () => {
   const identity = { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("source") };
   const target = { identity: { harness: "opencode", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("target") }, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") };
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
@@ -473,22 +295,6 @@ test("drag mutations strictly identify priority, folder, and dependent-snooze in
     priority: "main",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
     sourceKey: "codex:source",
-  }).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    destinationFolderId: null,
-    folderId,
-    method: "workbench/thread-state/display-order/folder/drop",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-    section: "snoozed",
-    sourceKey: "codex:source",
-    targetKey: "codex:target",
-  }).success, true);
-  assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
-    destinationFolderId: folderId,
-    folderId: null,
-    method: "workbench/thread-state/pinned-display-order/folder/drop",
-    sourceKey: "alpha/codex%3Asource",
-    targetKey: "beta/codex%3Atarget",
   }).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
     identity,

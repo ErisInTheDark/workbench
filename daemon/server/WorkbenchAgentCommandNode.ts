@@ -165,6 +165,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   sources: [
     "daemon/server/WorkbenchAgentCommandNode.ts",
     "daemon/server/WorkbenchAgentCommandController*.ts",
+    "daemon/server/WorkbenchTestProcessResources*.ts",
     "daemon/server/WorkbenchAgentCommandLogger*.ts",
     "daemon/server/WorkbenchRipgrepController*.ts",
     "daemon/server/WorkbenchTokenCountController*.ts",

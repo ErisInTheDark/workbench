@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchProjectThreadStateOptions: initial durable and lifecycle facts for one project.
- * - default WorkbenchProjectThreadState: own one project's stores, revision, observation, and reconciliation lifecycle.
+ * - default WorkbenchProjectThreadState: own one project's stores, revision, and reconciliation lifecycle.
  */
 
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -41,11 +41,9 @@ export default class WorkbenchProjectThreadState {
   error: string | null = null;
   freshness: WorkbenchThreadSidebarSnapshot["freshness"] = "loading";
   generation = 0;
-  readonly observers = new Set<string>();
   reconcilePromise: Promise<void> | null = null;
   readonly recordStore: WorkbenchThreadRecordStore;
   revision = 0;
-  stopProjectObservation: (() => void) | null = null;
   #writeQueue = { tail: Promise.resolve<unknown>(undefined) };
 
   constructor(options: WorkbenchProjectThreadStateOptions = {}) {

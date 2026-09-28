@@ -55,6 +55,11 @@ test("one remote groups locations but drafts retain a concrete daemon target acr
       target: { daemonId: second, projectId }, prompt: "hello", selection, updatedAt: 1 };
     const saved = repository.mutate({ kind: "putDraft", draft, expectedRevision: null }).drafts[0]!;
     assert.deepEqual(saved.target, { daemonId: second, projectId });
+    const revision = repository.read().revision;
+    assert.equal(repository.mutate({ kind: "putDraft", draft, expectedRevision: null }).revision, revision);
+    assert.equal(repository.mutate({
+      kind: "putDraft", draft: { ...draft, updatedAt: 2 }, expectedRevision: saved.revision - 1,
+    }).revision, revision);
     assert.throws(() => repository.mutate({ kind: "putDraft", draft: { ...draft, prompt: "stale" },
       expectedRevision: saved.revision - 1 }), /another browser/u);
     await repository.close();
@@ -105,6 +110,87 @@ test("only the exact revision from deleting an unlaunched draft can reopen it", 
     await repository.close();
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("new-folder draft placement is atomic and autosaves cannot restore an obsolete folder choice", async context => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-draft-folder-"));
+  const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
+  context.after(async () => {
+    await repository.close(); await fs.rm(root, { recursive: true, force: true });
+  });
+  await repository.start();
+  repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/repo") });
+  const logicalProjectId = repository.read().projects[0]!.id;
+  const folderId = crypto.randomUUID();
+  const movedFolderId = crypto.randomUUID();
+  const folders = [folderId, movedFolderId].map((id, position) => ({
+    id, scope: "project" as const, logicalProjectId, title: id, position,
+  }));
+  repository.mutate({ kind: "saveLayout", scope: "project", logicalProjectId,
+    expectedRevision: repository.read().revision, folders, members: [] });
+  for (const priority of ["pinned", "snoozed"] as const) {
+    const draft = { id: crypto.randomUUID(), logicalProjectId, target: { daemonId: first, projectId },
+      prompt: priority, selection, updatedAt: 1 };
+    const before = repository.read();
+    assert.throws(() => repository.mutate({ kind: "putDraft", expectedRevision: null,
+      draft, placement: { folderId: crypto.randomUUID(), priority } }), /folder/);
+    assert.deepEqual(repository.read(), before);
+    let result = repository.mutate({ kind: "putDraft", expectedRevision: null, draft,
+      placement: { folderId, priority } });
+    const saved = result.drafts.find(item => item.id === draft.id)!;
+    assert.equal(saved.pinned, priority === "pinned");
+    assert.equal(saved.snoozed, priority === "snoozed");
+    assert.equal(result.members.find(item => item.draftId === draft.id)?.folderId, folderId);
+    const createdRevision = result.revision;
+    result = repository.mutate({ kind: "putDraft", expectedRevision: null, draft,
+      placement: { folderId, priority } });
+    assert.equal(result.revision, createdRevision);
+    result = repository.mutate({ kind: "saveLayout", scope: "project", logicalProjectId,
+      expectedRevision: result.revision, folders, members: result.members.map(member =>
+        member.draftId === draft.id ? { ...member, folderId: movedFolderId } : member) });
+    result = repository.mutate({ kind: "putDraft", expectedRevision: saved.revision,
+      draft: { ...draft, prompt: "newer content" }, placement: { folderId, priority } });
+    assert.equal(result.members.find(item => item.draftId === draft.id)?.folderId, movedFolderId);
+  }
+  const before = repository.read();
+  await repository.close(); await repository.start();
+  assert.deepEqual(repository.read(), before);
+});
+
+test("draft settings and destination defaults commit together without rewriting other drafts", async context => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-draft-defaults-"));
+  const databasePath = path.join(root, "presentation.sqlite3");
+  const repository = new WorkbenchPresentationRepository({ databasePath });
+  context.after(async () => { await repository.close(); await fs.rm(root, { recursive: true, force: true }); });
+  await repository.start();
+  repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/repo") });
+  const logicalProjectId = repository.read().projects[0]!.id;
+  const draft = { id: draftId, logicalProjectId, target: { daemonId: first, projectId },
+    prompt: "first", selection, updatedAt: 1 };
+  const saved = repository.mutate({ kind: "putDraft", expectedRevision: null, draft }).drafts[0]!;
+  const secondId = crypto.randomUUID();
+  const secondSelection = { ...selection, settings: { ...selection.settings, model: "second" } };
+  let result = repository.mutate({ kind: "putDraft", expectedRevision: null,
+    draft: { ...draft, id: secondId, selection: secondSelection } });
+  assert.equal(result.drafts.find(item => item.id === draftId)?.selection.settings.model, "test");
+  assert.equal(result.defaults[0]?.selection.settings.model, "second");
+  const newer = { ...draft, selection: { ...selection, settings: { ...selection.settings, model: "newer" } } };
+  result = repository.mutate({ kind: "putDraft", expectedRevision: saved.revision, draft: newer });
+  assert.equal(result.defaults[0]?.selection.settings.model, "newer");
+  assert.equal(result.drafts.find(item => item.id === secondId)?.selection.settings.model, "second");
+  assert.throws(() => repository.mutate({ kind: "putDraft", expectedRevision: saved.revision, draft }), /another browser/);
+  const before = repository.read();
+  const fault = new Database(databasePath);
+  try {
+    fault.exec(`CREATE TRIGGER reject_default_write BEFORE UPDATE ON presentation_new_thread_defaults
+      BEGIN SELECT RAISE(ABORT, 'default write failed'); END`);
+    assert.throws(() => repository.mutate({ kind: "putDraft",
+      expectedRevision: before.drafts.find(item => item.id === draftId)!.revision,
+      draft: { ...draft, prompt: "uncommitted", selection: secondSelection } }), /default write failed/);
+    assert.deepEqual(repository.read(), before);
+  } finally { fault.close(); }
+  await repository.close(); await repository.start();
+  assert.deepEqual(repository.read(), before);
 });
 
 test("equal path identities share one project without losing concrete daemon targets", async () => {

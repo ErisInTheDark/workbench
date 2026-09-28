@@ -4,11 +4,9 @@
  */
 
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
-import { useContext } from "react";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
 import { ProjectIcon } from "./workbench-icons";
-import WorkbenchClientContext from "./workbench-client-context";
 import WorkbenchProjectLocationLabel from "./WorkbenchProjectLocationLabel";
 
 function getWorkbenchProjectDisplayPath(project: WorkbenchProjectOption) {
@@ -33,16 +31,10 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
   project: WorkbenchProjectOption | WorkbenchLogicalProject;
   variant?: "card" | "heading" | "thread";
 }) {
-  const client = useContext(WorkbenchClientContext);
   if ("matchKey" in project) {
     const location = project.locations.find(item => item.project)
       ?? project.observedLocations?.[0] ?? project.locations[0];
-    const attachedDaemonId = client?.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId;
-    const assetSource = location?.daemonId === attachedDaemonId
-      ? { kind: "attached" as const }
-      : location ? { kind: "peer" as const,
-          origin: client?.mounted?.daemonSessions?.httpOrigin(location.daemonId) ?? null }
-        : undefined;
+    const assetSource = location ? { kind: "source" as const, daemonId: location.daemonId } : undefined;
     const name = project.displayName ?? project.label;
     const hasDistinctRemoteLabel = project.matchKey.startsWith("remote://") && project.label !== name;
     const secondary = hasDistinctRemoteLabel ? project.label : project.displayPath ?? null;

@@ -11,6 +11,32 @@ import OpenCodeEventController from "./OpenCodeEventController";
 import type OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import { readTranscriptText } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 
+test("compaction execution settles without accepting a user turn or continuing its task", async () => {
+  let active = false;
+  const owner = new OpenCodeEventController({
+    observe: async () => { assert.fail("Compaction cannot change the task lifecycle"); },
+    broadcast: () => { assert.fail("Compaction cannot announce a user turn"); },
+    threads: {
+      ...executionLifecycle,
+      currentTurn: () => ({ threadId, turnId }),
+      latestTurn: async () => turn(),
+      syncNative: async () => ({ threadId, latestTurnId: turnId, maintenance: true }),
+      markExecutionStarted: () => { active = true; },
+      markExecutionSettled: () => { active = false; },
+      completeExecution: async () => { assert.fail("Compaction cannot trigger a continuation"); },
+    },
+    transcript: {
+      appendText: () => undefined,
+      recordItem: async () => "item" as never,
+      recordTurnState: async () => { assert.fail("Compaction cannot reopen a settled user turn"); },
+    },
+  });
+  for (const type of ["session.inbox.delivered", "session.execution.started", "session.execution.succeeded"]) {
+    await owner.accept(event({ type, created: 1, data: { sessionID: "session", inboxID: "compaction" } }));
+  }
+  assert.equal(active, false);
+});
+
 test("reasoning deltas target the visible canonical section before completion", async () => {
   const deltas: Parameters<OpenCodeTranscriptAdapter["appendText"]>[0][] = [];
   const owner = new OpenCodeEventController({
@@ -234,7 +260,7 @@ test("terminal reconciliation never settles a newer user turn", async () => {
   }
 });
 
-test("streams text directly and performs one canonical read at execution settlement", async () => {
+test("streams text directly with canonical reads only at execution boundaries", async () => {
   let syncs = 0;
   const started: string[] = [];
   const settled: string[] = [];
@@ -276,6 +302,7 @@ test("streams text directly and performs one canonical read at execution settlem
     id: "execution-start", created: 1, type: "session.execution.started", durable,
     data: { sessionID: "session" },
   }));
+  assert.equal(syncs, 1);
   await controller.accept(event({
     id: "text-start", created: 2, type: "session.text.started", durable,
     data: { sessionID: "session", assistantMessageID: "assistant", ordinal: 0 },
@@ -313,7 +340,7 @@ test("streams text directly and performs one canonical read at execution settlem
   assert.deepEqual(lifecycle, ["started", "completed"]);
   assert.deepEqual(turnStates, ["inProgress"],
     "Successful settlement must preserve the canonical history timestamp");
-  assert.equal(syncs, 1);
+  assert.equal(syncs, 2);
   assert.deepEqual(started, ["session"]);
   assert.deepEqual(settled, ["session"]);
 });

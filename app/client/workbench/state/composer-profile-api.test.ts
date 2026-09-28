@@ -10,8 +10,9 @@ import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workben
 import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import WorkbenchPresentationClient from "./WorkbenchPresentationClient";
 import { createComposerProfileTargetPersistence } from "./composer-profile-api";
+import { createWorkspaceClientFixture } from "../app/workspace-client-fixture";
 
-test("new folders use the latest same-daemon project default without replacing their own", async () => {
+test("new folders use the latest same-daemon project default without replacing their own", async context => {
   const daemonId = DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029");
   const peerId = DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2030");
   const logicalId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
@@ -41,15 +42,24 @@ test("new folders use the latest same-daemon project default without replacing t
     ],
     drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
   };
-  const presentation = new WorkbenchPresentationClient({ fetcher: async () => Response.json(snapshot) });
-  await presentation.refresh();
+  const connection = createWorkspaceClientFixture();
+  const socket = await connection.open();
+  const presentation = new WorkbenchPresentationClient({ workspace: connection.workspace });
+  context.after(() => { presentation.dispose(); connection.dispose(); });
+  presentation.start();
+  const query = await socket.request("workspace/observe", 0, request => request.params.query.kind === "presentation");
+  let revision = 0;
+  const publish = () => socket.observation(query, {
+    kind: "presentation", phase: "current", failure: null, data: { ...snapshot, revision: ++revision },
+  }, revision);
+  publish();
   let own: WorkbenchComposerProfileTargetSelection | null = null;
   let profiles: WorkbenchComposerProfile[] = [];
   const daemon = new WorkbenchDaemonClient({
     request: async <TResponse>(method: string) => (method === "profiles/target/read"
       ? { selection: own } : { profiles }) as TResponse,
   });
-  const persistence = createComposerProfileTargetPersistence(daemon, async () => undefined, presentation, daemonId);
+  const persistence = createComposerProfileTargetPersistence(daemon, presentation, daemonId);
   const slot = { kind: "new-thread" as const, projectId: ProjectIdSchema.parse("destination") };
   assert.deepEqual(await persistence.read(slot), selection("newer"));
   own = selection("own");
@@ -63,7 +73,7 @@ test("new folders use the latest same-daemon project default without replacing t
     ...scopedSettings, id: "scoped", name: "scoped", scope: { kind: "project", projectId: target("newer").projectId },
     createdAt: 1, updatedAt: 1,
   }];
-  await presentation.refresh();
+  publish();
   assert.deepEqual(await persistence.read(slot), { kind: "custom", settings: settings("newer") },
     "a source-folder profile and its project agent cannot stay linked in another folder");
   snapshot.defaults[1]!.selection = { kind: "profile", profileId: "global", settings: settings("newer") };
@@ -71,12 +81,12 @@ test("new folders use the latest same-daemon project default without replacing t
     ...settings("newer"), id: "global", name: "global", scope: { kind: "global" },
     createdAt: 1, updatedAt: 1,
   }];
-  await presentation.refresh();
+  publish();
   assert.deepEqual(await persistence.read(slot), snapshot.defaults[1]!.selection,
     "a global profile remains linked across folders on its daemon");
   const ownScoped = { kind: "profile" as const, profileId: "own-scoped", settings: scopedSettings };
   snapshot.defaults.push({ target: target("destination"), revision: 1, selection: ownScoped });
-  await presentation.refresh();
+  publish();
   assert.deepEqual(await persistence.read(slot), ownScoped,
     "an exact folder's app default retains its own project-scoped profile");
   presentation.dispose();

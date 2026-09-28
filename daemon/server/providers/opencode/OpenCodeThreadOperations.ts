@@ -73,6 +73,7 @@ export interface OpenCodeThreadOperationsOptions {
 
 interface SessionExecution {
   active: boolean;
+  kind: "prompt" | "compaction";
   turn: { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId } | null;
   eventSequence: number;
   intentVersion: number;
@@ -353,7 +354,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
           || latest.status === "inProgress" && session.outcome === undefined
         ));
     }
-    const activeTurn = execution.active ? execution.turn : null;
+    const activeTurn = execution.active && execution.kind !== "compaction" ? execution.turn : null;
     const delivery = input.intent === "newTurn" || !activeTurn ? "queue" : "steer";
     const request = prompt(input.input);
     const messageId = nativeMessageId(input.clientMessageId);
@@ -436,6 +437,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         turnId: recorded.latestTurnId,
       };
       execution.active = true;
+      execution.kind = "prompt";
       resolvePromptOwner({
         threadId: recorded.threadId,
         turnId: recorded.latestTurnId,
@@ -521,6 +523,8 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       throw new Error("OpenCode recovery has no matching native turn.");
     }
     const native = turn?.native ?? binding;
+    const execution = this.execution(native.nativeThreadId);
+    const intentVersion = execution.intentVersion;
     const client = await this.options.acquire();
     const nativeTarget = target.mode === "latest" ? target
       : target.mode === "exact" ? { mode: "exact" as const, turnId: turn!.native.nativeTurnId! }
@@ -545,6 +549,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         state: "completed" as const, createdAt: 0, startedAt: null, endedAt: null, durationMs: null,
       } : undefined;
       const recorded = await this.syncSession(session, window.messages, {
+        canCommit: () => execution.intentVersion === intentVersion,
         window: { ...window, latest: target.mode === "latest", gapIds: input.gapIds, successor },
       });
       return { turnIds: recorded.latestTurnId ? [recorded.latestTurnId] : [], exhausted: window.previousCursor === null };
@@ -566,7 +571,8 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     signal?.throwIfAborted();
     const session = await client.session.get({ sessionID: nativeThreadId }, { signal });
     const identity = await this.syncSession(session, []);
-    return this.sync(identity.threadId, signal);
+    const result = await this.sync(identity.threadId, signal);
+    return { ...result, maintenance: this.execution(nativeThreadId).kind === "compaction" };
   }
 
   currentTurn(nativeThreadId: string) {
@@ -614,7 +620,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   private execution(nativeThreadId: string) {
     let execution = this.executions.get(nativeThreadId);
     if (!execution) {
-      execution = { active: false, turn: null, eventSequence: -1, intentVersion: 0, admission: null };
+      execution = { active: false, kind: "prompt", turn: null, eventSequence: -1, intentVersion: 0, admission: null };
       this.executions.set(nativeThreadId, execution);
     }
     return execution;
@@ -738,6 +744,9 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         session.location.directory, { endpointName: "OpenCode provider history" },
       );
     const latest = options.window?.latest !== false;
+    const canCommit = (latestTurnId: WorkbenchTurnId | null) => options.canCommit?.(latestTurnId) !== false
+      && execution.turn === startingTurn && execution.intentVersion === startingIntent
+      && !(latest && execution.active && execution.turn && latestTurnId !== execution.turn.turnId);
     const result = await this.options.transcript.record(session, messages, {
       id: resolution.project.id,
       rootPath: resolution.project.rootPath,
@@ -745,20 +754,20 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       keepLatestTurnOpen: latest && this.pendingSteerSessions.has(session.id),
       settleUsage: latest && Boolean(options.window),
       ...options,
+      ...(options.window ? { canCommit } : {}),
     });
-    if (!latest || !options.window) return { ...result, hasPendingSteers: this.pendingSteerSessions.has(session.id) };
+    if (!latest || !options.window || !canCommit(result.latestTurnId)) {
+      return { ...result, hasPendingSteers: this.pendingSteerSessions.has(session.id) };
+    }
     for (const clientMessageId of result.deliveredSteerClientMessageIds ?? []) {
       this.pendingSteers.get(result.threadId)?.delete(clientMessageId);
       this.deletePendingSteerSession(clientMessageId);
     }
     if (!this.pendingSteers.get(result.threadId)?.size) this.pendingSteers.delete(result.threadId);
-    if (execution.turn !== startingTurn || execution.intentVersion !== startingIntent
-      || execution.active && execution.turn && result.latestTurnId !== execution.turn.turnId) {
-      return { ...result, hasPendingSteers: this.pendingSteerSessions.has(session.id) };
-    }
     if (result.latestTurnId) {
       execution.turn = { threadId: result.threadId, turnId: result.latestTurnId };
       execution.active = result.latestTurnState === "inProgress" || this.pendingSteerSessions.has(session.id);
+      execution.kind = result.latestOperation ?? "prompt";
     } else {
       this.execution(session.id).active = false;
     }
@@ -815,7 +824,9 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     nativeThreadId: string,
     suppliedTurnId?: WorkbenchTurnId,
   ) {
-    this.execution(nativeThreadId).intentVersion++;
+    const execution = this.execution(nativeThreadId);
+    const interruptedTurnId = execution.active ? execution.turn?.turnId : undefined;
+    let intentVersion = ++execution.intentVersion;
     this.requestedInterruptions.add(nativeThreadId);
     try {
       await (await this.options.acquire()).session.interrupt({ sessionID: nativeThreadId });
@@ -823,9 +834,13 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       this.requestedInterruptions.delete(nativeThreadId);
       throw error;
     }
+    if (execution.intentVersion === intentVersion) intentVersion = ++execution.intentVersion;
     const synced = await this.sync(threadId);
-    const turnId = suppliedTurnId ?? synced.latestTurnId;
+    const turnId = interruptedTurnId ?? suppliedTurnId ?? synced.latestTurnId;
     if (!turnId) return;
+    if (execution.intentVersion === intentVersion && execution.turn?.turnId === turnId) {
+      execution.active = false;
+    }
     try {
       await this.options.transcript.recordTurnState({
         threadId: synced.threadId,

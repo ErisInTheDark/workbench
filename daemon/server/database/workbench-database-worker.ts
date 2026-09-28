@@ -179,11 +179,14 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   }
   switch (request.type) {
     case "reconcileProjectCatalog":
+    case "readRetainedProjectCatalog":
     case "readProjectAliases":
     case "resolveProjectIdentity":
     case "settleProjectIcon":
       if (!projectRepository) throw new Error("Workbench project repository is not initialized");
-      if (request.type === "reconcileProjectCatalog") {
+      if (request.type === "readRetainedProjectCatalog") {
+        post({ id: request.id, type: "projectCatalog", projects: projectRepository.readRetained(request.discoveryRoots) });
+      } else if (request.type === "reconcileProjectCatalog") {
         post({ id: request.id, type: "projectCatalog", projects: projectRepository.reconcile(request.discovery) });
       } else if (request.type === "readProjectAliases") {
         post({ id: request.id, type: "projectAliases", aliases: projectRepository.readAliases() });
@@ -338,6 +341,7 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
       post(response);
       return;
     }
+    case "readThreadStateNavigationSummary":
     case "readThreadStateProject":
     case "readThreadStateTitleHistories":
     case "writeThreadStateProject":
@@ -357,6 +361,7 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
       const repository = threadStateRepository;
       const response = database.transaction((): WorkbenchDatabaseResponse => {
         switch (request.type) {
+          case "readThreadStateNavigationSummary": return { id: request.id, type: "threadStateNavigationSummary", summary: repository.readNavigationSummary(request.projectId) };
           case "readThreadStateProject": return { id: request.id, type: "threadStateProject", document: repository.readProject(request.projectId) };
           case "readThreadStateTitleHistories": return { id: request.id, type: "threadStateTitleHistories", histories: repository.readTitleHistories(request.projectId) };
           case "readThreadStateGlobal": return { id: request.id, type: "threadStateGlobal", document: repository.readGlobal(request.documentId) };

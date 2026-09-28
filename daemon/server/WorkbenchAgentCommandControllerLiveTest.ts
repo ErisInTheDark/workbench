@@ -12,6 +12,7 @@ import {
   type WorkbenchLiveProviderTestRequest,
 } from "./lib/workbench/commands/live-provider-test-command-definition";
 import { createSpawnOptions, killProcessTreeAsync } from "./process-helpers";
+import WorkbenchTestProcessResources from "./WorkbenchTestProcessResources";
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const OUTPUT_TRUNCATED = "\n[workbench live-provider test output truncated]\n";
@@ -69,6 +70,15 @@ export default class WorkbenchAgentCommandLiveTestController {
   }
 
   private async run(root: string, request: WorkbenchLiveProviderTestRequest, signal: AbortSignal) {
+    const services = await WorkbenchTestProcessResources.create();
+    try {
+      return await this.runOwned(root, request, signal, services.environment);
+    } finally {
+      await services.dispose();
+    }
+  }
+
+  private async runOwned(root: string, request: WorkbenchLiveProviderTestRequest, signal: AbortSignal, environment: NodeJS.ProcessEnv) {
     const entry = path.join(root, "test", "run-live-provider-test.mjs");
     const child = this.spawnProcess(process.execPath, [
       "--disable-warning=ExperimentalWarning",
@@ -78,7 +88,7 @@ export default class WorkbenchAgentCommandLiveTestController {
       request.provider,
       request.file,
     ], {
-      ...createSpawnOptions(root, process.env, true),
+      ...createSpawnOptions(root, { ...process.env, ...environment }, true),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = Buffer.alloc(0);

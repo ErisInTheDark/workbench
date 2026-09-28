@@ -1,12 +1,13 @@
 /*
  * Exports:
  * - WorkbenchThreadState: owned cross-thread selection and provider projection state.
- * - WorkbenchAcceptedIntent: provider-confirmed sidebar admission evidence handed to the workbench coordinator.
  * - WorkbenchThreadClientOptions: thread-client adapters and coordinator callbacks.
+ * - WorkbenchThreadProject: renderer context independent of live catalogue availability.
  * - default WorkbenchThreadClient: coordinate transport, project context, controller registries, cross-thread notifications, and message admission.
  */
 
-import WorkbenchSocketClient from "workbench-shared/workbench/WorkbenchSocketClient";
+import type WorkbenchWorkspaceClient from "./app/WorkbenchWorkspaceClient";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { defaultProviderKey, installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { WORKBENCH_THREAD_HISTORY_PENDING } from "workbench-shared/workbench/provider/provider-thread";
 import ThreadObservationController, { getThreadObservationKey } from "./thread/ThreadObservationController";
@@ -23,7 +24,6 @@ import { resolveWorkbenchThreadTitle, type WorkbenchThreadSidebarEntry } from "w
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { createWorkbenchTextInput as createTextInput } from "workbench-shared/workbench/provider/provider-input";
-import { isWorkbenchRpcFailure } from "workbench-shared/workbench/workbench-rpc";
 import { formatThreadStatus } from "workbench-shared/workbench/thread/thread-runtime-state";
 import { isProjectThread, isProjectThreadAtExpectedCwd } from "workbench-shared/workbench/thread/thread-location";
 import { appendCommandOutputDelta, compactCommandExecutionItemOutput } from "workbench-shared/workbench/thread/thread-command-output";
@@ -121,23 +121,20 @@ export interface WorkbenchThreadState {
 
 type WorkbenchThreadListener = (snapshot: WorkbenchThreadRuntimeSnapshot) => void;
 
-export interface WorkbenchAcceptedIntent {
-  draftId?: DraftId;
-  harness: WorkbenchHarness;
-  projectId: ProjectId;
-  threadId: WorkbenchThreadId;
-  title: string;
-  turnId: WorkbenchTurnId;
-}
+export type WorkbenchThreadProject = WorkbenchProjectOption
+  | Pick<WorkbenchProjectOption, "id" | "name" | "rootPath" | "roots">;
 
 export interface WorkbenchThreadClientOptions {
-  resolveDaemonUrl?: () => Promise<string>;
+  workspace: WorkbenchWorkspaceClient;
+  location?: ProjectLocationReference;
+  getLocation?: () => ProjectLocationReference | null;
+  observeProviderEvents?: boolean;
+  getProjectForThread?: (threadId: string) => WorkbenchThreadProject | undefined;
   updateThreadStateWithAcceptance?: WorkbenchControls["updateThreadStateWithAcceptance"];
-  getProjectById?: (projectId: string) => WorkbenchProjectOption | undefined;
+  getProjectById?: (projectId: string) => WorkbenchThreadProject | undefined;
   clientStateController?: WorkbenchClientStateController;
   onStatusMessage?: (message: string) => void;
   onThreadStarted?: (thread: ThreadPayload) => void;
-  publishAcceptedIntent?: (event: WorkbenchAcceptedIntent) => Promise<void>;
   resolveThreadIdentity?: (request: WorkbenchThreadIdentityResolveRequest) => Promise<WorkbenchThreadIdentityResolution | null>;
 }
 
@@ -149,7 +146,7 @@ interface WorkbenchThreadClient {
   activateThreadControllers: () => void;
   applyAcceptedThreadTitle: (threadId: WorkbenchThreadId, harness: WorkbenchHarness, title: string) => boolean;
   clearThreadSelection: () => void;
-  createThread: (harness: WorkbenchHarness, threadId?: DraftId, options?: { project?: WorkbenchProjectOption; select?: boolean }) => ThreadPayload<DraftId>;
+  createThread: (harness: WorkbenchHarness, threadId?: DraftId, options?: { project?: WorkbenchThreadProject; select?: boolean }) => ThreadPayload<DraftId>;
   dispose: () => void;
   getSnapshot: () => WorkbenchThreadRuntimeSnapshot;
   getPublishedSnapshot: () => WorkbenchThreadRuntimeSnapshot;
@@ -160,11 +157,10 @@ interface WorkbenchThreadClient {
     activeProjectSnapshot: WorkbenchThreadSidebarSnapshot | null;
   }) => void;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
-  openThread: (threadId: string, options?: { harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload"; isCurrent?: () => boolean }) => Promise<ThreadPayloadFetchOutcome>;
+  openThread: (threadId: string, options?: { harness?: WorkbenchHarness; project?: WorkbenchThreadProject; source?: "open" | "reload"; isCurrent?: () => boolean }) => Promise<ThreadPayloadFetchOutcome>;
   onReconnect: (listener: () => void) => () => void;
   onConnectionOpen: (listener: () => void) => () => void;
   onDisconnect: (listener: () => void) => () => void;
-  setAppAvailable: (available: boolean) => void;
   onWorkbenchNotification: (listener: (notification: {
     method: "voice/event" | "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
     params: unknown;
@@ -172,6 +168,7 @@ interface WorkbenchThreadClient {
   refreshCurrentThread: () => Promise<ThreadPayload | null>;
   requestWorkbench: <TResponse>(method: string, params: unknown) => Promise<TResponse>;
   resetConnectionState: () => void;
+  acceptSourceGeneration: (generation: number) => void;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   selectThreadPayload: (thread: ThreadPayload) => void;
   refreshRateLimits: () => Promise<void>;
@@ -203,7 +200,6 @@ interface WorkbenchThreadClient {
 
 type OptimisticUserMessagePlacement = "initial" | "steer";
 type OptimisticUserMessageStatus = "pending" | "sent" | "interrupted" | "failed";
-type ProviderSteerAcknowledgement = { turnId: string };
 
 interface ThreadReadFailure {
   harness: WorkbenchHarness;
@@ -542,30 +538,29 @@ function normalizeQuestionnaireHistoryEntryState(
 }
 
 function WorkbenchThreadClient(
-  options: WorkbenchThreadClientOptions = {},
+  options: WorkbenchThreadClientOptions,
   lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchThreadClient {
-  const socket = new WorkbenchSocketClient({
-    ...(options.resolveDaemonUrl ? { resolveUrl: options.resolveDaemonUrl } : {}),
-  });
+  const workspace = options.workspace;
+  const cancellation = new AbortController();
 
   async function requestWorkbench<TResponse>(method: string, params: unknown) {
-    const response = await socket.sendRequest<TResponse>({ method, params });
-    if (isWorkbenchRpcFailure(response)) {
-      const data = response.error.data && typeof response.error.data === "object" && !Array.isArray(response.error.data)
-        ? response.error.data
-        : null;
-      throw new WorkbenchDaemonRequestError(response.error.message, response.error.code, data);
-    }
-    return response.result;
+    if (!params || typeof params !== "object" || Array.isArray(params)) throw new Error("Workspace request parameters are invalid.");
+    const location = options.location ?? options.getLocation?.();
+    return workspace.request<TResponse>(method, params,
+      location ? { kind: "folder", location: {
+        ...location, projectId: "projectId" in params && typeof params.projectId === "string"
+          ? ProjectIdSchema.parse(params.projectId) : location.projectId,
+      } } : undefined);
   }
 
   const daemon = new WorkbenchDaemonClient({ request: requestWorkbench });
-  const threadObservations = new ThreadObservationController({ request: requestWorkbench });
-  lifecycle.addUnsubscribe(socket.onConnectionClose(() => threadObservations.disconnect()));
-  lifecycle.addUnsubscribe(socket.onWorkbenchNotification(notification => {
-    if (notification.method === "workbench/thread-state/reset") threadObservations.disconnect();
-    else if (notification.method === "workbench/thread-state/updated"
+  const threadObservations = new ThreadObservationController({
+    observe: request => options.workspace.observeThread(request),
+    release: subscriptionId => options.workspace.releaseThread(subscriptionId),
+  });
+  lifecycle.addUnsubscribe(workspace.onWorkbenchNotification(notification => {
+    if (notification.method === "workbench/thread-state/updated"
       && notification.params && typeof notification.params === "object"
       && "updateKind" in notification.params && notification.params.updateKind === "threadObservation") {
       threadObservations.accept(notification.params);
@@ -577,7 +572,7 @@ function WorkbenchThreadClient(
     method: "voice/event" | "workbench/thread-state/reset" | "workbench/thread-state/updated" | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
     params: unknown;
   }) => void) {
-    return socket.onWorkbenchNotification((notification) => {
+    return workspace.onWorkbenchNotification((notification) => {
       if (
         notification.method === "workbench/thread-state/reset"
         || notification.method === "voice/event"
@@ -591,7 +586,7 @@ function WorkbenchThreadClient(
   }
 
   function onReconnect(listener: () => void) {
-    return socket.onReconnect(listener);
+    return workspace.rpc.onReconnect(listener);
   }
 
   let transcriptConformanceReportFailureLogged = false;
@@ -607,8 +602,8 @@ function WorkbenchThreadClient(
       });
     },
     transport: {
-      onDisconnect: (listener) => socket.onConnectionClose(listener),
-      onNotification: (listener) => socket.onWorkbenchNotification(listener),
+      onDisconnect: (listener) => workspace.onDisconnect(listener),
+      onNotification: (listener) => workspace.onWorkbenchNotification(listener),
       request: async (method, params) => await requestWorkbench<unknown>(method, params),
     },
   });
@@ -730,7 +725,8 @@ function WorkbenchThreadClient(
             .observation?.entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === threadId);
           const harness = observed && observed.entryKind !== "draft" ? observed.identity.harness
             : target.kind === "draft" ? defaultProviderKey : target.harness ?? getKnownThreadHarness(threadId) ?? defaultProviderKey;
-          const cwd = observed?.entryKind === "subagent" ? observed.cwd : options.getProjectById?.(projectId)?.rootPath;
+          const cwd = observed?.entryKind === "subagent" ? observed.cwd
+            : (options.getProjectForThread?.(threadId) ?? options.getProjectById?.(projectId))?.rootPath;
           readOptions = { ...(cwd ? { cwd } : {}), ...readOptions };
           const outcome = await fetchThreadPayload(threadId, harness, readOptions, payload => selectedThreadProjectContext?.projectId === projectId && selectedThreadProjectContext.rootThreadId === threadId && selectedThreadProjectContext.isCurrent()
             ? (setCurrentThread(payload), state.currentThread)
@@ -752,13 +748,15 @@ function WorkbenchThreadClient(
             },
             readOptimisticInitials: thread => optimisticInputs.getInitialProjections(getThreadStateKey(thread.harness, thread.id)),
             transcripts: {
-              subscribe: (params, listener, streamListener, streamFailure) =>
-                transcripts.subscribe(params, listener, streamListener, streamFailure),
+              subscribe: (params, listener, streamListener, streamFailure, stateListener) =>
+                transcripts.subscribe(params, listener, streamListener, streamFailure, stateListener),
               unsubscribe: async params => {
-                // Closing this client closes the shared socket and releases all server subscriptions.
-                if (disposed) return;
                 try { await transcripts.unsubscribe(params); }
-                catch (error) { if (!disposed) throw error; }
+                catch (error) {
+                  console.warn("Transcript subscription release failed.",
+                    error instanceof Error ? error.message.slice(0, 500) : "Workspace release failed.");
+                  throw error;
+                }
               },
             },
             turnLimit: 4,
@@ -770,31 +768,6 @@ function WorkbenchThreadClient(
       threadControllers.set(key, controller);
     }
     return controller;
-  }
-  async function publishAcceptedIntent({
-    draftId,
-    harness,
-    projectId,
-    threadId,
-    title,
-    turnId,
-  }: Omit<WorkbenchAcceptedIntent, "projectId"> & { projectId: ProjectId | "" }) {
-    try {
-      if (!projectId) throw new Error("The admitted thread has no project identity.");
-      if (options.publishAcceptedIntent) {
-        await options.publishAcceptedIntent({ ...(draftId ? { draftId } : {}), harness, projectId, threadId, title, turnId });
-      } else {
-        await requestWorkbench("workbench/thread-state/intent/accept", {
-          ...(draftId ? { draftId } : {}),
-          identity: { harness, threadId },
-          projectId,
-          title,
-          turnId,
-        });
-      }
-    } catch (error) {
-      options.onStatusMessage?.(`The message was admitted, but sidebar lifecycle publication failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
   }
   const optimisticInputs = ThreadOptimisticInputStore();
   let disposed = false;
@@ -819,7 +792,7 @@ function WorkbenchThreadClient(
   const steerHistoryReadGenerationByKey = new Map<string, number>();
   const steerHistoryWarningKeys = new Set<string>();
   const messageAdmissionController = ThreadMessageAdmissionController({
-    client: { connect: () => socket.connectSocket(), submit: input => daemon.threads.message(input) },
+    client: { connect: () => workspace.connect(cancellation.signal), submit: input => daemon.threads.message(input) },
     documents: threadDocuments,
     emitWarning: emitStatusMessage,
     getLifecycleState: (threadId) => {
@@ -870,7 +843,7 @@ function WorkbenchThreadClient(
     };
   }
 
-  function projectThreadContext(project: WorkbenchProjectOption): ThreadProjectContext {
+  function projectThreadContext(project: WorkbenchThreadProject): ThreadProjectContext {
     return {
       projectId: project.id,
       projectRoot: project.name || project.id,
@@ -880,6 +853,8 @@ function WorkbenchThreadClient(
   }
 
   function effectiveThreadProjectContext(harness: WorkbenchHarness, threadId: string) {
+    const ownedProject = options.getProjectForThread?.(threadId);
+    if (ownedProject) return projectThreadContext(ownedProject);
     const observed = threadObservations.getObservations().find(snapshot => snapshot.entries.some(entry => (
       entry.entryKind !== "draft" && entry.identity.harness === harness && entry.identity.threadId === threadId
     )));
@@ -893,7 +868,7 @@ function WorkbenchThreadClient(
 
   function installSelectedThreadProjectContext(
     target: Exclude<ThreadControllerTarget, { kind: "subagent" }> & { harness: WorkbenchHarness },
-    project: WorkbenchProjectOption | undefined,
+    project: WorkbenchThreadProject | undefined,
     isCurrent: () => boolean = () => true,
   ) {
     const { harness } = target;
@@ -1023,8 +998,14 @@ function WorkbenchThreadClient(
 
   function resetConnectionState() {
     account.reset();
-    resetProjectThreadState();
   }
+  let sourceGeneration: number | null = null;
+  function acceptSourceGeneration(generation: number) {
+    const previous = sourceGeneration;
+    sourceGeneration = generation;
+    if (previous !== null && previous !== generation) resetConnectionState();
+  }
+  lifecycle.addUnsubscribe(workspace.onDisconnect(resetConnectionState));
 
   function setProjectContext(context: { projectId?: ProjectId | ""; root: string; rootPath: string; roots?: WorkbenchProjectRoot[] }) {
     const nextRoots = context.roots?.length
@@ -3779,7 +3760,7 @@ function WorkbenchThreadClient(
       project,
       source = "open",
       isCurrent = () => true,
-    }: { harness?: WorkbenchHarness; project?: WorkbenchProjectOption; source?: "open" | "reload"; isCurrent?: () => boolean } = {},
+    }: { harness?: WorkbenchHarness; project?: WorkbenchThreadProject; source?: "open" | "reload"; isCurrent?: () => boolean } = {},
   ) {
     if (source === "open") messageAdmissionIntentRevision += 1;
     const intentRevision = messageAdmissionIntentRevision;
@@ -3985,46 +3966,17 @@ function WorkbenchThreadClient(
     sendOptions: WorkbenchSendThreadMessageOptions = {},
   ) {
     if (!installedProviderKeys.some(key => key === thread.harness)) throw new Error(`Provider ${thread.harness} is not installed.`);
-    let resolvedThreadId = thread.id;
-    let harness = thread.harness;
+    const resolvedThreadId = thread.id;
+    const harness = thread.harness;
     const previousThread = state.currentThread;
-    const sendSelectedThreadKey = threadDocuments.getSelectedThreadKey();
-    const sendMessageAdmissionIntentRevision = messageAdmissionIntentRevision;
-    const operationProjectContext = effectiveThreadProjectContext(harness, resolvedThreadId);
-    const sendProjectContext = {
-      generation: projectContextGeneration,
-      projectId: operationProjectContext.projectId,
-      projectRootPath: operationProjectContext.projectRootPath,
-      threadGeneration: threadProjectContextGeneration,
-    };
-    const isSendProjectCurrent = () => !disposed
-      && sendProjectContext.generation === projectContextGeneration
-      && sendProjectContext.threadGeneration === threadProjectContextGeneration
-      && sendProjectContext.projectId === effectiveThreadProjectContext(harness, resolvedThreadId).projectId
-      && sendProjectContext.projectRootPath === effectiveThreadProjectContext(harness, resolvedThreadId).projectRootPath;
-    const isInitialSendSelectionCurrent = () => sendOptions.selectThread === false || (
-      sendSelectedThreadKey === threadDocuments.getSelectedThreadKey()
-      && sendMessageAdmissionIntentRevision === messageAdmissionIntentRevision
-    );
     const selectedModel = thread.model;
     const selectedReasoningEffort = thread.reasoningEffort;
     const selectedServiceTier = thread.serviceTier;
     const selectedAgentPath = normalizeWorkbenchAgentPath(thread.agentPath);
     const normalizedInput = normalizeThreadMessageInput(input);
-    const firstMessagePreview = normalizedInput.find((entry) => entry.type === "text")?.text ?? "";
-    const recoveryClientUserMessageId = isWorkbenchThreadRecoveryInput(normalizedInput)
-      ? createWorkbenchThreadRecoveryId()
-      : null;
     const workbenchOrigin = readLocalWorkbenchOrigin();
     const isDraftThread = thread.isDraft;
-    const materializingDraftId = isDraftThread ? thread.id : undefined;
-    const initialClientUserMessageId = isDraftThread && !recoveryClientUserMessageId
-      ? optimisticInputs.createClientUserMessageId()
-      : null;
     const isFreshCreation = isDraftThread;
-    let bootstrapThread: ThreadPayload | null = null;
-    let connectingTurnId: string | null = null;
-    let pendingInitialOptimisticHandle: string | null = null;
 
     if (!normalizedInput.length) {
       throw new Error("Message input cannot be empty.");
@@ -4267,312 +4219,7 @@ function WorkbenchThreadClient(
       });
     }
 
-    if (isDraftThread || !resolvedThreadId.trim()) {
-      let startedPayload = await daemon.threads.create({
-        projectId: operationProjectContext.projectId,
-        profile: sendOptions.composerProfileSlot
-          ? { kind: "target", slot: sendOptions.composerProfileSlot }
-          : { kind: "snapshot", selection: { kind: "custom", settings: {
-            harness, model: selectedModel ?? "", reasoningEffort: selectedReasoningEffort,
-            serviceTier: selectedServiceTier === "fast" ? "fast" : null, agentPath: selectedAgentPath, agentSource: null,
-            contextWindowTokens: thread.contextWindowTokens ?? null,
-          } } },
-        context: {
-          workbenchOrigin, instructionInjections: sendOptions.instructionInjections,
-          workflowIds: [...(sendOptions.workflowIds ?? getDefaultWorkflowIdsForThread(thread.id))],
-        },
-        additionalWritableRoots: sendOptions.additionalWritableRoots,
-      });
-      if (!isSendProjectCurrent() || !isInitialSendSelectionCurrent()) {
-        throw new ThreadMessageNotSentError();
-      }
-
-      if (sendOptions.composerProfileSlot) startedPayload = await readThreadProfileSnapshot(startedPayload, sendOptions.composerProfileSlot.projectId);
-      if (!isSendProjectCurrent() || !isInitialSendSelectionCurrent()) {
-        throw new ThreadMessageNotSentError();
-      }
-      bootstrapThread = startedPayload;
-      resolvedThreadId = bootstrapThread.id;
-      if (selectedThreadProjectContext?.rootThreadId === thread.id && selectedThreadProjectContext.harness === harness) {
-        selectedThreadProjectContext.rootThreadId = resolvedThreadId;
-      }
-      if (isDraftThread) {
-        connectingTurnId = crypto.randomUUID();
-        const connectingTurn = withWorkbenchTurnAdmission(createStreamingTurn(connectingTurnId), "connecting");
-        const connectingThread: ThreadPayload = {
-          ...startedPayload,
-          preview: firstMessagePreview || startedPayload.preview,
-          status: "active",
-          turnHistory: [createLoadedTurnHistoryEntry(connectingTurn)],
-          turns: [connectingTurn],
-        };
-        const pendingEntry = optimisticInputs.enqueueInitial(connectingThread, connectingTurnId, normalizedInput, {
-          clientUserMessageId: initialClientUserMessageId,
-        });
-        pendingInitialOptimisticHandle = pendingEntry.handle;
-        const connectingKey = getThreadStateKey(connectingThread.harness, connectingThread.id);
-        bumpOverlayRevisionForKey(connectingKey, "optimisticRevision");
-        if (sendOptions.selectThread !== false) {
-          setCurrentThread(connectingThread);
-        } else {
-          installAuthoritativeThreadSource(connectingThread);
-        }
-        sendOptions.onThreadCreated?.(projectThreadSource(connectingKey) ?? connectingThread);
-      } else if (sendOptions.selectThread !== false) {
-        setCurrentThread(bootstrapThread);
-      }
-      if (!isFreshCreation) {
-        if (
-          !isSendProjectCurrent()
-        ) {
-          throw new ThreadMessageNotSentError();
-        }
-      }
-    }
-
-    let resumedThread = bootstrapThread;
-
-    if (!resumedThread) {
-      throw new Error(`Unable to prepare the new ${harness} thread for its first turn.`);
-    }
-    if (resumedThread.isDraft) throw new Error("Message preparation did not materialize the thread.");
-    const admittedThreadId = resumedThread.id;
-
-    harness = resumedThread.harness;
-    const providerThreadIsActive = isThreadStatusActive(resumedThread.status);
-    const currentInProgressTurn = providerThreadIsActive
-      ? getCurrentInProgressTurn(resumedThread)
-      : null;
-    if (sendOptions.startNewTurn && providerThreadIsActive) {
-      throw new Error(currentInProgressTurn
-        ? "The questionnaire response cannot start a new turn while the provider reports an active turn."
-        : "The questionnaire response cannot start a new turn while the provider reports an active thread without a turn identity.");
-    }
-    if (providerThreadIsActive && !currentInProgressTurn) {
-      throw new ThreadMessageNotSentError();
-    }
-    let optimisticTurnId: string | null = null;
-
-    if (currentInProgressTurn) {
-      optimisticTurnId = currentInProgressTurn.id;
-      const pendingSteerItem = enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput, "steer", "pending", resumedThread);
-      if (sendOptions.selectThread !== false) {
-        resumedThread = applyOptimisticUserMessageOverlay(resumedThread) ?? resumedThread;
-        setCurrentThread(resumedThread);
-      }
-
-      let steerResponse: ProviderSteerAcknowledgement;
-      try {
-        const result = await daemon.threads.message({
-          threadId: resolvedThreadId, input: normalizedInput, intent: "steer",
-          expectedTurnId: currentInProgressTurn.id,
-          clientMessageId: pendingSteerItem.clientId ?? pendingSteerItem.id,
-          context: {
-            workbenchOrigin, instructionInjections: sendOptions.instructionInjections,
-            workflowIds: [...(sendOptions.workflowIds ?? getDefaultWorkflowIdsForThread(thread.id))],
-            activatedSkillPaths: sendOptions.activatedSkillPaths ? [...sendOptions.activatedSkillPaths] : undefined,
-          },
-        });
-        if (result.warning) emitStatusMessage(result.warning);
-        steerResponse = { turnId: result.kind === "steered" ? result.turnId : result.turn.id };
-      } catch (error) {
-        if (!isSendProjectCurrent()) {
-          throw error;
-        }
-        const admissionStatus = optimisticInputs.transition(pendingSteerItem.id, "failed");
-        bumpOverlayRevisionForKey(getThreadStateKey(harness, resolvedThreadId), "optimisticRevision");
-        if (sendOptions.selectThread !== false) {
-          refreshCurrentThreadOptimisticUserMessages();
-        }
-        if (admissionStatus === "sent") {
-          return null;
-        }
-        throw error;
-      }
-      if (!isSendProjectCurrent()) {
-        return null;
-      }
-
-      const acknowledgedTurnId = "turnId" in steerResponse
-        ? steerResponse.turnId.trim()
-        : currentInProgressTurn.id;
-      if (!acknowledgedTurnId) {
-        const admissionStatus = optimisticInputs.transition(pendingSteerItem.id, "failed");
-        bumpOverlayRevisionForKey(getThreadStateKey(harness, resolvedThreadId), "optimisticRevision");
-        if (sendOptions.selectThread !== false) {
-          refreshCurrentThreadOptimisticUserMessages();
-        }
-        if (admissionStatus === "sent") {
-          return null;
-        }
-        throw new Error("turn/steer returned an empty turn id.");
-      }
-      const optimisticHandle = pendingSteerItem.id;
-      if (optimisticInputs.movePending(optimisticHandle, acknowledgedTurnId)) {
-        if (acknowledgedTurnId !== optimisticTurnId) {
-          optimisticTurnId = acknowledgedTurnId;
-          bumpOverlayRevisionForKey(getThreadStateKey(harness, resolvedThreadId), "optimisticRevision");
-        }
-      } else {
-        const admissionStatus = optimisticInputs.transition(optimisticHandle, "failed");
-        if (admissionStatus !== "sent") {
-          bumpOverlayRevisionForKey(getThreadStateKey(harness, resolvedThreadId), "optimisticRevision");
-          if (sendOptions.selectThread !== false) {
-            refreshCurrentThreadOptimisticUserMessages();
-          }
-          throw new Error(admissionStatus === "interrupted"
-            ? "The turn stopped before this steer was delivered."
-            : "The steer could not be admitted to the active turn.");
-        }
-      }
-      if (sendOptions.selectThread !== false) {
-        refreshCurrentThreadOptimisticUserMessages();
-      }
-    } else {
-      const turnStartFence = captureThreadOperationFence(harness, resolvedThreadId, {
-        selectionBound: sendOptions.selectThread !== false,
-      });
-      let turnStartResponse: { turn: Turn };
-      try {
-        const result = await daemon.threads.message({
-          threadId: resolvedThreadId, input: normalizedInput, intent: "newTurn",
-          clientMessageId: recoveryClientUserMessageId ?? initialClientUserMessageId ?? optimisticInputs.createClientUserMessageId(),
-          context: {
-            workbenchOrigin, instructionInjections: sendOptions.instructionInjections,
-            workflowIds: [...(sendOptions.workflowIds ?? getDefaultWorkflowIdsForThread(thread.id))],
-            activatedSkillPaths: sendOptions.activatedSkillPaths ? [...sendOptions.activatedSkillPaths] : undefined,
-          },
-        });
-        if (result.warning) emitStatusMessage(result.warning);
-        turnStartResponse = { turn: result.kind === "started" ? result.turn : createStreamingTurn(result.turnId) };
-      } catch (error) {
-        if (pendingInitialOptimisticHandle) {
-          const threadKey = getThreadStateKey(harness, resolvedThreadId);
-          const currentSource = threadSources.get(threadKey);
-          const bootstrapTurnIds = new Set(bootstrapThread?.turns.map((turn) => turn.id) ?? []);
-          const admittedTurn = currentSource?.turns.find((turn) => (
-            turn.id !== connectingTurnId
-            && !bootstrapTurnIds.has(turn.id)
-          ));
-          if (currentSource && admittedTurn) {
-            optimisticInputs.movePending(pendingInitialOptimisticHandle, admittedTurn.id);
-            optimisticInputs.transition(pendingInitialOptimisticHandle, "sent");
-            bumpOverlayRevisionForKey(threadKey, "optimisticRevision");
-            const admittedSource = {
-              ...currentSource,
-              turnHistory: currentSource.turnHistory.filter((entry) => entry.turnId !== connectingTurnId),
-              turns: currentSource.turns.filter((turn) => turn.id !== connectingTurnId),
-            };
-            commitCanonicalThreadSource(admittedSource);
-            const projectedSource = projectThreadSource(threadKey) ?? admittedSource;
-            sendOptions.onTurnAdmitted?.(admittedTurn.id);
-            if (materializingDraftId) void publishAcceptedIntent({
-              draftId: materializingDraftId,
-              harness,
-              projectId: operationProjectContext.projectId,
-              threadId: admittedThreadId,
-              title: firstMessagePreview || "New thread",
-              turnId: WorkbenchTurnIdSchema.parse(admittedTurn.id),
-            });
-            if (isDraftThread) {
-              sendOptions.onThreadMaterialized?.(projectedSource);
-            }
-            if (threadDocuments.getSelectedThreadKey() === threadKey) {
-              flushSelectedThreadRendering();
-              options.onThreadStarted?.(projectedSource);
-            }
-            return null;
-          }
-
-          optimisticInputs.transition(pendingInitialOptimisticHandle, "failed");
-          optimisticInputs.deleteThread(threadKey);
-          bumpOverlayRevisionForKey(threadKey, "optimisticRevision");
-          if (bootstrapThread) {
-            const settledSource = currentSource
-              ? {
-                ...currentSource,
-                status: bootstrapThread.status,
-                turnHistory: currentSource.turnHistory.filter((entry) => entry.turnId !== connectingTurnId),
-                turns: currentSource.turns.filter((turn) => turn.id !== connectingTurnId),
-              }
-              : bootstrapThread;
-            installAuthoritativeThreadSource(settledSource);
-            if (threadDocuments.getSelectedThreadKey() === threadKey) {
-              flushSelectedThreadRendering();
-            }
-          }
-        }
-        throw error;
-      }
-      if (materializingDraftId) void publishAcceptedIntent({
-        draftId: materializingDraftId,
-        harness,
-        projectId: operationProjectContext.projectId,
-        threadId: admittedThreadId,
-        title: firstMessagePreview || "New thread",
-        turnId: WorkbenchTurnIdSchema.parse(turnStartResponse.turn.id),
-      });
-      if (
-        !isSendProjectCurrent()
-        || !isThreadOperationIdentityCurrent(turnStartFence)
-      ) {
-        return null;
-      }
-      sendOptions.onTurnAdmitted?.(turnStartResponse.turn.id);
-      const liveThread = threadSources.get(turnStartFence.threadKey) ?? resumedThread;
-      const admittedTurn = mergeLiveStreamingTurn(
-        turnStartResponse.turn,
-        liveThread.turns.find((turn) => turn.id === turnStartResponse.turn.id),
-        getThreadStreaming(turnStartFence.threadKey),
-      );
-      optimisticTurnId = admittedTurn.id;
-      if (pendingInitialOptimisticHandle) {
-        optimisticInputs.movePending(pendingInitialOptimisticHandle, optimisticTurnId);
-        optimisticInputs.transition(pendingInitialOptimisticHandle, "sent");
-        bumpOverlayRevisionForKey(getThreadStateKey(harness, resolvedThreadId), "optimisticRevision");
-      }
-      if (!pendingInitialOptimisticHandle && !recoveryClientUserMessageId) {
-        enqueueOptimisticUserMessage(harness, resolvedThreadId, optimisticTurnId, normalizedInput, "initial", "sent", liveThread);
-      }
-      resumedThread = applyOptimisticUserMessageOverlay({
-        ...liveThread,
-        preview: firstMessagePreview || liveThread.preview,
-        status: isThreadStatusActive(liveThread.status) ? liveThread.status : "active",
-        turnHistory: isDraftThread
-          ? [createLoadedTurnHistoryEntry(admittedTurn)]
-          : liveThread.turnHistory,
-        turns: isDraftThread
-          ? [admittedTurn]
-          : [
-            ...liveThread.turns.filter((turn) => turn.id !== connectingTurnId && turn.id !== admittedTurn.id),
-            admittedTurn,
-          ],
-      }) ?? liveThread;
-      if (isDraftThread) {
-        sendOptions.onThreadMaterialized?.(resumedThread);
-      }
-      if (sendOptions.selectThread !== false) {
-        setCurrentThread(resumedThread);
-        options.onThreadStarted?.(resumedThread);
-      }
-    }
-
-    return reconcileAdmittedThreadMessage({
-      harness,
-      isDraftThread,
-      normalizedInput,
-      optimisticTurnId,
-      previousThread,
-      resolvedThreadId,
-      resumedThread,
-      selectedAgentPath,
-      selectedModel,
-      selectedReasoningEffort,
-      selectedServiceTier,
-      sendOptions,
-      isFreshCreation,
-      workbenchOrigin,
-    });
+    throw new Error("New threads must be launched from an app-owned saved draft.");
   }
 
   async function stopThread(thread: ThreadPayload) {
@@ -4778,12 +4425,13 @@ function WorkbenchThreadClient(
     }
   }
 
-  const unsubscribeNotifications = socket.onNotification((notification, harness) => {
+  const unsubscribeNotifications = options.observeProviderEvents === false ? () => {} : workspace.onThreadEvent((notification, harness, daemonId) => {
+    if (daemonId && options.location && daemonId !== options.location.daemonId) return;
     handleProviderNotification(notification, harness);
   });
   lifecycle.addUnsubscribe(unsubscribeNotifications);
   lifecycle.addUnsubscribe(() => {
-    socket.dispose();
+    cancellation.abort(new Error("Thread view disposed."));
   });
 
   function clearThreadSelection() {
@@ -4912,7 +4560,7 @@ function WorkbenchThreadClient(
   function createThread(
     harness: WorkbenchHarness,
     threadId?: DraftId,
-    options: { project?: WorkbenchProjectOption; select?: boolean } = {},
+    options: { project?: WorkbenchThreadProject; select?: boolean } = {},
   ) {
     const rootThreadId = threadId ?? createDraftThreadId();
     const projectContext = options.project ? projectThreadContext(options.project) : currentThreadProjectContext();
@@ -4930,10 +4578,8 @@ function WorkbenchThreadClient(
 
   function dispose() {
     disposed = true;
-    for (const controller of threadControllers.values()) controller.dispose({ transportClosing: true });
+    for (const controller of threadControllers.values()) controller.dispose();
     threadControllers.clear();
-    // This owner closes the shared socket below, so disconnect owns server subscription cleanup.
-    threadObservations.disconnect();
     threadObservations.dispose();
     resetProjectThreadState({ emitChange: false });
     listeners.clear();
@@ -4946,7 +4592,6 @@ function WorkbenchThreadClient(
 
   return {
     threadObservations,
-    setAppAvailable: available => socket.setSuspended(!available),
     getThreadController,
     recoverThreadControllers: async () => {
       const results = await Promise.allSettled([...threadControllers.values()].map(controller => controller.recover()));
@@ -4959,7 +4604,7 @@ function WorkbenchThreadClient(
       }
     },
     applyAcceptedThreadTitle,
-    connect: () => socket.connectSocket(),
+    connect: () => workspace.connect(cancellation.signal),
     clearThreadSelection,
     createThread,
     dispose,
@@ -4972,13 +4617,14 @@ function WorkbenchThreadClient(
     listModels,
     openThread,
     onReconnect,
-    onConnectionOpen: listener => socket.onConnectionOpen(listener),
-    onDisconnect: listener => socket.onConnectionClose(listener),
+    onConnectionOpen: listener => workspace.rpc.onOpen(listener),
+    onDisconnect: listener => workspace.onDisconnect(listener),
     onWorkbenchNotification,
     refreshCurrentThread,
     requestWorkbench,
     readThread,
     resetConnectionState,
+    acceptSourceGeneration,
     selectThreadPayload,
     refreshRateLimits,
     refreshRateLimitsIfStale,

@@ -29,7 +29,7 @@ export interface OpenCodeEventControllerOptions {
     latestTurn(threadId: string): Promise<Turn | null>;
     markExecutionSettled(nativeThreadId: string): void;
     markExecutionStarted(nativeThreadId: string): void;
-    syncNative(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId; latestTurnId?: WorkbenchTurnId | null; hasPendingSteers?: boolean }>;
+    syncNative(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId; latestTurnId?: WorkbenchTurnId | null; hasPendingSteers?: boolean; maintenance?: boolean }>;
     syncCreatedNative?(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId } | null>;
   } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "completeExecution" | "executionIntentVersion">;
   transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordItem" | "recordTurnState">
@@ -102,6 +102,7 @@ export default class OpenCodeEventController {
         return;
       case "session.inbox.delivered": {
         const identity = await this.options.threads.syncNative(sessionID);
+        if (identity.maintenance) return;
         const turn = await this.options.threads.latestTurn(identity.threadId);
         if (!turn) return;
         await this.options.observe({
@@ -119,6 +120,8 @@ export default class OpenCodeEventController {
       case "session.execution.started": {
         if (!this.options.threads.acceptExecutionEvent(sessionID, event.durable.seq)) return;
         this.options.threads.markExecutionStarted(sessionID);
+        const identity = await this.options.threads.syncNative(sessionID);
+        if (identity.maintenance) return;
         const active = await this.active(sessionID);
         await this.options.transcript.recordTurnState({
           ...active,
@@ -276,6 +279,10 @@ export default class OpenCodeEventController {
         if (event.type === "session.execution.succeeded" && identity.hasPendingSteers) return;
         if (startingTurn && this.options.threads.currentTurn(sessionID)?.turnId !== startingTurn.turnId) return;
         if (identity.latestTurnId && identity.latestTurnId !== this.options.threads.currentTurn(sessionID)?.turnId) return;
+        if (identity.maintenance) {
+          this.options.threads.markExecutionSettled(sessionID);
+          return;
+        }
         const turn = await this.options.threads.latestTurn(identity.threadId);
         if (!turn) return;
         if (startingTurn && (turn.id !== startingTurn.turnId

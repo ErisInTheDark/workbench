@@ -169,6 +169,10 @@ function isMissingFileError(error: unknown) {
 }
 
 export default class WorkbenchProjectCatalogController {
+  private readonly listeners = new Set<() => void>();
+  private factRevision = 0;
+  private refreshFailure: string | null = null;
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly cancellation = new AbortController();
   private readonly iconWork = new Map<ProjectId, Promise<void>>();
   private readonly persistence: WorkbenchProjectPersistence;
@@ -231,6 +235,9 @@ export default class WorkbenchProjectCatalogController {
     this.disposed = true;
     this.cancellation.abort();
     this.scanCancellation?.abort();
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.refreshTimer = null;
+    this.listeners.clear();
     const work = [...this.iconWork.values(), ...(this.refreshInFlight ? [this.refreshInFlight] : [])];
     this.cwdResolutions.clear();
     for (const watcher of this.projectWatchers) watcher.close();
@@ -239,7 +246,11 @@ export default class WorkbenchProjectCatalogController {
     this.catalogExpiresAt = 0;
     this.catalogGeneration += 1;
     this.hardStale = true;
-    this.disposal = Promise.allSettled(work).then(() => undefined);
+    this.disposal = Promise.allSettled(work).then(results => {
+      const failures = results.flatMap(result => result.status === "rejected"
+        && !isOwnedCancellation(result.reason, this.cancellation.signal) ? [result.reason] : []);
+      if (failures.length) throw new AggregateError(failures, "Project catalogue disposal failed.");
+    });
     return this.disposal;
   }
 
@@ -262,10 +273,11 @@ export default class WorkbenchProjectCatalogController {
         if (!current || current.sourceKey !== record.sourceKey) return;
         const { icon: _previous, ...metadata } = current.project;
         const project = { ...metadata, ...(icon ? { icon } : {}) };
-        const records = this.catalog.records!.map(item => item === current ? { project, sourceKey: current.sourceKey, checkedAt } : item);
+        const records = this.catalog.records!.map(item => item === current ? { ...current, project, checkedAt } : item);
         const data = records.map(item => item.project);
         const payload = { ...this.catalog.payload, data };
         this.catalog = { ...this.catalog, records, data, payload, serialized: JSON.stringify(payload) };
+        this.publishFacts();
       } catch (error) {
         if (!isOwnedCancellation(error, this.cancellation.signal)) this.logError(`project icon refresh failed: ${sanitizeRefreshError(error)}`);
       }
@@ -342,6 +354,58 @@ export default class WorkbenchProjectCatalogController {
       this.logError(`project icon request failed: ${sanitizeRefreshError(error)}`);
       sendIconError(response, 500, "Unable to read the project icon.");
     }
+  }
+
+  async start() {
+    this.assertActive();
+    const roots = this.settings ? await this.settings.readProjectDiscoveryRoots()
+      : this.configuredRoots ?? [];
+    this.assertActive();
+    const rootsChanged = !this.configuredRoots || roots.length !== this.configuredRoots.length
+      || roots.some((root, index) => root !== this.configuredRoots![index]);
+    if (!this.catalog || rootsChanged) {
+      const retained = await this.persistence.readRetainedProjectCatalog(roots);
+      this.assertActive();
+      this.installPreparedProjects(retained);
+    }
+    this.configuredRoots = [...roots];
+    this.replaceWatchers(roots);
+    this.hardStale = true;
+    this.catalogExpiresAt = 0;
+    this.publishFacts();
+    this.refreshInBackground();
+  }
+
+  subscribe(listener: () => void) {
+    this.assertActive();
+    this.listeners.add(listener);
+    if (this.shouldRefresh()) this.refreshInBackground();
+    this.scheduleRefresh();
+    return () => {
+      this.listeners.delete(listener);
+      if (!this.listeners.size && this.refreshTimer) {
+        clearTimeout(this.refreshTimer);
+        this.refreshTimer = null;
+      }
+    };
+  }
+
+  getFacts() {
+    const catalogue = this.catalog?.payload ?? null;
+    const records = this.catalog?.records ?? [];
+    const incomplete = records.some(record => !record.identityKey || !record.rootIdentityKeys);
+    return {
+      revision: this.factRevision,
+      phase: catalogue
+        ? (this.hardStale || this.refreshFailure || incomplete ? "stale" as const : "current" as const)
+        : (this.refreshFailure ? "failed" as const : "pending" as const),
+      failure: this.refreshFailure,
+      catalogue,
+      locations: catalogue ? {
+        data: records.flatMap(record => record.identityKey && record.rootIdentityKeys
+          ? [{ project: record.project, identityKey: record.identityKey, rootIdentityKeys: record.rootIdentityKeys }] : []),
+      } : null,
+    };
   }
 
   async ensureLoaded() {
@@ -526,6 +590,9 @@ export default class WorkbenchProjectCatalogController {
     this.catalogGeneration += 1;
     this.cwdResolutions.clear();
     this.hardStale = true;
+    this.refreshFailure = null;
+    this.publishFacts();
+    if (this.listeners.size) this.refreshInBackground();
   };
 
   private async readCatalogForResolution() {
@@ -533,7 +600,7 @@ export default class WorkbenchProjectCatalogController {
       return { catalog: await this.refreshCatalog(), refresh: null, refreshed: true };
     }
     let refresh: Promise<ProjectCatalogSnapshot> | null = null;
-    if (this.hardStale || this.catalogExpiresAt <= this.now()) {
+    if (this.shouldRefresh()) {
       refresh = this.refreshInBackground();
     }
     return { catalog: this.catalog, refresh, refreshed: false };
@@ -545,7 +612,7 @@ export default class WorkbenchProjectCatalogController {
       if (!this.hardStale && this.catalogExpiresAt > this.now()) {
         return { cacheState: "hit", catalog: this.catalog };
       }
-      this.refreshInBackground();
+      if (this.shouldRefresh()) this.refreshInBackground();
       return { cacheState: "stale", catalog: this.catalog };
     }
     const coalesced = this.refreshInFlight;
@@ -574,15 +641,7 @@ export default class WorkbenchProjectCatalogController {
   }
 
   private refreshInBackground() {
-    const alreadyRefreshing = Boolean(this.refreshInFlight);
-    const refresh = this.refreshCatalog();
-    if (!alreadyRefreshing) {
-      void refresh.catch((error) => {
-        if (isOwnedCancellation(error, this.cancellation.signal)) return;
-        this.logError(`project catalog background refresh failed: ${sanitizeRefreshError(error)}`);
-      });
-    }
-    return refresh;
+    return this.refreshCatalog();
   }
 
   private startRefresh() {
@@ -633,15 +692,55 @@ export default class WorkbenchProjectCatalogController {
         this.catalog = catalog;
         this.catalogExpiresAt = this.now() + this.cacheTtlMs;
         this.hardStale = false;
+        this.refreshFailure = null;
+        this.publishFacts();
         return catalog;
       }
     })();
     this.refreshInFlight = refresh;
-    void refresh.finally(() => {
+    const settled = () => {
       if (this.refreshInFlight === refresh) this.refreshInFlight = null;
       if (this.scanCancellation === scan) this.scanCancellation = null;
-    }).catch(() => undefined);
+      this.scheduleRefresh();
+    };
+    void refresh.then(settled, error => {
+      if (!isOwnedCancellation(error, this.cancellation.signal)
+        && !isOwnedCancellation(error, scan.signal)) {
+        this.refreshFailure = sanitizeRefreshError(error);
+        this.catalogExpiresAt = this.now() + this.cacheTtlMs;
+        this.logError(`project catalogue refresh failed: ${this.refreshFailure}`);
+        this.publishFacts();
+      }
+      settled();
+    });
     return refresh;
+  }
+
+  private shouldRefresh() {
+    return !this.catalog || this.catalogExpiresAt <= this.now()
+      || this.hardStale && this.refreshFailure === null;
+  }
+
+  private publishFacts() {
+    if (this.disposed) return;
+    this.factRevision++;
+    for (const listener of this.listeners) {
+      try { listener(); }
+      catch (error) { this.logError(`project catalogue observer failed: ${sanitizeRefreshError(error)}`); }
+    }
+  }
+
+  private scheduleRefresh() {
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.refreshTimer = null;
+    if (this.disposed || !this.listeners.size || this.refreshInFlight) return;
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      this.hardStale = true;
+      this.publishFacts();
+      this.refreshInBackground();
+    }, Math.max(0, this.catalogExpiresAt - this.now()));
+    this.refreshTimer.unref?.();
   }
 
   private async readConfiguredRoots() {

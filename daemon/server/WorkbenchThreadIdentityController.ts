@@ -24,6 +24,7 @@ import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread
 
 export default class WorkbenchThreadIdentityController {
   private disposed = false;
+  private readonly listeners = new Set<(threadId: WorkbenchThreadId) => void>();
   private readonly records = new Map<WorkbenchThreadIdentityLookup["threadId"], WorkbenchThreadIdentityRecord>();
   private readonly nativeOwners = new Map<NativeThreadKey, WorkbenchThreadId>();
   private readonly nativeReferences = new Map<NativeThreadReferenceKey, Map<string, WorkbenchNativeThreadIdentity>>();
@@ -193,8 +194,20 @@ export default class WorkbenchThreadIdentityController {
     return record;
   }
 
+  findThread(threadId: WorkbenchThreadId | ThreadReference) {
+    this.assertActive();
+    return this.records.get(threadId) ?? null;
+  }
+
+  subscribe(listener: (threadId: WorkbenchThreadId) => void) {
+    this.assertActive();
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
   dispose() {
     this.disposed = true;
+    this.listeners.clear();
     this.records.clear();
     this.nativeOwners.clear();
     this.nativeReferences.clear();
@@ -204,6 +217,7 @@ export default class WorkbenchThreadIdentityController {
 
   private remember(record: WorkbenchThreadIdentityRecord) {
     this.assertActive();
+    const previous = this.records.get(record.threadId);
     const committed = Object.freeze({
       ...record,
       bindings: Object.freeze(record.bindings.map((binding) => Object.freeze({ ...binding }))),
@@ -230,6 +244,16 @@ export default class WorkbenchThreadIdentityController {
       const references = this.nativeReferences.get(key) ?? new Map<string, WorkbenchNativeThreadIdentity>();
       references.set(nativeLocationKey(binding.nativeLocation, this.platform), binding);
       this.nativeReferences.set(key, references);
+    }
+    if (!previous || previous.projectId !== committed.projectId
+      || previous.bindings[0]?.harness !== committed.bindings[0]?.harness) {
+      for (const listener of this.listeners) {
+        try { listener(committed.threadId); }
+        catch (error) {
+          console.error("Thread identity observer failed:", (error instanceof Error
+            ? error.message : "Unknown observer failure").replace(/[\u0000-\u001f]/gu, "").slice(0, 512));
+        }
+      }
     }
     return committed;
   }

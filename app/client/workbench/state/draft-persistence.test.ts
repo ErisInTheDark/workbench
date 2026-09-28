@@ -1,33 +1,49 @@
 /*
- * No production exports. Tests exercise actual draft adapters with client-state storage and sidebar owner ports.
+ * No production exports. Tests exercise draft adapters with client-state storage and app presentation ports.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchComposerInputDraft } from "workbench-shared/types";
+import type { PresentationDraftInput, PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import DraftSessionController from "../../components/workbench/thread-view/DraftSessionController";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
 import type WorkbenchPresentationClient from "./WorkbenchPresentationClient";
 import {
-  clearComposerDraft, clearQuestionnaireDraft, projectComposerDrafts, saveComposerDraft, saveQuestionnaireDraft, sidebarDraftToInput,
-  type ComposerDraftTarget, type SidebarDraftPersistence,
+  clearComposerDraft, clearQuestionnaireDraft, projectComposerDrafts, saveComposerDraft, saveQuestionnaireDraft,
+  type ComposerDraftTarget,
 } from "./draft-persistence";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
-function sidebarFixture() {
-  const records = new Map<string, WorkbenchThreadDraft>();
+function presentationFixture() {
+  const records = new Map<string, PresentationSnapshot["drafts"][number]>();
   const navigations: string[] = [];
-  const owner: SidebarDraftPersistence = {
-    read: (projectId, draftId) => records.get(`${projectId}:${draftId}`) ?? null,
-    create: (projectId, draftId) => ({
-      attachments: [], clientUpdatedAt: 0, createdAt: 1, draftId,
-      composerSettings: { agentPath: null, agentSource: null, harness: "codex", model: "model", reasoningEffort: null, serviceTier: null },
-      profileId: "profile", projectId, prompt: "", updatedAt: 1,
-    }),
-    write: (draft) => { records.set(`${draft.projectId}:${draft.draftId}`, draft); },
-    remove: async (projectId, draftId) => { records.delete(`${projectId}:${draftId}`); },
-    materialize: (draft) => { navigations.push(draft.draftId); },
+  const selection = { kind: "custom" as const, settings: {
+    agentPath: null, agentSource: null, harness: "codex" as const, model: "model", reasoningEffort: null,
+    serviceTier: null, contextWindowTokens: null,
+  } };
+  const owner = {
+    draft: (id: string) => records.get(id) ?? null,
+    putDraft: async (input: PresentationDraftInput) => {
+      const prior = records.get(input.id);
+      records.set(input.id, { ...input, phase: "unsent", revision: (prior?.revision ?? 0) + 1,
+        pinned: prior?.pinned ?? false, snoozed: prior?.snoozed ?? false, launchId: null, acceptedThreadId: null,
+        attachments: prior?.attachments ?? [] });
+    },
+    uploadAttachment: async (id: string, attachmentId: string) => {
+      records.get(id)!.attachments.push({ id: attachmentId, mediaType: "image/png", contentHash: attachmentId });
+    },
+    attachmentUrl: (_id: string, attachmentId: string) => `image:${attachmentId}`,
+    removeDraft: async (id: string) => { records.delete(id); },
+  } as unknown as WorkbenchPresentationClient;
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse(crypto.randomUUID());
+  const target: Extract<ComposerDraftTarget, { kind: "presentation" }> = {
+    kind: "presentation", draftId, isNew: true, owner,
+    logicalProjectId: fixtureIdentitySchemas.LogicalProjectIdSchema.parse(crypto.randomUUID()),
+    location: { daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse(crypto.randomUUID()),
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project") },
+    selection: () => owner.draft(draftId)?.selection ?? selection,
+    materialize: () => { navigations.push(draftId); }, dematerialize: () => {},
   };
-  const target: ComposerDraftTarget = { kind: "sidebar", draftId: fixtureIdentitySchemas.DraftIdSchema.parse(crypto.randomUUID()), projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), isNew: true, owner };
   return { records, navigations, owner, target };
 }
 
@@ -73,29 +89,30 @@ test("saved presentation draft keeps its owner location when a queued save captu
 
 test("new drafts reuse their reserved identity and preserve existing metadata through late updates", async () => {
   const state = new WorkbenchClientStateController();
-  const store = sidebarFixture();
+  const store = presentationFixture();
   await saveComposerDraft(state, store.target, (draft) => ({ ...draft, text: "enough words to save this draft" }), autosave);
   assert.equal(store.records.size, 1);
-  const original = store.owner.read(store.target.projectId, store.target.draftId);
+  const original = store.owner.draft(store.target.draftId);
   assert.ok(original);
-  store.records.set(`${original.projectId}:${original.draftId}`, { ...original, composerSettings: { ...original.composerSettings, model: "updated model" }, profileId: "new profile" });
+  store.records.set(original.id, { ...original, pinned: true,
+    selection: { kind: "profile", profileId: "new profile", settings: { ...original.selection.settings, model: "updated model" } } });
   await saveComposerDraft(state, store.target, (draft) => ({
     ...draft, attachments: [...draft.attachments, { id: "image", url: "image:pasted" }],
   }), { ...autosave, detached: true });
   assert.equal(store.records.size, 1);
-  const latest = store.owner.read(store.target.projectId, store.target.draftId);
+  const latest = store.owner.draft(store.target.draftId);
   assert.ok(latest);
   assert.equal(latest.prompt, original.prompt);
-  assert.equal(latest.composerSettings.model, "updated model");
-  assert.equal(latest.profileId, "new profile");
-  assert.equal(latest.createdAt, original.createdAt);
-  assert.deepEqual(latest.attachments, [{ id: "image", url: "image:pasted" }]);
+  assert.equal(latest.selection.settings.model, "updated model");
+  assert.equal(latest.selection.kind === "profile" ? latest.selection.profileId : null, "new profile");
+  assert.equal(latest.pinned, true);
+  assert.deepEqual(latest.attachments.map(item => item.id), ["image"]);
   assert.deepEqual(store.navigations, [store.target.draftId]);
 });
 
-test("existing sidebar drafts disappear only after their last content is cleared", async () => {
+test("existing app drafts disappear only after their last content is cleared", async () => {
   const state = new WorkbenchClientStateController();
-  const store = sidebarFixture();
+  const store = presentationFixture();
   await saveComposerDraft(state, store.target, (draft) => ({ ...draft, text: "materialised draft content" }), autosave);
   await saveComposerDraft(state, store.target, (draft) => ({ ...draft, text: " " }), autosave);
   assert.equal(store.records.size, 0);
@@ -106,7 +123,7 @@ test("existing sidebar drafts disappear only after their last content is cleared
     text: "materialised yet again",
   }), autosave);
   await saveComposerDraft(state, store.target, (draft) => ({ ...draft, text: "" }), autosave);
-  assert.deepEqual(store.owner.read(store.target.projectId, store.target.draftId)?.attachments, [{ id: "shot", url: "image:shot" }]);
+  assert.deepEqual(store.owner.draft(store.target.draftId)?.attachments.map(item => item.id), ["shot"]);
 });
 
 test("clearing the last app draft content dematerialises its current route only after deletion", async () => {
@@ -180,23 +197,24 @@ test("a still-new presentation view retries its draft handoff after later succes
   assert.equal(handoffs, 2);
 });
 
-test("detached creation never navigates and clearing uses the original project identity", async () => {
+test("detached creation never navigates and clearing uses the original draft identity", async () => {
   const state = new WorkbenchClientStateController();
-  const store = sidebarFixture();
+  const store = presentationFixture();
   await saveComposerDraft(state, store.target, (draft) => ({ ...draft, text: "save this detached draft safely" }), { ...autosave, detached: true });
   assert.equal(store.navigations.length, 0);
-  const otherProject = { ...store.target, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other") };
+  const otherProject = { ...store.target, draftId: fixtureIdentitySchemas.DraftIdSchema.parse(crypto.randomUUID()),
+    logicalProjectId: fixtureIdentitySchemas.LogicalProjectIdSchema.parse(crypto.randomUUID()) };
   await saveComposerDraft(state, otherProject, (draft) => ({ ...draft, text: "another project's draft" }), autosave);
   await clearComposerDraft(state, store.target);
-  assert.equal(store.owner.read(fixtureIdentitySchemas.ProjectIdSchema.parse("project"), store.target.draftId), null);
-  assert.ok(store.owner.read(fixtureIdentitySchemas.ProjectIdSchema.parse("other"), store.target.draftId));
+  assert.equal(store.owner.draft(store.target.draftId), null);
+  assert.ok(store.owner.draft(otherProject.draftId));
 });
 
 test("an image materialises a new draft below the text threshold", async () => {
   const state = new WorkbenchClientStateController();
-  const store = sidebarFixture();
-  const session = new DraftSessionController(sidebarDraftToInput(null), {
-    empty: () => sidebarDraftToInput(null),
+  const store = presentationFixture();
+  const session = new DraftSessionController<WorkbenchComposerInputDraft>({ text: "", attachments: [], updatedAt: 0 }, {
+    empty: () => ({ text: "", attachments: [], updatedAt: 0 }),
     save: (update, options) => saveComposerDraft(state, store.target, update, options),
     schedule: () => 1,
     cancelSchedule: () => {},
@@ -208,7 +226,7 @@ test("an image materialises a new draft below the text threshold", async () => {
   await session.flush();
   assert.equal(store.records.size, 1);
   const saved = [...store.records.values()][0];
-  assert.deepEqual(saved.attachments, [{ id: "shot", url: "image:shot" }]);
+  assert.deepEqual(saved.attachments.map(item => item.id), ["shot"]);
   assert.equal(saved.prompt, "hi");
   assert.deepEqual(store.navigations, [store.target.draftId]);
   session.detach();

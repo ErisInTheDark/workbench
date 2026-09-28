@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { captureTestOutput } from "../../../../test/capture-test-output.mts";
-import type WorkbenchSocketClient from "workbench-shared/workbench/WorkbenchSocketClient";
+import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import type WorkbenchWorkspaceClient from "../app/WorkbenchWorkspaceClient";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadPageResult } from "workbench-shared/workbench/thread/thread-actions";
 import {
@@ -24,7 +25,7 @@ function fixture() {
   const notifications = new Set<(notification: { method: string; params: unknown }) => void>();
   const disconnects = new Set<() => void>();
   let reconnect = () => {};
-  let closed = false;
+  let released = false;
   let subscriptionId = "";
   let failSubscription = false;
   let readPage: (cursor: string | null) => Promise<WorkbenchThreadPageResult> = async cursor => page(cursor ? "older" : "latest", cursor ? null : "latest");
@@ -47,27 +48,30 @@ function fixture() {
     } as WorkbenchThreadPageResult["thread"],
     nextCursor, questionnaireEntries: [], steerEntries: [], browseResultEntries: [],
   });
-  const client = {
-    connectSocket: async () => notify(workbenchTranscriptNotifications.capabilities.method, { protocolVersion: 3 }),
+  const request = async <T>(method: string, params: object): Promise<T> => {
+    const input = { method, params } as (typeof requests)[number];
+    requests.push(input);
+    if (method === "thread/page/read") return await readPage(input.params.cursor ?? null) as T;
+    if (method === "thread/reconcile") return { turnIds: ["latest"], exhausted: false } as T;
+    if (method === workbenchTranscriptOperations.subscribe.method && failSubscription) throw new Error("subscription unavailable");
+    if (method === workbenchTranscriptOperations.subscribe.method) subscriptionId = input.params.subscriptionId!;
+    return { subscribed: true, unsubscribed: true, reported: true } as T;
+  };
+  const workspace = {
+    connect: async () => notify(workbenchTranscriptNotifications.capabilities.method, { protocolVersion: 4 }),
+    daemon: () => new WorkbenchDaemonClient({ request }),
+    request,
+    observe: () => ({ getSnapshot: () => ({ value: null }), release: () => { released = true; } }),
     onWorkbenchNotification: (listener: (notification: { method: string; params: unknown }) => void) => {
       notifications.add(listener); return () => { notifications.delete(listener); };
     },
-    onConnectionClose: (listener: () => void) => { disconnects.add(listener); return () => { disconnects.delete(listener); }; },
-    onReconnect: (listener: () => void) => { reconnect = listener; return () => { reconnect = () => {}; }; },
-    close: () => { closed = true; },
-    sendRequest: async (request: (typeof requests)[number]) => {
-      requests.push(request);
-      if (request.method === "thread/page/read") return { id: 1, result: await readPage(request.params.cursor ?? null) };
-      if (request.method === "thread/reconcile") return { id: 1, result: { turnIds: ["latest"], exhausted: false } };
-      if (request.method === workbenchTranscriptOperations.subscribe.method && failSubscription) throw new Error("subscription unavailable");
-      if (request.method === workbenchTranscriptOperations.subscribe.method) subscriptionId = request.params.subscriptionId!;
-      return { id: 1, result: { subscribed: true, unsubscribed: true, reported: true } };
-    },
-  } as unknown as WorkbenchSocketClient;
-  const owner = new StandaloneThreadController(threadId, { client });
+    onDisconnect: (listener: () => void) => { disconnects.add(listener); return () => { disconnects.delete(listener); }; },
+    rpc: { onReconnect: (listener: () => void) => { reconnect = listener; return () => { reconnect = () => {}; }; } },
+  } as unknown as WorkbenchWorkspaceClient;
+  const owner = new StandaloneThreadController(threadId, { workspace });
   return {
     owner, threadId, requests, page,
-    get closed() { return closed; },
+    get released() { return released; },
     set read(operation: typeof readPage) { readPage = operation; },
     set failSubscription(value: boolean) { failSubscription = value; },
     disconnect() { for (const listener of disconnects) listener(); },
@@ -132,7 +136,7 @@ test("standalone uses bounded pages and shared SQL text projection without provi
     assert.equal(f.requests.filter(request => request.method === "thread/reconcile").length, 2);
   } finally {
     f.owner.dispose();
-    assert.equal(f.closed, true);
+    assert.equal(f.released, true);
   }
 });
 
@@ -176,6 +180,6 @@ test("standalone refresh retries a failed SQL subscription without recreating it
     await flush();
     assert.equal(f.requests.filter(request => request.method === workbenchTranscriptOperations.subscribe.method).length, 2);
     assert.notEqual(f.owner.getSnapshot().source.status, "failed");
-    assert.equal(f.closed, false);
+    assert.equal(f.released, false);
   } finally { f.owner.dispose(); }
 });

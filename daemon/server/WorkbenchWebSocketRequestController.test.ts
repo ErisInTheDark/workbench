@@ -57,7 +57,6 @@ function createController(options: {
   daemonRequests?: WorkbenchWebSocketRequestControllerOptions["daemonRequests"];
   initialState?: WorkbenchWebSocketRequestControllerOptions["initialState"];
   lines?: string[];
-  onDisconnect?: (connectionId: string) => void;
   reportDelivery?: WorkbenchWebSocketRequestControllerOptions["reportDelivery"];
   reload?: WorkbenchWebSocketRequestControllerOptions["reload"];
   stats?: WorkbenchWebSocketRequestControllerOptions["stats"];
@@ -87,8 +86,6 @@ function createController(options: {
     stats: options.stats,
     threadActions: { materialize: options.materialize ?? (async () => { throw new Error("Unexpected materialisation"); }) },
     threadState: {
-      acceptIntent: async () => ({ accepted: true, revision: 1 }),
-      disconnect: async (connectionId) => { options.onDisconnect?.(connectionId); },
       handleRequest: async () => ({ result: { accepted: true, revision: 1 } }),
     },
     transcript: options.transcript ?? {
@@ -104,7 +101,6 @@ function createController(options: {
 test("voice RPC binds events and audio admission to the initiating connection", async () => {
   let audio = 0;
   let cancelled = 0;
-  const disconnected: string[] = [];
   const voice = new WorkbenchVoiceController({
     recognizer: { async prepare() {}, async dispose() {}, async send(request) { if (request.type === "audio") audio++; } },
     async resolveSettings() { return { harness: "codex", model: "luna", reasoningEffort: "none", agentPath: null, agentSource: null, serviceTier: null }; },
@@ -112,7 +108,7 @@ test("voice RPC binds events and audio admission to the initiating connection", 
     provider: () => ({ async prepare() {}, async start() { return { directory: "/scratch" }; }, async input() {}, async finish() {}, async cancel() { cancelled++; } }),
   });
   const { controller } = createController({
-    clock: new FakeClock(), onDisconnect: connection => disconnected.push(connection),
+    clock: new FakeClock(),
     voice: {
       controller: voice, agents: async () => [],
       settings: {} as NonNullable<WorkbenchWebSocketRequestControllerOptions["voice"]>["settings"],
@@ -134,7 +130,6 @@ test("voice RPC binds events and audio admission to the initiating connection", 
     assert.ok(received.filter(message => message.method === "voice/event").every(message => message.owner === "first"));
     await controller.disconnect(first, "first");
     assert.equal(cancelled, 1);
-    assert.deepEqual(disconnected, ["first"]);
   } finally { controller.dispose(); await voice.dispose(); }
 });
 

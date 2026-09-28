@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect old-process compatibility, browser schema admission, and origin-only redirects.
+ * No production exports. Tests protect browser schema admission and origin-only redirects.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -9,27 +9,25 @@ import {
   readWorkbenchAppPort,
   updateWorkbenchAppPort,
 } from "./workbench-app-port-client";
-import type WorkbenchAppRpcClient from "./WorkbenchAppRpcClient";
+import { createWorkspaceClientFixture } from "./workspace-client-fixture";
 
 function fetcher(response: Response) {
   return (async () => response) as typeof fetch;
 }
 
-test("reads typed port state and degrades cleanly when the old process has no route", async () => {
+test("reads the app-owned port state through the maintained connection", async context => {
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
   const snapshot = {
     appOrigin: "http://127.0.0.1:43210",
     currentPort: 43_210,
     editable: true,
     source: "random",
   };
-  assert.deepEqual(
-    await readWorkbenchAppPort(fetcher(Response.json(snapshot)), "http://127.0.0.1:43210/project"),
-    { ...snapshot, stableOrigin: null },
-  );
-  assert.deepEqual(
-    await readWorkbenchAppPort(fetcher(new Response("", { status: 404 })), "http://127.0.0.1:43210/project"),
-    { ...snapshot, editable: false, source: "unavailable" },
-  );
+  const reading = readWorkbenchAppPort(fixture.rpc);
+  socket.reply(await socket.request("app/port/read"), snapshot);
+  assert.deepEqual(await reading, { ...snapshot, stableOrigin: null });
 });
 
 test("rejects malformed browser-boundary responses", async () => {
@@ -59,24 +57,6 @@ test("redirects to the new origin without losing route, query, hash, or stable b
     ),
     "http://127.0.0.1:43211/project/workbench/settings/global?panel=app&workbenchBrowserStateId=10000000-0000-4000-8000-000000000001#port",
   );
-});
-
-test("new-process port reads use RPC while listener changes stay HTTP", async () => {
-  const methods: string[] = [];
-  const snapshot = {
-    appOrigin: "http://127.0.0.1:43210", currentPort: 43_210,
-    editable: true, source: "random", stableOrigin: null,
-  };
-  const rpc = {
-    available: true,
-    requestRaw: async (intent: { method: string }) => {
-      methods.push(intent.method);
-      return snapshot;
-    },
-  } as unknown as WorkbenchAppRpcClient;
-  const noHttp: typeof fetch = async () => { throw new Error("Unexpected port HTTP read."); };
-  assert.deepEqual(await readWorkbenchAppPort(noHttp, "http://127.0.0.1:43210/", rpc), snapshot);
-  assert.deepEqual(methods, ["app/port/read"]);
 });
 
 test("port moves preserve private HTTPS and static tailnet origins while direct tailnet URLs follow the new port", () => {

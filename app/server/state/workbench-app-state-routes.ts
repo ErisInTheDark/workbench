@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAppStateRoutes: own app-state HTTP routes and bounded mutation/remap admission.
+ * - default WorkbenchAppStateRoutes: own browser-scoped binary attachment HTTP admission.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
@@ -8,17 +8,10 @@ import { z } from "zod";
 import {
   WORKBENCH_BROWSER_STATE_HEADER,
   isWorkbenchBrowserStateId,
-  WorkbenchDaemonRegistrationRequestSchema,
-  WorkbenchClientStateMutationSchema,
-  WorkbenchProjectRemapSchema,
-  workbenchClientStateMutationKinds,
-  type WorkbenchClientStateIdentity,
-  type WorkbenchClientStateResponse,
 } from "workbench-shared/state/workbench-client-state";
 
 import WorkbenchBrowserStateRegistry from "./WorkbenchBrowserStateRegistry.ts";
 
-const MAX_BODY_BYTES = 1_000_000;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const attachmentInput = z.discriminatedUnion("kind", [
   z.object({
@@ -49,26 +42,6 @@ function sendJson(response: ServerResponse, status: number, value: object) {
   response.end(JSON.stringify(value));
 }
 
-function negotiatedState(value: WorkbenchClientStateResponse, url: URL) {
-  if (url.searchParams.get("capabilities") === "3") return value;
-  const { attachmentsAsUrls: _attachmentsAsUrls, ...previous } = value;
-  if (url.searchParams.get("capabilities") === "2") return previous;
-  const { registrations: _registrations, ...legacy } = previous;
-  return legacy;
-}
-
-async function readJson(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    bytes += buffer.length;
-    if (bytes > MAX_BODY_BYTES) throw new Error("Workbench app-state request is too large.");
-    chunks.push(buffer);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-
 async function readImage(request: IncomingMessage) {
   const chunks: Buffer[] = [];
   let bytes = 0;
@@ -85,19 +58,14 @@ async function readImage(request: IncomingMessage) {
 export default class WorkbenchAppStateRoutes {
   readonly #registry: WorkbenchBrowserStateRegistry;
 
-  constructor(registry: WorkbenchBrowserStateRegistry,
-    private readonly verifyAttachedDaemon: (daemonId: string) => boolean = () => false) {
+  constructor(registry: WorkbenchBrowserStateRegistry) {
     this.#registry = registry;
   }
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL) {
-    const isReadRoute = url.pathname === "/api/workbench-client-state";
     const isAttachmentRoute = url.pathname === "/api/workbench-client-state/attachment";
-    const isRemapRoute = url.pathname === "/api/workbench-client-state/project-remap";
-    const isRegistrationRoute = url.pathname === "/api/workbench-client-state/daemon-register";
-    const mutationKinds = workbenchClientStateMutationKinds(url.pathname);
-    if (!isReadRoute && !isAttachmentRoute && !isRemapRoute && !isRegistrationRoute && !mutationKinds) {
-      if (!url.pathname.startsWith("/api/workbench-client-state/")) return false;
+    if (!isAttachmentRoute) {
+      if (!url.pathname.startsWith("/api/workbench-client-state")) return false;
       sendJson(response, 404, { error: "Unknown Workbench app-state route." });
       return true;
     }
@@ -142,51 +110,7 @@ export default class WorkbenchAppStateRoutes {
           imageBrowser, owner, parsed.attachmentId, type, content));
         return true;
       }
-      if (isRegistrationRoute && request.method === "POST") {
-        const input = WorkbenchDaemonRegistrationRequestSchema.safeParse(await readJson(request));
-        if (!input.success || input.data.attachedLocal && !this.verifyAttachedDaemon(input.data.daemonId)) {
-          sendJson(response, 400, { error: "Daemon registration is invalid or not attached." });
-          return true;
-        }
-        sendJson(response, 200, await this.#registry.registerBrowserDaemon(
-          browserStateId, input.data.daemonId, input.data.attachedLocal));
-        return true;
-      }
-      if (isRemapRoute && request.method === "POST") {
-        const input = WorkbenchProjectRemapSchema.safeParse(await readJson(request));
-        if (!input.success) {
-          sendJson(response, 400, { error: "Workbench project remap is invalid." });
-          return true;
-        }
-        sendJson(response, 200, negotiatedState(
-          await this.#registry.remapBrowserProjects(browserStateId, input.data), url));
-        return true;
-      }
-      if (isReadRoute && request.method === "GET") {
-        const rawRevision = url.searchParams.get("sinceRevision");
-        const sinceRevision = rawRevision === null ? undefined : Number(rawRevision);
-        if (sinceRevision !== undefined && (!Number.isSafeInteger(sinceRevision) || sinceRevision < 0)) {
-          sendJson(response, 400, { error: "sinceRevision must be a non-negative integer." });
-          return true;
-        }
-        sendJson(response, 200, negotiatedState(await this.#registry.readBrowser(
-          browserStateId, sinceRevision, url.searchParams.get("capabilities") === "3"), url));
-        return true;
-      }
-      if (mutationKinds && (request.method === "PUT" || request.method === "DELETE")) {
-        const value = await readJson(request);
-        const parsed = WorkbenchClientStateMutationSchema.safeParse(request.method === "PUT"
-          ? { action: "put", record: value } : { action: "delete", identity: value });
-        if (!parsed.success || !mutationKinds.includes(parsed.data.action === "put"
-          ? parsed.data.record.kind : parsed.data.identity.kind)) {
-          sendJson(response, 400, { error: "Workbench app-state mutation is invalid." });
-          return true;
-        }
-        sendJson(response, 200, negotiatedState(await this.#registry.mutateBrowser(
-          browserStateId, parsed.data, url.searchParams.get("capabilities") === "3"), url));
-        return true;
-      }
-      response.writeHead(405, { Allow: isReadRoute ? "GET" : isRemapRoute || isRegistrationRoute ? "POST" : "DELETE, PUT" });
+      response.writeHead(405, { Allow: "GET, PUT" });
       response.end();
       return true;
     } catch (error) {

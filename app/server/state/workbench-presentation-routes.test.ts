@@ -13,7 +13,7 @@ import WorkbenchPresentationController from "./WorkbenchPresentationController";
 import WorkbenchPresentationRepository from "./WorkbenchPresentationRepository";
 import WorkbenchPresentationRoutes from "./workbench-presentation-routes";
 
-test("presentation HTTP admits state and bounded image bytes without daemon execution routes", async () => {
+test("presentation attachments admit bounded bytes and reject unsupported media", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-presentation-http-"));
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(root, "presentation.sqlite3") });
   const owner = new WorkbenchPresentationController(repository);
@@ -32,9 +32,7 @@ test("presentation HTTP admits state and bounded image bytes without daemon exec
     const daemonId = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
     const projectId = ProjectIdSchema.parse("b597a4b6-7af9-41f1-83ea-a53aed6f3b0a");
     const identityKey = ProjectIdentityKeySchema.parse("remote://example.test/owner/repo");
-    const registration = await fetch(`${origin}/api/workbench-presentation/mutate`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const registered = owner.mutate({
         kind: "registerLocations", daemonId, hostname: "desktop",
         catalog: { data: [{
           identityKey, rootIdentityKeys: [identityKey],
@@ -44,14 +42,9 @@ test("presentation HTTP admits state and bounded image bytes without daemon exec
               name: "repo", relativePath: "repo", rootPath: "/repo" }], lastCommitTimeMs: null,
           },
         }] },
-      }),
     });
-    assert.equal(registration.status, 200);
-    const registered = await registration.json() as { projects: Array<{ id: string }> };
     const draftId = "2d64382a-c7e5-456a-9ee5-6e16de89453d";
-    const saved = await fetch(`${origin}/api/workbench-presentation/mutate`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    owner.mutate({
         kind: "putDraft", expectedRevision: null,
         draft: {
           id: draftId, logicalProjectId: registered.projects[0]!.id,
@@ -61,9 +54,7 @@ test("presentation HTTP admits state and bounded image bytes without daemon exec
             reasoningEffort: null, serviceTier: null,
           } },
         },
-      }),
     });
-    assert.equal(saved.status, 200);
     const bytes = Buffer.from("image-bytes");
     const hash = createHash("sha256").update(bytes).digest("hex");
     const upload = await fetch(`${origin}/api/workbench-presentation/drafts/${draftId}/attachments/image-1/chunks/0`, {

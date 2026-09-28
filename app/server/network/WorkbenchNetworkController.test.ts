@@ -81,7 +81,7 @@ function fixture(privateIssue?: () => string | null) {
           if (!hostStarted) { await host.start(); hostStarted = true; }
           ready = true; emit();
         },
-        getSnapshot: () => ({ phase: ready ? "ready" as const : "connecting" as const, snapshot: ready ? snapshot() : null, failure: null }),
+        getSnapshot: () => ({ phase: ready ? "ready" as const : "connecting" as const, generation: 1, snapshot: ready ? snapshot() : null, failure: null }),
         subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
         request: async intent => {
           let result: WorkbenchNetworkResult = { kind: "ok" };
@@ -95,7 +95,19 @@ function fixture(privateIssue?: () => string | null) {
       };
     },
   });
-  return { owner, host, calls, publish: (runtime: WorkbenchNetworkRuntime) => status(runtime),
+  const start = async () => {
+    owner.start();
+    await new Promise<void>((resolve, reject) => {
+      const changed = () => {
+        const facts = owner.getFacts();
+        if (facts.phase === "current" || !targetAvailable && facts.snapshot) { stop(); resolve(); }
+        else if (facts.phase === "failed") { stop(); reject(new Error(facts.failure ?? "Fixture network failed.")); }
+      };
+      const stop = owner.subscribe(changed);
+      changed();
+    });
+  };
+  return { owner, host, calls, start, publish: (runtime: WorkbenchNetworkRuntime) => status(runtime),
     get configuration() { return configuration; }, get starts() { return starts; }, get closes() { return closes; },
     target: (port: number) => { target = { ...target, appOrigin: `http://127.0.0.1:${port}` }; },
     result: (next: WorkbenchNetworkResult) => { result = next; },
@@ -110,7 +122,7 @@ function fixture(privateIssue?: () => string | null) {
 test("a legacy local-port update owns the same mutation boundary as combined settings", async context => {
   const f = fixture();
   context.after(() => f.owner.close());
-  await f.owner.start();
+  await f.start();
   let enter!: () => void;
   let finish!: () => void;
   const entered = new Promise<void>(resolve => { enter = resolve; });
@@ -136,7 +148,7 @@ test("remote settings handoff retains the active entry point until the same devi
     mode: "tailnet-service", hostServe: { enabled: true, port: 8080 }, members: [],
     privateAccess: { role: "authority", label: "desktop", enabled: true },
   });
-  await f.owner.start();
+  await f.start();
   f.forward();
   const source = { deviceNodeId: "owner-host", origin: "https://desktop.wb.inthedark.boo" };
   const prepared = await f.owner.action({
@@ -167,7 +179,7 @@ test("the verified host moves to loopback before disabling remote access", async
   const f = fixture();
   context.after(() => f.owner.close());
   f.forward();
-  await f.owner.start();
+  await f.start();
   await f.owner.action({ action: "mode", mode: "tailnet-ip" });
   f.publish({ ...f.owner.snapshot().runtime, host: { hostname: "desktop", address: "100.80.0.2", nodeId: "owner-host" } });
   const source = { deviceNodeId: "owner-host", origin: "http://100.80.0.2:8080" };
@@ -191,7 +203,7 @@ test("host access is inherent so saving restrictions needs no handoff or self-gr
   const f = fixture();
   context.after(() => f.owner.close());
   f.forward();
-  await f.owner.start();
+  await f.start();
   await f.owner.action({ action: "mode", mode: "tailnet-ip" });
   f.publish({ ...f.owner.snapshot().runtime,
     host: { hostname: "desktop", address: "100.80.0.2", nodeId: "owner-host" },
@@ -218,7 +230,7 @@ test("host access is inherent so saving restrictions needs no handoff or self-gr
 test("remote localhost selection is rejected before any configuration or forwarding mutation", async context => {
   const f = fixture();
   context.after(() => f.owner.close());
-  await f.owner.start();
+  await f.start();
   await f.owner.action({ action: "mode", mode: "tailnet-ip" });
   const before = structuredClone(f.configuration);
   const calls = f.calls.length;
@@ -233,7 +245,7 @@ test("a replacement forwarding failure preserves committed settings", async cont
   const f = fixture();
   context.after(() => { f.fail(null); return f.owner.close(); });
   f.forward();
-  await f.owner.start();
+  await f.start();
   await f.owner.action({ action: "mode", mode: "tailnet-ip" });
   const before = structuredClone(f.configuration);
   f.fail("configure");
@@ -248,7 +260,7 @@ test("a local move followed by failure returns the surviving address for explici
   const f = fixture();
   context.after(() => f.owner.close());
   f.forward();
-  await f.owner.start();
+  await f.start();
   await f.owner.action({ action: "mode", mode: "tailnet-ip" });
   const caller = { deviceNodeId: null, origin: "http://127.0.0.1:4200" };
   const prepared = await f.owner.action({ action: "settings-prepare",
@@ -271,7 +283,7 @@ test("cancelling a prepared port handoff returns before removing temporary forwa
   const f = fixture();
   context.after(() => f.owner.close());
   f.forward();
-  await f.owner.start();
+  await f.start();
   await f.owner.action({ action: "mode", mode: "tailnet-ip" });
   const source = { deviceNodeId: "owner-host", origin: "http://100.80.0.2:8080" };
   const prepared = await f.owner.action({ action: "settings-prepare", settings: { mode: "tailnet-ip", localPort: 4200, tailnetPort: 8089 } }, source);
@@ -294,7 +306,7 @@ test("cancelling a prepared port handoff returns before removing temporary forwa
   assert.ok("token" in resumed);
   assert.equal(resumed.token, next.token);
   await f.owner.suspend();
-  await f.owner.start();
+  await f.start();
   assert.equal(f.owner.snapshot().change, null);
   const restored = f.calls.at(-1);
   assert.ok(restored?.action === "configure");
@@ -315,14 +327,14 @@ test("persisted owner can manage its network while disconnected but a member can
       members: [{ nodeId: "desktop", label: "desktop", addresses: ["100.80.0.1"], keyFingerprint: "a".repeat(64) }],
       group: { id: "67e323d5-949a-4c41-956f-1fa28905f034", revision: 1, ownerNodeId: "desktop", dnsNodeId: "desktop", access: "all", grants: [] },
     });
-    await f.owner.start();
+    await f.start();
     assert.equal(f.owner.ingress({})?.manageNetwork, role === "authority");
   }
 });
 
 test("disabled defaults spawn nothing; independent modes follow port changes and close when disabled", async () => {
   const f = fixture();
-  await f.owner.start();
+  await f.start();
   assert.equal(f.starts, 0);
   await f.owner.action({ action: "host-serve", enabled: true, port: 8088 });
   assert.equal(f.starts, 1);
@@ -346,7 +358,7 @@ test("authenticated app access does not grant network management and retired ing
     members: [{ nodeId: "desktop", hostNodeId: "owner-host", label: "desktop", addresses: ["100.80.0.1"], keyFingerprint: "a".repeat(64) }],
     group: { id: "67e323d5-949a-4c41-956f-1fa28905f034", revision: 1, ownerNodeId: "desktop", dnsNodeId: "desktop", access: "all", grants: [] },
   });
-  await f.owner.start();
+  await f.start();
   const configure = f.calls.findLast(command => command.action === "configure");
   assert.ok(configure?.action === "configure" && configure.ingressToken);
   const headers = { "x-workbench-network-token": configure.ingressToken, "x-workbench-network-device": "visitor" };
@@ -360,7 +372,7 @@ test("authenticated app access does not grant network management and retired ing
   assert.equal(f.owner.ingress({ ...ownerHeaders, "x-workbench-network-token": "0".repeat(64) }), null);
   await f.owner.suspend();
   assert.equal(f.owner.ingress(ownerHeaders), null, "a detached app session loses ingress authority immediately");
-  await f.owner.start();
+  await f.start();
   assert.equal(f.owner.ingress(ownerHeaders), null, "a previous app session's credentials must not survive replacement");
   assert.equal(f.owner.ingress({})?.manageNetwork, true, "local owner access remains available");
 });
@@ -368,7 +380,7 @@ test("authenticated app access does not grant network management and retired ing
 test("localhost closes its helper even when the final disabled configuration is rejected", async context => {
   const f = fixture();
   context.after(() => f.owner.close());
-  await f.owner.start();
+  await f.start();
   await f.owner.action({ action: "mode", mode: "tailnet-ip" });
   f.fail("configure");
   await assert.rejects(f.owner.action({ action: "mode", mode: "localhost" }), /Injected/);
@@ -382,7 +394,7 @@ test("service selection includes host forwarding and localhost stops both withou
     hostServe: { enabled: false, port: 8080 }, members: [],
     privateAccess: { role: "authority", label: "desktop", enabled: false, nodeLabel: "original" },
   });
-  await f.owner.start();
+  await f.start();
   try {
     await f.owner.action({ action: "tailnet-port", port: 8088 });
     assert.equal(f.starts, 0);
@@ -410,7 +422,7 @@ test("service selection includes host forwarding and localhost stops both withou
 
 test("URL rename commits after activation while retaining the installation's internal node label", async () => {
   const f = fixture();
-  await f.owner.start();
+  await f.start();
   try {
     await f.owner.action({ action: "prepare", label: "desktop" });
     f.result({ kind: "setup", privateAccess: { role: "authority", label: "desktop", enabled: false }, members: [] });
@@ -428,7 +440,7 @@ test("URL rename commits after activation while retaining the installation's int
 test("failed URL transitions retain their phase and retry without re-pairing or reporting a premature address change", async () => {
   for (const action of ["rename-prepare", "rename-activate", "rename-retire"] as const) {
     const f = fixture();
-    await f.owner.start();
+    await f.start();
     try {
       await f.owner.action({ action: "prepare", label: "desktop" });
       f.result({ kind: "setup", privateAccess: { role: "authority", label: "desktop", enabled: false }, members: [] });
@@ -456,7 +468,7 @@ test("failed URL transitions retain their phase and retry without re-pairing or 
 test("localhost suspends a pending rename until service mode is selected again", async context => {
   const f = fixture();
   context.after(() => f.owner.close());
-  await f.owner.start();
+  await f.start();
   await f.owner.action({ action: "prepare", label: "desktop" });
   f.fail("rename-prepare");
   await assert.rejects(f.owner.action({ action: "machine-name", label: "desk" }), /Injected/);
@@ -465,7 +477,7 @@ test("localhost suspends a pending rename until service mode is selected again",
   assert.ok(f.configuration.rename);
   await f.owner.suspend();
   f.fail(null);
-  await f.owner.start();
+  await f.start();
   assert.equal(f.starts, 1, "localhost restart must not resume private networking");
   await f.owner.action({ action: "mode", mode: "tailnet-service" });
   assert.equal(f.configuration.rename, undefined);
@@ -481,7 +493,7 @@ test("the independent service resumes a rename without an app listener", async c
     rename: { id: "6e1a6f64-af71-4639-b997-65d8f314b352", from: "desktop", to: "desk", phase: "prepare" },
   });
   f.targetAvailable(false);
-  await f.owner.start();
+  await f.start();
   assert.equal(f.starts, 1);
   assert.equal(f.configuration.rename, undefined);
   assert.equal(f.owner.snapshot().busy, false);
@@ -494,7 +506,7 @@ test("the independent service resumes a rename without an app listener", async c
 
 test("setup results persist before activation; permanent labels and incomplete enablement are rejected", async () => {
   const f = fixture();
-  await f.owner.start();
+  await f.start();
   await assert.rejects(f.owner.action({ action: "private-access", enabled: true }));
   await f.owner.action({ action: "prepare", label: "desktop" });
   await assert.rejects(f.owner.action({ action: "prepare", label: "other" }));
@@ -509,7 +521,7 @@ test("setup results persist before activation; permanent labels and incomplete e
 
 test("approval persists the exact pending identity before releasing certificate issuance", async () => {
   const f = fixture();
-  await f.owner.start();
+  await f.start();
   await f.owner.action({ action: "prepare", label: "desktop" });
   f.result({ kind: "setup", privateAccess: { role: "authority", label: "desktop", enabled: false }, members: [] });
   await f.owner.action({ action: "create-setup", clientId: "id", clientSecret: "secret" });
@@ -526,12 +538,12 @@ test("approval persists the exact pending identity before releasing certificate 
 
 test("app reload detaches its session without stopping independent networking", async () => {
   const f = fixture();
-  await f.owner.start();
+  await f.start();
   await f.owner.action({ action: "host-serve", enabled: true, port: 8088 });
   await f.owner.suspend();
   assert.equal(f.closes, 0);
   await assert.rejects(f.owner.action({ action: "host-serve", enabled: false, port: 8088 }));
-  await f.owner.start();
+  await f.start();
   assert.equal(f.starts, 1);
   assert.equal(f.configuration.hostServe.enabled, true);
   await f.owner.close();
@@ -539,7 +551,7 @@ test("app reload detaches its session without stopping independent networking", 
 
 test("incompatible private HTTPS configuration is reported without preventing the independent static mode", async () => {
   const f = fixture(() => "Insecure explicit daemon URL.");
-  await f.owner.start();
+  await f.start();
   await f.owner.action({ action: "host-serve", enabled: true, port: 8088 });
   assert.equal(f.configuration.hostServe.enabled, true);
   await assert.rejects(f.owner.action({ action: "prepare", label: "desktop" }), /Insecure/u);
@@ -555,7 +567,7 @@ test("an incompatible persisted service mode cannot override the private HTTPS s
     privateAccess: { role: "authority", enabled: true, label: "desktop" }, members: [],
   });
   try {
-    await f.owner.start();
+    await f.start();
     const configure = f.calls.findLast(command => command.action === "configure");
     assert.equal(configure?.action, "configure");
     if (configure?.action === "configure") {

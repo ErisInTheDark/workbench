@@ -13,9 +13,11 @@ import WorkbenchServiceClient from "workbench-shared/process/WorkbenchServiceCli
 import type { WorkbenchServiceIntent } from "workbench-shared/process/WorkbenchServiceClient";
 import { WORKBENCH_DAEMON_TAILNET_PORT } from "workbench-shared/http/workbench-daemon-endpoint";
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 
 type SettingsCaller = { deviceNodeId: string | null; origin: string };
 type ServiceClient = Pick<WorkbenchServiceClient, "start" | "close" | "request" | "subscribe" | "getSnapshot">;
+type Registration = Extract<WorkbenchServiceIntent, { method: "service/app/register" }>["registration"];
 type PendingSettings = {
   token: string;
   settings: WorkbenchNetworkSettings;
@@ -29,7 +31,12 @@ type PendingSettings = {
 };
 
 export default class WorkbenchNetworkController {
-  private configuration!: WorkbenchNetworkConfiguration;
+  private configurationValue: WorkbenchNetworkConfiguration | null = null;
+  private get configuration() {
+    if (!this.configurationValue) throw new Error("Network configuration is still loading.");
+    return this.configurationValue;
+  }
+  private set configuration(value: WorkbenchNetworkConfiguration) { this.configurationValue = value; }
   private runtime: WorkbenchNetworkRuntime = {
     hostServe: { phase: "off", message: null, url: null },
     privateAccess: {
@@ -47,7 +54,11 @@ export default class WorkbenchNetworkController {
   private client: ServiceClient | null = null;
   private unsubscribe: (() => void) | null = null;
   private readonly lifetime = new AbortController();
-  private registered = false;
+  private session: AbortController | null = null;
+  private startup: Promise<void> | null = null;
+  private registered: { generation: number; value: Registration } | null = null;
+  private registrationWork: { generation: number; promise: Promise<void> } | null = null;
+  private registrationFailure: { generation: number; message: string } | null = null;
 
   constructor(private readonly options: {
     endpointPath: string;
@@ -60,41 +71,101 @@ export default class WorkbenchNetworkController {
     createClient?: () => ServiceClient;
   }) {}
 
-  async start() {
+  start() {
     if (this.phase === "closed") throw new Error("Network settings have closed.");
+    if (this.phase === "active") return;
     this.phase = "active";
-    await this.options.ensure(this.lifetime.signal);
+    const session = new AbortController();
+    this.session = session;
     this.ingressToken = randomBytes(32).toString("hex");
-    this.client = this.options.createClient?.() ?? new WorkbenchServiceClient({ endpointPath: this.options.endpointPath, warn: this.options.warn });
-    await this.client.start();
-    this.registered = true;
-    this.unsubscribe = this.client.subscribe(() => {
-      const state = this.client?.getSnapshot();
-      const network = state?.snapshot?.network;
-      if (network) {
-        this.configuration = network.configuration;
-        this.runtime = network.runtime;
-        this.executable = network.executable;
-        this.failure = state?.failure ?? network.failure;
-      }
-      if (state?.phase !== "ready") this.registered = false;
-      else if (!this.registered && this.configuration) {
-        this.registered = true;
-        void this.synchronise().catch(error => { this.registered = false; this.report(error); });
-      }
-      this.publish();
+    const client = this.options.createClient?.() ?? new WorkbenchServiceClient({
+      endpointPath: this.options.endpointPath, warn: this.options.warn,
     });
-    const network = this.client.getSnapshot().snapshot?.network;
-    if (!network) throw new Error("Service did not provide network state.");
-    this.configuration = network.configuration;
-    this.runtime = network.runtime;
-    this.executable = network.executable;
-    await this.synchronise();
-    if (this.options.wakeLocal) {
-      void this.client.request({ method: "service/daemon/wake", retry: false }, this.lifetime.signal).catch(error => {
-        if (!this.lifetime.signal.aborted && this.phase === "active") this.report(error);
+    this.client = client;
+    this.unsubscribe = client.subscribe(() => this.acceptService(client, session));
+    const startup = (async () => {
+      try { await this.options.ensure(session.signal); }
+      catch (error) {
+        if (session.signal.aborted) return;
+        this.report(error);
+      }
+      if (session.signal.aborted || this.client !== client) return;
+      try { await client.start(); }
+      catch (error) {
+        if (session.signal.aborted) return;
+        this.report(error);
+      }
+      if (!session.signal.aborted && this.client === client) this.acceptService(client, session);
+    })();
+    this.startup = startup;
+    void startup.then(() => {
+      if (this.startup === startup) this.startup = null;
+    }, error => {
+      if (this.startup === startup) this.startup = null;
+      if (!session.signal.aborted && this.client === client) this.report(error);
+    });
+    this.publish();
+  }
+
+  getFacts() {
+    const service = this.client?.getSnapshot();
+    const current = service?.phase === "ready" && this.registered?.generation === service.generation;
+    return {
+      phase: current ? "current" as const : this.configurationValue ? "stale" as const
+        : this.failure ? "failed" as const : "pending" as const,
+      failure: this.registrationFailure && this.registrationFailure.generation === service?.generation
+        ? this.registrationFailure?.message ?? null : this.failure ?? service?.failure ?? null,
+      snapshot: this.configurationValue ? this.snapshot() : null,
+    };
+  }
+
+  daemonSources() {
+    const service = this.client?.getSnapshot();
+    return {
+      current: service?.phase === "ready",
+      attached: service?.snapshot?.identity ?? null,
+      localOrigin: service?.phase === "ready" ? service.snapshot?.daemonOrigin ?? null : null,
+      discovery: this.discovery(null),
+    };
+  }
+
+  canAccessPeer(peerId: string): boolean | null {
+    if (!this.configurationValue) return null;
+    const group = this.configuration.group;
+    if (!group || group.access === "all") return true;
+    const viewer = this.runtime.host?.nodeId;
+    if (!viewer) return null;
+    const member = this.configuration.members.find(member => member.hostNodeId === peerId);
+    return Boolean(member && (member.hostNodeId === viewer
+      || group.grants.some(grant => grant.deviceNodeId === viewer && grant.appNodeId === member.nodeId)));
+  }
+
+  private acceptService(client: ServiceClient, session: AbortController) {
+    if (session.signal.aborted || this.client !== client || this.phase !== "active") return;
+    const state = client.getSnapshot();
+    const network = state.snapshot?.network;
+    if (network) {
+      this.configuration = network.configuration;
+      this.runtime = network.runtime;
+      this.executable = network.executable;
+      this.failure = state.failure ?? network.failure;
+    } else if (state.failure) this.failure = state.failure;
+    if (state.phase === "ready" && network
+      && this.registered?.generation !== state.generation
+      && this.registrationFailure?.generation !== state.generation
+      && this.registrationWork?.generation !== state.generation) {
+      void this.synchronise().then(() => {
+        if (session.signal.aborted || this.client !== client || state.generation !== client.getSnapshot().generation) return;
+        if (this.options.wakeLocal && client.getSnapshot().snapshot?.identity.state === "sleeping") {
+          void client.request({ method: "service/daemon/wake", retry: false }, session.signal).catch(error => {
+            if (!session.signal.aborted && this.client === client) this.report(error);
+          });
+        }
+      }, error => {
+        if (!session.signal.aborted && this.client === client && state.generation === client.getSnapshot().generation) this.report(error);
       });
     }
+    this.publish();
   }
 
   snapshot(): WorkbenchNetworkSnapshot {
@@ -113,6 +184,7 @@ export default class WorkbenchNetworkController {
 
   discovery(deviceNodeId: string | null) {
     const discovery = this.client?.getSnapshot().snapshot?.discovery ?? { refreshing: false, peers: [] };
+    if (!this.configurationValue) return { refreshing: true, peers: [] };
     const group = this.configuration.group;
     if (!group || group.access === "all") return discovery;
     const viewer = deviceNodeId ?? this.runtime.host?.nodeId;
@@ -145,14 +217,6 @@ export default class WorkbenchNetworkController {
     return () => { this.listeners.delete(listener); };
   }
 
-  connection() {
-    const origin = this.client?.getSnapshot().snapshot?.daemonOrigin;
-    return {
-      localPort: origin ? Number(new URL(origin).port) : null,
-      tailnetPort: WORKBENCH_DAEMON_TAILNET_PORT,
-    };
-  }
-
   ingress(headers: IncomingHttpHeaders): { deviceNodeId: string | null; manageApp: boolean; manageNetwork: boolean; trustHost: boolean } | null {
     const token = headers["x-workbench-network-token"];
     const device = headers["x-workbench-network-device"];
@@ -162,6 +226,9 @@ export default class WorkbenchNetworkController {
       if (!this.ingressToken || typeof token !== "string" || typeof device !== "string"
         || !device || device.length > 256 || !/^[a-f0-9]{64}$/u.test(token)
         || !timingSafeEqual(Buffer.from(token), Buffer.from(this.ingressToken))) return null;
+    }
+    if (!this.configurationValue) {
+      return forwarded ? null : { deviceNodeId: null, manageApp: true, manageNetwork: false, trustHost: false };
     }
     const group = this.configuration.group;
     const owner = group && this.configuration.members.find(member => member.nodeId === group.ownerNodeId);
@@ -178,6 +245,7 @@ export default class WorkbenchNetworkController {
   }
 
   stableOrigin(origin: string): string | null {
+    if (!this.configurationValue) return null;
     let parsed: URL;
     try { parsed = new URL(origin); } catch { return null; }
     if (parsed.origin !== origin) return null;
@@ -206,6 +274,9 @@ export default class WorkbenchNetworkController {
 
   action(input: WorkbenchNetworkAction, caller?: SettingsCaller): Promise<WorkbenchNetworkResult> {
     if (this.phase !== "active") return Promise.reject(new Error("Network settings are closing or reloading."));
+    if (!this.configurationValue || this.client?.getSnapshot().phase !== "ready") {
+      return Promise.reject(new Error("Network settings are still connecting."));
+    }
     const action = WorkbenchNetworkActionSchema.parse(input);
     if (action.action === "cancel") {
       return (async () => {
@@ -235,6 +306,7 @@ export default class WorkbenchNetworkController {
 
   async targetChanged() {
     if (this.phase !== "active") return;
+    if (this.client?.getSnapshot().phase !== "ready" || !this.configurationValue) return;
     // The local-port owner awaits this subscriber. Its initiating settings
     // operation reconciles forwarding after update() returns.
     if (this.change?.phase === "applying" || this.change?.phase === "finalising") return;
@@ -262,20 +334,32 @@ export default class WorkbenchNetworkController {
 
   private async stopProcess() {
     const child = this.client;
+    this.session?.abort(new Error("App network session retired."));
+    this.session = null;
     this.client = null;
     this.unsubscribe?.();
     this.unsubscribe = null;
-    this.registered = false;
+    this.registered = null;
+    this.registrationFailure = null;
     this.ingressToken = null;
     try { await child?.close(); }
     finally {
       if (this.operation) await Promise.allSettled([this.operation]);
+      if (this.startup) await this.startup;
+      if (this.registrationWork) await Promise.allSettled([this.registrationWork.promise]);
+      this.registrationWork = null;
       this.change = null;
     }
   }
 
   private publish() {
-    if (this.phase !== "closed") for (const listener of this.listeners) listener();
+    if (this.phase !== "closed") for (const listener of this.listeners) {
+      try { listener(); }
+      catch (error) {
+        this.options.warn(`Network observer failed: ${(error instanceof Error ? error.message : "Unknown failure")
+          .replace(/[\u0000-\u001f]/gu, "").slice(0, 512)}`);
+      }
+    }
   }
 
   private report(error: unknown) {
@@ -285,25 +369,58 @@ export default class WorkbenchNetworkController {
     this.publish();
   }
 
-  private async synchronise() {
-    const target = this.options.readTarget();
-    if (!target || this.phase !== "active") return;
-    if (!this.ingressToken) throw new Error("App ingress session is unavailable.");
-    await this.send({
-      method: "service/app/register",
-      registration: {
+  private synchronise(): Promise<void> {
+    const client = this.client;
+    if (!client || client.getSnapshot().phase !== "ready" || this.phase !== "active") return Promise.resolve();
+    const generation = client.getSnapshot().generation;
+    if (this.registrationWork?.generation === generation) {
+      return this.registrationWork.promise.then(() => this.synchronise());
+    }
+    const registration = () => {
+      const target = this.options.readTarget();
+      if (!target) return null;
+      if (!this.ingressToken) throw new Error("App ingress session is unavailable.");
+      return {
         appOrigin: target.appOrigin, previewOrigin: null, ingressToken: this.ingressToken,
         previewHostPort: this.change?.previewPort ?? null,
         privateAppAllowed: !this.options.privateIssue?.(),
         retainedHostPort: this.change?.phase !== "finalising" && this.change?.retainedPort ? this.change.retainedPort : null,
-      },
+      };
+    };
+    const promise = Promise.resolve().then(async () => {
+      for (;;) {
+        if (this.client !== client || this.phase !== "active" || client.getSnapshot().generation !== generation) return;
+        const intended = registration();
+        if (!intended) return;
+        if (this.registered?.generation === generation && areDeeplyEqual(this.registered.value, intended)) return;
+        await this.send({ method: "service/app/register", registration: intended });
+        if (this.client !== client || client.getSnapshot().generation !== generation) return;
+        const current = registration();
+        if (!current || intended.appOrigin !== current.appOrigin
+          || intended.previewHostPort !== current.previewHostPort
+          || intended.retainedHostPort !== current.retainedHostPort
+          || intended.privateAppAllowed !== current.privateAppAllowed
+          || intended.ingressToken !== current.ingressToken) continue;
+        this.registered = { generation, value: intended };
+        this.registrationFailure = null;
+        this.publish();
+        return;
+      }
+    }).catch(error => {
+      if (this.client === client && client.getSnapshot().generation === generation && client.getSnapshot().phase === "ready") {
+        this.registrationFailure = { generation, message: error instanceof Error ? error.message.slice(0, 512) : "App registration failed." };
+      }
+      throw error;
+    }).finally(() => {
+      if (this.registrationWork?.promise === promise) this.registrationWork = null;
     });
-    this.registered = true;
+    this.registrationWork = { generation, promise };
+    return promise;
   }
 
   private async send(intent: WorkbenchServiceIntent): Promise<WorkbenchNetworkResult> {
     if (!this.client) throw new Error("The service connection is unavailable.");
-    const response = await this.client.request(intent, this.lifetime.signal);
+    const response = await this.client.request(intent, this.session?.signal ?? this.lifetime.signal);
     return response.kind === "network-result" ? response.result : { kind: "ok" };
   }
 

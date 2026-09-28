@@ -15,7 +15,7 @@ import type { GitArcProposalStatus } from "workbench-shared/workbench/git/git-ar
 import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import PrimaryButton from "../PrimaryButton";
-import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
+import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 import { BinIcon, ResetIcon } from "../workbench-icons";
 import GitArcIcon, { GitArcClaimIcon, GitArcUnclaimedIcon } from "./GitArcIcon";
@@ -38,7 +38,6 @@ export default function ThreadGitArcLifecycleCard ({
   claim,
   cwd,
   harness,
-  onReleased,
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -49,7 +48,6 @@ export default function ThreadGitArcLifecycleCard ({
   claim: LifecyclePresentation;
   cwd: string;
   harness: WorkbenchHarnessId;
-  onReleased: () => Promise<void>;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -101,11 +99,9 @@ export default function ThreadGitArcLifecycleCard ({
           ? await daemon.git.arc.stash({ cwd, harness, threadId })
           : await daemon.git.arc.unstash({ cwd, harness, threadId });
         setConflictedPaths(result.conflictedPaths);
-        await onReleased();
       } else if (action === "discardStash") {
         await daemon.git.arc.discardStash({ cwd, harness, threadId });
         setConflictedPaths([]);
-        await onReleased();
       } else if (action === "restore" || action === "restoreAndUnclaim") {
         const confirmRestore = action === "restoreAndUnclaim";
         await daemon.git.arc.restore(memberRefs.length ? {
@@ -135,7 +131,6 @@ export default function ThreadGitArcLifecycleCard ({
         });
       }
       if (action === "restore") setChangeState("clean");
-      else if (action !== "stash" && action !== "unstash" && action !== "discardStash") await onReleased();
     } catch (releaseError) {
       setFailure(releaseError instanceof GitArcFailureException
         ? releaseError.failure

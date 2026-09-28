@@ -15,7 +15,6 @@ export default class WorkbenchRouteIntentController {
   private readonly canonicalListeners = new Set<(route: WorkbenchRoute) => void>();
 
   constructor(private readonly options: {
-    available(): boolean;
     apply(route: WorkbenchRoute): Promise<WorkbenchRouteLoadResult>;
     onError?(error: unknown): void;
   }) {}
@@ -43,15 +42,24 @@ export default class WorkbenchRouteIntentController {
     this.outcome = "idle";
   }
 
-  sourceAvailable() {
+  factsChanged() {
     if (this.disposed) return;
     this.sourceRevision++;
     if (this.outcome === "failed" || this.outcome === "idle") this.run();
   }
 
+  canonicalise(route: WorkbenchRoute) {
+    if (this.disposed) return;
+    this.intent = route;
+    this.generation++;
+    this.attempt = null;
+    this.outcome = "ready";
+    for (const listener of this.canonicalListeners) listener(route);
+  }
+
   private run() {
     const route = this.intent;
-    if (this.disposed || !route || !this.options.available()
+    if (this.disposed || !route
       || this.outcome === "ready" || this.attempt?.generation === this.generation) return;
     const generation = this.generation;
     const sourceRevision = this.sourceRevision;
@@ -59,7 +67,7 @@ export default class WorkbenchRouteIntentController {
     void this.options.apply(route).then(result => {
       if (this.disposed || generation !== this.generation) return;
       this.attempt = null;
-      this.outcome = result.ok ? "ready" : "failed";
+      this.outcome = result.pending ? "idle" : result.ok ? "ready" : "failed";
       if (result.ok && result.canonicalRoute) {
         for (const listener of this.canonicalListeners) listener(result.canonicalRoute);
       }

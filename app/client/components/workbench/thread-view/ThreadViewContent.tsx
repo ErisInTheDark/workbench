@@ -10,7 +10,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, use
 
 import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchComposerInputDraft, WorkbenchComposerSettings, WorkbenchHarness, WorkbenchProjectRoot, WorkbenchSendThreadMessageOptions, WorkbenchSkillSummary } from "workbench-shared/types";
-import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
+import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import { writeTextToClipboard } from "../../../workbench/dom/clipboard";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
@@ -1255,7 +1255,6 @@ export default memo(function ThreadViewContent ({
             claim={terminalGitArc}
             cwd={activeThread.cwd}
             harness={activeThread.harness}
-            onReleased={async () => await threads.updateState({ method: "workbench/thread-state/refresh", projectId: ProjectIdSchema.parse(projectId) })}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}

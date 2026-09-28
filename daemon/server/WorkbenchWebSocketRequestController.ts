@@ -37,12 +37,10 @@ import { z } from "zod";
 import { VoiceAudioSchema, VoiceConfigurationSchema, VoiceStartSchema } from "workbench-shared/workbench/voice/voice-session-contract";
 import type { DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import {
-  mapNativeThreadStateSnapshot, mapNativeThreadStateResult,
   mapWorkbenchThreadStateRequest,
-  type NativeThreadStateIdentityOwners,
 } from "./thread-identity-workbench-mapping";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
-import { WorkbenchThreadStateRequestSchema, type WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchThreadStateRequestSchema } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import type WorkbenchDaemonReloadController from "./WorkbenchDaemonReloadController";
@@ -55,6 +53,11 @@ import WorkbenchWebSocketStreamController, {
 import WorkbenchWebSocketEventLog from "./WorkbenchWebSocketEventLog";
 import { dimWebSocketDetail, formatWebSocketBytes as formatBytes, formatWebSocketSendFailure, webSocketMethodLabel as methodLabel } from "./websocket-log-format";
 import { transcriptSnapshotForProtocol } from "./database/transcript/transcript-wire-compatibility";
+import WorkbenchWorkspaceObservationController from "./WorkbenchWorkspaceObservationController";
+import {
+  DaemonWorkspaceObserveSchema, WorkspaceReleaseSchema,
+  WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_UPDATED_METHOD,
+} from "workbench-shared/workbench/workspace/workspace-observation";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
 const DEFAULT_PENDING_THRESHOLD_MS = 2_000;
@@ -99,6 +102,7 @@ export interface WorkbenchWebSocketRequestControllerState {
   stream?: WorkbenchWebSocketStreamControllerState;
   statsObservers?: Array<{ client: BridgeClient; connectionId: string }>;
   transcriptSubscriptions?: WorkbenchWebSocketTranscriptSubscriptionState[];
+  workspaceInterests?: ReturnType<WorkbenchWorkspaceObservationController<BridgeClient>["captureInterests"]>;
 }
 
 export interface WorkbenchWebSocketReloadDirtObserverState {
@@ -123,6 +127,7 @@ interface PendingRequest extends WorkbenchWebSocketPendingRequestState {
 }
 
 export interface WorkbenchWebSocketRequestControllerOptions {
+  workspace?: Omit<ConstructorParameters<typeof WorkbenchWorkspaceObservationController<BridgeClient>>[0], "publish" | "warn" | "reload">;
   voice?: DaemonRuntimeObjects["voice"];
   reportDelivery: (delivery: WorkbenchWebSocketDelivery) => void;
   clearTimeout?: (timer: Timer) => void;
@@ -139,7 +144,7 @@ export interface WorkbenchWebSocketRequestControllerOptions {
   >;
   stats?: Pick<WorkbenchStatsController, "subscribeImportProgress">;
   setTimeout?: (callback: () => void, delayMs: number) => Timer;
-  threadState: Pick<WorkbenchThreadStateController, "acceptIntent" | "disconnect" | "handleRequest">;
+  threadState: Pick<WorkbenchThreadStateController, "handleRequest">;
   transcript: Pick<DaemonTranscriptRegistration, "read" | "subscribe" | "unsubscribe">;
   writeLine?: (line: string) => void;
 }
@@ -191,7 +196,6 @@ export default class WorkbenchWebSocketRequestController {
   private readonly eventLog: WorkbenchWebSocketEventLog;
   private readonly harnesses: WorkbenchWebSocketRequestControllerOptions["harnesses"];
   private readonly identities: WorkbenchWebSocketRequestControllerOptions["identities"];
-  private readonly threadStateIdentities: NativeThreadStateIdentityOwners | undefined;
   private readonly daemonRequests: NonNullable<WorkbenchWebSocketRequestControllerOptions["daemonRequests"]>;
   private readonly now: NonNullable<WorkbenchWebSocketRequestControllerOptions["now"]>;
   private readonly pending = new Map<BridgeClient, Map<RequestId, PendingRequest>>();
@@ -209,6 +213,9 @@ export default class WorkbenchWebSocketRequestController {
   private readonly statsObservers = new Map<string, { client: BridgeClient; connectionId: string }>();
   private unsubscribeStats: (() => void) | null = null;
   private readonly stats: WorkbenchWebSocketRequestControllerOptions["stats"];
+  private readonly workspaceOwners: WorkbenchWebSocketRequestControllerOptions["workspace"];
+  private workspace: WorkbenchWorkspaceObservationController<BridgeClient> | null = null;
+  private workspaceInterests: NonNullable<WorkbenchWebSocketRequestControllerState["workspaceInterests"]> = [];
   private readonly writeLine: NonNullable<WorkbenchWebSocketRequestControllerOptions["writeLine"]>;
 
   constructor({
@@ -228,6 +235,7 @@ export default class WorkbenchWebSocketRequestController {
     stats,
     threadState,
     transcript,
+    workspace,
     writeLine = (line) => process.stdout.write(`${line}\n`),
   }: WorkbenchWebSocketRequestControllerOptions) {
     this.voice = voice;
@@ -236,11 +244,6 @@ export default class WorkbenchWebSocketRequestController {
     this.daemonRequests = daemonRequests;
     this.harnesses = harnesses;
     this.identities = identities;
-    this.threadStateIdentities = identities ? {
-      ...identities,
-      ...(harnesses.resolveThreadIdentity ? { resolveThreadIdentity: harnesses.resolveThreadIdentity.bind(harnesses) } : {}),
-      ...(harnesses.resolveTurnIdentity ? { resolveTurnIdentity: harnesses.resolveTurnIdentity.bind(harnesses) } : {}),
-    } : undefined;
     this.now = now;
     this.reload = reload;
     this.reportDelivery = reportDelivery;
@@ -260,12 +263,40 @@ export default class WorkbenchWebSocketRequestController {
     this.transcript = transcript;
     this.writeLine = writeLine;
     this.stats = stats;
+    this.workspaceOwners = workspace;
+    this.workspaceInterests = initialState?.workspaceInterests ?? [];
     for (const state of initialState?.pending ?? []) this.restorePending(state);
     for (const observer of initialState?.statsObservers ?? []) this.statsObservers.set(observer.connectionId, observer);
     for (const subscription of initialState?.transcriptSubscriptions ?? []) {
       this.transcriptSubscriptions.set(this.transcriptSubscriptionKey(subscription.connectionId, subscription.subscriptionId), { ...subscription });
     }
     this.observeStats();
+  }
+
+  private startWorkspace() {
+    if (this.workspace || !this.workspaceOwners) return;
+    const workspace = new WorkbenchWorkspaceObservationController<BridgeClient>({
+      ...this.workspaceOwners,
+      reload: { read: () => this.reload.getReloadDirtSnapshot(), subscribe: listener => this.reload.subscribeReloadDirt(listener) },
+      publish: (client, params) => {
+        void this.sendJsonToClient(client, { method: WORKSPACE_UPDATED_METHOD, params })
+          .catch(error => this.reportSendFailure({ method: WORKSPACE_UPDATED_METHOD }, error));
+      },
+      warn: message => this.writeLine(`[workspace] ${message}`),
+    });
+    this.workspace = workspace;
+    const interests = this.workspaceInterests;
+    this.workspaceInterests = [];
+    for (const interest of interests) {
+      try {
+        const params = workspace.observe(interest.client, interest.connectionId, interest.request, interest.revision + 1);
+        void this.sendJsonToClient(interest.client, { method: WORKSPACE_UPDATED_METHOD, params })
+          .catch(error => this.reportSendFailure({ method: WORKSPACE_UPDATED_METHOD }, error));
+      } catch (error) {
+        this.reportSendFailure({ method: "workspace/restore" }, error);
+        interest.client.close(1012, "Workspace observation needs a new connection.");
+      }
+    }
   }
 
   private observeStats() {
@@ -286,6 +317,7 @@ export default class WorkbenchWebSocketRequestController {
 
   async start() {
     this.assertActive();
+    this.startWorkspace();
     if (this.unsubscribeReloadDirt) return;
     const signal = this.generation.signal;
     this.unsubscribeReloadDirt = this.reload.subscribeReloadDirt(() => {
@@ -321,7 +353,9 @@ export default class WorkbenchWebSocketRequestController {
     const isRequest = requestId === null || typeof requestId === "number" || typeof requestId === "string";
     const transcriptRequest = decodeWorkbenchTranscriptRequest(method, message.params);
     const daemonRequest = this.daemonRequests.accepts(method);
+    const workspaceRequest = method === WORKSPACE_OBSERVE_METHOD || method === WORKSPACE_RELEASE_METHOD;
     const workbenchRequest = daemonRequest || method.startsWith("voice/") || method.startsWith("workbench/thread-state/")
+      || workspaceRequest
       || method === WORKBENCH_RELOAD_DIRT_READ_METHOD
       || transcriptRequest !== null;
     const harness = workbenchRequest ? "workbench" : "unknown";
@@ -342,6 +376,24 @@ export default class WorkbenchWebSocketRequestController {
     signal.throwIfAborted();
 
     if (workbenchRequest && isRequest) {
+      if (workspaceRequest) {
+        try {
+          this.startWorkspace();
+          if (!this.workspace) throw new Error("Workspace observation support is unavailable.");
+          const result = method === WORKSPACE_OBSERVE_METHOD
+            ? this.workspace.observe(client, connectionId, DaemonWorkspaceObserveSchema.parse(message.params))
+            : this.workspace.release(connectionId, WorkspaceReleaseSchema.parse(message.params));
+          await this.sendJsonToClient(client, { id: requestId, result });
+        } catch (error) {
+          const invalid = error instanceof z.ZodError;
+          const message = invalid ? "Workspace observation request is invalid."
+            : (error instanceof Error ? error.message : "Workspace observation failed.")
+              .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, 512);
+          if (!invalid) this.writeLine(`[workspace] ${message}`);
+          await this.sendJsonToClient(client, { id: requestId, error: { code: invalid ? -32602 : -32000, message } });
+        }
+        return;
+      }
       if (method.startsWith("voice/")) {
         try {
           if (!this.voice) throw new Error("Voice support is unavailable or reloading.");
@@ -411,45 +463,19 @@ export default class WorkbenchWebSocketRequestController {
         }
         return;
       }
-      if (method === "workbench/thread-state/accepted") {
-        const params = asRecord(message.params) ?? {};
-        try {
-          const acceptedHarness = this.harnesses.resolveHarness(params.harness);
-          const projectId = typeof params.projectId === "string" ? params.projectId.trim() : "";
-          const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-          const turnId = typeof params.turnId === "string" ? params.turnId.trim() : "";
-          if (!projectId || !threadId || !turnId) throw new Error("Invalid accepted-intent lifecycle evidence.");
-          if (!this.identities) throw new Error("Accepted-intent identity resolution is unavailable.");
-          const thread = await this.identities.threads.resolve({
-            harness: acceptedHarness, projectId: ProjectIdSchema.parse(projectId),
-            threadId: ThreadReferenceSchema.parse(threadId),
-          });
-          if (!thread) throw new Error("Accepted-intent thread does not belong to the requested project.");
-          const turn = await this.identities.threads.resolveTurn({
-            threadId: thread.threadId, turnId: TurnReferenceSchema.parse(turnId),
-          });
-          if (!turn) throw new Error("Accepted-intent turn does not belong to the requested thread.");
-          signal.throwIfAborted();
-          const result = await this.threadState.acceptIntent(connectionId, {
-            harness: acceptedHarness, projectId: thread.projectId,
-            threadId: thread.threadId, turnId: turn.turnId,
-          });
-          await this.sendJsonToClient(client, { id: requestId, result });
-        } catch (error) {
-          signal.throwIfAborted();
-          await this.sendJsonToClient(client, { id: requestId, error: { code: -32000, message: error instanceof Error ? error.message : "Accepted-intent publication failed." } });
-        }
-        return;
-      }
       try {
         const input = { method, ...(asRecord(message.params) ?? {}) };
         const parsed = WorkbenchThreadStateRequestSchema.safeParse(input);
         const request = this.identities && parsed.success ? await mapWorkbenchThreadStateRequest(this.identities, parsed.data) : input;
         signal.throwIfAborted();
         const result = await this.threadState.handleRequest(connectionId, request);
-        await this.sendJsonToClient(client, { id: requestId, ...result,
-          ...("result" in result && this.threadStateIdentities ? { result: await mapNativeThreadStateResult(this.threadStateIdentities, result.result) } : {}),
-        });
+        if ("error" in result) {
+          await this.sendJsonToClient(client, { id: requestId, error: {
+            code: -32000, message: result.error.message, data: { reason: result.error.code },
+          } });
+        } else {
+          await this.sendJsonToClient(client, { id: requestId, result: result.result });
+        }
       } catch (error) {
         signal.throwIfAborted();
         await this.sendJsonToClient(client, { id: requestId, error: { code: -32000, message: error instanceof Error ? error.message : "Thread state identity projection failed." } });
@@ -489,12 +515,6 @@ export default class WorkbenchWebSocketRequestController {
     const eventHarness = envelope?.[WORKBENCH_HARNESS_FIELD];
     const responseId = readResponseId(message);
     const pending = responseId === undefined ? null : this.pending.get(client)?.get(responseId) ?? null;
-    if (this.threadStateIdentities && envelope?.method === "workbench/thread-state/updated") {
-      const source = envelope.params as WorkbenchThreadStateSnapshot;
-      const params = await mapNativeThreadStateSnapshot(this.threadStateIdentities, source);
-      signal.throwIfAborted();
-      message = { ...envelope, params };
-    }
     const streamEvent = this.stream.prepareDelivery(client, message);
     const deliveryMessage = streamEvent?.message ?? message;
     const responseErrorMessage = readResponseErrorMessage(message);
@@ -563,9 +583,10 @@ export default class WorkbenchWebSocketRequestController {
     this.reloadDirtObservers.delete(connectionId);
     this.statsObservers.delete(connectionId);
     this.unsubscribeTranscriptConnection(connectionId);
+    this.workspace?.disconnect(connectionId);
+    this.workspaceInterests = this.workspaceInterests.filter(interest => interest.connectionId !== connectionId);
     const cleanup = await Promise.allSettled([
       this.voice?.controller.disconnect(connectionId),
-      this.threadState.disconnect(connectionId),
     ]);
     const failures = cleanup.flatMap(result => result.status === "rejected" ? [result.reason] : []);
     if (failures.length) throw new AggregateError(failures, "WebSocket connection cleanup failed.");
@@ -589,12 +610,18 @@ export default class WorkbenchWebSocketRequestController {
       stream: this.stream.detachForReload(),
       statsObservers: [...this.statsObservers.values()],
       transcriptSubscriptions: [...this.transcriptSubscriptions.values()].map((subscription) => ({ ...subscription })),
+      workspaceInterests: [...this.workspaceInterests],
     };
   }
 
   suspend() {
     if (this.lifecycle !== "active") return;
     this.lifecycle = "suspended";
+    if (this.workspace) {
+      this.workspaceInterests = this.workspace.captureInterests();
+      this.workspace.dispose();
+      this.workspace = null;
+    }
     this.generation.abort(new Error("Workbench WebSocket request generation retired."));
     this.eventLog.suspend();
     this.stream.suspend();
@@ -631,6 +658,7 @@ export default class WorkbenchWebSocketRequestController {
     if (this.lifecycle === "disposed") return;
     this.suspend();
     this.lifecycle = "disposed";
+    this.workspaceInterests = [];
     this.eventLog.dispose();
     for (const requests of this.pending.values()) {
       for (const request of requests.values()) if (request.timer) this.cancel(request.timer);

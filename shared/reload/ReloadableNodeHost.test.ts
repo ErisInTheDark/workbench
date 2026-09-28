@@ -20,6 +20,53 @@ interface Objects {
   unrelated: boolean;
 }
 
+test("unrelated topology drift rejects a narrow reload without replacing running owners", async () => {
+  let changed = false;
+  const started: string[] = [];
+  const disposed: string[] = [];
+  const graph = () => {
+    const node = (
+      scope: string, provides: (keyof Objects)[], registrations: Partial<Objects>,
+      children: ReloadableNode<object, Objects, never>[] = [],
+      requires: (keyof Objects)[] = [],
+    ) => ReloadableNode.define<object, Objects, never>()({
+      scope, provides, requires, children, access: "agent", lifecycle: "atomic",
+      safeAll: true, sources: "", description: scope,
+      create: () => ({
+        registrations, start() { started.push(scope); }, dispose() { disposed.push(scope); },
+      }),
+    });
+    const consumer = node("server:consumer", ["consumer"], {
+      consumer: { read: async () => changed ? 2 : 1 },
+    }, [], changed ? ["value"] : []);
+    return defineReloadableNodeGraph([
+      node("server:value", ["value"], { value: 1 }, [consumer]),
+      node("server:commands", ["unrelated"], { unrelated: true }),
+    ]);
+  };
+  const host = new ReloadableNodeHost({}, { load: graph, reload: graph }, {
+    topologyScope: "server:topology",
+  });
+  await host.start();
+  try {
+    const original = await host.run("consumer", value => value);
+    started.length = 0;
+    changed = true;
+    await assert.rejects(host.reload(["server:commands"]), /topology changed/u);
+    assert.deepEqual(started, []);
+    assert.deepEqual(disposed, []);
+    assert.equal(await host.run("consumer", value => value), original);
+    assert.equal(await host.run("unrelated", value => value), true);
+
+    await host.reload(["server:commands", "server:topology"]);
+    assert.deepEqual(new Set(started), new Set(["server:commands", "server:consumer"]));
+    assert.deepEqual(new Set(disposed), new Set(["server:commands", "server:consumer"]));
+    assert.notEqual(await host.run("consumer", value => value), original);
+  } finally {
+    await host.dispose();
+  }
+});
+
 test("idleness includes admitted requests, queued reloads and node-owned background work", async () => {
   let background = true;
   const graph = () => defineReloadableNodeGraph([

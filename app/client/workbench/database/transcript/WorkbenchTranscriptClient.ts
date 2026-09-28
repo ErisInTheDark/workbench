@@ -19,6 +19,8 @@ import {
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type { TranscriptStreamUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import type { DatabaseConformancePath } from "workbench-shared/database/schema/schema-conformance";
+import { WorkspaceTranscriptStateSchema, type WorkspaceTranscriptState } from "workbench-shared/workbench/workspace/workspace-observation";
+import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 
 export type { WorkbenchTranscriptConformanceReport } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 
@@ -50,13 +52,14 @@ function conformanceReportSignature(report: WorkbenchTranscriptConformanceReport
 }
 
 export default class WorkbenchTranscriptClient {
-  private protocolVersion: 1 | 2 | 3 | 4 | null = null;
+  private protocolVersion: 4 | null = null;
   private readonly availabilityListeners = new Set<(available: boolean) => void>();
-  private readonly listeners = new Map<string, (snapshot: WorkbenchTranscriptSnapshot | null) => void>();
-  private readonly streamListeners = new Map<string, {
+  private readonly subscriptions = new Map<string, {
     failed: boolean;
     onFailure?: (error: Error) => void;
-    onUpdate: (update: TranscriptStreamUpdate) => void;
+    onSnapshot(snapshot: WorkbenchTranscriptSnapshot | null): void;
+    onUpdate?: (update: TranscriptStreamUpdate) => void;
+    onState?: (state: WorkspaceTranscriptState) => void;
   }>();
   private readonly reportedConformanceSignatures = new Set<string>();
   private readonly reportConformance: NonNullable<WorkbenchTranscriptClientOptions["reportConformance"]>;
@@ -69,7 +72,7 @@ export default class WorkbenchTranscriptClient {
   }
 
   get incremental() {
-    return this.protocolVersion !== null && this.protocolVersion >= 3;
+    return this.available;
   }
 
   constructor({
@@ -84,8 +87,7 @@ export default class WorkbenchTranscriptClient {
 
   dispose() {
     this.availabilityListeners.clear();
-    this.listeners.clear();
-    this.streamListeners.clear();
+    this.subscriptions.clear();
     this.stopDisconnect();
     this.stopNotifications();
   }
@@ -98,11 +100,7 @@ export default class WorkbenchTranscriptClient {
 
   async read(params: WorkbenchTranscriptReadRequest) {
     return (await this.request(workbenchTranscriptOperations.read, {
-      ...params, ...(this.protocolVersion !== null && this.protocolVersion >= 4
-        ? { protocolVersion: 4 as const }
-        : this.protocolVersion !== null && this.protocolVersion >= 2
-          ? { protocolVersion: 2 as const }
-          : {}),
+      ...params, protocolVersion: 4,
     })).snapshot;
   }
 
@@ -111,29 +109,25 @@ export default class WorkbenchTranscriptClient {
     listener: (snapshot: WorkbenchTranscriptSnapshot | null) => void,
     streamListener?: (update: TranscriptStreamUpdate) => void,
     streamFailure?: (error: Error) => void,
+    stateListener?: (state: WorkspaceTranscriptState) => void,
   ) {
-    this.listeners.set(params.subscriptionId, listener);
-    const stream = streamListener ? { failed: false, onFailure: streamFailure, onUpdate: streamListener } : null;
-    if (stream) this.streamListeners.set(params.subscriptionId, stream);
+    const subscription = { failed: false, onSnapshot: listener, onFailure: streamFailure,
+      onUpdate: streamListener, onState: stateListener };
+    this.subscriptions.set(params.subscriptionId, subscription);
     try {
       await this.request(workbenchTranscriptOperations.subscribe, {
-        ...params, ...(streamListener && this.protocolVersion !== null && this.protocolVersion >= 4
-          ? { protocolVersion: 4 as const }
-          : streamListener && this.protocolVersion === 3
-            ? { protocolVersion: 3 as const }
-          : this.protocolVersion !== 1 ? { protocolVersion: 2 as const } : {}),
+        // The daemon's snapshot-only format remains used by non-streaming consumers.
+        ...params, protocolVersion: streamListener ? 4 : 2,
       });
     } catch (error) {
-      if (this.listeners.get(params.subscriptionId) === listener) this.listeners.delete(params.subscriptionId);
-      if (this.streamListeners.get(params.subscriptionId) === stream) this.streamListeners.delete(params.subscriptionId);
+      if (this.subscriptions.get(params.subscriptionId) === subscription) this.subscriptions.delete(params.subscriptionId);
       throw error;
     }
   }
 
   async unsubscribe(params: WorkbenchTranscriptUnsubscribeParams) {
     await this.request(workbenchTranscriptOperations.unsubscribe, params);
-    this.listeners.delete(params.subscriptionId);
-    this.streamListeners.delete(params.subscriptionId);
+    this.subscriptions.delete(params.subscriptionId);
   }
 
   private async request<Kind extends string, Method extends string, Params, Result>(
@@ -155,8 +149,17 @@ export default class WorkbenchTranscriptClient {
   }
 
   private receiveNotification(notification: { method: string; params: unknown }) {
-    if (notification.method === "workbench/thread-state/reset") {
-      this.resetConnectionState();
+    if (notification.method === "workspace/transcript/state") {
+      const parsed = WorkspaceTranscriptStateSchema.safeParse(notification.params);
+      if (!parsed.success) {
+        reportClientSchemaError("Rejected workspace transcript state", parsed.error);
+        return;
+      }
+      const subscription = this.subscriptions.get(parsed.data.subscriptionId);
+      if (subscription) {
+        if (parsed.data.phase !== "current") subscription.failed = true;
+        subscription.onState?.(parsed.data);
+      }
       return;
     }
     if (notification.method === workbenchTranscriptNotifications.capabilities.method) {
@@ -169,9 +172,7 @@ export default class WorkbenchTranscriptClient {
         });
       }
       if ("data" in conformed) {
-        this.setProtocolVersion(conformed.data.protocolVersion >= 4
-          ? 4
-          : conformed.data.protocolVersion >= 3 ? 3 : conformed.data.protocolVersion >= 2 ? 2 : 1);
+        this.setProtocolVersion(conformed.data.protocolVersion >= 4 ? 4 : null);
       }
       return;
     }
@@ -189,7 +190,7 @@ export default class WorkbenchTranscriptClient {
           && typeof params.subscriptionId === "string" && "update" in params
           && params.update && typeof params.update === "object" && "kind" in params.update
           && params.update.kind === "structure") {
-          const stream = this.streamListeners.get(params.subscriptionId);
+          const stream = this.subscriptions.get(params.subscriptionId);
           if (stream && !stream.failed) {
             stream.failed = true;
             stream.onFailure?.(new Error("The SQLite transcript structure was rejected."));
@@ -197,8 +198,10 @@ export default class WorkbenchTranscriptClient {
         }
         return;
       }
-      const stream = this.streamListeners.get(conformed.data.subscriptionId);
-      if (!stream?.failed) stream?.onUpdate(conformed.data.update);
+      const stream = this.subscriptions.get(conformed.data.subscriptionId);
+      if (stream && (conformed.data.update.kind === "absent"
+        || conformed.data.update.kind === "structure" && conformed.data.update.reset)) stream.failed = false;
+      if (!stream?.failed) stream?.onUpdate?.(conformed.data.update);
       return;
     }
     if (notification.method !== workbenchTranscriptNotifications.updated.method) return;
@@ -211,10 +214,14 @@ export default class WorkbenchTranscriptClient {
       });
     }
     if (!("data" in conformed)) return;
-    this.listeners.get(conformed.data.subscriptionId)?.(conformed.data.snapshot);
+    const subscription = this.subscriptions.get(conformed.data.subscriptionId);
+    if (subscription) {
+      subscription.failed = false;
+      subscription.onSnapshot(conformed.data.snapshot);
+    }
   }
 
-  private setProtocolVersion(version: 1 | 2 | 3 | 4 | null) {
+  private setProtocolVersion(version: 4 | null) {
     const wasAvailable = this.available;
     this.protocolVersion = version;
     if (wasAvailable === this.available) return;
@@ -222,8 +229,7 @@ export default class WorkbenchTranscriptClient {
   }
 
   private resetConnectionState() {
-    this.listeners.clear();
-    this.streamListeners.clear();
+    this.subscriptions.clear();
     this.reportedConformanceSignatures.clear();
     this.setProtocolVersion(null);
   }

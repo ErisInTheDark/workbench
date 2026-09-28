@@ -31,6 +31,36 @@ function reconciledProjects(catalog: WorkbenchProjectCacheRecord[], excludedRoot
   return { catalog, aliases: [], excludedRootPaths, rootPath: "C:/projects" };
 }
 
+test("cold startup publishes retained identities without waiting for filesystem discovery", async context => {
+  const project = createProject("retained", "C:/projects/retained");
+  const identityKey = fixtureIdentitySchemas.ProjectIdentityKeySchema.parse("local://C:/projects/retained");
+  const retained = reconciledProjects([{ project, identityKey, rootIdentityKeys: [identityKey],
+    sourceKey: "retained", checkedAt: null }]);
+  const scan = deferred<WorkbenchProjectDiscovery>();
+  const current = deferred<void>();
+  let scans = 0;
+  const controller = new WorkbenchProjectCatalogController({
+    persistence: {
+      readRetainedProjectCatalog: async () => retained,
+      reconcileProjectCatalog: async () => retained,
+      readProjectAliases: async () => [],
+      resolveProjectIdentity: async () => project.id,
+      settleProjectIcon: async () => true,
+    },
+    discoverProjectIdentities: async () => { scans++; return scan.promise; },
+    createWatcher: (root, listener, recursive) => new FakeWatcher(root, listener, recursive),
+  });
+  context.after(async () => { scan.resolve(discoveryForProjects([project])); await controller.dispose(); });
+  await controller.start();
+  assert.equal(controller.getFacts().phase, "stale");
+  assert.equal(controller.getFacts().locations?.data[0]?.project.id, project.id);
+  const stop = controller.subscribe(() => { if (controller.getFacts().phase === "current") current.resolve(); });
+  context.after(stop);
+  scan.resolve(discoveryForProjects([project]));
+  await current.promise;
+  assert.equal(scans, 1);
+});
+
 test("catalogue admission and reopening publish one owner across remote changes", async () => {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
@@ -46,6 +76,7 @@ test("catalogue admission and reopening publish one owner across remote changes"
       discovery.observedKeys = [identityKey];
       const controller = new WorkbenchProjectCatalogController({
         persistence: {
+          readRetainedProjectCatalog: async roots => repository.readRetained(roots),
           reconcileProjectCatalog: async value => repository.reconcile(value),
           readProjectAliases: async () => repository.readAliases(),
           resolveProjectIdentity: async value => repository.resolve(value),
@@ -80,6 +111,7 @@ test("location reads wait for one coalesced repair of an incomplete cached catal
   const controller = new WorkbenchProjectCatalogController({
     initialProjects: reconciledProjects([incomplete]),
     persistence: {
+      readRetainedProjectCatalog: async () => reconciledProjects([]),
       reconcileProjectCatalog: async () => reconciledProjects([complete]),
       readProjectAliases: async () => [],
       resolveProjectIdentity: async () => project.id,
@@ -120,6 +152,7 @@ test("saving roots validates the whole list and replaces watchers without partia
       },
     },
     persistence: {
+      readRetainedProjectCatalog: async () => reconciledProjects([]),
       reconcileProjectCatalog: async discovery => reconciledProjects([]),
       readProjectAliases: async () => [],
       resolveProjectIdentity: async value => fixtureIdentitySchemas.ProjectIdSchema.parse(value),
@@ -176,6 +209,7 @@ test("saving an empty list fences an older in-flight project scan", async () => 
       replaceProjectDiscoveryRoots: async roots => { persisted = [...roots]; },
     },
     persistence: {
+      readRetainedProjectCatalog: async () => reconciledProjects([]),
       reconcileProjectCatalog: async discovery => reconciledProjects(discovery.data.map(project => ({
         project: { ...project, id: fixtureIdentitySchemas.ProjectIdSchema.parse(project.name), roots: project.roots.map(({ identityKey: _key, ...item }) => item) },
         sourceKey: project.rootPath, checkedAt: null,
@@ -214,6 +248,7 @@ test("prepared startup waits for parent readiness and warm replacement retains i
   const options = {
     now: () => 101,
     persistence: {
+      readRetainedProjectCatalog: async () => initial,
       reconcileProjectCatalog: async () => { throw new Error("Startup must use prepared discovery."); },
       readProjectAliases: async () => [],
       resolveProjectIdentity: async () => project.id,
@@ -253,6 +288,7 @@ test("icon observations keep stale data, coalesce work, and retain successful ab
   const scan = deferred<null>();
   let scans = 0;
   const persistence: WorkbenchProjectPersistence = {
+    readRetainedProjectCatalog: async () => reconciledProjects([record]),
     reconcileProjectCatalog: async () => reconciledProjects([record]),
     readProjectAliases: async () => [],
     resolveProjectIdentity: async () => project.id,
@@ -299,6 +335,7 @@ test("every disposal caller waits for icon settlement and unexpected settlement 
     initialProjects: { catalog: [{ project, sourceKey: "first", checkedAt: null }], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
     persistence: {
       reconcileProjectCatalog: async () => reconciledProjects([]),
+      readRetainedProjectCatalog: async () => reconciledProjects([]),
       readProjectAliases: async () => [],
       resolveProjectIdentity: async () => project.id,
       settleProjectIcon: () => { entered.resolve(); return settlement.promise; },
@@ -329,6 +366,7 @@ test("structural refresh cannot replace a newer settled icon with its earlier da
     initialProjects: { catalog: [record], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
     persistence: {
       reconcileProjectCatalog: async () => { reconciled.resolve(); await aliases.promise; return reconciledProjects([record]); },
+      readRetainedProjectCatalog: async () => reconciledProjects([record]),
       readProjectAliases: async () => [],
       resolveProjectIdentity: async () => project.id,
       settleProjectIcon: async () => true,
@@ -359,6 +397,7 @@ test("invalidated structural discovery cannot reconcile stale roots into durable
     initialProjects: { catalog: [{ project, sourceKey: "current", checkedAt: null }], aliases: [], excludedRootPaths: [], rootPath: "C:/projects" },
     persistence: {
       reconcileProjectCatalog: async () => { reconciliations += 1; return reconciledProjects([]); },
+      readRetainedProjectCatalog: async () => reconciledProjects([]),
       readProjectAliases: async () => [],
       resolveProjectIdentity: async () => project.id,
       settleProjectIcon: async () => true,
@@ -388,6 +427,7 @@ test("first catalogue load retries a watcher-invalidated scan before publishing"
   let reconciliations = 0;
   const controller = new WorkbenchProjectCatalogController({
     persistence: {
+      readRetainedProjectCatalog: async () => reconciledProjects([]),
       reconcileProjectCatalog: async () => {
         reconciliations += 1;
         return reconciledProjects([{ project, sourceKey: "current", checkedAt: null }]);
@@ -429,6 +469,7 @@ test("reload rejects a prepared project outside the saved discovery roots", asyn
     },
     persistence: {
       reconcileProjectCatalog: async () => reconciledProjects([]),
+      readRetainedProjectCatalog: async () => reconciledProjects([]),
       readProjectAliases: async () => [],
       resolveProjectIdentity: async () => project.id,
       settleProjectIcon: async () => true,
@@ -457,6 +498,7 @@ test("changed exclusion evidence retires cached CWD authority even when selectab
     now: () => now,
     persistence: {
       reconcileProjectCatalog: async () => reconciledProjects([record], [excluded]),
+      readRetainedProjectCatalog: async () => reconciledProjects([record]),
       readProjectAliases: async () => [],
       resolveProjectIdentity: async () => project.id,
       settleProjectIcon: async () => true,
@@ -529,6 +571,7 @@ function catalogFixture(read: () => Promise<WorkbenchProjectOption[]>) {
     },
     persistence: {
       reconcileProjectCatalog: async () => reconciledProjects(projects.map(project => ({ project, sourceKey: project.rootPath, checkedAt: null }))),
+      readRetainedProjectCatalog: async () => reconciledProjects([]),
       readProjectAliases: async () => [],
       resolveProjectIdentity: async projectId => fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
       settleProjectIcon: async () => true,
@@ -988,7 +1031,7 @@ test("coalesced failed background refresh logs once and preserves the last-good 
   await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.equal(harness.loggedErrors.length, 1);
-  assert.match(harness.loggedErrors[0] ?? "", /background refresh failed/u);
+  assert.match(harness.loggedErrors[0] ?? "", /refresh exploded/u);
   assert.doesNotMatch(harness.loggedErrors[0] ?? "", /C:\/private/u);
 });
 

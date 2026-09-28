@@ -10,10 +10,11 @@ import WorkbenchServiceStartup from "../../../daemon/host/WorkbenchServiceStartu
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import AppHttpNode from "./AppHttpNode.ts";
+import AppWorkspaceNode from "./AppWorkspaceNode.ts";
 
 export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never>()({
   access: "operator",
-  children: [AppHttpNode],
+  children: [AppWorkspaceNode, AppHttpNode],
   create: (context, build) => {
     const database = build.get("database");
     const logger = build.get("logger");

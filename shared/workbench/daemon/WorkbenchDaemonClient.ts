@@ -36,7 +36,7 @@ import {
   GitArcFailureSchema,
 } from "../git/git-arc-failures.ts";
 import reportClientSchemaError from "../report-client-schema-error.ts";
-import { WorkbenchProjectsPayloadSchema } from "../project/project-state.ts";
+import { WorkbenchProjectsPayloadSchema, WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema } from "../project/project-state.ts";
 import { WorkbenchProjectFileIndexResponseSchema } from "../project/project-file-index.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "../thread/thread-state.ts";
 import { WorkbenchModelContextCapabilitySchema } from "../thread/thread-profile.ts";
@@ -103,6 +103,9 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "project/discovery-settings/update": return ProjectDiscoverySettingsResultSchema;
     case "project/catalog/read": return WorkbenchProjectsPayloadSchema;
     case "project/file-index/read": return WorkbenchProjectFileIndexResponseSchema;
+    case "project/tree/refresh": return z.object({ accepted: z.literal(true) });
+    case "project/entry/create": return WorkbenchCreateEntryResultSchema;
+    case "project/file/delete": return WorkbenchDeleteFileResultSchema;
     case "project/locations/read": return WorkbenchProjectLocationsPayloadSchema;
     case "thread/launch": return WorkbenchThreadLaunchStateSchema;
     case "thread/launch/read": return z.object({ state: WorkbenchThreadLaunchStateSchema.nullable() }).strict();
@@ -236,6 +239,9 @@ class WorkbenchDaemonClient {
   };
 
   readonly projects = {
+    refresh: (params: WorkbenchDaemonParams<"project/tree/refresh">) => this.request("project/tree/refresh", params),
+    createEntry: (params: WorkbenchDaemonParams<"project/entry/create">) => this.request("project/entry/create", params),
+    deleteFile: (params: WorkbenchDaemonParams<"project/file/delete">) => this.request("project/file/delete", params),
     catalog: () => this.request("project/catalog/read", {}),
     fileIndex: (params: WorkbenchDaemonParams<"project/file-index/read">) =>
       this.request("project/file-index/read", params),

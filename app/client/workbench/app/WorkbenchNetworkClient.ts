@@ -9,15 +9,12 @@ import {
   WORKBENCH_NETWORK_PATH, WorkbenchNetworkActionSchema, WorkbenchNetworkResultSchema, WorkbenchNetworkSnapshotSchema, WorkbenchNetworkVerificationSchema, workbenchNetworkActionKeepsAppConnection, workbenchNetworkMode,
   type WorkbenchNetworkAction, type WorkbenchNetworkResult, type WorkbenchNetworkSnapshot, type WorkbenchNetworkSettings,
 } from "workbench-shared/http/workbench-network";
-import {
-  WorkbenchPresentationImportStatusSchema, WorkbenchPresentationRevisionEventSchema,
-  type WorkbenchPresentationImportStatus,
-} from "workbench-shared/state/workbench-presentation-state";
+import type { WorkbenchPresentationImportStatus } from "workbench-shared/state/workbench-presentation-state";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
-import { WORKBENCH_APP_NETWORK_SOCKET_PATH, WorkbenchAppNetworkEventSchema,
-  type WorkbenchAppNetworkEvent } from "workbench-shared/http/workbench-app-events";
-import WorkbenchRpcSocketClient from "workbench-shared/workbench/WorkbenchRpcSocketClient";
+import type { WorkbenchAppNetworkEvent } from "workbench-shared/http/workbench-app-events";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type WorkbenchAppRpcClient from "./WorkbenchAppRpcClient";
+import type WorkbenchWorkspaceClient from "./WorkbenchWorkspaceClient";
 import { z } from "zod";
 import { consumeNetworkHandoff, networkNavigationUrl, type NetworkHandoff, type NetworkUpgrade } from "./workbench-network-navigation";
 import { readWorkbenchBrowserStateTransferId } from "../state/workbench-browser-state-identity";
@@ -38,21 +35,18 @@ export default class WorkbenchNetworkClient {
     snapshot: null, error: null, loading: true, verification: { phase: "idle" }, handoff: null,
   };
   private readonly listeners = new Set<() => void>();
-  private readonly presentationListeners = new Set<(revision: number) => void>();
   private readonly presentationImportListeners = new Set<(status: WorkbenchPresentationImportStatus) => void>();
   private readonly requests = new Set<AbortController>();
-  private events: Pick<EventSource, "close" | "onmessage" | "onerror"> & Partial<Pick<EventSource, "addEventListener">> | null = null;
-  private socket: WorkbenchRpcSocketClient | null = null;
   private readonly rpcSubscriptions: Array<() => void> = [];
   private closed = false;
   private upgrade: NetworkUpgrade | null = null;
   private verificationRequest: AbortController | null = null;
+  private observation: Pick<ReturnType<WorkbenchWorkspaceClient["observe"]>, "release"> | null = null;
 
   constructor(private readonly options: {
     fetcher?: typeof fetch;
-    events?: (url: string) => Pick<EventSource, "close" | "onmessage" | "onerror"> & Partial<Pick<EventSource, "addEventListener">>;
     rpc?: WorkbenchAppRpcClient;
-    socket?: (url: string) => WebSocket;
+    workspace?: WorkbenchWorkspaceClient;
   } = {}) {}
 
   readonly subscribe = (listener: () => void) => {
@@ -60,10 +54,6 @@ export default class WorkbenchNetworkClient {
     return () => { this.listeners.delete(listener); };
   };
   readonly snapshot = () => this.state;
-  readonly subscribePresentation = (listener: (revision: number) => void) => {
-    this.presentationListeners.add(listener);
-    return () => { this.presentationListeners.delete(listener); };
-  };
   readonly subscribePresentationImport = (listener: (status: WorkbenchPresentationImportStatus) => void) => {
     this.presentationImportListeners.add(listener);
     return () => { this.presentationImportListeners.delete(listener); };
@@ -71,62 +61,29 @@ export default class WorkbenchNetworkClient {
 
   async start() {
     if (this.closed) return;
+    if (!this.options.workspace) throw new Error("Network settings require the app workspace.");
+    this.observation?.release();
     for (const unsubscribe of this.rpcSubscriptions) unsubscribe();
     this.rpcSubscriptions.length = 0;
-    const controller = new AbortController();
-    this.requests.add(controller);
-    try {
-      const rpc = this.options.rpc?.available ? this.options.rpc : null;
-      if (rpc) {
-        this.rpcSubscriptions.push(rpc.onEvent(event => this.receiveEvent(event)));
-        this.rpcSubscriptions.push(rpc.onReconnect(() => {
-          void rpc.request("app/network/read", {}).then(snapshot => {
-            if (!this.closed) this.receive(snapshot);
-          }).catch(error => {
-            if (!this.closed) this.update({ ...this.state,
-              error: error instanceof Error ? error.message.slice(0, 512) : "Network state could not refresh." });
-          });
-        }));
-        const snapshot = await rpc.request("app/network/read", {});
-        if (this.closed) return;
-        this.receive(snapshot);
-      } else {
-        const response = await (this.options.fetcher ?? fetch)(`${WORKBENCH_NETWORK_PATH}?capabilities=6`, { cache: "no-store", signal: controller.signal });
-        if (this.closed) return;
-        if (response.status === 404) throw new Error("Restart the Workbench app to load network settings.");
-        if (!response.ok) throw new Error(`Network settings could not be read (HTTP ${response.status}).`);
-        const value: unknown = await response.json();
-        if (this.closed) return;
-        this.receive(value);
-        if (this.state.snapshot?.capabilities?.appEventsWebSocket) {
-          const socket = new WorkbenchRpcSocketClient(
-            async () => new URL(WORKBENCH_APP_NETWORK_SOCKET_PATH, window.location.href).href.replace(/^http/u, "ws"),
-            "Workbench app network",
-            this.options.socket,
-          );
-          this.socket?.dispose();
-          this.socket = socket;
-          socket.onMessage(message => {
-            if (this.closed || this.socket !== socket) return;
-            const parsed = WorkbenchAppNetworkEventSchema.safeParse(message);
-            if (!parsed.success) {
-              reportClientSchemaError("Rejected Workbench app event", parsed.error);
-              return;
-            }
-            this.receiveEvent(parsed.data);
-          });
-          socket.onClose(() => {
-            if (!this.closed && this.socket === socket) this.update({
-              ...this.state, error: "Network progress disconnected; the browser is reconnecting.",
-            });
-          });
-          void socket.connect().catch(error => {
-            if (!this.closed && this.socket === socket) this.update({
-              ...this.state, error: error instanceof Error ? error.message.slice(0, 512) : "Network socket could not connect.",
-            });
-          });
-        } else this.startLegacyEvents();
-      }
+    let handoffHandled = false;
+    const update = () => {
+      const fact = observation.getSnapshot();
+      if (fact.value?.data) this.receive(fact.value.data);
+      this.update({ ...this.state, loading: !fact.value?.data, error: fact.failure });
+      if (handoffHandled || !fact.value?.data || fact.phase !== "current") return;
+      handoffHandled = true;
+      void this.resumeHandoff().catch(error => {
+        if (!this.closed) this.update({ ...this.state,
+          error: error instanceof Error ? error.message.slice(0, 512) : "Network handoff failed." });
+      });
+    };
+    const observation = this.options.workspace.observe({ kind: "network" }, update);
+    this.observation = observation;
+    this.rpcSubscriptions.push(this.options.workspace.rpc.onEvent(event => this.receiveEvent(event)));
+    update();
+  }
+
+  private async resumeHandoff() {
       if (typeof window !== "undefined") {
         const consumed = consumeNetworkHandoff(window.location.href);
         if (consumed.receipt || consumed.upgrade) {
@@ -139,69 +96,13 @@ export default class WorkbenchNetworkClient {
           this.beginUpgrade(consumed.upgrade);
         }
       }
-    } catch (error) {
-      if (!this.closed) this.update({
-        ...this.state, loading: false,
-        error: error instanceof Error ? error.message.slice(0, 512) : "Network settings could not be read.",
-      });
-    } finally { this.requests.delete(controller); }
   }
 
   private receiveEvent(event: WorkbenchAppNetworkEvent) {
     if (this.closed) return;
-    if (event.kind === "network") this.receive(event.snapshot);
-    if (event.kind === "presentation") {
-      for (const listener of this.presentationListeners) listener(event.event.revision);
-    }
     if (event.kind === "presentation-import") {
       for (const listener of this.presentationImportListeners) listener(event.status);
     }
-  }
-
-  private startLegacyEvents() {
-      const eventsUrl = `${WORKBENCH_NETWORK_PATH}/events?capabilities=4`;
-      const events = this.options.events?.(eventsUrl) ?? new EventSource(eventsUrl);
-      this.events?.close();
-      this.events = events;
-      events.onmessage = event => {
-        if (this.closed || this.events !== events) return;
-        try { this.receive(JSON.parse(event.data)); }
-        catch {
-          this.update({ ...this.state, error: "Network progress data was invalid." });
-        }
-      };
-      events.addEventListener?.("presentation", event => {
-        if (this.closed || this.events !== events) return;
-        try {
-          const parsed = WorkbenchPresentationRevisionEventSchema.safeParse(
-            JSON.parse((event as MessageEvent).data));
-          if (!parsed.success) {
-            reportClientSchemaError("Rejected Workbench presentation revision", parsed.error);
-            return;
-          }
-          for (const listener of this.presentationListeners) listener(parsed.data.revision);
-        } catch {
-          this.update({ ...this.state, error: "Presentation progress data was invalid." });
-        }
-      });
-      events.addEventListener?.("presentation-import", event => {
-        if (this.closed || this.events !== events) return;
-        try {
-          const parsed = WorkbenchPresentationImportStatusSchema.safeParse(
-            JSON.parse((event as MessageEvent).data));
-          if (!parsed.success) {
-            reportClientSchemaError("Rejected Workbench presentation import status", parsed.error);
-            return;
-          }
-          for (const listener of this.presentationImportListeners) listener(parsed.data);
-        } catch {
-          this.update({ ...this.state, error: "Presentation import progress data was invalid." });
-        }
-      });
-      events.onerror = () => {
-        if (this.closed || this.events !== events) return;
-        this.update({ ...this.state, error: "Network progress disconnected; the browser is reconnecting." });
-      };
   }
 
   async action(input: WorkbenchNetworkAction): Promise<WorkbenchNetworkResult> {
@@ -211,8 +112,9 @@ export default class WorkbenchNetworkClient {
     this.requests.add(controller);
     try {
       let value: unknown;
-      if (this.options.rpc?.available && workbenchNetworkActionKeepsAppConnection(action)) {
-        value = await this.options.rpc.requestRaw({
+      if (workbenchNetworkActionKeepsAppConnection(action)) {
+        if (!this.options.workspace) throw new Error("Network action requires the app workspace.");
+        value = await this.options.workspace.rpc.requestRaw({
           method: "app/network/action", params: { action },
         });
       } else {
@@ -305,16 +207,13 @@ export default class WorkbenchNetworkClient {
     this.cancelUpgrade();
     this.verificationRequest?.abort();
     this.verificationRequest = null;
-    this.events?.close();
-    this.events = null;
-    this.socket?.dispose();
-    this.socket = null;
+    this.observation?.release();
+    this.observation = null;
     for (const unsubscribe of this.rpcSubscriptions) unsubscribe();
     this.rpcSubscriptions.length = 0;
     for (const controller of this.requests) controller.abort();
     this.requests.clear();
     this.listeners.clear();
-    this.presentationListeners.clear();
     this.presentationImportListeners.clear();
   }
 
@@ -415,6 +314,7 @@ export default class WorkbenchNetworkClient {
   }
 
   private update(state: typeof this.state) {
+    if (areDeeplyEqual(this.state, state)) return;
     if (this.closed) return;
     this.state = state;
     for (const listener of this.listeners) listener();

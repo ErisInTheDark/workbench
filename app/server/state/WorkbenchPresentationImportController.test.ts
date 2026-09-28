@@ -3,12 +3,51 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
-import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import type { WorkbenchDaemonTransport } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { PresentationMutation, PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
-import type WorkbenchNetworkController from "../network/WorkbenchNetworkController";
+import type WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
+import type WorkbenchDaemonSource from "../workspace/WorkbenchDaemonSource";
 import type WorkbenchPresentationController from "./WorkbenchPresentationController";
 import WorkbenchPresentationImportController from "./WorkbenchPresentationImportController";
+
+function importSource(
+  identity: () => { daemonId: string; generation: number; ready: boolean },
+  request: WorkbenchDaemonTransport["request"],
+) {
+  const listeners = new Set<() => void>();
+  let retained = 0;
+  let released = 0;
+  const source = {
+    get available() { return identity().ready; },
+    getSnapshot: () => ({ ...identity(), hostname: "local", connection: identity().ready ? "current" : "unavailable" }),
+    retain: () => { retained++; return () => { released++; }; },
+    request,
+    observe: (_query: object, changed: () => void) => {
+      let active = true;
+      let fact: object = { phase: "pending", value: null, failure: null };
+      void request<{ data: [] }>("project/locations/read", {}).then(
+        locations => {
+          if (!active) return;
+          fact = { phase: "current", value: { kind: "catalogue", locations }, failure: null };
+          changed();
+        },
+        error => {
+          if (!active) return;
+          fact = { phase: "failed", value: null, failure: error instanceof Error ? error.message : "Read failed." };
+          changed();
+        },
+      );
+      return { getSnapshot: () => fact, release: () => { active = false; } };
+    },
+  } as unknown as WorkbenchDaemonSource;
+  const sources = {
+    attached: source,
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+  } as unknown as WorkbenchDaemonSources;
+  return { sources, notify: () => { for (const listener of listeners) listener(); },
+    get retained() { return retained; }, get released() { return released; } };
+}
 
 test("one app import survives tab-like refresh signals and an unreadable image cannot hide the next draft", async () => {
   const daemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
@@ -26,8 +65,6 @@ test("one app import survives tab-like refresh signals and an unreadable image c
   const staged: PresentationMutation[] = [];
   const chunks: Buffer[] = [];
   let completedImages = 0;
-  let notify = () => {};
-  let connections = 0;
   let manifestReads = 0;
   let ready = true;
   const snapshot: PresentationSnapshot = {
@@ -38,11 +75,6 @@ test("one app import survives tab-like refresh signals and an unreadable image c
     }],
     members: [], projects: [], revision: 1, sourceMappings: [],
   };
-  const network = {
-    snapshot: () => ({ daemon: { protocol: 1, daemonId, hostname: "local", state: ready ? "ready" : "unavailable", wakeEnabled: true } }),
-    connection: () => ({ localPort: 5555, tailnetPort: 5556 }),
-    subscribe: (listener: () => void) => { notify = listener; return () => { notify = () => {}; }; },
-  } as unknown as WorkbenchNetworkController;
   const presentation = {
     mutate: (mutation: PresentationMutation) => { staged.push(mutation); return snapshot; },
     read: () => snapshot,
@@ -54,7 +86,7 @@ test("one app import survives tab-like refresh signals and an unreadable image c
     putAttachmentChunk: (_draftId: string, _id: string, _index: number, bytes: Buffer) => { chunks.push(bytes); },
     completeAttachment: () => { completedImages++; return snapshot; },
   } as unknown as WorkbenchPresentationController;
-  const daemon = new WorkbenchDaemonClient({ request: async <TResponse>(method: string) => {
+  const source = importSource(() => ({ daemonId, generation: 1, ready }), async <TResponse>(method: string) => {
     if (method === "project/locations/read") {
       entered.resolve();
       await release.promise;
@@ -99,17 +131,14 @@ test("one app import survives tab-like refresh signals and an unreadable image c
         contentHash: imageHash, mediaType: "image/png" } as TResponse;
     }
     throw new Error(`Unexpected source request: ${method}`);
-  } });
+  });
   const logger = new WorkbenchProcessLogger({
     color: false,
     writeOutput: () => {},
     writeError: () => {},
   });
   const owner = new WorkbenchPresentationImportController({
-    network, presentation, logger,
-    openSource: () => { connections++; return {
-      daemon, request: async () => { throw new Error("Unexpected raw request."); }, close: () => {},
-    }; },
+    sources: source.sources, presentation, logger,
   });
   owner.subscribe(status => {
     if (status.phase === "partial" || status.phase === "complete") settled.resolve();
@@ -118,12 +147,12 @@ test("one app import survives tab-like refresh signals and an unreadable image c
     const initial = owner.start();
     assert.ok(initial instanceof Promise, "startup exposes its owned reconciliation");
     await entered.promise;
-    notify();
-    notify();
+    source.notify();
+    source.notify();
     release.resolve();
     await settled.promise;
     await initial;
-    assert.equal(connections, 1);
+    assert.equal(source.retained, 1);
     assert.equal(manifestReads, 1);
     assert.deepEqual(mutations.flat().map(mutation => mutation.kind), ["importDraft", "finishImportDraft"]);
     assert.deepEqual(staged.filter(mutation => mutation.kind !== "registerLocations").map(mutation => mutation.kind),
@@ -131,10 +160,10 @@ test("one app import survives tab-like refresh signals and an unreadable image c
     assert.deepEqual(Buffer.concat(chunks), image);
     assert.equal(completedImages, 1);
     ready = false;
-    notify();
+    source.notify();
     ready = true;
-    notify();
-    assert.equal(connections, 1, "a completed partial import is not replayed for the same daemon");
+    source.notify();
+    assert.equal(source.retained, 1, "a completed partial import is not replayed for the same connection generation");
   } finally {
     release.resolve();
     await owner.close();
@@ -145,54 +174,39 @@ test("a changed attached daemon retires the old import source before it can writ
   const firstId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
   const secondId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000002");
   let currentId = firstId;
-  let notify = () => {};
-  let closed = 0;
   const entered = Promise.withResolvers<void>();
   const pending = Promise.withResolvers<{ data: [] }>();
-  const network = {
-    snapshot: () => ({ daemon: { protocol: 1, daemonId: currentId, hostname: "local", state: "ready", wakeEnabled: true } }),
-    connection: () => ({ localPort: currentId === firstId ? 5555 : 5556, tailnetPort: 0 }),
-    subscribe: (listener: () => void) => { notify = listener; return () => {}; },
-  } as unknown as WorkbenchNetworkController;
-  const daemon = new WorkbenchDaemonClient({ request: async <TResponse>() => {
+  const source = importSource(() => ({ daemonId: currentId, generation: 1, ready: true }), async <TResponse>() => {
     entered.resolve();
     return await pending.promise as TResponse;
-  } });
+  });
   const owner = new WorkbenchPresentationImportController({
-    network,
+    sources: source.sources,
     presentation: {} as WorkbenchPresentationController,
     logger: new WorkbenchProcessLogger({ color: false, writeOutput: () => {}, writeError: () => {} }),
-    openSource: () => ({
-      daemon, request: async () => { throw new Error("Unexpected raw request."); },
-      close: () => { closed++; pending.reject(new Error("Source changed.")); },
-    }),
   });
   try {
     owner.start();
     await entered.promise;
     currentId = secondId;
-    notify();
-    assert.equal(closed, 1);
+    source.notify();
+    assert.equal(source.released, 1);
   } finally {
     await owner.close();
+    pending.resolve({ data: [] });
   }
 });
 
-test("a failed location admission can retry on the next ready signal", async () => {
+test("failed import waits for a new connection generation instead of replaying on unrelated source facts", async () => {
   const daemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
   let ready = true;
-  let notify = () => {};
+  let generation = 1;
   let attempts = 0;
-  const network = {
-    snapshot: () => ({ daemon: { protocol: 1, daemonId, hostname: "local", state: ready ? "ready" : "unavailable", wakeEnabled: true } }),
-    connection: () => ({ localPort: 5555, tailnetPort: 0 }),
-    subscribe: (listener: () => void) => { notify = listener; return () => {}; },
-  } as unknown as WorkbenchNetworkController;
   const snapshot = {
     daemons: [], defaults: [], divergences: [], drafts: [], folders: [], locations: [],
     members: [], projects: [], revision: 1, sourceMappings: [],
   } as PresentationSnapshot;
-  const daemon = new WorkbenchDaemonClient({ request: async <TResponse>(method: string) => {
+  const source = importSource(() => ({ daemonId, generation, ready }), async <TResponse>(method: string) => {
     if (method === "project/locations/read") {
       if (++attempts === 1) throw new Error("Discovery was unavailable.");
       return { data: [] } as TResponse;
@@ -201,25 +215,28 @@ test("a failed location admission can retry on the next ready signal", async () 
       return { sources: [], nextCursor: null } as TResponse;
     }
     throw new Error(`Unexpected source request: ${method}`);
-  } });
+  });
   const owner = new WorkbenchPresentationImportController({
-    network,
+    sources: source.sources,
     presentation: {
       mutate: () => snapshot, read: () => snapshot,
       readImportReceipts: () => ({ present: [] }),
     } as unknown as WorkbenchPresentationController,
     logger: new WorkbenchProcessLogger({ color: false, writeOutput: () => {}, writeError: () => {} }),
-    openSource: () => ({ daemon, request: async () => { throw new Error("Unexpected raw request."); }, close: () => {} }),
   });
   try {
     await owner.start();
     assert.equal(owner.snapshot().phase, "failed");
+    source.notify();
+    source.notify();
+    assert.equal(attempts, 1);
     const complete = Promise.withResolvers<void>();
     owner.subscribe(status => { if (status.phase === "complete") complete.resolve(); });
     ready = false;
-    notify();
+    source.notify();
     ready = true;
-    notify();
+    generation++;
+    source.notify();
     await complete.promise;
     assert.equal(attempts, 2);
   } finally {

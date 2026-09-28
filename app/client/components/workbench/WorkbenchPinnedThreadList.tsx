@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 
 import type { WorkbenchControls, WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
-import { projectLogicalPinnedDisplayOrder } from "../../workbench/WorkbenchProjectProjection";
+import { projectLogicalPinnedDisplayOrder } from "workbench-shared/workbench/project/workbench-project-projection";
 import { createLogicalExistingThreadRoute, createLogicalThreadRoute, createPinnedThreadRoute, createThreadRoute, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import {

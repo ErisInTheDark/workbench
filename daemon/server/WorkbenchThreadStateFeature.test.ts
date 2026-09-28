@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
-import type { WorkbenchDurableQuestionnaire, WorkbenchThreadSidebarEntry, WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchDurableQuestionnaire, WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchThreadStateFeature, { normalizeProviderSidebarEntry as normalizeSidebar, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
 import { mapProviderActivityNotification as mapActivity, mapProviderLifecycleNotification as mapLifecycle } from "./CodexProviderObservations";
@@ -95,6 +95,7 @@ function providerThread(cwd: string, threadId: string, fields: Partial<ThreadRea
 function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThreadStateFeature>[0], "identities" | "database" | "providers" | "harnesses"> & {
   database: ReturnType<typeof createThreadStateDatabase>;
   harnesses: ReturnType<typeof createHarnesses>;
+  onProject?: (snapshot: WorkbenchThreadSidebarSnapshot) => void;
   interruptRetainingQuestionnaire?: (threadId: string, requestKey: string, interrupt: () => Promise<boolean>) => Promise<boolean>;
 }) {
   const operationsByHarness = new Map<WorkbenchHarness, CodexThreadOperations>();
@@ -143,20 +144,21 @@ function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThrea
       }))] };
     },
   });
+  feature.controller.subscribeProjects(projectId => {
+    const snapshot = feature.controller.peekProject(projectId);
+    if (snapshot) options.onProject?.(snapshot);
+  });
   return Object.assign(feature, { observeThread: (thread: ThreadReadResponse["thread"]) => getOperations("codex").observeThread(thread) });
 }
 
-test("browser project admission rejects unknown owners before loading or replacing observations", async () => {
+test("project reads reject unknown owners before loading or writing state", async () => {
   const database = createThreadStateDatabase("C:/project", [["thread", "codex"]]);
   const projectId = fixtureIdentityValues.ProjectId.project;
-  const stopped: string[] = [];
   const feature = createFeature({
     database,
     getProjectCatalog: () => ({ data: [], aliases: [{ alias: "old/project", projectId }], rootPath: "C:/" }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
-    projectState: { getCurrentUpdate: () => null, handleRequest: async () => ({}), observe: id => () => { stopped.push(id); } },
-    publish: () => {},
     harnesses: createHarnesses(async () => ({ id: null, result: { data: [] } })),
     resolveProjectById: async id => {
       assert.equal(id, projectId);
@@ -166,15 +168,12 @@ test("browser project admission rejects unknown owners before loading or replaci
     transitions: { run: async (_key, operation) => operation() },
   });
   try {
-    await feature.controller.open("client", fixtureIdentitySchemas.ProjectIdSchema.parse("old/project"), 1);
+    await feature.controller.readProject(fixtureIdentitySchemas.ProjectIdSchema.parse("old/project"));
     const before = database.sqlite.prepare("SELECT * FROM workbench_sidebar_project_layouts").all();
     database.operations.length = 0;
     for (const id of ["remote:/example.test/project", "remote://example.test/unregistered"]) {
-      await assert.rejects(feature.controller.handleRequest("client", {
-        method: "workbench/thread-state/open", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(id), version: 2,
-      }), /project/i);
+      await assert.rejects(feature.controller.readProject(fixtureIdentitySchemas.ProjectIdSchema.parse(id)), /project/i);
     }
-    assert.deepEqual(stopped, []);
     assert.deepEqual(database.operations, []);
     assert.deepEqual(database.sqlite.prepare("SELECT * FROM workbench_sidebar_project_layouts").all(), before);
   } finally { await feature.dispose(); }
@@ -213,8 +212,6 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
     getProjectCatalog: () => ({ data: [], rootPath: "C:/workspace" }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
-    projectState: { getCurrentUpdate: () => null, handleRequest: async () => ({}), observe: () => () => {} },
-    publish: () => {},
     interruptRetainingQuestionnaire: async (_threadId: string, requestKey: string, interrupt: () => Promise<boolean>) => {
       await state.beforeRelease();
       state.retainingQuestionnaire = true;
@@ -263,7 +260,7 @@ async function questionnaireHarness(harness: WorkbenchHarness = "codex") {
     });
   }
   const feature = createFeature(options);
-  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
+  await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
   await feature.controller.refresh(fixtureIdentityValues.ProjectId["project"]);
   await feature.controller.ensureProviderEntry(fixtureIdentityValues.ProjectId["project"], provider);
   await feature.controller.observeLifecycle(harness, fixtureIdentityValues.WorkbenchThreadId["thread"], {
@@ -540,12 +537,6 @@ test("provider notification observation returns the persisted lifecycle result",
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     harnesses: createHarnesses(async (_harness, request) => ({ id: request.id ?? null, result: { data: [], nextCursor: null } })),
     listSubagents: async () => ({ subagents: [] }),
-    projectState: {
-      getCurrentUpdate: () => null,
-      handleRequest: async () => ({ accepted: true }),
-      observe: () => () => undefined,
-    },
-    publish: () => undefined,
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
     transitions: { run: async (_key, operation) => await operation() },
@@ -596,8 +587,6 @@ test("creation installs captured settings before first admission and refreshes o
       gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
       harnesses: createHarnesses(async () => ({ id: 0, result: { data: [], nextCursor: null } })),
       listSubagents: async () => ({ subagents: [] }),
-      projectState: { getCurrentUpdate: () => null, handleRequest: async () => ({}), observe: () => () => {} },
-      publish: () => {},
       readComposerProfiles: async () => {
         catalogueReads++;
         return { profiles: [{ ...settings, model, id: "profile", name: "Profile", scope: { kind: "global" }, createdAt: 1, updatedAt: 1 }] };
@@ -705,12 +694,6 @@ test("MCP admission consumes translated metadata without additional provider rea
       };
     }),
     listSubagents: async () => ({ subagents: [] }),
-    projectState: {
-      getCurrentUpdate: () => null,
-      handleRequest: async () => ({ accepted: true }),
-      observe: () => () => undefined,
-    },
-    publish: () => undefined,
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => {
       resolvedCwds.push(cwd);
@@ -788,8 +771,7 @@ for (const foreignPage of ["first", "last"] as const) {
         } };
       }),
       listSubagents: async () => ({ subagents: [] }),
-      projectState: { getCurrentUpdate: () => null, handleRequest: async () => ({}), observe: () => () => {} },
-      publish: (_connection, snapshot) => {
+      onProject: snapshot => {
         if ("freshness" in snapshot && (snapshot.freshness === "fresh" || snapshot.error)) reconciled.resolve();
       },
       resolveProjectById: async id => ({ id: fixtureIdentitySchemas.ProjectIdSchema.parse(id), rootPath: id === projectId ? local.cwd : foreign.cwd }),
@@ -800,7 +782,7 @@ for (const foreignPage of ["first", "last"] as const) {
     });
     try {
       await feature.controller.setComposerProfileTarget({ kind: "new-thread", projectId }, selection);
-      await feature.controller.open("observer", projectId);
+      await feature.controller.readProject(projectId);
       releaseListing.resolve();
       await reconciled.promise;
       const observed = await feature.observeThread(local);
@@ -878,18 +860,12 @@ test("a relationship committed during provider pagination remains a subagent aft
       return { id: request.id ?? null, result: { data: [], nextCursor: null } };
     }),
     listSubagents: async () => ({ subagents: relationships }),
-    projectState: {
-      getCurrentUpdate: () => null,
-      handleRequest: async () => ({ accepted: true }),
-      observe: () => () => undefined,
-    },
-    publish: () => undefined,
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
+  await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
   await secondPageStarted.promise;
   relationships = [relationship];
   await feature.installSubagentRelationship(relationship);
@@ -903,7 +879,7 @@ test("a relationship committed during provider pagination remains a subagent aft
 
 test("provider reconciliation publishes its first page before deeper history and retains relationship and git state", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-feature-"));
-  const publications: WorkbenchThreadStateSnapshot[] = [];
+  const publications: WorkbenchThreadSidebarSnapshot[] = [];
   const starts: string[] = [];
   const codexCursors: Array<string | null> = [];
   const codexRequests: Array<Record<string, unknown>> = [];
@@ -975,12 +951,7 @@ test("provider reconciliation publishes its first page before deeper history and
         updatedAt: 2,
       }],
     }),
-    projectState: {
-      getCurrentUpdate: () => null,
-      handleRequest: async () => ({ accepted: true }),
-      observe: () => () => undefined,
-    },
-    publish: (_connectionId, snapshot) => { publications.push(snapshot); },
+    onProject: snapshot => { publications.push(snapshot); },
     harnesses: createHarnesses(async (harness, request) => {
       const params = request.params as { cursor?: string | null };
       if (!starts.includes(harness)) starts.push(harness);
@@ -1000,7 +971,7 @@ test("provider reconciliation publishes its first page before deeper history and
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
+  await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
   await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.harness === "codex")), "First page did not publish while deeper history remained pending.");
   assert.deepEqual(starts, ["codex", "opencode"]);
   assert.deepEqual(codexCursors, [null, "codex-next"]);
@@ -1087,12 +1058,6 @@ test("deep provider pages serialize across projects while both newest pages star
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
-    projectState: {
-      getCurrentUpdate: () => null,
-      handleRequest: async () => ({ accepted: true }),
-      observe: () => () => undefined,
-    },
-    publish: () => undefined,
     harnesses: createHarnesses(async (harness, request) => {
       const params = request.params as { cursor?: string | null; cwd: string };
       if (harness !== "codex") return { id: request.id ?? null, result: { data: [], nextCursor: null } };
@@ -1112,7 +1077,7 @@ test("deep provider pages serialize across projects while both newest pages star
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  await Promise.all([feature.controller.open("a", fixtureIdentityValues.ProjectId["project-a"]), feature.controller.open("b", fixtureIdentityValues.ProjectId["project-b"])]);
+  await Promise.all([feature.controller.readProject(fixtureIdentityValues.ProjectId["project-a"]), feature.controller.readProject(fixtureIdentityValues.ProjectId["project-b"])]);
   await waitFor(() => firstPages.length === 2 && deepPages.length === 1, "Newest pages did not start before serialized continuation work.");
   assert.deepEqual(new Set(firstPages), new Set(projectRoots.values()));
   assert.equal(maximumActiveDeepPages, 1);
@@ -1134,12 +1099,6 @@ test("managed title commands use the workbench-recorded title as the mutation pr
     getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
-    projectState: {
-      getCurrentUpdate: () => null,
-      handleRequest: async () => ({ accepted: true }),
-      observe: () => () => undefined,
-    },
-    publish: () => undefined,
     harnesses: createHarnesses(async (harness, request) => {
       requests.push({ harness, method: request.method, params: request.params });
       if (harness !== "codex") return { id: request.id ?? null, error: { code: -32000, message: "Not found" } };
@@ -1292,19 +1251,13 @@ test("Git snapshot reconciliation failures reach the bounded feature log", async
     },
     listSubagents: async () => ({ subagents: [] }),
     log: (message) => logs.push(message),
-    projectState: {
-      getCurrentUpdate: () => null,
-      handleRequest: async () => ({ accepted: true }),
-      observe: () => () => undefined,
-    },
-    publish: () => undefined,
     harnesses: createHarnesses(async () => { throw new Error("Provider reconciliation must not start after the initial Git snapshot fails."); }),
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
+  await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
   await waitFor(() => logs.length === 1, "Git snapshot reconciliation failure was not logged.");
   assert.ok(logs[0]?.includes(fixtureIdentityValues.ProjectId.project));
   assert.match(logs[0] ?? "", /reconciliation failed .*error=Git snapshot exploded\./u);
@@ -1346,18 +1299,12 @@ test("expired settled threads reach repository retention through the feature bou
     },
     harnesses: createHarnesses(async (_harness, request) => ({ id: request.id ?? null, result: { data: [], nextCursor: null } })),
     listSubagents: async () => ({ subagents: [] }),
-    projectState: {
-      getCurrentUpdate: () => null,
-      handleRequest: async () => ({ accepted: true }),
-      observe: () => () => undefined,
-    },
-    publish: () => undefined,
     resolveProjectById: async () => ({ id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" }),
     resolveProjectFromCwd: async (cwd) => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: "C:/workspace" } }),
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
+  await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
   await waitFor(() => pruned.length === 1, "Expired thread did not reach Git retention through the feature.");
   assert.deepEqual(pruned, [{ cwd: "C:/workspace", identities: [identity] }]);
   await feature.dispose();
@@ -1404,12 +1351,6 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
       listPlanStates: async () => resolved ? [] : [planState],
     },
     listSubagents: async () => ({ subagents: [] }),
-    projectState: {
-      getCurrentUpdate: () => null,
-      handleRequest: async () => ({ accepted: true }),
-      observe: () => () => undefined,
-    },
-    publish: () => undefined,
     harnesses: createHarnesses(async (harness, request) => {
       if (harness !== "codex") return { error: { code: -32000, message: `${harness} unavailable` }, id: request.id ?? null };
       const cursor = (request.params as { cursor?: string | null }).cursor;
@@ -1449,7 +1390,7 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
     metadata: { archived: false, pinned: false, snoozed: false },
     title: "Thread one",
   });
-  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
+  await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
   await waitFor(async () => {
     const snapshot = await feature.controller.getSnapshot(fixtureIdentityValues.ProjectId["project"]);
     const entry = snapshot.entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "thread-one");
@@ -1496,12 +1437,6 @@ test("managed resume validates the provider thread before requesting lifecycle-o
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
-    projectState: {
-      getCurrentUpdate: () => null,
-      handleRequest: async () => ({ accepted: true }),
-      observe: () => () => undefined,
-    },
-    publish: () => undefined,
     harnesses: createHarnesses(async (harness, request) => {
       if (request.method === "thread/turns/list") {
         assert.deepEqual(request.params, {
@@ -1548,7 +1483,7 @@ test("managed resume validates the provider thread before requesting lifecycle-o
 
 test("observed title mutations update the provider and published sidebar together", async () => {
   const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-thread-title-"));
-  const publications: WorkbenchThreadStateSnapshot[] = [];
+  const publications: WorkbenchThreadSidebarSnapshot[] = [];
   const titleRequests: Array<{ harness: string; params: unknown }> = [];
   let rejectTitle = false;
   const feature = createFeature({
@@ -1556,12 +1491,7 @@ test("observed title mutations update the provider and published sidebar togethe
     getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
     gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
     listSubagents: async () => ({ subagents: [] }),
-    projectState: {
-      getCurrentUpdate: () => null,
-      handleRequest: async () => ({ accepted: true }),
-      observe: () => () => undefined,
-    },
-    publish: (_connectionId, snapshot) => { publications.push(snapshot); },
+    onProject: snapshot => { publications.push(snapshot); },
     harnesses: createHarnesses(async (harness, request) => {
       if (request.method === "thread/name/set") {
         titleRequests.push({ harness, params: request.params });
@@ -1584,7 +1514,7 @@ test("observed title mutations update the provider and published sidebar togethe
     transitions: { run: async (_key, operation) => await operation() },
   });
 
-  await feature.controller.open("observer", fixtureIdentityValues.ProjectId["project"]);
+  await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
   await waitFor(() => publications.some((snapshot) => (
     "entries" in snapshot
     && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "thread-one")

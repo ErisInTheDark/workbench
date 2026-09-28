@@ -6,55 +6,52 @@ import { z } from "zod";
 import { WORKBENCH_APP_NETWORK_SOCKET_PATH, WorkbenchAppNetworkEventSchema,
   type WorkbenchAppNetworkEvent } from "workbench-shared/http/workbench-app-events";
 import type { WorkbenchAppRpcIntent } from "workbench-shared/http/workbench-app-rpc";
-import { WorkbenchNetworkSnapshotSchema } from "workbench-shared/http/workbench-network";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
-import WorkbenchRpcSocketClient from "workbench-shared/workbench/WorkbenchRpcSocketClient";
+import WorkbenchRpcSocketClient, { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
+import { WORKSPACE_COMMAND_NOT_SENT, WORKSPACE_COMMAND_UNCERTAIN } from "workbench-shared/workbench/workspace/workspace-commands";
+import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 
 function boundedListenerError(error: unknown) {
   return (error instanceof Error ? error.message : "Unknown listener failure.")
     .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, 512);
 }
 
+const WorkspaceObservationAddress = z.object({
+  kind: z.literal("workspace"),
+  observation: z.object({ subscriptionId: z.uuid(), generation: z.number().int().nonnegative() }),
+});
+type ObservationAddress = z.infer<typeof WorkspaceObservationAddress>["observation"];
+
 export default class WorkbenchAppRpcClient {
-  private transport: WorkbenchRpcSocketClient | null = null;
+  private readonly transport: WorkbenchRpcSocketClient;
   private readonly lifetime = new AbortController();
   private readonly eventListeners = new Set<(event: WorkbenchAppNetworkEvent) => void>();
+  private readonly invalidObservationListeners = new Set<(address: ObservationAddress) => void>();
   private readonly reconnectListeners = new Set<() => void>();
   private latestImport: Extract<WorkbenchAppNetworkEvent, { kind: "presentation-import" }> | null = null;
   private started = false;
-  private selected = false;
 
   constructor(private readonly options: {
-    fetcher?: typeof fetch;
     socket?: (url: string) => WebSocket;
-  } = {}) {}
-
-  get available() { return this.selected; }
-
-  async start() {
-    if (this.started || this.lifetime.signal.aborted) throw new Error("App RPC already started or closed.");
-    this.started = true;
-    const response = await (this.options.fetcher ?? fetch)(
-      "/api/workbench-app-lifetime?capabilities=3",
-      { method: "HEAD", cache: "no-store", signal: this.lifetime.signal },
-    );
-    this.lifetime.signal.throwIfAborted();
-    if (response.status === 404) return;
-    if (!response.ok) throw new Error("Workbench app RPC capability could not be read.");
-    if (response.headers.get("x-workbench-app-rpc") !== "1") return;
+    origin?: string;
+  } = {}) {
     const transport = new WorkbenchRpcSocketClient(
       async () => new URL(WORKBENCH_APP_NETWORK_SOCKET_PATH,
-        globalThis.location?.href ?? "http://localhost/").href.replace(/^http/u, "ws"),
+        options.origin ?? globalThis.location?.href ?? "http://localhost/").href.replace(/^http/u, "ws"),
       "Workbench app RPC",
       this.options.socket,
     );
     this.transport = transport;
-    this.selected = true;
     transport.onMessage(value => {
       if (this.lifetime.signal.aborted || !value || typeof value !== "object" || "id" in value) return;
       const parsed = WorkbenchAppNetworkEventSchema.safeParse(value);
       if (!parsed.success) {
         reportClientSchemaError("Rejected Workbench app RPC event", parsed.error);
+        const address = WorkspaceObservationAddress.safeParse(value);
+        if (address.success) for (const listener of this.invalidObservationListeners) {
+          try { listener(address.data.observation); }
+          catch (error) { console.error("Workspace failure listener failed:", boundedListenerError(error)); }
+        }
         return;
       }
       if (parsed.data.kind === "presentation-import") this.latestImport = parsed.data;
@@ -69,13 +66,31 @@ export default class WorkbenchAppRpcClient {
       }
     });
     transport.onClose(() => { this.latestImport = null; });
-    await transport.connect();
+  }
+
+  get available() { return !this.lifetime.signal.aborted; }
+  get connected() { return this.transport.isOpen; }
+  getSnapshot = () => this.transport.getSnapshot();
+  subscribe = (listener: () => void) => this.transport.subscribe(listener);
+  onOpen(listener: () => void) { return this.transport.onOpen(listener); }
+
+  start() {
+    if (this.started || this.lifetime.signal.aborted) return;
+    this.started = true;
+    void this.transport.connect().catch(error => {
+      if (!this.lifetime.signal.aborted) console.warn("Workbench app connection failed:", boundedListenerError(error));
+    });
   }
 
   onEvent(listener: (event: WorkbenchAppNetworkEvent) => void) {
     this.eventListeners.add(listener);
     if (this.latestImport) this.deliverEvent(listener, this.latestImport);
     return () => { this.eventListeners.delete(listener); };
+  }
+
+  onInvalidObservation(listener: (address: ObservationAddress) => void) {
+    this.invalidObservationListeners.add(listener);
+    return () => { this.invalidObservationListeners.delete(listener); };
   }
 
   private deliverEvent(listener: (event: WorkbenchAppNetworkEvent) => void, event: WorkbenchAppNetworkEvent) {
@@ -90,25 +105,21 @@ export default class WorkbenchAppRpcClient {
     return () => { this.reconnectListeners.delete(listener); };
   }
 
-  async request(method: "app/network/read", params: Record<string, never>) {
-    const result = await this.requestRaw({ method, params });
-    const parsed = WorkbenchNetworkSnapshotSchema.safeParse(result);
-    if (!parsed.success) {
-      reportClientSchemaError("Rejected Workbench app RPC response", parsed.error);
-      throw new Error("Workbench app RPC returned invalid data.");
-    }
-    return parsed.data;
-  }
-
-  async requestRaw(intent: WorkbenchAppRpcIntent): Promise<unknown> {
-    if (!this.selected || !this.transport || this.lifetime.signal.aborted) {
+  async requestRaw(intent: WorkbenchAppRpcIntent, options: { signal?: AbortSignal } = {}): Promise<unknown> {
+    if (this.lifetime.signal.aborted) {
       throw new Error("Workbench app RPC is unavailable.");
     }
-    const response = await this.transport.sendRequest<unknown>(intent);
+    const response = await this.transport.sendRequest<unknown>(intent, { requireOpen: true, signal: options.signal });
     if ("error" in response) {
-      const failure = z.object({ code: z.number().int(), message: z.string().max(512) }).safeParse(response.error);
+      const failure = z.object({ code: z.number().int(), message: z.string().max(512), data: z.json().optional() }).safeParse(response.error);
       if (!failure.success) reportClientSchemaError("Rejected Workbench app RPC error", failure.error);
-      throw new Error(failure.success ? failure.data.message : "Workbench app RPC failed.");
+      if (!failure.success) throw new Error("Workbench app RPC failed.");
+      if (failure.data.code === WORKSPACE_COMMAND_NOT_SENT || failure.data.code === WORKSPACE_COMMAND_UNCERTAIN) {
+        throw new WorkbenchRpcRequestInterruptedError(failure.data.message, failure.data.code === WORKSPACE_COMMAND_UNCERTAIN);
+      }
+      const data = failure.data.data;
+      throw new WorkbenchDaemonRequestError(failure.data.message, failure.data.code,
+        data && typeof data === "object" && !Array.isArray(data) ? data : null);
     }
     return response.result;
   }
@@ -116,10 +127,9 @@ export default class WorkbenchAppRpcClient {
   dispose() {
     if (this.lifetime.signal.aborted) return;
     this.lifetime.abort(new Error("Workbench app RPC disposed."));
-    this.transport?.dispose();
-    this.transport = null;
-    this.selected = false;
+    this.transport.dispose();
     this.eventListeners.clear();
+    this.invalidObservationListeners.clear();
     this.reconnectListeners.clear();
     this.latestImport = null;
   }

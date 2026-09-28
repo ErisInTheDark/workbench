@@ -13,18 +13,10 @@
  * - WorkbenchProjectThreadSummariesSchema/WorkbenchProjectThreadSummaries: cross-project summary collection.
  * - WorkbenchPinnedThreadLayoutSnapshotSchema/WorkbenchPinnedThreadLayoutSnapshot: revisioned global pin layout.
  * - WorkbenchHomeThreadDisplayOrderSchema/WorkbenchHomeThreadDisplayOrder/WorkbenchHomeThreadDisplayOrderSnapshot: folder-free home order and revision.
- * - WorkbenchThreadStateOpenResultV2/WorkbenchThreadStateOpenResult: project bootstrap types.
- * - WorkbenchGlobalThreadStateOpenResultV4Schema/WorkbenchGlobalThreadStateOpenResultV5Schema/WorkbenchGlobalThreadStateOpenResultV6Schema/WorkbenchGlobalThreadStateOpenResultV7Schema/WorkbenchGlobalThreadStateOpenResultV8Schema/WorkbenchGlobalThreadStateOpenResultV9Schema/WorkbenchGlobalThreadStateOpenResult: versioned global bootstrap variants.
- * - WorkbenchPinnedThreadContextResult: admitted pinned-thread context.
  * - WorkbenchObservedThreadTargetSchema/WorkbenchObservedThreadTarget: provider and subagent observation targets.
  * - WorkbenchThreadObservationSnapshotSchema/WorkbenchThreadObservationSnapshot: revisioned full thread-family observation.
  * - WorkbenchThreadObservationResultSchema: initial observation acknowledgement.
- * - WorkbenchThreadActivityUpdate: compact activity delta type.
- * - WorkbenchThreadStateDeltaSchema/WorkbenchThreadStateDelta: revisioned changed entries, projection removals and optional layout.
  * - WorkbenchThreadDraftAttachmentSchema: typed persisted attachment identity and URL.
- * - serializeLegacyThreadDraft: derive older wire aliases from canonical composer settings.
- * - WorkbenchProjectThreadSummaryUpdateSchema/WorkbenchProjectThreadSummaryUpdate: project summary notification.
- * - WorkbenchProjectThreadSidebarUpdateSchema/WorkbenchProjectThreadSidebarUpdate: project sidebar notification.
  * - WorkbenchThreadStateSnapshot/WorkbenchThreadStateRequest/WorkbenchThreadStateMutationResult/WorkbenchThreadTitleMutationResult: notification, intent, and acknowledgement types.
  * - WorkbenchLifecycleEvent/getWorkbenchLifecycleTurnId: lifecycle inputs and owning turn identity.
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity.
@@ -32,12 +24,11 @@
  * - WorkbenchComposerProfileSlotSchema/WorkbenchComposerSettingsSchema/WorkbenchComposerProfileSelectionSchema: strict daemon target-profile contracts.
  * - WorkbenchComposerProfileSlotInputSchema: unresolved thread references accepted at profile RPC ingress.
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts.
- * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchProjectThreadSidebarsSchema/WorkbenchThreadActivityUpdateSchema: project and global full sidebar state plus tiny activity delta contracts.
+ * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchProjectThreadSidebarsSchema: current project and grouped sidebar facts.
  * - WorkbenchHomeThreadDisplayOrderSnapshotSchema: revisioned home-owned cross-project priority order.
  * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchPinnedThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled and pinned cross-project rows, counts, ordering, and activity with direct-child lifecycle projection.
- * - WorkbenchThreadStateOpenResultV2Schema/WorkbenchThreadStateOpenResultSchema/WorkbenchGlobalThreadStateOpenResultSchema/WorkbenchPinnedThreadContextResultSchema: atomic project and global observation bootstraps plus bounded admitted-pin context.
  * - WorkbenchThreadPrioritySchema/WorkbenchThreadPriority: exact pinned, main, and snoozed placement intent.
- * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: multiplexed sidebar, activity, project-summary, mutation, title, project, and request protocol.
+ * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: current thread-family snapshots and daemon-owned mutations.
  * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness.
  * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries: partition ordered entries into pinned, main, snoozed, settled, and archived render sections.
  * - WorkbenchThreadClaimIntersections/getWorkbenchThreadClaimIntersections/createWorkbenchThreadClaimIntersectionSelector: derive and identity-stabilize sibling intersections for plan or stashed claims.
@@ -56,7 +47,6 @@ import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadI
 import type { WorkbenchComposerProfileTargetSelection, WorkbenchComposerSettings } from "../../types.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 import { gitArcPathsOverlap } from "../git/git-arc-paths.ts";
-import { WorkbenchProjectsPayloadSchema, WorkbenchProjectStateUpdateSchema } from "../project/project-state.ts";
 import { ThreadDisplayLayoutSchema } from "./thread-display-layout.ts";
 import { isWorkbenchApprovalRequest } from "./thread-user-input-requests.ts";
 import { WorkbenchThreadTitleHistoryEntrySchema } from "./thread-title-history.ts";
@@ -201,21 +191,6 @@ export type WorkbenchThreadDraft = z.infer<typeof WorkbenchThreadDraftSchema>;
 
 export function hasWorkbenchThreadDraftContent(draft: { attachments: readonly unknown[]; prompt: string }) {
   return Boolean(draft.prompt.trim() || draft.attachments.length);
-}
-
-const WorkbenchThreadDraftWriteSchema = WorkbenchThreadDraftSchema.refine(hasWorkbenchThreadDraftContent, {
-  message: "Draft requires prompt or attachment content.",
-});
-
-export function serializeLegacyThreadDraft(draft: WorkbenchThreadDraft) {
-  return {
-    ...draft,
-    agent: draft.composerSettings.agentPath,
-    harness: draft.composerSettings.harness,
-    model: draft.composerSettings.model,
-    reasoningEffort: draft.composerSettings.reasoningEffort,
-    serviceTier: draft.composerSettings.serviceTier,
-  };
 }
 
 const AgentTurnSchema = z.object({
@@ -555,67 +530,6 @@ export const WorkbenchHomeThreadDisplayOrderSnapshotSchema = z.object({
 }).strict();
 export type WorkbenchHomeThreadDisplayOrderSnapshot = z.infer<typeof WorkbenchHomeThreadDisplayOrderSnapshotSchema>;
 
-export const WorkbenchThreadStateOpenResultV2Schema = z.object({
-  catalog: WorkbenchProjectsPayloadSchema,
-  project: WorkbenchProjectStateUpdateSchema.nullable(),
-  sidebar: WorkbenchThreadSidebarSnapshotSchema,
-}).strict();
-export type WorkbenchThreadStateOpenResultV2 = z.infer<typeof WorkbenchThreadStateOpenResultV2Schema>;
-
-export const WorkbenchThreadStateOpenResultSchema = WorkbenchThreadStateOpenResultV2Schema.extend({
-  pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshotSchema.default(() => ({
-    displayOrder: {},
-    revision: 0,
-    updateKind: "pinnedThreadLayout" as const,
-  })),
-  projectThreads: WorkbenchProjectThreadSummariesSchema.default(() => ({ projects: [] })),
-});
-export type WorkbenchThreadStateOpenResult = z.infer<typeof WorkbenchThreadStateOpenResultSchema>;
-
-export const WorkbenchGlobalThreadStateOpenResultV4Schema = z.object({
-  catalog: WorkbenchProjectsPayloadSchema,
-  pinnedThreadLayout: WorkbenchPinnedThreadLayoutSnapshotSchema,
-  projectSidebars: WorkbenchProjectThreadSidebarsSchema,
-}).strict();
-export const WorkbenchGlobalThreadStateOpenResultV5Schema = WorkbenchGlobalThreadStateOpenResultV4Schema.extend({
-  homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
-  version: z.literal(5),
-}).strict();
-export const WorkbenchGlobalThreadStateOpenResultV6Schema = WorkbenchGlobalThreadStateOpenResultV4Schema.extend({
-  homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
-  version: z.literal(6),
-}).strict();
-export const WorkbenchGlobalThreadStateOpenResultV7Schema = WorkbenchGlobalThreadStateOpenResultV4Schema.extend({
-  homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
-  version: z.literal(7),
-}).strict();
-export const WorkbenchGlobalThreadStateOpenResultV8Schema = WorkbenchGlobalThreadStateOpenResultV4Schema.extend({
-  homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
-  version: z.literal(8),
-}).strict();
-export const WorkbenchGlobalThreadStateOpenResultV9Schema = WorkbenchGlobalThreadStateOpenResultV4Schema.extend({
-  homeThreadDisplayOrder: WorkbenchHomeThreadDisplayOrderSnapshotSchema,
-  version: z.literal(9),
-}).strict();
-export const WorkbenchGlobalThreadStateOpenResultSchema = z.union([
-  WorkbenchGlobalThreadStateOpenResultV9Schema,
-  WorkbenchGlobalThreadStateOpenResultV8Schema,
-  WorkbenchGlobalThreadStateOpenResultV7Schema,
-  WorkbenchGlobalThreadStateOpenResultV6Schema,
-  WorkbenchGlobalThreadStateOpenResultV5Schema,
-  WorkbenchGlobalThreadStateOpenResultV4Schema,
-]);
-export type WorkbenchGlobalThreadStateOpenResult = z.infer<typeof WorkbenchGlobalThreadStateOpenResultSchema>;
-
-export const WorkbenchPinnedThreadContextResultSchema = z.object({
-  context: z.object({
-    entries: z.array(WorkbenchThreadSidebarEntrySchema),
-    projectId: z.string().min(1).brand<"ProjectId">(),
-    target: WorkbenchThreadTargetSchema,
-  }).strict().nullable(),
-}).strict();
-export type WorkbenchPinnedThreadContextResult = z.infer<typeof WorkbenchPinnedThreadContextResultSchema>;
-
 export const WorkbenchThreadObservationSnapshotSchema = z.object({
   entries: z.array(WorkbenchThreadSidebarEntrySchema),
   error: z.string().max(500).nullable(),
@@ -625,7 +539,7 @@ export const WorkbenchThreadObservationSnapshotSchema = z.object({
   subscriptionId: CanonicalUuidSchema,
   target: WorkbenchObservedThreadTargetSchema,
   updateKind: z.literal("threadObservation"),
-  version: z.union([z.literal(1), z.literal(2)]),
+  version: z.literal(2),
 }).strict().superRefine((observation, context) => {
   if (!observation.entries.length) return;
   const rootId = observation.target.kind === "subagent" ? observation.target.parentThreadId : observation.target.threadId;
@@ -656,52 +570,7 @@ export const WorkbenchThreadObservationResultSchema = z.object({
   observation: WorkbenchThreadObservationSnapshotSchema,
 }).strict();
 
-export const WorkbenchThreadActivityUpdateSchema = z.object({
-  activityAt: z.number().int().nonnegative(),
-  displayOrder: WorkbenchThreadDisplayOrderSchema.optional(),
-  identity: ThreadIdentitySchema,
-  orderAt: z.number().int().nonnegative().optional(),
-  projectId: z.string().min(1).brand<"ProjectId">(),
-  revision: z.number().int().nonnegative(),
-  updateKind: z.literal("activity"),
-}).strict();
-export type WorkbenchThreadActivityUpdate = z.infer<typeof WorkbenchThreadActivityUpdateSchema>;
-
-export const WorkbenchThreadStateDeltaSchema = z.object({
-  projectId: z.string().min(1).brand<"ProjectId">(),
-  revision: z.number().int().nonnegative(),
-  upserts: z.array(WorkbenchThreadSidebarEntrySchema),
-  removedKeys: z.array(z.string().min(1)),
-  displayOrder: WorkbenchThreadDisplayOrderSchema.optional(),
-  error: z.string().max(500).nullable(),
-  freshness: z.enum(["loading", "fresh", "partial"]),
-  updateKind: z.literal("threadStateDelta"),
-}).strict();
-export type WorkbenchThreadStateDelta = z.infer<typeof WorkbenchThreadStateDeltaSchema>;
-
-export const WorkbenchProjectThreadSummaryUpdateSchema = z.object({
-  summary: WorkbenchProjectThreadSummarySchema,
-  updateKind: z.literal("projectThreadSummary"),
-}).strict();
-export type WorkbenchProjectThreadSummaryUpdate = z.infer<typeof WorkbenchProjectThreadSummaryUpdateSchema>;
-
-export const WorkbenchProjectThreadSidebarUpdateSchema = z.object({
-  sidebar: WorkbenchThreadSidebarSnapshotSchema,
-  updateKind: z.literal("projectThreadSidebar"),
-}).strict();
-export type WorkbenchProjectThreadSidebarUpdate = z.infer<typeof WorkbenchProjectThreadSidebarUpdateSchema>;
-
-export const WorkbenchThreadStateSnapshotSchema = z.union([
-  WorkbenchThreadStateDeltaSchema,
-  WorkbenchThreadObservationSnapshotSchema,
-  WorkbenchThreadSidebarSnapshotSchema,
-  WorkbenchThreadActivityUpdateSchema,
-  WorkbenchHomeThreadDisplayOrderSnapshotSchema,
-  WorkbenchPinnedThreadLayoutSnapshotSchema,
-  WorkbenchProjectThreadSidebarUpdateSchema,
-  WorkbenchProjectThreadSummaryUpdateSchema,
-  WorkbenchProjectStateUpdateSchema,
-]);
+export const WorkbenchThreadStateSnapshotSchema = WorkbenchThreadObservationSnapshotSchema;
 export type WorkbenchThreadStateSnapshot = z.infer<typeof WorkbenchThreadStateSnapshotSchema>;
 
 export const WorkbenchThreadStateMutationResultSchema = z.object({
@@ -718,50 +587,9 @@ export const WorkbenchThreadTitleMutationResultSchema = z.object({
 export type WorkbenchThreadTitleMutationResult = z.infer<typeof WorkbenchThreadTitleMutationResultSchema>;
 
 const ProjectRequestBase = z.object({ projectId: ProjectIdSchema }).strict();
-const FolderDropFields = {
-  destinationFolderId: CanonicalUuidSchema.nullable(),
-  folderId: CanonicalUuidSchema.nullable(),
-  section: z.enum(["pinned", "snoozed", "settled"]),
-  sourceKey: z.string().min(1),
-  targetKey: z.string().min(1),
-} as const;
-const { section: _pinnedFolderSection, ...PinnedFolderDropFields } = FolderDropFields;
-const requireOneFolderDestination = (value: { destinationFolderId?: string | null; folderId?: string | null }, context: z.RefinementCtx) => {
-  if (Boolean(value.destinationFolderId) === Boolean(value.folderId)) {
-    context.addIssue({ code: "custom", message: "Folder drops require exactly one existing or new folder id.", path: ["folderId"] });
-  }
-};
 export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", [
-  ProjectRequestBase.extend({
-    method: z.literal("workbench/thread-state/observe"),
-    subscriptionId: CanonicalUuidSchema,
-    target: WorkbenchObservedThreadTargetSchema,
-    version: z.union([z.literal(1), z.literal(2)]),
-  }),
-  z.object({ method: z.literal("workbench/thread-state/release"), subscriptionId: CanonicalUuidSchema }).strict(),
-  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/open"), version: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7)]).optional() }),
-  z.object({ method: z.literal("workbench/thread-state/global/open"), version: z.union([z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8), z.literal(9)]) }).strict(),
-  z.object({ method: z.literal("workbench/thread-state/global/close") }).strict(),
-  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/close") }),
-  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/refresh") }),
-  ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/pin/open"), target: WorkbenchThreadTargetSchema }),
-  ProjectRequestBase.extend({ draftId: CanonicalUuidSchema.brand<"DraftId">().optional(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/intent/accept"), title: z.string().trim().min(1), turnId: z.string().trim().min(1).brand<"WorkbenchTurnId">() }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/title/set"), title: z.string().trim().min(1) }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/title/dismiss"), title: z.string().trim().min(1) }),
-  ProjectRequestBase.extend({ draft: WorkbenchThreadDraftWriteSchema, folderId: CanonicalUuidSchema.optional(), method: z.literal("workbench/thread-state/draft/upsert") }),
-  z.object({
-    destinationProjectId: ProjectIdSchema,
-    draftId: CanonicalUuidSchema.brand<"DraftId">(),
-    method: z.literal("workbench/thread-state/draft/move"),
-    sourceProjectId: ProjectIdSchema,
-  }).strict().superRefine((value, context) => {
-    if (value.destinationProjectId === value.sourceProjectId) {
-      context.addIssue({ code: "custom", message: "Draft move projects must differ.", path: ["destinationProjectId"] });
-    }
-  }),
-  ProjectRequestBase.extend({ clientUpdatedAt: z.number().int().nonnegative(), draftId: CanonicalUuidSchema.brand<"DraftId">(), method: z.literal("workbench/thread-state/draft/delete") }),
-  ProjectRequestBase.extend({ draftId: CanonicalUuidSchema.brand<"DraftId">(), method: z.literal("workbench/thread-state/draft/pin/set"), pinned: z.boolean() }),
-  ProjectRequestBase.extend({ draftId: CanonicalUuidSchema.brand<"DraftId">(), method: z.literal("workbench/thread-state/draft/snooze/set"), snoozed: z.boolean() }),
   ProjectRequestBase.extend({ method: z.literal("workbench/thread-state/priority/set"), priority: WorkbenchThreadPrioritySchema, sourceKey: z.string().min(1).brand<"ThreadDisplayKey">() }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/pin/set"), pinned: z.boolean() }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/snooze/set"), snoozed: z.boolean() }),
@@ -777,56 +605,6 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/snooze"), requestKey: z.string().min(1) }),
   ProjectRequestBase.extend({ entry: WorkbenchQuestionnaireHistoryEntrySchema, identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/resolve") }),
   ProjectRequestBase.extend({ archived: z.boolean(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/archive/set") }),
-  ProjectRequestBase.extend({
-    folderId: CanonicalUuidSchema,
-    method: z.literal("workbench/thread-state/display-order/folder/create"),
-    sourceKey: z.string().min(1).brand<"ThreadDisplayKey">(),
-    title: z.string().trim().min(1).max(80),
-  }),
-  ProjectRequestBase.extend({
-    folderId: CanonicalUuidSchema,
-    method: z.literal("workbench/thread-state/display-order/folder/title/set"),
-    title: z.string().trim().min(1).max(80),
-  }),
-  ProjectRequestBase.extend({
-    ...FolderDropFields,
-    method: z.literal("workbench/thread-state/display-order/folder/drop"),
-  }).superRefine(requireOneFolderDestination),
-  ProjectRequestBase.extend({
-    beforeKey: z.string().min(1).nullable(),
-    destinationFolderId: CanonicalUuidSchema.nullable(),
-    method: z.literal("workbench/thread-state/display-order/move"),
-    section: z.enum(["pinned", "snoozed", "settled"]),
-    sourceKey: z.string().min(1).brand<"ThreadDisplayKey">(),
-  }),
-  z.object({
-    beforeKey: z.string().min(1).nullable(),
-    destinationFolderKey: z.string().min(1).nullable(),
-    method: z.literal("workbench/thread-state/home-display-order/move"),
-    section: z.enum(["pinned", "snoozed", "settled"]),
-    sourceKey: z.string().min(1),
-  }).strict(),
-  z.object({
-    folderId: CanonicalUuidSchema,
-    method: z.literal("workbench/thread-state/pinned-display-order/folder/create"),
-    sourceKey: z.string().min(1),
-    title: z.string().trim().min(1).max(80),
-  }).strict(),
-  z.object({
-    folderId: CanonicalUuidSchema,
-    method: z.literal("workbench/thread-state/pinned-display-order/folder/title/set"),
-    title: z.string().trim().min(1).max(80),
-  }).strict(),
-  z.object({
-    ...PinnedFolderDropFields,
-    method: z.literal("workbench/thread-state/pinned-display-order/folder/drop"),
-  }).strict().superRefine(requireOneFolderDestination),
-  z.object({
-    beforeKey: z.string().min(1).nullable(),
-    destinationFolderId: CanonicalUuidSchema.nullable(),
-    method: z.literal("workbench/thread-state/pinned-display-order/move"),
-    sourceKey: z.string().min(1),
-  }).strict(),
 ]);
 export type WorkbenchThreadStateRequest = z.infer<typeof WorkbenchThreadStateRequestSchema>;
 
@@ -1105,6 +883,7 @@ export function createWorkbenchProjectThreadSummary(
   entries: readonly WorkbenchThreadSidebarEntry[],
   revision: number,
   displayOrder: WorkbenchThreadDisplayOrder = {},
+  proposedThreadIds?: ReadonlySet<string>,
 ): WorkbenchProjectThreadSummary {
   const counts: WorkbenchProjectThreadSummaryCounts = {
     completed: 0,
@@ -1129,7 +908,8 @@ export function createWorkbenchProjectThreadSummary(
         ? entry.metadata.snoozed ? "needsAttention" : "needsAttentionActive"
         : entry.lifecycle.kind === "stopped"
           ? "stopped"
-          : entry.gitArc?.proposals.some(({ status: proposalStatus }) => proposalStatus === "proposed")
+          : (proposedThreadIds?.has(entry.identity.threadId)
+            ?? entry.gitArc?.proposals.some(({ status: proposalStatus }) => proposalStatus === "proposed"))
             ? "proposedCommit"
             : "completed";
     counts[status] += 1;

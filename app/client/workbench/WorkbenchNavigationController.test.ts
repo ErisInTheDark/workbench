@@ -1,352 +1,73 @@
-/*
- * Exports:
- * - No production exports; Node tests protect route freshness, canonicalisation, failure publication, and pinned draft ownership.
- */
-
+/* No production exports. Protect route supersession, partial reads and draft-preserving canonicalisation. */
 import assert from "node:assert/strict";
-import { test } from "node:test";
-
-import type { WorkbenchRouteLoadResult } from "workbench-shared/types";
+import test from "node:test";
 import {
-  DraftIdSchema,
-  ProjectIdSchema,
-  ThreadReferenceSchema,
-} from "workbench-shared/workbench/identity";
-import {
-  createHomeRoute,
-  createFileRoute,
-  createLogicalProjectRoute,
-  createLogicalThreadRoute,
-  type WorkbenchRoute,
+  createHomeRoute, createLogicalProjectRoute, createLogicalThreadRoute, createObservedProjectRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
-import type {
-  WorkbenchThreadDraft,
-  WorkbenchThreadSidebarEntry,
-} from "workbench-shared/workbench/thread/thread-state";
-import WorkbenchNavigationController, {
-  type WorkbenchNavigationPorts,
-} from "./WorkbenchNavigationController.ts";
+import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import WorkbenchNavigationController from "./WorkbenchNavigationController";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((accept) => {
-    resolve = accept;
+const projectId = "00000000-0000-4000-8000-000000000001";
+const location = { daemonId: DaemonIdSchema.parse("00000000-0000-4000-8000-000000000002"),
+  projectId: ProjectIdSchema.parse("local-folder") };
+const draftId = DraftIdSchema.parse("00000000-0000-4000-8000-000000000003");
+
+test("pending facts render progress, then the same route can become ready without an error latch", async () => {
+  let available = false;
+  const route = createLogicalProjectRoute(projectId);
+  const navigation = new WorkbenchNavigationController(route, {
+    load: async () => available ? { ok: true } : { ok: false, pending: true },
   });
-  return { promise, resolve };
-}
+  await navigation.applyRoute(route);
+  assert.equal(navigation.getSnapshot().phase, "loading");
+  assert.equal(navigation.getSnapshot().error, null);
+  available = true;
+  await navigation.applyRoute(route);
+  assert.equal(navigation.getSnapshot().phase, "ready");
+  navigation.dispose();
+});
 
-async function waitForRead(
-  reads: Map<string, ReturnType<typeof deferred<WorkbenchRouteLoadResult>>>,
-  threadId: string,
-) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const read = reads.get(threadId);
-    if (read) return read;
-    await Promise.resolve();
-  }
-  throw new Error(`Expected navigation to open ${threadId}.`);
-}
-
-function project(id = "project") {
-  return {
-    id: ProjectIdSchema.parse(id),
-    kind: "git" as const,
-    lastCommitTimeMs: null,
-    name: id,
-    relativePath: id,
-    rootPath: `C:/${id}`,
-    roots: [],
-  };
-}
-
-function threadRoute(threadId: string): WorkbenchRoute {
-  return {
-    ...createHomeRoute(),
-    projectId: ProjectIdSchema.parse("project"),
-    threadId,
-    threadTarget: {
-      harness: "codex",
-      kind: "provider",
-      threadId: ThreadReferenceSchema.parse(threadId),
-    },
-    view: "thread",
-  };
-}
-
-function draft(): WorkbenchThreadDraft {
-  return {
-    attachments: [],
-    clientUpdatedAt: 2,
-    composerSettings: {
-      agentPath: null,
-      agentSource: null,
-      harness: "codex",
-      model: "",
-      reasoningEffort: null,
-      serviceTier: null,
-    },
-    createdAt: 1,
-    draftId: DraftIdSchema.parse("00000000-0000-4000-8000-000000000001"),
-    profileId: null,
-    projectId: ProjectIdSchema.parse("owner"),
-    prompt: "draft",
-    updatedAt: 2,
-  };
-}
-
-function createPorts(overrides: Partial<WorkbenchNavigationPorts> = {}): WorkbenchNavigationPorts {
-  return {
-    applyDraft: () => undefined,
-    clearSelection: () => undefined,
-    createDraft: () => undefined,
-    ensureProject: async () => "",
-    failThread: () => undefined,
-    getLocalEntries: () => [],
-    getProject: projectId => project(projectId),
-    getProjectEntries: () => [],
-    guardNavigation: async apply => await apply(),
-    hydrateSidebar: () => undefined,
-    openFile: async () => true,
-    openThread: async () => ({ ok: true }),
-    readPinnedContext: async () => ({
-      error: "missing",
-      ok: false,
-    }),
-    receiveDraft: () => undefined,
-    reportStatus: () => undefined,
-    resolveDraftReferences: async () => false,
-    resolveProjectId: projectId => projectId,
-    resolveRoute: async route => route,
-    ...overrides,
-  };
-}
-
-test("logical navigation uses its source route instead of legacy attached-project selection", async () => {
-  const route = createLogicalProjectRoute("112f7e1e-81b6-4c30-bdc0-f83475981001");
-  let legacySelections = 0;
-  let logicalSelections = 0;
-  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
-    ensureProject: async () => { legacySelections += 1; return ""; },
-    openLogicalRoute: async selected => {
-      assert.deepEqual(selected.logical, route.logical);
-      logicalSelections += 1;
+test("a superseded route is cancelled and its late failure cannot replace a newer view", async () => {
+  const pending = Promise.withResolvers<{ ok: false; error: string }>();
+  const first = Promise.withResolvers<AbortSignal>();
+  const navigation = new WorkbenchNavigationController(createHomeRoute(), {
+    load: async (route, context) => {
+      if (route.view === "home") { first.resolve(context.signal); return pending.promise; }
       return { ok: true };
     },
-  }));
-  assert.deepEqual(await controller.applyRoute(route), { ok: true });
-  assert.equal(logicalSelections, 1);
-  assert.equal(legacySelections, 0);
-  assert.deepEqual(controller.getSnapshot().route, route);
-});
-
-test("one admitted draft session retargets between new and saved URLs without reopening", async () => {
-  const logicalId = "112f7e1e-81b6-4c30-bdc0-f83475981001";
-  const draftId = DraftIdSchema.parse("00000000-0000-4000-8000-000000000001");
-  const fresh = createLogicalThreadRoute(null, logicalId, null, { kind: "new" });
-  const saved = createLogicalThreadRoute(null, logicalId, null, { kind: "draft", draftId });
-  let opens = 0;
-  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
-    openLogicalRoute: async () => { opens++; return { ok: true }; },
-  }));
-  await controller.applyRoute(fresh);
-  assert.equal(controller.retargetDraftSession(saved, draftId), true);
-  assert.equal(controller.getSnapshot().phase, "ready");
-  assert.deepEqual(controller.getSnapshot().route, saved);
-  assert.equal(controller.retargetDraftSession(fresh, draftId), true);
-  assert.deepEqual(controller.getSnapshot().route, fresh);
-  assert.equal(controller.retargetDraftSession(saved, DraftIdSchema.parse("different")), false);
-  assert.equal(opens, 1);
-});
-
-test("a pending saved-route admission cannot replace a retargeted empty draft session", async () => {
-  const logicalId = "112f7e1e-81b6-4c30-bdc0-f83475981001";
-  const draftId = DraftIdSchema.parse("00000000-0000-4000-8000-000000000001");
-  const fresh = createLogicalThreadRoute(null, logicalId, null, { kind: "new" });
-  const saved = createLogicalThreadRoute(null, logicalId, null, { kind: "draft", draftId });
-  const started = deferred<void>();
-  const late = deferred<WorkbenchRouteLoadResult>();
-  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
-    openLogicalRoute: async route => {
-      if (route.threadTarget?.kind !== "draft") return { ok: true };
-      started.resolve();
-      return await late.promise;
-    },
-  }));
-  await controller.applyRoute(fresh);
-  const opening = controller.applyRoute(saved);
-  await started.promise;
-  assert.equal(controller.getSnapshot().phase, "loading");
-  assert.equal(controller.retargetDraftSession(fresh, draftId), true);
-  assert.equal(controller.getSnapshot().phase, "ready");
-  late.resolve({ ok: false, error: "The deleted draft cannot open." });
-  assert.deepEqual(await opening, { ok: false });
-  assert.equal(controller.getSnapshot().phase, "ready");
-  assert.equal(controller.getSnapshot().error, null);
-  assert.deepEqual(controller.getSnapshot().route, fresh);
-});
-
-test("a verified empty draft session can recover a failed saved route or retain its current route", async () => {
-  const logicalId = "112f7e1e-81b6-4c30-bdc0-f83475981001";
-  const draftId = DraftIdSchema.parse("00000000-0000-4000-8000-000000000001");
-  const fresh = createLogicalThreadRoute(null, logicalId, null, { kind: "new" });
-  const saved = createLogicalThreadRoute(null, logicalId, null, { kind: "draft", draftId });
-  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
-    openLogicalRoute: async () => ({ ok: true }),
-  }));
-  await controller.applyRoute(fresh);
-  controller.rejectRoute(saved, "The deleted draft cannot open.");
-  assert.equal(controller.retargetDraftSession(fresh, draftId), true);
-  assert.equal(controller.getSnapshot().phase, "ready");
-  assert.equal(controller.getSnapshot().error, null);
-  assert.equal(controller.retargetDraftSession(fresh, draftId), true);
-  assert.deepEqual(controller.getSnapshot().route, fresh);
-});
-
-test("a rejected route intent exposes failure without clearing the current selection", () => {
-  let clears = 0;
-  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
-    clearSelection: () => { clears++; },
-  }));
-  const route = threadRoute("blocked");
-  assert.deepEqual(controller.rejectRoute(route, "Project identity is unavailable."), {
-    ok: false, error: "Project identity is unavailable.",
   });
-  assert.equal(controller.getSnapshot().phase, "failed");
-  assert.deepEqual(controller.getSnapshot().route, route);
-  assert.equal(clears, 0);
+  const old = navigation.applyRoute(createHomeRoute());
+  const next = createLogicalProjectRoute(projectId);
+  await navigation.applyRoute(next);
+  assert.ok((await first.promise).aborted);
+  pending.resolve({ ok: false, error: "old source unavailable" });
+  await old;
+  assert.equal(navigation.getSnapshot().route, next);
+  assert.equal(navigation.getSnapshot().error, null);
+  navigation.dispose();
 });
 
-test("file navigation rejects a non-openable file before invoking the file owner", async () => {
-  let opened = false;
-  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
-    openFile: async () => { opened = true; return true; },
-  }));
-  const result = await controller.applyRoute(createFileRoute(ProjectIdSchema.parse("project"), "image.png"));
-  assert.equal(result.ok, false);
-  assert.equal(opened, false);
+test("source registration and draft materialisation retarget without reloading the composer", async () => {
+  const initial = { ...createObservedProjectRoute(location), view: "thread" as const,
+    threadTarget: { kind: "new" as const }, threadId: "new" };
+  let loads = 0;
+  const navigation = new WorkbenchNavigationController(initial, { load: async () => { loads++; return { ok: true }; } });
+  await navigation.applyRoute(initial);
+  const canonical = createLogicalThreadRoute(projectId, projectId, null, { kind: "draft", draftId });
+  assert.equal(navigation.retargetDraftSession(canonical, draftId, location), true);
+  assert.equal(navigation.getSnapshot().route, canonical);
+  assert.equal(loads, 1);
+  navigation.dispose();
 });
 
-test("overlapping thread opens publish only the latest route", async () => {
-  const reads = new Map<string, ReturnType<typeof deferred<WorkbenchRouteLoadResult>>>();
-  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
-    openThread: async (threadId) => {
-      const read = deferred<WorkbenchRouteLoadResult>();
-      reads.set(threadId, read);
-      return await read.promise;
-    },
-  }));
-
-  const first = controller.applyRoute(threadRoute("first"));
-  const firstRead = await waitForRead(reads, "first");
-  assert.equal(controller.getSnapshot().phase, "loading",
-    "the route owner must expose a pending read instead of relying on a skeleton");
-  const second = controller.applyRoute(threadRoute("second"));
-  const secondRead = await waitForRead(reads, "second");
-  firstRead.resolve({ ok: true });
-  assert.deepEqual(await first, { ok: false });
-  secondRead.resolve({ ok: true });
-  assert.deepEqual(await second, { ok: true });
-  assert.equal(controller.getSnapshot().route.threadId, "second");
-});
-
-test("new-thread navigation clears the prior selection before async project setup", async () => {
-  const projectReady = deferred<string>();
-  const events: string[] = [];
-  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
-    clearSelection: () => { events.push("clear"); },
-    createDraft: () => { events.push("create"); },
-    ensureProject: async () => await projectReady.promise,
-  }));
-  const route: WorkbenchRoute = {
-    ...createHomeRoute(),
-    projectId: ProjectIdSchema.parse("project"),
-    threadTarget: { kind: "new" },
-    view: "thread",
-  };
-
-  const navigation = controller.applyRoute(route);
-  assert.deepEqual(events, ["clear"]);
-  projectReady.resolve("");
-  assert.deepEqual(await navigation, { ok: true });
-  assert.deepEqual(events, ["clear", "create"]);
-});
-
-test("failed thread opens publish to the exact current owner", async () => {
-  const failures: Array<{ error: string; projectId: string; threadId: string }> = [];
-  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
-    failThread: (projectId, target, error) => {
-      failures.push({
-        error,
-        projectId,
-        threadId: target.kind === "draft" ? target.draftId : target.threadId,
-      });
-    },
-    openThread: async () => ({ error: "transcript unavailable", ok: false }),
-  }));
-
-  const result = await controller.applyRoute(threadRoute("failed"));
-
-  assert.deepEqual(result, { error: "transcript unavailable", ok: false });
-  assert.equal(controller.getSnapshot().phase, "failed");
-  assert.equal(controller.getSnapshot().error, "transcript unavailable");
-  assert.deepEqual(failures, [{
-    error: "transcript unavailable",
-    projectId: "project",
-    threadId: "failed",
-  }]);
-});
-
-test("navigation guard failures become owned route failures", async () => {
-  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
-    guardNavigation: async () => { throw new Error("draft save failed"); },
-  }));
-  assert.deepEqual(await controller.applyRoute(threadRoute("guarded")), {
-    error: "draft save failed", ok: false,
-  });
-  assert.equal(controller.getSnapshot().phase, "failed");
-  assert.equal(controller.getSnapshot().error, "draft save failed");
-});
-
-test("project aliases become internal canonical scope without a public redirect", async () => {
-  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
-    resolveProjectId: projectId => projectId === "alias" ? "project" : projectId,
-  }));
-  const route: WorkbenchRoute = {
-    ...createHomeRoute(),
-    projectId: ProjectIdSchema.parse("alias"),
-    view: "project",
-  };
-
-  const result = await controller.applyRoute(route);
-
-  assert.deepEqual(result, { ok: true });
-  assert.equal(controller.getSnapshot().route.projectId, "project");
-});
-
-test("home draft routes own a cloned pinned draft through later project moves", async () => {
-  const source = draft();
-  const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> = {
-    activityAt: 2,
-    draft: source,
-    entryKind: "draft",
-    metadata: { archived: false, pinned: true, snoozed: false },
-    title: "draft",
-  };
-  const controller = new WorkbenchNavigationController(createHomeRoute(), createPorts({
-    getProjectEntries: () => [entry],
-  }));
-  const route: WorkbenchRoute = {
-    ...createHomeRoute(),
-    threadId: source.draftId,
-    threadOwnerProjectId: source.projectId,
-    threadTarget: { draftId: source.draftId, kind: "draft" },
-    view: "thread",
-  };
-
-  assert.deepEqual(await controller.applyRoute(route), { ok: true });
-  controller.movePinnedDraft("owner", "destination", source.draftId);
-  source.prompt = "mutated outside";
-
-  assert.equal(controller.getSnapshot().selectedPinnedThreadDraft?.projectId, "destination");
-  assert.equal(controller.getSnapshot().selectedPinnedThreadDraft?.prompt, "draft");
+test("draft canonicalisation cannot transfer the composer to an unrelated folder", async () => {
+  const initial = { ...createObservedProjectRoute(location), view: "thread" as const,
+    threadTarget: { kind: "new" as const }, threadId: "new" };
+  const navigation = new WorkbenchNavigationController(initial, { load: async () => ({ ok: true }) });
+  await navigation.applyRoute(initial);
+  const other = { ...location, projectId: ProjectIdSchema.parse("other-folder") };
+  const canonical = createLogicalThreadRoute(projectId, projectId, other, { kind: "draft", draftId });
+  assert.equal(navigation.retargetDraftSession(canonical, draftId), false);
+  assert.equal(navigation.getSnapshot().route, initial);
+  navigation.dispose();
 });

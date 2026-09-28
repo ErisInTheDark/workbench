@@ -18,17 +18,17 @@ import {
 import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../daemon/server/lib/workbench/WorkbenchTemporaryDirectory";
 import ProjectTestRunCoordinator, { type ProjectTestRunLease } from "./ProjectTestRunCoordinator";
 import ProjectTestCatalog from "./ProjectTestCatalog";
+import ProjectTestProcess, { type ProjectTestProcessResult } from "./ProjectTestProcess";
+import WorkbenchTestProcessResources from "../daemon/server/WorkbenchTestProcessResources";
 
 const GIT_TEST_CONCURRENCY = 1;
 const NESTED_GIT_TEST_CONCURRENCY = 1;
 const ORDINARY_TEST_CONCURRENCY = 8;
 const TEST_CONCURRENCY = Math.max(1, Math.min(8, availableParallelism()));
 const TEST_TIMEOUT_MS = 30_000;
+const FILE_TIMEOUT_MS = 300_000;
 
-type TestProcessResult = {
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-};
+type TestProcessResult = ProjectTestProcessResult;
 
 export interface ProjectTestRunnerOptions {
   acquireTestRun?: () => Promise<ProjectTestRunLease>;
@@ -36,10 +36,14 @@ export interface ProjectTestRunnerOptions {
   spawnProcess?: (
     command: string,
     args: readonly string[],
-    options: { cwd: string; env: NodeJS.ProcessEnv; stdio: "inherit" },
+    options: { cwd: string; env: NodeJS.ProcessEnv; stdio: "inherit"; detached: boolean; windowsHide: boolean },
   ) => ChildProcess;
   testConcurrency?: number;
   testTimeoutMs?: number | null;
+  fileTimeoutMs?: number;
+  signal?: AbortSignal;
+  ownProcess?: (child: ChildProcess, file: string, timeoutMs: number, signal: AbortSignal) => Promise<TestProcessResult>;
+  report?: (message: string) => void;
 }
 
 export type PreparedTestFixtures = WorkbenchPreparedTestFixtures;
@@ -64,6 +68,11 @@ export default class ProjectTestRunner {
   private readonly spawnProcess: NonNullable<ProjectTestRunnerOptions["spawnProcess"]>;
   private readonly testConcurrency: number;
   private readonly testTimeoutMs: number | null;
+  private readonly fileTimeoutMs: number;
+  private readonly cancellation = new AbortController();
+  private readonly signal: AbortSignal;
+  private readonly ownProcess: NonNullable<ProjectTestRunnerOptions["ownProcess"]>;
+  private readonly report: (message: string) => void;
 
   constructor(
     private readonly projectRoot = process.cwd(),
@@ -82,6 +91,16 @@ export default class ProjectTestRunner {
       throw new Error("Test timeout must be a positive integer of milliseconds.");
     }
     this.testTimeoutMs = requestedTimeoutMs;
+    this.fileTimeoutMs = options.fileTimeoutMs ?? FILE_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.fileTimeoutMs) || this.fileTimeoutMs < 1) {
+      throw new Error("Test-file timeout must be a positive integer of milliseconds.");
+    }
+    this.signal = options.signal
+      ? AbortSignal.any([this.cancellation.signal, options.signal])
+      : this.cancellation.signal;
+    this.report = options.report ?? console.log;
+    this.ownProcess = options.ownProcess ?? ((child, file, timeoutMs, signal) =>
+      new ProjectTestProcess(child, file, { timeoutMs, signal, report: this.report }).wait());
   }
 
   async discoverTestFiles(inputs: readonly string[] = []) {
@@ -95,6 +114,9 @@ export default class ProjectTestRunner {
     if (files.length === 0) throw new Error(`No .test.ts or .test.tsx files found under: ${inputs.join(", ")}`);
 
     const testRun = await this.acquireTestRun();
+    const cancel = () => this.cancellation.abort(new Error("Test command interrupted."));
+    process.once("SIGINT", cancel);
+    process.once("SIGTERM", cancel);
     try {
       const prepared = await this.prepareTestFixtures(files, testRun.temporaryRootPath);
       const environment = {
@@ -127,6 +149,8 @@ export default class ProjectTestRunner {
         await prepared.dispose();
       }
     } finally {
+      process.removeListener("SIGINT", cancel);
+      process.removeListener("SIGTERM", cancel);
       await testRun.dispose();
     }
   }
@@ -138,26 +162,43 @@ export default class ProjectTestRunner {
   ) {
     const testProcessRoot = path.join(this.projectRoot, "daemon");
     const reporter = pathToFileURL(path.join(this.projectRoot, "test", "concise-test-reporter.mjs")).href;
-    const testArguments = files.map((file) => path.relative(testProcessRoot, file).replaceAll("\\", "/"));
-    return await new Promise<TestProcessResult>((resolve, reject) => {
-      const child = this.spawnProcess(process.execPath, [
+    let cursor = 0;
+    const results: TestProcessResult[] = [];
+    const workers = Array.from({ length: Math.min(concurrency, files.length) }, async () => {
+      while (cursor < files.length && !this.signal.aborted) {
+        const file = files[cursor++]!;
+        const relative = path.relative(this.projectRoot, file).replaceAll("\\", "/");
+        const services = await WorkbenchTestProcessResources.create(true);
+        try {
+        const child = this.spawnProcess(process.execPath, [
         "--disable-warning=ExperimentalWarning",
         "--import",
         "tsx",
         "--test",
         "--test-force-exit",
-        `--test-concurrency=${concurrency}`,
+        "--test-concurrency=1",
         ...(this.testTimeoutMs === null ? [] : [`--test-timeout=${this.testTimeoutMs}`]),
         `--test-reporter=${reporter}`,
-        ...testArguments,
+        path.relative(testProcessRoot, file).replaceAll("\\", "/"),
       ], {
         cwd: testProcessRoot,
-        env: { ...process.env, ...fixtureEnvironment },
+        env: { ...process.env, ...fixtureEnvironment, ...services.environment },
         stdio: "inherit",
+        detached: process.platform !== "win32",
+        windowsHide: true,
       });
-      child.once("error", reject);
-      child.once("exit", (exitCode, signal) => resolve({ exitCode, signal }));
+        this.report(`TEST ${relative} (pid ${child.pid ?? "unstarted"}, budget ${this.fileTimeoutMs}ms)`);
+        results.push(await this.ownProcess(child, relative, this.fileTimeoutMs, this.signal));
+        } finally {
+          await services.dispose();
+        }
+      }
     });
+    const workersFinished = await Promise.allSettled(workers);
+    const failed = workersFinished.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) throw failed.reason;
+    if (this.signal.aborted) return { exitCode: 130, signal: null };
+    return results.find(result => result.signal !== null || result.exitCode !== 0) ?? { exitCode: 0, signal: null };
   }
 }
 

@@ -27,11 +27,12 @@ type SnapshotCacheState = "coalesced" | "hit" | "miss";
 
 interface ProjectSnapshotState {
   expiresAt: number;
-  failureReported: boolean;
+  failure: string | null;
   lastAccessAt: number;
-  observationToken: symbol | null;
-  observed: boolean;
-  publish: ((update: WorkbenchProjectStateUpdate) => void) | null;
+  observers: Set<{
+    publish(update: WorkbenchProjectStateUpdate): void;
+    failed?(message: string): void;
+  }>;
   refreshPromise: Promise<ProjectSnapshot | null> | null;
   refreshRequested: boolean;
   refreshTimer: ReturnType<typeof setTimeout> | null;
@@ -128,21 +129,26 @@ export default class WorkbenchProjectSnapshotController {
     this.projects.clear();
   }
 
-  observe(projectId: string, publish: (update: WorkbenchProjectStateUpdate) => void) {
+  observe(
+    projectId: string,
+    publish: (update: WorkbenchProjectStateUpdate) => void,
+    failed?: (message: string) => void,
+  ) {
     this.assertActive();
     this.observeProject(projectId);
     const key = this.projectKey(projectId);
     const state = this.getState(key);
-    const observationToken = Symbol(projectId);
+    const observer = { publish, failed };
     state.lastAccessAt = this.now();
-    state.observationToken = observationToken;
-    state.observed = true;
-    state.publish = publish;
+    state.observers.add(observer);
     if (state.snapshot) publish(this.toUpdate(state.snapshot, state.revision));
-    this.scheduleRefresh(key, projectId, 0);
+    if (state.failure) failed?.(state.failure);
+    if (!state.refreshTimer && !state.refreshPromise) {
+      this.scheduleRefresh(key, projectId, Math.max(0, state.expiresAt - this.now()));
+    }
     return () => {
-      if (state.observationToken !== observationToken) return;
-      this.stopObservation(state);
+      state.observers.delete(observer);
+      if (!state.observers.size) this.stopObservation(state);
     };
   }
 
@@ -261,11 +267,9 @@ export default class WorkbenchProjectSnapshotController {
     if (existing) return existing;
     const state: ProjectSnapshotState = {
       expiresAt: 0,
-      failureReported: false,
+      failure: null,
       lastAccessAt: this.now(),
-      observationToken: null,
-      observed: false,
-      publish: null,
+      observers: new Set(),
       refreshPromise: null,
       refreshRequested: false,
       refreshTimer: null,
@@ -288,13 +292,14 @@ export default class WorkbenchProjectSnapshotController {
     }
     const cacheState: SnapshotCacheState = state.refreshPromise ? "coalesced" : "miss";
     await this.refreshNow(key, projectId);
+    if (state.failure) throw new Error(state.failure);
     if (!state.snapshot || !state.serialized) throw new Error("Project tree refresh did not produce a snapshot.");
     return { cacheState, serialized: state.serialized, snapshot: state.snapshot };
   }
 
   private scheduleRefresh(key: string, projectId: string | null, delayMs: number) {
     const state = this.projects.get(key);
-    if (!state?.observed || this.disposed) return;
+    if (!state?.observers.size || this.disposed) return;
     if (state.refreshPromise) {
       state.refreshRequested = true;
       return;
@@ -310,7 +315,6 @@ export default class WorkbenchProjectSnapshotController {
   private async refreshNow(key: string, projectId: string | null) {
     const state = this.getState(key);
     if (state.refreshPromise) {
-      state.refreshRequested = true;
       return await state.refreshPromise;
     }
     if (state.refreshTimer) clearTimeout(state.refreshTimer);
@@ -321,17 +325,23 @@ export default class WorkbenchProjectSnapshotController {
     )).then((snapshot) => {
       if (this.disposed) return null;
       this.installSnapshot(key, state, snapshot);
-      state.failureReported = false;
       return snapshot;
     }).catch((error: unknown) => {
-      if (!state.failureReported) {
-        state.failureReported = true;
-        this.logError(`Project snapshot refresh failed for ${key}: ${error instanceof Error ? error.message : String(error)}`);
+      if (this.disposed) return null;
+      const failure = (error instanceof Error ? error.message : "Project snapshot refresh failed.")
+        .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, 512);
+      if (state.failure !== failure) {
+        state.failure = failure;
+        this.logError(`Project snapshot refresh failed for ${key}: ${failure}`);
+        for (const observer of state.observers) {
+          try { observer.failed?.(failure); }
+          catch (observerError) { this.reportObserverFailure(observerError); }
+        }
       }
       return null;
     }).finally(() => {
       state.refreshPromise = null;
-      if (!state.observed || this.disposed) return;
+      if (!state.observers.size || this.disposed) return;
       const delay = state.refreshRequested ? 0 : this.pollIntervalMs;
       state.refreshRequested = false;
       this.scheduleRefresh(key, projectId, delay);
@@ -342,13 +352,19 @@ export default class WorkbenchProjectSnapshotController {
 
   private installSnapshot(key: string, state: ProjectSnapshotState, snapshot: ProjectSnapshot) {
     const changed = !state.snapshot || !areDeeplyEqual(state.snapshot, snapshot);
+    const recovered = state.failure !== null;
+    state.failure = null;
     state.expiresAt = this.now() + this.cacheTtlMs;
     state.lastAccessAt = this.now();
     state.serialized = JSON.stringify(snapshot);
     state.snapshot = snapshot;
-    if (changed) {
-      state.revision += 1;
-      state.publish?.(this.toUpdate(snapshot, state.revision));
+    if (changed) state.revision += 1;
+    if (changed || recovered) {
+      const update = this.toUpdate(snapshot, state.revision);
+      for (const observer of state.observers) {
+        try { observer.publish(update); }
+        catch (error) { this.reportObserverFailure(error); }
+      }
     }
     this.evictSnapshots();
   }
@@ -358,9 +374,7 @@ export default class WorkbenchProjectSnapshotController {
   }
 
   private stopObservation(state: ProjectSnapshotState) {
-    state.observationToken = null;
-    state.observed = false;
-    state.publish = null;
+    state.observers.clear();
     state.refreshRequested = false;
     if (state.refreshTimer) clearTimeout(state.refreshTimer);
     state.refreshTimer = null;
@@ -374,12 +388,17 @@ export default class WorkbenchProjectSnapshotController {
   private evictSnapshots() {
     while (this.projects.size > this.maxProjectSnapshots) {
       const oldest = [...this.projects.entries()]
-        .filter(([, state]) => !state.observed)
+        .filter(([, state]) => !state.observers.size)
         .sort((left, right) => left[1].lastAccessAt - right[1].lastAccessAt)[0];
       if (!oldest) return;
       this.stopState(oldest[1]);
       this.projects.delete(oldest[0]);
     }
+  }
+
+  private reportObserverFailure(error: unknown) {
+    this.logError(`Project snapshot observer failed: ${(error instanceof Error
+      ? error.message : "Unknown observer failure").replace(/[\u0000-\u001f]/gu, "").slice(0, 512)}`);
   }
 
   private assertActive() {

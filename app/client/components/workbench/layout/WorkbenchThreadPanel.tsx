@@ -12,7 +12,7 @@ import ThreadScrollViewport from "../thread-view/ThreadScrollViewport";
 import ThreadView from "../thread-view/ThreadView";
 import { useWorkbenchThread } from "../use-workbench-thread";
 import { useWorkbenchClientController } from "../workbench-client-context";
-import WorkbenchDaemonClientContext, { WorkbenchDaemonAssetOriginContext, useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
+import { WorkbenchOperationsContext as WorkbenchDaemonClientContext, WorkbenchDaemonAssetOriginContext, useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import WorkbenchWorkingTreeProvider from "../git/WorkbenchWorkingTreeProvider";
 import WorkbenchComposerProfileProvider from "../WorkbenchComposerProfileProvider";
 import type WorkbenchComposerProfileController from "../../../workbench/state/WorkbenchComposerProfileController";
@@ -225,7 +225,7 @@ export default function WorkbenchThreadPanel ({
                 projectRoots={panelContext?.project.roots ?? threadViewProps.projectRoots}
                 threadOwnerContent={ownerMetadata
                   ? <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 text-fg/muted" title={`${ownerMetadata.hostname}: ${ownerMetadata.rootPath}`}>
-                    {panelContext?.project
+                    {panelContext?.project && "kind" in panelContext.project
                       ? <WorkbenchProjectIcon project={panelContext.project} variant="thread" />
                       : <ProjectIcon className="shrink-0" size={16} />}
                     <span className="min-w-0 truncate">

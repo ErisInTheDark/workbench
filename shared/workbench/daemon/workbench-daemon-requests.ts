@@ -125,6 +125,9 @@ export const WORKBENCH_GIT_ARC_ACTION_BY_METHOD = {
 export type WorkbenchDaemonGitArcMethod = keyof typeof WORKBENCH_GIT_ARC_ACTION_BY_METHOD;
 
 export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
+  "project/tree/refresh": { params: { projectId: string }; result: { accepted: true } };
+  "project/entry/create": { params: { projectId: string; parentPath: string; name: string; type: "directory" | "file" }; result: import("../../types").CreateEntryPayload };
+  "project/file/delete": { params: { projectId: string; path: string; confirmUntracked?: boolean }; result: import("../../types").DeleteFileResponse };
   "voice/configuration/read": { params: object; result: import("../voice/voice-session-contract").VoiceConfiguration };
   "voice/configuration/write": { params: import("../voice/voice-session-contract").VoiceConfiguration; result: { ok: true } };
   "voice/agents": { params: object; result: { data: import("../../types").WorkbenchAgentOption[] } };

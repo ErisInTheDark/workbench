@@ -5,8 +5,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
-import type { WorkbenchThreadDraft, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
-import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
+import { createWorkbenchProjectThreadSummary, type WorkbenchThreadDraft, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import { projectWorkbenchThreadStateEntry, type WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";
@@ -39,6 +39,60 @@ function seedIdentities(database: Database.Database, projectId: keyof typeof fix
     projectId: fixtureIdentityValues.ProjectId[projectId], projectRoot: `C:/${projectId}`, title: nativeThreadId, createdAt: 1, updatedAt: 2, activityAt: 2,
   }).threadId);
 }
+
+test("navigation summaries preserve lifecycle counts and pinned title projection", () => {
+  const database = openDatabase();
+  try {
+    const [pinned, stopped, working] = seedIdentities(database, "project", "pinned", "stopped", "working");
+    assert.ok(pinned && stopped && working);
+    const repository = new WorkbenchThreadStateRelationalRepository(database);
+    const records: WorkbenchThreadStateRecord[] = [pinned, stopped, working].map((threadId, index) => ({
+      entryKind: "thread", identity: { harness: "codex", threadId }, title: `Thread ${index}`, activityAt: index + 1,
+      lifecycle: index === 2
+        ? { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working" }, settled: false }
+        : { kind: "stopped", reason: "userMarkedStopped", settled: false },
+      metadata: { archived: false, pinned: index === 0, snoozed: false },
+      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+      titleHistory: [{ title: `Renamed ${index}`, usedAt: 20 }, { title: `Previous ${index}`, usedAt: 10 }],
+    }));
+    repository.writeRecords(records);
+    const full = repository.readProject(testProjectIds.project);
+    const entries = full.records.flatMap(record => {
+      const projected = projectWorkbenchThreadStateEntry(record);
+      return projected ? [projected] : [];
+    });
+    const expected = createWorkbenchProjectThreadSummary(testProjectIds.project, entries, 0, full.displayOrder);
+    const navigation = repository.readNavigationSummary(testProjectIds.project);
+    assert.deepEqual(navigation, expected);
+    assert.equal(navigation.counts.working, 1);
+    assert.equal(navigation.counts.stopped, 2);
+    assert.equal(navigation.pinnedThreads[0]?.title, "Renamed 0");
+  } finally { database.close(); }
+});
+
+test("full hydration query growth is per batch rather than per thread", () => {
+  let queries = 0;
+  const database = new Database(":memory:", { verbose: () => { queries++; } });
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  try {
+    const ids = seedIdentities(database, "project", ...Array.from({ length: 40 }, (_, index) => `thread-${index}`));
+    const repository = new WorkbenchThreadStateRelationalRepository(database);
+    repository.writeRecords(ids.map(threadId => ({
+      entryKind: "thread", identity: { harness: "codex", threadId }, title: "Stored thread", activityAt: 1,
+      lifecycle: { kind: "stopped", reason: "userMarkedStopped", settled: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+    })));
+    queries = 0;
+    repository.readRecords({ selection: "threads", threadIds: ids.slice(0, 1) });
+    const single = queries;
+    queries = 0;
+    const records = repository.readRecords({ selection: "threads", threadIds: ids });
+    assert.equal(records.length, ids.length);
+    assert.ok(queries < single * 2, `Hydrating ${ids.length} threads used ${queries} queries versus ${single} for one.`);
+  } finally { database.close(); }
+});
 
 test("draft-only writes require admitted parents and retained addresses share profiles and layouts", () => {
   const database = openDatabase();

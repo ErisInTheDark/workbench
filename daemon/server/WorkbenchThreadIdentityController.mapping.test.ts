@@ -96,61 +96,6 @@ async function setup(platform: NodeJS.Platform = process.platform) {
   return { database, owners: { threads, items }, native, parent, child, turn, admissions: () => admissions };
 }
 
-test("accepted-intent ingress resolves canonical ownership before publishing lifecycle evidence", async () => {
-  const { database, owners, native, parent, child, turn } = await setup();
-  const emitted: Array<{ id?: number; error?: { message: string }; result?: { accepted: boolean } }> = [];
-  const accepted: Array<{ threadId: string; turnId: string }> = [];
-  const client: BridgeClient = {
-    OPEN: 1, readyState: 1, close() {}, on() {}, once() {},
-    send(data, callback) { emitted.push(JSON.parse(String(data))); callback?.(); },
-  };
-  const harnesses = new WorkbenchHarnessController({
-    identities: owners.threads,
-    providers: { get: () => { throw new Error("Lifecycle evidence must not execute a provider request"); } },
-  });
-  const controller = new WorkbenchWebSocketRequestController({
-    harnesses, identities: owners,
-    reportDelivery: delivery => controller.completeDelivery(delivery),
-    setTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>, clearTimeout() {},
-    reload: { getReloadDirtSnapshot: () => ({ dirtyScopes: [], error: null, pendingScopes: [] }), subscribeReloadDirt: () => () => {} },
-    threadState: {
-      acceptIntent: async (_connection, input) => {
-        const admitted = owners.threads.knownTurn(input.turnId);
-        assert.equal(admitted.threadId, input.threadId);
-        accepted.push(input);
-        return { accepted: true, revision: accepted.length };
-      },
-      disconnect: async () => {},
-      handleRequest: async () => { throw new Error("Unexpected thread-state request"); },
-    },
-    transcript: { read: async () => null, subscribe: async () => {}, unsubscribe() {} },
-    writeLine() {},
-  });
-  const send = async (id: number, projectId: string, threadId: string, turnId: string) => {
-    await controller.handleMessage(client, "socket", Buffer.from(JSON.stringify({
-      id, method: "workbench/thread-state/accepted",
-      params: { harness: "codex", projectId, threadId, turnId },
-    })), false);
-    return emitted.find(message => message.id === id);
-  };
-  try {
-    assert.equal((await send(1, parent.projectId, parent.threadId, turn.turnId))?.error, undefined);
-    assert.equal((await send(2, parent.projectId, native.nativeThreadId, native.nativeTurnId))?.error, undefined);
-    assert.deepEqual(accepted.map(({ threadId, turnId }) => ({ threadId, turnId })), [
-      { threadId: parent.threadId, turnId: turn.turnId },
-      { threadId: parent.threadId, turnId: turn.turnId },
-    ]);
-    assert.ok((await send(3, "wrong-project", parent.threadId, turn.turnId))?.error);
-    assert.ok((await send(4, child.projectId, child.threadId, turn.turnId))?.error);
-    assert.equal(accepted.length, 2);
-  } finally {
-    controller.dispose();
-    owners.threads.dispose();
-    owners.items.dispose();
-    database.close();
-  }
-});
-
 test("Git arc mutations and state callbacks share the canonical Workbench owner", async () => {
   const { database, owners, native, parent } = await setup();
   const contexts: string[] = [];
@@ -719,7 +664,7 @@ test("socket reload preserves canonical publications without resolving their ide
       now: () => now,
       setTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>, clearTimeout() {},
       reload: { getReloadDirtSnapshot: () => ({ dirtyScopes: [], error: null, pendingScopes: [] }), subscribeReloadDirt: () => () => {} },
-      threadState: { acceptIntent: async () => ({ accepted: true, revision: 0 }), disconnect: async () => {},
+      threadState: {
         handleRequest: async () => { throw new Error("Unexpected thread state request"); } },
       transcript: { read: async () => { throw new Error("Unexpected transcript read"); }, subscribe: async () => {}, unsubscribe() {} },
       writeLine(line) { lines.push(line.replace(/\u001b\[[0-9;]*m/gu, "")); },

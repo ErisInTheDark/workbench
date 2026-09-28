@@ -3,6 +3,7 @@
  * - WorkbenchTranscriptNotification: compatible public transcript messages.
  * - WorkbenchProviderLifecycleEvent: admitted lifecycle facts consumed by shared state.
  * - WorkbenchProviderObservation: lifecycle, activity and display-label facts from one provider ingress.
+ * - isWorkbenchPublicNotification: recognise the public notification envelope at transport edges.
  */
 import type { ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "../identity.ts";
 import type { ThreadPayload, WorkbenchUserInputRequest } from "../../types.ts";
@@ -14,6 +15,23 @@ import type { WorkbenchRateLimitSnapshot } from "./provider-account.ts";
 import type { ThreadTokenUsage } from "../thread/thread-context-usage.ts";
 
 type ItemReference = { threadId: string; turnId: string; itemId: string };
+const publicMethods = new Set<string>([
+  "thread/started", "thread/status/changed", "thread/name/updated", "thread/tokenUsage/updated",
+  "thread/goal/updated", "thread/goal/cleared", "account/updated", "account/rateLimits/updated",
+  "turn/started", "turn/completed", "item/started", "item/completed",
+  "item/agentMessage/delta", "item/plan/delta", "item/commandExecution/outputDelta",
+  "item/fileChange/outputDelta", "item/fileChange/patchUpdated", "item/reasoning/summaryTextDelta",
+  "item/reasoning/summaryPartAdded", "item/reasoning/textDelta",
+  "questionnaire/requested", "questionnaire/resolved", "browse/result/recorded",
+] satisfies WorkbenchTranscriptNotification["method"][]);
+
+export function isWorkbenchPublicNotification(message: unknown): message is WorkbenchTranscriptNotification {
+  return !!message && typeof message === "object"
+    && "method" in message && typeof message.method === "string" && publicMethods.has(message.method)
+    && "params" in message && !!message.params && typeof message.params === "object"
+    && !("id" in message);
+}
+
 export type WorkbenchTranscriptNotification =
   | { method: "thread/started"; params: { thread: ThreadPayload } }
   | { method: "thread/tokenUsage/updated"; params: { threadId: string; turnId: string; tokenUsage: ThreadTokenUsage } }

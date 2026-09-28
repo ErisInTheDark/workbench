@@ -5,6 +5,7 @@ import type { WorkbenchModelOption } from "workbench-shared/types";
 import { createVoiceConfiguration, type VoiceConfiguration } from "workbench-shared/workbench/voice/voice-session-contract";
 import VoiceSettingsController from "./VoiceSettingsController";
 import WorkbenchClientStateController from "../state/WorkbenchClientStateController";
+import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -36,6 +37,24 @@ function fixture() {
   };
   return { port, preferences, saved: () => saved };
 }
+
+test("retired voice reads ignore owned interruption without hiding unexpected failures", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (message: string) => { warnings.push(message); });
+  for (const interruption of [true, false]) {
+    const h = fixture();
+    const entered = Promise.withResolvers<void>();
+    const read = Promise.withResolvers<VoiceConfiguration>();
+    h.port.voice.configuration.read = () => { entered.resolve(); return read.promise; };
+    const controller = new VoiceSettingsController(h.port, h.preferences);
+    await entered.promise;
+    controller.dispose();
+    read.reject(interruption ? new WorkbenchRpcRequestInterruptedError("disposed", true)
+      : new Error("unexpected storage failure"));
+    await controller.ready;
+    assert.equal(warnings.length, interruption ? 0 : 1);
+  }
+});
 
 test("voice enables only after a complete selection is saved and prepared", async context => {
   const h = fixture();

@@ -19,6 +19,7 @@ if (args.length && (args.length !== 1 || args[0] !== file)) {
   // Four minutes for validation, with the remaining minute reserved for cleanup.
   const result = await new ProjectTestRunner(root, {
     testConcurrency: 1, testTimeoutMs: 300_000,
+    fileTimeoutMs: 300_000,
     spawnProcess: (command, args, options) => spawn(command,
       args.map((arg) => arg.startsWith("--test-reporter=") ? "--test-reporter=spec" : arg), options),
   }).run([file]);

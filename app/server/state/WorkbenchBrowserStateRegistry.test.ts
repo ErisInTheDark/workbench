@@ -26,6 +26,24 @@ const BROWSER_B = "20000000-0000-4000-8000-000000000002";
 const BROWSER_C = "30000000-0000-4000-8000-000000000003";
 const BROWSER_D = "40000000-0000-4000-8000-000000000004";
 
+test("retirement cancels an opening browser store without treating cancellation as failed disposal", async context => {
+  const { registry, shared } = await fixture(context);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const backup = shared.backupTo.bind(shared);
+  context.mock.method(shared, "backupTo", async (destination: string) => {
+    entered.resolve();
+    await release.promise;
+    return backup(destination);
+  });
+  const reading = registry.readBrowser(BROWSER_A);
+  const rejected = assert.rejects(reading, /registry is closed/);
+  await entered.promise;
+  const closing = registry.close();
+  release.resolve();
+  await Promise.all([closing, rejected]);
+});
+
 test("voice enabled preference remains browser-local and survives reopening", async context => {
   const { directory, registry, shared } = await fixture(context);
   await registry.readBrowser(BROWSER_A);

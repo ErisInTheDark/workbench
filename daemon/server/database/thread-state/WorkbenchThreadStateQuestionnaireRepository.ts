@@ -31,17 +31,60 @@ type QuestionnaireRow = {
   resolved_at: number | null;
   history_index: number | null;
 };
+type QuestionRow = {
+  questionnaire_id: string; question_index: number; question_id: string;
+  header: string; question: string; allow_other: 0 | 1; is_secret: 0 | 1;
+};
+type OptionRow = { questionnaire_id: string; question_index: number; option_index: number; label: string; description: string };
+type AnswerGroupRow = { questionnaire_id: string; question_id: string };
+type AnswerRow = { questionnaire_id: string; question_id: string; answer_index: number; answer: string };
+interface QuestionnaireBatch {
+  questions: Map<string, QuestionRow[]>;
+  options: Map<string, OptionRow[]>;
+  groups: Map<string, AnswerGroupRow[]>;
+  answers: Map<string, AnswerRow[]>;
+}
 
 export default class WorkbenchThreadStateQuestionnaireRepository {
   constructor(private readonly database: Database.Database) {}
 
   read(threadId: string): WorkbenchThreadQuestionnaires {
-    const rows = this.database.prepare(`
-      SELECT * FROM workbench_thread_questionnaires WHERE thread_id = ? ORDER BY history_index
-    `).all(threadId) as QuestionnaireRow[];
+    return this.readMany([threadId]).get(threadId)!;
+  }
+
+  readMany(threadIds: readonly string[], pendingOnly = false): Map<string, WorkbenchThreadQuestionnaires> {
+    const result = new Map<string, WorkbenchThreadQuestionnaires>();
+    for (let offset = 0; offset < threadIds.length; offset += 400) {
+      const ids = threadIds.slice(offset, offset + 400);
+      const placeholders = ids.map(() => "?").join(",");
+      const where = `thread_id IN (${placeholders})${pendingOnly ? " AND state = 'pending'" : ""}`;
+      const selection = `SELECT id FROM workbench_thread_questionnaires WHERE ${where}`;
+      const rows = this.database.prepare(`SELECT * FROM workbench_thread_questionnaires WHERE ${where} ORDER BY history_index`)
+        .all(...ids) as QuestionnaireRow[];
+      const questions = this.database.prepare(`SELECT * FROM workbench_thread_questionnaire_questions WHERE questionnaire_id IN (${selection}) ORDER BY question_index`)
+        .all(...ids) as QuestionRow[];
+      const options = this.database.prepare(`SELECT * FROM workbench_thread_questionnaire_options WHERE questionnaire_id IN (${selection}) ORDER BY question_index, option_index`)
+        .all(...ids) as OptionRow[];
+      const groups = this.database.prepare(`SELECT * FROM workbench_thread_questionnaire_answer_groups WHERE questionnaire_id IN (${selection})`)
+        .all(...ids) as AnswerGroupRow[];
+      const answers = this.database.prepare(`SELECT * FROM workbench_thread_questionnaire_answers WHERE questionnaire_id IN (${selection}) ORDER BY question_id, answer_index`)
+        .all(...ids) as AnswerRow[];
+      const batch: QuestionnaireBatch = {
+        questions: Map.groupBy(questions, row => row.questionnaire_id),
+        options: Map.groupBy(options, row => row.questionnaire_id),
+        groups: Map.groupBy(groups, row => row.questionnaire_id),
+        answers: Map.groupBy(answers, row => row.questionnaire_id),
+      };
+      const byThread = Map.groupBy(rows, row => row.thread_id);
+      for (const id of ids) result.set(id, this.decode(id, byThread.get(id) ?? [], batch));
+    }
+    return result;
+  }
+
+  private decode(threadId: string, rows: readonly QuestionnaireRow[], batch: QuestionnaireBatch): WorkbenchThreadQuestionnaires {
     const result: WorkbenchThreadQuestionnaires = { pending: null, history: [] };
     for (const row of rows) {
-      const request = this.readRequest(row);
+      const request = this.readRequest(row, batch);
       const common = {
         request, requestKey: row.request_key, turnId: row.turn_id, itemId: row.item_id,
       };
@@ -53,7 +96,7 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
         result.history.push(WorkbenchQuestionnaireHistoryEntrySchema.parse({
           ...common, threadId, resolvedAt: row.resolved_at,
           insertAfterItemId: row.insert_after_item_id, insertAfterItemIndex: row.insert_after_item_index,
-          response: this.readResponse(row.id),
+          response: this.readResponse(row.id, batch),
         }));
       }
     }
@@ -115,17 +158,9 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
     }
   }
 
-  private readRequest(row: QuestionnaireRow): WorkbenchDurableQuestionnaire["request"] {
-    const questions = this.database.prepare(`
-      SELECT question_index, question_id, header, question, allow_other, is_secret
-      FROM workbench_thread_questionnaire_questions WHERE questionnaire_id = ? ORDER BY question_index
-    `).all(row.id) as Array<{
-      question_index: number; question_id: string; header: string; question: string; allow_other: 0 | 1; is_secret: 0 | 1;
-    }>;
-    const options = this.database.prepare(`
-      SELECT question_index, option_index, label, description
-      FROM workbench_thread_questionnaire_options WHERE questionnaire_id = ? ORDER BY question_index, option_index
-    `).all(row.id) as Array<{ question_index: number; option_index: number; label: string; description: string }>;
+  private readRequest(row: QuestionnaireRow, batch: QuestionnaireBatch): WorkbenchDurableQuestionnaire["request"] {
+    const questions = batch.questions.get(row.id) ?? [];
+    const options = batch.options.get(row.id) ?? [];
     return {
       id: row.request_id, title: row.title, summary: row.summary, submitLabel: row.submit_label,
       questions: questions.map((question, questionIndex) => {
@@ -142,14 +177,9 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
     };
   }
 
-  private readResponse(id: string): WorkbenchQuestionnaireHistoryEntryState["response"] {
-    const groups = this.database.prepare(`
-      SELECT question_id FROM workbench_thread_questionnaire_answer_groups WHERE questionnaire_id = ?
-    `).all(id) as Array<{ question_id: string }>;
-    const rows = this.database.prepare(`
-      SELECT question_id, answer_index, answer FROM workbench_thread_questionnaire_answers
-      WHERE questionnaire_id = ? ORDER BY question_id, answer_index
-    `).all(id) as Array<{ question_id: string; answer_index: number; answer: string }>;
+  private readResponse(id: string, batch: QuestionnaireBatch): WorkbenchQuestionnaireHistoryEntryState["response"] {
+    const groups = batch.groups.get(id) ?? [];
+    const rows = batch.answers.get(id) ?? [];
     return {
       answers: Object.fromEntries(groups.map((group) => [
         group.question_id,

@@ -422,6 +422,7 @@ export default class ThreadTranscriptProjectionController {
     // but cannot erase or overwrite content already accepted by this owner.
     if (generation !== this.#generation && (this.#projection || !snapshot)) return;
     if (snapshot === null) {
+      this.#failureMessage = null;
       this.#projection = { value: null, generation };
       this.#streamItems.clear();
       this.#patchPreview = null;
@@ -453,7 +454,10 @@ export default class ThreadTranscriptProjectionController {
   }
 
   #receiveStream(generation: number, update: TranscriptStreamUpdate) {
-    if (this.#disposed || !this.#available || generation !== this.#generation || this.#failureMessage) return;
+    if (this.#disposed || !this.#available || generation !== this.#generation) return;
+    const baseline = update.kind === "absent" || update.kind === "structure" && update.reset;
+    if (this.#failureMessage && !baseline) return;
+    if (baseline) this.#failureMessage = null;
     this.#incremental = true;
     if (update.kind === "absent") {
       this.#receiveSnapshot(generation, null);
@@ -604,7 +608,20 @@ export default class ThreadTranscriptProjectionController {
           turnLimit: this.#turnLimit,
         }, (snapshot) => this.#receiveSnapshot(generation, snapshot),
         update => this.#receiveStream(generation, update),
-        error => this.#failStream(error, generation));
+        error => this.#failStream(error, generation),
+        state => {
+          if (this.#disposed || generation !== this.#generation || state.phase === "current") return;
+          if (state.phase === "failed" || state.phase === "unavailable" || state.failure) {
+            this.#failureMessage = state.failure ?? "The transcript source is unavailable.";
+            if (!this.#publishProjection()) this.#onStateChange({ status: "failed", threadId: selection.thread.id,
+              projection: null, message: this.#failureMessage });
+          } else {
+            this.#failureMessage = null;
+            if (!this.#publishProjection("loading")) this.#onStateChange({
+              status: "loading", threadId: selection.thread.id, projection: null,
+            });
+          }
+        });
         if (!this.#disposed && generation !== this.#generation) {
           if (this.#activeSubscriptionId === subscriptionId) this.#activeSubscriptionId = null;
           await this.#transcripts.unsubscribe({ subscriptionId });

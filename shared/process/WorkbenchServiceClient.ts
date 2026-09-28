@@ -36,6 +36,7 @@ type Pending = { resolve(value: Reply): void; reject(error: Error): void; detach
 
 export default class WorkbenchServiceClient {
   private phase: "idle" | "connecting" | "ready" | "failed" | "closed" = "idle";
+  private generation = 0;
   private socket: ServiceControlSocket | null = null;
   private detachSocket: ((error: Error) => void) | null = null;
   private endpointId: string | null = null;
@@ -50,7 +51,7 @@ export default class WorkbenchServiceClient {
 
   constructor(private readonly options: WorkbenchServiceClientOptions) {}
 
-  getSnapshot = () => ({ phase: this.phase, snapshot: this.current, failure: this.failure });
+  getSnapshot = () => ({ phase: this.phase, generation: this.generation, snapshot: this.current, failure: this.failure });
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
@@ -116,6 +117,7 @@ export default class WorkbenchServiceClient {
   }
 
   private connect(endpoint: WorkbenchServiceEndpoint, signal: AbortSignal) {
+    this.generation++;
     const socket = this.options.createSocket?.(endpoint)
       ?? new WebSocket(`${endpoint.origin.replace("http:", "ws:")}/control`, ["workbench-service", endpoint.token]);
     this.socket = socket;

@@ -22,7 +22,7 @@ import {
 import { ThreadFileChangeList } from "./ThreadFileChangeItem";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
-import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
+import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 
 type CheckpointDiffState =
   | { failure: GitArcFailure; status: "error" }

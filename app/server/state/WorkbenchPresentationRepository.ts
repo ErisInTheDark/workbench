@@ -101,6 +101,13 @@ export default class WorkbenchPresentationRepository {
       .get() as { revision: number }).revision;
   }
 
+  readAcceptedLaunch(draftId: string): string | null {
+    const receipt = this.requireDatabase().prepare(
+      "SELECT accepted_thread_id FROM presentation_drafts WHERE id = ? AND phase = 'accepted'",
+    ).get(draftId) as Pick<DraftRow, "accepted_thread_id"> | undefined;
+    return receipt?.accepted_thread_id ?? null;
+  }
+
   read(): PresentationSnapshot {
     const db = this.requireDatabase();
     const metadata = db.prepare("SELECT revision FROM presentation_metadata WHERE id = 'singleton'")
@@ -377,6 +384,9 @@ export default class WorkbenchPresentationRepository {
     const draft = PresentationDraftInputSchema.parse(input.draft);
     this.requireTarget(draft.target, draft.logicalProjectId);
     const previous = this.draft(draft.id);
+    if (previous?.phase === "unsent" && previous.logical_project_id === draft.logicalProjectId
+      && previous.daemon_id === draft.target.daemonId && previous.project_id === draft.target.projectId
+      && previous.prompt === draft.prompt && areDeeplyEqual(this.selection(previous.selection_json), draft.selection)) return;
     if (input.expectedRevision === null ? Boolean(previous) : previous?.revision !== input.expectedRevision) {
       throw new Error("Draft changed in another browser.");
     }
@@ -384,10 +394,13 @@ export default class WorkbenchPresentationRepository {
       && (previous.phase !== "deleted" || previous.launch_id)) {
       throw new Error("Draft is already submitting or closed.");
     }
+    const placement = previous?.phase === "unsent" ? undefined : input.placement;
+    if (placement && !db.prepare(`
+      SELECT 1 FROM presentation_folders WHERE id = ? AND scope = 'project' AND logical_project_id = ?
+    `).get(placement.folderId, draft.logicalProjectId)) {
+      throw new Error("The draft folder no longer belongs to this project.");
+    }
     const selectionJson = JSON.stringify(draft.selection);
-    if (previous?.phase === "unsent" && previous.logical_project_id === draft.logicalProjectId
-      && previous.daemon_id === draft.target.daemonId && previous.project_id === draft.target.projectId
-      && previous.prompt === draft.prompt && areDeeplyEqual(this.selection(previous.selection_json), draft.selection)) return;
     const revision = this.nextRevision();
     db.prepare(`
       INSERT INTO presentation_drafts
@@ -401,6 +414,24 @@ export default class WorkbenchPresentationRepository {
         updated_at = excluded.updated_at
     `).run(draft.id, draft.logicalProjectId, draft.target.daemonId, draft.target.projectId,
       draft.prompt, selectionJson, revision, draft.updatedAt);
+    if (placement) {
+      const first = db.prepare(`
+        SELECT MIN(position) AS position FROM presentation_layout_members
+        WHERE scope = 'project' AND logical_project_id = ? AND folder_id = ?
+      `).get(draft.logicalProjectId, placement.folderId) as { position: number | null };
+      const position = first.position ?? 0;
+      db.prepare(`
+        UPDATE presentation_layout_members SET position = position + 1, revision = ?
+        WHERE scope = 'project' AND logical_project_id = ? AND position >= ?
+      `).run(revision, draft.logicalProjectId, position);
+      db.prepare(`
+        INSERT INTO presentation_layout_members
+          (id, scope, logical_project_id, folder_id, kind, draft_id, daemon_id, project_id, thread_id, position, revision)
+        VALUES (?, 'project', ?, ?, 'draft', ?, NULL, NULL, NULL, ?, ?)
+      `).run(randomUUID(), draft.logicalProjectId, placement.folderId, draft.id, position, revision);
+      db.prepare("UPDATE presentation_drafts SET pinned = ?, snoozed = ? WHERE id = ?")
+        .run(placement.priority === "pinned" ? 1 : 0, placement.priority === "snoozed" ? 1 : 0, draft.id);
+    }
     if (!previous || previous.daemon_id === draft.target.daemonId
       && previous.project_id === draft.target.projectId
       && !areDeeplyEqual(this.selection(previous.selection_json), draft.selection)) {

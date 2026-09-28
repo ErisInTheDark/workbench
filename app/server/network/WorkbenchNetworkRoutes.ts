@@ -1,15 +1,12 @@
 /*
  * Exports:
- * - default WorkbenchNetworkRoutes: own network actions, shared grant-filtered projection and legacy progress streams.
+ * - default WorkbenchNetworkRoutes: admit app sockets and connection-changing HTTP handoffs.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { WORKBENCH_NETWORK_PATH, WorkbenchNetworkActionSchema,
   type WorkbenchNetworkAction } from "workbench-shared/http/workbench-network";
-import type { WorkbenchPresentationImportStatus } from "workbench-shared/state/workbench-presentation-state";
 import type WorkbenchNetworkController from "./WorkbenchNetworkController.ts";
-import type WorkbenchPresentationController from "../state/WorkbenchPresentationController.ts";
-import type WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController.ts";
 
 class NetworkActionAdmissionError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -19,15 +16,11 @@ export default class WorkbenchNetworkRoutes {
   private closed = false;
   private readonly responses = new Map<ServerResponse, () => void>();
   constructor(
-    private readonly controller: Pick<WorkbenchNetworkController, "snapshot" | "subscribe" | "action" | "connection" | "ingress" | "discovery">,
-    private readonly presentation?: Pick<WorkbenchPresentationController, "subscribe" | "revision">,
-    private readonly presentationImport?: Pick<WorkbenchPresentationImportController, "snapshot" | "subscribe">,
-    private readonly supportsAppWebSockets = false,
+    private readonly controller: Pick<WorkbenchNetworkController, "getFacts" | "subscribe" | "action" | "ingress" | "discovery">,
   ) {}
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
-    const progress = url.pathname === `${WORKBENCH_NETWORK_PATH}/events`;
-    if (url.pathname !== WORKBENCH_NETWORK_PATH && !progress) return false;
+    if (url.pathname !== WORKBENCH_NETWORK_PATH) return false;
     if (this.closed) {
       this.send(response, 503, { error: "Network settings are reloading." });
       return true;
@@ -37,42 +30,8 @@ export default class WorkbenchNetworkRoutes {
       this.send(response, 403, { error: "Authenticated network ingress is required." });
       return true;
     }
-    const snapshot = () => this.snapshotFor(request, url);
-    if (request.method === "GET" && !progress) {
-      if (url.searchParams.get("connection") === "1") {
-        this.send(response, 200, this.controller.connection());
-      } else this.send(response, 200, snapshot());
-      return true;
-    }
-    if (request.method === "GET" && progress) {
-      response.writeHead(200, {
-        "Content-Type": "text/event-stream", "Cache-Control": "no-store",
-        Connection: "keep-alive", "X-Accel-Buffering": "no",
-      });
-      const write = () => {
-        if (!response.write(`data: ${JSON.stringify(snapshot())}\n\n`)) response.end();
-      };
-      const writePresentation = (revision: number) => {
-        if (!response.write(`event: presentation\ndata: ${JSON.stringify({ revision })}\n\n`)) response.end();
-      };
-      const writeImport = (status: WorkbenchPresentationImportStatus) => {
-        if (!response.write(`event: presentation-import\ndata: ${JSON.stringify(status)}\n\n`)) response.end();
-      };
-      const unsubscribeNetwork = this.controller.subscribe(write);
-      const unsubscribePresentation = this.presentation?.subscribe(writePresentation);
-      const unsubscribeImport = this.presentationImport?.subscribe(writeImport);
-      this.own(response, () => {
-        unsubscribeNetwork();
-        unsubscribePresentation?.();
-        unsubscribeImport?.();
-      });
-      write();
-      if (this.presentation && !response.writableEnded) writePresentation(this.presentation.revision());
-      if (this.presentationImport && !response.writableEnded) writeImport(this.presentationImport.snapshot());
-      return true;
-    }
-    if (request.method !== "POST" || progress) {
-      response.writeHead(405, { Allow: progress ? "GET" : "GET, POST" });
+    if (request.method !== "POST") {
+      response.writeHead(405, { Allow: "POST" });
       response.end();
       return true;
     }
@@ -106,7 +65,7 @@ export default class WorkbenchNetworkRoutes {
         result => this.send(response, 200, result),
         error => this.send(response, error instanceof NetworkActionAdmissionError ? error.status : 409, {
           error: error instanceof NetworkActionAdmissionError ? error.message
-            : this.controller.snapshot().failure ?? "Network action could not complete.",
+            : this.controller.getFacts().failure ?? "Network action could not complete.",
         }),
       );
     } catch {
@@ -153,27 +112,17 @@ export default class WorkbenchNetworkRoutes {
     });
   }
 
-  snapshotFor(request: IncomingMessage, url: URL) {
+  snapshotFor(request: IncomingMessage, _url?: URL) {
     const current = this.controller.ingress(request.headers);
-    const { localPort, change, daemon, discovery: _discovery, ...legacy } = this.controller.snapshot();
-    const version = url.searchParams.get("capabilities");
-    const discovery = current ? this.controller.discovery(current.deviceNodeId) : { refreshing: false, peers: [] };
-    const visibleDiscovery = version === "5" || version === "6" ? discovery : {
-      ...discovery,
-      peers: discovery.peers.map(peer => {
-        if (peer.phase !== "verified") return peer;
-        const { endpoints: _endpoints, ...legacyPeer } = peer;
-        return legacyPeer;
-      }),
-    };
-    return { ...legacy,
-      ...(["3", "4", "5", "6"].includes(version ?? "") ? { localPort, change } : {}),
-      ...(["4", "5", "6"].includes(version ?? "") ? { daemon, discovery: visibleDiscovery } : {}),
+    const snapshot = this.controller.getFacts().snapshot;
+    if (!snapshot) return null;
+    return { ...snapshot,
+      discovery: current ? this.controller.discovery(null) : { refreshing: false, peers: [] },
       capabilities: {
         manageApp: current?.manageApp ?? false, manageNetwork: current?.manageNetwork ?? false,
-        ...(["2", "3", "4", "5", "6"].includes(version ?? "") ? { trustHost: current?.trustHost ?? false } : {}),
-        ...(["3", "4", "5", "6"].includes(version ?? "") ? { localConnection: current?.deviceNodeId === null, settingsApply: true } : {}),
-        ...(version === "6" ? { appEventsWebSocket: this.supportsAppWebSockets } : {}),
+        trustHost: current?.trustHost ?? false,
+        localConnection: current?.deviceNodeId === null, settingsApply: true,
+        appEventsWebSocket: true,
       } };
   }
 
@@ -199,7 +148,7 @@ export default class WorkbenchNetworkRoutes {
     try {
       const parsed = new URL(origin);
       const host = parsed.hostname.replace(/^\[|\]$/gu, "");
-      const configuration = this.controller.snapshot().configuration.privateAccess;
+      const configuration = this.controller.getFacts().snapshot?.configuration.privateAccess;
       const privateHostname = configuration ? `${configuration.label}.wb.inthedark.boo` : null;
       if (parsed.origin !== origin || parsed.username || parsed.password) return false;
       // ingress() has authenticated these native headers before admission.

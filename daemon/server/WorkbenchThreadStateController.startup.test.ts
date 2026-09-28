@@ -38,8 +38,6 @@ function controller(database: ReturnType<typeof createThreadStateTestDatabase>) 
     resolveGitArc: async () => null,
     resolveGitArcPlan: async () => null,
     runGitArcReadTransition: async (_projectId, operation) => await operation(),
-    projectState: { getCurrentUpdate: () => null, handleRequest: async () => ({}), observe: () => () => undefined },
-    publish: () => undefined,
     reconcileProject: async () => [],
     threadStateStore: database.persistence,
   });
@@ -66,8 +64,8 @@ test("cold relational startup preserves canonical entries and layout across reop
   });
   let current = controller(database);
   try {
-    const first = await current.open("client", fixtureIdentityValues.ProjectId.project, 5);
-    const entry = first.sidebar.entries[0]!;
+    const first = await current.readProject(fixtureIdentityValues.ProjectId.project);
+    const entry = first.entries[0]!;
     assert.equal(entry.entryKind, "thread");
     assert.ok(entry.entryKind === "thread");
     assert.equal(entry.identity.threadId, threadId);
@@ -76,9 +74,9 @@ test("cold relational startup preserves canonical entries and layout across reop
     assert.deepEqual(sqlite.prepare("SELECT COUNT(*) AS count FROM thread_items").get(), { count: 0 });
     await current.dispose();
     current = controller(createThreadStateTestDatabase(sqlite));
-    const reopened = await current.open("client", fixtureIdentityValues.ProjectId.project, 5);
-    assert.deepEqual(reopened.sidebar.entries, first.sidebar.entries);
-    assert.deepEqual(reopened.sidebar.displayOrder, first.sidebar.displayOrder);
+    const reopened = await current.readProject(fixtureIdentityValues.ProjectId.project);
+    assert.deepEqual(reopened.entries, first.entries);
+    assert.deepEqual(reopened.displayOrder, first.displayOrder);
     assert.deepEqual(sqlite.pragma("foreign_key_check"), []);
   } finally {
     await current.dispose();
@@ -109,8 +107,8 @@ test("complete cold serving isolates projects and retains settled cross-harness 
   ] });
   const current = controller(database);
   try {
-    const opened = await current.open("client", fixtureIdentityValues.ProjectId.project, 5);
-    assert.deepEqual(new Set(opened.sidebar.entries.map(entry => entry.entryKind !== "draft" && entry.identity.threadId)), new Set([parentId, childId]));
+    const opened = await current.readProject(fixtureIdentityValues.ProjectId.project);
+    assert.deepEqual(new Set(opened.entries.map(entry => entry.entryKind !== "draft" && entry.identity.threadId)), new Set([parentId, childId]));
     const children = await database.readThreadStateRecords({ selection: "children", parentThreadId: parentId });
     assert.equal(children.length, 1);
     assert.ok(children[0]?.entryKind === "subagent");

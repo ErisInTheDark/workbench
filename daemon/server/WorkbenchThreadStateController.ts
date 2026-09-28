@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchObservedThreadEntry: sidebar input whose optional title is workbench-owned, never provider-supplied.
- * - WorkbenchThreadStateControllerOptions: catalogue, project-state, persistence and lifecycle ports.
+ * - WorkbenchThreadStateControllerOptions: catalogue, persistence and lifecycle ports.
  * - WorkbenchThreadReconciliationFailure: bounded provider reconciliation failure.
  * - WorkbenchThreadGitArcSnapshot: project Git arc projection.
  * - WorkbenchThreadClaimContext: thread-owned claim context.
@@ -12,11 +12,10 @@ import type { WorkbenchHarness } from "workbench-shared/types";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
-import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchReloadDirtSnapshot, WorkbenchUserInputResponse } from "workbench-shared/types";
+import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchUserInputResponse } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
-import { WorkbenchProjectStateRequestSchema, type WorkbenchProjectStateRequest, type WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
-import { DraftIdSchema, ProjectIdSchema, ThreadDisplayKeySchema, type DraftId, type ProjectId, type ProjectThreadDisplayKey, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import { DraftIdSchema, ProjectIdSchema, type DraftId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import {
   WorkbenchPresentationAttachmentChunkRequestSchema,
   WorkbenchPresentationAttachmentChunkSchema,
@@ -32,28 +31,15 @@ import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thr
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import { currentThreadTitleName, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
 import {
-  getWorkbenchHomeThreadKey,
-  removeWorkbenchThreadFromProjectFolder,
-  resolveWorkbenchHomeThreadSectionKeys,
-} from "workbench-shared/workbench/thread/home-thread-display-order";
-import {
-  getProjectQualifiedThreadDisplayKey,
   getThreadDisplayDraftKey,
   getThreadDisplayThreadKey,
-  parseProjectQualifiedThreadDisplayKey,
-  type ThreadDisplayLayoutEntry,
 } from "workbench-shared/workbench/thread/thread-display-layout";
 import {
-  createWorkbenchThreadFolder,
   findWorkbenchThreadFolder,
   getWorkbenchThreadDisplayKey,
-  getWorkbenchThreadDisplaySection,
   isWorkbenchThreadDisplayOrderEmpty,
-  moveWorkbenchThreadDisplayItem,
   normalizeWorkbenchThreadDisplayOrder,
   reconcileWorkbenchThreadDisplayOrder,
-  replaceWorkbenchThreadFolderMember,
-  renameWorkbenchThreadFolder,
   resolveWorkbenchThreadDisplayOrder,
   sortThreadSidebarEntries,
   type WorkbenchThreadDisplayOrder,
@@ -63,7 +49,6 @@ import {
   createWorkbenchProjectThreadSummary,
   WorkbenchComposerProfileSelectionSchema,
   WorkbenchHarnessSchema,
-  WorkbenchThreadDraftSchema,
   WorkbenchThreadSidebarEntrySchema,
   WorkbenchThreadStateRequestSchema,
   gitArcPreventsThreadSettlement,
@@ -80,29 +65,20 @@ import {
   type WorkbenchQuestionnaireHistoryEntryState,
   type WorkbenchThreadLifecycle,
   type WorkbenchThreadDraft,
-  type WorkbenchThreadStateDelta,
   type WorkbenchGitArcLifecycleState,
   type WorkbenchGitArcPlanState,
   type WorkbenchHarnessId,
-  type WorkbenchThreadActivityUpdate,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadSidebarSnapshot,
-  type WorkbenchGlobalThreadStateOpenResult,
-  type WorkbenchThreadStateOpenResultV2,
-  type WorkbenchThreadStateOpenResult,
   type WorkbenchThreadStateRequest,
-  type WorkbenchThreadStateSnapshot,
-  type WorkbenchProjectThreadSummary,
   type WorkbenchThreadObservationSnapshot,
   type WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
-import WorkbenchThreadObservationController, { type ThreadObservationRequest } from "./WorkbenchThreadObservationController";
 import WorkbenchHomeThreadDisplayOrderStore from "./WorkbenchHomeThreadDisplayOrderStore";
 import WorkbenchPinnedThreadLayoutStore from "./WorkbenchPinnedThreadLayoutStore";
 import WorkbenchThreadArchiveController from "./WorkbenchThreadArchiveController";
 import WorkbenchProjectThreadState from "./WorkbenchProjectThreadState";
 import {
-  setWorkbenchThreadEntryDisplaySection,
   setWorkbenchThreadEntryPriority,
 } from "./WorkbenchThreadDisplayController";
 import {
@@ -126,38 +102,6 @@ export type WorkbenchObservedThreadEntry = WorkbenchThreadSidebarEntry & { workb
 
 interface StoredThreadMetadata { archived: boolean; harness: WorkbenchHarness; lifecycle: WorkbenchThreadLifecycle; mcpGeneration?: string | null; orderAt?: number; pendingQuestionnaire?: WorkbenchDurableQuestionnaire | null; pinned: boolean; questionnaireHistory?: WorkbenchQuestionnaireHistoryEntryState[]; snoozed: boolean; threadId: string; titleFallback?: string }
 type StoredThreadDraft = WorkbenchThreadDraft & { pinned?: boolean; snoozed?: boolean };
-type ProjectObservation =
-  | { pinnedThreadKeys: Set<string>; projectId: ProjectId; scope: "project"; version: 1 | 2 | 3 | 4 | 5 | 6 | 7 }
-  | { pinnedThreadKeys: Set<string>; scope: "global"; version: 4 | 5 | 6 | 7 | 8 | 9 };
-
-function withoutWaitDetails(entry: WorkbenchThreadSidebarEntry): WorkbenchThreadSidebarEntry {
-  if (entry.entryKind !== "thread") return entry;
-  const { waitingOnThreads: _waitingOnThreads, ...legacy } = entry;
-  return legacy;
-}
-
-function supportsWaitDetails(observation: ProjectObservation) {
-  return observation.scope === "project" ? observation.version >= 7 : observation.version >= 9;
-}
-
-function summaryForObservation(summary: WorkbenchProjectThreadSummary, observation: ProjectObservation): WorkbenchProjectThreadSummary {
-  const detailed = supportsWaitDetails(observation);
-  const attachments = observation.scope === "project" && observation.version >= 6;
-  if (detailed && attachments) return summary;
-  return {
-    ...summary,
-    pinnedThreads: summary.pinnedThreads.map((entry) => {
-      if (entry.entryKind === "draft") {
-        if (attachments) return entry;
-        const { hasAttachments: _hasAttachments, ...legacy } = entry;
-        return legacy as typeof entry;
-      }
-      if (detailed) return entry;
-      const { waitingOnThreads: _waitingOnThreads, ...legacy } = entry;
-      return legacy;
-    }),
-  };
-}
 interface StoredProjectStateV1 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 1 }
 interface StoredProjectStateV2 { drafts: StoredThreadDraft[]; threads: StoredThreadMetadata[]; version: 2 }
 interface StoredProjectStateV3 { displayOrder?: WorkbenchThreadDisplayOrder; drafts: StoredThreadDraft[]; records: WorkbenchThreadStateRecord[]; version: 3 }
@@ -214,17 +158,10 @@ export interface WorkbenchThreadStateControllerOptions {
   readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
   recordComposerProfileUsage?: (profileId: string, at: number) => Promise<void>;
   getProjectCatalog: () => WorkbenchProjectsPayload;
-  getReloadDirt?: () => WorkbenchReloadDirtSnapshot;
   hasGitArcBlockingSettlement: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<boolean>;
   log?: (message: string) => void;
   publishAgentContext?: (harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, text: string) => Promise<void>;
   now?: () => number;
-  projectState: {
-    getCurrentUpdate: (projectId: ProjectId) => WorkbenchProjectStateUpdate | null;
-    handleRequest: (projectId: ProjectId, request: WorkbenchProjectStateRequest) => Promise<unknown>;
-    observe: (projectId: ProjectId, publish: (update: WorkbenchProjectStateUpdate) => void) => () => void;
-  };
-  publish: (connectionId: string, snapshot: WorkbenchThreadStateSnapshot) => void;
   pruneExpiredGitState?: (projectId: ProjectId, identities: Array<{ harness: WorkbenchHarnessId; threadId: WorkbenchThreadId }>) => Promise<ReadonlyArray<{ harness: WorkbenchHarnessId; threadId: WorkbenchThreadId }> | void>;
   renameThread?: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, title: string) => Promise<string>;
   interruptQuestionnaire?: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, questionnaire: WorkbenchDurableQuestionnaire) => Promise<boolean>;
@@ -237,7 +174,6 @@ export interface WorkbenchThreadStateControllerOptions {
   resolveGitArc: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<WorkbenchGitArcLifecycleState | LegacyGitArcClaim | null>;
   resolveGitArcPlan: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<WorkbenchGitArcPlanState | null>;
   runGitArcReadTransition: <TValue>(projectId: ProjectId, operation: () => Promise<TValue>) => Promise<TValue>;
-  subscribeReloadDirt?: (listener: () => void) => () => void;
   threadStateStore: WorkbenchThreadStatePersistence;
 }
 
@@ -305,21 +241,17 @@ export default class WorkbenchThreadStateController {
   private static readonly SETTLED_GIT_RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
   private active = true;
   private readonly archives: WorkbenchThreadArchiveController;
-  private readonly connectionProjects = new Map<string, ProjectObservation>();
   private readonly homeDisplayOrder: WorkbenchHomeThreadDisplayOrderStore;
   private readonly now: () => number;
   private readonly options: WorkbenchThreadStateControllerOptions;
-  private readonly threadObservations: WorkbenchThreadObservationController;
   private readonly pinnedLayout: WorkbenchPinnedThreadLayoutStore;
   private readonly projects = new Map<ProjectId, ProjectState>();
   private readonly operationQueues = new Map<string, Promise<unknown>>();
   private readonly persistenceWrites = new Set<Promise<void>>();
   private readonly retiredError = new Error("Thread-state controller is retired.");
-  private readonly pinnedEntries = new Map<string, ThreadDisplayLayoutEntry>();
   private readonly reconciliationPromises = new Set<Promise<void>>();
-  private readonly summaryHydrationPromises = new Set<Promise<void>>();
-  private readonly stopReloadDirtSubscription: (() => void) | null;
   private readonly subscribers = new Set<(projectId: ProjectId, entry: WorkbenchThreadSidebarEntry) => void>();
+  private readonly projectSubscribers = new Set<(projectId: ProjectId) => void>();
   private readonly waitingByThreadKey = new Map<string, "subagents" | "other">();
 
   private inlineAttachment(url: string) {
@@ -467,12 +399,12 @@ export default class WorkbenchThreadStateController {
       readArchiveEligible: before => this.readPersistence(() => persistence.readArchiveEligible(before)),
       readGlobal: id => this.readPersistence(() => persistence.readGlobal(id)),
       readProject: projectId => this.readPersistence(() => persistence.readProject(projectId)),
+      readNavigationSummary: projectId => this.readPersistence(() => persistence.readNavigationSummary(projectId)),
       readTitleHistories: projectId => this.readPersistence(() => persistence.readTitleHistories(projectId)),
       writeGlobal: (id, document) => this.writePersistence(() => persistence.writeGlobal(id, document)),
       writeProject: (projectId, document, histories) => this.writePersistence(() => persistence.writeProject(projectId, document, histories)),
     };
     this.options = { ...options, threadStateStore: ownedPersistence };
-    this.threadObservations = new WorkbenchThreadObservationController((connectionId, snapshot) => this.options.publish(connectionId, snapshot));
     this.now = options.now ?? Date.now;
     this.archives = new WorkbenchThreadArchiveController({
       now: this.now,
@@ -505,7 +437,6 @@ export default class WorkbenchThreadStateController {
     this.pinnedLayout = new WorkbenchPinnedThreadLayoutStore(ownedPersistence, {
       reportRepairs: (repairedPaths) => this.logPinnedLayoutRepairs(repairedPaths),
     });
-    this.stopReloadDirtSubscription = options.subscribeReloadDirt?.(() => this.publishReloadDirt()) ?? null;
   }
 
   subscribe(listener: (projectId: ProjectId, entry: WorkbenchThreadSidebarEntry) => void) {
@@ -531,21 +462,7 @@ export default class WorkbenchThreadStateController {
     }
   }
 
-  private async handleRequestOwned(connectionId: string, input: WorkbenchThreadStateRequest | object) {
-    const projectRequest = WorkbenchProjectStateRequestSchema.safeParse(input);
-    if (projectRequest.success) {
-      projectRequest.data.projectId = this.canonicalProjectId(ProjectIdSchema.parse(projectRequest.data.projectId));
-      const observation = this.connectionProjects.get(connectionId);
-      const observedProjectId = observation?.scope === "project" ? observation.projectId : "";
-      if (!observedProjectId || observedProjectId !== projectRequest.data.projectId) {
-        return { error: { code: "invalidProjectObservation", message: "The project request does not belong to this connection's observed project." } };
-      }
-      try {
-        return { result: await this.options.projectState.handleRequest(observedProjectId, projectRequest.data) };
-      } catch (error) {
-        return { error: { code: "projectStateRequestFailed", message: sanitizeError(error) } };
-      }
-    }
+  private async handleRequestOwned(_connectionId: string, input: WorkbenchThreadStateRequest | object) {
     const parsed = WorkbenchThreadStateRequestSchema.safeParse(input);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
@@ -554,68 +471,11 @@ export default class WorkbenchThreadStateController {
     }
     const request = this.canonicalRequest(parsed.data);
     switch (request.method) {
-      case "workbench/thread-state/observe": {
-        const observationRequest: ThreadObservationRequest = {
-          projectId: request.projectId, subscriptionId: request.subscriptionId,
-          target: request.target, version: request.version,
-        };
-        const observation = await this.threadObservations.observe(connectionId, observationRequest, async () => {
-          const state = await this.getProject(request.projectId);
-          const projectAuthorized = this.isObservedProjectAuthorized(connectionId, request.projectId);
-          const context = this.selectThreadContext(request.projectId, request.target, state, !projectAuthorized);
-          if (!context && !projectAuthorized) {
-            const connection = this.connectionProjects.get(connectionId);
-            const observedProject = connection?.scope === "project" ? connection.projectId : connection?.scope ?? "none";
-            throw new Error([
-              "Thread observation rejected.",
-              `requestedProject=${sanitizeLogValue(request.projectId)}`,
-              `observedProject=${sanitizeLogValue(observedProject)}`,
-              `target=${sanitizeLogValue(request.target.kind)}:${sanitizeLogValue(request.target.threadId)}`,
-              "reason=missing, snoozed, or not pinned",
-            ].join(" "));
-          }
-          return this.threadObservationSnapshot(observationRequest, state);
-        });
-        return { result: { observation } };
-      }
-      case "workbench/thread-state/release":
-        this.threadObservations.release(connectionId, request.subscriptionId);
-        return { result: { accepted: true } };
-      case "workbench/thread-state/open": return { result: await this.open(connectionId, request.projectId, request.version ?? 1) };
-      case "workbench/thread-state/global/open": return { result: await this.openGlobal(connectionId, request.version) };
-      case "workbench/thread-state/global/close": await this.closeGlobal(connectionId); return { result: { accepted: true } };
-      case "workbench/thread-state/close": await this.close(connectionId, request.projectId); return { result: { accepted: true } };
-      case "workbench/thread-state/refresh": {
-        const sidebar = await this.refresh(request.projectId);
-        const observation = this.connectionProjects.get(connectionId);
-        return {
-          result: observation
-            ? this.snapshotForObservation(sidebar, observation)
-            : sidebar,
-        };
-      }
-      case "workbench/thread-state/pin/open": {
-        const context = await this.getPinnedThreadContext(request);
-        if (context) this.authorizePinnedThreadContext(connectionId, context);
-        return { result: { context: context ? {
-          ...context, entries: context.entries.map(withoutWaitDetails),
-        } : null } };
-      }
-      case "workbench/thread-state/intent/accept": return { result: await this.acceptIntent(connectionId, {
-        draftId: request.draftId,
-        harness: request.identity.harness,
-        projectId: request.projectId,
-        threadId: request.identity.threadId,
-        title: request.title,
-        turnId: request.turnId,
-      }) };
       case "workbench/thread-state/title/set":
       case "workbench/thread-state/title/dismiss": {
-        if (
-          !this.isObservedProjectAuthorized(connectionId, request.projectId)
-          && !this.isPinnedThreadAuthorized(connectionId, request.projectId, request.identity.harness, request.identity.threadId)
-        ) {
-          return { error: { code: "invalidProjectObservation", message: "The title request does not belong to this connection's observed project." } };
+        const owner = await this.getCanonicalThreadEntry(request.projectId, request.identity.threadId);
+        if (!owner || owner.entryKind === "draft" || owner.identity.harness !== request.identity.harness) {
+          return { error: { code: "invalidThreadOwner", message: "The title request does not match an admitted thread in this project." } };
         }
         try {
           return { result: request.method === "workbench/thread-state/title/set"
@@ -625,159 +485,10 @@ export default class WorkbenchThreadStateController {
           return { error: { code: "threadTitleMutationFailed", message: sanitizeError(error) } };
         }
       }
-      case "workbench/thread-state/draft/upsert": return { result: await this.upsertDraft(request.projectId, request.draft, request.folderId) };
-      case "workbench/thread-state/draft/move": return { result: await this.moveDraft(request.sourceProjectId, request.destinationProjectId, request.draftId) };
-      case "workbench/thread-state/draft/delete": return { result: await this.deleteDraft(request.projectId, request.draftId, request.clientUpdatedAt) };
-      case "workbench/thread-state/draft/pin/set":
-      case "workbench/thread-state/draft/snooze/set": return { result: await this.mutateDraft(request) };
       case "workbench/thread-state/priority/set": return { result: await this.mutatePriority(request) };
       case "workbench/thread-state/snooze/until": return { result: await this.mutateDependentSnooze(request) };
-      case "workbench/thread-state/display-order/folder/create":
-      case "workbench/thread-state/display-order/folder/drop":
-      case "workbench/thread-state/display-order/folder/title/set":
-      case "workbench/thread-state/display-order/move": return { result: await this.mutateDisplayOrder(request) };
-      case "workbench/thread-state/home-display-order/move": return { result: await this.mutateHomeDisplayOrder(connectionId, request) };
-      case "workbench/thread-state/pinned-display-order/folder/create":
-      case "workbench/thread-state/pinned-display-order/folder/drop":
-      case "workbench/thread-state/pinned-display-order/folder/title/set":
-      case "workbench/thread-state/pinned-display-order/move": return { result: await this.mutatePinnedDisplayOrder(request) };
       default: return { result: await this.mutateThread(request) };
     }
-  }
-
-  async open(connectionId: string, projectId: ProjectId): Promise<WorkbenchThreadStateOpenResultV2>;
-  async open(connectionId: string, projectId: ProjectId, version: 7): Promise<WorkbenchThreadStateOpenResult>;
-  async open(connectionId: string, projectId: ProjectId, version: 6): Promise<WorkbenchThreadStateOpenResult>;
-  async open(connectionId: string, projectId: ProjectId, version: 5): Promise<WorkbenchThreadStateOpenResult>;
-  async open(connectionId: string, projectId: ProjectId, version: 4): Promise<WorkbenchThreadStateOpenResult>;
-  async open(connectionId: string, projectId: ProjectId, version: 3): Promise<WorkbenchThreadStateOpenResult>;
-  async open(connectionId: string, projectId: ProjectId, version: 2): Promise<WorkbenchThreadStateOpenResultV2>;
-  async open(connectionId: string, projectId: ProjectId, version: 1): Promise<WorkbenchThreadSidebarSnapshot>;
-  async open(connectionId: string, projectId: ProjectId, version: 1 | 2 | 3 | 4 | 5 | 6 | 7): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult>;
-  async open(connectionId: string, projectId: ProjectId, version: 1 | 2 | 3 | 4 | 5 | 6 | 7 = 2): Promise<WorkbenchThreadSidebarSnapshot | WorkbenchThreadStateOpenResultV2 | WorkbenchThreadStateOpenResult> {
-    projectId = this.canonicalProjectId(projectId);
-    const priorObservation = this.connectionProjects.get(connectionId);
-    if (priorObservation?.scope === "global") await this.closeGlobal(connectionId);
-    const priorProjectId = priorObservation?.scope === "project" ? priorObservation.projectId : "";
-    if (priorProjectId && priorProjectId !== projectId) await this.close(connectionId, priorProjectId);
-    const state = await this.getProject(projectId);
-    const observation: ProjectObservation = { pinnedThreadKeys: new Set(), projectId, scope: "project", version };
-    this.startProjectObservation(projectId, state);
-    this.connectionProjects.set(connectionId, observation);
-    state.observers.add(connectionId);
-    const currentProjectUpdate = this.options.projectState.getCurrentUpdate(projectId);
-    if (currentProjectUpdate) {
-      this.options.publish(connectionId, currentProjectUpdate);
-      this.options.log?.(`project replayed connection=${sanitizeLogValue(connectionId)} project=${sanitizeLogValue(projectId)} revision=${currentProjectUpdate.revision}`);
-    }
-    const sidebar = this.snapshotForObservation(this.snapshot(projectId, state), observation);
-    if (version === 1) return sidebar;
-    const catalog = this.options.getProjectCatalog();
-    const composite = {
-      catalog,
-      project: currentProjectUpdate ?? this.options.projectState.getCurrentUpdate(projectId),
-      sidebar,
-    };
-    if (version === 2) return composite;
-    const loadedProjectSummaries = catalog.data.flatMap(({ id }) => {
-      const loadedState = this.projects.get(id);
-      return loadedState
-        ? [summaryForObservation(createWorkbenchProjectThreadSummary(id, this.naturallyOrderedEntries(loadedState), loadedState.revision, loadedState.displayOrder), observation)]
-        : [];
-    });
-    this.hydrateProjectThreadSummaries(
-      connectionId,
-      observation,
-      catalog.data.map(({ id }) => id).filter((id) => !this.projects.has(id)),
-    );
-    return {
-      ...composite,
-      pinnedThreadLayout: await this.pinnedLayout.getSnapshot(),
-      projectThreads: { projects: loadedProjectSummaries },
-    };
-  }
-
-  async openGlobal(connectionId: string, version: 4 | 5 | 6 | 7 | 8 | 9 = 5): Promise<WorkbenchGlobalThreadStateOpenResult> {
-    const priorObservation = this.connectionProjects.get(connectionId);
-    if (priorObservation?.scope === "project") await this.close(connectionId, priorObservation.projectId);
-    else if (priorObservation) await this.closeGlobal(connectionId);
-    const observation: ProjectObservation = { pinnedThreadKeys: new Set(), scope: "global", version };
-    this.connectionProjects.set(connectionId, observation);
-    const catalog = this.options.getProjectCatalog();
-    if (version >= 8) {
-      const readySidebars = catalog.data.flatMap(({ id }) => {
-        const state = this.projects.get(id);
-        return state ? [this.snapshotForObservation(this.snapshot(id, state), observation)] : [];
-      });
-      void this.pinnedLayout.getSnapshot().then(snapshot => {
-        if (this.active && this.connectionProjects.get(connectionId) === observation) {
-          this.options.publish(connectionId, snapshot);
-        }
-      }).catch(error => this.options.log?.(`Pinned layout read failed: ${sanitizeError(error)}`));
-      void this.homeDisplayOrder.getSnapshot().then(snapshot => {
-        if (this.active && this.connectionProjects.get(connectionId) === observation) {
-          this.options.publish(connectionId, snapshot);
-        }
-      }).catch(error => this.options.log?.(`Home layout read failed: ${sanitizeError(error)}`));
-      for (const { id } of catalog.data) {
-        if (this.projects.has(id)) continue;
-        void this.getProject(id).then(state => {
-          if (!this.active || this.connectionProjects.get(connectionId) !== observation) return;
-          this.options.publish(connectionId, {
-            sidebar: this.snapshotForObservation(this.snapshot(id, state), observation),
-            updateKind: "projectThreadSidebar",
-          });
-        }).catch(error => {
-          if (!this.active || this.connectionProjects.get(connectionId) !== observation) return;
-          this.options.publish(connectionId, {
-            sidebar: {
-              entries: [], error: sanitizeError(error), freshness: "partial",
-              projectId: id, revision: 0,
-            },
-            updateKind: "projectThreadSidebar",
-          });
-        });
-      }
-      const result = {
-        catalog,
-        pinnedThreadLayout: {
-          displayOrder: {}, revision: 0, updateKind: "pinnedThreadLayout" as const,
-        },
-        projectSidebars: { projects: readySidebars },
-        homeThreadDisplayOrder: {
-          displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder" as const,
-        },
-      };
-      return version === 9 ? { ...result, version: 9 } : { ...result, version: 8 };
-    }
-    const projectSidebars = await Promise.all(catalog.data.map(async ({ id }) => (
-      this.snapshotForObservation(this.snapshot(id, await this.getProject(id)), observation)
-    )));
-    const result = {
-      catalog,
-      pinnedThreadLayout: await this.pinnedLayout.getSnapshot(),
-      projectSidebars: { projects: projectSidebars },
-    };
-    return version !== 4
-      ? { ...result, homeThreadDisplayOrder: await this.homeDisplayOrder.getSnapshot(), version }
-      : result;
-  }
-
-  async close(connectionId: string, expectedProjectId?: ProjectId) {
-    if (expectedProjectId) expectedProjectId = this.canonicalProjectId(expectedProjectId);
-    const observation = this.connectionProjects.get(connectionId);
-    const projectId = observation?.scope === "project" ? observation.projectId : "";
-    if (!projectId || (expectedProjectId && projectId !== expectedProjectId)) return;
-    this.connectionProjects.delete(connectionId);
-    const state = this.projects.get(projectId);
-    if (!state) return;
-    state.observers.delete(connectionId);
-    this.stopProjectObservationIfIdle(state);
-  }
-
-  private async closeGlobal(connectionId: string) {
-    if (this.connectionProjects.get(connectionId)?.scope !== "global") return;
-    this.connectionProjects.delete(connectionId);
   }
 
   private synchronizeSettlementTimestamps(state: ProjectState) {
@@ -813,12 +524,6 @@ export default class WorkbenchThreadStateController {
     ));
   }
 
-  async disconnect(connectionId: string) {
-    this.threadObservations.disconnect(connectionId);
-    if (this.connectionProjects.get(connectionId)?.scope === "global") await this.closeGlobal(connectionId);
-    else await this.close(connectionId);
-  }
-
   private acceptedIntentEntry(input: { harness: WorkbenchHarnessId; threadId: WorkbenchThreadId; title: string; turnId: WorkbenchTurnId; pinned?: boolean }): WorkbenchThreadSidebarEntry {
     const activityAt = this.now();
     return {
@@ -829,75 +534,16 @@ export default class WorkbenchThreadStateController {
     };
   }
 
-  async acceptIntent(connectionId: string, input: { draftId?: DraftId; harness: WorkbenchHarness; projectId: ProjectId; threadId: WorkbenchThreadId; title?: string; turnId: WorkbenchTurnId }) {
-    input = { ...input, projectId: this.canonicalProjectId(input.projectId) };
-    const authorizedThreadId = input.draftId ? `draft:${input.draftId}` : input.threadId;
-    if (
-      !this.isObservedProjectAuthorized(connectionId, input.projectId)
-      && !this.isPinnedThreadAuthorized(connectionId, input.projectId, input.harness, authorizedThreadId)
-    ) {
-      throw new Error("The accepted intent does not belong to this connection's observed or pinned thread project.");
-    }
-    let draftPinned = false;
-    let profile: WorkbenchComposerProfileSelectionState | null = null;
-    if (input.draftId) {
-      const state = await this.getProject(input.projectId);
-      const draftKey = getThreadDisplayDraftKey(input.draftId);
-      const draftEntry = state.entries.get(draftKey);
-      draftPinned = draftEntry?.entryKind === "draft" ? draftEntry.metadata.pinned : false;
-      const draft = state.drafts.get(input.draftId);
-      profile = draft ? state.draftStore.profileFromDraft(draft) : null;
-      state.displayOrder = replaceWorkbenchThreadFolderMember(state.displayOrder, draftKey, `${input.harness}:${input.threadId}`);
-      const pinnedLayoutUpdate = await this.pinnedLayout.replace(input.projectId, draftKey, getThreadDisplayThreadKey(input.harness, input.threadId));
-      if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
-      const homeDisplayOrderUpdate = await this.homeDisplayOrder.replace(input.projectId, draftKey, getThreadDisplayThreadKey(input.harness, input.threadId));
-      if (homeDisplayOrderUpdate) this.publishHomeDisplayOrder(homeDisplayOrderUpdate);
-      state.drafts.delete(input.draftId);
-      state.entries.delete(draftKey);
-    }
-    const providerEntry = this.acceptedIntentEntry({
-      harness: input.harness, threadId: input.threadId, turnId: input.turnId,
-      pinned: draftPinned, title: input.title?.trim() || input.threadId,
-    });
-    const entry = await this.applyLifecycle(input.projectId, input.harness, input.threadId, { kind: "acceptedIntent", turnId: input.turnId }, providerEntry, undefined, profile, input.draftId);
-    if (!entry) throw new Error("The accepted intent does not identify a known provider thread.");
-    return { accepted: true, revision: (await this.getSnapshot(input.projectId)).revision };
-  }
-
   private canonicalProjectId(projectId: ProjectId) {
     return this.options.resolveProjectId(projectId);
   }
 
   private canonicalRequest(request: WorkbenchThreadStateRequest): WorkbenchThreadStateRequest {
     if ("projectId" in request) request = { ...request, projectId: this.canonicalProjectId(request.projectId) };
-    if (request.method === "workbench/thread-state/draft/upsert") {
-      return { ...request, draft: { ...request.draft, projectId: this.canonicalProjectId(request.draft.projectId) } };
-    }
-    if (request.method === "workbench/thread-state/draft/move") {
-      return {
-        ...request, sourceProjectId: this.canonicalProjectId(request.sourceProjectId),
-        destinationProjectId: this.canonicalProjectId(request.destinationProjectId),
-      };
-    }
     if (request.method === "workbench/thread-state/snooze/until") {
       return { ...request, target: { ...request.target, projectId: this.canonicalProjectId(ProjectIdSchema.parse(request.target.projectId)) } };
     }
-    const key = (value: string | null) => {
-      if (!value) return value;
-      const parsed = parseProjectQualifiedThreadDisplayKey(value);
-      return parsed ? getProjectQualifiedThreadDisplayKey(this.canonicalProjectId(parsed.projectId), parsed.threadKey) : value;
-    };
-    switch (request.method) {
-      case "workbench/thread-state/home-display-order/move":
-        return { ...request, sourceKey: key(request.sourceKey)!, beforeKey: key(request.beforeKey), destinationFolderKey: key(request.destinationFolderKey) };
-      case "workbench/thread-state/pinned-display-order/move":
-        return { ...request, sourceKey: key(request.sourceKey)!, beforeKey: key(request.beforeKey) };
-      case "workbench/thread-state/pinned-display-order/folder/create":
-        return { ...request, sourceKey: key(request.sourceKey)! };
-      case "workbench/thread-state/pinned-display-order/folder/drop":
-        return { ...request, sourceKey: key(request.sourceKey)!, targetKey: key(request.targetKey) };
-      default: return request;
-    }
+    return request;
   }
 
   async acceptProviderIntent(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, firstMessagePreview?: string) {
@@ -1220,7 +866,7 @@ export default class WorkbenchThreadStateController {
         ...this.changedEntryKeys(beforePublication, state),
         ...(promotedDraftId ? [getThreadDisplayDraftKey(promotedDraftId)] : []),
       ], { layout: Boolean(promotedDraftId) });
-      this.publish(projectId, state, parsedNext, beforePublication);
+      this.publish(projectId, state, parsedNext);
       if (ownedEvent.kind === "acceptedIntent" || ownedEvent.kind === "userInputDelivered"
         || (ownedEvent.kind === "inputResolved" && ownedEvent.answered)) {
         await this.publishWorkingTransition(existing, parsedNext, ownedEvent.kind === "inputResolved");
@@ -1518,18 +1164,7 @@ export default class WorkbenchThreadStateController {
         if (updatesOrder && next.entryKind === "thread") {
           await this.persist(projectId, state, [key]);
         }
-        if (!this.active || (!state.observers.size && !this.threadObservations.hasProject(projectId))) return;
-        state.revision += 1;
-        this.threadObservations.update(projectId, request => this.threadObservationSnapshot(request, state));
-        this.publishUpdate(state, {
-          activityAt: next.activityAt,
-          displayOrder: state.displayOrder,
-          identity: next.identity,
-          ...(updatesOrder && next.entryKind === "thread" ? { orderAt: next.orderAt } : {}),
-          projectId,
-          revision: state.revision,
-          updateKind: "activity",
-        } satisfies WorkbenchThreadActivityUpdate);
+        this.publish(projectId, state, next);
       });
     }
   }
@@ -1548,10 +1183,9 @@ export default class WorkbenchThreadStateController {
         if (currentThreadTitleName(entry.titleHistory ?? [])) return;
         const title = resolveWorkbenchThreadTitle({ id: threadId, name: label, preview: entry.title });
         if (entry.title === title) return;
-        const beforePublication = new Map(state.entries);
         state.entries.set(key, parseWorkbenchThreadStateEntry({ ...entry, title }));
         await this.persist(projectId, state, [key]);
-        this.publish(projectId, state, state.entries.get(key), beforePublication);
+        this.publish(projectId, state, state.entries.get(key));
       });
     }
   }
@@ -1579,12 +1213,11 @@ export default class WorkbenchThreadStateController {
   }
 
   private async setTitleOwned(projectId: ProjectId, state: ProjectState, key: string, title: string) {
-    const beforePublication = new Map(state.entries);
     const result = state.recordStore.setTitle(key, title, this.now());
     if (!result) return null;
     if (!result.changed) return result.next;
     await this.persist(projectId, state, [key]);
-    this.publish(projectId, state, state.entries.get(key), beforePublication);
+    this.publish(projectId, state, state.entries.get(key));
     return result.next;
   }
 
@@ -1649,14 +1282,11 @@ export default class WorkbenchThreadStateController {
 
   async dispose() {
     this.active = false;
-    this.threadObservations.dispose();
-    this.stopReloadDirtSubscription?.();
+    this.projectSubscribers.clear();
     this.waitingByThreadKey.clear();
     for (const state of this.projects.values()) {
       state.generation += 1;
       state.abort?.abort();
-      state.stopProjectObservation?.();
-      state.stopProjectObservation = null;
     }
     await this.archives.dispose();
     while (this.persistenceWrites.size) await Promise.allSettled([...this.persistenceWrites]);
@@ -1664,6 +1294,33 @@ export default class WorkbenchThreadStateController {
 
   private assertActive() {
     if (!this.active) throw this.retiredError;
+  }
+
+  subscribeProjects(listener: (projectId: ProjectId) => void) {
+    this.assertActive();
+    this.projectSubscribers.add(listener);
+    return () => { this.projectSubscribers.delete(listener); };
+  }
+
+  peekProject(projectId: ProjectId) {
+    this.assertActive();
+    projectId = this.canonicalProjectId(projectId);
+    const state = this.projects.get(projectId);
+    return state ? this.snapshot(projectId, state) : null;
+  }
+
+  async readProject(projectId: ProjectId) {
+    projectId = this.canonicalProjectId(projectId);
+    return this.snapshot(projectId, await this.getProject(projectId));
+  }
+
+  peekProjectSummary(projectId: ProjectId) {
+    this.assertActive();
+    projectId = this.canonicalProjectId(projectId);
+    const state = this.projects.get(projectId);
+    return state ? createWorkbenchProjectThreadSummary(
+      projectId, this.naturallyOrderedEntries(state), state.revision, state.displayOrder,
+    ) : null;
   }
 
   private async readPersistence<T>(read: () => Promise<T>) {
@@ -1713,9 +1370,7 @@ export default class WorkbenchThreadStateController {
       const originalEntries = new Map(state.entries);
       const repairedSettlementTimestamps = this.synchronizeSettlementTimestamps(state);
       this.projects.set(projectId, state);
-      this.updatePinnedLayoutEntries(projectId, this.naturallyOrderedEntries(state));
-      const pinnedLayoutUpdate = await this.pinnedLayout.importProject(projectId, this.naturallyOrderedEntries(state), state.displayOrder);
-      if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
+      await this.pinnedLayout.importProject(projectId, this.naturallyOrderedEntries(state), state.displayOrder);
       if (repairedSettlementTimestamps) await this.persist(projectId, state, this.changedEntryKeys(originalEntries, state), { previousEntries: originalEntries });
       this.archives.reschedule();
       setTimeout(() => {
@@ -1725,21 +1380,6 @@ export default class WorkbenchThreadStateController {
     const loaded = this.projects.get(projectId);
     if (!loaded) throw new Error(`Project state failed to load: ${projectId}`);
     return loaded;
-  }
-
-  private startProjectObservation(projectId: ProjectId, state: ProjectState) {
-    this.assertActive();
-    if (state.stopProjectObservation) return;
-    state.stopProjectObservation = this.options.projectState.observe(
-      projectId,
-      (update) => this.publishUpdate(state, update),
-    );
-  }
-
-  private stopProjectObservationIfIdle(state: ProjectState) {
-    if (state.observers.size || !state.stopProjectObservation) return;
-    state.stopProjectObservation();
-    state.stopProjectObservation = null;
   }
 
   private loadProjectStorage(projectId: ProjectId) {
@@ -1764,33 +1404,13 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  private async getProjectThreadSummary(projectId: ProjectId) {
+  async getProjectThreadSummary(projectId: ProjectId) {
+    projectId = this.canonicalProjectId(projectId);
     const state = this.projects.get(projectId);
     if (state) {
       return createWorkbenchProjectThreadSummary(projectId, this.naturallyOrderedEntries(state), state.revision, state.displayOrder);
     }
-    const stored = await this.loadProjectStorage(projectId);
-    const entries: WorkbenchThreadSidebarEntry[] = [
-      ...stored.records.flatMap((record) => {
-        const projected = projectWorkbenchThreadStateEntry(record);
-        return projected ? [projected] : [];
-      }),
-      ...stored.drafts.map(({ pinned, snoozed, ...draft }) => projectWorkbenchThreadDraft(draft, {
-        archived: false,
-        pinned: pinned === true,
-        snoozed: snoozed === true,
-      })),
-    ];
-    this.updatePinnedLayoutEntries(projectId, entries);
-    const pinnedLayoutUpdate = await this.pinnedLayout.importProject(projectId, entries, stored.displayOrder ?? {});
-    if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
-    return createWorkbenchProjectThreadSummary(projectId, entries, 0, stored.displayOrder);
-  }
-
-  private async getPinnedThreadContext(
-    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/pin/open" }>,
-  ) {
-    return this.selectThreadContext(request.projectId, request.target, await this.getProject(request.projectId), true);
+    return this.options.threadStateStore.readNavigationSummary(projectId);
   }
 
   private selectThreadContext(projectId: ProjectId, target: WorkbenchThreadTarget, state: ProjectState, requirePinned: boolean) {
@@ -1837,12 +1457,14 @@ export default class WorkbenchThreadStateController {
     };
   }
 
-  private threadObservationSnapshot(request: ThreadObservationRequest, state: ProjectState): WorkbenchThreadObservationSnapshot {
+  async readWorkspaceThread(request: Pick<WorkbenchThreadObservationSnapshot, "projectId" | "subscriptionId" | "target">): Promise<WorkbenchThreadObservationSnapshot> {
+    request = { ...request, projectId: this.canonicalProjectId(request.projectId) };
+    const state = await this.getProject(request.projectId);
     const context = this.selectThreadContext(request.projectId, request.target.kind === "subagent"
       ? { kind: "provider", threadId: request.target.parentThreadId }
       : request.target, state, false);
     return {
-      entries: request.version !== 2 ? context?.entries.map(withoutWaitDetails) ?? [] : context?.entries ?? [],
+      entries: context?.entries ?? [],
       error: context ? null : state.error?.slice(0, 500) ?? null,
       freshness: context ? "fresh" : state.freshness,
       projectId: request.projectId,
@@ -1850,51 +1472,8 @@ export default class WorkbenchThreadStateController {
       subscriptionId: request.subscriptionId,
       target: context?.target.kind === "provider" ? context.target : request.target,
       updateKind: "threadObservation",
-      version: request.version ?? 1,
+      version: 2,
     };
-  }
-
-  private authorizePinnedThreadContext(
-    connectionId: string,
-    context: { entries: WorkbenchThreadSidebarEntry[]; projectId: ProjectId },
-  ) {
-    const observation = this.connectionProjects.get(connectionId);
-    if (!observation) return;
-    for (const entry of context.entries) {
-      const harness = entry.entryKind === "draft" ? entry.draft.composerSettings.harness : entry.identity.harness;
-      const threadId = entry.entryKind === "draft" ? `draft:${entry.draft.draftId}` : entry.identity.threadId;
-      observation.pinnedThreadKeys.add(`${context.projectId}\0${harness}\0${threadId}`);
-    }
-  }
-
-  private isPinnedThreadAuthorized(connectionId: string, projectId: ProjectId, harness: WorkbenchHarnessId, threadId: string) {
-    return this.connectionProjects.get(connectionId)?.pinnedThreadKeys.has(`${projectId}\0${harness}\0${threadId}`) === true;
-  }
-
-  private isObservedProjectAuthorized(connectionId: string, projectId: ProjectId) {
-    const observation = this.connectionProjects.get(connectionId);
-    return observation?.scope === "global"
-      ? this.options.getProjectCatalog().data.some(({ id }) => id === projectId)
-      : observation?.projectId === projectId;
-  }
-
-  private hydrateProjectThreadSummaries(
-    connectionId: string,
-    observation: ProjectObservation,
-    projectIds: readonly ProjectId[],
-  ) {
-    const hydrationPromise = Promise.all(projectIds.map(async (projectId) => {
-      try {
-        const summary = await this.getProjectThreadSummary(projectId);
-        if (!this.active || this.connectionProjects.get(connectionId) !== observation) return;
-        this.options.publish(connectionId, { summary: summaryForObservation(summary, observation), updateKind: "projectThreadSummary" });
-      } catch (error) {
-        this.options.log?.(`project thread summary hydration failed project=${sanitizeLogValue(projectId)} error=${sanitizeError(error)}`);
-      }
-    })).then(() => undefined).finally(() => {
-      this.summaryHydrationPromises.delete(hydrationPromise);
-    });
-    this.summaryHydrationPromises.add(hydrationPromise);
   }
 
   private decodeStoredProjectState(stored: Partial<StoredProjectState | StoredProjectStateV3 | StoredProjectStateV2 | StoredProjectStateV1>, projectId: ProjectId): StoredProjectState {
@@ -1986,101 +1565,15 @@ export default class WorkbenchThreadStateController {
       revision: state.revision,
     };
   }
-  private snapshotForObservation(
-    sidebar: WorkbenchThreadSidebarSnapshot,
-    observation: ProjectObservation,
-  ): WorkbenchThreadSidebarSnapshot {
-    const compatible = supportsWaitDetails(observation) ? sidebar
-      : { ...sidebar, entries: sidebar.entries.map(withoutWaitDetails) };
-    const legacy = observation.scope === "project" ? observation.version <= 3 : observation.version <= 5;
-    if (!legacy || !this.options.getReloadDirt) return compatible;
-    const reloadDirt = this.options.getReloadDirt();
-    return {
-      ...compatible,
-      reloadDirt: {
-        ...reloadDirt,
-        dirtyScopes: reloadDirt.dirtyScopes.map(({ dependantScopes: _dependantScopes, ...scope }) => scope),
-      },
-    };
-  }
-  private publishReloadDirt() {
-    if (!this.active) return;
-    const legacyGlobalObservers = [...this.connectionProjects.entries()].filter(([, observation]) => (
-      observation.scope === "global" && observation.version <= 5
-    ));
-    for (const [projectId, state] of this.projects) {
-      const legacyProjectObservers = [...state.observers].flatMap((connectionId) => {
-        const observation = this.connectionProjects.get(connectionId);
-        return observation?.scope === "project" && observation.version <= 3 ? [[connectionId, observation] as const] : [];
-      });
-      if (!legacyProjectObservers.length && !legacyGlobalObservers.length) continue;
-      state.revision += 1;
-      const sidebar = this.snapshot(projectId, state);
-      for (const [connectionId, observation] of legacyProjectObservers) {
-        this.options.publish(connectionId, this.snapshotForObservation(sidebar, observation));
-      }
-      for (const [connectionId, observation] of legacyGlobalObservers) {
-        this.options.publish(connectionId, {
-          sidebar: this.snapshotForObservation(sidebar, observation),
-          updateKind: "projectThreadSidebar",
-        });
-      }
-    }
-  }
-  private publish(projectId: ProjectId, state: ProjectState, changedEntry?: WorkbenchThreadStateEntry, before?: ReadonlyMap<string, WorkbenchThreadStateEntry>) {
+  private publish(projectId: ProjectId, state: ProjectState, changedEntry?: WorkbenchThreadStateEntry) {
     if (!this.active) return;
     state.revision += 1;
-    const entries = this.naturallyOrderedEntries(state);
-    this.updatePinnedLayoutEntries(projectId, entries);
-    let sidebar: WorkbenchThreadSidebarSnapshot | null = null;
-    const fullSidebar = () => sidebar ??= this.snapshot(projectId, state);
-    const changed = before ? [...state.entries].filter(([key, entry]) => before.get(key) !== entry).map(([, entry]) => entry) : [];
-    const changedKeys = new Set(changed.map(entryKey));
-    const parents = new Set(changed.flatMap(entry => entry.entryKind === "subagent" ? [entry.parentThreadId] : []));
-    const upserts = entries.filter(entry => changedKeys.has(entryKey(entry))
-      || entry.entryKind === "thread" && parents.has(entry.identity.threadId));
-    const projectedKeys = new Set(upserts.map(entryKey));
-    const delta: WorkbenchThreadStateDelta | null = before ? {
-      updateKind: "threadStateDelta", projectId, revision: state.revision,
-      upserts,
-      removedKeys: [...new Set([
-        ...[...before.keys()].filter(key => !state.entries.has(key)),
-        ...[...changedKeys].filter(key => !projectedKeys.has(key)),
-      ])],
-      displayOrder: state.displayOrder, error: state.error, freshness: state.freshness,
-    } : null;
-    this.threadObservations.update(projectId, request => this.threadObservationSnapshot(request, state));
-    const summary = createWorkbenchProjectThreadSummary(projectId, entries, state.revision, state.displayOrder);
-    for (const [connectionId, observation] of this.connectionProjects) {
-      const compatibleDelta = delta && !supportsWaitDetails(observation)
-        ? { ...delta, upserts: delta.upserts.map(withoutWaitDetails) } : delta;
-      if (observation.scope === "project") {
-        if (observation.projectId === projectId) {
-          this.options.publish(connectionId, compatibleDelta && observation.version >= 5
-            ? compatibleDelta : this.snapshotForObservation(fullSidebar(), observation));
-        }
-        if (observation.version >= 3) this.options.publish(connectionId, { summary: summaryForObservation(summary, observation), updateKind: "projectThreadSummary" });
-      } else {
-        this.options.publish(connectionId, compatibleDelta && observation.version >= 7 ? compatibleDelta : {
-          sidebar: this.snapshotForObservation(fullSidebar(), observation), updateKind: "projectThreadSidebar",
-        });
-      }
+    for (const listener of this.projectSubscribers) {
+      try { listener(projectId); }
+      catch (error) { this.options.log?.(`Thread project observer failed: ${sanitizeError(error)}`); }
     }
     const projected = changedEntry ? projectWorkbenchThreadStateEntry(changedEntry) : null;
     if (projected) for (const listener of this.subscribers) listener(projectId, projected);
-  }
-
-  private publishUpdate(state: ProjectState, update: WorkbenchThreadStateSnapshot) {
-    if (!this.active) return;
-    for (const connectionId of state.observers) {
-      const observation = this.connectionProjects.get(connectionId);
-      this.options.publish(
-        connectionId,
-        observation && !("updateKind" in update)
-          ? this.snapshotForObservation(update, observation)
-          : update,
-      );
-    }
   }
 
   private reconcile(projectId: ProjectId, state: ProjectState) {
@@ -2259,364 +1752,6 @@ export default class WorkbenchThreadStateController {
     return changed;
   }
 
-  private publishPinnedLayout(snapshot: Extract<WorkbenchThreadStateSnapshot, { updateKind: "pinnedThreadLayout" }>) {
-    if (!this.active) return;
-    for (const [connectionId, observation] of this.connectionProjects) {
-      if (
-        (observation.scope === "project" && observation.version >= 3)
-        || observation.scope === "global"
-      ) this.options.publish(connectionId, snapshot);
-    }
-  }
-
-  private publishHomeDisplayOrder(snapshot: Extract<WorkbenchThreadStateSnapshot, { updateKind: "homeThreadDisplayOrder" }>) {
-    if (!this.active) return;
-    for (const [connectionId, observation] of this.connectionProjects) {
-      if (observation.scope === "global" && observation.version >= 5) this.options.publish(connectionId, snapshot);
-    }
-  }
-
-  private homeLayoutEntries() {
-    return [...this.projects].flatMap(([projectId, state]) => this.naturallyOrderedEntries(state).flatMap((entry): ThreadDisplayLayoutEntry<ProjectThreadDisplayKey>[] => {
-      const section = getWorkbenchThreadDisplaySection(entry);
-      return section ? [{ key: getWorkbenchHomeThreadKey(projectId, entry), section }] : [];
-    }));
-  }
-
-  private updatePinnedLayoutEntries(projectId: ProjectId, entries: readonly WorkbenchThreadSidebarEntry[]) {
-    const prefix = `${encodeURIComponent(projectId)}/`;
-    for (const key of this.pinnedEntries.keys()) {
-      if (key.startsWith(prefix)) this.pinnedEntries.delete(key);
-    }
-    for (const entry of entries) {
-      if (getThreadSidebarGroup(entry) !== "pinned") continue;
-      this.pinnedEntries.set(getProjectQualifiedThreadDisplayKey(projectId, getWorkbenchThreadDisplayKey(entry)), {
-        key: getProjectQualifiedThreadDisplayKey(projectId, getWorkbenchThreadDisplayKey(entry)),
-        section: "pinned",
-      });
-    }
-  }
-
-  private async mutatePinnedDisplayOrder(
-    request: Extract<WorkbenchThreadStateRequest, {
-      method:
-        | "workbench/thread-state/pinned-display-order/folder/create"
-        | "workbench/thread-state/pinned-display-order/folder/drop"
-        | "workbench/thread-state/pinned-display-order/folder/title/set"
-        | "workbench/thread-state/pinned-display-order/move";
-    }>,
-  ) {
-    if (request.method === "workbench/thread-state/pinned-display-order/folder/drop") {
-      return await this.mutatePinnedFolderDrop(request);
-    }
-    if (request.method === "workbench/thread-state/pinned-display-order/move" && !request.sourceKey.startsWith("folder:")) {
-      return await this.mutatePinnedThreadMove(request);
-    }
-    if ("sourceKey" in request && !request.sourceKey.startsWith("folder:")) {
-      const identity = parseProjectQualifiedThreadDisplayKey(request.sourceKey);
-      if (!identity) return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
-      if (!this.pinnedEntries.has(request.sourceKey)) {
-        const state = await this.getProject(identity.projectId);
-        this.updatePinnedLayoutEntries(identity.projectId, this.naturallyOrderedEntries(state));
-      }
-    }
-    const result = await this.pinnedLayout.mutate([...this.pinnedEntries.values()], request);
-    if (result.snapshot) this.publishPinnedLayout(result.snapshot);
-    return { accepted: result.accepted, revision: result.snapshot?.revision ?? (await this.pinnedLayout.getSnapshot()).revision };
-  }
-
-  private async mutatePinnedThreadMove(
-    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/pinned-display-order/move" }>,
-  ) {
-    const sourceIdentity = parseProjectQualifiedThreadDisplayKey(request.sourceKey);
-    const currentSnapshot = await this.pinnedLayout.getSnapshot();
-    if (!sourceIdentity || sourceIdentity.threadKey.startsWith("folder:")) {
-      return { accepted: false, revision: currentSnapshot.revision };
-    }
-    const sourceState = await this.getProject(sourceIdentity.projectId);
-    return await this.enqueue("pinned-display-order", async () => await this.enqueue(
-      `${sourceIdentity.projectId}:thread:${sourceIdentity.threadKey}`,
-      async () => {
-        const source = sourceState.entries.get(sourceIdentity.threadKey);
-        if (!source) return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
-        const nextSource = setWorkbenchThreadEntryPriority(source, "pinned");
-        if (!nextSource) return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
-        const priorDisplayOrder = sourceState.displayOrder;
-        const sourceChanged = !areDeeplyEqual(source, nextSource);
-        if (sourceChanged) {
-          sourceState.entries.set(sourceIdentity.threadKey, nextSource);
-          sourceState.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(sourceState), sourceState.displayOrder);
-          try {
-            await this.persist(sourceIdentity.projectId, sourceState, [sourceIdentity.threadKey], { layout: true });
-          } catch (error) {
-            sourceState.entries.set(sourceIdentity.threadKey, source);
-            sourceState.displayOrder = priorDisplayOrder;
-            throw error;
-          }
-        }
-        this.updatePinnedLayoutEntries(sourceIdentity.projectId, this.naturallyOrderedEntries(sourceState));
-        try {
-          const result = await this.pinnedLayout.mutate([...this.pinnedEntries.values()], request);
-          if (!result.accepted) {
-            if (sourceChanged) {
-              sourceState.entries.set(sourceIdentity.threadKey, source);
-              sourceState.displayOrder = priorDisplayOrder;
-              await this.persist(sourceIdentity.projectId, sourceState, [sourceIdentity.threadKey], { layout: true });
-              this.updatePinnedLayoutEntries(sourceIdentity.projectId, this.naturallyOrderedEntries(sourceState));
-            }
-            return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
-          }
-          if (sourceChanged) this.publish(sourceIdentity.projectId, sourceState, nextSource);
-          if (result.snapshot) this.publishPinnedLayout(result.snapshot);
-          return { accepted: true, revision: result.snapshot?.revision ?? (await this.pinnedLayout.getSnapshot()).revision };
-        } catch (error) {
-          if (sourceChanged) {
-            sourceState.entries.set(sourceIdentity.threadKey, source);
-            sourceState.displayOrder = priorDisplayOrder;
-            try {
-              await this.persist(sourceIdentity.projectId, sourceState, [sourceIdentity.threadKey], { layout: true });
-              this.updatePinnedLayoutEntries(sourceIdentity.projectId, this.naturallyOrderedEntries(sourceState));
-            } catch {
-              throw new Error(`Pinned thread move failed and source priority rollback could not be persisted: ${sanitizeError(error)}`);
-            }
-          }
-          throw error;
-        }
-      },
-    ));
-  }
-
-  private async mutatePinnedFolderDrop(
-    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/pinned-display-order/folder/drop" }>,
-  ) {
-    const sourceIdentity = parseProjectQualifiedThreadDisplayKey(request.sourceKey);
-    const targetIdentity = parseProjectQualifiedThreadDisplayKey(request.targetKey);
-    const currentSnapshot = await this.pinnedLayout.getSnapshot();
-    if (!sourceIdentity || !targetIdentity || sourceIdentity.threadKey.startsWith("folder:") || targetIdentity.threadKey.startsWith("folder:")) {
-      return { accepted: false, revision: currentSnapshot.revision };
-    }
-    const sourceState = await this.getProject(sourceIdentity.projectId);
-    const targetState = await this.getProject(targetIdentity.projectId);
-    return await this.enqueue("pinned-display-order", async () => await this.enqueue(
-      `${sourceIdentity.projectId}:thread:${sourceIdentity.threadKey}`,
-      async () => {
-        const source = sourceState.entries.get(sourceIdentity.threadKey);
-        const target = targetState.entries.get(targetIdentity.threadKey);
-        if (!source || !target || target.entryKind !== "thread" || target.metadata.archived || target.lifecycle.settled) {
-          return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
-        }
-        const nextSource = setWorkbenchThreadEntryPriority(source, "pinned");
-        if (!nextSource) return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
-        const priorSource = source;
-        const priorDisplayOrder = sourceState.displayOrder;
-        const sourceChanged = !areDeeplyEqual(source, nextSource);
-        if (sourceChanged) {
-          sourceState.entries.set(sourceIdentity.threadKey, nextSource);
-          sourceState.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(sourceState), sourceState.displayOrder);
-          try {
-            await this.persist(sourceIdentity.projectId, sourceState, [sourceIdentity.threadKey], { layout: true });
-          } catch (error) {
-            sourceState.entries.set(sourceIdentity.threadKey, priorSource);
-            sourceState.displayOrder = priorDisplayOrder;
-            throw error;
-          }
-        }
-        this.updatePinnedLayoutEntries(sourceIdentity.projectId, this.naturallyOrderedEntries(sourceState));
-        this.updatePinnedLayoutEntries(targetIdentity.projectId, this.naturallyOrderedEntries(targetState));
-        try {
-          const result = await this.pinnedLayout.dropThread([...this.pinnedEntries.values()], request);
-          if (!result.accepted) {
-            if (sourceChanged) {
-              sourceState.entries.set(sourceIdentity.threadKey, priorSource);
-              sourceState.displayOrder = priorDisplayOrder;
-              await this.persist(sourceIdentity.projectId, sourceState, [sourceIdentity.threadKey], { layout: true });
-              this.updatePinnedLayoutEntries(sourceIdentity.projectId, this.naturallyOrderedEntries(sourceState));
-            }
-            return { accepted: false, revision: (await this.pinnedLayout.getSnapshot()).revision };
-          }
-          if (sourceChanged) this.publish(sourceIdentity.projectId, sourceState, nextSource);
-          if (result.snapshot) this.publishPinnedLayout(result.snapshot);
-          return { accepted: true, revision: result.snapshot?.revision ?? (await this.pinnedLayout.getSnapshot()).revision };
-        } catch (error) {
-          if (sourceChanged) {
-            sourceState.entries.set(sourceIdentity.threadKey, priorSource);
-            sourceState.displayOrder = priorDisplayOrder;
-            try {
-              await this.persist(sourceIdentity.projectId, sourceState, [sourceIdentity.threadKey], { layout: true });
-              this.updatePinnedLayoutEntries(sourceIdentity.projectId, this.naturallyOrderedEntries(sourceState));
-            } catch {
-              throw new Error(`Pinned folder drop failed and source priority rollback could not be persisted: ${sanitizeError(error)}`);
-            }
-          }
-          throw error;
-        }
-      },
-    ));
-  }
-
-  private async mutateHomeDisplayOrder(
-    connectionId: string,
-    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/home-display-order/move" }>,
-  ) {
-    const observation = this.connectionProjects.get(connectionId);
-    const currentSnapshot = await this.homeDisplayOrder.getSnapshot();
-    if (observation?.scope !== "global" || observation.version < 5) {
-      return { accepted: false, revision: currentSnapshot.revision };
-    }
-
-    const sourceIdentity = parseProjectQualifiedThreadDisplayKey(request.sourceKey);
-    if (!sourceIdentity) return { accepted: false, revision: currentSnapshot.revision };
-    const sourceState = await this.getProject(sourceIdentity.projectId);
-    const destinationIdentity = request.destinationFolderKey
-      ? parseProjectQualifiedThreadDisplayKey(request.destinationFolderKey)
-      : null;
-    if (request.destinationFolderKey && !destinationIdentity) return { accepted: false, revision: currentSnapshot.revision };
-    if (destinationIdentity && destinationIdentity.projectId !== sourceIdentity.projectId) {
-      return { accepted: false, revision: currentSnapshot.revision };
-    }
-    const beforeIdentity = request.beforeKey ? parseProjectQualifiedThreadDisplayKey(request.beforeKey) : null;
-    if (request.beforeKey && !beforeIdentity) return { accepted: false, revision: currentSnapshot.revision };
-
-    return await this.enqueue("home-display-order", async () => await this.enqueue(
-      `${sourceIdentity.projectId}:display-order`,
-      async () => {
-        const queuedSnapshot = await this.homeDisplayOrder.getSnapshot();
-        const sourceFolderId = sourceIdentity.threadKey.startsWith("folder:") ? sourceIdentity.threadKey.slice("folder:".length) : null;
-        const sourceFolder = sourceFolderId
-          ? sourceState.displayOrder.folders?.find((folder) => folder.folderId === sourceFolderId) ?? null
-          : null;
-        const sourceEntry = sourceFolder ? null : sourceState.entries.get(sourceIdentity.threadKey) ?? null;
-        if ((sourceFolder && sourceFolder.section !== request.section) || (!sourceFolder && !sourceEntry)) {
-          return { accepted: false, revision: queuedSnapshot.revision };
-        }
-        const nextSource = sourceEntry ? setWorkbenchThreadEntryDisplaySection(sourceEntry, request.section) : null;
-        if (sourceEntry && !nextSource) return { accepted: false, revision: queuedSnapshot.revision };
-
-        const destinationFolderId = destinationIdentity?.threadKey.startsWith("folder:")
-          ? destinationIdentity.threadKey.slice("folder:".length)
-          : null;
-        const destinationFolder = destinationFolderId
-          ? sourceState.displayOrder.folders?.find((folder) => folder.folderId === destinationFolderId) ?? null
-          : null;
-        if (
-          (request.destinationFolderKey && !destinationFolder)
-          || (destinationFolder && destinationFolder.section !== request.section)
-          || (sourceFolder && destinationFolder)
-          || (destinationFolder && beforeIdentity && beforeIdentity.projectId !== sourceIdentity.projectId)
-        ) return { accepted: false, revision: queuedSnapshot.revision };
-
-        const priorSource = sourceEntry;
-        const sourceChanged = Boolean(sourceEntry && nextSource && !areDeeplyEqual(sourceEntry, nextSource));
-        if (sourceEntry && nextSource && sourceChanged) {
-          sourceState.entries.set(sourceIdentity.threadKey, nextSource);
-        }
-        const sourceKeys = sourceFolder
-          ? sourceFolder.threadKeys.map((threadKey) => getProjectQualifiedThreadDisplayKey(sourceIdentity.projectId, ThreadDisplayKeySchema.parse(threadKey)))
-          : [request.sourceKey];
-        const entries = this.homeLayoutEntries();
-        let homeBeforeKey = request.beforeKey;
-        if (destinationFolder && !homeBeforeKey) {
-          const orderedKeys = resolveWorkbenchHomeThreadSectionKeys(entries, queuedSnapshot.displayOrder, request.section);
-          const destinationKeys = new Set(destinationFolder.threadKeys.map((threadKey) => (
-            getProjectQualifiedThreadDisplayKey(sourceIdentity.projectId, ThreadDisplayKeySchema.parse(threadKey))
-          )));
-          const lastDestinationIndex = orderedKeys.reduce(
-            (lastIndex, key, index) => destinationKeys.has(key) ? index : lastIndex,
-            -1,
-          );
-          homeBeforeKey = orderedKeys.slice(lastDestinationIndex + 1).find((key) => !sourceKeys.includes(key)) ?? null;
-        }
-
-        const currentFolder = sourceEntry
-          ? findWorkbenchThreadFolder(sourceState.displayOrder, sourceIdentity.threadKey)
-          : null;
-        const beforeLocalKey = beforeIdentity?.projectId === sourceIdentity.projectId
-          ? beforeIdentity.threadKey
-          : null;
-        const withinSameFolder = Boolean(
-          sourceEntry
-          && currentFolder
-          && destinationFolder
-          && currentFolder.folderId === destinationFolder.folderId,
-        );
-        let nextProjectDisplayOrder = sourceChanged
-          ? reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(sourceState), sourceState.displayOrder)
-          : sourceState.displayOrder;
-        if (sourceEntry && destinationFolder) {
-          if (beforeLocalKey && !destinationFolder.threadKeys.includes(beforeLocalKey)) {
-            if (priorSource) sourceState.entries.set(sourceIdentity.threadKey, priorSource);
-            return { accepted: false, revision: queuedSnapshot.revision };
-          }
-          nextProjectDisplayOrder = moveWorkbenchThreadDisplayItem(
-            this.naturallyOrderedEntries(sourceState),
-            nextProjectDisplayOrder,
-            request.section,
-            sourceIdentity.threadKey,
-            destinationFolder.folderId,
-            beforeLocalKey,
-          ) ?? sourceState.displayOrder;
-        } else if (sourceEntry && currentFolder) {
-          nextProjectDisplayOrder = reconcileWorkbenchThreadDisplayOrder(
-            this.naturallyOrderedEntries(sourceState),
-            removeWorkbenchThreadFromProjectFolder(sourceState.displayOrder, sourceIdentity.threadKey),
-          );
-        }
-
-        const priorProjectDisplayOrder = sourceState.displayOrder;
-        const projectChanged = sourceChanged || !areDeeplyEqual(nextProjectDisplayOrder, priorProjectDisplayOrder);
-        if (projectChanged) {
-          sourceState.displayOrder = nextProjectDisplayOrder;
-          try {
-            await this.persist(sourceIdentity.projectId, sourceState, sourceChanged ? [sourceIdentity.threadKey] : [], { layout: true });
-          } catch (error) {
-            if (priorSource) sourceState.entries.set(sourceIdentity.threadKey, priorSource);
-            sourceState.displayOrder = priorProjectDisplayOrder;
-            throw error;
-          }
-        }
-
-        if (withinSameFolder) {
-          if (projectChanged) this.publish(sourceIdentity.projectId, sourceState);
-          return { accepted: true, revision: sourceState.revision };
-        }
-
-        try {
-          const result = await this.homeDisplayOrder.move(
-            entries,
-            request.section,
-            sourceKeys,
-            homeBeforeKey,
-          );
-          if (!result.accepted) {
-            if (projectChanged) {
-              if (priorSource) sourceState.entries.set(sourceIdentity.threadKey, priorSource);
-              sourceState.displayOrder = priorProjectDisplayOrder;
-              await this.persist(sourceIdentity.projectId, sourceState, sourceChanged ? [sourceIdentity.threadKey] : [], { layout: true });
-            }
-            return { accepted: false, revision: queuedSnapshot.revision };
-          }
-          if (projectChanged) this.publish(sourceIdentity.projectId, sourceState, sourceChanged && nextSource ? nextSource : undefined);
-          if (result.snapshot) this.publishHomeDisplayOrder(result.snapshot);
-          return {
-            accepted: true,
-            revision: result.snapshot?.revision ?? queuedSnapshot.revision,
-          };
-        } catch (error) {
-          if (projectChanged) {
-            if (priorSource) sourceState.entries.set(sourceIdentity.threadKey, priorSource);
-            sourceState.displayOrder = priorProjectDisplayOrder;
-            try {
-              await this.persist(sourceIdentity.projectId, sourceState, sourceChanged ? [sourceIdentity.threadKey] : [], { layout: true });
-            } catch {
-              throw new Error(`Home thread move failed and project folder rollback could not be persisted: ${sanitizeError(error)}`);
-            }
-          }
-          throw error;
-        }
-      },
-    ));
-  }
-
   private installGitArcSnapshot(state: ProjectState, snapshot: WorkbenchThreadGitArcSnapshot) {
     const arcs = new Map(snapshot.arcs.map(({ harness, state: gitArc, threadId }) => [`${harness}:${threadId}`, gitArc]));
     const plans = new Map(snapshot.plans.map(({ harness, state: gitArcPlan, threadId }) => [`${harness}:${threadId}`, gitArcPlan]));
@@ -2649,128 +1784,20 @@ export default class WorkbenchThreadStateController {
     return next.finally(() => { if (this.operationQueues.get(key) === next) this.operationQueues.delete(key); });
   }
 
-  private async upsertDraft(projectId: ProjectId, draft: WorkbenchThreadDraft, folderId?: string) {
-    const state = await this.getProject(projectId);
-    return await this.enqueue(folderId ? `${projectId}:display-order` : `${projectId}:draft:${draft.draftId}`, () => this.enqueue(`${projectId}:storage:write`, async () => {
-      const result = await state.draftStore.upsert(state, projectId, draft, folderId, {
-        beforeWrite: () => this.assertActive(),
-        entries: (candidate) => this.naturallyOrderedEntries(candidate),
-        now: this.now,
-        write: async (changes) => {
-          await this.options.threadStateStore.writeChanges(projectId, changes);
-        },
-      });
-      if (result.entry) this.publish(projectId, state, result.entry);
-      return { accepted: result.accepted, revision: result.revision };
-    }));
-  }
-
-  private async moveDraft(sourceProjectId: ProjectId, destinationProjectId: ProjectId, draftId: DraftId) {
-    const [sourceState, destinationState] = await Promise.all([
-      this.getProject(sourceProjectId),
-      this.getProject(destinationProjectId),
-    ]);
-    return await this.enqueue(`draft:${draftId}`, async () => {
-      const sourceDraft = sourceState.drafts.get(draftId);
-      const sourceEntry = sourceState.entries.get(`draft:${draftId}`);
-      if (!sourceDraft || sourceEntry?.entryKind !== "draft") {
-        return { accepted: false, revision: destinationState.revision };
-      }
-      if (destinationState.drafts.has(draftId) || destinationState.entries.has(`draft:${draftId}`)) {
-        return { accepted: false, revision: destinationState.revision };
-      }
-
-      const sourceDisplayOrder = sourceState.displayOrder;
-      const destinationDisplayOrder = destinationState.displayOrder;
-      const movedDraft = WorkbenchThreadDraftSchema.parse({ ...sourceDraft, projectId: destinationProjectId });
-      const movedEntry = destinationState.draftStore.projectEntry(movedDraft, sourceEntry.metadata);
-      destinationState.drafts.set(draftId, movedDraft);
-      destinationState.entries.set(`draft:${draftId}`, movedEntry);
-
-      try {
-        await this.persist(destinationProjectId, destinationState, [getThreadDisplayDraftKey(draftId)]);
-      } catch (error) {
-        destinationState.drafts.delete(draftId);
-        destinationState.entries.delete(`draft:${draftId}`);
-        destinationState.displayOrder = destinationDisplayOrder;
-        throw error;
-      }
-
-      sourceState.drafts.delete(draftId);
-      sourceState.entries.delete(`draft:${draftId}`);
-      try {
-        await this.persist(sourceProjectId, sourceState, [getThreadDisplayDraftKey(draftId)]);
-      } catch (error) {
-        sourceState.drafts.set(draftId, sourceDraft);
-        sourceState.entries.set(`draft:${draftId}`, sourceEntry);
-        sourceState.displayOrder = sourceDisplayOrder;
-        destinationState.drafts.delete(draftId);
-        destinationState.entries.delete(`draft:${draftId}`);
-        destinationState.displayOrder = destinationDisplayOrder;
-        const rollback = await Promise.allSettled([
-          this.persist(sourceProjectId, sourceState, [getThreadDisplayDraftKey(draftId)], { layout: true }),
-          this.persist(destinationProjectId, destinationState, [getThreadDisplayDraftKey(draftId)], { layout: true }),
-        ]);
-        if (rollback.some(({ status }) => status === "rejected")) {
-          throw new Error(`Draft move failed and rollback could not be persisted: ${sanitizeError(error)}`);
-        }
-        throw error;
-      }
-
-      if (sourceEntry.metadata.pinned) {
-        const pinnedLayoutUpdate = await this.pinnedLayout.remove(sourceProjectId, getThreadDisplayDraftKey(draftId));
-        if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
-      }
-      const homeDisplayOrderUpdate = await this.homeDisplayOrder.replace(
-        sourceProjectId,
-        getThreadDisplayDraftKey(draftId),
-        getThreadDisplayDraftKey(draftId),
-        destinationProjectId,
-      );
-      if (homeDisplayOrderUpdate) this.publishHomeDisplayOrder(homeDisplayOrderUpdate);
-      this.publish(sourceProjectId, sourceState);
-      this.publish(destinationProjectId, destinationState, movedEntry);
-      return { accepted: true, revision: destinationState.revision };
-    });
-  }
-
-  private async deleteDraft(projectId: ProjectId, draftId: DraftId, clientUpdatedAt: number) {
-    const state = await this.getProject(projectId);
-    await this.enqueue(`${projectId}:draft:${draftId}`, async () => {
-      const current = state.drafts.get(draftId);
-      if (current && current.clientUpdatedAt > clientUpdatedAt) return;
-      const deletedEntry = state.entries.get(`draft:${draftId}`);
-      state.drafts.delete(draftId); state.entries.delete(`draft:${draftId}`);
-      if (deletedEntry && getThreadSidebarGroup(deletedEntry) === "pinned") {
-        const pinnedLayoutUpdate = await this.pinnedLayout.remove(projectId, getThreadDisplayDraftKey(draftId));
-        if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
-      }
-      const homeDisplayOrderUpdate = await this.homeDisplayOrder.remove(projectId, getThreadDisplayDraftKey(draftId));
-      if (homeDisplayOrderUpdate) this.publishHomeDisplayOrder(homeDisplayOrderUpdate);
-      await this.persist(projectId, state, [getThreadDisplayDraftKey(draftId)]); this.publish(projectId, state);
-    });
-    return { accepted: true, revision: state.revision };
-  }
-
   private async mutatePriority(
     request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/priority/set" }>,
   ) {
     const state = await this.getProject(request.projectId);
     return await this.enqueue(`${request.projectId}:thread:${request.sourceKey}`, async () => {
-      const beforePublication = new Map(state.entries);
       const entry = state.entries.get(request.sourceKey);
       if (!entry) return { accepted: false, revision: state.revision };
       const next = setWorkbenchThreadEntryPriority(entry, request.priority);
       if (!next) return { accepted: false, revision: state.revision };
       if (areDeeplyEqual(entry, next)) return { accepted: true, revision: state.revision };
+      const previousEntries = new Map(state.entries);
       state.entries.set(request.sourceKey, next);
-      state.displayOrder = reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(state), state.displayOrder);
-      if (getThreadSidebarGroup(entry) === "pinned" && getThreadSidebarGroup(next) !== "pinned") {
-        const pinnedLayoutUpdate = await this.pinnedLayout.remove(request.projectId, request.sourceKey);
-        if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
-      }
-      await this.persist(request.projectId, state, [request.sourceKey], { layout: true });
-      this.publish(request.projectId, state, next, beforePublication);
+      await this.persist(request.projectId, state, [request.sourceKey], { previousEntries, layout: true });
+      this.publish(request.projectId, state, next);
       return { accepted: true, revision: state.revision };
     });
   }
@@ -2896,162 +1923,7 @@ export default class WorkbenchThreadStateController {
     )));
   }
 
-  private async mutateDraft(request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" }>) {
-    const state = await this.getProject(request.projectId);
-    return await this.enqueue(`${request.projectId}:draft:${request.draftId}`, async () => {
-      const key = getThreadDisplayDraftKey(request.draftId);
-      const entry = state.entries.get(key);
-      if (!entry || entry.entryKind !== "draft") return { accepted: false, revision: state.revision };
-      const next = WorkbenchThreadSidebarEntrySchema.parse({
-        ...entry,
-        metadata: request.method === "workbench/thread-state/draft/pin/set"
-          ? { ...entry.metadata, pinned: request.pinned }
-          : { ...entry.metadata, snoozed: request.snoozed },
-      });
-      if (next.entryKind !== "draft") return { accepted: false, revision: state.revision };
-      if (areDeeplyEqual(entry, next)) return { accepted: true, revision: state.revision };
-      state.entries.set(key, next);
-      if (getThreadSidebarGroup(entry) === "pinned" && getThreadSidebarGroup(next) !== "pinned") {
-        const pinnedLayoutUpdate = await this.pinnedLayout.remove(request.projectId, key);
-        if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
-      }
-      await this.persist(request.projectId, state, [key]);
-      this.publish(request.projectId, state, next);
-      return { accepted: true, revision: state.revision };
-    });
-  }
-
-  private async mutateDisplayOrder(request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/drop" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" }>) {
-    const state = await this.getProject(request.projectId);
-    return await this.enqueue(`${request.projectId}:display-order`, async () => {
-      const beforePublication = new Map(state.entries);
-      if (request.method === "workbench/thread-state/display-order/folder/drop") {
-        return await this.mutateProjectFolderDrop(state, request);
-      }
-      if (request.method === "workbench/thread-state/display-order/move") {
-        return await this.mutateProjectDisplayMove(state, request);
-      }
-      const entries = this.naturallyOrderedEntries(state);
-      const next = request.method === "workbench/thread-state/display-order/folder/create"
-        ? createWorkbenchThreadFolder(entries, state.displayOrder, request.folderId, request.sourceKey, request.title)
-        : renameWorkbenchThreadFolder(entries, state.displayOrder, request.folderId, request.title);
-      if (!next) return { accepted: false, revision: state.revision };
-      if (areDeeplyEqual(next, state.displayOrder)) return { accepted: true, revision: state.revision };
-      state.displayOrder = next;
-      await this.persist(request.projectId, state, [], { layout: true });
-      this.publish(request.projectId, state, undefined, beforePublication);
-      return { accepted: true, revision: state.revision };
-    });
-  }
-
-  private async mutateProjectDisplayMove(
-    state: ProjectState,
-    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/display-order/move" }>,
-  ) {
-    const beforePublication = new Map(state.entries);
-    const source = state.entries.get(request.sourceKey);
-    const nextSource = source ? setWorkbenchThreadEntryDisplaySection(source, request.section) : null;
-    if (source && !nextSource) return { accepted: false, revision: state.revision };
-    const priorDisplayOrder = state.displayOrder;
-    const sourceChanged = Boolean(source && nextSource && !areDeeplyEqual(source, nextSource));
-    if (source && nextSource && sourceChanged) state.entries.set(request.sourceKey, nextSource);
-    const nextDisplayOrder = moveWorkbenchThreadDisplayItem(
-      this.naturallyOrderedEntries(state),
-      sourceChanged
-        ? reconcileWorkbenchThreadDisplayOrder(this.naturallyOrderedEntries(state), priorDisplayOrder)
-        : priorDisplayOrder,
-      request.section,
-      request.sourceKey,
-      request.destinationFolderId,
-      request.beforeKey,
-    );
-    if (!nextDisplayOrder) {
-      if (source) state.entries.set(request.sourceKey, source);
-      return { accepted: false, revision: state.revision };
-    }
-    const displayOrderChanged = !areDeeplyEqual(nextDisplayOrder, priorDisplayOrder);
-    if (!sourceChanged && !displayOrderChanged) return { accepted: true, revision: state.revision };
-    state.displayOrder = nextDisplayOrder;
-    try {
-      await this.persist(request.projectId, state, sourceChanged ? [request.sourceKey] : [], { layout: true });
-    } catch (error) {
-      if (source) state.entries.set(request.sourceKey, source);
-      state.displayOrder = priorDisplayOrder;
-      throw error;
-    }
-    if (source && nextSource && getThreadSidebarGroup(source) === "pinned" && getThreadSidebarGroup(nextSource) !== "pinned") {
-      const pinnedLayoutUpdate = await this.pinnedLayout.remove(request.projectId, entryKey(source));
-      if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
-    }
-    this.publish(request.projectId, state, sourceChanged && nextSource ? nextSource : undefined, beforePublication);
-    return { accepted: true, revision: state.revision };
-  }
-
-  private async mutateProjectFolderDrop(
-    state: ProjectState,
-    request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/display-order/folder/drop" }>,
-  ) {
-    const beforePublication = new Map(state.entries);
-    if (request.sourceKey === request.targetKey) return { accepted: false, revision: state.revision };
-    const source = state.entries.get(request.sourceKey);
-    const target = state.entries.get(request.targetKey);
-    if (!source || !target || target.entryKind !== "thread" || getWorkbenchThreadDisplaySection(target) !== request.section) {
-      return { accepted: false, revision: state.revision };
-    }
-    const nextSource = setWorkbenchThreadEntryDisplaySection(source, request.section);
-    if (!nextSource) return { accepted: false, revision: state.revision };
-    const priorDisplayOrder = state.displayOrder;
-    state.entries.set(request.sourceKey, nextSource);
-    const entries = this.naturallyOrderedEntries(state);
-    let nextDisplayOrder: WorkbenchThreadDisplayOrder | null = null;
-    if (request.destinationFolderId) {
-      const folder = findWorkbenchThreadFolder(state.displayOrder, request.targetKey);
-      if (!folder || folder.folderId !== request.destinationFolderId || folder.section !== request.section) {
-        state.entries.set(request.sourceKey, source);
-        return { accepted: false, revision: state.revision };
-      }
-      nextDisplayOrder = moveWorkbenchThreadDisplayItem(
-        entries,
-        state.displayOrder,
-        request.section,
-        request.sourceKey,
-        folder.folderId,
-        folder.threadKeys[0] ?? null,
-      );
-    } else if (request.folderId) {
-      nextDisplayOrder = createWorkbenchThreadFolder(entries, state.displayOrder, request.folderId, request.targetKey, "New folder");
-      if (nextDisplayOrder) {
-        nextDisplayOrder = moveWorkbenchThreadDisplayItem(
-          entries,
-          nextDisplayOrder,
-          request.section,
-          request.sourceKey,
-          request.folderId,
-          request.targetKey,
-        );
-      }
-    }
-    if (!nextDisplayOrder) {
-      state.entries.set(request.sourceKey, source);
-      return { accepted: false, revision: state.revision };
-    }
-    state.displayOrder = nextDisplayOrder;
-    try {
-      await this.persist(request.projectId, state, areDeeplyEqual(source, nextSource) ? [] : [request.sourceKey], { layout: true });
-    } catch (error) {
-      state.entries.set(request.sourceKey, source);
-      state.displayOrder = priorDisplayOrder;
-      throw error;
-    }
-    if (getThreadSidebarGroup(source) === "pinned" && getThreadSidebarGroup(nextSource) !== "pinned") {
-      const pinnedLayoutUpdate = await this.pinnedLayout.remove(request.projectId, entryKey(source));
-      if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
-    }
-    this.publish(request.projectId, state, nextSource, beforePublication);
-    return { accepted: true, revision: state.revision };
-  }
-
-  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/observe" | "workbench/thread-state/release" | "workbench/thread-state/open" | "workbench/thread-state/global/open" | "workbench/thread-state/global/close" | "workbench/thread-state/close" | "workbench/thread-state/refresh" | "workbench/thread-state/pin/open" | "workbench/thread-state/draft/upsert" | "workbench/thread-state/draft/move" | "workbench/thread-state/draft/delete" | "workbench/thread-state/draft/pin/set" | "workbench/thread-state/draft/snooze/set" | "workbench/thread-state/priority/set" | "workbench/thread-state/snooze/until" | "workbench/thread-state/display-order/folder/create" | "workbench/thread-state/display-order/folder/drop" | "workbench/thread-state/display-order/folder/title/set" | "workbench/thread-state/display-order/move" | "workbench/thread-state/home-display-order/move" | "workbench/thread-state/pinned-display-order/folder/create" | "workbench/thread-state/pinned-display-order/folder/drop" | "workbench/thread-state/pinned-display-order/folder/title/set" | "workbench/thread-state/pinned-display-order/move" }>) {
+  private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/priority/set" | "workbench/thread-state/snooze/until" }>) {
     const state = await this.getProject(request.projectId);
     const key = getThreadDisplayThreadKey(request.identity.harness, request.identity.threadId);
     const candidate = state.entries.get(key);
@@ -3183,11 +2055,7 @@ export default class WorkbenchThreadStateController {
       if (!parsed.success) return { accepted: false, revision: state.revision };
       if (areDeeplyEqual(entry, parsed.data)) return { accepted: true, revision: state.revision };
       state.entries.set(key, parsed.data);
-      if (getThreadSidebarGroup(entry) === "pinned" && getThreadSidebarGroup(parsed.data) !== "pinned") {
-        const pinnedLayoutUpdate = await this.pinnedLayout.remove(request.projectId, key);
-        if (pinnedLayoutUpdate) this.publishPinnedLayout(pinnedLayoutUpdate);
-      }
-      await this.persist(request.projectId, state, [key]); this.publish(request.projectId, state, state.entries.get(key), beforePublication);
+      await this.persist(request.projectId, state, [key]); this.publish(request.projectId, state, state.entries.get(key));
       return { accepted: true, revision: state.revision };
     });
     const result = request.method === "workbench/thread-state/settle"

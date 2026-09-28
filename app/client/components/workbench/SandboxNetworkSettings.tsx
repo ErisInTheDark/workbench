@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { WorkbenchSandboxNetworkSetting } from "workbench-shared/workbench/provider/provider-settings";
 import { ResetIcon } from "./workbench-icons";
-import { useWorkbenchDaemonClient } from "./WorkbenchDaemonClientContext";
+import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
 import WorkbenchIconButton from "./WorkbenchIconButton";
 import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
 

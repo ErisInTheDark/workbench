@@ -63,6 +63,7 @@ export default function WorkbenchProjectListItem({
   active = false,
   compact: compactOverride,
   entry,
+  href,
   id,
   nowMs,
   onProjectLinkClick,
@@ -74,6 +75,7 @@ export default function WorkbenchProjectListItem({
   active?: boolean;
   compact?: boolean;
   entry: DisplaySidebarProject;
+  href?: string;
   id?: string;
   nowMs: number;
   onProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
@@ -160,7 +162,7 @@ export default function WorkbenchProjectListItem({
             aria-label={`Open ${logical ? project.label : project.name || project.id}`}
             aria-selected={role === "option" ? selected : undefined}
             className="absolute inset-0 z-20 cursor-pointer rounded-[0.8rem] border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-            href={projectHref(logical ? createLogicalProjectRoute(project.id) : createProjectRoute(project.id))}
+            href={href ?? projectHref(logical ? createLogicalProjectRoute(project.id) : createProjectRoute(project.id))}
             id={id}
             onClick={(event) => onProjectLinkClick(event, project.id, logical)}
             role={role}

@@ -1,21 +1,13 @@
 /*
  * Exports:
- * - default WorkbenchHomeThreadDisplayOrderStore: own revisioned home priority order and SQLite persistence.
+ * - default WorkbenchHomeThreadDisplayOrderStore: read and conform retained home order for app presentation import.
  */
 
 import { z } from "zod";
-import type { ProjectId, ThreadDisplayKey } from "workbench-shared/workbench/identity";
-
-import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
-  moveWorkbenchHomeThreadDisplayItem,
   normalizeWorkbenchHomeThreadDisplayOrder,
-  removeWorkbenchHomeThreadDisplayMember,
-  replaceWorkbenchHomeThreadDisplayMember,
   WorkbenchHomeThreadDisplayOrderSchema,
 } from "workbench-shared/workbench/thread/home-thread-display-order";
-import { getProjectQualifiedThreadDisplayKey, type ThreadDisplayLayoutEntry } from "workbench-shared/workbench/thread/thread-display-layout";
-import type { WorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type { WorkbenchHomeThreadDisplayOrderSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
@@ -38,7 +30,6 @@ const EMPTY_STORED_ORDER: StoredHomeThreadDisplayOrder = {
 
 export default class WorkbenchHomeThreadDisplayOrderStore {
   private loadPromise: Promise<StoredHomeThreadDisplayOrder> | null = null;
-  private operationQueue: Promise<void> = Promise.resolve();
   private readonly reportRepairs: (repairedPaths: PropertyKey[][]) => void;
   private state: StoredHomeThreadDisplayOrder | null = null;
 
@@ -51,52 +42,6 @@ export default class WorkbenchHomeThreadDisplayOrderStore {
 
   async getSnapshot(): Promise<WorkbenchHomeThreadDisplayOrderSnapshot> {
     return this.snapshot(await this.load());
-  }
-
-  async move(
-    entries: readonly ThreadDisplayLayoutEntry[],
-    section: WorkbenchThreadDisplaySection,
-    sourceKeys: readonly string[],
-    beforeKey: string | null,
-  ) {
-    return await this.enqueue(async () => {
-      const state = await this.load();
-      const next = moveWorkbenchHomeThreadDisplayItem(entries, state.displayOrder, section, sourceKeys, beforeKey);
-      if (!next) return { accepted: false, snapshot: null };
-      return { accepted: true, snapshot: await this.commitIfChanged(state, next) };
-    });
-  }
-
-  async remove(projectId: ProjectId, threadKey: ThreadDisplayKey) {
-    return await this.enqueue(async () => {
-      const state = await this.load();
-      const next = removeWorkbenchHomeThreadDisplayMember(
-        state.displayOrder,
-        getProjectQualifiedThreadDisplayKey(projectId, threadKey),
-      );
-      return await this.commitIfChanged(state, next);
-    });
-  }
-
-  async replace(
-    sourceProjectId: ProjectId,
-    sourceThreadKey: ThreadDisplayKey,
-    replacementThreadKey: ThreadDisplayKey,
-    replacementProjectId = sourceProjectId,
-  ) {
-    return await this.enqueue(async () => {
-      const state = await this.load();
-      const next = replaceWorkbenchHomeThreadDisplayMember(
-        state.displayOrder,
-        getProjectQualifiedThreadDisplayKey(sourceProjectId, sourceThreadKey),
-        getProjectQualifiedThreadDisplayKey(replacementProjectId, replacementThreadKey),
-      );
-      return await this.commitIfChanged(state, next);
-    });
-  }
-
-  async waitForIdle() {
-    await this.operationQueue;
   }
 
   private async load() {
@@ -114,20 +59,6 @@ export default class WorkbenchHomeThreadDisplayOrderStore {
     return await this.loadPromise;
   }
 
-  private async commitIfChanged(
-    state: StoredHomeThreadDisplayOrder,
-    displayOrder: StoredHomeThreadDisplayOrder["displayOrder"],
-  ) {
-    if (areDeeplyEqual(displayOrder, state.displayOrder)) return null;
-    return await this.commit({ ...state, displayOrder, revision: state.revision + 1 });
-  }
-
-  private async commit(next: StoredHomeThreadDisplayOrder) {
-    await this.persistence.writeGlobal("homeDisplayOrder", next);
-    this.state = next;
-    return this.snapshot(next);
-  }
-
   private snapshot(state: StoredHomeThreadDisplayOrder): WorkbenchHomeThreadDisplayOrderSnapshot {
     return {
       displayOrder: normalizeWorkbenchHomeThreadDisplayOrder(state.displayOrder),
@@ -136,9 +67,4 @@ export default class WorkbenchHomeThreadDisplayOrderStore {
     };
   }
 
-  private enqueue<T>(operation: () => Promise<T>) {
-    const result = this.operationQueue.then(operation, operation);
-    this.operationQueue = result.then(() => undefined, () => undefined);
-    return result;
-  }
 }

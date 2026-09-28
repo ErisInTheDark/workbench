@@ -7,7 +7,7 @@
  * - default WorkbenchThreadStateStore: adapt consumer objects to relational persistence.
  */
 import { z } from "zod";
-import type { WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchHarnessId, WorkbenchProjectThreadSummary } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadTitleHistoryEntry } from "workbench-shared/workbench/thread/thread-title-history";
 import { ThreadDisplayLayoutSchema } from "workbench-shared/workbench/thread/thread-display-layout";
 import { parseProjectDocument } from "./database/thread-state/workbench-thread-state-document-source";
@@ -26,6 +26,7 @@ export interface WorkbenchStoredThreadTitleHistory {
 }
 
 export interface WorkbenchThreadStatePersistence {
+  readNavigationSummary(projectId: ProjectId): Promise<WorkbenchProjectThreadSummary>;
   writeChanges(projectId: ProjectId, changes: Omit<WorkbenchThreadStateCommit, "projectId">): Promise<void>;
   readNextArchiveEligibility(): Promise<number | null>;
   readArchiveEligible(activeBefore: number): Promise<Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }>>;
@@ -37,6 +38,7 @@ export interface WorkbenchThreadStatePersistence {
 }
 
 export interface WorkbenchThreadStateStoreDatabase {
+  readThreadStateNavigationSummary(projectId: ProjectId): Promise<WorkbenchProjectThreadSummary>;
   commitThreadState(changes: WorkbenchThreadStateCommit): Promise<void>;
   readThreadStateArchiveDeadline(): Promise<number | null>;
   readThreadStateArchiveEligible(activeBefore: number): Promise<Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }>>;
@@ -61,6 +63,10 @@ const GlobalDocumentSchema = z.discriminatedUnion("id", [
 
 export default class WorkbenchThreadStateStore implements WorkbenchThreadStatePersistence {
   constructor(private readonly database: WorkbenchThreadStateStoreDatabase) {}
+
+  readNavigationSummary(projectId: ProjectId) {
+    return this.database.readThreadStateNavigationSummary(projectId);
+  }
 
   writeChanges(projectId: ProjectId, changes: Omit<WorkbenchThreadStateCommit, "projectId">) {
     return this.database.commitThreadState({ ...changes, projectId });

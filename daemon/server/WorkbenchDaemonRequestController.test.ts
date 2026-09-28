@@ -191,6 +191,7 @@ function createController(options: {
       },
     },
     projectSnapshot: options.projectSnapshot ?? {
+      handleRequest: async () => ({ accepted: true }),
       readProjectSnapshot: async projectId => ({
         projectId: ProjectIdSchema.parse(projectId),
         root: "project", rootPath: "C:/project", roots: [],
@@ -627,6 +628,7 @@ test("file-index reads stay qualified to the requested project without changing 
   const reads: string[] = [];
   const { controller } = createController({
     projectSnapshot: {
+      handleRequest: async () => ({ accepted: true }),
       readProjectSnapshot: async projectId => {
         reads.push(projectId);
         return {
@@ -669,6 +671,7 @@ for (const harness of ["codex", "copilot", "opencode"] as const) {
     const persistence = new WorkbenchThreadStateStore({
       commitThreadState: async changes => { repository.commit(changes); },
       readThreadStateProject: async id => repository.readProject(id),
+      readThreadStateNavigationSummary: async id => repository.readNavigationSummary(id),
       readThreadStateTitleHistories: async id => repository.readTitleHistories(id),
       writeThreadStateProject: async (id, document, histories) => { repository.writeProject(id, document, histories); },
       readThreadStateGlobal: async id => repository.readGlobal(id),
@@ -692,12 +695,6 @@ for (const harness of ["codex", "copilot", "opencode"] as const) {
           scope: { kind: "global" }, createdAt: 1, updatedAt: 1,
         }] }),
         hasGitArcBlockingSettlement: async () => false,
-        projectState: {
-          getCurrentUpdate: () => null,
-          handleRequest: async () => { throw new Error("Unexpected project request."); },
-          observe: () => () => {},
-        },
-        publish: () => {},
         reconcileProject: async () => [],
         resolveGitArc: async () => null,
         resolveGitArcPlan: async () => null,

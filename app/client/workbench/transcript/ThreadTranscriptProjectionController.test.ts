@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ThreadPayload } from "workbench-shared/types";
+import type { WorkspaceTranscriptState } from "workbench-shared/workbench/workspace/workspace-observation";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { getWorkbenchInputState, withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
@@ -135,6 +136,42 @@ function streamBaseline(threadId: string): TranscriptStreamUpdate {
     layout: createTranscriptLayoutPatch(null, createTranscriptLayout(projected.data)),
   };
 }
+
+test("a stale source retains its visible transcript and recovers from the next baseline without another view subscription", async context => {
+  let publishStream: ((update: TranscriptStreamUpdate) => void) | undefined;
+  let publishState: ((state: WorkspaceTranscriptState) => void) | undefined;
+  let sourceState: ThreadTranscriptProjectionState = { status: "idle" };
+  let subscriptions = 0;
+  const opened = Promise.withResolvers<void>();
+  const controller = new ThreadTranscriptProjectionController({
+    available: true, turnLimit: 1, onText: () => {},
+    onError: error => assert.fail(error),
+    onStateChange: state => { sourceState = state; },
+    transcripts: {
+      subscribe: async (_params, _snapshot, stream, _failure, state) => {
+        subscriptions++; publishStream = stream; publishState = state; opened.resolve();
+      },
+      unsubscribe: async () => {},
+    },
+  });
+  context.after(() => controller.dispose());
+  controller.select({ thread: thread("thread") });
+  await opened.promise;
+  publishStream!(streamBaseline("thread"));
+  const current = sourceState as ThreadTranscriptProjectionState;
+  assert.equal(current.status, "ready");
+  assert.ok("projection" in current && current.projection);
+  publishState!({ subscriptionId: "view", phase: "stale", failure: null });
+  const stale = sourceState as ThreadTranscriptProjectionState;
+  assert.equal(stale.status, "loading");
+  assert.ok("projection" in stale);
+  assert.deepEqual(stale.projection, current.projection);
+  publishState!({ subscriptionId: "view", phase: "failed", failure: "Source read failed." });
+  assert.equal((sourceState as ThreadTranscriptProjectionState).status, "failed");
+  publishStream!(streamBaseline("thread"));
+  assert.equal((sourceState as ThreadTranscriptProjectionState).status, "ready");
+  assert.equal(subscriptions, 1);
+});
 
 function patchBaseline(
   status: "inProgress" | "completed" | "failed" = "inProgress",

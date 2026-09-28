@@ -91,6 +91,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "readTranscriptAsset"; input: TranscriptAssetRead }
   | { type: "initialize"; databasePath: string; acknowledgeMigration?: boolean; projects?: WorkbenchProjectPreparation }
   | { type: "reconcileProjectCatalog"; discovery: WorkbenchProjectDiscovery }
+  | { type: "readRetainedProjectCatalog"; discoveryRoots: readonly string[] }
   | { type: "readProjectAliases" }
   | { type: "resolveProjectIdentity"; projectId: string }
   | { type: "settleProjectIcon"; settlement: WorkbenchProjectIconSettlement }
@@ -113,6 +114,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "resolveTurnIdentity"; input: WorkbenchTurnIdentityLookup }
   | { type: "admitTranscriptItemIdentities"; inputs: readonly WorkbenchTranscriptItemIdentityAdmission[] }
   | { type: "resolveTranscriptItemIdentity"; input: WorkbenchTranscriptItemIdentityLookup }
+  | { type: "readThreadStateNavigationSummary"; projectId: ProjectId }
   | { type: "readThreadStateProject"; projectId: ProjectId }
   | { type: "readThreadStateTitleHistories"; projectId: ProjectId }
   | { type: "writeThreadStateProject"; projectId: ProjectId; document: WorkbenchThreadStateProjectDocument; titleHistories?: readonly WorkbenchStoredThreadTitleHistory[] }
@@ -184,6 +186,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "turnIdentity"; identity: WorkbenchTurnIdentityRecord | null }
   | { id: number; type: "transcriptItemIdentities"; identities: WorkbenchTranscriptItemIdentity[] }
   | { id: number; type: "transcriptItemIdentity"; identity: WorkbenchTranscriptItemIdentity | null }
+  | { id: number; type: "threadStateNavigationSummary"; summary: import("workbench-shared/workbench/thread/thread-state").WorkbenchProjectThreadSummary }
   | { id: number; type: "threadStateProject"; document: WorkbenchThreadStateProjectDocument }
   | { id: number; type: "threadStateTitleHistories"; histories: WorkbenchStoredThreadTitleHistory[] }
   | { id: number; type: "threadStateGlobal"; document: WorkbenchThreadStateGlobalDocument | null }

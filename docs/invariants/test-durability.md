@@ -1,1 +1,3 @@
 - We do not need permanent test tax for one-off migrations. Migration system tests and `test:lifecycle` (which tests against copies of real databases) are sufficient.
+- Lifecycle and provider scenarios exercise app-to-daemon routing through real isolated processes. Direct daemon or storage checks support, not replace, that end-to-end proof.
+- Test-process deadlines live outside test workers; retire owned descendants and detached-service PIDs before releasing fixtures or the shared run lease.

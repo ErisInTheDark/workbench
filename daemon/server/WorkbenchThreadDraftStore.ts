@@ -3,13 +3,11 @@
  * - conformStoredWorkbenchThreadDraft: repair one persisted draft at the storage boundary.
  * - projectWorkbenchThreadDraft: project one draft into its sidebar entry.
  * - workbenchComposerProfileFromDraft: derive the draft's durable profile selection.
- * - default WorkbenchThreadDraftStore: own project drafts, new-thread profile, and draft sidebar projection.
+ * - default WorkbenchThreadDraftStore: retain imported drafts, new-thread profile, and stored draft projection.
  */
 
 import { z } from "zod";
 
-import { getThreadDisplayDraftKey } from "workbench-shared/workbench/thread/thread-display-layout";
-import { moveWorkbenchThreadDisplayItem } from "workbench-shared/workbench/thread/thread-display-order";
 import type { ProjectId } from "workbench-shared/workbench/identity";
 import {
   WorkbenchComposerSettingsSchema,
@@ -17,11 +15,9 @@ import {
   WorkbenchThreadDraftSchema,
   type WorkbenchComposerProfileSelectionState,
   type WorkbenchThreadDraft,
-  type WorkbenchThreadSidebarEntry,
 } from "workbench-shared/workbench/thread/thread-state";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type { WorkbenchThreadStateEntry } from "./workbench-thread-state-record";
-import type WorkbenchProjectThreadState from "./WorkbenchProjectThreadState";
 
 const StoredDraftIdentitySchema = z.object({
   draftId: z.uuid(),
@@ -120,74 +116,4 @@ export default class WorkbenchThreadDraftStore {
     return projectWorkbenchThreadDraft(draft, metadata);
   }
 
-  async upsert(
-    project: WorkbenchProjectThreadState,
-    projectId: ProjectId,
-    draft: WorkbenchThreadDraft,
-    folderId: string | undefined,
-    ports: {
-      beforeWrite: () => void;
-      entries: (state: WorkbenchProjectThreadState) => readonly WorkbenchThreadSidebarEntry[];
-      now: () => number;
-      write: Parameters<WorkbenchProjectThreadState["writeSelected"]>[3]["write"];
-    },
-  ) {
-    const current = this.drafts.get(draft.draftId);
-    if (current && current.clientUpdatedAt > draft.clientUpdatedAt) {
-      return { accepted: true, entry: null, revision: project.revision };
-    }
-    const targetFolder = folderId
-      ? project.displayOrder.folders?.find((folder) => folder.folderId === folderId)
-      : null;
-    if (folderId && (!targetFolder || targetFolder.section === "settled")) {
-      return { accepted: false, entry: null, revision: project.revision };
-    }
-    const timestamp = ports.now();
-    const accepted = WorkbenchThreadDraftSchema.parse({
-      ...draft,
-      createdAt: current?.createdAt ?? timestamp,
-      projectId,
-      updatedAt: timestamp,
-    });
-    const staged = project.stage();
-    staged.drafts.set(accepted.draftId, accepted);
-    staged.newThreadProfile = staged.draftStore.profileFromDraft(accepted);
-    const existingEntry = project.entries.get(getThreadDisplayDraftKey(accepted.draftId));
-    const metadata = existingEntry?.entryKind === "draft"
-      ? existingEntry.metadata
-      : targetFolder
-        ? {
-          archived: false as const,
-          pinned: targetFolder.section === "pinned",
-          snoozed: targetFolder.section === "snoozed",
-        }
-        : undefined;
-    const entry = staged.draftStore.projectEntry(accepted, metadata);
-    const key = getThreadDisplayDraftKey(accepted.draftId);
-    staged.entries.set(key, entry);
-    if (targetFolder) {
-      const displayOrder = moveWorkbenchThreadDisplayItem(
-        ports.entries(staged),
-        staged.displayOrder,
-        targetFolder.section,
-        key,
-        targetFolder.folderId,
-        targetFolder.threadKeys[0] ?? null,
-      );
-      if (!displayOrder) return { accepted: false, entry: null, revision: project.revision };
-      staged.displayOrder = displayOrder;
-    }
-    await staged.writeSelected(projectId, [key], {
-      layout: Boolean(targetFolder),
-      profile: true,
-    }, {
-      beforeWrite: ports.beforeWrite,
-      write: ports.write,
-    });
-    this.drafts.set(accepted.draftId, accepted);
-    project.entries.set(key, entry);
-    this.newThreadProfile = staged.newThreadProfile;
-    if (targetFolder) project.displayOrder = staged.displayOrder;
-    return { accepted: true, entry, revision: project.revision };
-  }
 }

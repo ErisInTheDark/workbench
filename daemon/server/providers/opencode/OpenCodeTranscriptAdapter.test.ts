@@ -17,6 +17,90 @@ import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcrip
 import WorkbenchTranscriptLiveController from "../../database/transcript/WorkbenchTranscriptLiveController";
 import OpenCodeEventController from "./OpenCodeEventController";
 import { writeTranscriptText, readTranscriptText } from "workbench-shared/workbench/transcript/thread-transcript-stream";
+import type { SessionMessageInfo } from "@opencode/client";
+
+test("an obsolete canonical read cannot reopen a turn interrupted while its identities were resolving", async context => {
+  const fixture = createThreadStateTestDatabase();
+  context.after(() => fixture.sqlite.close());
+  fixture.admitThread(testProjectIds.project, "wb-thread", "opencode", "session", "C:/repo");
+  const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
+  const adapter = new OpenCodeTranscriptAdapter({
+    ...fixture.identities,
+    transcript: { record: async observations => repository.settle(observations) },
+  });
+  const session = {
+    id: "session", projectID: "project", title: "Thread", cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 2 }, location: { directory: "C:/repo" },
+  };
+  const messages: SessionMessageInfo[] = [
+    { id: "root", type: "user", text: "work", time: { created: 1 } },
+    { id: "assistant", type: "assistant", agent: "agent", model: { id: "model", providerID: "provider" },
+      content: [], time: { created: 2 } },
+  ];
+  const project = { id: testProjectIds.project, rootPath: "C:/repo" };
+  const admitted = await adapter.record(session, messages, project);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const admit = fixture.identities.items.admit.bind(fixture.identities.items);
+  context.mock.method(fixture.identities.items, "admit", async (...args: Parameters<typeof admit>) => {
+    entered.resolve();
+    await release.promise;
+    return admit(...args);
+  });
+  let current = true;
+  const stale = adapter.record(session, messages, project, {
+    window: { latest: true, previousCursor: null, gapIds: [] },
+    canCommit: () => current,
+  });
+  await entered.promise;
+  try {
+    current = false;
+    await adapter.recordTurnState({ threadId: admitted.threadId, turnId: admitted.latestTurnId!,
+      state: "interrupted", observedAt: 3 });
+  } finally { release.resolve(); }
+  await stale;
+  const turn = repository.read({ threadId: admitted.threadId, turnLimit: 1 })!.turns[0]!;
+  assert.equal(turn.state, "interrupted");
+  assert.equal(turn.ended_at, 3);
+});
+
+for (const outcome of ["succeeded", "failed", "interrupted"] as const) {
+  test(`native idle ${outcome} survives canonical rereads without reopening a turn`, async context => {
+    const fixture = createThreadStateTestDatabase();
+    context.after(() => fixture.sqlite.close());
+    fixture.admitThread(testProjectIds.project, "wb-thread", "opencode", "session", "C:/repo");
+    const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
+    const adapter = new OpenCodeTranscriptAdapter({
+      ...fixture.identities,
+      transcript: { record: async observations => repository.settle(observations) },
+    });
+    const session = {
+      id: "session", projectID: "project", title: "Thread", cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: 1, updated: 4 }, location: { directory: "C:/repo" },
+    };
+    const messages: SessionMessageInfo[] = [
+      { id: "root", type: "user", text: "work", time: { created: 1 } },
+      { id: "assistant", type: "assistant", agent: "agent", model: { id: "model", providerID: "provider" },
+        content: [], time: { created: 2 } },
+      { id: "idle", type: "idle", outcome, time: { created: 4 } },
+    ];
+    const project = { id: testProjectIds.project, rootPath: "C:/repo" };
+    const window = { previousCursor: null, gapIds: [], latest: true };
+    const recorded = await adapter.record(session, messages, project, { window });
+    await adapter.record(session, messages, project, { window });
+    const expected = outcome === "succeeded" ? "completed" : outcome;
+    assert.equal(recorded.latestTurnState, expected);
+    assert.equal(repository.read({ threadId: recorded.threadId, turnLimit: 1 })!.turns[0]!.state, expected);
+    const next = await adapter.record(session, [...messages,
+      { id: "next", type: "user", text: "next task", time: { created: 5 } },
+    ], project, { window });
+    assert.equal(next.latestTurnState, "inProgress");
+    assert.deepEqual(repository.read({ threadId: recorded.threadId, turnLimit: 2 })!.turns.map(turn => turn.state),
+      [expected, "inProgress"]);
+  });
+}
 
 test("native reasoning streams through SQLite identity and live projection before its end event", async () => {
   const fixture = createThreadStateTestDatabase();
@@ -208,7 +292,7 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
       },
     },
   });
-  await adapter.record({
+  const result = await adapter.record({
     id: "session", projectID: "project", title: "Thread", cost: 0,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 1, updated: 4 }, location: { directory: "C:/repo" },
@@ -273,6 +357,7 @@ test("keeps a delivered steer in its active WB turn and starts the next root sep
     },
   ], { id: "00000000-0000-4000-8000-000000000010", rootPath: "C:/repo" }, { settleUsage: true });
 
+  assert.equal(result.latestOperation, "compaction");
   assert.equal(recorded.filter(entry => entry.kind === "turn").length, 2);
   assert.equal(recorded.filter(entry => entry.kind === "item").length, 7);
   assert.equal(recorded.some(entry => entry.kind === "item" && entry.item.type === "contextCompaction"), true);

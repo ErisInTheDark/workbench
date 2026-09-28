@@ -13,7 +13,7 @@ import type { InlineMentionHighlightSources } from "../../../workbench/thread/in
 import { normalizeWorkbenchPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { deriveMarkdownAppendPresentation } from "../../../workbench/markdown/markdown-append-presentation";
 import { renderThreadMarkdown } from "./thread-markdown-render";
-import { useWorkbenchDaemonClient } from "../WorkbenchDaemonClientContext";
+import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");

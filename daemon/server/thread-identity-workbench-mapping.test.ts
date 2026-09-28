@@ -1,5 +1,5 @@
 /*
- * Exports: none. Tests protect complete observation identity at the wire boundary.
+ * Exports: none. Tests protect canonical mutation and questionnaire ownership at the wire boundary.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -9,8 +9,7 @@ import WorkbenchThreadIdentityRepository from "./database/thread-identity/Workbe
 import WorkbenchTranscriptIdentityRepository from "./database/transcript/WorkbenchTranscriptIdentityRepository";
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
-import { WorkbenchThreadObservationResultSchema, WorkbenchThreadObservationSnapshotSchema, type WorkbenchThreadObservationSnapshot } from "workbench-shared/workbench/thread/thread-state";
-import { createWorkbenchQuestionnaireStatePorts, mapNativeThreadStateResult, mapNativeThreadStateSnapshot, mapWorkbenchThreadStateRequest } from "./thread-identity-workbench-mapping";
+import { createWorkbenchQuestionnaireStatePorts, mapNativeQuestionnaire, mapWorkbenchThreadStateRequest } from "./thread-identity-workbench-mapping";
 import { admitNativeTranscriptObservations } from "./thread-identity-transcript-mapping";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
@@ -28,7 +27,7 @@ const fixtureIdentityValues = {
   },
 };
 
-test("observation requests validate canonical ownership and outbound state needs no identity projection", async () => {
+test("mutations and questionnaires retain canonical identity and reject foreign project ownership", async () => {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
@@ -79,46 +78,20 @@ test("observation requests validate canonical ownership and outbound state needs
     assert.equal(admittedQuestionnaire.turnId, null);
     await assert.rejects(ports.resolveThread("/foreign", thread.threadId));
     const [question] = await items.admit([{ threadId: thread.threadId, sources: [] }]);
-    const source: WorkbenchThreadObservationSnapshot = {
-      projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: "2c13640d-e0aa-441a-9ce3-a9f293bf38dc",
-      target: { kind: "provider", harness: "codex", threadId: thread.threadId },
-      revision: 4, version: 1, updateKind: "threadObservation", error: null, freshness: "fresh",
-      entries: [{
-        entryKind: "thread", identity: { harness: "codex", threadId: thread.threadId },
-        activityAt: 2, title: "Thread", metadata: { archived: false, pinned: true, snoozed: false },
-        lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "request", turnId: turn.turnId, settled: false },
-        pendingQuestionnaire: {
-          itemId: question!.itemId, turnId: turn.turnId, requestKey: "request",
-          request: { id: "request", title: "Choose", summary: "", submitLabel: "Send", questions: [
-            { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
-          ] },
-        },
-      }],
-    };
-    const request = await mapWorkbenchThreadStateRequest(owners, {
-      method: "workbench/thread-state/observe", projectId: source.projectId,
-      subscriptionId: source.subscriptionId, version: 1,
-      target: { kind: "provider", harness: "codex", threadId: thread.threadId },
+    const questionnaire = await mapNativeQuestionnaire(owners, entry.identity, {
+      itemId: question!.itemId, turnId: fixtureIdentityValues.NativeTurnId["native-turn"], requestKey: "request",
+      request: { id: "request", title: "Choose", summary: "", submitLabel: "Send", questions: [
+        { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
+      ] },
     });
-    assert.ok(request.method === "workbench/thread-state/observe");
-    assert.equal(request.target.threadId, thread.threadId);
-    const resolve = threads.resolve.bind(threads);
-    threads.resolve = async () => { throw new Error("Outbound state performed identity lookup"); };
-    const pushed = WorkbenchThreadObservationSnapshotSchema.parse(await mapNativeThreadStateSnapshot(owners, source));
-    const opened = WorkbenchThreadObservationResultSchema.parse(await mapNativeThreadStateResult(owners, { observation: source }));
-    threads.resolve = resolve;
-    assert.deepEqual(opened.observation, pushed);
-    assert.equal(pushed.projectId, source.projectId);
-    assert.equal(pushed.subscriptionId, source.subscriptionId);
-    assert.equal(pushed.target.threadId, thread.threadId);
-    const projectedEntry = pushed.entries[0]!;
-    assert.ok(projectedEntry.entryKind !== "draft");
-    assert.equal(projectedEntry.identity.threadId, thread.threadId);
-    assert.ok("turnId" in projectedEntry.lifecycle);
-    assert.equal(projectedEntry.lifecycle.turnId, turn.turnId);
-    assert.equal(projectedEntry.pendingQuestionnaire?.turnId, turn.turnId);
-    assert.equal(projectedEntry.pendingQuestionnaire?.itemId, question!.itemId);
-    assert.deepEqual(projectedEntry.pendingQuestionnaire?.request, source.entries[0]!.entryKind !== "draft" && source.entries[0]!.pendingQuestionnaire?.request);
+    assert.equal(questionnaire.itemId, question!.itemId);
+    assert.equal(questionnaire.turnId, turn.turnId);
+    const request = await mapWorkbenchThreadStateRequest(owners, {
+      method: "workbench/thread-state/pin/set", projectId: thread.projectId,
+      identity: { harness: "codex", threadId: thread.threadId }, pinned: true,
+    });
+    assert.ok(request.method === "workbench/thread-state/pin/set");
+    assert.equal(request.identity.threadId, thread.threadId);
     const child = await threads.observe({
       native: { harness: "opencode", nativeLocation: "/repo", nativeThreadId: fixtureIdentityValues.NativeThreadId["native-child"] },
       projectId: fixtureIdentityValues.ProjectId["project"], projectRoot: "/repo", title: "Child", createdAt: 1, updatedAt: 1, activityAt: 1,
@@ -140,23 +113,24 @@ test("observation requests validate canonical ownership and outbound state needs
     assert.ok(items.findItemIdForSource(child.threadId, { turnId: childTurn, reference: "item-123", kind: "stable" }));
     assert.equal(items.findItemIdForSource(child.threadId, { turnId: childTurn, reference: "item-123", kind: "provisional" }), undefined);
     const childRequest = await mapWorkbenchThreadStateRequest(owners, {
-      method: "workbench/thread-state/observe", projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: source.subscriptionId, version: 1,
-      target: { kind: "subagent", harness: "opencode", threadId: child.threadId, parentThreadId: thread.threadId },
+      method: "workbench/thread-state/snooze/until", projectId: fixtureIdentityValues.ProjectId["project"],
+      identity: { harness: "opencode", threadId: child.threadId },
+      target: { projectId: thread.projectId, identity: { harness: "codex", threadId: thread.threadId } },
     });
-    assert.ok(childRequest.method === "workbench/thread-state/observe" && childRequest.target.kind === "subagent");
-    assert.equal(childRequest.target.threadId, child.threadId);
-    assert.equal(childRequest.target.parentThreadId, thread.threadId);
-    for (const target of [request.target, childRequest.target]) {
+    assert.ok(childRequest.method === "workbench/thread-state/snooze/until");
+    assert.equal(childRequest.identity.threadId, child.threadId);
+    assert.equal(childRequest.target.identity.threadId, thread.threadId);
+    for (const identity of [request.identity, childRequest.identity]) {
       const aliased = await mapWorkbenchThreadStateRequest(owners, {
-        method: "workbench/thread-state/observe", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("old/project"),
-        subscriptionId: source.subscriptionId, version: 1, target,
+        method: "workbench/thread-state/pin/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("old/project"),
+        identity, pinned: true,
       });
-      assert.ok(aliased.method === "workbench/thread-state/observe");
-      assert.deepEqual(aliased.target, target);
+      assert.ok(aliased.method === "workbench/thread-state/pin/set");
+      assert.deepEqual(aliased.identity, identity);
     }
     await assert.rejects(mapWorkbenchThreadStateRequest(owners, {
-      method: "workbench/thread-state/observe", projectId: fixtureIdentityValues.ProjectId["foreign"], subscriptionId: source.subscriptionId, version: 1,
-      target: { kind: "provider", harness: "codex", threadId: thread.threadId },
+      method: "workbench/thread-state/pin/set", projectId: fixtureIdentityValues.ProjectId["foreign"],
+      identity: { harness: "codex", threadId: thread.threadId }, pinned: true,
     }));
   } finally {
     threads.dispose();

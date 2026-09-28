@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchDaemonRuntimeClientOptions: shared-socket request seam for browser reload runtime tests.
- * - default WorkbenchDaemonRuntimeClient: own ordered reload dirt, server-completion signals, fallback, and reload admission.
+ * - WorkbenchDaemonRuntimeClientOptions: app workspace and optional installation selection.
+ * - default WorkbenchDaemonRuntimeClient: project source runtime facts and send app-routed reload intent.
  */
 import type {
   WorkbenchReloadDirtSnapshot,
@@ -12,34 +12,29 @@ import type {
 import {
   DaemonReloadResponseSchema,
   WorkbenchDaemonReloadDirtEnvelopeSchema,
-  WORKBENCH_RELOAD_DIRT_READ_METHOD,
-  WORKBENCH_RELOAD_METHOD,
 } from "workbench-shared/workbench/daemon-reload";
-import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
+import type WorkbenchWorkspaceClient from "./app/WorkbenchWorkspaceClient";
+import type { DaemonId } from "workbench-shared/workbench/identity";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 
 const EMPTY: WorkbenchReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
 
 export interface WorkbenchDaemonRuntimeClientOptions {
-  request(method: string, params: unknown): Promise<unknown>;
-}
-
-function isUnsupportedRead(error: unknown) {
-  return error instanceof WorkbenchDaemonRequestError && error.code === -32601;
+  workspace: WorkbenchWorkspaceClient;
+  daemonId?: DaemonId;
 }
 
 export default class WorkbenchDaemonRuntimeClient {
-  #dedicatedObservation = false;
   #disposed = false;
   readonly #listeners = new Set<() => void>();
   readonly #serverReloadListeners = new Set<() => void>();
-  readonly #request: WorkbenchDaemonRuntimeClientOptions["request"];
+  #observation: Pick<ReturnType<WorkbenchWorkspaceClient["observe"]>, "release"> | null = null;
+  #generation = -1;
   #revision = -1;
   #snapshot: WorkbenchReloadDirtSnapshot = EMPTY;
 
-  constructor({ request }: WorkbenchDaemonRuntimeClientOptions) {
-    this.#request = request;
-  }
+  constructor(private readonly options: WorkbenchDaemonRuntimeClientOptions) {}
 
   getSnapshot = () => this.#snapshot;
 
@@ -54,38 +49,28 @@ export default class WorkbenchDaemonRuntimeClient {
   };
 
   async open() {
-    try {
-      const response = await this.#request(WORKBENCH_RELOAD_DIRT_READ_METHOD, {});
-      return this.acceptEnvelope(response, "Rejected Workbench daemon reload dirt response");
-    } catch (error) {
-      if (isUnsupportedRead(error)) {
-        this.#dedicatedObservation = false;
-        return false;
+    if (this.#observation || this.#disposed) return;
+    const update = () => {
+      const fact = observation.getSnapshot();
+      const value = fact.value;
+      if (value?.data) {
+        if (this.#generation !== value.generation) {
+          this.#generation = value.generation;
+          this.#revision = -1;
+        }
+        this.acceptEnvelope({ revision: value.revision, snapshot: value.data }, "Rejected daemon runtime facts");
       }
-      this.#publish({
-        ...this.#snapshot,
-        error: error instanceof Error ? error.message.slice(0, 500) : "Workbench daemon reload observation failed.",
-      });
-      throw error;
-    }
-  }
-
-  resetConnection() {
-    this.#dedicatedObservation = false;
-    this.#revision = -1;
-  }
-
-  acceptLegacy(snapshot: WorkbenchReloadDirtSnapshot | null | undefined) {
-    if (this.#disposed || this.#dedicatedObservation || !snapshot) return;
-    this.#publish(snapshot);
-  }
-
-  acceptUpdate(value: unknown) {
-    return this.acceptEnvelope(value, "Rejected Workbench daemon reload dirt update");
+      if (fact.failure) this.#publish({ ...this.#snapshot, error: fact.failure });
+    };
+    const observation = this.options.workspace.observe({ kind: "daemonRuntime", daemonId: this.options.daemonId }, update);
+    this.#observation = observation;
+    update();
   }
 
   async reloadScopes(scopes: readonly WorkbenchReloadScope[]): Promise<WorkbenchReloadResponse> {
-    const response = await this.#request(WORKBENCH_RELOAD_METHOD, { scopes });
+    const response = await this.options.workspace.rpc.requestRaw({
+      method: "workspace/daemon/reload", params: { daemonId: this.options.daemonId, request: { scopes: [...scopes] } },
+    });
     const parsed = DaemonReloadResponseSchema.safeParse(response);
     if (!parsed.success) {
       reportClientSchemaError("Rejected Workbench reload admission response", parsed.error);
@@ -105,6 +90,7 @@ export default class WorkbenchDaemonRuntimeClient {
 
   dispose() {
     this.#disposed = true;
+    this.#observation?.release();
     this.#listeners.clear();
     this.#serverReloadListeners.clear();
   }
@@ -116,7 +102,6 @@ export default class WorkbenchDaemonRuntimeClient {
       reportClientSchemaError(message, parsed.error);
       return false;
     }
-    this.#dedicatedObservation = true;
     if (parsed.data.revision <= this.#revision) return true;
     const completedServerReload = this.#revision >= 0
       && this.#snapshot.pendingScopes.some(scope => scope.startsWith("server:"))
@@ -133,6 +118,7 @@ export default class WorkbenchDaemonRuntimeClient {
   }
 
   #publish(snapshot: WorkbenchReloadDirtSnapshot) {
+    if (areDeeplyEqual(this.#snapshot, snapshot)) return;
     this.#snapshot = snapshot;
     for (const listener of this.#listeners) listener();
   }

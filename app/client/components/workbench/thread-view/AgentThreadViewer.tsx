@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import StandaloneThreadController from "../../../workbench/transcript/StandaloneThreadController";
 import ThreadTextPresentationContext from "../ThreadTextPresentationContext";
 import ThreadRenderSurface from "./ThreadRenderSurface";
+import { useWorkbenchWorkspace, WorkbenchDaemonAssetOriginContext } from "../WorkbenchWorkspaceContext";
 
 function normalizeThreadId(value: string | null | undefined) {
   return value?.trim() ?? "";
@@ -17,19 +18,22 @@ const emptySubscribe = () => () => undefined;
 const emptySnapshot = () => null;
 
 function SqlThreadViewer({ threadId }: { threadId: string }) {
+  const workspace = useWorkbenchWorkspace();
   const [controller, setController] = useState<StandaloneThreadController | null>(null);
   useEffect(() => {
-    const owner = new StandaloneThreadController(threadId);
+    const owner = new StandaloneThreadController(threadId, { workspace });
     setController(owner);
     void owner.refresh();
     return () => owner.dispose();
-  }, [threadId]);
+  }, [threadId, workspace]);
   const state = useSyncExternalStore(controller?.subscribe ?? emptySubscribe, controller?.getSnapshot ?? emptySnapshot, emptySnapshot);
   const source = state?.source;
   const projection = source?.status === "ready" || source?.status === "loading" || source?.status === "failed"
     ? source.projection : null;
   const error = state?.error ?? (source?.status === "failed" ? source.message : null);
   return (
+    <WorkbenchDaemonAssetOriginContext value={state?.location
+      ? { kind: "source", daemonId: state.location.daemonId } : { kind: "unavailable" }}>
     <ThreadTextPresentationContext value={controller?.text ?? null}>
       {error ? (
         <div role="alert" className="mx-auto max-w-content px-5 pt-5 text-danger md:px-6">
@@ -50,6 +54,7 @@ function SqlThreadViewer({ threadId }: { threadId: string }) {
         }}
       /></div>
     </ThreadTextPresentationContext>
+    </WorkbenchDaemonAssetOriginContext>
   );
 }
 

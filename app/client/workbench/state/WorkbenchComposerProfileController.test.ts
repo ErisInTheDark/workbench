@@ -18,6 +18,7 @@ import type { WorkbenchComposerProfileSlot } from "workbench-shared/types";
 import type { ComposerProfilePersistence, ComposerProfileTargetPersistence } from "./composer-profile-api";
 import WorkbenchComposerProfileController from "./WorkbenchComposerProfileController";
 import { createComposerProfileTargetPersistence } from "./composer-profile-api";
+import type WorkbenchPresentationClient from "./WorkbenchPresentationClient";
 import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
@@ -214,7 +215,7 @@ test("disconnect fences late reads without severing profile subscribers", async 
   controller.dispose();
 });
 
-test("draft profile reads wait for persistence and propagate save failures", async () => {
+test("draft profile reads wait for app facts while configured threads still read their daemon", async () => {
   let release!: () => void;
   const saving = new Promise<void>((resolve) => { release = resolve; });
   let reads = 0;
@@ -222,40 +223,51 @@ test("draft profile reads wait for persistence and propagate save failures", asy
     request: async <TResponse>() => { reads++; return { selection: { kind: "custom", settings: CODEX_SETTINGS } } as TResponse; },
   });
   const slot = { kind: "draft" as const, harness: "codex" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), draftId: fixtureIdentitySchemas.DraftIdSchema.parse("draft") };
-  const persistence = createComposerProfileTargetPersistence(daemon, async (projectId, draftId) => {
-    assert.equal(projectId, slot.projectId);
-    assert.equal(draftId, slot.draftId);
-    await saving;
-  });
+  const appDrafts = { ready: async () => saving,
+    draft: (id: string) => {
+      assert.equal(id, slot.draftId);
+      return { selection: { kind: "custom", settings: CODEX_SETTINGS } };
+    },
+  } as unknown as WorkbenchPresentationClient;
+  const persistence = createComposerProfileTargetPersistence(daemon, appDrafts, fixtureIdentitySchemas.DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001"));
   const reading = persistence.read(slot);
   assert.equal(reads, 0);
   release();
   assert.deepEqual(await reading, { kind: "custom", settings: CODEX_SETTINGS });
-  const failing = createComposerProfileTargetPersistence(daemon, async () => { throw new Error("Draft save failed"); });
-  await assert.rejects(failing.read(slot), /Draft save failed/);
+  assert.equal(reads, 0);
+  await persistence.read({ kind: "thread", harness: "codex", projectId: fixtureIdentityValues.ProjectId["project-a"], threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] });
   assert.equal(reads, 1);
-  await failing.read({ kind: "thread", harness: "codex", projectId: fixtureIdentityValues.ProjectId["project-a"], threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] });
-  assert.equal(reads, 2);
 });
 
-test("draft profile edits cannot overtake a queued draft save", async () => {
+test("draft profile edits await app acknowledgement and preserve failed-save propagation", async () => {
   let release!: () => void;
   const saving = new Promise<void>((resolve) => { release = resolve; });
   let writes = 0;
-  const daemon = new WorkbenchDaemonClient({
-    request: async <TResponse>() => { writes++; return { ok: true } as TResponse; },
-  });
+  const daemon = new WorkbenchDaemonClient({ request: async () => { throw new Error("Draft profiles are app-owned."); } });
   const slot = { kind: "draft" as const, harness: "codex" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), draftId: fixtureIdentitySchemas.DraftIdSchema.parse("draft") };
   const selection = { kind: "custom" as const, settings: CODEX_SETTINGS };
-  const persistence = createComposerProfileTargetPersistence(daemon, async () => saving);
+  let fail = false;
+  const appDrafts = {
+    ready: async () => {},
+    draft: () => ({ id: slot.draftId, phase: "unsent", prompt: "Retained prompt",
+      logicalProjectId: "logical", target: { daemonId: "daemon", projectId: slot.projectId }, selection }),
+    putDraft: async (value: { prompt: string; selection: object }) => {
+      assert.equal(value.prompt, "Retained prompt");
+      assert.deepEqual(value.selection, selection);
+      writes++;
+      await saving;
+      if (fail) throw new Error("Draft save failed");
+    },
+  } as unknown as WorkbenchPresentationClient;
+  const persistence = createComposerProfileTargetPersistence(daemon, appDrafts, fixtureIdentitySchemas.DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001"));
   const writing = persistence.write(slot, selection);
   assert.equal(writes, 0);
   release();
   await writing;
   assert.equal(writes, 1);
-  const failing = createComposerProfileTargetPersistence(daemon, async () => { throw new Error("Draft save failed"); });
-  await assert.rejects(failing.write(slot, selection), /Draft save failed/);
-  assert.equal(writes, 1);
+  fail = true;
+  await assert.rejects(persistence.write(slot, selection), /Draft save failed/);
+  assert.equal(writes, 2);
 });
 
 test("target edits remain ordered and sending waits for their acknowledgement", async () => {

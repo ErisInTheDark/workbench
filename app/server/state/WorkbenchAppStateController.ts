@@ -78,6 +78,10 @@ export default class WorkbenchAppStateController {
       ...(projection?.attachmentsAsUrls ? { attachmentsAsUrls: true } : {}),
       daemonRegistrationId: this.daemonRegistrationId,
       registrations: this.#repository.readDaemonRegistrations(),
+      projectAliases: this.#repository.readDaemonRegistrations().map(registration => ({
+        daemonRegistrationId: registration.id,
+        aliases: this.#repository.readProjectAliases(registration.id),
+      })),
       kind: canUseDelta ? "delta" : "snapshot",
       rows: this.#readRows(canUseDelta ? sinceRevision : -1, projection),
       schemaVersion: appStateSchema.currentVersion,
@@ -115,6 +119,22 @@ export default class WorkbenchAppStateController {
         : { ...mutation, identity: this.#canonicalProject(mutation.identity) };
       const revision = this.#repository.commit((nextRevision) => this.#buildMutation(canonical, nextRevision));
       return this.read(revision - 1, projection);
+    });
+    this.#mutationQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  get revision() {
+    return this.#repository.currentVersion().revision;
+  }
+
+  bindDaemons(
+    sources: readonly { daemonId: string; attachedLocal: boolean }[],
+    projection?: BrowserProjection,
+  ) {
+    const operation = this.#mutationQueue.then(() => {
+      for (const source of sources) this.#repository.registerDaemon(source.daemonId, source.attachedLocal);
+      return this.read(undefined, projection);
     });
     this.#mutationQueue = operation.then(() => undefined, () => undefined);
     return operation;

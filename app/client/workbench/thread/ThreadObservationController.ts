@@ -1,13 +1,12 @@
 /*
  * Exports:
  * - ThreadObservationState: explicit availability of one observed thread family.
- * - ThreadObservationTransport: shared socket request boundary.
+ * - ThreadObservationTransport: workspace-owned acquisition and release boundary.
  * - getThreadObservationKey: stable project/root-family key.
  * - default ThreadObservationController: share consumer-owned observations and fence retired replies.
  */
 import { WorkbenchThreadObservationResultSchema, WorkbenchThreadObservationSnapshotSchema, type WorkbenchThreadRouteTarget, type WorkbenchThreadObservationSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
-import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { z } from "zod";
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 
@@ -20,7 +19,8 @@ export interface ThreadObservationState {
 }
 
 export interface ThreadObservationTransport {
-  request: (method: string, params: object) => Promise<unknown>;
+  observe: (request: { projectId: string; target: WorkbenchObservedThreadTarget; subscriptionId: string }) => Promise<unknown>;
+  release: (subscriptionId: string) => Promise<void>;
 }
 
 export function getThreadObservationKey(projectId: string, target: WorkbenchObservedThreadTarget) {
@@ -40,7 +40,6 @@ interface Observation {
 export default class ThreadObservationController {
   private readonly observations = new Map<string, Observation>();
   private readonly listeners = new Set<() => void>();
-  private connected = true;
   private disposed = false;
 
   constructor(private readonly transport: ThreadObservationTransport) {}
@@ -59,7 +58,7 @@ export default class ThreadObservationController {
         state: { status: "loading", observation: null, error: null },
       };
       this.observations.set(key, observation);
-      if (this.connected) void this.open(observation);
+      void this.open(observation);
     } else observation.consumers.add(consumer);
     const record = observation;
     return { key, release: () => {
@@ -112,21 +111,6 @@ export default class ThreadObservationController {
     if (observation) this.install(observation, next);
   }
 
-  disconnect() {
-    this.connected = false;
-    for (const observation of this.observations.values()) {
-      observation.subscriptionId = null;
-      observation.state = { ...observation.state, status: "loading", error: null };
-      this.emit(observation);
-    }
-  }
-
-  reset() {
-    if (this.disposed) return;
-    this.connected = true;
-    for (const observation of this.observations.values()) void this.open(observation);
-  }
-
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
@@ -146,19 +130,9 @@ export default class ThreadObservationController {
     observation.state = { ...observation.state, status: "loading", error: null };
     this.emit(observation);
     try {
-      const request = (version: 1 | 2) => this.transport.request("workbench/thread-state/observe", {
-        projectId: observation.projectId, target: observation.target, subscriptionId, version,
+      const response = await this.transport.observe({
+        projectId: observation.projectId, target: observation.target, subscriptionId,
       });
-      let response: unknown;
-      try {
-        response = await request(2);
-      } catch (error) {
-        if (!(error instanceof WorkbenchDaemonRequestError)
-          || (error.code as unknown) !== "invalidThreadStateMutation"
-          || !/version|expected 1/iu.test(error.message)) throw error;
-        if (!this.isCurrent(observation, subscriptionId)) return;
-        response = await request(1);
-      }
       if (!this.isCurrent(observation, subscriptionId)) return;
       const parsed = WorkbenchThreadObservationResultSchema.safeParse(response);
       if (!parsed.success) {
@@ -200,10 +174,9 @@ export default class ThreadObservationController {
   }
 
   private releaseRemote(subscriptionId: string) {
-    void this.transport.request("workbench/thread-state/release", { subscriptionId }).catch(() => {
-      // Closing the socket releases all server subscriptions, including an in-flight release.
-      if (!this.connected) return;
-      console.warn("Thread observation release failed. The connection's server subscription may remain until disconnect.");
+    void this.transport.release(subscriptionId).catch(error => {
+      console.warn("Thread observation release failed.",
+        error instanceof Error ? error.message.slice(0, 500) : "Workspace release failed.");
     });
   }
 

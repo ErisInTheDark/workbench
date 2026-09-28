@@ -25,6 +25,11 @@ export default class WorkbenchPresentationController {
     return this.repository.readRevision();
   }
 
+  readAcceptedLaunch(draftId: string) {
+    this.assertOpen();
+    return this.repository.readAcceptedLaunch(draftId);
+  }
+
   readImportReceipts(daemonId: DaemonId, sources: readonly PresentationImportSource[]) {
     this.assertOpen();
     return { present: this.repository.readImportReceipts(daemonId, sources) };
