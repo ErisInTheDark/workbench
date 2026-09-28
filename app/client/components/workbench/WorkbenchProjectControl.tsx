@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchProjectControl: render the home draft's click-to-next project rotator beside the harness control.
+ * - default WorkbenchProjectControl: render the selected-project draft rotator beside the harness control.
  */
 "use client";
 
@@ -20,7 +20,7 @@ export default function WorkbenchProjectControl({
   const label = "matchKey" in project ? project.displayName ?? project.label : project.name || project.id;
   return (
     <WorkbenchRotatorButton
-      ariaLabel={`Create thread in ${label}. Click to use the next recent project.`}
+      ariaLabel={`Create thread in ${label}. Click to use the next selected project.`}
       disabled={disabled}
       onRotate={onRotate}
       title={label}

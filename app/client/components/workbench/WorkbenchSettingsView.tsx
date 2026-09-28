@@ -47,7 +47,6 @@ const SETTINGS_ORDER: WorkbenchSettingKey[] = [
   "editorSpellCheck",
   "composerSpellCheck",
   "fileOpenBehavior",
-  "selectedProjectPinPlacement",
   "showUnopenableFiles",
   "threadCodeBlockWrap",
   "threadCodeDetails",

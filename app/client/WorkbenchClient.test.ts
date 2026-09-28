@@ -1,10 +1,10 @@
 /* No production exports. Protect independent local-folder rendering, draft-preserving registration and applied launch identity. */
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import type { WorkbenchProjectOption } from "workbench-shared/types";
-import type { WorkspaceProjects } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { ExplorerSnapshot, WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkspaceProjects, WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
 import { DaemonIdSchema, FolderIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createObservedProjectRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createObservedProjectRoute, createProjectSelectionRoute, withProjectSelection } from "workbench-shared/workbench/navigation/workbench-route";
 import { createWorkspaceClientFixture } from "./workbench/app/workspace-client-fixture";
 import { WorkbenchClient } from "./WorkbenchClient";
 
@@ -39,6 +39,135 @@ function facts(registered: boolean): WorkspaceProjects {
     ],
   };
 }
+
+test("empty and multi-project list routes do not invent a browsed folder", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  for (const selected of [[], [logicalId, "another-project"]]) {
+    const result = await client.controls.applyRoute(createProjectSelectionRoute(selected));
+    assert.equal(result.ok, true);
+    assert.deepEqual(client.navigation.getSnapshot().route.selectedProjectIds, selected);
+  }
+  assert.equal(socket.sent.some(item => item.method === "workspace/observe"
+    && item.params.query.kind === "projectTree"), false);
+});
+
+test("project row observations hand off without blanking visible threads", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (message: string) => warnings.push(message));
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const snapshots: ExplorerSnapshot[] = [];
+  const client = WorkbenchClient({
+    workspace: fixture.workspace,
+    onExplorerStateChange: snapshot => snapshots.push(snapshot),
+  });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const secondId = LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000004");
+  const secondLocation = { daemonId, projectId: ProjectIdSchema.parse("local://C:/git/app/other") };
+  const data = facts(true);
+  data.projects.push({
+    ...data.projects[0]!, id: secondId, label: "other", matchKey: "local://C:/git/app/other",
+    locations: [{ ...data.projects[0]!.locations[0]!, target: secondLocation,
+      name: "other", rootPath: "C:/git/app/other",
+      project: { ...project, id: secondLocation.projectId, name: "other",
+        relativePath: "other", rootPath: "C:/git/app/other" } }],
+  });
+  const projects = await socket.request("workspace/observe", 0,
+    request => request.params.query.kind === "projects");
+  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data });
+
+  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
+  const firstQuery = await socket.request("workspace/observe", 0, request =>
+    request.params.query.kind === "projectThreads" && request.params.query.projects?.length === 1);
+  const firstRow = {
+    logicalProjectId: logicalId, location, hostname: "local", rootPath: project.rootPath,
+    entry: {
+      entryKind: "thread" as const, title: "first", activityAt: 1,
+      identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse("first") },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false },
+    },
+  } satisfies WorkspaceThreadRows["rows"][number];
+  socket.observation(firstQuery, { kind: "projectThreads", phase: "current", failure: null,
+    data: { rows: [firstRow], projects: [] } });
+  await Promise.resolve();
+  assert.deepEqual(snapshots.at(-1)?.logicalThreads?.map(row => row.entry.title), ["first"]);
+
+  const beforeAdd = socket.sent.length;
+  assert.equal((await client.controls.applyRoute(withProjectSelection(createLogicalProjectRoute(logicalId),
+    [logicalId, secondId]))).ok, true);
+  const added = await socket.request("workspace/observe", beforeAdd, request =>
+    request.params.query.kind === "projectThreads" && request.params.query.projects?.length === 2);
+  socket.observation(added, { kind: "projectThreads", phase: "pending", failure: null,
+    data: { rows: [], projects: [] } });
+  await Promise.resolve();
+  assert.deepEqual(snapshots.at(-1)?.logicalThreads?.map(row => row.entry.title), ["first"]);
+  assert.equal(socket.sent.some(item => item.method === "workspace/release"
+    && item.params.subscriptionId === firstQuery.params.subscriptionId), false);
+
+  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
+  const superseded = await socket.request("workspace/release", beforeAdd,
+    request => request.params.subscriptionId === added.params.subscriptionId);
+  assert.equal(superseded.params.subscriptionId, added.params.subscriptionId);
+  assert.deepEqual(snapshots.at(-1)?.logicalThreads?.map(row => row.entry.title), ["first"]);
+
+  const beforeRetry = socket.sent.length;
+  assert.equal((await client.controls.applyRoute(withProjectSelection(createLogicalProjectRoute(logicalId),
+    [logicalId, secondId]))).ok, true);
+  const retry = await socket.request("workspace/observe", beforeRetry, request =>
+    request.params.query.kind === "projectThreads" && request.params.query.projects?.length === 2);
+  const secondRow = {
+    ...firstRow, logicalProjectId: secondId, location: secondLocation, rootPath: "C:/git/app/other",
+    entry: { ...firstRow.entry, title: "second",
+      identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse("second") } },
+  } satisfies WorkspaceThreadRows["rows"][number];
+  socket.observation(retry, { kind: "projectThreads", phase: "current", failure: null,
+    data: { rows: [firstRow, secondRow], projects: [] } });
+  await socket.request("workspace/release", beforeRetry,
+    request => request.params.subscriptionId === firstQuery.params.subscriptionId);
+  assert.deepEqual(snapshots.at(-1)?.logicalThreads?.map(row => row.entry.title), ["first", "second"]);
+
+  const beforeFailure = socket.sent.length;
+  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
+  const failing = await socket.request("workspace/observe", beforeFailure, request =>
+    request.params.query.kind === "projectThreads" && request.params.query.projects?.length === 1);
+  socket.fail(failing, "project rows unavailable");
+  await socket.request("workspace/release", beforeFailure,
+    request => request.params.subscriptionId === retry.params.subscriptionId);
+  await Promise.resolve();
+  assert.deepEqual(snapshots.at(-1)?.logicalThreads, []);
+  assert.match(snapshots.at(-1)?.threadsError ?? "", /project rows unavailable/);
+  assert.ok(warnings.some(message => message.includes("Workspace query failed")));
+});
+
+test("an older app broadens row demand only when project groups are unavailable", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (message: string) => warnings.push(message));
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const projects = await socket.request("workspace/observe", 0,
+    request => request.params.query.kind === "projects");
+  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
+  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
+  const focused = await socket.request("workspace/observe", 0,
+    request => request.params.query.kind === "projectThreads"
+      && request.params.query.projects?.length === 1);
+  assert.equal(focused.params.query.kind, "projectThreads");
+  const groups = await socket.request("workspace/observe", 0,
+    request => request.params.query.kind === "projectGroups");
+  const offset = socket.sent.length;
+  socket.fail(groups, "Unknown query kind");
+  const fallback = await socket.request("workspace/observe", offset,
+    request => request.params.query.kind === "projectThreads" && request.params.query.projects === null);
+  assert.equal(fallback.params.query.kind, "projectThreads");
+  if (fallback.params.query.kind === "projectThreads") assert.equal(fallback.params.query.projects, null);
+  assert.ok(warnings.some(message => message.includes("Workspace query failed")));
+});
 
 test("a no-remote folder opens a draft while another source and unrelated app queries remain pending", async context => {
   const fixture = createWorkspaceClientFixture();
@@ -252,13 +381,13 @@ test("a thread viewed from another project keeps demand for its owning project r
     { kind: "provider", harness: "codex", threadId }, null);
   assert.equal((await client.controls.applyRoute(route)).pending, true);
   const owner = await socket.request("workspace/observe", 0, request => request.params.query.kind === "threadOwner");
+  const ownerRowOffset = socket.sent.length;
   socket.observation(owner, { kind: "threadOwner", phase: "current", failure: null, data: {
     phase: "current", identity: { threadId, projectId: ownerLocation.projectId, harness: "codex" },
     location: ownerLocation, logicalProjectId: ownerLogicalId,
   } });
-  const offset = socket.sent.length;
   const opening = client.controls.applyRoute(route);
-  const rows = await socket.request("workspace/observe", offset, request =>
+  const rows = await socket.request("workspace/observe", ownerRowOffset, request =>
     request.params.query.kind === "projectThreads"
       && request.params.query.projects?.length === 2);
   assert.equal(rows.params.query.kind, "projectThreads");
@@ -267,7 +396,7 @@ test("a thread viewed from another project keeps demand for its owning project r
     { kind: "logical", projectId: logicalId },
     { kind: "logical", projectId: ownerLogicalId },
   ]);
-  const read = await socket.request("workspace/observe", offset, request => request.params.query.kind === "thread");
+  const read = await socket.request("workspace/observe", ownerRowOffset, request => request.params.query.kind === "thread");
   await client.controls.applyRoute(createHomeRoute());
   socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
     data: null, owner: { phase: "unavailable", failure: "source read unavailable" } });

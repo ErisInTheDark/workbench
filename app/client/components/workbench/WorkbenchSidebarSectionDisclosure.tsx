@@ -19,6 +19,7 @@ type WorkbenchSidebarSectionDisclosureProps = Omit<
 > & {
   actions?: ReactNode;
   icon: ComponentType<IconProps>;
+  onOpenChange?: (open: boolean) => void;
   preferenceKey: WorkbenchSidebarDisclosurePreferenceKey;
   title: ReactNode;
 };
@@ -27,6 +28,7 @@ export default function WorkbenchSidebarSectionDisclosure({
   actions,
   className,
   icon: Icon,
+  onOpenChange,
   preferenceKey,
   summaryClassName,
   title,
@@ -40,7 +42,10 @@ export default function WorkbenchSidebarSectionDisclosure({
       className={disclosureClassName}
       compactSummary
       leading={<Icon size={16} />}
-      onToggle={(event) => setDisclosureOpen(preferenceKey, event.currentTarget.open)}
+      onToggle={(event) => {
+        setDisclosureOpen(preferenceKey, event.currentTarget.open);
+        onOpenChange?.(event.currentTarget.open);
+      }}
       open={preferences[preferenceKey]}
       summary={(
         <div className="group/entry-row flex min-w-0 items-center justify-between gap-1">

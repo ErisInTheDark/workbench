@@ -71,7 +71,8 @@ test("home shows threads from every logical project without a default create tar
             children: createElement(WorkbenchAllProjectsThreadSidebar, {
               activeDragPayload: null, attentionLabelsByThreadId: {}, createProjectId: "",
               currentTarget: null, onCreateThread: () => undefined, onOpenThread: () => undefined,
-              projects: [], selectedOwnerProjectId: "", logicalProjects, logicalThreads, presentation,
+              projects: [], selectedOwnerProjectId: "", selectedProjectIds: logicalProjects.map(project => project.id),
+              logicalProjects, logicalThreads, presentation,
             }),
           }),
         }),

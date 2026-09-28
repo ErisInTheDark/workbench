@@ -16,7 +16,6 @@ import {
   type WorkbenchProjectThreadSummaries,
   type WorkbenchThreadSidebarEntry,
 } from "workbench-shared/workbench/thread/thread-state";
-import WorkbenchPinnedThreadList from "./WorkbenchPinnedThreadList";
 import WorkbenchClientStateProvider from "./WorkbenchClientStateProvider";
 import WorkbenchComposerDraftPresenceProvider from "./WorkbenchComposerDraftPresenceProvider";
 import WorkbenchHomeThreadList from "./WorkbenchHomeThreadList";
@@ -108,7 +107,6 @@ function createThreadEntry({
 
 function renderThreads(
   entries: ThreadEntry[],
-  showPinnedThreadsInMain = false,
   activeDragPayload: ComponentProps<typeof WorkbenchThreadList>["activeDragPayload"] = null,
   displayOrder: ComponentProps<typeof WorkbenchThreadList>["displayOrder"] = {},
 ) {
@@ -131,61 +129,7 @@ function renderThreads(
             onSetPriority: () => undefined,
             onSnoozeUntil: () => undefined,
             projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-            showPinnedThreadsInMain,
           })),
-      ),
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    },
-  ));
-}
-
-function renderPinnedThreads(
-  projects: WorkbenchProjectOption[],
-  projectThreadSummaries: WorkbenchProjectThreadSummaries,
-  selectedProjectPinPlacement: ComponentProps<typeof WorkbenchPinnedThreadList>["selectedProjectPinPlacement"] = "pinned-section",
-  activeDragPayload: ComponentProps<typeof WorkbenchPinnedThreadList>["activeDragPayload"] = null,
-) {
-  return renderToStaticMarkup(createElement(
-    WorkbenchSidebarPreferencesProvider,
-    {
-      children: () => createElement(
-        WorkbenchContextMenuContext.Provider,
-        { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
-        createElement(WorkbenchDragProvider, null, createElement(WorkbenchPinnedThreadList, {
-          activeDragPayload,
-          actions: {
-            autoFocusFolderId: null,
-            getThreadContextMenu: () => ({ id: "test-thread-menu", items: [], label: "Thread actions" }),
-            getThreadContextMenuFor: () => null,
-            nowMs: 1_723_456_790_000,
-            onAction: () => undefined,
-            onActionFor: () => undefined,
-            onAutoFocusFolderComplete: () => undefined,
-            onPinnedFolderDrop: () => undefined,
-            onPinnedMove: () => undefined,
-            onRenamePinnedFolder: async (_folderId, title) => title,
-            onSetPriority: () => undefined,
-            onSnoozeUntil: () => undefined,
-            pinnedDisplayOrder: {},
-            projectThreadSidebars: {
-              projects: projectThreadSummaries.projects.map(summary => ({
-                displayOrder: {},
-                entries: summary.pinnedThreads.flatMap(entry => entry.entryKind === "thread" ? [entry] : []),
-                error: "",
-                freshness: "fresh" as const,
-                projectId: summary.projectId,
-                revision: summary.revision,
-              })),
-            },
-            projectThreadSummaries,
-          },
-          currentTarget: null,
-          onOpenThread: () => undefined,
-          projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-          projects,
-          selectedProjectPinPlacement,
-          selectedOwnerProjectId: "project",
-        })),
       ),
       projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     },
@@ -197,11 +141,13 @@ function renderHomeThreads({
   displayOrder = {},
   projectThreadSidebars,
   projects,
+  selectedProjectIds = projects.map(project => project.id),
 }: {
   activeDragPayload?: ComponentProps<typeof WorkbenchHomeThreadList>["activeDragPayload"];
   displayOrder?: ComponentProps<typeof WorkbenchHomeThreadList>["actions"]["homeDisplayOrder"];
   projectThreadSidebars: WorkbenchProjectThreadSidebars;
   projects: WorkbenchProjectOption[];
+  selectedProjectIds?: string[];
 }) {
   const actions: ComponentProps<typeof WorkbenchHomeThreadList>["actions"] = {
     autoFocusFolderId: null,
@@ -248,6 +194,7 @@ function renderHomeThreads({
           onOpenThread: () => undefined,
           projects,
           selectedOwnerProjectId: "",
+          selectedProjectIds,
         })),
         ),
       }),
@@ -535,10 +482,14 @@ test("thread rows expose explicit context-menu access alongside interactive tool
   assert.match(source, /claimedPaths\.map\(\(filePath\)[\s\S]*?<ProjectFilePath/u);
 });
 
-test("global pinned disclosure starts open, omits thread creation, and identifies each project", () => {
+test("selected project pins stay in its thread list and other projects do not leak into combined pins", () => {
   const localPinned = {
     ...createThreadEntry({ threadId: "local-pin", title: "Local pin" }),
     lifecycle: { agent: { agentStatus: "working" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-local") }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const },
+    metadata: { archived: false as const, pinned: true, snoozed: false },
+  };
+  const remotePinned = {
+    ...createThreadEntry({ threadId: "remote-pin", title: "Remote pin" }),
     metadata: { archived: false as const, pinned: true, snoozed: false },
   };
   const projects: WorkbenchProjectOption[] = [{
@@ -548,75 +499,25 @@ test("global pinned disclosure starts open, omits thread creation, and identifie
     id: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), kind: "git", lastCommitTimeMs: null, name: "Other", relativePath: "web/other",
     rootPath: "C:/git/web/other", roots: [{ id: "other", isPrimary: true, name: "other", relativePath: "web/other", rootPath: "C:/git/web/other" }],
   }];
-  const projectThreadSummaries: WorkbenchProjectThreadSummaries = {
-    projects: [{
-      counts: { completed: 0, needsAttention: 0, needsAttentionActive: 0, proposedCommit: 0, stopped: 0, working: 1 },
-      lastThreadUpdateAt: localPinned.activityAt,
-      pinnedThreads: [{
-        activityAt: localPinned.activityAt,
-        canCompleteQuestionnaire: false,
-        entryKind: "thread",
-        identity: localPinned.identity,
-        lifecycle: localPinned.lifecycle,
-        metadata: { archived: false, pinned: true, snoozed: false },
-        status: "working",
-        title: localPinned.title,
-      }],
-      projectId: fixtureIdentityValues.ProjectId["project"],
-      revision: 1,
-      unsettledThreads: [{ activityAt: localPinned.activityAt, identity: localPinned.identity, status: "working", title: localPinned.title }],
-    }, {
-      counts: { completed: 0, needsAttention: 0, needsAttentionActive: 0, proposedCommit: 0, stopped: 1, working: 0 },
-      lastThreadUpdateAt: localPinned.activityAt,
-      pinnedThreads: [{
-        activityAt: localPinned.activityAt,
-        canCompleteQuestionnaire: false,
-        entryKind: "thread",
-        identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["remote-pin"] },
-        lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn-remote"] },
-        metadata: { archived: false, pinned: true, snoozed: false },
-        status: "stopped",
-        title: "Remote pin",
-      }],
-      projectId: fixtureIdentityValues.ProjectId["other"],
-      revision: 1,
-      unsettledThreads: [{ activityAt: localPinned.activityAt, identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["remote-pin"] }, status: "stopped", title: "Remote pin" }],
-    }],
+  const projectThreadSidebars: WorkbenchProjectThreadSidebars = {
+    projects: [
+      { displayOrder: {}, entries: [localPinned], error: "", freshness: "fresh",
+        projectId: fixtureIdentityValues.ProjectId["project"], revision: 1 },
+      { displayOrder: {}, entries: [remotePinned], error: "", freshness: "fresh",
+        projectId: fixtureIdentityValues.ProjectId["other"], revision: 1 },
+    ],
   };
-  const html = renderPinnedThreads(projects, projectThreadSummaries);
-
-  assert.match(html, /<details[^>]*open=""/u);
-  assert.doesNotMatch(html, /Create new thread/u);
-  const localRowHtml = renderThreadItem(localPinned, null, projects[0]);
-  const remoteRowHtml = renderThreadItem({
-    ...createThreadEntry({ threadId: "remote-pin", title: "Remote pin" }),
-    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn-remote"] },
-    metadata: { archived: false, pinned: true, snoozed: false },
-  }, null, projects[1]);
-  assert.match(localRowHtml, /Workbench[\s\S]*?web\/workbench[\s\S]*?Local pin/u);
-  assert.match(remoteRowHtml, /Other[\s\S]*?web\/other[\s\S]*?Remote pin/u);
-  assert.doesNotMatch(`${localRowHtml}${remoteRowHtml}`, /data-role="thread-priority-icon"/u);
-
-  const relocatedPinnedHtml = renderPinnedThreads(projects, projectThreadSummaries, "threads-section");
-  assert.doesNotMatch(relocatedPinnedHtml, /Local pin/u);
-  assert.match(relocatedPinnedHtml, /Remote pin/u);
-  const relocatedMainHtml = renderThreads([localPinned], true);
-  assert.match(relocatedMainHtml, /Local pin/u);
-  assert.match(relocatedMainHtml, /data-role="thread-priority-icon" data-thread-priority="pinned"/u);
-
-  const dragHtml = renderPinnedThreads(projects, projectThreadSummaries, "pinned-section", {
-    ownerProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("source-project"),
-    projectSourceKey: fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:source"),
-    section: "main",
-    sourceKey: "codex:source",
-    target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["source"] } },
-    type: "thread-row",
+  const single = renderThreads([localPinned]);
+  assert.match(single, /Local pin/u);
+  assert.match(single, /data-role="thread-priority-icon" data-thread-priority="pinned"/u);
+  const selected = renderHomeThreads({
+    projectThreadSidebars, projects, selectedProjectIds: ["project"],
   });
-  assert.doesNotMatch(dragHtml, /data-thread-priority-drop-target="pinned"/u);
-  assert.match(dragHtml, /data-thread-insertion-target="pinned"/u);
-  assert.equal((dragHtml.match(/data-thread-drag-target="folder"/gu) ?? []).length, 2);
-  assert.equal((dragHtml.match(/data-thread-drag-target-scope="row"/gu) ?? []).length, 4);
-  assert.equal((dragHtml.match(/data-thread-drag-target="dependent-snooze"/gu) ?? []).length, 2);
+  assert.match(selected, /Local pin/u);
+  assert.doesNotMatch(selected, /Remote pin/u);
+  const both = renderHomeThreads({ projectThreadSidebars, projects });
+  assert.match(both, /Local pin/u);
+  assert.match(both, /Remote pin/u);
 });
 
 test("project thread drag exposes group outcomes and folder targets only in folder-capable priorities", () => {
@@ -640,7 +541,7 @@ test("project thread drag exposes group outcomes and folder targets only in fold
     lifecycle: needsAttention,
     metadata: { archived: false as const, pinned: false, snoozed: true },
   };
-  const html = renderThreads([pinned, ungroupedPinned, main, snoozed], true, {
+  const html = renderThreads([pinned, ungroupedPinned, main, snoozed], {
     ownerProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     projectSourceKey: fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:source"),
     section: "main",

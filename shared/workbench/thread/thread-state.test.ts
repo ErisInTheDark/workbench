@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isWorkbenchSidebarThreadCompletionAvailable, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema } from "./thread-state.ts";
-import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
+import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, hasUnarchivedSidebarWork, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -203,6 +203,29 @@ test("settlement is available only for unsettled terminal rows without Git block
   assert.equal(areAllUnsnoozedThreadEntriesSettlementReady([{ ...completed, lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false } }, snoozed]), false);
   assert.equal(areAllUnsnoozedThreadEntriesSettlementReady([{ ...completed, gitArc: activeArc }, snoozed]), false);
   assert.equal(areAllUnsnoozedThreadEntriesSettlementReady([draft, snoozed]), false);
+});
+
+test("project placement includes settled work and drafts until they are archived", () => {
+  const settled = {
+    activityAt: 1, entryKind: "thread",
+    identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId.thread },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+    metadata: { archived: false, pinned: false, snoozed: false }, title: "Settled",
+  } satisfies Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
+  const draft = {
+    activityAt: 2, entryKind: "draft",
+    draft: {
+      attachments: [], clientUpdatedAt: 2, composerSettings: { agentPath: null, agentSource: null,
+        harness: "codex", model: "", reasoningEffort: null, serviceTier: null }, createdAt: 2,
+      draftId: fixtureIdentityValues.DraftId.draft, profileId: null,
+      projectId: fixtureIdentityValues.ProjectId.project, prompt: "Draft", updatedAt: 2,
+    },
+    metadata: { archived: false, pinned: false, snoozed: false }, title: "Draft",
+  } satisfies Extract<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
+  assert.equal(hasUnarchivedSidebarWork([settled]), true);
+  assert.equal(hasUnarchivedSidebarWork([draft]), true);
+  assert.equal(hasUnarchivedSidebarWork([{ ...settled, metadata: { ...settled.metadata, archived: true } }]), false);
+  assert.equal(hasUnarchivedSidebarWork([]), false);
 });
 
 test("thread state mutation results preserve explicit rejection", () => {

@@ -1,14 +1,15 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceController: own shared catalogue demand, registration and partial project projections.
+ * - default WorkbenchWorkspaceController: own shared catalogue, placement demand, registration and cross-daemon project projections.
  */
-import type { DaemonId } from "workbench-shared/workbench/identity";
+import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkbenchProjectLocationsPayload } from "workbench-shared/workbench/project/project-location";
 import type { WorkbenchProjectThreadSummaries } from "workbench-shared/workbench/thread/thread-state";
-import type { WorkspaceProjects } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { WorkspaceProjectGroups, WorkspaceProjects, WorkspaceSourcePhase } from "workbench-shared/workbench/workspace/workspace-observation";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { projectLogicalProjects, projectLogicalSummaries } from "workbench-shared/workbench/project/workbench-project-projection";
+import { projectLogicalGroups, projectLogicalProjects, projectLogicalSummaries } from "workbench-shared/workbench/project/workbench-project-projection";
+import { hasUnarchivedSidebarWork } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import type WorkbenchDaemonSources from "./WorkbenchDaemonSources";
@@ -19,6 +20,8 @@ type Observation = ReturnType<WorkbenchDaemonSource["observe"]>;
 interface SourceInterest {
   catalogue: Observation;
   summaries: Observation | null;
+  placement: Observation | null;
+  placementFallback: { projectIds: readonly ProjectId[]; observation: Observation } | null;
   registered: WorkbenchProjectLocationsPayload | null;
   registrationAttempt: string | null;
   registrationFailure: string | null;
@@ -28,11 +31,15 @@ export default class WorkbenchWorkspaceController {
   readonly search: WorkbenchWorkspaceSearch;
   private readonly interests = new Map<DaemonId, SourceInterest>();
   private readonly listeners = new Set<() => void>();
-  private readonly demands = new Map<object, { summaries: boolean; daemonIds?: readonly DaemonId[] }>();
+  private readonly demands = new Map<object, { summaries: boolean; placement?: boolean; daemonIds?: readonly DaemonId[] }>();
   private readonly unsubscribe: Array<() => void> = [];
   private updating = false;
   private updateRequested = false;
   private snapshot: WorkspaceProjects = { projects: [], observedProjects: [], summaries: {}, sources: [], catalogues: [], navigation: [] };
+  private groups: { data: WorkspaceProjectGroups; phase: WorkspaceSourcePhase; failure: string | null } = {
+    data: { orderedProjectIds: [], unsettledProjectIds: [], unarchivedProjectIds: [] },
+    phase: "pending", failure: null,
+  };
   private bindings: Array<{ daemonId: DaemonId; attachedLocal: boolean; aliases: readonly WorkbenchProjectAlias[] }> = [];
 
   constructor(private readonly options: {
@@ -55,6 +62,7 @@ export default class WorkbenchWorkspaceController {
 
   getSnapshot = () => this.snapshot;
   getBindings = () => this.bindings;
+  getProjectGroups = () => this.groups;
 
   select(daemonIds: readonly DaemonId[]): WorkspaceProjects {
     const all = this.snapshot;
@@ -81,7 +89,7 @@ export default class WorkbenchWorkspaceController {
     return () => { this.listeners.delete(listener); };
   }
 
-  retain(options: { summaries?: boolean; daemonIds?: readonly DaemonId[] } = {}) {
+  retain(options: { summaries?: boolean; placement?: boolean; daemonIds?: readonly DaemonId[] } = {}) {
     const token = {};
     this.demands.set(token, { ...options, summaries: options.summaries === true });
     this.refresh();
@@ -97,6 +105,8 @@ export default class WorkbenchWorkspaceController {
     for (const interest of this.interests.values()) {
       interest.catalogue.release();
       interest.summaries?.release();
+      interest.placement?.release();
+      interest.placementFallback?.observation.release();
     }
     this.interests.clear();
     this.demands.clear();
@@ -126,7 +136,8 @@ export default class WorkbenchWorkspaceController {
       if (!interest) {
         interest = {
           catalogue: source.observe({ kind: "catalogue" }, () => this.refresh()),
-          summaries: null, registered: null, registrationAttempt: null, registrationFailure: null,
+          summaries: null, placement: null, placementFallback: null,
+          registered: null, registrationAttempt: null, registrationFailure: null,
         };
         this.interests.set(source.id, interest);
       }
@@ -138,12 +149,38 @@ export default class WorkbenchWorkspaceController {
         interest.summaries = null;
         previous.release();
       }
+      const placement = demands.some(demand => demand.placement);
+      if (placement && !interest.placement) {
+        interest.placement = source.observe({ kind: "projectPlacement" }, () => this.refresh());
+      } else if (!placement && interest.placement) {
+        interest.placement.release();
+        interest.placement = null;
+      }
+      const placementFact = interest.placement?.getSnapshot();
+      const catalogueFact = interest.catalogue.getSnapshot().value;
+      const fallbackIds = catalogueFact?.kind === "catalogue"
+        ? (catalogueFact.catalogue?.data.map(project => project.id) ?? []).sort() : [];
+      const needsFallback = placement && (placementFact?.phase === "failed"
+        || interest.placementFallback !== null && placementFact?.phase !== "current");
+      if (interest.placementFallback && (!needsFallback
+        || !areDeeplyEqual(interest.placementFallback.projectIds, fallbackIds))) {
+        interest.placementFallback.observation.release();
+        interest.placementFallback = null;
+      }
+      if (needsFallback && fallbackIds.length && !interest.placementFallback) {
+        interest.placementFallback = {
+          projectIds: fallbackIds,
+          observation: source.observe({ kind: "projectThreads", projectIds: fallbackIds }, () => this.refresh()),
+        };
+      }
     }
     for (const [id, interest] of this.interests) {
       if (needed.has(id)) continue;
       this.interests.delete(id);
       interest.catalogue.release();
       interest.summaries?.release();
+      interest.placement?.release();
+      interest.placementFallback?.observation.release();
     }
   }
 
@@ -151,12 +188,20 @@ export default class WorkbenchWorkspaceController {
     const catalogues = new Map<DaemonId, readonly WorkbenchProjectOption[]>();
     const locations = new Map<DaemonId, { hostname: string; data: WorkbenchProjectLocationsPayload["data"] }>();
     const summaries = new Map<DaemonId, WorkbenchProjectThreadSummaries>();
+    const placement = new Map<DaemonId, ReadonlySet<ProjectId>>();
+    const placementPhases: WorkspaceSourcePhase[] = [];
+    const placementFailures: string[] = [];
+    const summaryPhases: WorkspaceSourcePhase[] = [];
     for (const [id, interest] of this.interests) {
       const source = this.options.sources.get(id);
       if (!source) continue;
       const fact = interest.catalogue.getSnapshot();
       const value = fact.value;
-      if (value?.kind !== "catalogue") continue;
+      if (value?.kind !== "catalogue") {
+        if (interest.placement) placementPhases.push(interest.placement.getSnapshot().phase);
+        if (interest.summaries) summaryPhases.push(interest.summaries.getSnapshot().phase);
+        continue;
+      }
       const hostname = source.getSnapshot().hostname;
       if (value.locations) {
         locations.set(id, { hostname, data: value.locations.data });
@@ -179,6 +224,27 @@ export default class WorkbenchWorkspaceController {
       }
       const summary = interest.summaries?.getSnapshot().value;
       if (summary?.kind === "summaries") summaries.set(id, { projects: summary.projects });
+      if (interest.summaries) summaryPhases.push(interest.summaries.getSnapshot().phase);
+      if (interest.placement) {
+        const compact = interest.placement.getSnapshot();
+        const fallback = interest.placementFallback?.observation.getSnapshot();
+        if (compact.value?.kind === "projectPlacement"
+          && (compact.phase === "current"
+            || compact.phase !== "failed" && fallback?.phase !== "current")) {
+          placement.set(id, new Set(compact.value.projects
+            .filter(project => project.hasUnarchivedWork).map(project => project.projectId)));
+          placementPhases.push(compact.phase);
+          if (compact.failure) placementFailures.push(compact.failure);
+        } else if (fallback?.value?.kind === "projectThreads") {
+          placement.set(id, new Set(fallback.value.projects.flatMap(project =>
+            project.sidebar && hasUnarchivedSidebarWork(project.sidebar.entries) ? [project.projectId] : [])));
+          placementPhases.push(fallback.phase);
+          if (fallback.failure) placementFailures.push(fallback.failure);
+        } else {
+          placementPhases.push(compact.phase);
+          if (compact.failure) placementFailures.push(compact.failure);
+        }
+      }
     }
     const presentation = this.options.presentation.read();
     const projects = projectLogicalProjects(presentation, catalogues, locations);
@@ -211,6 +277,19 @@ export default class WorkbenchWorkspaceController {
         return fact ? [{ daemonId, phase: fact.phase, failure: fact.failure }] : [];
       }),
     };
+    const groupPhases = [...placementPhases, ...summaryPhases,
+      ...next.catalogues.map(source => source.phase)];
+    const hasGroupFacts = placement.size > 0 || summaries.size > 0;
+    const nextGroups = {
+      data: projectLogicalGroups(projects, next.summaries, placement, presentation),
+      phase: groupPhases.some(phase => phase === "failed")
+        ? hasGroupFacts ? "stale" as const : "failed" as const
+        : groupPhases.some(phase => phase !== "current")
+          ? hasGroupFacts ? "stale" as const : "pending" as const : "current" as const,
+      failure: placementFailures[0]
+        ?? next.catalogues.find(source => source.failure)?.failure
+        ?? next.navigation.find(source => source.failure)?.failure ?? null,
+    };
     const bindings = this.options.sources.all().map(source => {
       const value = this.interests.get(source.id)?.catalogue.getSnapshot().value;
       return { daemonId: source.id, attachedLocal: source.id === this.options.sources.attached?.id,
@@ -218,8 +297,9 @@ export default class WorkbenchWorkspaceController {
     });
     const bindingChanged = !areDeeplyEqual(this.bindings, bindings);
     if (bindingChanged) this.bindings = bindings;
-    if (areDeeplyEqual(this.snapshot, next) && !bindingChanged) return;
+    if (areDeeplyEqual(this.snapshot, next) && areDeeplyEqual(this.groups, nextGroups) && !bindingChanged) return;
     if (!areDeeplyEqual(this.snapshot, next)) this.snapshot = next;
+    this.groups = nextGroups;
     for (const listener of [...this.listeners]) {
       try { listener(); }
       catch (error) {

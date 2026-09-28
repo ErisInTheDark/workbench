@@ -157,9 +157,8 @@ export default function WorkbenchProjectListItem({
             y="0.5"
           />
         </svg>
-        {!active || role === "option" ? (
           <a
-            aria-label={`Open ${logical ? project.label : project.name || project.id}`}
+            aria-label={`${role === "option" || href ? "Open" : selected ? "Deselect" : "Select"} ${logical ? project.label : project.name || project.id}`}
             aria-selected={role === "option" ? selected : undefined}
             className="absolute inset-0 z-20 cursor-pointer rounded-[0.8rem] border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
             href={href ?? projectHref(logical ? createLogicalProjectRoute(project.id) : createProjectRoute(project.id))}
@@ -168,7 +167,6 @@ export default function WorkbenchProjectListItem({
             role={role}
             tabIndex={tabIndex}
           />
-        ) : null}
         {content}
       </div>
     </WorkbenchTooltip>

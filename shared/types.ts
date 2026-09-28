@@ -1124,6 +1124,8 @@ export interface ProjectSnapshot {
 
 export interface ExplorerSnapshot {
   workspaceProjects?: import("./workbench/workspace/workspace-observation").WorkspaceProjects;
+  workspaceProjectGroups?: import("./workbench/workspace/workspace-observation").WorkspaceProjectGroups;
+  workspaceProjectGroupsPhase?: import("./workbench/workspace/workspace-observation").WorkspaceSourcePhase;
   workspaceThreads?: import("./workbench/workspace/workspace-observation").WorkspaceThreadRows;
   browseLocation?: ProjectLocationReference | null;
   configuredDiscoveryRootPath: string | null;

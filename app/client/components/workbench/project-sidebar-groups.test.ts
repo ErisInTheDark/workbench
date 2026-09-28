@@ -1,119 +1,26 @@
-/*
- * No production exports. Tests protect project activity sorting, stable ties, priority promotion, snooze semantics, and progressive recency groups.
- */
-
+/* No production exports. Tests protect selection membership and incremental display tiers. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { WorkbenchProjectOption } from "workbench-shared/types";
-import type { WorkbenchProjectThreadSummary } from "workbench-shared/workbench/thread/thread-state";
-import { getFirstSidebarProjectGroup, groupSidebarProjects } from "./project-sidebar-groups";
-import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { groupProjectSelection, resolveSelectedProjectIds } from "./project-sidebar-groups";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const NOW_MS = 200 * DAY_MS;
+const entries = ["selected", "unsettled", "settled", "archived"].map(id => ({
+  activityAt: null, project: { id }, summary: null,
+}));
 
-function project(id: string, ageDays: number | null, kind: WorkbenchProjectOption["kind"] = "git"): WorkbenchProjectOption {
-  return {
-    id: fixtureIdentitySchemas.ProjectIdSchema.parse(id),
-    kind,
-    lastCommitTimeMs: ageDays === null ? null : NOW_MS - ageDays * DAY_MS,
-    name: id,
-    relativePath: `team/${id}`,
-    rootPath: `C:/projects/team/${id}`,
-    roots: [{ id, isPrimary: true, name: id, relativePath: `team/${id}`, rootPath: `C:/projects/team/${id}` }],
-  };
-}
-
-function summary(
-  projectId: string,
-  ageDays: number,
-  snoozed = false,
-): WorkbenchProjectThreadSummary {
-  const activityAt = NOW_MS - ageDays * DAY_MS;
-  return {
-    counts: snoozed ? {
-      completed: 0,
-      needsAttention: 0,
-      needsAttentionActive: 0,
-      proposedCommit: 0,
-      stopped: 0,
-      working: 0,
-    } : {
-      completed: 0,
-      needsAttention: 0,
-      needsAttentionActive: 0,
-      proposedCommit: 0,
-      stopped: 0,
-      working: 1,
-    },
-    lastThreadUpdateAt: activityAt,
-    pinnedThreads: [],
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse(projectId),
-    revision: 1,
-    unsettledThreads: snoozed ? [] : [{
-      activityAt,
-      identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(`${projectId}-thread`) },
-      status: "working",
-      title: `${projectId} thread`,
-    }],
-  };
-}
-
-test("sidebar project grouping promotes libraries and unsnoozed unsettled work without headings or folder groups", () => {
-  const grouped = groupSidebarProjects([
-    project("old-priority", 180),
-    project("library", null, "workbench-library"),
-    project("recent", 2),
-    project("snoozed", 1),
-    project("month", 20),
-  ], [
-    summary("old-priority", 3),
-    summary("snoozed", 1, true),
-  ], NOW_MS);
-
-  assert.deepEqual(grouped.alwaysVisibleProjects.map(({ project: entry }) => entry.id), ["library", "old-priority"]);
-  assert.deepEqual(grouped.timeGroups.map(({ label, projects }) => ({
-    label,
-    projects: projects.map(({ project: entry }) => entry.id),
-  })), [
-    { label: "last week", projects: ["snoozed", "recent"] },
-    { label: "last month", projects: ["month"] },
+test("dynamic selection includes settled but unarchived projects", () => {
+  const unarchived = new Set(["selected", "unsettled", "settled"]);
+  assert.deepEqual(resolveSelectedProjectIds(entries.map(item => item.project.id), null, unarchived), [
+    "selected", "unsettled", "settled",
   ]);
+  assert.deepEqual(resolveSelectedProjectIds(entries.map(item => item.project.id), [], unarchived), []);
 });
 
-test("thread activity overrides commit activity and catalog order breaks equal-date ties", () => {
-  const grouped = groupSidebarProjects([
-    project("commit-new", 1),
-    project("thread-new", 100),
-    project("tie-a", 20),
-    project("tie-b", 20),
-  ], [
-    {
-      ...summary("thread-new", 2, true),
-      unsettledThreads: [],
-    },
-  ], NOW_MS);
-
-  assert.deepEqual(grouped.timeGroups.flatMap(({ projects }) => projects.map(({ project: entry }) => entry.id)), [
-    "commit-new",
-    "thread-new",
-    "tie-a",
-    "tie-b",
-  ]);
-});
-
-test("project rotation uses the exact first rendered project group", () => {
-  const promoted = groupSidebarProjects([
-    project("recent", 1),
-    project("library", null, "workbench-library"),
-    project("working", 100),
-  ], [summary("working", 2)], NOW_MS);
-  assert.deepEqual(getFirstSidebarProjectGroup(promoted).map(({ project: entry }) => entry.id), ["library", "working"]);
-
-  const recencyOnly = groupSidebarProjects([
-    project("month", 20),
-    project("recent", 1),
-  ], [], NOW_MS);
-  assert.deepEqual(getFirstSidebarProjectGroup(recencyOnly).map(({ project: entry }) => entry.id), ["recent"]);
+test("incremental tiers partition app pools around the opening selection", () => {
+  const tiers = groupProjectSelection(entries, ["selected"], new Set(["unsettled"]),
+    new Set(["selected", "unsettled", "settled"]));
+  assert.deepEqual(tiers.selected.map(item => item.project.id), ["selected"]);
+  assert.deepEqual(tiers.unsettled.map(item => item.project.id), ["unsettled"]);
+  assert.deepEqual(tiers.unarchived.map(item => item.project.id), ["settled"]);
+  assert.deepEqual(tiers.all.map(item => item.project.id), ["archived"]);
 });

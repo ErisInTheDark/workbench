@@ -6,7 +6,7 @@ import { test } from "node:test";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
-import { preferredLogicalLaunchLocation, projectLogicalProjects, projectLogicalSummaries, projectLogicalThreadRows } from "./workbench-project-projection";
+import { preferredLogicalLaunchLocation, projectLogicalGroups, projectLogicalProjects, projectLogicalSummaries, projectLogicalThreadRows } from "./workbench-project-projection";
 import { groupWorkbenchThreadSidebarEntries, type WorkbenchProjectThreadSidebars, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 
 const first = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
@@ -47,8 +47,10 @@ test("pinned draft summaries use app facts even when retained daemon drafts disa
   assert.equal(entries.length, 1);
   assert.equal(entries[0]?.entry.entryKind === "draft" ? entries[0].entry.draftId : null, draftId);
   assert.equal(entries[0]?.entry.entryKind === "draft" && entries[0].entry.hasAttachments, true);
+  assert.deepEqual(projectLogicalGroups(projects, {}, new Map(), snapshot).unarchivedProjectIds, [localId]);
   snapshot.drafts[0]!.phase = "deleted";
   assert.deepEqual(projectLogicalSummaries(projects, sources, snapshot).get(localId)!.pinnedThreads, []);
+  assert.deepEqual(projectLogicalGroups(projects, {}, new Map(), snapshot).unarchivedProjectIds, []);
 });
 
 function catalog(rootPath: string): WorkbenchProjectOption {
@@ -107,6 +109,9 @@ test("remote identity has one row, collisions show hosts, and unavailable locati
   assert.deepEqual(summaries.get(remoteId)?.unsettledThreads.map(item => [
     item.location.daemonId, item.entry.identity.threadId,
   ]), [[second, "laptop-thread"], [first, "desktop-thread"]]);
+  const groups = projectLogicalGroups(projects, Object.fromEntries(summaries), new Map(), snapshot);
+  assert.deepEqual(groups.unsettledProjectIds, [remoteId]);
+  assert.deepEqual(groups.unarchivedProjectIds, [remoteId]);
 });
 
 test("a local project's name stays separate from its shortest daemon folder address", () => {

@@ -11,14 +11,14 @@ import type {
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
-  DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema,
+  DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ThreadReferenceSchema,
   WorkbenchThreadIdSchema, type DaemonId, type DraftId, type ProjectId,
 } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import {
   createHomeRoute, createLogicalThreadRoute, createLogicalExistingThreadRoute,
   createLogicalProjectRoute, getWorkbenchMosaicThreadRootIds,
-  getWorkbenchThreadTargetRootId, isSameWorkbenchRoute, type WorkbenchRoute,
+  getWorkbenchThreadTargetRootId, isSameWorkbenchRoute, withProjectSelection, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import {
   WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema,
@@ -140,6 +140,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   let lastExplorer: ExplorerSnapshot | null = null;
   let tree: QueryHandle<"projectTree"> | null = null;
   let rows: QueryHandle<"projectThreads"> | null = null;
+  let previousRows: QueryHandle<"projectThreads"> | null = null;
   let rowSelection: WorkspaceProjectReference[] | null | undefined;
   const owners = new Map<string, QueryHandle<"threadOwner">>();
   const renderers = new Map<DaemonId, ThreadClient>();
@@ -150,6 +151,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   const warn = (message: string, error?: unknown) => console.warn(message,
     error instanceof Error ? error.message.slice(0, 512) : error === undefined ? "" : "Workspace operation failed.");
   const projects = workspace.observe({ kind: "projects" }, factsChanged);
+  const groups = workspace.observe({ kind: "projectGroups" }, factsChanged);
   const projectFacts = () => projects.getSnapshot().value?.data;
   const registrationFor = (daemonId: DaemonId) =>
     state?.getSnapshot().registrations.find(item => item.daemonId === daemonId)?.id ?? "";
@@ -166,7 +168,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   const locationForThread = (id: string) => {
     const value = owners.get(id)?.getSnapshot().value?.data;
     if (value) return value.phase === "current" ? value.location : null;
-    const matches = rows?.getSnapshot().value?.data.rows.filter(row =>
+    const matches = visibleRows()?.rows.filter(row =>
       row.entry.entryKind !== "draft" && row.entry.identity.threadId === id) ?? [];
     const first = matches[0]?.location;
     return first && matches.every(row => sameLocation(row.location, first)) ? first : null;
@@ -322,9 +324,60 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
 
   function selectRows(selection: WorkspaceProjectReference[] | null) {
     if (rowSelection !== undefined && areDeeplyEqual(rowSelection, selection)) return;
-    rows?.release();
+    const next = workspace.observe({ kind: "projectThreads", projects: selection }, factsChanged);
+    const retained = usableRows(rows) ? rows : previousRows;
+    if (rows && rows !== retained) rows.release();
+    if (previousRows && previousRows !== retained) previousRows.release();
     rowSelection = selection;
-    rows = workspace.observe({ kind: "projectThreads", projects: selection }, factsChanged);
+    rows = next;
+    previousRows = retained;
+    retirePreviousRows();
+  }
+
+  function retirePreviousRows() {
+    if (!previousRows || !rows) return;
+    const current = rows.getSnapshot();
+    if (!usableRows(rows) && current.phase !== "failed" && current.phase !== "unavailable") return;
+    previousRows.release();
+    previousRows = null;
+  }
+
+  function usableRows(handle: QueryHandle<"projectThreads"> | null) {
+    const snapshot = handle?.getSnapshot();
+    return snapshot?.phase === "current" || snapshot?.phase === "stale"
+      ? snapshot.value?.data ?? null : null;
+  }
+
+  function visibleRows() {
+    return usableRows(rows) ?? previousRows?.getSnapshot().value?.data
+      ?? rows?.getSnapshot().value?.data ?? null;
+  }
+
+  function selectRowsForRoute(route: WorkbenchRoute) {
+    if (groups.getSnapshot().phase === "failed") {
+      selectRows(null);
+      return;
+    }
+    const selectedLogicalIds = [...new Set([
+      ...(route.logical ? route.selectedProjectIds ?? [] : []),
+      route.logical?.threadOwnerProjectId,
+    ].filter((id): id is NonNullable<typeof id> => Boolean(id)))];
+    const root = route.view === "thread" && route.threadTarget
+      && (route.threadTarget.kind === "provider" || route.threadTarget.kind === "subagent")
+      ? getWorkbenchThreadTargetRootId(route.threadTarget) : null;
+    const ownerFact = root ? owners.get(root)?.getSnapshot().value?.data : null;
+    const selectedRows: WorkspaceProjectReference[] = selectedLogicalIds.map(projectId => ({
+      kind: "logical", projectId: LogicalProjectIdSchema.parse(projectId),
+    }));
+    if (selectedRows.length && ownerFact?.phase === "current") {
+      if (ownerFact.logicalProjectId && !selectedLogicalIds.includes(ownerFact.logicalProjectId)) {
+        selectedRows.push({ kind: "logical", projectId: ownerFact.logicalProjectId });
+      } else if (!ownerFact.logicalProjectId) {
+        selectedRows.push({ kind: "location", location: ownerFact.location });
+      }
+    }
+    const explicit = route.logical?.browseLocation ?? route.logical?.location;
+    selectRows(selectedRows.length ? selectedRows : explicit ? [{ kind: "location", location: explicit }] : null);
   }
 
   function selectFolder(location: ProjectLocationReference | null) {
@@ -358,23 +411,25 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
 
   function factsChanged() {
     if (disposed) return;
+    retirePreviousRows();
     for (const source of projectFacts()?.sources ?? []) renderers.get(source.daemonId)?.acceptSourceGeneration(source.generation);
     if (browseLocation) {
       void projectClient.installCatalog(catalogueFor(browseLocation.daemonId))
         .catch(error => warn("Project facts could not be displayed.", error));
     }
-    sidebar.acceptFacts(browseLocation, rows?.getSnapshot().value?.data ?? null);
     const route = navigation.getSnapshot().route;
+    selectRowsForRoute(route);
+    sidebar.acceptFacts(browseLocation, visibleRows());
     prepareMosaicRenderers(route.mosaicNode);
     const currentDraft = threadClient.getSnapshot().currentThread;
     if (route.logical && !route.logical.threadOwnerProjectId && route.logical.location
       && route.view === "thread" && currentDraft?.isDraft) {
       const registered = logicalFor(route.logical.location);
       if (registered) {
-        const canonical = createLogicalThreadRoute(registered.id, registered.id,
+        const canonical = withProjectSelection(createLogicalThreadRoute(registered.id, registered.id,
           route.threadTarget?.kind === "draft" ? null : route.logical.location,
           route.threadTarget?.kind === "draft" || route.threadTarget?.kind === "new"
-            ? route.threadTarget : { kind: "new" });
+            ? route.threadTarget : { kind: "new" }), route.selectedProjectIds);
         if (navigation.retargetDraftSession(canonical, DraftIdSchema.parse(currentDraft.id), route.logical.location)) {
           draftRoute = canonical;
           routeIntents.canonicalise(canonical);
@@ -409,11 +464,14 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       const threads = threadClient.getSnapshot();
       const facts = projectFacts();
       const fontSize = state?.records("globalPreference").find(item => item.preference.key === "editorFontSize");
-      const logicalRows = rows?.getSnapshot().value?.data.rows.filter(
+      const rowData = visibleRows();
+      const logicalRows = rowData?.rows.filter(
         (item): item is WorkbenchLogicalThreadRow => item.logicalProjectId !== null) ?? [];
       const snapshot: ExplorerSnapshot = {
         ...project, browseLocation, currentPath: activePath,
-        workspaceProjects: facts, workspaceThreads: rows?.getSnapshot().value?.data,
+        workspaceProjects: facts, workspaceThreads: rowData ?? undefined,
+        workspaceProjectGroups: groups.getSnapshot().value?.data,
+        workspaceProjectGroupsPhase: groups.getSnapshot().phase,
         logicalProjects: facts?.projects ?? [], logicalSummaries: facts?.summaries ?? {},
         logicalThreads: logicalRows,
         subagents: threads.subagents, threads: threads.threads,
@@ -452,24 +510,9 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     retainOwners(route.mosaicNode ? [...getWorkbenchMosaicThreadRootIds(route.mosaicNode)] : root ? [root] : []);
     const logicalId = route.logical?.projectId;
     const explicit = route.logical?.browseLocation ?? route.logical?.location;
-    const selectedLogicalIds = [...new Set([logicalId, route.logical?.threadOwnerProjectId].filter(
-      (id): id is NonNullable<typeof id> => Boolean(id),
-    ))];
-    const ownerFact = root ? owners.get(root)?.getSnapshot().value?.data : null;
-    const selectedRows: WorkspaceProjectReference[] = selectedLogicalIds.map(projectId => ({
-      kind: "logical", projectId,
-    }));
-    if (selectedRows.length && ownerFact?.phase === "current") {
-      if (ownerFact.logicalProjectId && !selectedLogicalIds.includes(ownerFact.logicalProjectId)) {
-        selectedRows.push({ kind: "logical", projectId: ownerFact.logicalProjectId });
-      } else if (!ownerFact.logicalProjectId) {
-        selectedRows.push({ kind: "location", location: ownerFact.location });
-      }
-    }
-    selectRows(selectedRows.length
-      ? selectedRows
-      : explicit ? [{ kind: "location", location: explicit }] : null);
-    if (route.view === "home" || route.view === "settings" && route.settingsScope === "global"
+    selectRowsForRoute(route);
+    if (route.view === "home" || route.view === "project" && route.selectedProjectIds?.length !== 1
+      || route.view === "settings" && route.settingsScope === "global"
       || route.view === "stats") {
       selectFolder(null);
       draftLocation = null;
@@ -523,8 +566,9 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       if (!context.isCurrent() || outcome.kind === "superseded") return { ok: false };
       if (outcome.kind === "failure") return { ok: false, error: outcome.failure.message };
       activePath = "";
-      const canonical = createLogicalExistingThreadRoute(logicalId ?? null,
-        target?.kind === "provider" ? { ...target, harness: data.identity.harness } : target!, null);
+      const canonical = withProjectSelection(createLogicalExistingThreadRoute(logicalId ?? null,
+        target?.kind === "provider" ? { ...target, harness: data.identity.harness } : target!, null),
+        route.selectedProjectIds);
       emit();
       return { ok: true, ...(isSameWorkbenchRoute(route, canonical) ? {} : { canonicalRoute: canonical }) };
     }
@@ -565,8 +609,9 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       const registered = logicalFor(location);
       if (registered) {
         const viewedProjectId = route.logical?.threadOwnerProjectId ? route.logical.projectId : logicalId ?? registered.id;
-        const canonical = createLogicalThreadRoute(viewedProjectId, registered.id,
-          saved ? null : browseTarget, saved ? { kind: "draft", draftId: DraftIdSchema.parse(saved.id) } : target);
+        const canonical = withProjectSelection(createLogicalThreadRoute(viewedProjectId, registered.id,
+          saved ? null : browseTarget, saved ? { kind: "draft", draftId: DraftIdSchema.parse(saved.id) } : target),
+          route.selectedProjectIds);
         return { ok: true, ...(isSameWorkbenchRoute(route, canonical) ? {} : { canonicalRoute: canonical }) };
       }
       return { ok: true };
@@ -631,9 +676,9 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         warn("The thread started, but its view could not be selected.", error);
       }
       if (!options.onThreadLaunched && options.selectThread !== false && navigation.getSnapshot().route === route) {
-        routeIntents.request(createLogicalExistingThreadRoute(route.logical?.projectId ?? null,
+        routeIntents.request(withProjectSelection(createLogicalExistingThreadRoute(route.logical?.projectId ?? null,
           { kind: "provider", threadId: ThreadReferenceSchema.parse(launched.threadId), harness },
-          route.logical?.browseLocation ?? null));
+          route.logical?.browseLocation ?? null), route.selectedProjectIds));
       }
       return null;
     },
@@ -804,7 +849,9 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     dispose: () => {
       disposed = true;
       projects.release();
+      groups.release();
       rows?.release();
+      previousRows?.release();
       tree?.release();
       for (const owner of owners.values()) owner.release();
       for (const panel of panels) panel.dispose();

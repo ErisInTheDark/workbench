@@ -8,22 +8,57 @@ import {
   createProjectRoute, createFileRoute, createThreadRoute, createHomeThreadRoute,
   createPinnedThreadRoute, createSettingsRoute, createStatsRoute, createLogicalProjectRoute,
   createLogicalExistingThreadRoute,
+  createLogicalThreadRoute, withProjectSelection,
+  createObservedProjectRoute,
+  createToggledProjectSelectionRoute,
   createWorkbenchHref, parseWorkbenchRouteFromLocation,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import WorkbenchProjectNavigation from "./workbench-project-navigation";
 
 const identities = ["remote://github.com/team/repo", "local:///C:/git/repo", "workspace://members"];
 
+test("multi-project addresses keep selection independent of a draft owner", () => {
+  const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const navigation = new WorkbenchProjectNavigation([], [], [
+    { id: first, matchKey: "remote://github.com/team/one", label: "one", locations: [] },
+    { id: second, matchKey: "remote://github.com/team/two", label: "two", locations: [] },
+  ]);
+  const selected = navigation.readRoute("/one/+/two/@/");
+  assert.deepEqual(selected.selectedProjectIds, [first, second]);
+  assert.equal(selected.logical?.projectId, null);
+  assert.equal(navigation.href(selected), "/one/+/two/@/");
+  const draft = withProjectSelection(createLogicalThreadRoute(null, first, null, { kind: "new" }), [first, second]);
+  const href = navigation.href(draft);
+  assert.equal(href, "/one/+/two/@/thread/one/@/new");
+  const restored = navigation.readRoute(href!);
+  assert.deepEqual(restored.selectedProjectIds, [first, second]);
+  assert.equal(restored.logical?.threadOwnerProjectId, first);
+});
+
+test("thread links inherit selection while an explicit project toggle changes it", () => {
+  const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const navigation = new WorkbenchProjectNavigation([], [], [
+    { id: first, matchKey: "remote://github.com/team/one", label: "one", locations: [] },
+    { id: second, matchKey: "remote://github.com/team/two", label: "two", locations: [] },
+  ]);
+  const current = navigation.readRoute("/one/@/thread/t1");
+  const toggled = createToggledProjectSelectionRoute(current, [first], second, [first, second]);
+  assert.equal(navigation.href(toggled, current, "inherit"), "/one/@/thread/t1");
+  assert.equal(navigation.href(toggled, current, "exact"), "/one/+/two/@/thread/one/@/t1");
+});
+
 test("longer remote addresses resolve to one project and canonicalise to its shortest slug", () => {
   const id = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
   const navigation = new WorkbenchProjectNavigation([], [], [{
     id, matchKey: "remote://github.com/team/repo", label: "repo", locations: [],
   }]);
-  assert.equal(navigation.href(createLogicalProjectRoute(id)), "/repo");
+  assert.equal(navigation.href(createLogicalProjectRoute(id)), "/repo/@/");
   for (const address of ["/repo", "/team/repo", "/github.com/team/repo"]) {
     const resolved = navigation.readRoute(address);
     assert.equal(resolved.logical?.projectId, id);
-    assert.equal(navigation.href(resolved), "/repo");
+    assert.equal(navigation.href(resolved), "/repo/@/");
   }
 });
 
@@ -45,24 +80,24 @@ test("local discovery paths canonicalise to their shortest unique suffix", () =>
   const bak = localProject(firstId, "app/bak", "app/bak", "C:/git/app/bak");
   const other = localProject(secondId, "other/bak", "other/bak", "C:/git/other/bak");
   const single = new WorkbenchProjectNavigation([], [], [bak]);
-  assert.equal(single.href(createLogicalProjectRoute(firstId)), "/bak");
+  assert.equal(single.href(createLogicalProjectRoute(firstId)), "/bak/@/");
   assert.equal(single.readRoute("/app/bak").logical?.projectId, firstId);
-  assert.equal(single.href(single.readRoute("/C%3A/git/app/bak")), "/bak");
+  assert.equal(single.href(single.readRoute("/C%3A/git/app/bak")), "/bak/@/");
 
   const collision = new WorkbenchProjectNavigation([], [], [bak, other]);
   assert.equal(collision.readRoute("/bak").view, "invalid");
-  assert.equal(collision.href(createLogicalProjectRoute(firstId)), "/app/bak");
-  assert.equal(collision.href(createLogicalProjectRoute(secondId)), "/other/bak");
+  assert.equal(collision.href(createLogicalProjectRoute(firstId)), "/app/bak/@/");
+  assert.equal(collision.href(createLogicalProjectRoute(secondId)), "/other/bak/@/");
 
   const thirdId = LogicalProjectIdSchema.parse("b12f7e1e-81b6-4c30-bdc0-f83475981003");
   const sameRelativePath = new WorkbenchProjectNavigation([], [], [
     bak, localProject(thirdId, "another/app/bak", "app/bak", "D:/git/app/bak"),
   ]);
   assert.equal(sameRelativePath.readRoute("/app/bak").view, "invalid");
-  assert.equal(sameRelativePath.href(createLogicalProjectRoute(firstId)), "/c/git/app/bak");
-  assert.equal(sameRelativePath.href(createLogicalProjectRoute(thirdId)), "/d/git/app/bak");
+  assert.equal(sameRelativePath.href(createLogicalProjectRoute(firstId)), "/c/git/app/bak/@/");
+  assert.equal(sameRelativePath.href(createLogicalProjectRoute(thirdId)), "/d/git/app/bak/@/");
   assert.equal(sameRelativePath.readRoute("/c/git/app/bak").logical?.projectId, firstId);
-  assert.equal(sameRelativePath.href(sameRelativePath.readRoute("/C%3A/git/app/bak")), "/c/git/app/bak");
+  assert.equal(sameRelativePath.href(sameRelativePath.readRoute("/C%3A/git/app/bak")), "/c/git/app/bak/@/");
 });
 
 test("a local route resolves from presentation before its daemon catalogue attaches", () => {
@@ -79,12 +114,12 @@ test("a local route resolves from presentation before its daemon catalogue attac
   const bak = local(firstId, "C:/git/app/bak");
   const single = new WorkbenchProjectNavigation([], [], [bak]);
   assert.equal(single.readRoute("/bak/@/thread/example").logical?.projectId, firstId);
-  assert.equal(single.href(createLogicalProjectRoute(firstId)), "/bak");
+  assert.equal(single.href(createLogicalProjectRoute(firstId)), "/bak/@/");
 
   const collision = new WorkbenchProjectNavigation([], [], [bak, local(secondId, "C:/git/other/bak")]);
   assert.equal(collision.readRoute("/bak").view, "invalid");
-  assert.equal(collision.href(createLogicalProjectRoute(firstId)), "/app/bak");
-  assert.equal(collision.href(createLogicalProjectRoute(secondId)), "/other/bak");
+  assert.equal(collision.href(createLogicalProjectRoute(firstId)), "/app/bak/@/");
+  assert.equal(collision.href(createLogicalProjectRoute(secondId)), "/other/bak/@/");
 });
 
 test("a concrete project address keeps its logical selection when opening a thread", () => {
@@ -121,7 +156,7 @@ test("a display label cannot become a project address", () => {
     id, matchKey: "remote://github.com/team/repo", label: "friendly", locations: [],
   }]);
   assert.equal(navigation.readRoute("/friendly").logical, undefined);
-  assert.equal(navigation.href(createLogicalProjectRoute(id)), "/repo");
+  assert.equal(navigation.href(createLogicalProjectRoute(id)), "/repo/@/");
 });
 
 test("remote collisions reject a short alias instead of guessing and keep the longer owner", () => {
@@ -134,7 +169,7 @@ test("remote collisions reject a short alias instead of guessing and keep the lo
   assert.equal(navigation.readRoute("/repo").view, "invalid");
   assert.equal(navigation.readRoute("/team/repo").logical?.projectId, firstId);
   assert.equal(navigation.readRoute("/github.com/team/repo").logical?.projectId, firstId);
-  assert.equal(navigation.href(navigation.readRoute("/github.com/team/repo")), "/team/repo");
+  assert.equal(navigation.href(navigation.readRoute("/github.com/team/repo")), "/team/repo/@/");
   assert.equal(navigation.readRoute("/team/repo/@/pin/missing/@/thread/id").view, "invalid");
 });
 
@@ -149,9 +184,9 @@ test("a local name collision cannot steal a former remote short link", () => {
   ]);
   assert.equal(navigation.readRoute("/repo").view, "invalid");
   const localHref = navigation.href(createLogicalProjectRoute(localId));
-  assert.equal(localHref, `/${localId}`);
+  assert.equal(localHref, `/${localId}/@/`);
   assert.equal(navigation.readRoute(localHref!).logical?.projectId, localId);
-  assert.equal(navigation.href(createLogicalProjectRoute(remoteId)), "/team/repo");
+  assert.equal(navigation.href(createLogicalProjectRoute(remoteId)), "/team/repo/@/");
 });
 
 test("a UUID link needs its verified owner and does not borrow the selected project", () => {
@@ -196,6 +231,30 @@ test("a verified observed-only thread still has a Home link", () => {
     `/@/thread/repo/@/${threadId}`);
 });
 
+test("observed-folder thread links resolve selection without losing their location", () => {
+  const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const location = {
+    daemonId: DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c"),
+    projectId: ProjectIdSchema.parse("observed-folder"),
+  };
+  const navigation = new WorkbenchProjectNavigation([], [], [
+    { id: first, matchKey: "remote://github.com/team/one", label: "one", locations: [] },
+    { id: second, matchKey: "remote://github.com/team/two", label: "two", locations: [] },
+  ]);
+  const thread = { ...createObservedProjectRoute(location), view: "thread" as const,
+    threadTarget: { kind: "new" as const }, threadId: "new" };
+  const href = navigation.href(withProjectSelection(thread, [first, second]));
+  assert.equal(href, `/one/+/two/@/location/${location.daemonId}/${location.projectId}/thread/new`);
+  const beforeCatalogue = new WorkbenchProjectNavigation([], []).readRoute(href!);
+  assert.equal(beforeCatalogue.view, "thread");
+  assert.deepEqual(beforeCatalogue.selectedProjectIds, ["one", "two"]);
+  const restored = navigation.readRoute(href!);
+  assert.deepEqual(restored.selectedProjectIds, [first, second]);
+  assert.deepEqual(restored.logical?.location, location);
+  assert.deepEqual(restored.threadTarget, { kind: "new" });
+});
+
 test("catalogue addresses replace junction aliases without changing thread identity", () => {
   const projectId = ProjectIdSchema.parse(identities[0]);
   const alias = ".pnpm-store/v11/projects/hash";
@@ -234,8 +293,8 @@ for (const identity of identities) {
       assert.equal(href, createWorkbenchHref(publicRoute));
       assert.deepEqual(navigation.resolveRoute(parseWorkbenchRouteFromLocation(href!)), internal);
     }
-    assert.equal(navigation.href(createProjectRoute(identity)), "/web/repo");
-    assert.equal(navigation.href(navigation.readRoute("/launch", identity)), "/web/repo");
+    assert.equal(navigation.href(createProjectRoute(identity)), "/web/repo/@/");
+    assert.equal(navigation.href(navigation.readRoute("/launch", identity)), "/web/repo/@/");
   });
 }
 
@@ -244,10 +303,10 @@ test("current retained addresses survive navigation, with deterministic historic
   const aliases = [{ alias: "old/repo", projectId }, { alias: "older/repo", projectId }];
   const navigation = new WorkbenchProjectNavigation([], aliases);
   assert.equal(navigation.href(createThreadRoute(projectId, "thread"), createProjectRoute("older/repo")), "/older/repo/@/thread/thread");
-  assert.equal(navigation.href(createProjectRoute(projectId)), "/old/repo");
-  assert.equal(new WorkbenchProjectNavigation([], [...aliases].reverse()).href(createProjectRoute(projectId)), "/old/repo");
+  assert.equal(navigation.href(createProjectRoute(projectId)), "/old/repo/@/");
+  assert.equal(new WorkbenchProjectNavigation([], [...aliases].reverse()).href(createProjectRoute(projectId)), "/old/repo/@/");
   assert.equal(new WorkbenchProjectNavigation([], []).href(createProjectRoute(projectId)), undefined);
-  assert.equal(navigation.href(createProjectRoute("legacy/project")), "/legacy/project");
+  assert.equal(navigation.href(createProjectRoute("legacy/project")), "/legacy/project/@/");
   assert.equal(navigation.readRoute("/unrelated", projectId).projectId, "unrelated");
   assert.equal(navigation.readRoute("/launch").view, "home");
 });

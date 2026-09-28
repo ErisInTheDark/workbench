@@ -3,11 +3,13 @@
  * - projectLogicalProjects: build display identities from app-owned projects and daemon-qualified catalogs.
  * - preferredLogicalLaunchLocation: choose a project's last used launch target without changing its combined view.
  * - projectLogicalSummaries/LogicalProjectSummary: combine source-qualified thread summaries without rewriting ids.
+ * - projectLogicalGroups: combine daemon placement and app drafts into ordered cross-daemon project groups.
  * - projectLogicalThreadRows/projectLogicalThreadDisplayOrder/projectLogicalHomeDisplayOrder/projectLogicalPinnedDisplayOrder: retain sources and app-owned layouts.
  */
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
-import type { DaemonId, LogicalProjectId } from "workbench-shared/workbench/identity";
+import type { DaemonId, LogicalProjectId, ProjectId } from "workbench-shared/workbench/identity";
+import type { WorkspaceProjectGroups } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { ProjectLocationReference, WorkbenchProjectLocationsPayload } from "workbench-shared/workbench/project/project-location";
 import type {
   WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchProjectThreadSummaryCounts,
@@ -272,6 +274,26 @@ export function projectLogicalSummaries(
     result.set(project.id, { counts, lastThreadUpdateAt, pinnedThreads, unsettledThreads });
   }
   return result;
+}
+
+export function projectLogicalGroups(
+  projects: readonly WorkbenchLogicalProject[],
+  summaries: Readonly<Record<string, WorkbenchLogicalProjectSummary>>,
+  placement: ReadonlyMap<DaemonId, ReadonlySet<ProjectId>>,
+  presentation: Pick<PresentationSnapshot, "drafts">,
+): WorkspaceProjectGroups {
+  const orderedProjectIds = projects.map(project => project.id);
+  const unsettledProjectIds = projects.flatMap(project =>
+    summaries[project.id]?.unsettledThreads.length ? [project.id] : []);
+  const unsettled = new Set(unsettledProjectIds);
+  const unarchivedProjectIds = projects.flatMap(project => {
+    const hasDaemonWork = projectDisplayLocations(project).some(location =>
+      placement.get(location.target.daemonId)?.has(location.target.projectId));
+    const hasAppDraft = presentation.drafts.some(draft =>
+      draft.logicalProjectId === project.id && draft.phase === "unsent");
+    return hasDaemonWork || hasAppDraft || unsettled.has(project.id) ? [project.id] : [];
+  });
+  return { orderedProjectIds, unsettledProjectIds, unarchivedProjectIds };
 }
 
 export function projectLogicalProjects(

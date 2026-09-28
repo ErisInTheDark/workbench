@@ -43,12 +43,14 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     .readRoute(locationSnapshot, launchProjectId);
   const route = useMemo(() => resolved, [
     locationSnapshot, resolved.projectId, resolved.threadOwnerProjectId,
+    resolved.selectedProjectIds?.join("\0") ?? null,
     resolved.logical?.projectId, resolved.logical?.threadOwnerProjectId,
     resolved.view, resolved.error, pathname === "/launch" ? launchProjectId : undefined,
   ]);
 
-  const navigateToRoute = useCallback((nextRoute: WorkbenchRoute, options: { replace?: boolean } = {}) => {
-    const nextHref = href(nextRoute);
+  const navigateToRoute = useCallback((nextRoute: WorkbenchRoute,
+    options: { replace?: boolean; selection?: "inherit" | "exact" } = {}) => {
+    const nextHref = href(nextRoute, options.selection);
     if (nextHref === undefined || nextHref === locationSnapshot) {
       return;
     }
@@ -71,7 +73,7 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     const canonical = href(route);
     if (!canonical) return;
     const canonicalPath = new URL(canonical, window.location.origin).pathname;
-    if (canonicalPath !== pathname) {
+    if (pathname !== "/" && pathname !== "/@/" && canonicalPath !== pathname) {
       window.history.replaceState({ workbench: true }, "", `${canonicalPath}${window.location.search}${window.location.hash}`);
     }
   }, [pathname, locationSnapshot, client.controls, client.explorer.projects, client.explorer.logicalProjects, href, navigateToRoute, route]);

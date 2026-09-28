@@ -475,6 +475,10 @@ export default class WorkbenchWorkspaceRequestController {
         interest.stop.push(this.options.workspace.subscribe(refresh),
           this.options.workspace.retain({ summaries: true, daemonIds: request.query.daemonIds }));
         break;
+      case "projectGroups":
+        interest.stop.push(this.options.workspace.subscribe(refresh),
+          this.options.workspace.retain({ summaries: true, placement: true }));
+        break;
       case "projectThreads":
         interest.stop.push(this.options.workspace.subscribe(refresh),
           this.options.presentation.subscribe(refresh), this.options.workspace.retain());
@@ -529,6 +533,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "runtime": return { ...base, kind: "runtime", data: this.options.runtime.read() };
       case "presentation": return { phase: "current", failure: null, kind: "presentation", data: this.options.presentation.read() };
       case "projects": return { ...base, kind: "projects", data: this.options.workspace.getSnapshot() };
+      case "projectGroups": return { ...base, kind: "projectGroups", data: this.options.workspace.getProjectGroups().data };
       case "projectThreads": return { ...base, kind: "projectThreads", data: { rows: [], projects: [] } };
       case "threadOwner": return { ...base, kind: "threadOwner", data: { phase: "pending", failure: null } };
       case "thread": return { ...base, kind: "thread", owner: { phase: "pending", failure: null }, data: null };
@@ -583,6 +588,11 @@ export default class WorkbenchWorkspaceRequestController {
         const failure = data.catalogues.find(source => source.failure)?.failure ?? null;
         this.update(interest, { kind: "projects", phase: complete ? "current"
           : data.projects.length || data.observedProjects.length ? "stale" : failure ? "failed" : "pending", failure, data });
+        return;
+      }
+      case "projectGroups": {
+        const groups = this.options.workspace.getProjectGroups();
+        this.update(interest, { kind: "projectGroups", ...groups });
         return;
       }
       case "projectThreads": this.projectRows(interest); return;

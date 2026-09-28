@@ -147,6 +147,65 @@ test("a failed refresh retains previous rows and waits for a new fact instead of
   assert.equal(f.warnings.length, 1);
 });
 
+test("placement observation tracks settled unarchived work without publishing thread rows", async context => {
+  const f = fixture(context);
+  f.owners.catalogue.getFacts = () => ({
+    revision: 1, phase: "current", failure: null, locations: null,
+    catalogue: { data: [{ id: a, kind: "git", name: "a", rootPath: "C:/a",
+      relativePath: "a", lastCommitTimeMs: null, roots: [] }], aliases: [], rootPath: "" },
+  });
+  const settled = {
+    activityAt: 1, entryKind: "thread" as const,
+    identity: { harness: "codex" as const, threadId },
+    lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: true },
+    metadata: { archived: false, pinned: false, snoozed: false }, title: "Settled",
+  };
+  let archived = false;
+  f.owners.threads.readProject = async projectId => ({
+    ...sidebar(projectId), entries: [{ ...settled,
+      metadata: archived
+        ? { archived: true as const, pinned: false as const, snoozed: false as const }
+        : { archived: false as const, pinned: false as const, snoozed: false as const } }],
+  });
+  const observation = f.observe({ kind: "projectPlacement" });
+  const first = await f.wait(value => value.subscriptionId === observation.subscriptionId
+    && value.kind === "projectPlacement" && value.projects[0]?.hasUnarchivedWork === true);
+  assert.equal(first.kind === "projectPlacement" ? first.projects[0]?.hasUnarchivedWork : null, true);
+  archived = true;
+  f.projectChanged(a);
+  const next = await f.wait(value => value.subscriptionId === observation.subscriptionId
+    && value.kind === "projectPlacement" && value.projects[0]?.hasUnarchivedWork === false);
+  assert.equal(next.kind === "projectPlacement" ? next.projects[0]?.hasUnarchivedWork : null, false);
+});
+
+test("placement read failure retains the last usable project fact and surfaces the failure", async context => {
+  const f = fixture(context);
+  f.owners.catalogue.getFacts = () => ({
+    revision: 1, phase: "current", failure: null, locations: null,
+    catalogue: { data: [{ id: a, kind: "git", name: "a", rootPath: "C:/a",
+      relativePath: "a", lastCommitTimeMs: null, roots: [] }], aliases: [], rootPath: "" },
+  });
+  let reads = 0;
+  f.owners.threads.readProject = async projectId => {
+    if (++reads > 1) throw new Error("placement storage unavailable");
+    return { ...sidebar(projectId), entries: [{
+      activityAt: 1, entryKind: "thread",
+      identity: { harness: "codex", threadId },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+      metadata: { archived: false, pinned: false, snoozed: false }, title: "Settled",
+    }] };
+  };
+  const observation = f.observe({ kind: "projectPlacement" });
+  await f.wait(value => value.subscriptionId === observation.subscriptionId
+    && value.kind === "projectPlacement" && value.phase === "current");
+  f.projectChanged(a);
+  const failed = await f.wait(value => value.subscriptionId === observation.subscriptionId
+    && value.kind === "projectPlacement" && value.phase === "stale");
+  assert.equal(failed.kind === "projectPlacement" ? failed.projects[0]?.hasUnarchivedWork : null, true);
+  assert.match(failed.failure ?? "", /placement storage unavailable/u);
+  assert.equal(f.warnings.length, 1);
+});
+
 test("canonical project publications refresh an observation opened through a retained alias", async context => {
   const f = fixture(context);
   f.owners.catalogue.getFacts = () => ({ revision: 1, phase: "current", failure: null, locations: null,

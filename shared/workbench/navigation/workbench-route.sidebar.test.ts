@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createHomeHref,
+  createProjectSelectionRoute,
+  createToggledProjectSelectionRoute,
   createHomeThreadHref,
   createPinnedThreadHref,
   createProjectHref,
@@ -41,13 +43,14 @@ test("stats routes round-trip globally and per project", () => {
   assert.equal(parseWorkbenchRouteFromPath("/@/stats/nope").view, "invalid");
 });
 
-test("/@/ is the canonical projectless home route and root remains an alias", () => {
-  assert.equal(createHomeHref(), "/@/");
+test("/ and /@/ select projects with unarchived threads", () => {
+  assert.equal(createHomeHref(), "/");
   const expected = {
     error: "",
     filePath: "",
     mosaicNode: null,
     projectId: "",
+    selectedProjectIds: null,
     settingsScope: "global",
     threadId: "",
     threadOwnerProjectId: "",
@@ -60,10 +63,70 @@ test("/@/ is the canonical projectless home route and root remains an alias", ()
 
 test("project hrefs preserve slash and reserved-character identities", () => {
   for (const projectId of ["web/workbench", "team space/project%two"]) {
+    assert.equal(createProjectHref(projectId), `/${projectId.split("/").map(encodeURIComponent).join("/")}/@/`);
     const route = parseWorkbenchRouteFromPath(createProjectHref(projectId));
     assert.equal(route.view, "project");
     assert.equal(route.projectId, projectId);
   }
+});
+
+test("explicit project selection round-trips while distinguishing an empty set and encoded plus", () => {
+  for (const ids of [[], ["alpha"], ["alpha", "beta/path"], ["+"]]) {
+    const href = createWorkbenchHref(createProjectSelectionRoute(ids));
+    const parsed = parseWorkbenchRouteFromPath(href);
+    assert.equal(parsed.view, "project");
+    assert.deepEqual(parsed.selectedProjectIds, ids);
+  }
+  assert.equal(createWorkbenchHref(createProjectSelectionRoute([])), "/+/@/");
+  assert.equal(createWorkbenchHref(createProjectSelectionRoute(["alpha", "beta/path"])), "/alpha/+/beta/path/@/");
+  assert.equal(createWorkbenchHref(createProjectSelectionRoute(["+"])), "/%2B/@/");
+  assert.equal(parseWorkbenchRouteFromPath("/alpha/+/alpha/@/").view, "invalid");
+});
+
+test("project toggles keep the active thread until its owning project is deselected", () => {
+  const selected = ["alpha", "beta"];
+  const order = ["alpha", "beta", "gamma"];
+  const thread = parseWorkbenchRouteFromPath("/alpha/+/beta/@/thread/alpha/@/t1");
+  assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(thread, selected, "gamma", order)),
+    "/alpha/+/beta/+/gamma/@/thread/alpha/@/t1");
+  assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(thread, selected, "beta", order)),
+    "/alpha/@/thread/t1");
+  assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(thread, selected, "alpha", order)),
+    "/beta/@/");
+  const single = parseWorkbenchRouteFromPath("/alpha/@/thread/t1");
+  assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(single, ["alpha"], "beta", order)),
+    "/alpha/+/beta/@/thread/alpha/@/t1");
+  assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(single, ["alpha"], "alpha", order)),
+    "/+/@/");
+  const dynamic = parseWorkbenchRouteFromPath("/@/thread/alpha/@/t1");
+  assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(dynamic, selected, "beta", order)),
+    "/alpha/@/thread/t1");
+
+  const unselectedOwner = parseWorkbenchRouteFromPath("/alpha/@/pin/beta/@/thread/t1");
+  assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(unselectedOwner, ["alpha"], "gamma", order)),
+    "/alpha/+/gamma/@/thread/beta/@/t1");
+  const draftId = "123e4567-e89b-42d3-a456-426614174000";
+  const draft = parseWorkbenchRouteFromPath(`/alpha/+/beta/@/thread/beta/@/new/${draftId}`);
+  assert.equal(draft.view, "thread");
+  assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(draft, selected, "alpha", order)),
+    `/beta/@/thread/new/${draftId}`);
+});
+
+test("observed-folder threads keep their target while the selection prefix changes", () => {
+  const location = {
+    daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029"),
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("observed"),
+  };
+  const route = {
+    ...parseWorkbenchRouteFromPath(`/@/location/${location.daemonId}/${location.projectId}/thread/new`),
+    selectedProjectIds: ["alpha", "beta"],
+  };
+  const href = createWorkbenchHref(route);
+  assert.equal(href, `/alpha/+/beta/@/location/${location.daemonId}/${location.projectId}/thread/new`);
+  const restored = parseWorkbenchRouteFromPath(href);
+  assert.deepEqual(restored.selectedProjectIds, ["alpha", "beta"]);
+  assert.deepEqual(restored.logical?.location, location);
+  assert.deepEqual(restored.threadTarget, { kind: "new" });
 });
 
 test("home thread routes preserve the owning project without selecting it", () => {
@@ -116,6 +179,7 @@ test("pinned routes preserve viewed and owning projects through the existing thr
   assert.deepEqual(parseWorkbenchRouteFromPath(providerHref), {
     ...parseWorkbenchRouteFromPath("/owner/project/@/thread/provider"),
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("viewed/project"),
+    selectedProjectIds: ["viewed/project"],
     threadOwnerProjectId: "owner/project",
   });
   const draftHref = createPinnedThreadHref("viewed", "owner", { draftId, kind: "draft" });

@@ -9,6 +9,7 @@
  * - WorkspaceQuerySchema/WorkspaceQuery: browser workspace intents without transport destinations.
  * - WorkspaceDaemonFactSchema/WorkspaceDaemonFact: app-owned daemon connection facts.
  * - WorkspaceProjectsSchema/WorkspaceProjects: merged and not-yet-registered projects.
+ * - WorkspaceProjectGroupsSchema/WorkspaceProjectGroups: app-owned cross-daemon sidebar project pools.
  * - WorkspaceThreadRowsSchema/WorkspaceThreadRows: source-qualified selected thread rows.
  * - WorkspaceThreadOwnerSchema/WorkspaceThreadOwner: resolved ownership or a scoped unresolved result.
  * - WorkspaceObservationSchema/WorkspaceObservation: independently revisioned app query results.
@@ -66,6 +67,7 @@ export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("runtime") }).strict(),
   z.object({ kind: z.literal("catalogue") }).strict(),
   z.object({ kind: z.literal("summaries") }).strict(),
+  z.object({ kind: z.literal("projectPlacement") }).strict(),
   z.object({ kind: z.literal("projectThreads"), projectIds: z.array(ProjectIdSchema) }).strict(),
   z.object({ kind: z.literal("projectTree"), projectId: ProjectIdSchema }).strict(),
   z.object({ kind: z.literal("threadIdentity"), threadId: ThreadReferenceSchema }).strict(),
@@ -104,6 +106,12 @@ export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
     failures: z.array(z.object({ projectId: ProjectIdSchema, message: z.string().max(512) }).strict()),
   }).strict(),
   z.object({
+    ...envelope, kind: z.literal("projectPlacement"),
+    projects: z.array(z.object({ projectId: ProjectIdSchema, hasUnarchivedWork: z.boolean() }).strict()),
+    pendingProjectIds: z.array(ProjectIdSchema),
+    failures: z.array(z.object({ projectId: ProjectIdSchema, message: z.string().max(512) }).strict()),
+  }).strict(),
+  z.object({
     ...envelope, kind: z.literal("projectThreads"), projects: z.array(projectRows),
   }).strict(),
   z.object({
@@ -129,6 +137,7 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("daemonRuntime"), daemonId: DaemonIdSchema.optional() }).strict(),
   z.object({ kind: z.literal("network") }).strict(),
   z.object({ kind: z.literal("projects"), daemonIds: z.array(DaemonIdSchema).optional() }).strict(),
+  z.object({ kind: z.literal("projectGroups") }).strict(),
   z.object({
     kind: z.literal("projectThreads"),
     projects: z.array(WorkspaceProjectReferenceSchema).nullable(),
@@ -210,6 +219,13 @@ export const WorkspaceProjectsSchema = z.object({
 }).strict();
 export type WorkspaceProjects = z.infer<typeof WorkspaceProjectsSchema>;
 
+export const WorkspaceProjectGroupsSchema = z.object({
+  orderedProjectIds: z.array(LogicalProjectIdSchema),
+  unsettledProjectIds: z.array(LogicalProjectIdSchema),
+  unarchivedProjectIds: z.array(LogicalProjectIdSchema),
+}).strict();
+export type WorkspaceProjectGroups = z.infer<typeof WorkspaceProjectGroupsSchema>;
+
 export const WorkspaceThreadRowsSchema = z.object({
   rows: z.array(z.object({
     logicalProjectId: LogicalProjectIdSchema.nullable(),
@@ -265,6 +281,7 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
     data: WorkbenchDaemonReloadDirtEnvelopeSchema.shape.snapshot.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("network"), data: WorkbenchNetworkSnapshotSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("projects"), data: WorkspaceProjectsSchema }).strict(),
+  z.object({ ...envelope, kind: z.literal("projectGroups"), data: WorkspaceProjectGroupsSchema }).strict(),
   z.object({ ...envelope, kind: z.literal("projectThreads"), data: WorkspaceThreadRowsSchema }).strict(),
   z.object({ ...envelope, kind: z.literal("projectTree"), sourceGeneration: revision.default(0),
     data: WorkbenchProjectStateUpdateSchema.nullable() }).strict(),

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAllProjectsThreadSidebar: bind the global observation to one combined home thread list and bounded project errors.
+ * - default WorkbenchAllProjectsThreadSidebar: bind selected project observations to one combined thread list and bounded project errors.
  */
 "use client";
 
@@ -25,6 +25,8 @@ interface WorkbenchAllProjectsThreadSidebarProps {
   projects: readonly WorkbenchProjectOption[];
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
   selectedOwnerProjectId: string;
+  selectedProjectIds: readonly string[];
+  emptySelectionMessage?: string;
   logicalProjects?: readonly WorkbenchLogicalProject[];
   logicalThreads?: readonly WorkbenchLogicalThreadRow[];
   presentation?: PresentationSnapshot | null;
@@ -43,6 +45,8 @@ export default memo(function WorkbenchAllProjectsThreadSidebar({
   projects,
   renderThreadTooltipDetails,
   selectedOwnerProjectId,
+  selectedProjectIds,
+  emptySelectionMessage,
   logicalProjects,
   logicalThreads,
   presentation,
@@ -51,16 +55,23 @@ export default memo(function WorkbenchAllProjectsThreadSidebar({
   onOpenQualifiedThread,
 }: WorkbenchAllProjectsThreadSidebarProps) {
   const actions = WorkbenchThreadSidebarActionsProvider.useActions();
+  const selected = new Set(selectedProjectIds);
   const createProject = logicalProjects
     ? logicalProjects.find(project => project.locations.some(location =>
-      location.target.projectId === createProjectId && location.project)) ?? null
-    : projects.find(({ id }) => id === createProjectId) ?? null;
+      location.target.projectId === createProjectId && location.project)
+      && selected.has(project.id)) ?? null
+    : projects.find(({ id }) => id === createProjectId && selected.has(id)) ?? null;
   const errors = useMemo(
-    () => [...new Set(actions.projectThreadSidebars.projects.map(({ error }) => error).filter(Boolean))],
-    [actions.projectThreadSidebars.projects],
+    () => [...new Set(actions.projectThreadSidebars.projects
+      .filter(sidebar => selectedProjectIds.includes(sidebar.projectId))
+      .map(({ error }) => error).filter(Boolean))],
+    [actions.projectThreadSidebars.projects, selectedProjectIds],
   );
   if (actions.isLoading && !logicalProjects && projects.length) {
     return <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />;
+  }
+  if (!selectedProjectIds.length) {
+    return <p className="m-0 px-2 py-2 text-[0.8rem] text-fg/muted">{emptySelectionMessage ?? "No projects selected. Select a project to see its threads."}</p>;
   }
 
   return (
@@ -76,6 +87,7 @@ export default memo(function WorkbenchAllProjectsThreadSidebar({
           projects={projects}
           renderThreadTooltipDetails={renderThreadTooltipDetails}
           selectedOwnerProjectId={selectedOwnerProjectId}
+          selectedProjectIds={selectedProjectIds}
           logicalProjects={logicalProjects}
           logicalThreads={logicalThreads}
           presentation={presentation}

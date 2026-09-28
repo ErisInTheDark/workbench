@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - default WorkbenchProjectNavigation: resolve readable project addresses to one logical owner and write old-shape URLs.
+ * - default WorkbenchProjectNavigation: resolve selected readable project addresses and thread owners to logical identities.
  */
 import type { WorkbenchLogicalProject, WorkbenchProjectAlias, WorkbenchProjectOption } from "workbench-shared/types";
 import {
   createHomeRoute, createInvalidWorkbenchRoute, createProjectRoute, createWorkbenchHref,
-  parseWorkbenchRouteFromLocation, type WorkbenchRoute,
+  parseWorkbenchRouteFromLocation, withProjectSelection, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
@@ -45,14 +45,22 @@ export default class WorkbenchProjectNavigation {
   }
 
   resolveRoute(route: WorkbenchRoute): WorkbenchRoute {
-    if (route.view === "invalid" || route.logical) return route;
-    const selected = this.logicalForAddress(route.projectId);
+    if (route.view === "invalid") return route;
+    if (route.logical) {
+      if (route.logical.projectId || !route.logical.location || route.selectedProjectIds === null) return route;
+      const selected = route.selectedProjectIds.map(address => this.logicalForAddress(address));
+      if (selected.includes("ambiguous")) return createInvalidWorkbenchRoute(
+        "Observed folder selection matches multiple remote identities.");
+      if (selected.some(project => !project)) return route;
+      return { ...route, selectedProjectIds: selected.map(project => (project as WorkbenchLogicalProject).id) };
+    }
+    const selected = route.selectedProjectIds?.map(address => this.logicalForAddress(address)) ?? null;
     const owner = this.logicalForAddress(route.threadOwnerProjectId);
-    if (selected === "ambiguous" || owner === "ambiguous") {
+    if (selected?.includes("ambiguous") || owner === "ambiguous") {
       return createInvalidWorkbenchRoute("Project address matches multiple remote identities.");
     }
-    if (selected || owner) {
-      if ((route.projectId && !selected) || (route.threadOwnerProjectId && !owner)) {
+    if (selected?.some(Boolean) || owner) {
+      if (selected?.some(project => !project) || (route.threadOwnerProjectId && !owner)) {
         return createInvalidWorkbenchRoute("The link mixes unresolved and logical project addresses.");
       }
       if (route.view === "settings" || route.view === "stats") {
@@ -62,11 +70,12 @@ export default class WorkbenchProjectNavigation {
         ...route,
         projectId: "",
         threadOwnerProjectId: "",
+        selectedProjectIds: selected?.map(project => (project as WorkbenchLogicalProject).id) ?? null,
         logical: {
-          projectId: selected?.id ?? null,
-          threadOwnerProjectId: owner?.id ?? (route.view === "thread"
+          projectId: selected?.length === 1 ? (selected[0] as WorkbenchLogicalProject).id : null,
+          threadOwnerProjectId: owner?.id ?? (route.view === "thread" && selected?.length === 1
             && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft")
-            ? selected?.id ?? null : null),
+            ? (selected[0] as WorkbenchLogicalProject).id : null),
           location: null,
           browseLocation: null,
         },
@@ -74,9 +83,12 @@ export default class WorkbenchProjectNavigation {
     }
     const projectId = this.resolveProjectId(route.projectId);
     const ownerId = this.resolveProjectId(route.threadOwnerProjectId);
-    return projectId === route.projectId && ownerId === route.threadOwnerProjectId ? route : {
+    const selectedIds = route.selectedProjectIds?.map(address => this.resolveProjectId(address)) ?? null;
+    return projectId === route.projectId && ownerId === route.threadOwnerProjectId
+      && selectedIds?.every((id, index) => id === route.selectedProjectIds?.[index]) !== false ? route : {
       ...route, projectId: projectId ? ProjectIdSchema.parse(projectId) : "",
       threadOwnerProjectId: ownerId ? ProjectIdSchema.parse(ownerId) : "",
+      selectedProjectIds: selectedIds,
     };
   }
 
@@ -87,12 +99,15 @@ export default class WorkbenchProjectNavigation {
       : parseWorkbenchRouteFromLocation(location));
   }
 
-  href(route: WorkbenchRoute, current?: WorkbenchRoute): string | undefined {
-    const resolved = this.resolveRoute(route);
+  href(route: WorkbenchRoute, current?: WorkbenchRoute,
+    selection: "inherit" | "exact" = "exact"): string | undefined {
+    const intent = selection === "inherit" && current && route.view === "thread"
+      && (current.selectedProjectIds !== null || route.selectedProjectIds === null)
+      ? withProjectSelection(route, current.selectedProjectIds) : route;
+    const resolved = this.resolveRoute(intent);
     if (resolved.view === "invalid" || resolved.view === "mosaic") return undefined;
     if (resolved.logical) {
       const logical = resolved.logical;
-      if (!logical.projectId && logical.location) return createWorkbenchHref(resolved);
       const selected = this.logicalProjects.find(project => project.id === logical.projectId);
       let owner = this.logicalProjects.find(project => project.id === logical.threadOwnerProjectId);
       if (resolved.view === "thread" && !owner
@@ -105,21 +120,34 @@ export default class WorkbenchProjectNavigation {
           || project.observedLocations?.some(item =>
             item.daemonId === location?.daemonId && item.projectId === location?.projectId));
       }
-      if (resolved.view === "thread" && !owner) return undefined;
+      if (resolved.view === "thread" && !owner && !(logical.location && !logical.projectId)) return undefined;
       if (logical.projectId && !selected) return undefined;
+      const selectedAddresses = resolved.selectedProjectIds?.map(id => {
+        const project = this.logicalProjects.find(candidate => candidate.id === id)
+          ?? this.logicalForAddress(id);
+        if (project === "ambiguous") return undefined;
+        return project ? this.canonicalAddress(project) : undefined;
+      }) ?? null;
+      if (selectedAddresses?.includes(undefined)) return undefined;
+      if (!logical.projectId && logical.location) {
+        return createWorkbenchHref({ ...resolved, selectedProjectIds: selectedAddresses as string[] | null });
+      }
       return createWorkbenchHref({
         ...resolved,
         logical: undefined,
-        projectId: selected ? ProjectIdSchema.parse(this.canonicalAddress(selected)) : "",
+        projectId: selectedAddresses?.length === 1 ? ProjectIdSchema.parse(selectedAddresses[0]!) : "",
+        selectedProjectIds: selectedAddresses as string[] | null,
         threadOwnerProjectId: owner ? ProjectIdSchema.parse(this.canonicalAddress(owner)) : "",
       });
     }
     const preferred = current ? [current.projectId, current.threadOwnerProjectId] : [];
-    const projectId = this.address(route.projectId, preferred);
-    const ownerId = this.address(route.threadOwnerProjectId, preferred);
-    if (projectId === undefined || ownerId === undefined) return undefined;
+    const projectId = this.address(intent.projectId, preferred);
+    const ownerId = this.address(intent.threadOwnerProjectId, preferred);
+    const selectedAddresses = intent.selectedProjectIds?.map(id => this.address(id, preferred)) ?? null;
+    if (projectId === undefined || ownerId === undefined || selectedAddresses?.includes(undefined)) return undefined;
     return createWorkbenchHref({
-      ...route, projectId: projectId ? ProjectIdSchema.parse(projectId) : "",
+      ...intent, projectId: projectId ? ProjectIdSchema.parse(projectId) : "",
+      selectedProjectIds: selectedAddresses as string[] | null,
       threadOwnerProjectId: ownerId ? ProjectIdSchema.parse(ownerId) : "",
     });
   }

@@ -9,7 +9,7 @@ import {
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
-import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { hasUnarchivedSidebarWork, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
@@ -101,6 +101,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         });
         break;
       case "summaries":
+      case "projectPlacement":
       case "projectThreads":
         this.selectProjects(observation);
         break;
@@ -146,6 +147,10 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         ...envelope, kind: "summaries", phase: "pending", failure: null,
         projects: [], pendingProjectIds: [], failures: [],
       };
+      case "projectPlacement": return {
+        ...envelope, kind: "projectPlacement", phase: "pending", failure: null,
+        projects: [], pendingProjectIds: [], failures: [],
+      };
       case "projectThreads": return {
         ...envelope, kind: "projectThreads", phase: "pending", failure: null,
         projects: request.query.projectIds.map(projectId => {
@@ -172,7 +177,8 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
           kind: "catalogue", phase: facts.phase, failure: facts.failure,
           catalogue: facts.catalogue, locations: facts.locations,
         });
-      } else if (observation.request.query.kind === "summaries") this.selectProjects(observation);
+      } else if (observation.request.query.kind === "summaries"
+        || observation.request.query.kind === "projectPlacement") this.selectProjects(observation);
     }
   }
 
@@ -186,7 +192,8 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
   private selectedProjects(observation: Observation<Client>): readonly ProjectId[] {
     const query = observation.request.query;
     return query.kind === "projectThreads" ? query.projectIds
-      : query.kind === "summaries" ? this.owners.catalogue.getFacts().catalogue?.data.map(project => project.id) ?? []
+      : query.kind === "summaries" || query.kind === "projectPlacement"
+        ? this.owners.catalogue.getFacts().catalogue?.data.map(project => project.id) ?? []
       : [];
   }
 
@@ -204,6 +211,20 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       });
       this.update(observation, {
         kind: "summaries", phase: observation.dirty.size ? "pending" : this.owners.catalogue.getFacts().phase,
+        failure: null, projects, pendingProjectIds: [...observation.dirty],
+        failures: value.failures.filter(item => selectedSet.has(item.projectId)),
+      });
+    } else if (value.kind === "projectPlacement") {
+      const projects = selected.flatMap(projectId => {
+        const sidebar = this.owners.threads.peekProject(projectId);
+        const retained = value.projects.find(project => project.projectId === projectId);
+        if (!sidebar) observation.dirty.add(projectId);
+        return sidebar
+          ? [{ projectId, hasUnarchivedWork: hasUnarchivedSidebarWork(sidebar.entries) }]
+          : retained ? [retained] : [];
+      });
+      this.update(observation, {
+        kind: "projectPlacement", phase: observation.dirty.size ? "pending" : this.owners.catalogue.getFacts().phase,
         failure: null, projects, pendingProjectIds: [...observation.dirty],
         failures: value.failures.filter(item => selectedSet.has(item.projectId)),
       });
@@ -265,6 +286,22 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
               projects: [...value.projects.filter(project => project.projectId !== projectId), summary],
               pendingProjectIds: [...observation.dirty], failures,
             });
+          } else if (observation.request.query.kind === "projectPlacement") {
+            const read = await this.owners.threads.readProject(projectId);
+            if (!this.active(observation)) return;
+            const sidebar = this.owners.threads.peekProject(projectId) ?? read;
+            observation.dirty.delete(projectId);
+            if (observation.value.kind !== "projectPlacement" || !this.selectedProjects(observation).includes(projectId)) continue;
+            const value = observation.value;
+            const failures = value.failures.filter(item => item.projectId !== projectId);
+            this.update(observation, {
+              kind: "projectPlacement", phase: observation.dirty.size ? "pending"
+                : failures.length ? "stale" : this.owners.catalogue.getFacts().phase,
+              failure: failures[0]?.message ?? null,
+              projects: [...value.projects.filter(project => project.projectId !== projectId),
+                { projectId, hasUnarchivedWork: hasUnarchivedSidebarWork(sidebar.entries) }],
+              pendingProjectIds: [...observation.dirty], failures,
+            });
           } else if (observation.request.query.kind === "projectThreads") {
             const read = await this.owners.threads.readProject(projectId);
             if (!this.active(observation)) return;
@@ -288,6 +325,13 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
             const value = observation.value;
             this.update(observation, {
               kind: "summaries", phase: value.projects.length ? "stale" : "failed", failure: message,
+              projects: value.projects, pendingProjectIds: [...observation.dirty],
+              failures: [...value.failures.filter(item => item.projectId !== projectId), { projectId, message }],
+            });
+          } else if (observation.value.kind === "projectPlacement") {
+            const value = observation.value;
+            this.update(observation, {
+              kind: "projectPlacement", phase: value.projects.length ? "stale" : "failed", failure: message,
               projects: value.projects, pendingProjectIds: [...observation.dirty],
               failures: [...value.failures.filter(item => item.projectId !== projectId), { projectId, message }],
             });

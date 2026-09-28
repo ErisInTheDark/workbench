@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
 
 import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { parseWorkbenchRouteFromPath } from "workbench-shared/workbench/navigation/workbench-route";
 import WorkbenchUsageDrivers from "./WorkbenchUsageDrivers.tsx";
 
 test("top usage threads link through the canonical thread route", () => {
@@ -29,7 +30,12 @@ test("top usage threads link through the canonical thread route", () => {
     projectNamesById: new Map([["project/path", "Sparkle project"]]),
     stats,
   }));
-  assert.match(html, /href="\/project\/path\/@\/thread\/thread-id"/u);
+  const href = /href="([^"]+)"/u.exec(html)?.[1];
+  assert.ok(href);
+  const route = parseWorkbenchRouteFromPath(href);
+  assert.equal(route.view, "thread");
+  assert.equal(route.threadOwnerProjectId, "project/path");
+  assert.deepEqual(route.selectedProjectIds, ["project/path"]);
   assert.match(html, /Expensive thread/u);
   assert.match(html, /Sparkle project/u);
   assert.doesNotMatch(html, />project\/path</u);

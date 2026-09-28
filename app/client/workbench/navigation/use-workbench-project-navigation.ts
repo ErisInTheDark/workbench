@@ -24,11 +24,11 @@ export function useWorkbenchProjectNavigation(explicitClient?: WorkbenchClientCo
   const pathname = usePathname();
   const search = useSearchParams().toString();
   const current = useMemo(() => parseWorkbenchRouteFromPath(pathname, search), [pathname, search]);
-  return useCallback((route: WorkbenchRoute) => (
+  return useCallback((route: WorkbenchRoute, selection: "inherit" | "exact" = "inherit") => (
     new WorkbenchProjectNavigation(projects, state.getProjectAliases(), logicalProjects,
       threadId => {
         const owner = client?.mounted?.threadOwnerFor(threadId);
         return owner ? { daemonId: owner.daemonId, projectId: ProjectIdSchema.parse(owner.projectId) } : null;
-      }).href(route, current)
+      }).href(route, current, selection)
   ), [client?.mounted, logicalProjects, projects, state, current]);
 }

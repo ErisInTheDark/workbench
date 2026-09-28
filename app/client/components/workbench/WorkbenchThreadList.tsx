@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadList: render project-owned main, snoozed, and settled threads with optional pinned priority rows.
+ * - default WorkbenchThreadList: render project-owned pinned, main, snoozed, and settled threads.
  */
 "use client";
 
@@ -125,7 +125,6 @@ export default function WorkbenchThreadList({
   onSnoozeUntil,
   projectId,
   renderThreadTooltipDetails,
-  showPinnedThreadsInMain = false,
 }: {
   allowMainPanelDrop?: boolean;
   attentionLabelsByThreadId?: Record<string, string | undefined>;
@@ -153,13 +152,10 @@ export default function WorkbenchThreadList({
   onSnoozeUntil?: (payload: WorkbenchThreadRowDragPayload, targetIdentity: { harness: WorkbenchHarness; threadId: WorkbenchThreadId }) => void;
   projectId: ProjectId;
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
-  showPinnedThreadsInMain?: boolean;
 }) {
   const rowRefs = useRef(new Map<string, HTMLAnchorElement>());
   const currentGroupedEntries = groupWorkbenchThreadSidebarEntries(entries);
-  const currentPinnedItems = showPinnedThreadsInMain
-    ? projectWorkbenchThreadDisplaySection(entries, displayOrder, "pinned")
-    : [];
+  const currentPinnedItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "pinned");
   const currentSnoozedItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "snoozed");
   const currentSettledItems = projectWorkbenchThreadDisplaySection(entries, displayOrder, "settled");
   const placement = useContextMenuPlacementSnapshot("thread-list", {
@@ -290,7 +286,7 @@ export default function WorkbenchThreadList({
         projectId: ownerProjectId,
         selected,
         showActions: !readOnly,
-        showPinPriorityIcon: showPinnedThreadsInMain,
+        showPinPriorityIcon: true,
         tooltipDetails: <>
           {renderThreadTooltipDetails?.(entry)}
           {entry.entryKind === "thread" && entry.waitingOnThreads?.length
@@ -521,11 +517,9 @@ export default function WorkbenchThreadList({
         </span>
       </a> : <div className="px-2 py-2 text-[0.78rem] text-fg/muted">Waiting for project identities</div>}
       <div role="tablist" aria-label="Threads" className="min-w-0">
-        {showPinnedThreadsInMain
-          ? pinnedItems.length
-            ? renderReorderableSection(pinnedItems, "pinned")
-            : priorityTarget("pinned")
-          : null}
+        {pinnedItems.length
+          ? renderReorderableSection(pinnedItems, "pinned")
+          : priorityTarget("pinned")}
         {priorityTarget("main")}
         {mainEntries.length
           ? <ul className="m-0 flex flex-col gap-1 p-0">{mainEntries.map((entry) => renderEntry(entry, null, undefined, true, "main"))}</ul>

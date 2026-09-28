@@ -7,7 +7,7 @@
  */
 
 import {
-  createHomeRoute, createLogicalProjectRoute, createProjectRoute, type WorkbenchRoute,
+  createLogicalProjectRoute, createProjectSelectionRoute, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 
 export const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
@@ -15,11 +15,11 @@ export const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
 export type MobilePane = "editor" | "explorer";
 
 export function getMobileExplorerRoute(route: WorkbenchRoute, browseProjectId = ""): WorkbenchRoute {
-  if (route.logical) return route.logical.projectId
-    ? createLogicalProjectRoute(route.logical.projectId)
-    : createHomeRoute();
-  if (route.view === "thread" && !route.projectId) return createHomeRoute();
-  return createProjectRoute(route.projectId || browseProjectId);
+  if (route.logical?.projectId && route.selectedProjectIds?.length === 1) {
+    return createLogicalProjectRoute(route.logical.projectId);
+  }
+  return createProjectSelectionRoute(route.selectedProjectIds
+    ?? (route.projectId ? [route.projectId] : browseProjectId && route.view !== "thread" ? [browseProjectId] : null));
 }
 
 export function getPreferredMobilePane (isMobileViewport: boolean, route: WorkbenchRoute): MobilePane {

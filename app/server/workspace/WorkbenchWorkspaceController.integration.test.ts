@@ -16,6 +16,7 @@ import {
   DaemonWorkspaceObserveSchema, type DaemonWorkspaceObserve, type DaemonWorkspaceObservation,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { DaemonIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { createWorkbenchProjectThreadSummary } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import WorkbenchDaemonSources from "./WorkbenchDaemonSources";
 import WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
@@ -69,6 +70,9 @@ class Socket extends EventTarget {
   push(query: Query, payload: Payload, revision = 1) {
     this.message({ method: "workspace/updated", params: { ...payload, revision,
       generation: query.params.generation, subscriptionId: query.params.subscriptionId } });
+  }
+  fail(query: Query, message: string) {
+    this.message({ id: query.id, error: { code: -32602, message } });
   }
   private message(value: object) {
     this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(value) }));
@@ -133,6 +137,53 @@ test("available catalogue facts register and render without waiting for a second
   assert.equal(owners.workspace.getSnapshot().catalogues.find(item => item.daemonId === b)?.phase, "pending");
   assert.equal(owners.presentation.read().locations[0]?.target.daemonId, a);
   assert.deepEqual(owners.warnings, []);
+});
+
+test("app merges compact placement across daemons and falls back only for an older source", async context => {
+  const owners = await fixture(context);
+  const release = owners.workspace.retain({ summaries: true, placement: true });
+  context.after(release);
+  const socketA = await owners.open(a);
+  const socketB = await owners.open(b);
+  const cataloguePayload = { kind: "catalogue" as const, phase: "current" as const, failure: null,
+    catalogue: { data: catalogue.data.map(item => item.project), rootPath: "C:/" }, locations: catalogue };
+  socketA.push(await socketA.query("catalogue"), cataloguePayload);
+  socketB.push(await socketB.query("catalogue"), cataloguePayload);
+  const summaryPayload = { kind: "summaries" as const, phase: "current" as const, failure: null,
+    projects: [createWorkbenchProjectThreadSummary(projectId, [], 1, {})],
+    pendingProjectIds: [], failures: [] };
+  socketA.push(await socketA.query("summaries"), summaryPayload);
+  socketB.push(await socketB.query("summaries"), summaryPayload);
+  socketB.push(await socketB.query("projectPlacement"), {
+    kind: "projectPlacement", phase: "current", failure: null,
+    projects: [{ projectId, hasUnarchivedWork: false }], pendingProjectIds: [], failures: [],
+  });
+  socketA.fail(await socketA.query("projectPlacement"), "Unknown query kind");
+  const fallback = await socketA.query("projectThreads");
+  assert.equal(fallback.params.query.kind, "projectThreads");
+  if (fallback.params.query.kind !== "projectThreads") return;
+  assert.deepEqual(fallback.params.query.projectIds, [projectId]);
+  socketA.push(fallback, { kind: "projectThreads", phase: "current", failure: null,
+    projects: [{ projectId, phase: "current", failure: null, sidebar: {
+      projectId, revision: 1, displayOrder: {}, error: null, freshness: "fresh", entries: [{
+        activityAt: 1, entryKind: "thread",
+        identity: { harness: "codex", threadId },
+        lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+        metadata: { archived: false, pinned: false, snoozed: false }, title: "Settled",
+      }],
+    } }],
+  });
+  const logical = owners.workspace.getSnapshot().projects;
+  assert.equal(logical.length, 1);
+  assert.deepEqual(owners.workspace.getProjectGroups().data.unarchivedProjectIds, [logical[0]!.id]);
+  assert.equal(owners.workspace.getProjectGroups().phase, "current");
+  assert.ok(owners.warnings.some(message => message.includes("Unknown query kind")));
+  socketB.push(await socketB.query("projectPlacement"), {
+    kind: "projectPlacement", phase: "stale", failure: "source reconnecting",
+    projects: [{ projectId, hasUnarchivedWork: false }], pendingProjectIds: [], failures: [],
+  }, 2);
+  assert.equal(owners.workspace.getProjectGroups().phase, "stale");
+  assert.deepEqual(owners.workspace.getProjectGroups().data.unarchivedProjectIds, [logical[0]!.id]);
 });
 
 test("registration failure preserves the observed folder and does not spin on the same catalogue", async context => {

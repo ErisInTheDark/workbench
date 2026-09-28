@@ -2,7 +2,7 @@
  * Exports:
  * - WORKBENCH_ROUTE_MARKER: route marker for workbench URLs.
  * - WorkbenchRouteView/WorkbenchSettingsScope/WorkbenchRoute/WorkbenchRouteParseResult: normalized route contracts.
- * - createHomeRoute/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
+ * - createHomeRoute/createProjectSelectionRoute/createToggledProjectSelectionRoute/withProjectSelection/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
  * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute/createLogicalMosaicRoute: internal project, target and UUID routes.
  * - createObservedProjectRoute: address a verified folder before durable logical registration.
  * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
@@ -12,7 +12,6 @@
  */
 
 import {
-  createWorkbenchProjectHref,
   encodeWorkbenchRoutePath,
 } from "../../navigation/workbench-route-path.ts";
 
@@ -39,6 +38,7 @@ export interface WorkbenchRoute {
   filePath: string;
   mosaicNode: WorkbenchMosaicNode | null;
   projectId: ProjectId | "";
+  selectedProjectIds: readonly string[] | null;
   settingsScope: WorkbenchSettingsScope;
   threadId: string;
   threadOwnerProjectId: ProjectId | "";
@@ -67,6 +67,7 @@ export function createHomeRoute(): WorkbenchRoute {
     filePath: "",
     mosaicNode: null,
     projectId: "",
+    selectedProjectIds: null,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
     threadOwnerProjectId: "",
@@ -81,6 +82,7 @@ export function createProjectRoute(projectId: string): WorkbenchRoute {
     filePath: "",
     mosaicNode: null,
     projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
+    selectedProjectIds: projectId ? [projectId] : [],
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
     threadOwnerProjectId: "",
@@ -89,8 +91,40 @@ export function createProjectRoute(projectId: string): WorkbenchRoute {
   };
 }
 
+export function createProjectSelectionRoute(selectedProjectIds: readonly string[] | null): WorkbenchRoute {
+  if (selectedProjectIds === null) return createHomeRoute();
+  const route = createProjectRoute(selectedProjectIds.length === 1 ? selectedProjectIds[0]! : "");
+  return { ...route, selectedProjectIds: [...selectedProjectIds] };
+}
+
+export function createToggledProjectSelectionRoute(
+  route: WorkbenchRoute,
+  selectedProjectIds: readonly string[],
+  projectId: string,
+  orderedProjectIds: readonly string[],
+): WorkbenchRoute {
+  const next = new Set(selectedProjectIds);
+  if (next.has(projectId)) next.delete(projectId);
+  else next.add(projectId);
+  const nextIds = orderedProjectIds.filter(id => next.has(id));
+  const ownerProjectId = route.logical?.threadOwnerProjectId || route.threadOwnerProjectId
+    || (!route.logical?.location && route.selectedProjectIds?.length === 1 ? route.selectedProjectIds[0] : "");
+  return route.view === "thread" && !(projectId === ownerProjectId && selectedProjectIds.includes(projectId))
+    ? withProjectSelection(route, nextIds)
+    : createProjectSelectionRoute(nextIds);
+}
+
+export function withProjectSelection(route: WorkbenchRoute, selectedProjectIds: readonly string[] | null): WorkbenchRoute {
+  return {
+    ...route,
+    projectId: route.logical ? "" : selectedProjectIds?.length === 1
+      ? RouteProjectIdSchema.parse(selectedProjectIds[0]!) : "",
+    selectedProjectIds: selectedProjectIds === null ? null : [...selectedProjectIds],
+  };
+}
+
 export function createLogicalProjectRoute(logicalProjectId: string, location: ProjectLocationReference | null = null): WorkbenchRoute {
-  return { ...createProjectRoute(""), logical: {
+  return { ...createProjectRoute(""), selectedProjectIds: [logicalProjectId], logical: {
     projectId: LogicalProjectIdSchema.parse(logicalProjectId),
     threadOwnerProjectId: null,
     location: location ? ProjectLocationReferenceSchema.parse(location) : null,
@@ -99,7 +133,7 @@ export function createLogicalProjectRoute(logicalProjectId: string, location: Pr
 }
 
 export function createObservedProjectRoute(location: ProjectLocationReference): WorkbenchRoute {
-  return { ...createProjectRoute(""), logical: {
+  return { ...createProjectRoute(""), selectedProjectIds: null, logical: {
     projectId: null, threadOwnerProjectId: null,
     location: ProjectLocationReferenceSchema.parse(location), browseLocation: null,
   } };
@@ -124,7 +158,7 @@ export function createLogicalThreadRoute(
   if ((route.threadTarget?.kind === "provider" || route.threadTarget?.kind === "subagent") && !location) {
     throw new Error("Materialized threads require a concrete daemon location.");
   }
-  return { ...route, logical: {
+  return { ...route, selectedProjectIds: selectedLogicalProjectId ? [selectedLogicalProjectId] : null, logical: {
     projectId: selectedLogicalProjectId ? LogicalProjectIdSchema.parse(selectedLogicalProjectId) : null,
     threadOwnerProjectId: LogicalProjectIdSchema.parse(ownerLogicalProjectId),
     location: location ? ProjectLocationReferenceSchema.parse(location) : null,
@@ -138,7 +172,7 @@ export function createLogicalExistingThreadRoute(
   browseLocation: ProjectLocationReference | null = null,
 ): WorkbenchRoute {
   const route = createThreadRoute("", target);
-  return { ...route, logical: {
+  return { ...route, selectedProjectIds: selectedLogicalProjectId ? [selectedLogicalProjectId] : null, logical: {
     projectId: selectedLogicalProjectId ? LogicalProjectIdSchema.parse(selectedLogicalProjectId) : null,
     threadOwnerProjectId: null,
     location: null,
@@ -157,7 +191,7 @@ function mosaicPanesHaveSources(node: WorkbenchMosaicNode): boolean {
 
 export function createLogicalMosaicRoute(logicalProjectId: string, mosaicNode: WorkbenchMosaicNode): WorkbenchRoute {
   if (!mosaicPanesHaveSources(mosaicNode)) throw new Error("Logical mosaic panes require source addresses.");
-  return { ...createMosaicRoute("", mosaicNode), logical: {
+  return { ...createMosaicRoute("", mosaicNode), selectedProjectIds: [logicalProjectId], logical: {
     projectId: LogicalProjectIdSchema.parse(logicalProjectId),
     threadOwnerProjectId: null,
     location: null,
@@ -175,6 +209,7 @@ export function createFileRoute(projectId: string, filePath: string): WorkbenchR
     filePath,
     mosaicNode: null,
     projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
+    selectedProjectIds: projectId ? [projectId] : null,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
     threadOwnerProjectId: "",
@@ -192,6 +227,7 @@ export function createThreadRoute(projectId: string, target: string | WorkbenchT
     filePath: "",
     mosaicNode: null,
     projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
+    selectedProjectIds: projectId ? [projectId] : null,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: getWorkbenchThreadTargetRootId(threadTarget),
     threadOwnerProjectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
@@ -208,6 +244,7 @@ export function createPinnedThreadRoute(
   return {
     ...createThreadRoute(threadOwnerProjectId, target),
     projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
+    selectedProjectIds: projectId ? [projectId] : null,
     threadOwnerProjectId: threadOwnerProjectId ? RouteProjectIdSchema.parse(threadOwnerProjectId) : "",
   };
 }
@@ -282,6 +319,7 @@ export function createSettingsRoute(projectId: string, settingsScope: WorkbenchS
     filePath: "",
     mosaicNode: null,
     projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
+    selectedProjectIds: projectId ? [projectId] : null,
     settingsScope,
     threadId: "",
     threadOwnerProjectId: "",
@@ -291,7 +329,7 @@ export function createSettingsRoute(projectId: string, settingsScope: WorkbenchS
 }
 
 export function createStatsRoute(projectId: string | null = null): WorkbenchRoute {
-  return { ...createProjectRoute(projectId ?? ""), view: "stats" };
+  return { ...createProjectRoute(projectId ?? ""), selectedProjectIds: projectId ? [projectId] : null, view: "stats" };
 }
 
 export function createMosaicRoute(projectId: string, mosaicNode: WorkbenchMosaicNode): WorkbenchRoute {
@@ -300,6 +338,7 @@ export function createMosaicRoute(projectId: string, mosaicNode: WorkbenchMosaic
     filePath: "",
     mosaicNode,
     projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
+    selectedProjectIds: projectId ? [projectId] : null,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
     threadOwnerProjectId: "",
@@ -314,6 +353,7 @@ export function createInvalidWorkbenchRoute(error: string, projectId = ""): Work
     filePath: "",
     mosaicNode: null,
     projectId: projectId ? RouteProjectIdSchema.parse(projectId) : "",
+    selectedProjectIds: projectId ? [projectId] : null,
     settingsScope: DEFAULT_SETTINGS_SCOPE,
     threadId: "",
     threadOwnerProjectId: "",
@@ -411,8 +451,8 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
 
     const mode = segments[markerIndex + 1] ?? "";
     const projectId = projectSegments.value.join("/");
-    if (!projectId && !mode && segments.length === 1) {
-      return createHomeRoute();
+    if (!mode && segments.length === markerIndex + 1) {
+      return projectId ? createProjectRoute(projectId) : createHomeRoute();
     }
     if (!projectId && mode === "thread") {
       const ownerMarkerIndex = segments.indexOf(WORKBENCH_ROUTE_MARKER, markerIndex + 2);
@@ -515,17 +555,51 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
   return createProjectRoute(projectId);
 }
 
+function parseProjectSelectionRouteFromSegments(segments: string[], searchParams: URLSearchParams): WorkbenchRoute {
+  const markerIndex = segments.indexOf(WORKBENCH_ROUTE_MARKER);
+  const prefix = markerIndex < 0 ? segments : segments.slice(0, markerIndex);
+  if (!prefix.includes("+")) return parseLegacyRouteFromSegments(segments, searchParams);
+  const groups: string[][] = [[]];
+  for (const segment of prefix) {
+    if (segment === "+") groups.push([]);
+    else groups.at(-1)!.push(segment);
+  }
+  const emptySelection = groups.length === 2 && groups.every(group => group.length === 0);
+  if (!emptySelection && groups.some(group => group.length === 0)) {
+    return createInvalidWorkbenchRoute("Project selection contains an empty project address.");
+  }
+  const selected: string[] = [];
+  for (const group of groups) {
+    if (!group.length) continue;
+    const decoded = decodeRouteSegments(group);
+    if (decoded.ok === false) return createInvalidWorkbenchRoute(decoded.error);
+    if (!decoded.value.length) return createInvalidWorkbenchRoute("Project selection contains an empty address.");
+    selected.push(decoded.value.join("/"));
+  }
+  if (new Set(selected).size !== selected.length) {
+    return createInvalidWorkbenchRoute("Project selection contains the same project twice.");
+  }
+  const suffix = markerIndex < 0 ? [] : segments.slice(markerIndex);
+  const parsed = parseLegacyRouteFromSegments(suffix.length ? suffix : ["@"], searchParams);
+  if (parsed.view === "invalid") return parsed;
+  return withProjectSelection(parsed.view === "home" ? { ...parsed, view: "project" } : parsed, selected);
+}
+
 export function parseWorkbenchRouteFromPath(pathname: string, search = ""): WorkbenchRouteParseResult {
-  const observed = /^\/@\/location\/([^/]+)\/([^/]+)(\/.*)?$/u.exec(pathname);
+  const observed = /^(.*)\/@\/location\/([^/]+)\/([^/]+)(\/.*)?$/u.exec(pathname);
   if (observed) {
     try {
+      const selection = parseWorkbenchRouteFromPath(`${observed[1] || ""}/@/`);
+      if (selection.view !== "home" && selection.view !== "project") {
+        return createInvalidWorkbenchRoute("Observed folder selection is invalid.");
+      }
       const location = ProjectLocationReferenceSchema.parse({
-        daemonId: decodeURIComponent(observed[1]!), projectId: decodeURIComponent(observed[2]!),
+        daemonId: decodeURIComponent(observed[2]!), projectId: decodeURIComponent(observed[3]!),
       });
-      const route = observed[3]
-        ? parseWorkbenchRouteFromPath(`/${encodeURIComponent(location.projectId)}/@${observed[3]}`, search)
+      const route = observed[4]
+        ? parseWorkbenchRouteFromPath(`/${encodeURIComponent(location.projectId)}/@${observed[4]}`, search)
         : createProjectRoute("");
-      return { ...route, projectId: "", threadOwnerProjectId: "",
+      return { ...route, projectId: "", threadOwnerProjectId: "", selectedProjectIds: selection.selectedProjectIds,
         logical: { projectId: null, threadOwnerProjectId: null, location, browseLocation: null } };
     } catch { return createInvalidWorkbenchRoute("Observed folder address is invalid."); }
   }
@@ -543,7 +617,7 @@ export function parseWorkbenchRouteFromPath(pathname: string, search = ""): Work
     return createHomeRoute();
   }
 
-  return parseLegacyRouteFromSegments(segments, searchParams);
+  return parseProjectSelectionRouteFromSegments(segments, searchParams);
 }
 
 export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike | string): WorkbenchRouteParseResult {
@@ -560,18 +634,20 @@ export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike 
 }
 
 export function createWorkbenchHref(route: WorkbenchRoute): string {
+  const projectPath = route.selectedProjectIds === null ? ""
+    : route.selectedProjectIds.length ? route.selectedProjectIds.map(encodeWorkbenchRoutePath).join("/+/") : "+";
+  const markedPath = projectPath ? `/${projectPath}/${WORKBENCH_ROUTE_MARKER}` : `/${WORKBENCH_ROUTE_MARKER}`;
   if (route.logical && !route.logical.projectId && route.logical.location) {
     const location = route.logical.location;
     const legacy = createWorkbenchHref({ ...route, logical: undefined,
-      projectId: location.projectId, threadOwnerProjectId: location.projectId });
+      projectId: location.projectId, selectedProjectIds: [location.projectId],
+      threadOwnerProjectId: location.projectId });
     const marker = legacy.indexOf("/@");
-    return `/@/location/${encodeURIComponent(location.daemonId)}/${encodeURIComponent(location.projectId)}${marker < 0 ? "" : legacy.slice(marker + 2)}`;
+    return `${markedPath}/location/${encodeURIComponent(location.daemonId)}/${encodeURIComponent(location.projectId)}${marker < 0 ? "" : legacy.slice(marker + 2)}`;
   }
   if (route.logical) throw new Error("Logical routes need project-address resolution before serialisation.");
-  const projectPath = encodeWorkbenchRoutePath(route.projectId);
-  const markedPath = projectPath ? `/${projectPath}/${WORKBENCH_ROUTE_MARKER}` : `/${WORKBENCH_ROUTE_MARKER}`;
   if (route.view === "home") {
-    return `/${WORKBENCH_ROUTE_MARKER}/`;
+    return "/";
   }
   if (route.view === "file") {
     return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/file/${encodeWorkbenchRoutePath(route.filePath)}`;
@@ -582,11 +658,11 @@ export function createWorkbenchHref(route: WorkbenchRoute): string {
     if (!route.projectId && threadOwnerProjectId) {
       const ownerPath = encodeWorkbenchRoutePath(threadOwnerProjectId);
       if (target.kind === "new") return target.folderId
-        ? `/${WORKBENCH_ROUTE_MARKER}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/folder/${target.folderId}/thread/new`
-        : `/${WORKBENCH_ROUTE_MARKER}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/new`;
-      if (target.kind === "draft") return `/${WORKBENCH_ROUTE_MARKER}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/new/${target.draftId}`;
-      if (target.kind === "subagent") return `/${WORKBENCH_ROUTE_MARKER}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/${encodeRouteSegment(target.parentThreadId)}/sub/${encodeRouteSegment(target.threadId)}`;
-      return `/${WORKBENCH_ROUTE_MARKER}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/${encodeRouteSegment(target.threadId)}`;
+        ? `${markedPath}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/folder/${target.folderId}/thread/new`
+        : `${markedPath}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/new`;
+      if (target.kind === "draft") return `${markedPath}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/new/${target.draftId}`;
+      if (target.kind === "subagent") return `${markedPath}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/${encodeRouteSegment(target.parentThreadId)}/sub/${encodeRouteSegment(target.threadId)}`;
+      return `${markedPath}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/${encodeRouteSegment(target.threadId)}`;
     }
     if (threadOwnerProjectId !== route.projectId) {
       return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/pin${createWorkbenchHref(createThreadRoute(threadOwnerProjectId, target))}`;
@@ -607,15 +683,15 @@ export function createWorkbenchHref(route: WorkbenchRoute): string {
   }
   if (route.view === "mosaic") throw new Error("Mosaic routes are unavailable.");
 
-  return createWorkbenchProjectHref(route.projectId);
+  return `${markedPath}/`;
 }
 
 export function createProjectHref(projectId: string) {
-  return createWorkbenchProjectHref(projectId);
+  return createWorkbenchHref(createProjectRoute(projectId));
 }
 
 export function createHomeHref() {
-  return createWorkbenchHref(createHomeRoute());
+  return "/";
 }
 
 export function createFileHref(projectId: string, filePath: string) {
@@ -649,6 +725,7 @@ export function createMosaicHref(projectId: string, mosaicNode: WorkbenchMosaicN
 export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute) {
   return left.view === right.view
     && left.projectId === right.projectId
+    && areDeeplyEqual(left.selectedProjectIds, right.selectedProjectIds)
     && left.filePath === right.filePath
     && areDeeplyEqual(left.mosaicNode, right.mosaicNode)
     && left.settingsScope === right.settingsScope

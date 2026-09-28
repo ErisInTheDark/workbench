@@ -36,7 +36,6 @@ import {
 import {
     createFileRoute,
     createGitRoute,
-    createHomeHref,
     createHomeRoute,
     createObservedProjectRoute,
     createHomeThreadRoute,
@@ -49,6 +48,7 @@ import {
     createMosaicRoute,
     createPinnedThreadRoute,
     createProjectRoute,
+    createToggledProjectSelectionRoute,
     createSettingsRoute,
     createStatsRoute,
     createThreadRoute,
@@ -58,6 +58,7 @@ import {
     isWorkbenchRouteOwnerOfThread,
     isSameDraftRouteIntent,
     isWorkbenchThreadTargetSelected,
+    withProjectSelection,
     type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
@@ -121,7 +122,7 @@ import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreePr
 import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
-import { getFirstSidebarProjectGroup, groupLogicalSidebarProjects, groupSidebarProjects } from "./workbench/project-sidebar-groups";
+import { resolveSelectedProjectIds } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
 import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
@@ -169,7 +170,6 @@ import {
     ExternalLinkIcon,
     FolderOpenIcon,
     GearIcon,
-    HomeIcon,
     ProjectIcon,
     SaveIcon,
     SearchIcon,
@@ -185,10 +185,8 @@ import WorkbenchClientProvider from "./workbench/WorkbenchClientProvider";
 import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
-import WorkbenchCurrentProjectHeading from "./workbench/WorkbenchCurrentProjectHeading";
 import { WorkbenchOperationsContext as WorkbenchDaemonClientContext, WorkbenchDaemonAssetOriginContext } from "./workbench/WorkbenchWorkspaceContext";
 import WorkbenchIconButton from "./workbench/WorkbenchIconButton";
-import WorkbenchPinnedThreadSidebar from "./workbench/WorkbenchPinnedThreadSidebar";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
 import WorkbenchProjectIcon from "./workbench/WorkbenchProjectIcon";
 import WorkbenchProjectLocationLabel from "./workbench/WorkbenchProjectLocationLabel";
@@ -432,21 +430,41 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     : explorer.projects.length ? undefined : explorer.logicalProjects;
   const projectThreadSidebars = useWorkbenchProjectThreadSidebars(workbenchClient);
   const projectThreadSummaries = useWorkbenchProjectThreadSummaries(workbenchClient);
-  const groupedSidebarProjects = useMemo(
-    () => groupSidebarProjects(explorer.projects, projectThreadSummaries.projects),
-    [explorer.projects, projectThreadSummaries.projects],
-  );
-  const firstSidebarProjectGroup = useMemo(
-    () => getFirstSidebarProjectGroup(groupedSidebarProjects).map(({ project }) => project),
-    [groupedSidebarProjects],
-  );
-  const firstLogicalSidebarProjectGroup = useMemo(
-    () => getFirstSidebarProjectGroup(groupLogicalSidebarProjects(
-      explorer.logicalProjects ?? [], explorer.logicalSummaries ?? {},
-    )).map(({ project }) => project).filter(project =>
-      project.locations.some(location => location.project)),
-    [explorer.logicalProjects, explorer.logicalSummaries],
-  );
+  const appProjectGroups = displayedLogicalProjects
+    && (explorer.workspaceProjectGroupsPhase === "current"
+      || explorer.workspaceProjectGroupsPhase === "stale")
+    ? explorer.workspaceProjectGroups : null;
+  const unarchivedProjectIds = useMemo(() => new Set<string>(appProjectGroups?.unarchivedProjectIds
+    ?? (displayedLogicalProjects
+      ? (explorer.logicalThreads ?? []).filter(row => row.entry.entryKind !== "subagent"
+        && !row.entry.metadata.archived).map(row => row.logicalProjectId)
+      : projectThreadSidebars.projects.flatMap(sidebar => sidebar.entries
+        .filter(entry => entry.entryKind !== "subagent" && !entry.metadata.archived)
+        .map(() => sidebar.projectId)))), [appProjectGroups, displayedLogicalProjects, explorer.logicalThreads,
+    projectThreadSidebars.projects]);
+  const unsettledProjectIds = useMemo(() => new Set<string>(appProjectGroups?.unsettledProjectIds
+    ?? (displayedLogicalProjects
+      ? displayedLogicalProjects.filter(project => explorer.logicalSummaries?.[project.id]?.unsettledThreads.length)
+        .map(project => project.id)
+      : projectThreadSummaries.projects.filter(summary => summary.unsettledThreads.length)
+        .map(summary => summary.projectId))), [appProjectGroups, displayedLogicalProjects,
+    explorer.logicalSummaries, projectThreadSummaries.projects]);
+  const orderedProjectIds = appProjectGroups?.orderedProjectIds
+    ?? (displayedLogicalProjects ?? explorer.projects).map(project => project.id);
+  const selectionProjectIds = useMemo(() => resolveSelectedProjectIds(
+    (displayedLogicalProjects ?? explorer.projects).map(project => project.id),
+    route.selectedProjectIds, unarchivedProjectIds,
+  ), [displayedLogicalProjects, explorer.projects, route.selectedProjectIds, unarchivedProjectIds]);
+  const dynamicSelectionPending = route.selectedProjectIds === null
+    && !appProjectGroups && explorer.isThreadsLoading;
+  const selectedLogicalProjects = useMemo(() => selectionProjectIds.flatMap(id => {
+    const project = displayedLogicalProjects?.find(candidate => candidate.id === id);
+    return project?.locations.some(location => location.project) ? [project] : [];
+  }), [displayedLogicalProjects, selectionProjectIds]);
+  const selectedPhysicalProjects = useMemo(() => selectionProjectIds.flatMap(id => {
+    const project = explorer.projects.find(candidate => candidate.id === id);
+    return project ? [project] : [];
+  }), [explorer.projects, selectionProjectIds]);
   const currentThread = threads.current;
   const threadDocuments = threads.documents;
   const [threadRelativeTimeNowMs, setThreadRelativeTimeNowMs] = useState(() => Date.now());
@@ -748,11 +766,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       return createFileRoute(route.projectId, route.filePath);
     }
     if (route.view === "thread") {
-      return !route.projectId && route.threadOwnerProjectId
+      const threadRoute = !route.projectId && route.threadOwnerProjectId
         ? createHomeThreadRoute(route.threadOwnerProjectId, route.threadTarget ?? route.threadId)
         : route.threadOwnerProjectId && route.threadOwnerProjectId !== route.projectId
         ? createPinnedThreadRoute(route.projectId, route.threadOwnerProjectId, route.threadTarget ?? route.threadId)
         : createThreadRoute(route.projectId, route.threadTarget ?? route.threadId);
+      return withProjectSelection(threadRoute, route.selectedProjectIds);
     }
     if (route.view === "settings") {
       return createSettingsRoute(route.projectId, route.settingsScope);
@@ -776,6 +795,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     route.logical?.browseLocation?.daemonId,
     route.logical?.browseLocation?.projectId,
     route.projectId,
+    route.selectedProjectIds,
     route.settingsScope,
     route.threadId,
     route.threadTarget,
@@ -1031,12 +1051,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
 
     event.preventDefault();
-    if (logical && route.logical?.projectId === projectId || !logical && projectId === explorer.currentProjectId) {
-      return;
-    }
-
-    navigateToRoute(logical ? createLogicalProjectRoute(projectId) : createProjectRoute(projectId));
-  }, [explorer.currentProjectId, navigateToRoute, route.logical?.projectId]);
+    const order = (displayedLogicalProjects ?? explorer.projects).map(project => project.id);
+    navigateToRoute(createToggledProjectSelectionRoute(route, selectionProjectIds, projectId, order),
+      { selection: "exact" });
+  }, [displayedLogicalProjects, explorer.projects, navigateToRoute, route, selectionProjectIds]);
 
   const onInvalidFileLocation = useCallback(() => {
     setSelectionError("The thread's file location is invalid.");
@@ -1098,13 +1116,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const searchActionContext = useMemo<WorkbenchActionContext>(() => ({
     createThread: () => {
       if (workbenchClient.mounted?.presentationClient) {
-        const project = selectedLogicalProject ?? firstLogicalSidebarProjectGroup[0];
+        const project = selectedLogicalProject ?? selectedLogicalProjects[0];
         const location = project?.locations.find(item => item.project)?.target;
         if (project && location) navigateToRoute(createLogicalThreadRoute(
           route.logical?.projectId ?? null, project.id, location, { kind: "new" },
         ));
       }
-      else if (activeProjectId) navigateToRoute(createThreadRoute(activeProjectId, { kind: "new" }));
+      else if (selectedPhysicalProjects[0]) navigateToRoute(createThreadRoute(selectedPhysicalProjects[0].id, { kind: "new" }));
     },
     getSidebarThreadLinks: () => Array.from(document.querySelector("aside")?.querySelectorAll<HTMLElement>("[data-workbench-sidebar-thread-link='true']") ?? [])
       .filter((link) => !link.closest("[hidden]")),
@@ -1118,7 +1136,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     },
     zoomIn: () => updateEditorFontSize(resolvedSettings.editorFontSize + 0.08),
     zoomOut: () => updateEditorFontSize(resolvedSettings.editorFontSize - 0.08),
-  }), [activeProjectId, attachedProjectId, firstLogicalSidebarProjectGroup, isMobile, navigateToRoute,
+  }), [attachedProjectId, isMobile, navigateToRoute, selectedLogicalProjects, selectedPhysicalProjects,
     resolvedSettings.editorFontSize, route.logical?.projectId, searchController, selectedLogicalProject,
     updateEditorFontSize, viewedProjectId, workbenchClient.mounted]);
   searchActivationRef.current = (result) => {
@@ -1471,9 +1489,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const showStatsView = route.view === "stats";
   const showGitView = route.view === "git";
   const sidebarCreateProjectId = workbenchClient.mounted?.presentationClient
-    ? (selectedLogicalProject ?? firstLogicalSidebarProjectGroup[0])?.locations
+    ? (selectedLogicalProject ?? selectedLogicalProjects[0])?.locations
       .find(location => location.project)?.target.projectId ?? browseLocation?.projectId ?? ""
-    : activeProjectId || firstSidebarProjectGroup[0]?.id || "";
+    : selectedPhysicalProjects[0]?.id || "";
   const showFullBleedMainView = showMosaicView;
   const createThreadFromSidebar = useCallback((ownerProjectId: string, folderId?: FolderId) => {
     if (showMosaicView || !controls) return;
@@ -1496,7 +1514,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
           && location.daemonId === workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId))
           ?? explorer.logicalProjects.find(project => project.locations.some(location =>
             location.target.projectId === ownerProjectId))
-          ?? firstLogicalSidebarProjectGroup[0];
+          ?? selectedLogicalProjects[0];
       if (selected) {
         const location = route.logical?.projectId === selected.id ? route.logical.location
             ?? selected.locations.find(item => item.project)?.target
@@ -1516,7 +1534,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     navigateToRoute(!route.projectId
       ? createHomeThreadRoute(ownerProjectId, target)
       : createThreadRoute(ownerProjectId, target));
-  }, [controls, explorer.logicalProjects, firstLogicalSidebarProjectGroup, navigateToRoute, route, showMosaicView, workbenchClient.mounted]);
+  }, [controls, explorer.logicalProjects, navigateToRoute, route, selectedLogicalProjects, showMosaicView, workbenchClient.mounted]);
   const handleThreadSettled = useCallback((settledTarget: WorkbenchThreadTarget, ownerProjectId?: string) => {
     const currentRoute = currentRouteRef.current;
     if (currentRoute.view !== "thread"
@@ -1640,6 +1658,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   );
   const threadProjectId = routeThreadContext?.project.id ?? routeDraftContext?.project.id
     ?? (route.view === "thread" ? route.threadOwnerProjectId || route.projectId : route.projectId || activeProjectId);
+  const threadSurfaceKey = `${routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? "attached"}:${threadProjectId}:${threadViewInstanceKey}`;
   const threadFileScope = useMemo(() => ({
     daemon: selectedDaemon,
     daemonId: routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? routeLaunchLocation?.daemonId,
@@ -1662,7 +1681,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft");
   const rotateHomeDraftProject = useCallback(async () => {
     if (!controls || !isHomeDraftRoute) return;
-    const recentProjects = route.logical ? firstLogicalSidebarProjectGroup : firstSidebarProjectGroup;
+    const recentProjects = route.logical ? selectedLogicalProjects : selectedPhysicalProjects;
     const currentProjectId = route.logical?.threadOwnerProjectId ?? threadProjectId;
     if (!currentProjectId || recentProjects.length < 2) return;
     const currentIndex = recentProjects.findIndex(({ id }) => id === currentProjectId);
@@ -1673,7 +1692,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     try {
       const target = route.threadTarget;
       if (route.logical) {
-        const logicalProject = firstLogicalSidebarProjectGroup.find(project => project.id === nextProject.id);
+        const logicalProject = selectedLogicalProjects.find(project => project.id === nextProject.id);
         const destination = logicalProject?.locations.find(item => item.project)?.target;
         if (!logicalProject || !destination) throw new Error("The next project's daemon folder is unavailable.");
         const draftSession = activeDraftSessionRef.current;
@@ -1695,7 +1714,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         return;
       }
       if (!threadProjectId) return;
-      const legacyNext = firstSidebarProjectGroup.find(project => project.id === nextProject.id);
+      const legacyNext = selectedPhysicalProjects.find(project => project.id === nextProject.id);
       if (!legacyNext) return;
       if (target?.kind === "draft") {
         await controls.moveThreadDraft(threadProjectId, legacyNext.id, target.draftId);
@@ -1708,13 +1727,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     } finally {
       setIsProjectRotationPending(false);
     }
-  }, [controls, firstLogicalSidebarProjectGroup, firstSidebarProjectGroup, isHomeDraftRoute, navigateToRoute, route, threadProjectId]);
+  }, [controls, isHomeDraftRoute, navigateToRoute, route, selectedLogicalProjects, selectedPhysicalProjects, threadProjectId]);
   const homeRotatorProject = route.logical ? logicalThreadProject
     : explorer.projects.find(project => project.id === threadProject?.id);
   const projectRotator = isHomeDraftRoute && homeRotatorProject ? (
     <WorkbenchProjectControl
       disabled={isProjectRotationPending || (route.logical
-        ? firstLogicalSidebarProjectGroup : firstSidebarProjectGroup).length < 2}
+        ? selectedLogicalProjects : selectedPhysicalProjects).length < 2}
       onRotate={() => { void rotateHomeDraftProject(); }}
       project={homeRotatorProject}
     />
@@ -2378,23 +2397,18 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden pr-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:pr-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
                         <DropTargetBoundary className="scrollbar-hover-reveal flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto pt-3 pb-[calc(0.75rem+min(0.75rem,var(--workbench-safe-area-bottom,0px)))] pr-2">
-                <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto_auto] items-center gap-1 pb-2">
-                  <span className="min-w-0 truncate pl-5 text-xl font-semibold leading-tight text-text">workbench</span>
-                  <WorkbenchIconButton
-                    as="a"
-                    label="Open home"
-                    display="hover-border"
-                    href={createHomeHref()}
+                <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto] items-center gap-1 pb-2">
+                  <a
+                    className="min-w-0 truncate rounded-lg pl-5 text-xl font-semibold leading-tight text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                    href="/"
                     onClick={(event) => {
                       if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
                       event.preventDefault();
                       navigateToRoute(createHomeRoute());
                     }}
-                    title="Open home"
                   >
-                    <HomeIcon size={20} />
-                    <span className="sr-only">Open home</span>
-                  </WorkbenchIconButton>
+                    workbench
+                  </a>
                   <WorkbenchIconButton
                     label="Open workspace search"
                     display="hover-border"
@@ -2444,30 +2458,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   onThreadSettled={handleThreadSettled}
                   projectId={explorer.currentProjectId || route.projectId}
                 >
-                  {viewedProjectId || selectedLogicalProject ? (
-                    <WorkbenchPinnedThreadSidebar
-                      activeDragPayload={activeWorkbenchDrag?.payload ?? null}
-                      logicalProjects={displayedLogicalProjects}
-                      logicalThreads={explorer.logicalThreads}
-                      logicalSummaries={explorer.logicalSummaries}
-                      presentation={workbenchClient.mounted?.presentationClient?.snapshot().data}
-                      controls={controls}
-                      attachedDaemonId={workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId}
-                      selectedLogicalProjectId={route.logical?.projectId}
-                      selectedLocation={browseLocation}
-                      onOpenQualifiedThread={row => openQualifiedThread(row, route.logical?.projectId ?? null)}
-                      currentTarget={route.view === "thread" ? route.threadTarget : null}
-                      onOpenThread={openThreadFromExplorer}
-                      projectId={browseProjectId}
-                      projects={explorer.projects}
-                      selectedProjectPinPlacement={resolvedSettings.selectedProjectPinPlacement}
-                      selectedOwnerProjectId={route.view === "thread"
-                        ? route.logical?.threadOwnerProjectId ?? (route.threadOwnerProjectId || route.projectId)
-                        : viewedProjectId}
-                    />
-                  ) : null}
                   <ProjectSidebar
                     activeProjectId={viewedProjectId}
+                    selectedProjectIds={selectionProjectIds}
+                    orderedProjectIds={orderedProjectIds}
+                    unsettledProjectIds={unsettledProjectIds}
+                    unarchivedProjectIds={unarchivedProjectIds}
+                    emptySelectionMessage={route.selectedProjectIds?.length === 0
+                      ? "No projects selected." : route.selectedProjectIds === null
+                        && !selectionProjectIds.length && !dynamicSelectionPending
+                        ? "No projects have unarchived threads." : undefined}
                     logicalProjects={displayedLogicalProjects}
                     logicalSummaries={explorer.logicalSummaries}
                     logicalError={[
@@ -2475,7 +2475,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       workbenchClient.projectSourceError,
                     ].filter(Boolean).join(" ") || null}
                     logicalLoading={workbenchClient.mounted?.presentationClient?.snapshot().phase === "loading"}
-                    onConfigureGitRoots={() => navigateToRoute(createSettingsRoute("", "global"))}
                     onProjectLinkClick={selectProjectFromLink}
                     onObservedProjectLinkClick={(event, location) => {
                       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -2483,14 +2482,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       navigateToRoute(createObservedProjectRoute(location));
                     }}
                     projects={explorer.projects}
-                    showGitRootsSetup={explorer.configuredDiscoveryRootPath === ""}
                   />
-                  {selectedLogicalProject || browseLocation && currentProject || !route.logical && viewedProjectId && currentProject ? (
-                    <WorkbenchCurrentProjectHeading
-                      project={selectedLogicalProject ? null : currentProject}
-                      logicalProject={selectedLogicalProject}
-                    />
-                  ) : null}
                   {(!route.logical || browseLocation) ? <WorkbenchGitSidebar active={showGitView} onNavigate={event => {
                     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                     event.preventDefault();
@@ -2506,7 +2498,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       preferenceKey="threadsOpen"
                       title="Threads"
                     >
-                      {viewedProjectId || selectedLogicalProject || browseLocation ? (
+                      {selectionProjectIds.length === 1 || browseLocation ? (
                         <WorkbenchThreadSidebar
                           activeDragPayload={activeWorkbenchDrag?.payload ?? null}
                           logicalProject={selectedLogicalProject}
@@ -2523,7 +2515,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           onOpenThread={openThreadFromExplorer}
                           projectId={browseProjectId}
                           renderThreadTooltipDetails={renderThreadTooltipDetails}
-                          selectedProjectPinPlacement={resolvedSettings.selectedProjectPinPlacement}
                           showMosaicView={showMosaicView}
                         />
                       ) : (
@@ -2541,6 +2532,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           onCreateThread={createThreadFromSidebar}
                           onOpenThread={openThreadFromExplorer}
                           projects={explorer.projects}
+                          selectedProjectIds={selectionProjectIds}
+                          emptySelectionMessage={route.selectedProjectIds === null
+                            ? dynamicSelectionPending ? "Loading projects..." : "No projects have unarchived threads."
+                            : undefined}
                           renderThreadTooltipDetails={renderThreadTooltipDetails}
                           selectedOwnerProjectId={route.view === "thread"
                             ? route.logical?.threadOwnerProjectId ?? (route.threadOwnerProjectId || route.projectId)
@@ -2660,7 +2655,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 className="h-full"
                 contentClassName="flex flex-col"
                 enabled={isDirectThreadSurface}
-                resetKey={`${viewedProjectId}:${selectedThreadIdForView || activeThreadId}`}
+                resetKey={`${threadSurfaceKey}:${selectedThreadIdForView || activeThreadId}`}
               >
               <header
                 ref={shellHeaderRef}
@@ -2793,7 +2788,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     <ThreadView
                       routeOwned
                       routeError={selectionError}
-                      key={`${routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? "attached"}:${threadProjectId}:${threadViewInstanceKey}`}
+                      key={threadSurfaceKey}
                       thread={threadForThreadView}
                       threadOwnerContent={showThreadOwnerLabel && routeOwnerMetadata ? (
                         <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 text-fg/muted" title={`${routeOwnerMetadata.hostname}: ${routeOwnerMetadata.rootPath}`}>
@@ -2939,21 +2934,27 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : showEmptyState && !shouldRenderMainLayout ? (
                   <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
                     <div className="flex w-full max-w-[42rem] flex-col gap-8">
-                      <button
+                      {!selectionProjectIds.length ? (
+                        <p className="m-0 px-4 text-[0.9rem] text-fg/muted">
+                          {route.selectedProjectIds === null
+                            ? dynamicSelectionPending ? "Loading projects..." : "No projects have unarchived threads."
+                            : "No projects selected. Select a project to see its threads."}
+                        </p>
+                      ) : <button
                         type="button"
                         className={`${workbenchOptionRowClassName} ${workbenchOptionHoverClassName} w-fit border-transparent px-4 py-2 text-[0.84rem] text-text md:py-2`}
                         disabled={!controls || !sidebarCreateProjectId
-                          || Boolean(workbenchClient.mounted?.presentationClient && !firstLogicalSidebarProjectGroup.length && !browseLocation)}
+                          || Boolean(workbenchClient.mounted?.presentationClient && !selectedLogicalProjects.length && !browseLocation)}
                         onClick={() => {
                           if (!controls || !sidebarCreateProjectId) return;
                           createThreadFromSidebar(sidebarCreateProjectId);
                         }}
                       >
                         <span className="inline-flex size-4 items-center justify-center text-[1.05em] leading-none">+</span>
-                        <span>{workbenchClient.mounted?.presentationClient && !firstLogicalSidebarProjectGroup.length
+                        <span>{workbenchClient.mounted?.presentationClient && !selectedLogicalProjects.length
                           ? explorer.logicalProjects?.length ? "Project folder unavailable"
                             : "Waiting for project identities" : "Create new thread"}</span>
-                      </button>
+                      </button>}
                       {quickOpenPaths.length ? (
                         <div className="space-y-2">
                           {quickOpenPaths.map((path) => (

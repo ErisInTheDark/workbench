@@ -30,7 +30,7 @@
  * - WorkbenchThreadPrioritySchema/WorkbenchThreadPriority: exact pinned, main, and snoozed placement intent.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: current thread-family snapshots and daemon-owned mutations.
  * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness.
- * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries: partition ordered entries into pinned, main, snoozed, settled, and archived render sections.
+ * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries/hasUnarchivedSidebarWork: classify project placement and ordered thread sections.
  * - WorkbenchThreadClaimIntersections/getWorkbenchThreadClaimIntersections/createWorkbenchThreadClaimIntersectionSelector: derive and identity-stabilize sibling intersections for plan or stashed claims.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback.
@@ -649,6 +649,10 @@ export function getThreadSidebarGroup(entry: WorkbenchThreadSidebarEntry): Workb
   if (entry.entryKind !== "subagent" && entry.metadata.snoozed) return "snoozed";
   const pinned = entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
   return pinned ? "pinned" : "main";
+}
+
+export function hasUnarchivedSidebarWork(entries: readonly WorkbenchThreadSidebarEntry[]) {
+  return entries.some(entry => entry.entryKind !== "subagent" && !entry.metadata.archived);
 }
 
 export function isWorkbenchThreadSettlementAvailable(entry: WorkbenchThreadSidebarEntry) {

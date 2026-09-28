@@ -84,6 +84,21 @@ test("pending browser-state binding cannot block already-available app presentat
   await f.wait(value => value.kind === "appState" && value.phase === "current");
 });
 
+test("project groups use their own observation response without changing projects", async context => {
+  const f = await fixture(context);
+  const groups = f.owner.observe({ subscriptionId: randomUUID(), generation: 1,
+    query: { kind: "projectGroups" } });
+  assert.equal(groups.kind, "projectGroups");
+  if (groups.kind !== "projectGroups") return;
+  assert.deepEqual(groups.data, {
+    orderedProjectIds: [], unsettledProjectIds: [], unarchivedProjectIds: [],
+  });
+  const projects = f.owner.observe({ subscriptionId: randomUUID(), generation: 1,
+    query: { kind: "projects" } });
+  assert.equal(projects.kind, "projects");
+  assert.equal(Object.hasOwn(projects, "projectGroups"), false);
+});
+
 test("state invalidations coalesce during one read and a final change is not lost", async context => {
   const f = await fixture(context);
   const first = Promise.withResolvers<WorkbenchClientStateResponse>();

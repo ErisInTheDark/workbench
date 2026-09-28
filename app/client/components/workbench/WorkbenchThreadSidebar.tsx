@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadSidebar: render the current project's configured main thread list from shared sidebar actions.
+ * - default WorkbenchThreadSidebar: render the current project's pinned, main and historical thread list.
  */
 "use client";
 
@@ -13,7 +13,6 @@ import type { WorkbenchDragPayload } from "../../workbench/layout/workbench-drag
 import { createLogicalExistingThreadRoute, createLogicalThreadRoute, createObservedProjectRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
-import type { WorkbenchSelectedProjectPinPlacement } from "../../workbench/state/workbench-settings";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { ProjectIdSchema, type FolderId, type ProjectId } from "workbench-shared/workbench/identity";
 import { SidebarLoadingSkeleton } from "./workbench-explorer";
@@ -32,7 +31,6 @@ interface WorkbenchThreadSidebarProps {
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   projectId: ProjectId | "";
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
-  selectedProjectPinPlacement: WorkbenchSelectedProjectPinPlacement;
   showMosaicView: boolean;
   logicalProject?: WorkbenchLogicalProject | null;
   logicalThreads?: readonly WorkbenchLogicalThreadRow[];
@@ -52,7 +50,6 @@ export default memo(function WorkbenchThreadSidebar({
   onOpenThread,
   projectId,
   renderThreadTooltipDetails,
-  selectedProjectPinPlacement,
   showMosaicView,
   logicalProject,
   logicalThreads = [],
@@ -182,7 +179,6 @@ export default memo(function WorkbenchThreadSidebar({
             ProjectIdSchema.parse(projectId || logicalProject!.id), targetIdentity)}
           projectId={logicalProject ? ProjectIdSchema.parse(logicalProject.id) : ProjectIdSchema.parse(projectId)}
           renderThreadTooltipDetails={renderThreadTooltipDetails}
-          showPinnedThreadsInMain={selectedProjectPinPlacement === "threads-section"}
         />
       </nav>
       {layoutError ? <p role="alert" className="m-0 pr-2 text-[0.84rem] leading-6 text-danger">{layoutError}</p> : null}

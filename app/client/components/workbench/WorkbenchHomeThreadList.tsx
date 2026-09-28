@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchHomeThreadList: render one projectless thread list with global priority order, project-owned folders, owner context, and guarded drag actions.
+ * - default WorkbenchHomeThreadList: render selected projects with combined priority order, project-owned folders, owner context, and guarded drag actions.
  */
 "use client";
 
@@ -117,6 +117,7 @@ export default function WorkbenchHomeThreadList({
   projects,
   renderThreadTooltipDetails,
   selectedOwnerProjectId,
+  selectedProjectIds,
   logicalProjects,
   logicalThreads,
   presentation,
@@ -134,6 +135,7 @@ export default function WorkbenchHomeThreadList({
   projects: readonly WorkbenchProjectOption[];
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
   selectedOwnerProjectId: string;
+  selectedProjectIds: readonly string[];
   logicalProjects?: readonly WorkbenchLogicalProject[];
   logicalThreads?: readonly WorkbenchLogicalThreadRow[];
   presentation?: PresentationSnapshot | null;
@@ -161,16 +163,17 @@ export default function WorkbenchHomeThreadList({
   ), [logicalProjects, projects]);
   const currentList = useMemo(() => projectWorkbenchHomeThreadList(
     logicalProjects && presentation ? {
-      projects: logicalProjects.map(project => ({
+      projects: logicalProjects.filter(project => selectedProjectIds.includes(project.id)).map(project => ({
         projectId: project.id,
         entries: (logicalThreads ?? []).filter(row => row.logicalProjectId === project.id).map(row => row.entry),
         displayOrder: projectLogicalThreadDisplayOrder(project.id, logicalThreads ?? [], presentation),
       })),
-    } : actions.projectThreadSidebars,
+    } : { projects: actions.projectThreadSidebars.projects
+      .filter(sidebar => selectedProjectIds.includes(sidebar.projectId)) },
     logicalProjects && presentation
       ? projectLogicalHomeDisplayOrder(logicalThreads ?? [], presentation)
       : actions.homeDisplayOrder,
-  ), [actions.homeDisplayOrder, actions.projectThreadSidebars, logicalProjects, logicalThreads, presentation]);
+  ), [actions.homeDisplayOrder, actions.projectThreadSidebars, logicalProjects, logicalThreads, presentation, selectedProjectIds]);
   const qualifiedFor = (homeEntry: WorkbenchHomeThreadEntry) => logicalProjects
     ? logicalThreads?.find(row => row.logicalProjectId === homeEntry.projectId
       && getWorkbenchThreadDisplayKey(row.entry) === getWorkbenchThreadDisplayKey(homeEntry.entry))

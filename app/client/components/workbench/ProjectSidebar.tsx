@@ -1,15 +1,15 @@
 /*
  * Exports:
- * - default ProjectSidebar: render project groups, status summaries, and Git-root setup access.
+ * - default ProjectSidebar: render selected project groups, reveal controls, and status summaries.
  */
 "use client";
 
-import { useMemo, type MouseEvent } from "react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
 
 import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchProjectOption } from "workbench-shared/types";
-import { getFirstSidebarProjectGroup, groupLogicalSidebarProjects, groupSidebarProjects, type DisplaySidebarGroups } from "./project-sidebar-groups";
+import { groupProjectSelection, type DisplaySidebarProject } from "./project-sidebar-groups";
 import { useWorkbenchProjectThreadSummaries } from "./use-workbench-client";
-import { ProjectIcon } from "./workbench-icons";
+import { EllipsisIcon, ProjectIcon } from "./workbench-icons";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
@@ -22,69 +22,93 @@ import { WorkbenchDaemonAssetOriginContext } from "./WorkbenchWorkspaceContext";
 
 export default function ProjectSidebar ({
   activeProjectId,
+  selectedProjectIds,
+  orderedProjectIds,
+  unsettledProjectIds,
+  unarchivedProjectIds,
+  emptySelectionMessage,
   logicalProjects,
   logicalSummaries,
   logicalError,
   logicalLoading,
-  onConfigureGitRoots,
   onProjectLinkClick,
   onObservedProjectLinkClick,
   projects,
-  showGitRootsSetup,
 }: {
   activeProjectId: string;
+  selectedProjectIds: readonly string[];
+  orderedProjectIds: readonly string[];
+  unsettledProjectIds: ReadonlySet<string>;
+  unarchivedProjectIds: ReadonlySet<string>;
+  emptySelectionMessage?: string;
   logicalProjects?: readonly WorkbenchLogicalProject[];
   logicalSummaries?: Readonly<Record<string, WorkbenchLogicalProjectSummary>>;
   logicalError?: string | null;
   logicalLoading?: boolean;
-  onConfigureGitRoots: () => void;
   onProjectLinkClick (event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
   onObservedProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, location: ProjectLocationReference): void;
   projects: readonly WorkbenchProjectOption[];
-  showGitRootsSetup: boolean;
 }) {
-  const { preferences, setProjectTimeGroupCount } = useWorkbenchSidebarPreferences();
+  const { preferences } = useWorkbenchSidebarPreferences();
   const workspace = useWorkbenchClientController().explorer.workspaceProjects;
   const observed = workspace?.observedProjects.flatMap(item => item.locations) ?? [];
   const summaries = useWorkbenchProjectThreadSummaries();
   const displayedProjects = logicalProjects ?? projects;
-  const grouped = useMemo<DisplaySidebarGroups>(() => logicalProjects
-    ? groupLogicalSidebarProjects(logicalProjects, logicalSummaries ?? {})
-    : groupSidebarProjects(projects, summaries.projects),
-    [logicalProjects, logicalSummaries, projects, summaries.projects]);
-  const entriesByProjectId = useMemo(() => new Map(
-    [...grouped.alwaysVisibleProjects, ...grouped.timeGroups.flatMap(({ projects: entries }) => entries)]
-      .map((entry) => [entry.project.id, entry]),
-  ), [grouped]);
+  const entriesByProjectId = useMemo(() => new Map<string, DisplaySidebarProject>(displayedProjects.map(project => {
+    const summary = logicalProjects
+      ? logicalSummaries?.[project.id] ?? null
+      : summaries.projects.find(item => item.projectId === project.id) ?? null;
+    return [project.id, { project, summary,
+      activityAt: summary?.lastThreadUpdateAt ?? ("lastCommitTimeMs" in project ? project.lastCommitTimeMs : null) }];
+  })), [displayedProjects, logicalProjects, logicalSummaries, summaries.projects]);
+  const orderedEntries = useMemo(() => {
+    const ids = [...orderedProjectIds, ...displayedProjects.map(project => project.id)];
+    return [...new Set(ids)].flatMap(id => entriesByProjectId.get(id) ? [entriesByProjectId.get(id)!] : []);
+  }, [displayedProjects, entriesByProjectId, orderedProjectIds]);
+  const [openingSelection, setOpeningSelection] = useState(() => ({
+    ids: selectedProjectIds,
+    ready: displayedProjects.length > 0,
+  }));
+  const [revealedTier, setRevealedTier] = useState(0);
+  useEffect(() => {
+    if (preferences.projectsOpen && !openingSelection.ready && displayedProjects.length) {
+      setOpeningSelection({ ids: selectedProjectIds, ready: true });
+    }
+  }, [displayedProjects.length, openingSelection.ready, preferences.projectsOpen, selectedProjectIds]);
+  const projectSelectionGroups = useMemo(() => groupProjectSelection(
+    orderedEntries, openingSelection.ids, unsettledProjectIds, unarchivedProjectIds,
+  ), [openingSelection.ids, orderedEntries, unsettledProjectIds, unarchivedProjectIds]);
+  const selectedSet = useMemo(() => new Set(selectedProjectIds), [selectedProjectIds]);
   const otherCounts = useMemo(() => displayedProjects.reduce(
     (counts, project) => {
-      if (project.id === activeProjectId) return counts;
+      if (selectedSet.has(project.id)) return counts;
       const summary = entriesByProjectId.get(project.id)?.summary;
-      const unpinnedCounts = summary
-        ? WorkbenchThreadStatusCounts.subtractCounts(summary.counts,
-          WorkbenchThreadStatusCounts.countPinnedStatuses(
-            logicalProjects ? (summary as WorkbenchLogicalProjectSummary).pinnedThreads.map(item => item.entry)
-              : (summary as typeof summaries.projects[number]).pinnedThreads,
-          ))
-        : WorkbenchThreadStatusCounts.emptyCounts;
-      return WorkbenchThreadStatusCounts.addCounts(counts, unpinnedCounts);
+      return WorkbenchThreadStatusCounts.addCounts(counts,
+        summary?.counts ?? WorkbenchThreadStatusCounts.emptyCounts);
     },
     WorkbenchThreadStatusCounts.emptyCounts,
-  ), [activeProjectId, displayedProjects, entriesByProjectId, logicalProjects, summaries.projects]);
-  const firstGroup = getFirstSidebarProjectGroup(grouped);
-  const visibleProjects = grouped.alwaysVisibleProjects.length
-    ? [...firstGroup, ...grouped.timeGroups.slice(0, preferences.projectTimeGroupCount).flatMap(({ projects: entries }) => entries)]
-    : [...firstGroup, ...grouped.timeGroups.slice(1, preferences.projectTimeGroupCount).flatMap(({ projects: entries }) => entries)];
-  const hasMoreTimeGroups = preferences.projectTimeGroupCount < grouped.timeGroups.length;
+  ), [displayedProjects, entriesByProjectId, selectedSet]);
+  const visibleProjects = [
+    ...projectSelectionGroups.selected,
+    ...(revealedTier >= 1 ? projectSelectionGroups.unsettled : []),
+    ...(revealedTier >= 2 ? projectSelectionGroups.unarchived : []),
+    ...(revealedTier >= 3 ? projectSelectionGroups.all : []),
+  ];
+  const nextTier = revealedTier < 1 ? 1 : revealedTier < 2 ? 2 : revealedTier < 3 ? 3 : null;
+  const nextLabel = nextTier === 1 ? "show unsettled" : nextTier === 2 ? "show unarchived" : "show all projects";
   const nowMs = Date.now();
 
   return (
     <section className="shrink-0 pb-3">
       <WorkbenchSidebarSectionDisclosure
-        actions={<WorkbenchThreadStatusCountsButton counts={otherCounts} label="other project" scope="project" />}
+        actions={<WorkbenchThreadStatusCountsButton counts={otherCounts} label="unselected project" scope="project" />}
         contentClassName="pb-3"
         icon={ProjectIcon}
         preferenceKey="projectsOpen"
+        onOpenChange={(open) => {
+          setRevealedTier(0);
+          if (open) setOpeningSelection({ ids: selectedProjectIds, ready: displayedProjects.length > 0 });
+        }}
         title="Projects"
       >
         <nav aria-label="Projects" className="flex flex-col gap-1">
@@ -95,18 +119,11 @@ export default function ProjectSidebar ({
               key={entry.project.id}
               nowMs={nowMs}
               onProjectLinkClick={onProjectLinkClick}
+              selected={selectedSet.has(entry.project.id)}
             />
           ))}
-          {showGitRootsSetup ? (
-            <button
-              className="w-full rounded-lg px-2 py-1.5 text-left text-[0.78rem] font-medium text-accent transition hover:bg-accent-soft focus-visible:bg-accent-soft focus-visible:outline-none"
-              onClick={onConfigureGitRoots}
-              type="button"
-            >
-              Set Git roots
-            </button>
-          ) : null}
-          {observed.map(item => (
+          {emptySelectionMessage ? <p className="m-0 px-2 py-1 text-[0.8rem] text-fg/muted">{emptySelectionMessage}</p> : null}
+          {revealedTier >= 3 ? observed.map(item => (
             <WorkbenchDaemonAssetOriginContext.Provider
               key={`${item.location.daemonId}/${item.location.projectId}`}
               value={{ kind: "source", daemonId: item.location.daemonId }}
@@ -118,14 +135,16 @@ export default function ProjectSidebar ({
               onProjectLinkClick={event => onObservedProjectLinkClick(event, item.location)}
             />
             </WorkbenchDaemonAssetOriginContext.Provider>
-          ))}
-          {hasMoreTimeGroups ? (
+          )) : null}
+          {nextTier !== null ? (
             <button
-              className="w-full rounded-lg px-2 py-1.5 text-left text-[0.78rem] font-medium text-fg/muted transition hover:(bg-accent-soft text-accent) focus-visible:(bg-accent-soft text-accent outline-none)"
-              onClick={() => setProjectTimeGroupCount(preferences.projectTimeGroupCount + 1)}
+              className="group/reveal flex min-h-11 w-full items-center rounded-lg px-2 py-1 text-left text-[0.78rem] text-fg/muted/70 transition hover:text-fg/muted focus-visible:text-fg/muted focus-visible:outline-none md:min-h-8"
+              onClick={() => setRevealedTier(nextTier)}
               type="button"
+              aria-label={nextLabel}
             >
-              Show {grouped.timeGroups[preferences.projectTimeGroupCount]?.label ?? "older projects"}
+              <EllipsisIcon className="mr-1.5 shrink-0" size={16} />
+              <span className="hidden group-hover/reveal:inline group-focus-visible/reveal:inline">{nextLabel}</span>
             </button>
           ) : null}
           {logicalError ? <p role="alert" className="m-0 px-2 text-[0.8rem] leading-5 text-danger">{logicalError}</p> : null}
