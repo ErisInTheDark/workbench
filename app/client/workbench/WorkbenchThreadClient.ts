@@ -4590,14 +4590,22 @@ function WorkbenchThreadClient(
     lifecycle.dispose();
   }
 
+  async function recoverThreadControllers() {
+    const results = await Promise.allSettled([...threadControllers.values()].map(controller => controller.recover()));
+    const failed = results.find(result => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+  }
+  lifecycle.addUnsubscribe(onReconnect(() => {
+    void recoverThreadControllers().catch(error => {
+      console.warn("Unable to refresh thread views after reconnect.",
+        error instanceof Error ? error.name : "Unknown failure.");
+    });
+  }));
+
   return {
     threadObservations,
     getThreadController,
-    recoverThreadControllers: async () => {
-      const results = await Promise.allSettled([...threadControllers.values()].map(controller => controller.recover()));
-      const failed = results.find(result => result.status === "rejected");
-      if (failed?.status === "rejected") throw failed.reason;
-    },
+    recoverThreadControllers,
     activateThreadControllers: () => {
       for (const controller of threadControllers.values()) {
         void controller.activate().catch(() => { /* The thread owner publishes and reports activation failures. */ });

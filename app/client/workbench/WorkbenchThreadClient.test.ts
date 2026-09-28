@@ -306,7 +306,7 @@ async function installProjectThreadState(
 }
 
 async function withClient(
-  run: (client: ReturnType<typeof WorkbenchThreadClient>, socket: FakeWebSocket) => Promise<void>,
+  run: (client: ReturnType<typeof WorkbenchThreadClient>, socket: FakeWebSocket, reconnect: () => number) => Promise<void>,
   clientOptions: Partial<Parameters<typeof WorkbenchThreadClient>[0]> = {},
 ) {
   const originalWindow = globalThis.window;
@@ -331,6 +331,7 @@ async function withClient(
   // These are renderer-owner tests. The fake edge retains their controlled provider
   // replies; app routing and protocol admission have separate real-socket scenarios.
   const transport = new WorkbenchSocketClient({ resolveUrl: async () => "ws://renderer.test" });
+  const reconnectListeners = new Set<() => void>();
   const pendingReleases = new Set<Promise<object>>();
   const request = async (method: string, params: object) => {
     const operation = transport.sendRequest({ method, params }).then(response => {
@@ -345,7 +346,11 @@ async function withClient(
   };
   const workspace = {
     rpc: {
-      onReconnect: (listener: () => void) => transport.onReconnect(listener),
+      onReconnect: (listener: () => void) => {
+        reconnectListeners.add(listener);
+        const stop = transport.onReconnect(listener);
+        return () => { reconnectListeners.delete(listener); stop(); };
+      },
       onOpen: (listener: () => void) => transport.onConnectionOpen(listener),
     },
     connect: () => transport.connect(),
@@ -374,7 +379,10 @@ async function withClient(
     client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), root: "repo", rootPath: "C:/repo" });
     await client.refreshRateLimits();
     assert.ok(socket);
-    await run(client, socket);
+    await run(client, socket, () => {
+      for (const listener of reconnectListeners) listener();
+      return reconnectListeners.size;
+    });
   } finally {
     FakeWebSocket.intercept = null;
     client.dispose();
@@ -627,6 +635,29 @@ test("SQLite transcript source lifecycle publishes through the thread client and
     release();
   });
 });
+
+test("reconnect revalidates a visible document instead of retaining an idle cached turn", async () => withClient(async (client, socket, reconnect) => {
+  const target = { kind: "provider" as const, harness: "codex" as const, threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] };
+  client.selectThreadPayload(activeThread("codex", "thread", "completed"));
+  const owner = client.getThreadController("project", target);
+  const release = owner.acquire("view");
+  try {
+    await owner.read();
+    client.selectThreadPayload(activeThread("codex", "thread", "completed"));
+    assert.equal(owner.getSnapshot().document?.turns.at(-1)?.status, "completed");
+    const before = socket.requests.filter(request => request.method === "thread/page/read").length;
+    const refreshed = Promise.withResolvers<void>();
+    const stop = owner.subscribe(() => {
+      if (owner.getSnapshot().document?.turns.at(-1)?.status === "inProgress") refreshed.resolve();
+    });
+    try {
+      assert.ok(reconnect() > 0);
+      await refreshed.promise;
+      assert.ok(socket.requests.filter(request => request.method === "thread/page/read").length > before);
+      assert.equal(owner.getSnapshot().document?.status, "active");
+    } finally { stop(); }
+  } finally { release(); }
+}));
 
 test("accepted thread titles update only the matching canonical source name", async () => withClient(async (client) => {
   const original = activeThread("codex", "original");

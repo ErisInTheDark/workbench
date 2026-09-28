@@ -395,8 +395,8 @@ export default class OpenCodeTranscriptAdapter {
       const latestExecutionMessage = [...group.messages].reverse().find(message =>
         ["idle", "user", "assistant", "synthetic", "shell", "compaction"].includes(message.type));
       const idle = latestExecutionMessage?.type === "idle" ? latestExecutionMessage : null;
-      const keepOpen = index === groups.length - 1
-        && (options.keepLatestTurnOpen || !idle && latestSteerIndex > latestAssistantIndex);
+      const keepOpen = index === groups.length - 1 && !idle
+        && (options.keepLatestTurnOpen || latestSteerIndex > latestAssistantIndex);
       const completedAt = keepOpen
         ? null
         : idle?.time.created ?? assistant?.time.completed

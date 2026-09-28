@@ -226,6 +226,31 @@ test("summary consumers share admission without loading a transcript", () => {
   f.owner.dispose();
 });
 
+for (const [cachedStatus, freshStatus] of [["completed", "inProgress"], ["inProgress", "completed"]] as const) {
+  test(`re-entering a cached ${cachedStatus} top-level view revalidates a ${freshStatus} turn`, async () => {
+    const f = fixture();
+    const document = (status: typeof cachedStatus | typeof freshStatus): ThreadPayload => ({
+      ...f.document, status: status === "inProgress" ? "active" : "idle",
+      turns: [{
+        id: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), status, items: [], itemsView: "full",
+        error: null, startedAt: 1, completedAt: status === "inProgress" ? null : 2,
+        durationMs: status === "inProgress" ? null : 1,
+      }],
+    });
+    f.publish(document(cachedStatus));
+    const release = f.owner.acquire("view");
+    f.admit();
+    assert.equal(f.reads.length, 1);
+    const fresh = document(freshStatus);
+    f.publish(fresh);
+    f.reads[0]!.resolve(fresh);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(f.owner.getSnapshot().document?.turns.at(-1)?.status, freshStatus);
+    release();
+    f.owner.dispose();
+  });
+}
+
 test("proposal observation hydrates only on demand and fences stale refreshes", async () => {
   const f = fixture();
   f.publish(f.document);

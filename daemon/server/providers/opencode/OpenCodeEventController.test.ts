@@ -224,6 +224,64 @@ test("successful execution reaches unfinished-task enforcement after lifecycle s
   assert.deepEqual(calls, ["observe", "enforce"]);
 });
 
+test("terminal notification waits for canonical settlement when native history still reports an active turn", async () => {
+  const calls: string[] = [];
+  const controller = new OpenCodeEventController({
+    threads: {
+      ...executionLifecycle,
+      currentTurn: () => ({ threadId, turnId }),
+      syncNative: async () => ({ threadId, latestTurnId: turnId }),
+      latestTurn: async () => turn("inProgress"),
+      completeExecution: async () => { calls.push("enforce"); },
+    },
+    transcript: {
+      appendText: () => undefined,
+      recordItem: async () => "item" as never,
+      recordTurnState: async input => { calls.push(`record:${input.state}`); },
+    },
+    observe: async () => { calls.push("observe"); },
+    broadcast: notification => { calls.push(notification.method); },
+  });
+  await controller.accept(event({
+    id: "end", created: 3, type: "session.execution.succeeded", durable,
+    data: { sessionID: "session" },
+  }));
+  assert.deepEqual(calls, [
+    "record:completed", "observe", "turn/completed", "thread/status/changed", "enforce",
+  ]);
+});
+
+test("connection reconciliation restores active work and settles missed terminal work from native evidence", async () => {
+  const calls: string[] = [];
+  let active = true;
+  const controller = new OpenCodeEventController({
+    threads: {
+      ...executionLifecycle,
+      reconcileActivity: async () => [{
+        sessionID: "session", threadId, turn: turn("inProgress"),
+        active, outcome: active ? null : "succeeded", idleAt: active ? null : 4, maintenance: false,
+      }],
+      markExecutionStarted: () => { calls.push("started"); },
+      markExecutionSettled: () => { calls.push("settled"); },
+      completeExecution: async () => { calls.push("enforce"); },
+    } as never,
+    transcript: {
+      appendText: () => undefined, recordItem: async () => "item" as never,
+      recordTurnState: async input => { calls.push(`record:${input.state}`); },
+    },
+    observe: async facts => { calls.push(facts.lifecycle?.event.kind ?? "none"); },
+    broadcast: notification => { calls.push(notification.method); },
+  });
+  await controller.reconcileConnection(new AbortController().signal, () => false);
+  assert.deepEqual(calls, ["started", "acceptedIntent", "thread/status/changed", "turn/started"]);
+  calls.length = 0;
+  active = false;
+  await controller.reconcileConnection(new AbortController().signal, () => false);
+  assert.deepEqual(calls, [
+    "record:completed", "settled", "turnCompleted", "turn/completed", "thread/status/changed", "enforce",
+  ]);
+});
+
 test("terminal reconciliation never settles a newer user turn", async () => {
   for (const changeDuring of ["sync", "latest"] as const) {
     let current = turnId;

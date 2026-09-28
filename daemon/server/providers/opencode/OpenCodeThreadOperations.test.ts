@@ -126,6 +126,7 @@ function operations(
       return {
         ...value,
         session: {
+          active: async () => ({}),
           get: async () => session,
           inbox: { list: async () => [] },
           ...value.session,
@@ -1053,6 +1054,44 @@ test("retains a questionnaire while interrupting its exact OpenCode session", as
     `interrupt:${nativeThreadId}`,
     "state:interrupted",
   ]);
+});
+
+test("connection recovery reads native activity for tracked work and ignores sessions changed by live events", async () => {
+  let active = true;
+  const owner = operations({
+    session: {
+      active: async () => active ? {
+        [nativeThreadId]: { type: "running" }, "outside-session": { type: "running" },
+      } : {},
+      get: async () => ({ ...session, ...(active ? {} : { outcome: "succeeded", time: { ...session.time, idle: 4 } }) }),
+      inbox: { list: async () => [] },
+      message: { list: async () => ({ data: [], cursor: {} }) },
+    },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: active ? "inProgress" : "completed" }) });
+  owner.markExecutionStarted(nativeThreadId);
+  const signal = new AbortController().signal;
+  const running = await owner.reconcileActivity(signal, () => false);
+  assert.equal(running.length, 1, "unadmitted native sessions do not enter Workbench recovery");
+  assert.equal(running[0]?.active, true);
+  assert.equal(running[0]?.turn?.id, turnId);
+  active = false;
+  const settled = await owner.reconcileActivity(signal, () => false);
+  assert.equal(settled[0]?.active, false);
+  assert.equal(settled[0]?.outcome, "succeeded");
+  assert.deepEqual(await owner.reconcileActivity(signal, id => id === nativeThreadId), []);
+});
+
+test("native idle history prevents a stale active snapshot from reopening a turn", async () => {
+  const owner = operations({
+    session: { active: async () => ({ [nativeThreadId]: { type: "running" } }) },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
+  {}, { readPage: async () => ({ thread: { turns: [{ id: turnId, status: "completed", items: [] }] } }) });
+  owner.markExecutionStarted(nativeThreadId);
+  const facts = await owner.reconcileActivity(new AbortController().signal, () => false);
+  assert.equal(facts[0]?.active, false);
+  assert.equal(facts[0]?.turn?.status, "completed");
 });
 
 for (const succeeds of [true, false]) {

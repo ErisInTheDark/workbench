@@ -31,6 +31,7 @@ export interface OpenCodeEventControllerOptions {
     markExecutionStarted(nativeThreadId: string): void;
     syncNative(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId; latestTurnId?: WorkbenchTurnId | null; hasPendingSteers?: boolean; maintenance?: boolean }>;
     syncCreatedNative?(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId } | null>;
+    reconcileActivity?(signal: AbortSignal, wasTouched: (sessionID: string) => boolean): ReturnType<OpenCodeThreadOperations["reconcileActivity"]>;
   } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "completeExecution" | "executionIntentVersion">;
   transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordItem" | "recordTurnState">
     & Partial<Pick<OpenCodeTranscriptAdapter, "previewToolPatch">>;
@@ -82,6 +83,47 @@ export default class OpenCodeEventController {
   dispose() {
     for (const sessionID of this.previews.keys()) this.clearPreviews(sessionID);
     this.tools.clear();
+  }
+
+  async reconcileConnection(signal: AbortSignal, wasTouched: (sessionID: string) => boolean) {
+    if (!this.options.threads.reconcileActivity) throw new Error("OpenCode activity reconciliation is unavailable.");
+    for (const fact of await this.options.threads.reconcileActivity(signal, wasTouched)) {
+      signal.throwIfAborted();
+      if (wasTouched(fact.sessionID) || fact.maintenance || !fact.turn) continue;
+      const turnId = WorkbenchTurnIdSchema.parse(fact.turn.id);
+      if (fact.active) {
+        this.options.threads.markExecutionStarted(fact.sessionID);
+        await this.options.observe({
+          activity: null, displayLabel: null,
+          lifecycle: { threadId: fact.threadId, event: { kind: "acceptedIntent", turnId } },
+        });
+        this.broadcastThreadStatus(fact.threadId, { activeFlags: [], type: "active" });
+        this.broadcastTurn("turn/started", fact.threadId, fact.turn);
+        continue;
+      }
+      const status = fact.outcome === "succeeded" ? "completed"
+        : fact.outcome === "failed" ? "failed"
+          : fact.outcome === "interrupted" ? "interrupted"
+            : fact.turn.status === "inProgress" ? "interrupted" : fact.turn.status;
+      if (fact.turn.status === "inProgress") {
+        await this.options.transcript.recordTurnState({
+          threadId: fact.threadId, turnId, state: status, observedAt: fact.idleAt ?? Date.now(),
+        });
+      }
+      if (wasTouched(fact.sessionID)) continue;
+      this.options.threads.markExecutionSettled(fact.sessionID);
+      const lifecycle = await this.options.observe({
+        activity: null, displayLabel: null,
+        lifecycle: { threadId: fact.threadId, event: { kind: "turnCompleted", turnId, status } },
+      });
+      this.broadcastTurn("turn/completed", fact.threadId, { ...fact.turn, status });
+      this.broadcastThreadStatus(fact.threadId, { type: "idle" });
+      await this.options.threads.completeExecution({
+        sessionID: fact.sessionID,
+        eventID: `reconnected:${fact.sessionID}:${turnId}:${fact.idleAt ?? 0}`,
+        turnId, status, lifecycle: lifecycle || null,
+      });
+    }
   }
 
   async accept(event: OpenCodeEvent) {
@@ -291,7 +333,7 @@ export default class OpenCodeEventController {
         const status = requestedInterrupt ? "interrupted"
           : event.type === "session.execution.succeeded" ? "completed"
           : event.type === "session.execution.interrupted" ? "interrupted" : "failed";
-        if (status !== "completed") {
+        if (status !== "completed" || turn.status === "inProgress") {
           await this.options.transcript.recordTurnState({
             threadId: identity.threadId,
             turnId: WorkbenchTurnIdSchema.parse(turn.id),

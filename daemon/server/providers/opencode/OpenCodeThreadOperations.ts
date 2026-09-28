@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - OpenCodeThreadOperationsOptions: provider-local dependencies for native session operations.
+ * - OpenCodeNativeActivity: one connection-recovery observation from native session state.
  * - default OpenCodeThreadOperations: translate WB thread intent to the pinned OpenCode client and canonical SQL history.
  */
 import { pathToFileURL } from "node:url";
@@ -32,6 +33,7 @@ import OpenCodeThreadWindowLoader from "./OpenCodeThreadWindowLoader";
 import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
 import type WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 
 type OpenCodeSteerEntry = Omit<WorkbenchSteerHistoryEntry, "threadId" | "turnId"> & {
@@ -80,6 +82,16 @@ interface SessionExecution {
   context?: Parameters<WorkbenchProviderThreads["submit"]>[0]["context"];
   admission: Promise<void> | null;
 }
+export interface OpenCodeNativeActivity {
+  sessionID: string;
+  threadId: WorkbenchThreadId;
+  turn: Turn | null;
+  active: boolean;
+  outcome: SessionInfo["outcome"] | null;
+  idleAt: number | null;
+  maintenance: boolean;
+}
+
 const supersededContinuation = Symbol("superseded OpenCode continuation");
 
 function modelRef(model: string) {
@@ -532,9 +544,11 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const cursor = target.mode === "previous"
       ? await this.options.readProviderCursor(identity.threadId, turn!.turnId) : undefined;
     try {
-      const [session, window] = await Promise.all([
+      const eventSequence = execution.eventSequence;
+      const [session, window, active] = await Promise.all([
         client.session.get({ sessionID: native.nativeThreadId }, { signal }),
         new OpenCodeThreadWindowLoader(client).load(native.nativeThreadId, nativeTarget, cursor, signal),
+        target.mode === "latest" ? client.session.active({ signal }) : Promise.resolve({}),
       ]);
       signal.throwIfAborted();
       if (target.mode === "previous" && !window.messages.length) {
@@ -549,7 +563,8 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         state: "completed" as const, createdAt: 0, startedAt: null, endedAt: null, durationMs: null,
       } : undefined;
       const recorded = await this.syncSession(session, window.messages, {
-        canCommit: () => execution.intentVersion === intentVersion,
+        canCommit: () => execution.intentVersion === intentVersion && execution.eventSequence === eventSequence,
+        keepLatestTurnOpen: target.mode === "latest" && Boolean(active[native.nativeThreadId]),
         window: { ...window, latest: target.mode === "latest", gapIds: input.gapIds, successor },
       });
       return { turnIds: recorded.latestTurnId ? [recorded.latestTurnId] : [], exhausted: window.previousCursor === null };
@@ -572,7 +587,50 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const session = await client.session.get({ sessionID: nativeThreadId }, { signal });
     const identity = await this.syncSession(session, []);
     const result = await this.sync(identity.threadId, signal);
-    return { ...result, maintenance: this.execution(nativeThreadId).kind === "compaction" };
+    return {
+      ...result, maintenance: this.execution(nativeThreadId).kind === "compaction",
+      outcome: session.outcome ?? null, idleAt: session.time.idle ?? null,
+    };
+  }
+
+  async reconcileActivity(signal: AbortSignal, wasTouched: (sessionID: string) => boolean): Promise<OpenCodeNativeActivity[]> {
+    signal.throwIfAborted();
+    const client = await this.options.acquire();
+    const active = await client.session.active({ signal });
+    const candidates = new Set([
+      ...Object.keys(active),
+      ...[...this.executions].filter(([sessionID, execution]) => execution.active
+        || execution.admission !== null || this.pendingSteerSessions.has(sessionID)).map(([sessionID]) => sessionID),
+    ]);
+    const observations: OpenCodeNativeActivity[] = [];
+    for (const sessionID of candidates) {
+      signal.throwIfAborted();
+      if (wasTouched(sessionID)) continue;
+      if (!this.executions.has(sessionID) && !this.sessions.has(sessionID)) {
+        const session = await client.session.get({ sessionID }, { signal });
+        const admitted = this.options.identities.findNativeThread({
+          harness: "opencode",
+          nativeLocation: session.location.directory,
+          nativeThreadId: NativeThreadIdSchema.parse(sessionID),
+        });
+        if (!admitted || wasTouched(sessionID)) continue;
+      }
+      const nativeActive = Boolean(active[sessionID]);
+      const identity = await this.syncNative(sessionID, signal);
+      if (wasTouched(sessionID)) continue;
+      const pending = !nativeActive && (this.execution(sessionID).admission !== null
+        || this.pendingSteerSessions.has(sessionID)
+        || (await client.session.inbox.list({ sessionID }, { signal })).some(isManagedWorkbenchPrompt));
+      if (pending || wasTouched(sessionID)) continue;
+      const turn = (await this.read(identity.threadId)).turns.at(-1) ?? null;
+      if (wasTouched(sessionID)) continue;
+      observations.push({
+        sessionID, threadId: identity.threadId, turn,
+        active: nativeActive && turn?.status === "inProgress",
+        outcome: identity.outcome, idleAt: identity.idleAt, maintenance: identity.maintenance,
+      });
+    }
+    return observations;
   }
 
   currentTurn(nativeThreadId: string) {

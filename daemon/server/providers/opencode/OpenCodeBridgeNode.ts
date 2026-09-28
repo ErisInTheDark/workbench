@@ -5,6 +5,7 @@
 import ReloadableNode from "../../ReloadableNode";
 import OpenCodeProvider from "./OpenCodeProvider";
 import OpenCodeEventController from "./OpenCodeEventController";
+import OpenCodeEventStreamController from "./OpenCodeEventStreamController";
 import OpenCodeThreadOperations from "./OpenCodeThreadOperations";
 import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
@@ -12,6 +13,7 @@ import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import { logError } from "../../process-helpers";
 import { OpenCodePatchObservationSchema } from "./opencode-workbench-rpc";
+import { setTimeout as delay } from "node:timers/promises";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
@@ -19,34 +21,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   create: (context, build) => {
     const service = build.get("openCodeService");
     const lifetime = new AbortController();
-    let subscription: Promise<void> | null = null;
-    let processingEvent: Promise<void> | null = null;
-    const startSubscription = (client: Awaited<ReturnType<typeof service.acquire>>) => subscription ??= (async () => {
-      for await (const event of client.event.subscribe({ signal: lifetime.signal })) {
-        try {
-          if (String(event.type) === "rpc.workbench.patchPreview") {
-            const parsed = OpenCodePatchObservationSchema.safeParse("data" in event ? event.data : undefined);
-            if (!parsed.success) logError("opencode", "Invalid companion file-preview observation.");
-            else events.acceptPatchPreview(parsed.data);
-          } else {
-            processingEvent = events.accept(event);
-            try { await processingEvent; }
-            finally { processingEvent = null; }
-          }
-        } catch (error) {
-          if (!lifetime.signal.aborted) {
-            logError("opencode", `event reconciliation failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
-          }
-        }
-      }
-    })().catch(error => {
-      if (!lifetime.signal.aborted) {
-        logError("opencode", `event subscription failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
-      }
-    });
+    let stream: OpenCodeEventStreamController;
     const acquire = async () => {
       const client = await service.acquire(lifetime.signal);
-      void startSubscription(client);
+      stream.start();
       return client;
     };
     const transcript = new OpenCodeTranscriptAdapter({
@@ -89,13 +67,31 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       threads,
       transcript,
     });
+    stream = new OpenCodeEventStreamController({
+      subscribe: signal => ({
+        async *[Symbol.asyncIterator]() {
+          const client = await service.acquire(signal);
+          yield* client.event.subscribe({ signal });
+        },
+      }),
+      onConnected: ({ signal, wasTouched }) => events.reconcileConnection(signal, wasTouched),
+      onEvent: async event => {
+        if (String(event.type) === "rpc.workbench.patchPreview") {
+          const parsed = OpenCodePatchObservationSchema.safeParse("data" in event ? event.data : undefined);
+          if (!parsed.success) logError("opencode", "Invalid companion file-preview observation.");
+          else events.acceptPatchPreview(parsed.data);
+        } else await events.accept(event);
+      },
+      waitBeforeRetry: signal => delay(1000, undefined, { signal }),
+      warn: message => logError("opencode", message),
+    });
     return {
-      hasPendingWork: () => processingEvent !== null || threads.hasPendingWork(),
+      hasPendingWork: () => stream.hasPendingWork() || threads.hasPendingWork(),
       registrations: { openCodeThreadOperations: threads },
       start: () => undefined,
       dispose: async () => {
         lifetime.abort(new Error("OpenCode bridge disposed."));
-        await Promise.all([subscription, threads.settle()]);
+        await Promise.all([stream.dispose(), threads.settle()]);
         events.dispose();
       },
     };
@@ -112,6 +108,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   sources: [
     "daemon/server/providers/opencode/OpenCodeBridgeNode.ts",
     "daemon/server/providers/opencode/OpenCodeEventController.ts",
+    "daemon/server/providers/opencode/OpenCodeEventStreamController.ts",
     "daemon/server/providers/opencode/OpenCodeThreadOperations.ts",
     "daemon/server/providers/opencode/OpenCodeThreadWindowLoader.ts",
     "daemon/server/providers/opencode/OpenCodeManagedSessionController.ts",

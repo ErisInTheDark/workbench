@@ -93,6 +93,8 @@ for (const outcome of ["succeeded", "failed", "interrupted"] as const) {
     const expected = outcome === "succeeded" ? "completed" : outcome;
     assert.equal(recorded.latestTurnState, expected);
     assert.equal(repository.read({ threadId: recorded.threadId, turnLimit: 1 })!.turns[0]!.state, expected);
+    const stillTerminal = await adapter.record(session, messages, project, { window, keepLatestTurnOpen: true });
+    assert.equal(stillTerminal.latestTurnState, expected, "a native idle marker must win over an active snapshot");
     const next = await adapter.record(session, [...messages,
       { id: "next", type: "user", text: "next task", time: { created: 5 } },
     ], project, { window });

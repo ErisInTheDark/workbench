@@ -169,6 +169,7 @@ export default class WorkbenchThreadController {
     if (this.disposed) throw new Error("The thread owner is disposed.");
     const consumer = {};
     const first = !this.consumers.size;
+    const firstView = interest === "view" && ![...this.consumers.values()].includes("view");
     this.consumers.set(consumer, interest);
     if (first) {
       this.stopDocument = this.ports.document?.subscribe(() => this.reconcile()) ?? null;
@@ -176,7 +177,8 @@ export default class WorkbenchThreadController {
     }
     if (interest !== "route") this.observe();
     this.reconcile();
-    if (interest === "view" && !this.ports.readNative().document && this.target.kind !== "draft") {
+    if (interest === "view" && this.target.kind !== "draft"
+      && (firstView && this.target.kind === "provider" || !this.ports.readNative().document)) {
       void this.read({}, { retain: false }).catch(() => { /* read owns and publishes the common failure. */ });
     }
     let released = false;
