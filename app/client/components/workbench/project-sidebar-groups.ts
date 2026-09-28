@@ -2,6 +2,7 @@
  * Exports:
  * - ProjectSidebarProject/LogicalSidebarProject/DisplaySidebarProject: project row inputs.
  * - resolveSelectedProjectIds/groupProjectSelection: display app-owned project pools around URL selection.
+ * - nextProjectSelectionTier: choose the next reveal group.
  */
 
 import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchProjectOption } from "workbench-shared/types";
@@ -46,4 +47,15 @@ export function groupProjectSelection<P extends { id: string }, S>(
   const all = remaining.filter(entry =>
     !unsettledProjectIds.has(entry.project.id) && !unarchivedProjectIds.has(entry.project.id));
   return { selected, unsettled, unarchived, all };
+}
+
+export function nextProjectSelectionTier(
+  revealedTier: number,
+  groups: Pick<ReturnType<typeof groupProjectSelection>, "unsettled" | "unarchived" | "all">,
+  observedProjectCount: number,
+): 1 | 2 | 3 | null {
+  if (revealedTier < 1 && groups.unsettled.length) return 1;
+  if (revealedTier < 2 && groups.unarchived.length) return 2;
+  if (revealedTier < 3 && (groups.all.length || observedProjectCount)) return 3;
+  return null;
 }

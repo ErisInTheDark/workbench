@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 
 import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchProjectOption } from "workbench-shared/types";
-import { groupProjectSelection, type DisplaySidebarProject } from "./project-sidebar-groups";
+import { groupProjectSelection, nextProjectSelectionTier, type DisplaySidebarProject } from "./project-sidebar-groups";
 import { useWorkbenchProjectThreadSummaries } from "./use-workbench-client";
 import { EllipsisIcon, ProjectIcon } from "./workbench-icons";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
@@ -94,15 +94,15 @@ export default function ProjectSidebar ({
     ...(revealedTier >= 2 ? projectSelectionGroups.unarchived : []),
     ...(revealedTier >= 3 ? projectSelectionGroups.all : []),
   ];
-  const nextTier = revealedTier < 1 ? 1 : revealedTier < 2 ? 2 : revealedTier < 3 ? 3 : null;
+  const nextTier = nextProjectSelectionTier(revealedTier, projectSelectionGroups, observed.length);
   const nextLabel = nextTier === 1 ? "show unsettled" : nextTier === 2 ? "show unarchived" : "show all projects";
   const nowMs = Date.now();
 
   return (
     <section className="shrink-0 pb-3">
       <WorkbenchSidebarSectionDisclosure
-        actions={<WorkbenchThreadStatusCountsButton counts={otherCounts} label="unselected project" scope="project" />}
-        contentClassName="pb-3"
+        actions={preferences.projectsOpen ? null
+          : <WorkbenchThreadStatusCountsButton counts={otherCounts} label="unselected project" scope="project" />}
         icon={ProjectIcon}
         preferenceKey="projectsOpen"
         onOpenChange={(open) => {
@@ -137,15 +137,22 @@ export default function ProjectSidebar ({
             </WorkbenchDaemonAssetOriginContext.Provider>
           )) : null}
           {nextTier !== null ? (
-            <button
-              className="group/reveal flex min-h-11 w-full items-center rounded-lg px-2 py-1 text-left text-[0.78rem] text-fg/muted/70 transition hover:text-fg/muted focus-visible:text-fg/muted focus-visible:outline-none md:min-h-8"
-              onClick={() => setRevealedTier(nextTier)}
-              type="button"
-              aria-label={nextLabel}
-            >
-              <EllipsisIcon className="mr-1.5 shrink-0" size={16} />
-              <span className="hidden group-hover/reveal:inline group-focus-visible/reveal:inline">{nextLabel}</span>
-            </button>
+            <div className="flex min-w-0 items-center">
+              <button
+                className="group/reveal flex min-h-11 min-w-0 flex-1 items-center rounded-lg px-2 py-1 text-left text-[0.78rem] text-fg/muted/70 transition hover:text-fg/muted focus-visible:text-fg/muted focus-visible:outline-none md:min-h-8"
+                onClick={() => setRevealedTier(nextTier)}
+                type="button"
+                aria-label={nextLabel}
+              >
+                <EllipsisIcon className="mr-1.5 shrink-0" size={16} />
+                <span className="hidden group-hover/reveal:inline group-focus-visible/reveal:inline">{nextLabel}</span>
+              </button>
+              {nextTier === 1 ? <WorkbenchThreadStatusCountsButton
+                counts={otherCounts}
+                label="unselected project"
+                scope="project"
+              /> : null}
+            </div>
           ) : null}
           {logicalError ? <p role="alert" className="m-0 px-2 text-[0.8rem] leading-5 text-danger">{logicalError}</p> : null}
           {!displayedProjects.length && !observed.length && !logicalError ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">
