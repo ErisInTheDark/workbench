@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect runner-owned temp routing, daemon-compatible child cwd, timeout policy, and fixture/test-run disposal order.
+ * No exports. Tests protect runner-owned temp routing, grouped invocations, timeout and cancellation policy, and fixture/test-run disposal order.
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -110,19 +110,18 @@ test("live runners can omit the test timeout without changing the ordinary defau
   assert.equal(invocations[1]?.some(argument => argument.startsWith("--test-timeout=")), false);
 });
 
-test("a failed file frees its slot while shared fixtures remain owned until the other files finish", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("test-runner-pool-");
+test("batches selected files by isolation group while preserving failure and cleanup", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("test-runner-batches-");
   const root = temporary.path;
-  const files = ["first", "second", "third"];
+  const files = ["first", "second", "third", "GitArcPlanController", "GitArcClaimLossStore"];
   await Promise.all(files.flatMap(name => [
     writeFile(path.join(root, `${name}.ts`), ""),
     writeFile(path.join(root, `${name}.test.ts`), ""),
   ]));
-  const outcomes = files.map(() => Promise.withResolvers<{ exitCode: number; signal: null }>());
-  const firstPair = Promise.withResolvers<void>();
-  const thirdStarted = Promise.withResolvers<void>();
   const disposed: string[] = [];
-  let count = 0;
+  const invocations: string[][] = [];
+  const budgets: number[] = [];
+  const argumentsByChild = new Map<ChildProcess, string[]>();
   const runner = new ProjectTestRunner(root, {
     report: () => {}, testConcurrency: 2,
     acquireTestRun: async () => ({
@@ -131,26 +130,51 @@ test("a failed file frees its slot while shared fixtures remain owned until the 
     prepareTestFixtures: async () => ({
       environment: {}, dispose: async () => { disposed.push("fixtures"); },
     }),
-    spawnProcess: () => Object.assign(new EventEmitter(), { exitCode: null, signalCode: null }) as ChildProcess,
-    ownProcess: async () => {
-      const index = count++;
-      if (count === 2) firstPair.resolve();
-      if (count === 3) thirdStarted.resolve();
-      return outcomes[index]!.promise;
+    spawnProcess: (_command, args) => {
+      const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null }) as ChildProcess;
+      const invocation = [...args];
+      invocations.push(invocation);
+      argumentsByChild.set(child, invocation);
+      return child;
+    },
+    ownProcess: async (child, _group, budget) => {
+      budgets.push(budget);
+      const args = argumentsByChild.get(child)!;
+      return { exitCode: args.some(argument => argument.endsWith("first.test.ts")) ? 1 : 0, signal: null };
     },
   });
   try {
-    const running = runner.run(files.map(name => `${name}.test.ts`));
-    await firstPair.promise;
-    outcomes[0]!.resolve({ exitCode: 1, signal: null });
-    await thirdStarted.promise;
-    assert.deepEqual(disposed, []);
-    outcomes[2]!.resolve({ exitCode: 0, signal: null });
-    outcomes[1]!.resolve({ exitCode: 0, signal: null });
-    assert.deepEqual(await running, { exitCode: 1, signal: null });
+    assert.deepEqual(await runner.run(files.map(name => `${name}.test.ts`)), { exitCode: 1, signal: null });
+    assert.equal(invocations.length, 3);
+    const selected = invocations.map(args => args.filter(argument => argument.endsWith(".test.ts")));
+    assert.deepEqual(selected.map(group => group.length).sort(), [1, 1, 3]);
+    assert.deepEqual(selected.flat().map(file => path.basename(file)).sort(),
+      files.map(name => `${name}.test.ts`).sort());
+    assert.ok(invocations.some(args => args.includes("--test-concurrency=2")
+      && args.filter(argument => argument.endsWith(".test.ts")).length === 3));
+    assert.equal(invocations.filter(args => args.includes("--test-concurrency=1")).length, 2);
+    assert.deepEqual(budgets.sort((a, b) => a - b), [300_000, 300_000, 600_000]);
     assert.deepEqual(disposed, ["fixtures", "lease"]);
   } finally {
-    for (const outcome of outcomes) outcome.resolve({ exitCode: 1, signal: null });
     await temporary.dispose();
   }
+});
+
+test("cancelled runs do not spawn a test batch", async () => {
+  const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const controller = new AbortController();
+  controller.abort();
+  let spawned = false;
+  const runner = new ProjectTestRunner(projectRoot, {
+    signal: controller.signal,
+    acquireTestRun: async () => ({ temporaryRootPath: projectRoot, dispose: async () => undefined }),
+    prepareTestFixtures: async () => ({ environment: {}, dispose: async () => undefined }),
+    spawnProcess: () => {
+      spawned = true;
+      throw new Error("cancelled run launched a batch");
+    },
+  });
+
+  assert.deepEqual(await runner.run([fileURLToPath(import.meta.url)]), { exitCode: 130, signal: null });
+  assert.equal(spawned, false);
 });

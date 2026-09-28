@@ -40,8 +40,6 @@ function withoutAmbientAgentIdentity(environment: NodeJS.ProcessEnv) {
   return sanitized;
 }
 
-type TestProcessResult = ProjectTestProcessResult;
-
 export interface ProjectTestRunnerOptions {
   acquireTestRun?: () => Promise<ProjectTestRunLease>;
   prepareTestFixtures?: (files: readonly string[], temporaryRootPath: string) => Promise<PreparedTestFixtures>;
@@ -54,7 +52,7 @@ export interface ProjectTestRunnerOptions {
   testTimeoutMs?: number | null;
   fileTimeoutMs?: number;
   signal?: AbortSignal;
-  ownProcess?: (child: ChildProcess, file: string, timeoutMs: number, signal: AbortSignal) => Promise<TestProcessResult>;
+  ownProcess?: (child: ChildProcess, file: string, timeoutMs: number, signal: AbortSignal) => Promise<ProjectTestProcessResult>;
   report?: (message: string) => void;
 }
 
@@ -172,26 +170,26 @@ export default class ProjectTestRunner {
     concurrency = this.testConcurrency,
     fixtureEnvironment: Record<string, string> = {},
   ) {
+    if (this.signal.aborted) return { exitCode: 130, signal: null };
     const testProcessRoot = path.join(this.projectRoot, "daemon");
     const reporter = pathToFileURL(path.join(this.projectRoot, "test", "concise-test-reporter.mjs")).href;
-    let cursor = 0;
-    const results: TestProcessResult[] = [];
-    const workers = Array.from({ length: Math.min(concurrency, files.length) }, async () => {
-      while (cursor < files.length && !this.signal.aborted) {
-        const file = files[cursor++]!;
-        const relative = path.relative(this.projectRoot, file).replaceAll("\\", "/");
-        const services = await WorkbenchTestProcessResources.create(true);
-        try {
-        const child = this.spawnProcess(process.execPath, [
+    const budget = Math.ceil(files.length / concurrency) * this.fileTimeoutMs;
+    const label = files.length === 1
+      ? path.relative(this.projectRoot, files[0]!).replaceAll("\\", "/")
+      : `${files.length} test files`;
+    const services = await WorkbenchTestProcessResources.create(true);
+    try {
+      if (this.signal.aborted) return { exitCode: 130, signal: null };
+      const child = this.spawnProcess(process.execPath, [
         "--disable-warning=ExperimentalWarning",
         "--import",
         "tsx",
         "--test",
         "--test-force-exit",
-        "--test-concurrency=1",
+        `--test-concurrency=${concurrency}`,
         ...(this.testTimeoutMs === null ? [] : [`--test-timeout=${this.testTimeoutMs}`]),
         `--test-reporter=${reporter}`,
-        path.relative(testProcessRoot, file).replaceAll("\\", "/"),
+        ...files.map(file => path.relative(testProcessRoot, file).replaceAll("\\", "/")),
       ], {
         cwd: testProcessRoot,
         env: { ...withoutAmbientAgentIdentity(process.env), ...fixtureEnvironment, ...services.environment },
@@ -199,18 +197,11 @@ export default class ProjectTestRunner {
         detached: process.platform !== "win32",
         windowsHide: true,
       });
-        this.report(`TEST ${relative} (pid ${child.pid ?? "unstarted"}, budget ${this.fileTimeoutMs}ms)`);
-        results.push(await this.ownProcess(child, relative, this.fileTimeoutMs, this.signal));
-        } finally {
-          await services.dispose();
-        }
-      }
-    });
-    const workersFinished = await Promise.allSettled(workers);
-    const failed = workersFinished.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    if (failed) throw failed.reason;
-    if (this.signal.aborted) return { exitCode: 130, signal: null };
-    return results.find(result => result.signal !== null || result.exitCode !== 0) ?? { exitCode: 0, signal: null };
+      this.report(`TEST ${label} (pid ${child.pid ?? "unstarted"}, budget ${budget}ms)`);
+      return await this.ownProcess(child, label, budget, this.signal);
+    } finally {
+      await services.dispose();
+    }
   }
 }
 
