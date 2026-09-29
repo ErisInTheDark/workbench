@@ -51,7 +51,7 @@ test("inline selectors work for every axis and compose with standalone blocks", 
     "<harness:codex>",
     "start <role:agent>agent</role:agent><role:voice-to-text>voice</role:voice-to-text>",
     "<model:gpt-6-astra>exact</model:gpt-6-astra>",
-    '<model matches="^gpt-">family</model matches="^gpt-">',
+    '<model matches="^gpt-">family</model>',
     "<shell:pwsh>powershell</shell:pwsh>",
     "<available:thread-recall>recall</available:thread-recall>",
     "</harness:codex>",
@@ -135,7 +135,7 @@ test("regex model selectors match configured slugs alongside exact and nested se
     "<harness:codex>",
     "gpt family",
     "</harness:codex>",
-    '</model matches="^gpt-">',
+    "</model>",
     "<model:gpt-6-astra>",
     "exact",
     "</model:gpt-6-astra>",
@@ -149,21 +149,37 @@ test("regex model selectors match configured slugs alongside exact and nested se
 });
 
 test("regex model selector examples stay literal and invalid patterns preserve the body with warnings", () => {
-  const example = '```md\n<model matches="^gpt-">\nexample\n</model matches="^gpt-">\n```';
+  const example = '```md\n<model matches="^gpt-">\nexample\n</model>\n```';
   assert.equal(filter(example).output, example);
 
-  const invalid = '<model matches="[">\nbody\n</model matches="[">';
+  const invalid = '<model matches="[">\nbody\n</model>';
   const result = filter(`before\n${invalid}\nafter`);
   assert.equal(result.output, "before\nbody\nafter");
   assert.equal(result.warnings.length, 2);
   assert.equal(result.warnings[0]?.recovery, "malformed");
 });
 
-test("regex model selector closing patterns must match their opener", () => {
-  const value = '<model matches="^gpt-">\nbody\n</model matches="^claude-">';
-  const result = filter(value);
+test("model matches closes with the bare model tag", () => {
+  const value = '<model matches="mimo-2.6-pro">\n## OVERTHINKING IS INCREDIBLY WASTEFUL\nspend less time analysing\n</model>';
+  const result = filter(value, "codex", "pwsh", new Set(), "mimo-2.6-pro");
+  assert.equal(result.output, "## OVERTHINKING IS INCREDIBLY WASTEFUL\nspend less time analysing");
+  assert.deepEqual(result.warnings, []);
+});
+
+test("bare model closers follow tag-name identity and nesting", () => {
+  const nested = '<model matches="^gpt-">\nouter\n<model matches="^gpt-6">\ninner\n</model>\nleftover\n</model>';
+  assert.equal(filter(nested).output, "outer\ninner\nleftover");
+  assert.deepEqual(filter(nested).warnings, []);
+
+  const differentName = filter("<model:gpt-6-astra>\nbody\n</model>");
+  assert.equal(differentName.output, "body");
+  assert.deepEqual(differentName.warnings.map((warning) => warning.recovery), ["unmatched", "unclosed"]);
+});
+
+test("attribute-bearing model closers are invalid html and warn", () => {
+  const result = filter('<model matches="^gpt-">\nbody\n</model matches="^gpt-">');
   assert.equal(result.output, "body");
-  assert.deepEqual(result.warnings.map((warning) => warning.recovery), ["unmatched", "unclosed"]);
+  assert.deepEqual(result.warnings.map((warning) => warning.recovery), ["malformed", "unclosed"]);
 });
 
 test("fenced selector examples remain literal", () => {

@@ -54,7 +54,9 @@ interface SelectorTag {
 interface Fence { include?: boolean; marker: "`" | "~"; size: number }
 
 const SELECTOR_TAG = /<(\/)?(available|harness|model|shell|role):([^<>]+)>/uy;
-const MODEL_REGEX_TAG = /<(\/)?model matches="([^"\n]+)">/uy;
+const MODEL_MATCHES_TAG = /<model matches="([^"\n]+)">/uy;
+const MODEL_NAME_CLOSE_TAG = /<\/model>/uy;
+const MODEL_ATTR_CLOSE_TAG = /<\/model(\s[^>]*)>/uy;
 const WRAPPER_TAG = /<(\/)?>/uy;
 const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|harness|model|shell|role)(?::|\s|>)/u;
 const AVAILABLE_VALUE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
@@ -88,6 +90,14 @@ interface LocatedInstructionSourceSpan extends InstructionSourceSpan {
 function findLastMatchingIndex<T>(values: readonly T[], predicate: (value: T) => boolean) {
   for (let index = values.length - 1; index >= 0; index -= 1) if (predicate(values[index] as T)) return index;
   return -1;
+}
+
+// Closing tags repeat their name but never attributes or values, so a valueless closer such as
+// `</model>` pairs with the innermost opener of the same tag name.
+function pairsWithCloser(opened: SelectorControl, closing: SelectorControl) {
+  return opened.axis === closing.axis
+    && opened.matchMode === closing.matchMode
+    && (closing.value === "" || opened.value === closing.value);
 }
 
 function scanSelectorTags(line: string, lineIndex: number, onMalformed: (column: number) => void) {
@@ -129,19 +139,60 @@ function scanSelectorTags(line: string, lineIndex: number, onMalformed: (column:
       index += wrapperMatch[0].length;
       continue;
     }
-    MODEL_REGEX_TAG.lastIndex = index;
+    MODEL_NAME_CLOSE_TAG.lastIndex = index;
+    const modelNameClose = MODEL_NAME_CLOSE_TAG.exec(line);
+    if (modelNameClose) {
+      // Closing tags never carry attributes, so the bare `</model>` name closes `<model matches="...">`.
+      tags.push({
+        control: {
+          axis: "model",
+          closing: true,
+          matchMode: "regex",
+          neutral: false,
+          pattern: null,
+          value: "",
+        },
+        end: index + modelNameClose[0].length,
+        line: lineIndex,
+        start: index,
+      });
+      index += modelNameClose[0].length;
+      continue;
+    }
+    MODEL_ATTR_CLOSE_TAG.lastIndex = index;
+    const modelAttrClose = MODEL_ATTR_CLOSE_TAG.exec(line);
+    if (modelAttrClose) {
+      // Closing tags cannot carry attributes. Keeping the junk as the value fails model validation,
+      // so the malformed recovery strips the tag and warns instead of pairing it.
+      tags.push({
+        control: {
+          axis: "model",
+          closing: true,
+          matchMode: "exact",
+          neutral: false,
+          pattern: null,
+          value: modelAttrClose[1] ?? "",
+        },
+        end: index + modelAttrClose[0].length,
+        line: lineIndex,
+        start: index,
+      });
+      index += modelAttrClose[0].length;
+      continue;
+    }
+    MODEL_MATCHES_TAG.lastIndex = index;
     SELECTOR_TAG.lastIndex = index;
-    const regexMatch = MODEL_REGEX_TAG.exec(line);
+    const regexMatch = MODEL_MATCHES_TAG.exec(line);
     const match = regexMatch ?? SELECTOR_TAG.exec(line);
     if (match) {
       tags.push({
         control: {
           axis: regexMatch ? "model" : match[2] as SelectorAxis,
-          closing: Boolean(match[1]),
+          closing: regexMatch ? false : Boolean(match[1]),
           matchMode: regexMatch ? "regex" : "exact",
           neutral: false,
           pattern: null,
-          value: regexMatch ? regexMatch[2] ?? "" : match[3]?.trim() ?? "",
+          value: regexMatch ? regexMatch[1] ?? "" : match[3]?.trim() ?? "",
         },
         end: index + match[0].length,
         line: lineIndex,
@@ -460,10 +511,7 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
         return;
       }
       if (!control.closing) { openTags.push(tag); return; }
-      const matchingStackIndex = findLastMatchingIndex(openTags, (opened) => {
-        const candidate = opened.control;
-        return candidate.axis === control.axis && candidate.matchMode === control.matchMode && candidate.value === control.value;
-      });
+      const matchingStackIndex = findLastMatchingIndex(openTags, (opened) => pairsWithCloser(opened.control, control));
       if (matchingStackIndex < 0) {
         control.neutral = true;
         warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "unmatched", line, detail);
@@ -579,7 +627,7 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
       }
       if (!control.closing && control.value) active.push(control);
       else if (control.closing) {
-        const index = findLastMatchingIndex(active, (opened) => opened.axis === control.axis && opened.matchMode === control.matchMode && opened.value === control.value);
+        const index = findLastMatchingIndex(active, (opened) => pairsWithCloser(opened, control));
         if (index >= 0) active.splice(index, 1);
       }
       cursor = tag.end;
