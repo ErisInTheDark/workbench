@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings.
  * - stripWorkbenchInstructionHtmlComments: remove source comments outside Markdown fences while preserving line structure.
- * - filterWorkbenchInstructionContent: strip comments and apply role, harness, exact/regex model, shell and capability selectors.
+ * - filterWorkbenchInstructionContent: strip comments, apply role, harness, exact/regex model, shell and capability selectors, and collapse inline wrapper regions.
  * - formatWorkbenchInstructionFilterWarning: render one bounded source diagnostic with ANSI emphasis.
  */
 
@@ -12,7 +12,7 @@ import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { InstructionSourceSpan, RenderedInstructionContent } from "./instruction-file-generation";
 
-type SelectorAxis = "available" | "harness" | "model" | "shell" | "role";
+type SelectorAxis = "available" | "harness" | "model" | "shell" | "role" | "wrapper";
 type WorkbenchShell = "bash" | "pwsh";
 
 export interface WorkbenchInstructionFilterContext {
@@ -33,7 +33,7 @@ export interface WorkbenchInstructionFilterWarning {
   line: number;
   message: string;
   path: string;
-  recovery: "crossed" | "malformed" | "unclosed" | "unmatched";
+  recovery: "crossed" | "fenced" | "malformed" | "unclosed" | "unmatched";
   source: string;
 }
 
@@ -55,6 +55,7 @@ interface Fence { include?: boolean; marker: "`" | "~"; size: number }
 
 const SELECTOR_TAG = /<(\/)?(available|harness|model|shell|role):([^<>]+)>/uy;
 const MODEL_REGEX_TAG = /<(\/)?model matches="([^"\n]+)">/uy;
+const WRAPPER_TAG = /<(\/)?>/uy;
 const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|harness|model|shell|role)(?::|\s|>)/u;
 const AVAILABLE_VALUE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
 const MODEL_VALUE = /^[^\s<>]{1,200}$/u;
@@ -109,6 +110,25 @@ function scanSelectorTags(line: string, lineIndex: number, onMalformed: (column:
       continue;
     }
     if (line[index] !== "<") { index += 1; continue; }
+    WRAPPER_TAG.lastIndex = index;
+    const wrapperMatch = WRAPPER_TAG.exec(line);
+    if (wrapperMatch) {
+      tags.push({
+        control: {
+          axis: "wrapper",
+          closing: Boolean(wrapperMatch[1]),
+          matchMode: "exact",
+          neutral: false,
+          pattern: null,
+          value: "",
+        },
+        end: index + wrapperMatch[0].length,
+        line: lineIndex,
+        start: index,
+      });
+      index += wrapperMatch[0].length;
+      continue;
+    }
     MODEL_REGEX_TAG.lastIndex = index;
     SELECTOR_TAG.lastIndex = index;
     const regexMatch = MODEL_REGEX_TAG.exec(line);
@@ -214,6 +234,7 @@ export function stripWorkbenchInstructionHtmlComments(value: string) {
 }
 
 function isKnownValue(axis: SelectorAxis, value: string) {
+  if (axis === "wrapper") return true;
   if (axis === "role") return value === "agent" || value === "voice-to-text";
   if (axis === "harness") return ProviderKeySchema.safeParse(value).success;
   if (axis === "model") return MODEL_VALUE.test(value);
@@ -222,6 +243,7 @@ function isKnownValue(axis: SelectorAxis, value: string) {
 }
 
 function matches(control: SelectorControl, context: WorkbenchInstructionFilterContext) {
+  if (control.axis === "wrapper") return true;
   if (control.axis === "role") return control.value === (context.role ?? "agent");
   if (control.axis === "harness") return control.value === context.harness;
   if (control.axis === "model") {
@@ -316,6 +338,7 @@ function warningMessage(
   axis?: SelectorAxis,
   value?: string,
 ) {
+  if (recovery === "fenced") return "Instruction wrapper cannot contain a fenced code block";
   if (recovery === "malformed" && axis === "available" && value) {
     return `Unable to check availability of ${sanitizeWarningSource(value).slice(0, MAX_WARNING_VALUE_LENGTH)}`;
   }
@@ -393,7 +416,22 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
   lines.forEach((line, lineIndex) => {
     if (fence) { if (closesFence(line, fence)) fence = null; return; }
     const openedFence = readFence(line);
-    if (openedFence) { fence = openedFence; return; }
+    if (openedFence) {
+      fence = openedFence;
+      // A wrapper-level fence would be collapsed into one line, so neutralise the wrappers instead.
+      if (openTags.every((tag) => tag.control.axis === "wrapper")) {
+        openTags.forEach((tag) => {
+          tag.control.neutral = true;
+          const wrapperSource = lines[tag.line] ?? "";
+          warn(context, locatedSources, tag.line, lineStarts[tag.line] ?? 0, "fenced", wrapperSource, {
+            axis: "wrapper",
+            column: tag.start,
+            length: Math.max(1, tag.end - tag.start),
+          });
+        });
+      }
+      return;
+    }
     const tags = scanSelectorTags(line, lineIndex, (column) => {
       warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "malformed", line, { column });
     });
@@ -457,21 +495,88 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
 
   const output: string[] = [];
   const active: SelectorControl[] = [];
+  const included = () => active.every((opened) => opened.neutral || matches(opened, context));
+  // An open inline wrapper buffers its region into one rendered line. Segments split wrapper-level
+  // text (whitespace collapses) from nested selector interiors (byte-preserved).
+  let inline: { beforeWs: string; depth: number; segments: Array<{ text: string; verbatim: boolean }> } | null = null;
+  let rendered = "";
+  let flushed = false;
+  const emit = (text: string) => {
+    if (!inline) { rendered += text; return; }
+    const verbatim = active.length > 0;
+    const last = inline.segments[inline.segments.length - 1];
+    if (last && last.verbatim === verbatim) last.text += text;
+    else inline.segments.push({ text, verbatim });
+  };
+  const flushInline = (afterWs: string) => {
+    const state = inline!;
+    inline = null;
+    let middle = "";
+    state.segments.forEach((segment, index) => {
+      if (segment.verbatim) { middle += segment.text; return; }
+      let collapsed = segment.text.replace(/\s+/gu, " ");
+      if (index === 0 && !state.beforeWs) collapsed = collapsed.trimStart();
+      if (index === state.segments.length - 1 && !afterWs) collapsed = collapsed.trimEnd();
+      middle += collapsed;
+    });
+    rendered += middle;
+    flushed = true;
+  };
   fence = null;
   lines.forEach((line, lineIndex) => {
-    if (fence) { if (fence.include !== false) output.push(line); if (closesFence(line, fence)) fence = null; return; }
-    const openedFence = readFence(line);
-    if (openedFence) { const include = active.every((control) => control.neutral || matches(control, context)); if (include) output.push(line); fence = { ...openedFence, include }; return; }
-    const tags = tagsByLine.get(lineIndex);
-    if (!tags?.length) {
-      if (active.every((opened) => opened.neutral || matches(opened, context))) output.push(line);
+    flushed = false;
+    if (fence) {
+      if (fence.include !== false) {
+        if (inline) { emit(line); emit("\n"); }
+        else output.push(line);
+      }
+      if (closesFence(line, fence)) fence = null;
       return;
     }
-    let rendered = "";
+    const openedFence = readFence(line);
+    if (openedFence) {
+      const include = included();
+      if (include) {
+        if (inline) { emit(line); emit("\n"); }
+        else output.push(line);
+      }
+      fence = { ...openedFence, include };
+      return;
+    }
+    const tags = tagsByLine.get(lineIndex);
+    if (!tags?.length) {
+      if (inline) { if (included()) { emit(line); emit("\n"); } return; }
+      if (included()) output.push(line);
+      return;
+    }
+    const lineTagOnly = tags.length === 1
+      && !line.slice(0, tags[0]!.start).trim()
+      && !line.slice(tags[0]!.end).trim();
     let cursor = 0;
     for (const tag of tags) {
-      if (active.every((opened) => opened.neutral || matches(opened, context))) rendered += line.slice(cursor, tag.start);
+      if (included()) emit(line.slice(cursor, tag.start));
       const { control } = tag;
+      if (control.axis === "wrapper") {
+        if (!control.closing) {
+          if (inline) inline.depth += 1;
+          else if (!control.neutral && active.length === 0) {
+            const beforeWs = /(\s*)$/u.exec(rendered)?.[1] ?? "";
+            rendered = rendered.slice(0, rendered.length - beforeWs.length);
+            inline = { beforeWs, depth: 1, segments: [] };
+            emit(beforeWs);
+          }
+          cursor = tag.end;
+          continue;
+        }
+        if (!inline) { cursor = tag.end; continue; }
+        inline.depth -= 1;
+        if (inline.depth > 0) { cursor = tag.end; continue; }
+        const afterWs = /^\s*/u.exec(line.slice(tag.end))?.[0] ?? "";
+        cursor = tag.end + afterWs.length;
+        emit(afterWs);
+        flushInline(afterWs);
+        continue;
+      }
       if (!control.closing && control.value) active.push(control);
       else if (control.closing) {
         const index = findLastMatchingIndex(active, (opened) => opened.axis === control.axis && opened.matchMode === control.matchMode && opened.value === control.value);
@@ -479,8 +584,10 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
       }
       cursor = tag.end;
     }
-    if (active.every((opened) => opened.neutral || matches(opened, context))) rendered += line.slice(cursor);
-    if (rendered && !(tags.length === 1 && !line.slice(0, tags[0]!.start).trim() && !line.slice(tags[0]!.end).trim())) output.push(rendered);
+    if (included()) emit(line.slice(cursor));
+    if (inline) { if (included()) emit("\n"); return; }
+    if (rendered && !(lineTagOnly && !flushed)) output.push(rendered);
+    rendered = "";
   });
   return output.join("\n");
 }

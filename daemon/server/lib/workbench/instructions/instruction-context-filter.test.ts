@@ -266,3 +266,81 @@ test("capability selectors use their exact availability", () => {
   assert.equal(filter(value, "codex", "pwsh", new Set(["long-waits"])).output, "wait");
   assert.equal(filter(value, "codex", "pwsh", new Set(["thread-refresh"])).output, "refresh");
 });
+
+test("inline wrapper tags lay out variants across lines with inline parity", () => {
+  const wrapped = [
+    "paragraph that includes provider-specific instructions like <>",
+    "<harness:codex>`tools.mcp__wb__thread_recall`</harness:codex>",
+    "<harness:opencode>`tools.wb.thread_recall`</harness:opencode>",
+    "</> and it's all inline and bad",
+  ].join("\n");
+  const inline = "paragraph that includes provider-specific instructions like "
+    + "<harness:codex>`tools.mcp__wb__thread_recall`</harness:codex>"
+    + "<harness:opencode>`tools.wb.thread_recall`</harness:opencode> and it's all inline and bad";
+  assert.equal(filter(wrapped, "codex").output, filter(inline, "codex").output);
+  assert.equal(filter(wrapped, "opencode").output, filter(inline, "opencode").output);
+  assert.equal(
+    filter(wrapped, "codex").output,
+    "paragraph that includes provider-specific instructions like `tools.mcp__wb__thread_recall` and it's all inline and bad",
+  );
+  assert.equal(
+    filter(wrapped, "opencode").output,
+    "paragraph that includes provider-specific instructions like `tools.wb.thread_recall` and it's all inline and bad",
+  );
+  assert.equal(
+    filter(wrapped, "copilot").output,
+    "paragraph that includes provider-specific instructions like and it's all inline and bad",
+  );
+  assert.deepEqual(filter(wrapped).warnings, []);
+});
+
+test("wrapper collapse never touches nested selector interiors", () => {
+  const value = [
+    "before <>",
+    "<harness:codex>keep   these  spaces</harness:codex>",
+    "<harness:opencode>",
+    "multi   line",
+    "  interior",
+    "</harness:opencode>",
+    "</> after",
+  ].join("\n");
+  assert.equal(filter(value).output, "before keep   these  spaces after");
+  assert.equal(filter(value, "opencode").output, "before \nmulti   line\n  interior\n after");
+});
+
+test("wrapper boundaries glue punctuation and respect tight text", () => {
+  const glued = ["read one result with <>", "<harness:codex>`expand`</harness:codex>", "</>."].join("\n");
+  assert.equal(filter(glued).output, "read one result with `expand`.");
+  assert.equal(filter("use<>\n<harness:codex>`x`</harness:codex>\n</>now").output, "use`x`now");
+  assert.equal(filter("first\n<>\nplain text\n</>\nlast").output, "first\nplain text\nlast");
+  assert.equal(
+    filter("<harness:codex>\n<>\ntext\n</>\n</harness:codex>").output,
+    filter("<harness:codex>\ntext\n</harness:codex>").output,
+  );
+});
+
+test("wrapper tags stay literal in code spans and fenced examples", () => {
+  const value = ["keep literal `&<>` entity-escaped", "```md", "<>", "</>", "```"].join("\n");
+  assert.equal(filter(value).output, value);
+  assert.deepEqual(filter(value).warnings, []);
+});
+
+test("wrapper-level fences warn and preserve content while variant fences stay verbatim", () => {
+  const blocky = filter(["<>", "text", "```md", "keep", "```", "</>"].join("\n"));
+  assert.equal(blocky.output, "text\n```md\nkeep\n```");
+  assert.deepEqual(blocky.warnings.map((warning) => warning.recovery), ["fenced"]);
+
+  const variant = filter(["<>", "<harness:codex>", "text", "```md", "keep  spaces", "```", "</harness:codex>", "</>"].join("\n"));
+  assert.deepEqual(variant.warnings, []);
+  assert.equal(variant.output, "\ntext\n```md\nkeep  spaces\n```\n");
+});
+
+test("broken wrappers preserve body and report recovery", () => {
+  const unclosed = filter("before <>\nkeep\nlines");
+  assert.equal(unclosed.output, "before \nkeep\nlines");
+  assert.deepEqual(unclosed.warnings.map((warning) => warning.recovery), ["unclosed"]);
+
+  const crossed = filter("<harness:codex><>\nbody\n</harness:codex></>");
+  assert.equal(crossed.output, "body");
+  assert.deepEqual(crossed.warnings.map((warning) => warning.recovery), ["crossed"]);
+});
