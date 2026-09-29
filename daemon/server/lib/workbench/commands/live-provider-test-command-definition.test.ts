@@ -18,6 +18,8 @@ test("live provider tests admit only explicit modes and the exact scenario", asy
   for (const [flags, providers] of [
     [["--codex=paid"], { codex: "paid" }],
     [["--opencode=fake"], { opencode: "fake" }],
+    [["--claude=fake"], { claude: "fake" }],
+    [["--future-provider=fake"], { "future-provider": "fake" }],
     [["--codex=paid", "--opencode=fake"], { codex: "paid", opencode: "fake" }],
   ] as const) {
     const parsed = await parseWorkbenchAgentCliCommand(["test", "live", ...flags, "--", file], context);
