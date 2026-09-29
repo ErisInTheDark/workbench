@@ -382,6 +382,16 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   assert.deepEqual(await mutation, { accepted: true, revision: 1 });
   assert.equal(daemonB.requests.some(request => request.method === dispatch.method), false);
 
+  const stop = second.rpc.requestRaw({ method: "workspace/thread/action",
+    params: { threadId, intent: { kind: "stop", requestKey: "held-question", turnId: "active-turn" } } });
+  const stopRequest = await daemonA.wait(request => request.method === "thread/stop");
+  assert.deepEqual(stopRequest.params, {
+    threadId, intent: "stop", requestKey: "held-question", turnId: "active-turn",
+  });
+  assert.equal(daemonB.requests.some(request => request.method === "thread/stop"), false);
+  stopRequest.socket.send(JSON.stringify({ id: stopRequest.id, result: { ok: true } }));
+  assert.deepEqual(await stop, { accepted: true });
+
   const content = "file contents\n".repeat(100_000);
   const save = second.workspace.request("project/file/save", {
     path: "large.txt", content, expectedMtimeMs: 0,

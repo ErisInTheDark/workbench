@@ -1,21 +1,20 @@
 /*
- * No exports. Run one exact provider scenario inside its parent-owned validation budget.
+ * No exports. Run one exact scenario for explicit provider modes inside its parent-owned validation budget.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { parseThreadTestArguments } from "./thread-test-arguments.ts";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const scenarios = {
-  codex: "test/scenarios/thread.scenario.test.ts",
-  opencode: "test/scenarios/thread.scenario.test.ts",
-};
-const [provider, file] = process.argv.slice(2);
-if (!(provider in scenarios) || file !== scenarios[provider]) {
+const values = process.argv.slice(2);
+const file = values.pop();
+const providers = parseThreadTestArguments(values);
+if (file !== "test/scenarios/thread.scenario.test.ts") {
   throw new Error("The live provider runner accepts only an exact allowlisted scenario.");
 }
 
-process.env.WORKBENCH_THREAD_TEST_PROVIDER = provider;
+process.env.WORKBENCH_THREAD_TEST_SELECTION = JSON.stringify(providers);
 const { default: ProjectTestRunner } = await import("./ProjectTestRunner.ts");
 const result = await new ProjectTestRunner(projectRoot, {
   testConcurrency: 1,

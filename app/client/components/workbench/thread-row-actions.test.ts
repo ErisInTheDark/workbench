@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createWorkbenchProjectThreadSummary, type WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
-import { getThreadRowActions } from "./thread-row-actions";
+import { getThreadRowActions, getThreadStopIntent } from "./thread-row-actions";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -53,6 +53,17 @@ test("a sidebar questionnaire offers snooze first and completion as the shift ac
   assert.deepEqual(getThreadRowActions(pending, "main"), { baseAction: "snooze", shiftAction: "complete" });
   assert.deepEqual(getThreadRowActions({ ...pending, waitingFor: "other" }, "main"), { baseAction: "snooze", shiftAction: "complete" });
   assert.deepEqual(getThreadRowActions({ ...pending, pendingQuestionnaire: null }, "main"), { baseAction: null, shiftAction: "snooze" });
+});
+
+test("stop carries the owning questionnaire or active turn evidence", () => {
+  assert.deepEqual(getThreadStopIntent(pending), { kind: "stop", requestKey: "question" });
+  assert.deepEqual(getThreadStopIntent({
+    ...pending, pendingQuestionnaire: null,
+    lifecycle: {
+      kind: "working", reason: "acceptedIntent", settled: false,
+      agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
+    },
+  }), { kind: "stop", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] });
 });
 
 test("pinned summaries preserve questionnaire completion without enabling shift settlement", () => {

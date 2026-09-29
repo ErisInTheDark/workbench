@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import Database from "better-sqlite3";
 import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory";
 import { EventEmitter } from "node:events";
 import test, { type TestContext } from "node:test";
@@ -9,6 +10,7 @@ import { captureTestOutput } from "../capture-test-output.mts";
 import IsolatedWorkbench, {
   IsolatedWorkbenchSignalCleanup,
   removeIsolatedWorkbenchWorkspace,
+  type IsolatedWorkbenchOptions,
 } from "./IsolatedWorkbench";
 
 async function runtime(
@@ -16,6 +18,7 @@ async function runtime(
   signal: AbortSignal,
   readinessSignal?: () => AbortSignal,
   programs?: { app: string; host: string },
+  prepareOpenCode?: (source: string) => Promise<IsolatedWorkbenchOptions["openCodeIdentity"]>,
 ) {
   captureTestOutput(context, process.stdout, text => text.startsWith("[scenario] "));
   captureTestOutput(context, process.stderr, text => text.startsWith("Scenario diagnostics retained: "));
@@ -38,7 +41,10 @@ async function runtime(
     await fs.writeFile(path.join(source, "app/server/index.ts"), programs.app);
     for (const directory of ["app", "daemon"]) await fs.writeFile(path.join(source, directory, "tsconfig.json"), "{}");
   }
-  return await IsolatedWorkbench.create(source, signal, { codexIdentity: false, readinessSignal });
+  return await IsolatedWorkbench.create(source, signal, {
+    codexIdentity: false, readinessSignal,
+    openCodeIdentity: await prepareOpenCode?.(source),
+  });
 }
 
 const hostProgram = `
@@ -209,6 +215,33 @@ test("failure diagnostics retain only run logs while the cloned workspace is rem
   assert.deepEqual((await fs.readdir(diagnostics)).sort(), ["scenario.log", "service.log"]);
   assert.equal(await fs.readFile(path.join(diagnostics, "service.log"), "utf8"), "host evidence");
   await assert.rejects(fs.stat(fixture.root), { code: "ENOENT" });
+});
+
+test("provider clone snapshots paid OpenCode data without writing the source", async context => {
+  let sourceDatabase = "";
+  const fixture = await runtime(context, context.signal, undefined, undefined, async source => {
+    sourceDatabase = path.join(source, "opencode.db");
+    const db = new Database(sourceDatabase);
+    try {
+      db.exec("CREATE TABLE credential (id TEXT PRIMARY KEY, value TEXT)");
+      db.prepare("INSERT INTO credential VALUES (?, ?)").run("paid", "secret");
+    } finally { db.close(); }
+    await fs.writeFile(path.join(source, "auth.json"), "private-auth");
+    return { configDirectory: source, database: sourceDatabase };
+  });
+  try {
+    const privateDatabase = path.join(fixture.root, "data", "opencode", "opencode.db");
+    const db = new Database(privateDatabase);
+    try {
+      assert.deepEqual(db.prepare("SELECT id FROM credential").all(), [{ id: "paid" }]);
+      db.prepare("INSERT INTO credential VALUES (?, ?)").run("test", "value");
+    } finally { db.close(); }
+    const original = new Database(sourceDatabase, { readonly: true });
+    try {
+      assert.deepEqual(original.prepare("SELECT id FROM credential").all(), [{ id: "paid" }]);
+    } finally { original.close(); }
+    assert.equal(await fs.readFile(path.join(fixture.root, "data", "opencode", "auth.json"), "utf8"), "private-auth");
+  } finally { await fixture.close(); }
 });
 
 test("process signals settle every active scenario exactly once before exit", async () => {

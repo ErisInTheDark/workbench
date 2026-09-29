@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAgentCommandLiveTestControllerOptions: inject filesystem, process and retirement boundaries.
- * - default WorkbenchAgentCommandLiveTestController: own one allowlisted real-provider journey and its bounded diagnostics.
+ * - default WorkbenchAgentCommandLiveTestController: own one allowlisted provider scenario and bounded diagnostics.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { realpath } from "node:fs/promises";
@@ -70,7 +70,7 @@ export default class WorkbenchAgentCommandLiveTestController {
   }
 
   private async run(root: string, request: WorkbenchLiveProviderTestRequest, signal: AbortSignal) {
-    const services = await WorkbenchTestProcessResources.create();
+    const services = await WorkbenchTestProcessResources.create(false, root);
     try {
       return await this.runOwned(root, request, signal, services.environment);
     } finally {
@@ -85,7 +85,7 @@ export default class WorkbenchAgentCommandLiveTestController {
       "--import",
       "tsx",
       entry,
-      request.provider,
+      ...Object.entries(request.providers).map(([provider, mode]) => `--${provider}=${mode}`),
       request.file,
     ], {
       ...createSpawnOptions(root, { ...process.env, ...environment }, true),

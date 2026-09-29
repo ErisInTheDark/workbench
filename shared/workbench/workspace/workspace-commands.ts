@@ -177,7 +177,11 @@ export const WorkspaceThreadActionSchema = z.object({
     z.object({ kind: z.literal("status"), status: z.enum(["needsAttention", "completed", "stopped"]) }).strict(),
     z.object({ kind: z.literal("restore") }).strict(),
     z.object({ kind: z.literal("settle") }).strict(),
-    z.object({ kind: z.literal("stop") }).strict(),
+    z.object({
+      kind: z.literal("stop"),
+      requestKey: z.string().min(1).optional(),
+      turnId: z.string().min(1).optional(),
+    }).strict(),
   ]),
 }).strict();
 

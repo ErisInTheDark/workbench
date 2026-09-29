@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTestProcessResources: retain isolated service PID records outside a test worker.
+ * - default WorkbenchTestProcessResources: retain isolated service and workspace records outside a test worker.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,6 +11,33 @@ import WorkbenchTemporaryDirectory from "./lib/workbench/WorkbenchTemporaryDirec
 
 const REGISTRY_ENV = "WORKBENCH_TEST_SERVICE_RECORDS";
 const ServiceProcess = z.object({ pid: z.number().int().min(2) });
+const WorkspaceRecord = z.object({
+  kind: z.literal("workspace"),
+  root: z.string().min(1),
+  source: z.string().min(1),
+}).strict();
+const ResourceRecord = z.union([z.string(), WorkspaceRecord]);
+
+function within(root: string, candidate: string) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative));
+}
+
+function validateWorkspace(source: string, root: string, projectRoot?: string) {
+  const resolvedSource = path.resolve(source);
+  const resolvedRoot = path.resolve(root);
+  const packageTempRoot = projectRoot && path.join(path.dirname(projectRoot), ".workbench", "tmp");
+  if (projectRoot && !within(projectRoot, resolvedSource)
+    && !(packageTempRoot && within(packageTempRoot, resolvedSource))) {
+    throw new Error("Scenario source is outside the owning project.");
+  }
+  if (path.dirname(resolvedRoot) !== path.join(resolvedSource, ".workbench", "test-runs")
+    || !/^wb-scenario-[^\\/]+$/u.test(path.basename(resolvedRoot))) {
+    throw new Error("Not an owned scenario workspace.");
+  }
+  return resolvedRoot;
+}
 
 function missing(error: unknown) {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
@@ -43,15 +70,19 @@ async function retirePid(pid: number) {
 }
 
 export default class WorkbenchTestProcessResources {
-  private constructor(readonly file: string, private readonly ownedDirectory: WorkbenchTemporaryDirectory | null) {}
+  private constructor(
+    readonly file: string,
+    private readonly ownedDirectory: WorkbenchTemporaryDirectory | null,
+    private readonly projectRoot: string,
+  ) {}
 
-  static async create(inherit = false) {
+  static async create(inherit = false, projectRoot = process.cwd()) {
     const inherited = inherit ? process.env[REGISTRY_ENV] : undefined;
-    if (inherited) return new WorkbenchTestProcessResources(inherited, null);
+    if (inherited) return new WorkbenchTestProcessResources(inherited, null, path.resolve(projectRoot));
     const directory = await WorkbenchTemporaryDirectory.create("wb-test-services-");
     const file = path.join(directory.path, "records.jsonl");
     await fs.writeFile(file, "");
-    return new WorkbenchTestProcessResources(file, directory);
+    return new WorkbenchTestProcessResources(file, directory, path.resolve(projectRoot));
   }
 
   get environment() { return { [REGISTRY_ENV]: this.file }; }
@@ -59,6 +90,14 @@ export default class WorkbenchTestProcessResources {
   static async track(serviceFile: string) {
     const registry = process.env[REGISTRY_ENV];
     if (registry) await fs.appendFile(registry, `${JSON.stringify(serviceFile)}\n`);
+  }
+
+  static async trackWorkspace(source: string, root: string) {
+    const owned = validateWorkspace(source, root);
+    const registry = process.env[REGISTRY_ENV];
+    if (registry) await fs.appendFile(registry, `${JSON.stringify({
+      kind: "workspace", source: path.resolve(source), root: owned,
+    })}\n`);
   }
 
   static async retireService(serviceFile: string, kill = retirePid) {
@@ -73,11 +112,18 @@ export default class WorkbenchTestProcessResources {
 
   async dispose() {
     const records = (await fs.readFile(this.file, "utf8")).split("\n").filter(Boolean)
-      .map(line => z.string().parse(JSON.parse(line)));
-    const results = await Promise.allSettled([...new Set(records)].map(file =>
+      .map(line => ResourceRecord.parse(JSON.parse(line)));
+    const services = records.filter((record): record is string => typeof record === "string");
+    const results = await Promise.allSettled([...new Set(services)].map(file =>
       WorkbenchTestProcessResources.retireService(file)));
     const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
     if (failures.length) throw new AggregateError(failures, "Owned test service cleanup failed.");
+    const workspaces = records.filter((record): record is z.infer<typeof WorkspaceRecord> =>
+      typeof record !== "string");
+    for (const root of new Set(workspaces.map(record =>
+      validateWorkspace(record.source, record.root, this.projectRoot)))) {
+      await fs.rm(root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+    }
     if (this.ownedDirectory) await this.ownedDirectory.dispose();
   }
 }

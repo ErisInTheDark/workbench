@@ -13,16 +13,18 @@ const context = {
   workbenchOrigin: "http://127.0.0.1:4500",
 };
 
-test("live provider tests admit only their exact scenario files", async () => {
-  for (const [provider, file] of [
-    ["codex", "test/scenarios/thread.scenario.test.ts"],
-    ["opencode", "test/scenarios/thread.scenario.test.ts"],
+test("live provider tests admit only explicit modes and the exact scenario", async () => {
+  const file = "test/scenarios/thread.scenario.test.ts";
+  for (const [flags, providers] of [
+    [["--codex=paid"], { codex: "paid" }],
+    [["--opencode=fake"], { opencode: "fake" }],
+    [["--codex=paid", "--opencode=fake"], { codex: "paid", opencode: "fake" }],
   ] as const) {
-    const parsed = await parseWorkbenchAgentCliCommand(["test", "live", provider, "--", file], context);
+    const parsed = await parseWorkbenchAgentCliCommand(["test", "live", ...flags, "--", file], context);
     assert.equal(parsed.kind, "request");
     if (parsed.kind !== "request") continue;
     assert.deepEqual(parsed.request, {
-      body: { cwd: context.cwd, file, provider },
+      body: { cwd: context.cwd, file, providers },
       method: "POST",
       path: "/internal/test/live-provider",
       responseKind: "native",
@@ -30,10 +32,12 @@ test("live provider tests admit only their exact scenario files", async () => {
   }
 
   for (const args of [
-    ["test", "live", "opencode"],
+    ["test", "live", "--opencode=paid"],
+    ["test", "live", "opencode", "--", file],
+    ["test", "live", "--codex=paid", "--codex=fake", "--", file],
     ["test", "live", "other", "--", "test/scenarios/thread.scenario.test.ts"],
-    ["test", "live", "opencode", "--", "test/scenarios/codex.scenario.test.ts"],
-    ["test", "live", "opencode", "--", "test/arbitrary.test.ts"],
+    ["test", "live", "--opencode=paid", "--", "test/scenarios/codex.scenario.test.ts"],
+    ["test", "live", "--opencode=paid", "--", "test/arbitrary.test.ts"],
   ]) {
     assert.equal((await parseWorkbenchAgentCliCommand(args, context)).kind, "error");
   }

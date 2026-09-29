@@ -1,17 +1,23 @@
 /*
- * No exports. Protect explicit paid consent before a provider scenario reaches the trusted daemon.
+ * No exports. Protect explicit per-provider mode consent before a scenario reaches the trusted daemon.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseThreadTestArguments } from "./thread-test-arguments";
 
-test("thread scenario requires one provider and explicit paid mode", () => {
-  assert.equal(parseThreadTestArguments(["--codex", "--paid"]), "codex");
-  assert.equal(parseThreadTestArguments(["--opencode", "--paid"]), "opencode");
-  assert.equal(parseThreadTestArguments(["--", "--codex", "--paid"]), "codex");
+test("thread scenario requires one or two explicit provider modes", () => {
+  assert.deepEqual(parseThreadTestArguments(["--codex=paid"]), { codex: "paid" });
+  assert.deepEqual(parseThreadTestArguments(["--opencode=fake"]), { opencode: "fake" });
+  assert.deepEqual(parseThreadTestArguments(["--", "--codex=paid", "--opencode=fake"]), {
+    codex: "paid", opencode: "fake",
+  });
+  assert.deepEqual(parseThreadTestArguments(["--opencode=paid", "--codex=fake"]), {
+    codex: "fake", opencode: "paid",
+  });
   for (const args of [
-    ["--codex"], ["--opencode"], ["--codex", "--fake"], ["--fake", "--paid"],
-    ["--codex", "--opencode", "--paid"], ["--codex", "--paid", "--paid"],
-    ["--codex", "--", "--paid"],
+    [], ["--codex"], ["--opencode"], ["--codex", "--paid"],
+    ["--codex=free"], ["--codex=paid", "--codex=fake"],
+    ["--codex=paid", "--opencode=fake", "--codex=fake"],
+    ["--codex=paid", "--", "--opencode=fake"], ["--other=fake"],
   ]) assert.throws(() => parseThreadTestArguments(args));
 });

@@ -229,7 +229,11 @@ export default class WorkbenchWorkspaceRequestController {
       const projectId = owner.location.projectId;
       const identity = { harness: owner.identity.harness, threadId: owner.identity.threadId };
       if (intent.kind === "stop") {
-        await source.daemon.threads.stop({ threadId: identity.threadId, intent: "stop" });
+        await source.daemon.threads.stop({
+          threadId: identity.threadId, intent: "stop",
+          ...(intent.turnId ? { turnId: intent.turnId } : {}),
+          ...(intent.requestKey ? { requestKey: intent.requestKey } : {}),
+        });
         return { accepted: true };
       }
       if (intent.kind === "priority") return source.request<Json>(

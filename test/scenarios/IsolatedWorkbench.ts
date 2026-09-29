@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
+import Database from "better-sqlite3";
 import { createSpawnOptions } from "../../daemon/server/process-helpers";
 import IsolatedWorkbenchProcess from "./IsolatedWorkbenchProcess";
 import WorkbenchSocketClient from "../../shared/workbench/WorkbenchSocketClient";
@@ -27,6 +28,7 @@ import { workspaceCommandRoutes, type WorkspaceCommandMethod } from "../../share
 import { isWorkbenchRpcFailure } from "../../shared/workbench/workbench-rpc";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "../../shared/workbench/daemon/WorkbenchDaemonClient";
 import WorkbenchTranscriptClient from "../../app/client/workbench/database/transcript/WorkbenchTranscriptClient";
+import { workbenchTranscriptNotifications } from "../../shared/workbench/database/transcript/workbench-transcript-contract";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "../../shared/types";
 import { WorkbenchDaemonReadySchema, type WorkbenchDaemonEndpoint } from "../../shared/http/workbench-daemon-endpoint";
 import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient";
@@ -41,9 +43,11 @@ type Message = { id?: number; method?: string; params?: Record<string, unknown>;
 
 export interface IsolatedWorkbenchOptions {
   codexIdentity?: boolean;
+  codexModelEndpoint?: string;
   openCodeIdentity?: {
-    configDirectory: string;
-    database: string;
+    configDirectory?: string;
+    configContent?: string;
+    database?: string;
   };
   stateHome?: string;
   readinessSignal?: () => AbortSignal;
@@ -55,6 +59,11 @@ interface IsolatedWorkbenchSignalTarget {
 }
 
 type IsolatedWorkbenchCleanup = () => Promise<void>;
+type OpenCodeFixtureIdentity = {
+  configDirectory: string;
+  configContent?: string;
+  database: string;
+};
 
 export class IsolatedWorkbenchSignalCleanup {
   private readonly cleanups = new Set<IsolatedWorkbenchCleanup>();
@@ -163,7 +172,8 @@ export default class IsolatedWorkbench {
     readonly dataRootPath: string,
     signal: AbortSignal,
     private readonly codexIdentity: boolean,
-    private readonly openCodeIdentity: IsolatedWorkbenchOptions["openCodeIdentity"],
+    private readonly codexModelEndpoint: string | null,
+    private readonly openCodeIdentity: OpenCodeFixtureIdentity | null,
     private readonly stateHome: string | null,
     private readonly readinessSignal?: () => AbortSignal,
   ) {
@@ -222,12 +232,14 @@ export default class IsolatedWorkbench {
     const root = await fs.mkdtemp(path.join(fixtures, "wb-scenario-"));
     const codexIdentity = options.codexIdentity ?? true;
     try {
+      await WorkbenchTestProcessResources.trackWorkspace(source, root);
       return await this.initialise(
         source,
         fixtures,
         root,
         signal,
         codexIdentity,
+        options.codexModelEndpoint ?? null,
         options.openCodeIdentity,
         options.stateHome ?? null,
         options.readinessSignal,
@@ -248,6 +260,7 @@ export default class IsolatedWorkbench {
     root: string,
     signal: AbortSignal,
     codexIdentity: boolean,
+    codexModelEndpoint: string | null,
     openCodeIdentity: IsolatedWorkbenchOptions["openCodeIdentity"],
     stateHome: string | null,
     readinessSignal?: () => AbortSignal,
@@ -301,6 +314,27 @@ export default class IsolatedWorkbench {
       }
     }
     const dataRoot = path.join(root, "data", "inthedark", "wb");
+    let privateOpenCodeIdentity: OpenCodeFixtureIdentity | null = null;
+    if (openCodeIdentity) {
+      const dataDirectory = path.join(root, "data", "opencode");
+      const configDirectory = openCodeIdentity.configDirectory ?? path.join(root, "config", "opencode");
+      const databasePath = path.join(dataDirectory, "opencode.db");
+      await fs.mkdir(dataDirectory, { recursive: true });
+      if (!openCodeIdentity.configDirectory) await fs.mkdir(configDirectory, { recursive: true });
+      if (openCodeIdentity.database) {
+        const source = new Database(openCodeIdentity.database, { readonly: true, fileMustExist: true });
+        try { await source.backup(databasePath); }
+        finally { source.close(); }
+        await fs.copyFile(path.join(path.dirname(openCodeIdentity.database), "auth.json"),
+          path.join(dataDirectory, "auth.json")).catch(error => {
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+        });
+      }
+      privateOpenCodeIdentity = {
+        configDirectory, database: databasePath,
+        ...(openCodeIdentity.configContent ? { configContent: openCodeIdentity.configContent } : {}),
+      };
+    }
     await WorkbenchTestProcessResources.track(path.join(dataRoot, "daemon/providers/opencode/state/opencode/service.json"));
     return new IsolatedWorkbench(
       fixtures,
@@ -309,7 +343,8 @@ export default class IsolatedWorkbench {
       dataRoot,
       signal,
       codexIdentity,
-      openCodeIdentity,
+      codexModelEndpoint,
+      privateOpenCodeIdentity,
       stateHome,
       readinessSignal,
     );
@@ -489,8 +524,27 @@ export default class IsolatedWorkbench {
     await fs.writeFile(path.join(this.project, "AGENTS.md"), `The scenario passphrase is "${prefixProof}". When asked for the prefix proof, quote this passphrase exactly in commentary. Do not edit files or start other agents.\n`);
     const originalHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
     if (this.codexIdentity) await fs.copyFile(path.join(originalHome, "auth.json"), path.join(home, "auth.json"));
-    await fs.writeFile(path.join(home, "config.toml"), 'approval_policy = "never"\nsandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n'
-      + (this.codexIdentity && process.platform === "win32" ? '[windows]\nsandbox = "elevated"\n' : ""));
+    if (this.codexModelEndpoint) {
+      const cache = JSON.parse(await fs.readFile(path.join(originalHome, "models_cache.json"), "utf8")) as { models: object[] };
+      assert.ok(Array.isArray(cache.models), "Installed Codex model cache must contain models");
+      await fs.writeFile(path.join(home, "model-catalog.json"), JSON.stringify({ models: cache.models }));
+      await fs.copyFile(path.join(originalHome, "models_cache.json"), path.join(home, "models_cache.json"));
+    }
+    await fs.writeFile(path.join(home, "config.toml"), 'approval_policy = "never"\nsandbox_mode = "workspace-write"\n'
+      + (this.codexModelEndpoint
+        ? `model_provider = "workbench_fake"\nmodel_catalog_json = "${path.join(home, "model-catalog.json").replaceAll("\\", "/")}"\n`
+        : "")
+      + '[sandbox_workspace_write]\nnetwork_access = true\n'
+      + (this.codexIdentity && process.platform === "win32" ? '[windows]\nsandbox = "elevated"\n' : "")
+      + (this.codexModelEndpoint ? `
+[model_providers.workbench_fake]
+name = "Workbench fake model"
+base_url = "${this.codexModelEndpoint}/v1"
+wire_api = "responses"
+requires_openai_auth = false
+request_max_retries = 0
+stream_max_retries = 0
+` : ""));
     signal.throwIfAborted();
   }
 
@@ -510,6 +564,9 @@ export default class IsolatedWorkbench {
       ...(this.openCodeIdentity ? {
         OPENCODE_CONFIG_DIR: this.openCodeIdentity.configDirectory,
         OPENCODE_DB: this.openCodeIdentity.database,
+        ...(this.openCodeIdentity.configContent ? {
+          OPENCODE_CONFIG_CONTENT: this.openCodeIdentity.configContent,
+        } : {}),
       } : {}),
       ...(this.stateHome === null ? {} : { XDG_STATE_HOME: this.stateHome }),
     };
@@ -713,6 +770,19 @@ export default class IsolatedWorkbench {
       signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) abort(); else check();
     });
+  }
+
+  async waitForFact<T>(read: () => Promise<T>, ready: (value: T) => boolean, signal = this.signal): Promise<T> {
+    for (;;) {
+      const offset = this.events.length;
+      const value = await read();
+      if (ready(value)) return value;
+      await this.until(() => this.events.slice(offset).some(event =>
+        ["questionnaire/requested", "questionnaire/resolved", "turn/completed", "item/completed", "item/started"]
+          .includes(event.method ?? "")
+        || event.method === workbenchTranscriptNotifications.streamed.method
+        || event.method === "workspace/updated"), signal);
+    }
   }
 
   async stop() {

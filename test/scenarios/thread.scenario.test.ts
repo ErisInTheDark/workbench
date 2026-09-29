@@ -1,5 +1,5 @@
 /*
- * No exports. One explicitly selected paid thread journey with provider-specific boundary checks.
+ * No exports. One explicitly selected provider journey with paid or test-scripted model calls.
  */
 import assert from "node:assert/strict";
 import { randomInt, randomUUID } from "node:crypto";
@@ -11,22 +11,19 @@ import Database from "better-sqlite3";
 import WorkbenchComposerProfileStore from "../../daemon/server/WorkbenchComposerProfileStore";
 import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseRow } from "../../shared/database/workbench-database-statements";
 import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-database-schema";
-import { captureThreadStateMigrationSource, isolateThreadStateMigrationSource, verifyThreadStateMigrationSource } from "./thread-state-migration-fixture";
 import ThreadTranscriptProjectionController, { type ThreadTranscriptProjectionState } from "../../app/client/workbench/transcript/ThreadTranscriptProjectionController";
 import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
 import type { ThreadPayload } from "../../shared/types";
 import type { Turn } from "../../shared/workbench/thread/workbench-thread-turn";
-import type {
-  WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection, WorkbenchPendingUserInputRequest,
-} from "../../shared/types";
-import type { TranscriptTextUpdate } from "../../shared/workbench/transcript/thread-transcript-stream";
-import { workbenchTranscriptNotifications } from "../../shared/workbench/database/transcript/workbench-transcript-contract";
+import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "../../shared/types";
 import { projectWorkbenchTranscript, type WorkbenchTranscriptProjection } from "../../shared/workbench/transcript/workbench-transcript-projection";
-import OpenCodeServiceController from "../../daemon/server/providers/opencode/OpenCodeServiceController";
 import IsolatedWorkbench from "./IsolatedWorkbench";
+import FakeThreadModelServer from "./FakeThreadModelServer";
+import ProviderThreadJourney, { SharedRuntimeCheckpoints } from "./ProviderThreadJourney";
+import { parseThreadTestArguments, type ThreadTestMode } from "../thread-test-arguments";
 import {
   createProviderBoundaryJourney, PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE, PROVIDER_SHELL_PROOF_FILE,
-  type ProviderBoundaryToolNames,
+  fakeCodexTool, type ProviderBoundaryToolNames,
 } from "./provider-boundary-journey";
 
 const modelId = "opencode-go/muse-spark-1.3-contributor";
@@ -35,14 +32,41 @@ type ProjectedItems = WorkbenchTranscriptProjection["turns"][number]["items"];
 type ProviderScenario = {
   initialPrompt?: string;
   tools: ProviderBoundaryToolNames;
-  verifyFirstTurn?: (thread: ThreadPayload, id: string, title: string) => Promise<void>;
+  verifyFirstTurn?: (thread: ThreadPayload, id: string, title: string) => Promise<() => Promise<void>>;
   verifySearch: (items: ProjectedItems) => void;
   verifyBinding?: (database: Database.Database, projectId: string, id: string) => void;
   verifyCapabilities?: () => Promise<void>;
+  verifySnoozedTurnSettled?: (turnId: string) => Promise<void>;
   verifyNativeDeletion?: (id: string) => Promise<void>;
   verifyLegacyFiles?: () => Promise<void>;
 };
-const selectedProvider = process.env.WORKBENCH_THREAD_TEST_PROVIDER;
+const selectedSelection = process.env.WORKBENCH_THREAD_TEST_SELECTION
+  ? parseThreadTestArguments(Object.entries(JSON.parse(process.env.WORKBENCH_THREAD_TEST_SELECTION) as Record<string, string>)
+    .map(([provider, mode]) => `--${provider}=${mode}`))
+  : null;
+const selectedProviders = selectedSelection
+  ? (["codex", "opencode"] as const).filter(provider => selectedSelection[provider])
+  : [];
+
+function assertFirstTurnPending(events: IsolatedWorkbench["events"], turnId: string, durableState?: string) {
+  if (durableState && durableState !== "inProgress") {
+    throw new Error(`Codex first turn ${durableState} before first-turn checkpoint completed.`);
+  }
+  const terminal = events.find(event => event.method === "turn/completed"
+    && (event.params?.turn as Turn | undefined)?.id === turnId)?.params?.turn as Turn | undefined;
+  if (terminal) {
+    throw new Error(`Codex first turn ${terminal.status} before first-turn checkpoint completed: ${terminal.error?.message.slice(0, 300) ?? "no provider error"}`);
+  }
+}
+
+test("first-turn proof wait rejects a terminal turn instead of hanging", () => {
+  const turn = (id: string, status: Turn["status"]) => ({ id, status, error: null }) as Turn;
+  const event = (value: Turn) => ({ method: "turn/completed", params: { turn: value } });
+  assertFirstTurnPending([event(turn("other", "failed"))], "target");
+  assert.throws(() => assertFirstTurnPending([event(turn("target", "failed"))], "target"), /failed/u);
+  assert.throws(() => assertFirstTurnPending([event(turn("target", "completed"))], "target"), /completed/u);
+  assert.throws(() => assertFirstTurnPending([], "target", "failed"), /failed/u);
+});
 
 function passphrase() {
   const words = [
@@ -75,12 +99,7 @@ await new Promise((resolve, reject) => {
   };
 }
 
-async function prepareCodexFixture(runtime: IsolatedWorkbench, sourceDatabasePath: string, signal: AbortSignal) {
-  const captured = await captureThreadStateMigrationSource(
-    sourceDatabasePath, path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"), { signal },
-  );
-  await verifyThreadStateMigrationSource(captured);
-  await isolateThreadStateMigrationSource(captured, runtime.root, signal);
+async function prepareCodexFixture(runtime: IsolatedWorkbench) {
   const legacyRoot = path.join(runtime.project, ".workbench/transcripts/codex");
   const retainedFile = path.join(legacyRoot, "retained-cutover-evidence.json");
   const retainedContents = `{"retained":"${randomUUID()}"}`;
@@ -107,11 +126,11 @@ function codexFirstPrompt() {
   return [
     "This is an authorised Workbench scenario. Follow these steps exactly, in order.",
     "1. Report the prefix proof from project instructions in commentary.",
-    "2. Call native exec_command with `node .workbench/transcript-gate.mjs && wb task get`. Do not use the Workbench shell tool.",
+    "2. Call code-mode exec with JavaScript that awaits `tools.mcp__wb__shell({command: \"node .workbench/transcript-gate.mjs\"})` until it finishes.",
     "3. Wait for that command to finish. The scenario releases it. Do not bypass the gate.",
     "4. Call Workbench MCP task_get to read this task's title.",
     "5. Report the title and prefix proof together in commentary.",
-    "6. Call Workbench MCP task_completed, then end with an empty final response. This completion is authorised.",
+    "6. Call the direct Workbench MCP mcp__wbex__task_completed tool, then end with an empty final response. This completion is authorised.",
     "Do not edit files, spawn agents, ask questions or make plans.",
   ].join("\n");
 }
@@ -158,15 +177,16 @@ async function verifyCodexFirstTurn(
     assert.ok(firstTurn, "App draft launch must admit the first provider turn");
     const turnId = firstTurn.id;
     controller.select({ thread: { ...thread, turns: [firstTurn] } });
-    await runtime.until(() => {
+    await runtime.waitForFact(async () => {
+      const snapshot = await runtime.transcripts.read({ threadId, turnLimit: 10 });
+      assertFirstTurnPending(runtime.events, turnId, snapshot?.turns.find(turn => turn.id === turnId)?.state);
       healthy();
-      return Boolean(current()?.turns.flatMap(turn => turn.items).some(item =>
-        item.type === "commandExecution" && item.aggregatedOutput?.includes(gate.gateProof)));
-    });
+      return current()?.turns.flatMap(turn => turn.items).some(item =>
+        item.type === "mcpToolCall" && item.tool === "shell" && item.status === "inProgress") ?? false;
+    }, Boolean, signal);
     const beforeSwitch = current()!.turns.flatMap(turn => turn.items)
       .filter(item => item.type === "agentMessage").map(item => ({ id: item.id, text: item.text }));
     assert.ok(beforeSwitch.some(item => item.text.includes(prefixProof)), "Commentary must arrive before the held command");
-    assert.ok(observed.texts > 0, "Incremental text must reach the real projection owner");
     assert.ok(!runtime.events.some(event => event.method === "turn/completed"
       && (event.params?.turn as Turn | undefined)?.id === turnId), "Resubscribe must occur during the live turn");
     const previousResets = observed.resets;
@@ -174,10 +194,12 @@ async function verifyCodexFirstTurn(
     controller.select(null);
     controller.select({ thread: { ...thread, turns: [firstTurn] } });
     await replacementSubscription;
-    await runtime.until(() => {
+    await runtime.waitForFact(async () => {
+      const snapshot = await runtime.transcripts.read({ threadId, turnLimit: 10 });
+      assertFirstTurnPending(runtime.events, turnId, snapshot?.turns.find(turn => turn.id === turnId)?.state);
       healthy();
       return observed.resets > previousResets && current() !== null;
-    });
+    }, Boolean, signal);
     const restored = current()!.turns.flatMap(turn => turn.items);
     for (const earlier of beforeSwitch) {
       const item = restored.find(item => item.id === earlier.id);
@@ -185,16 +207,20 @@ async function verifyCodexFirstTurn(
         earlier, "Resubscription must restore complete earlier commentary");
     }
     await fs.writeFile(gate.release, "");
-    await runtime.until(() => runtime.events.some(event => event.method === "turn/completed"
-      && (event.params?.turn as Turn | undefined)?.id === turnId));
-    const completed = runtime.events.find(event => event.method === "turn/completed"
-      && (event.params?.turn as Turn | undefined)?.id === turnId)?.params?.turn as Turn;
-    assert.equal(completed.status, "completed", completed.error?.message ?? "Paid turn must complete");
+    const completed = await runtime.waitForFact(
+      () => runtime.transcripts.read({ threadId, turnLimit: 10 }),
+      snapshot => snapshot?.turns.some(turn => turn.id === turnId && turn.state !== "inProgress") ?? false,
+      signal,
+    );
+    assert.equal(completed?.turns.find(turn => turn.id === turnId)?.state, "completed", "First turn must complete");
+    assert.ok(runtime.events.some(event => event.method === "turn/completed"
+      && (event.params?.turn as Turn | undefined)?.id === turnId), "First turn completion must be notified");
     assert.ok(runtime.events.some(event => event.method === "item/agentMessage/delta"));
     await runtime.until(() => {
       healthy();
       return Boolean(current()?.turns.some(turn => turn.id === turnId && turn.status === "completed"));
     });
+    assert.ok(observed.texts > 0, "Incremental text must reach the real projection owner");
     const snapshot = await runtime.transcripts.read({ threadId, turnLimit: 10 });
     assert.ok(snapshot, "Completed thread must have a durable transcript");
     assert.equal(snapshot.thread.id, threadId);
@@ -212,55 +238,56 @@ async function verifyCodexFirstTurn(
       `Durable first turn lacks managed task title (${agentMessages.length} agent messages)`);
     const read = await runtime.daemon.threads.page({ threadId, cursor: null });
     assert.equal(read.thread.model, thread.model);
-    assert.equal(read.thread.reasoningEffort, "low");
+    assert.equal(read.thread.reasoningEffort, profile.reasoningEffort);
     const items = read.thread.turns.flatMap(turn => turn.items);
-    assert.ok(items.some(item => item.type === "mcpToolCall" && item.tool === "task_completed" && item.status === "completed"));
-    assert.ok(items.some(item => item.type === "commandExecution" && item.exitCode === 0));
-    await controller.dispose();
-    await runtime.stop();
-    await runtime.start([profile], prefixProof);
-    const reopened = await runtime.transcripts.read({ threadId, turnLimit: 10 });
-    assert.ok(reopened);
-    assert.deepEqual(reopened.turns, snapshot.turns);
-    const reopenedProjection = projectWorkbenchTranscript(reopened);
-    assert.ok(reopenedProjection.success);
-    assert.deepEqual(reopenedProjection.data.turns, projection.data.turns);
-    healthy();
+    assert.ok(items.some(item => item.type === "mcpToolCall" && item.tool === "shell"
+      && item.status === "completed" && JSON.stringify(item.result?.content).includes(gate.gateProof)),
+    "Held Workbench shell result must contain the command proof");
+    assert.ok(items.some(item => item.type === "mcpToolCall" && item.tool === "shell"
+      && item.status === "completed" && JSON.stringify(item.result?.content).includes("Exit code: 0")),
+    "Held Workbench shell must exit successfully");
+    const lifecycle = new Database(path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"), {
+      readonly: true,
+    });
+    try {
+      assert.deepEqual(lifecycle.prepare(`
+        SELECT lifecycle_kind, reason, agent_status
+        FROM workbench_thread_lifecycle
+        WHERE thread_id = ?
+      `).get(threadId), {
+        lifecycle_kind: "completed", reason: "agentCompleted", agent_status: "completed",
+      }, "Workbench task completion must be durable");
+    } finally { lifecycle.close(); }
+    const originalTurn = snapshot.turns.find(turn => turn.id === turnId);
+    const originalProjection = projection.data.turns.find(turn => turn.id === turnId);
+    assert.ok(originalTurn && originalProjection);
+    return async () => {
+      const reopened = await runtime.transcripts.read({ threadId, turnLimit: 10 });
+      assert.ok(reopened);
+      assert.deepEqual(reopened.turns.find(turn => turn.id === turnId), originalTurn);
+      const reopenedProjection = projectWorkbenchTranscript(reopened);
+      assert.ok(reopenedProjection.success);
+      assert.deepEqual(reopenedProjection.data.turns.find(turn => turn.id === turnId), originalProjection);
+      healthy();
+    };
   } finally {
     await fs.writeFile(gate.release, "");
     await controller.dispose();
   }
 }
 
-test("selected provider completes the shared thread boundary journey", {
-  skip: selectedProvider !== "codex" && selectedProvider !== "opencode"
-    ? "run with pnpm test:thread --codex --paid or --opencode --paid" : false,
+test("selected providers complete the shared thread boundary journey in one clone", {
+  skip: !selectedProviders.length
+    ? "run with pnpm test:thread --codex=paid|fake or --opencode=paid|fake" : false,
 }, async t => {
-  const provider = selectedProvider as Provider;
+  assert.ok(selectedSelection);
   const now = Date.now();
   const prefixProof = passphrase();
-  const openCodeProfile: WorkbenchComposerProfile = {
-    id: randomUUID(),
-    name: "opencode live scenario",
-    description: "Explicit paid-model OpenCode provider diagnostic.",
-    scope: { kind: "global" },
-    harness: "opencode",
-    model: modelId,
-    reasoningEffort: null,
-    serviceTier: null,
-    agentPath: null,
-    agentSource: null,
-    createdAt: now,
-    updatedAt: now,
-  };
   const source = path.resolve(process.cwd(), "..");
-  const openCodePaths = provider === "opencode" ? await Promise.all([
+  const openCodePaths = selectedSelection.opencode === "paid" ? await Promise.all([
     IsolatedWorkbench.command("opencode", ["debug", "paths", "db"], source, process.env, t.signal),
     IsolatedWorkbench.command("opencode", ["debug", "paths", "config"], source, process.env, t.signal),
   ]) : null;
-  const openCodeEnvironment = openCodePaths ? {
-    ...process.env, OPENCODE_CONFIG_DIR: openCodePaths[1].trim(), OPENCODE_DB: openCodePaths[0].trim(),
-  } : null;
   const sourceDatabasePath = path.join(resolveWorkbenchDataRoot(), "daemon", "workbench.sqlite3");
   const readCodexProfile = async () => {
     const database = new Database(sourceDatabasePath, { readonly: true, fileMustExist: true });
@@ -280,21 +307,76 @@ test("selected provider completes the shared thread boundary journey", {
       return profile;
     } finally { await profiles.dispose(); database.close(); }
   };
-  const profile = provider === "codex" ? await readCodexProfile() : openCodeProfile;
-  const runtime = await IsolatedWorkbench.create(source, t.signal, {
-    codexIdentity: provider === "codex",
-    ...(openCodePaths ? { openCodeIdentity: {
-      configDirectory: openCodePaths[1].trim(), database: openCodePaths[0].trim(),
-    } } : {}),
-  });
+  const fakeModels: Partial<Record<Provider, FakeThreadModelServer>> = {};
+  const profiles: Partial<Record<Provider, WorkbenchComposerProfile>> = {};
+  if (selectedSelection.codex) {
+    const baseProfile = await readCodexProfile();
+    profiles.codex = selectedSelection.codex === "paid" ? baseProfile : {
+      ...baseProfile, id: randomUUID(), name: "codex fake scenario",
+      description: "Scripted Codex provider diagnostic.",
+    };
+  }
+  if (selectedSelection.opencode) profiles.opencode = {
+    id: randomUUID(), name: `opencode ${selectedSelection.opencode} scenario`,
+    description: `Explicit ${selectedSelection.opencode}-model OpenCode provider diagnostic.`,
+    scope: { kind: "global" }, harness: "opencode",
+    model: selectedSelection.opencode === "fake" ? "workbench-fake/fake-model" : modelId,
+    reasoningEffort: null, serviceTier: null, agentPath: null, agentSource: null,
+    createdAt: now, updatedAt: now,
+  };
+  const activeProfiles = selectedProviders.map(provider => profiles[provider]!);
+  try {
+    for (const provider of selectedProviders) {
+      if (selectedSelection[provider] === "fake") fakeModels[provider] = await FakeThreadModelServer.start();
+    }
+  } catch (error) {
+    await Promise.all(Object.values(fakeModels).map(model => model.close()));
+    throw error;
+  }
+  let runtime: IsolatedWorkbench;
+  try {
+    runtime = await IsolatedWorkbench.create(source, t.signal, {
+      codexIdentity: selectedSelection.codex === "paid",
+      ...(fakeModels.codex ? { codexModelEndpoint: fakeModels.codex.baseUrl } : {}),
+      ...(selectedSelection.opencode ? { openCodeIdentity: openCodePaths ? {
+        configDirectory: openCodePaths[1].trim(), database: openCodePaths[0].trim(),
+      } : {
+        configContent: JSON.stringify({
+          providers: { "workbench-fake": {
+            name: "Workbench fake model", package: "@opencode/ai/providers/openai-compatible",
+            settings: { baseURL: `${fakeModels.opencode!.baseUrl}/v1` },
+            models: { "fake-model": { name: "Fake model" } },
+          } },
+        }),
+      } } : {}),
+    });
+  } catch (error) {
+    await Promise.all(Object.values(fakeModels).map(model => model.close()));
+    throw error;
+  }
+  const groupAbort = new AbortController();
+  const scenarioSignal = AbortSignal.any([t.signal, groupAbort.signal]);
+  let codexGate: Awaited<ReturnType<typeof prepareCodexFixture>> | null = null;
+  let journeyGate: Awaited<ReturnType<typeof prepareJourneyGate>> | null = null;
+  let project!: Awaited<ReturnType<IsolatedWorkbench["waitForProjects"]>>[number];
+  let checkpoints: SharedRuntimeCheckpoints | null = null;
+
+  const runProvider = async (provider: Provider) => {
+  const coordinator = checkpoints;
+  assert.ok(coordinator, "Shared clone checkpoints must be ready before launching provider threads.");
+  const mode = selectedSelection[provider] as ThreadTestMode;
+  const profile = profiles[provider]!;
+  const fakeModel = fakeModels[provider] ?? null;
   let threadId: string | null = null;
   let nativeThreadId: string | null = null;
   let nativeSessionDeleted = false;
   let durableProjection: ReturnType<typeof projectWorkbenchTranscript> | null = null;
-  let codexGate: Awaited<ReturnType<typeof prepareCodexFixture>> | null = null;
-  let journeyGate: Awaited<ReturnType<typeof prepareJourneyGate>> | null = null;
+  let primaryFailure: Error | null = null;
   const activeProof = `active-${randomUUID()}`;
   const stopProof = `stop-${randomUUID()}`;
+  const title = `${provider} ${mode} ${randomUUID()}`;
+  const steerProof = passphrase();
+  const liveProof = passphrase();
   const providerRegistry: Record<Provider, ProviderScenario> = {
     codex: {
       initialPrompt: codexFirstPrompt(),
@@ -302,12 +384,12 @@ test("selected provider completes the shared thread boundary journey", {
         search: "Workbench MCP rg",
         shell: "Workbench MCP shell",
         taskGet: "Workbench MCP task_get",
-        taskComplete: "Workbench MCP task_completed",
+        taskComplete: "direct Workbench MCP mcp__wbex__task_completed",
         questionnaire: "Workbench MCP request_user_input (NOT the native Codex questionnaire)",
       },
       verifyFirstTurn: async (thread: ThreadPayload, id: string, title: string) => {
         assert.ok(codexGate);
-        await verifyCodexFirstTurn(runtime, thread, id, title, prefixProof, profile, codexGate, t.signal);
+        return await verifyCodexFirstTurn(runtime, thread, id, title, prefixProof, profile, codexGate, scenarioSignal);
       },
       verifySearch: (items: ProjectedItems) => {
         assert.ok(items.some(item => item.type === "mcpToolCall"
@@ -324,7 +406,7 @@ test("selected provider completes the shared thread boundary journey", {
       },
       verifyCapabilities: async () => {
         assert.ok((await runtime.daemon.models.list("codex")).data.some(entry => entry.id === profile.model));
-        await runtime.daemon.account.limits("codex");
+        if (mode === "paid") await runtime.daemon.account.limits("codex");
       },
       verifyNativeDeletion: async (_id: string) => {
         assert.ok(threadId);
@@ -341,11 +423,11 @@ test("selected provider completes the shared thread boundary journey", {
     },
     opencode: {
       tools: {
-        search: "the wb_rg tool",
-        shell: "the wb_shell tool",
-        taskGet: "the wb_task_get tool",
-        taskComplete: "the wb_task_completed tool",
-        questionnaire: "the wb_request_user_input tool",
+        search: "tools.wb.rg through execute",
+        shell: "tools.wb.shell through execute",
+        taskGet: "tools.wb.task_get through execute",
+        taskComplete: "tools.wb.task_completed through execute",
+        questionnaire: "tools.wb.request_user_input through execute",
       },
       verifySearch: (items: ProjectedItems) => {
         assert.ok(items.some(item => item.type === "dynamicToolCall"
@@ -354,35 +436,52 @@ test("selected provider completes the shared thread boundary journey", {
             && content.text.includes(PROVIDER_SEARCH_PROOF))),
         "OpenCode must complete WB search and preserve its result");
       },
+      verifySnoozedTurnSettled: async turnId => {
+        await runtime.waitForFact(async () => {
+          const terminal = runtime.events.find(event => event.method === "turn/completed"
+            && (event.params?.turn as Turn | undefined)?.id === turnId)?.params?.turn as Turn | undefined;
+          if (!terminal) return false;
+          assert.equal(terminal.status, "interrupted", "Snoozed OpenCode turn must settle before another turn starts");
+          return true;
+        }, Boolean, scenarioSignal);
+      },
       verifyNativeDeletion: async (id: string) => {
-        assert.ok(openCodeEnvironment);
-        const verificationService = new OpenCodeServiceController({
-          environment: { ...openCodeEnvironment, WORKBENCH_DATA_ROOT: runtime.dataRootPath },
+        const privateDatabase = new Database(path.join(runtime.root, "data", "opencode", "opencode.db"), {
+          readonly: true, fileMustExist: true,
         });
         try {
-          const verificationClient = await verificationService.acquire();
-          await assert.rejects(verificationClient.session.get({ sessionID: id }),
+          assert.equal(privateDatabase.prepare("SELECT 1 FROM session_v2 WHERE id = ?").get(id), undefined,
             "The diagnostic must delete only its exact native OpenCode session");
-        } finally { await verificationService.dispose(); }
+        } finally { privateDatabase.close(); }
       },
     },
   };
   try {
-    if (provider === "codex") codexGate = await prepareCodexFixture(runtime, sourceDatabasePath, t.signal);
-    journeyGate = await prepareJourneyGate(runtime);
-    await runtime.start([profile], prefixProof);
-    console.log(`[${provider} live] isolated runtime started`);
-    await runtime.request("project/discovery-settings/update", { paths: [path.dirname(runtime.project)] });
-    const catalog = await runtime.waitForProjects([runtime.project]);
-    const project = catalog.find(entry => path.resolve(entry.rootPath) === runtime.project);
-    assert.ok(project, "Isolated project must be discoverable");
+    if (provider === "codex" && fakeModel) {
+      assert.ok(codexGate);
+      fakeModel.enqueue([
+        fakeCodexTool("shell", { command: "node .workbench/transcript-gate.mjs" }, prefixProof),
+        fakeCodexTool("task_get", {}),
+        { tool: { nameSuffix: "task_completed", arguments: {} } },
+        { text: `${title} ${prefixProof}` },
+      ]);
+    }
+    assert.ok(journeyGate);
     const { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens } = profile;
     const selection: WorkbenchComposerProfileTargetSelection = {
       kind: "profile", profileId: profile.id,
       settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens },
     };
     await runtime.projectThreads(project.id);
-    const journey = createProviderBoundaryJourney(providerRegistry[provider].tools, journeyGate.command);
+    if (provider === "codex" && mode === "fake") {
+      const available = (await runtime.daemon.models.list("codex")).data.map(entry => entry.id);
+      assert.ok(available.includes(profile.model), `Fake Codex model ${profile.model} is not in the clone catalog: ${available.join(", ")}`);
+    }
+    const shellProofFile = `${PROVIDER_SHELL_PROOF_FILE}-${provider}`;
+    const journey = createProviderBoundaryJourney(provider, providerRegistry[provider].tools, journeyGate.command, shellProofFile);
+    if (provider === "opencode" && fakeModel) {
+      fakeModel.enqueue(journey.fake.active(prefixProof, activeProof, steerProof, liveProof));
+    }
     threadId = await runtime.launchDraft(project.id, selection,
       providerRegistry[provider].initialPrompt ?? journey.active(prefixProof, activeProof));
     const { thread } = await runtime.daemon.threads.page({ threadId, cursor: null });
@@ -392,66 +491,12 @@ test("selected provider completes the shared thread boundary journey", {
     assert.equal(path.resolve(thread.cwd), runtime.project);
     const firstTurn = thread.turns.at(-1);
     assert.ok(firstTurn, "App draft launch must admit the first provider turn");
-    const subscriptionId = `thread-${randomUUID()}`;
-    const liveText = new Map<string, TranscriptTextUpdate>();
-    const subscribe = () => runtime.transcripts.subscribe(
-      { threadId: threadId!, turnLimit: 20, subscriptionId },
-      () => {
-        assert.fail("The thread scenario must use the incremental SQLite transcript protocol");
-      },
-      update => {
-        if (update.kind !== "text" || update.field !== "agentMessageText") return;
-        const previous = liveText.get(update.itemId);
-        liveText.set(update.itemId, {
-          ...update,
-          text: update.append ? `${previous?.text ?? ""}${update.text}` : update.text,
-        });
-      },
-    );
-    const waitForFact = async <T>(read: () => Promise<T>, ready: (value: T) => boolean): Promise<T> => {
-      for (;;) {
-        const offset = runtime.events.length;
-        const value = await read();
-        if (ready(value)) return value;
-        await runtime.until(() => runtime.events.slice(offset).some(event =>
-          ["questionnaire/requested", "questionnaire/resolved", "turn/completed", "item/completed"]
-            .includes(event.method ?? "")
-          || event.method === workbenchTranscriptNotifications.streamed.method
-          || event.method === "workspace/updated"));
-      }
-    };
-    const durable = async () => {
-      const snapshot = await waitForFact(
-        () => runtime.transcripts.read({ threadId: threadId!, turnLimit: 30 }),
-        value => value !== null,
-      );
-      assert.ok(snapshot, "The provider turn must be durable in SQLite");
-      const projected = projectWorkbenchTranscript(snapshot);
-      assert.ok(projected.success);
-      return projected.data;
-    };
-    const waitHeldTool = async (id: string, proof: string) => {
-      await waitForFact(durable, projection => {
-        const turn = projection.turns.find(candidate => candidate.id === id);
-        if (!turn) return false;
-        const tool = turn.items.find(item =>
-          ["commandExecution", "mcpToolCall", "dynamicToolCall"].includes(item.type)
-          && JSON.stringify(item).includes(proof));
-        if (tool) {
-          assert.ok(tool.type === "commandExecution" || tool.type === "mcpToolCall"
-            || tool.type === "dynamicToolCall");
-          assert.equal(tool.status, "inProgress", "Shell gate settled before scenario released it");
-          return true;
-        }
-        assert.ok(!turn.items.some(item =>
-          (item.type === "mcpToolCall" || item.type === "dynamicToolCall")
-          && item.tool === "request_user_input" && item.status === "inProgress"),
-        "Provider requested user input before starting the shell gate");
-        assert.equal(turn.status, "inProgress", "Turn ended before starting the shell gate");
-        return false;
-      });
-    };
-    const steerProof = passphrase();
+    const owner = new ProviderThreadJourney(runtime, provider, project.id, threadId, scenarioSignal);
+    const subscribe = () => owner.subscribe();
+    const waitForFact = <T>(read: () => Promise<T>, ready: (value: T) => boolean) =>
+      owner.waitForFact(read, ready);
+    const durable = () => owner.durable();
+    const waitHeldTool = (id: string, proof: string) => owner.waitHeldTool(id, proof);
     const steerIntoActiveTurn = async (id: string) => {
       await waitHeldTool(id, activeProof);
       const result = await runtime.daemon.threads.message({
@@ -465,7 +510,6 @@ test("selected provider completes the shared thread boundary journey", {
     };
     if (provider === "opencode") await subscribe();
     let activeTurn = provider === "opencode" ? await steerIntoActiveTurn(firstTurn.id) : null;
-    const title = `${provider} live ${randomUUID()}`;
     await runtime.daemon.threads.title({ threadId, title });
 
     const database = new Database(path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"), {
@@ -495,65 +539,25 @@ test("selected provider completes the shared thread boundary journey", {
       ...(provider === "codex" ? { CODEX_THREAD_ID: nativeThreadId } : {}),
     }, t.signal);
     assert.ok(cli.includes(title), "CLI must resolve the managed WB thread identity");
-    await providerRegistry[provider].verifyFirstTurn?.(thread, threadId, title);
+    const verifyFirstTurnReopened = await providerRegistry[provider].verifyFirstTurn?.(thread, threadId, title);
     await providerRegistry[provider].verifyCapabilities?.();
 
     await fs.writeFile(path.join(runtime.project, PROVIDER_SEARCH_PROOF_FILE), PROVIDER_SEARCH_PROOF);
     if (provider === "codex") await subscribe();
-    const submit = async (text: string, intent: "newTurn" | "continue" = "continue") => {
-      const result = await runtime.daemon.threads.message({
-        threadId: threadId!, clientMessageId: randomUUID(), intent,
-        input: [{ type: "text", text, text_elements: [] }], context: { workflowIds: [] },
-      });
-      assert.equal(result.kind, "started");
-      assert.ok(result.kind === "started");
-      return result.turn.id;
-    };
-    const waitTurn = async (turnId: string, status: "completed" | "interrupted" = "completed") => {
-      const value = await waitForFact(durable, projection => {
-        const turn = projection.turns.find(candidate => candidate.id === turnId);
-        if (turn && ["completed", "failed", "interrupted"].includes(turn.status) && turn.status !== status) {
-          throw new Error(`${provider} turn ${turnId} settled as ${turn.status}; expected ${status}.`);
-        }
-        return turn?.status === status;
-      });
-      return value;
-    };
-    const readRetainedQuestions = async () => {
-      const state = await runtime.projectThreads(project.id);
-      return state.rows.flatMap(({ entry }) =>
-        entry.entryKind !== "draft" && entry.pendingQuestionnaire ? [{
-          ...entry.pendingQuestionnaire,
-          ...entry.identity,
-          itemId: entry.pendingQuestionnaire.itemId ?? null,
-          turnId: entry.pendingQuestionnaire.turnId ?? null,
-        }] : []);
-    };
-    const pending = async (id: string) => {
-      let found: WorkbenchPendingUserInputRequest | undefined;
-      const questions = await waitForFact(
-        async () => (await runtime.daemon.questionnaires.pending()).data
-          .filter(question => question.harness === provider && question.threadId === threadId),
-        value => value.some(question => question.request.questions.some(entry => entry.id === id)),
-      );
-      found = questions.find(question => question.request.questions.some(entry => entry.id === id));
-      return found as WorkbenchPendingUserInputRequest;
-    };
-    const answer = (question: WorkbenchPendingUserInputRequest, id: string, proof: string, supplementalInput?: string) =>
-      runtime.daemon.threads.questionnaire.respond({
-        projectId: project.id,
-        threadId: threadId!,
-        requestKey: question.requestKey,
-        response: { answers: { [id]: { answers: [proof] } } },
-        ...(supplementalInput ? {
-          supplementalInput: [{ type: "text" as const, text: supplementalInput, text_elements: [] }],
-        } : {}),
-      });
+    const submit = (text: string, intent: "newTurn" | "continue" = "continue") => owner.submit(text, intent);
+    const waitTurn = (id: string, status: "completed" | "interrupted" = "completed") => owner.waitTurn(id, status);
+    const readRetainedQuestions = () => owner.readRetainedQuestions();
+    const pending = (id: string) => owner.pending(id);
+    const answer = (
+      question: Awaited<ReturnType<typeof pending>>, id: string, proof: string, supplementalInput?: string,
+    ) => owner.answer(question, id, proof, supplementalInput);
 
-    if (provider === "codex") activeTurn = await steerIntoActiveTurn(
-      await submit(journey.active(prefixProof, activeProof)));
+    if (provider === "codex") {
+      if (fakeModel) fakeModel.enqueue(journey.fake.active(prefixProof, activeProof, steerProof, liveProof));
+      activeTurn = await steerIntoActiveTurn(await submit(journey.active(prefixProof, activeProof)));
+    }
     assert.ok(activeTurn);
-    const liveQuestion = await pending("live_answer");
+    const liveQuestion = await pending("live-answer");
     assert.equal(liveQuestion.turnId, activeTurn);
     const activeProjection = await durable();
     assert.ok(JSON.stringify(activeProjection).includes(prefixProof), "Managed instructions must reach the provider");
@@ -565,40 +569,41 @@ test("selected provider completes the shared thread boundary journey", {
     const steerIndex = activeItems.findIndex(item => item.type === "userMessage"
       && item.content.some(content => content.type === "text" && content.text.includes(steerProof)));
     assert.ok(gateIndex >= 0 && steerIndex > gateIndex, "Delivered steer must follow the held tool");
-    const liveProof = passphrase();
-    assert.equal((await answer(liveQuestion, "live_answer", liveProof)).route, "live");
-    const heldQuestion = await pending("held_answer");
+    assert.equal((await answer(liveQuestion, "live-answer", liveProof)).route, "live");
+    const heldQuestion = await pending("held-answer");
     assert.equal(heldQuestion.turnId, activeTurn);
     assert.ok(JSON.stringify(await durable()).includes(liveProof));
     const liveHistory = await runtime.daemon.threads.history.questionnaires({ threadId });
     assert.ok(liveHistory.data.some(entry => entry.requestKey === liveQuestion.requestKey
-      && entry.turnId === activeTurn && entry.response.answers.live_answer?.answers.includes(liveProof)));
+      && entry.turnId === activeTurn && entry.response.answers["live-answer"]?.answers.includes(liveProof)));
     await runtime.daemon.threads.stop({ threadId, intent: "snooze", requestKey: heldQuestion.requestKey });
     await waitTurn(activeTurn, "interrupted");
+    fakeModel?.forgetInterruptedTool();
     assert.ok((await readRetainedQuestions()).some(question => question.requestKey === heldQuestion.requestKey));
 
-    await runtime.stop();
-    await runtime.start([profile], prefixProof);
+    await coordinator.reopen(0);
+    await verifyFirstTurnReopened?.();
     await runtime.projectThreads(project.id);
     await subscribe();
     const retainedQuestions = await waitForFact(
       readRetainedQuestions,
-      value => value.some(question => question.request.questions.some(entry => entry.id === "held_answer")),
+      value => value.some(question => question.request.questions.some(entry => entry.id === "held-answer")),
     );
     const retainedQuestion = retainedQuestions.find(question =>
-      question.request.questions.some(entry => entry.id === "held_answer"))!;
+      question.request.questions.some(entry => entry.id === "held-answer"))!;
     const heldProof = passphrase();
+    if (fakeModel) fakeModel.enqueue(journey.fake.held(prefixProof, heldProof));
     assert.equal((await answer(
       retainedQuestion,
-      "held_answer",
+      "held-answer",
       heldProof,
       journey.heldContinuation(prefixProof),
     )).route, "admitted");
     const heldHistory = await runtime.daemon.threads.history.questionnaires({ threadId });
     const heldEntry = heldHistory.data.find(entry => entry.requestKey === heldQuestion.requestKey);
     assert.ok(heldEntry && heldEntry.turnId !== activeTurn
-      && heldEntry.response.answers.held_answer?.answers.includes(heldProof));
-    const dismissQuestion = await pending("dismiss_preserved");
+      && heldEntry.response.answers["held-answer"]?.answers.includes(heldProof));
+    const dismissQuestion = await pending("dismiss-preserved");
     const continuedProjection = await durable();
     assert.ok(JSON.stringify(continuedProjection).includes(heldProof));
     const continuedTurnId = dismissQuestion.turnId;
@@ -606,6 +611,8 @@ test("selected provider completes the shared thread boundary journey", {
     assert.equal(continuedTurnId, heldEntry.turnId);
     await runtime.daemon.threads.stop({ threadId, intent: "snooze", requestKey: dismissQuestion.requestKey });
     const beforeDismiss = await waitTurn(continuedTurnId, "interrupted");
+    await providerRegistry[provider].verifySnoozedTurnSettled?.(continuedTurnId);
+    fakeModel?.forgetInterruptedTool();
     await runtime.daemon.threads.stop({ threadId, intent: "stop", requestKey: dismissQuestion.requestKey });
     await waitForFact(durable, value => value.turns.every(turn => turn.status !== "inProgress"));
     await waitForFact(readRetainedQuestions, questions =>
@@ -614,20 +621,20 @@ test("selected provider completes the shared thread boundary journey", {
       beforeDismiss.turns.map(turn => ({ id: turn.id, status: turn.status })),
       "Dismissing a preserved question must not create or interrupt a turn");
 
+    if (fakeModel) fakeModel.enqueue(journey.fake.stop(stopProof));
     const stoppedTurn = await submit(journey.stop(stopProof));
     await waitHeldTool(stoppedTurn, stopProof);
     await runtime.daemon.threads.stop({ threadId, intent: "stop", turnId: stoppedTurn });
     await journeyGate.release(stopProof);
     await waitTurn(stoppedTurn, "interrupted");
-    if (provider === "codex") {
-      await runtime.stop();
-      await runtime.start([profile], prefixProof);
-      await runtime.projectThreads(project.id);
-      await subscribe();
-    }
+    fakeModel?.forgetInterruptedTool();
+    await coordinator.reopen(1);
+    await runtime.projectThreads(project.id);
+    await subscribe();
     const beforeCompact = await durable();
     const priorCompactions = new Set(beforeCompact.turns.flatMap(turn => turn.items)
       .filter(item => item.type === "contextCompaction").map(item => item.id));
+    if (fakeModel) fakeModel.enqueue([{ text: `Summary ${prefixProof}` }]);
     await runtime.daemon.threads.compact({ threadId });
     await waitForFact(durable, value => {
       assert.ok(value.turns.slice(0, -1).every(turn => turn.status !== "inProgress"),
@@ -643,6 +650,7 @@ test("selected provider completes the shared thread boundary journey", {
     );
 
     const finalProof = passphrase();
+    if (fakeModel) fakeModel.enqueue(journey.fake.final(prefixProof, finalProof, title));
     const finalTurn = await submit(journey.final(prefixProof, finalProof));
     durableProjection = { success: true, data: await waitTurn(finalTurn) };
     const finalItems = durableProjection.data.turns.find(turn => turn.id === finalTurn)?.items ?? [];
@@ -653,7 +661,7 @@ test("selected provider completes the shared thread boundary journey", {
     const finalPage = await runtime.daemon.threads.page({ threadId, cursor: null });
     assert.equal(finalPage.thread.model, profile.model);
     assert.equal(finalPage.thread.reasoningEffort, profile.reasoningEffort);
-    assert.equal(await fs.readFile(path.join(runtime.project, PROVIDER_SHELL_PROOF_FILE), "utf8"), finalProof);
+    assert.equal(await fs.readFile(path.join(runtime.project, shellProofFile), "utf8"), finalProof);
     const lifecycle = new Database(path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"), {
       readonly: true,
     });
@@ -670,13 +678,12 @@ test("selected provider completes the shared thread boundary journey", {
     } finally {
       lifecycle.close();
     }
-    assert.ok([...liveText.values()].some(update => update.text.includes(prefixProof)),
+    assert.ok([...owner.liveText.values()].some(update => update.text.includes(prefixProof)),
       "The provider text stream must reach the shared live projection");
-    await runtime.transcripts.unsubscribe({ subscriptionId });
+    await owner.unsubscribe();
     console.log(`[${provider} live] shared provider journey passed`);
 
-    await runtime.stop();
-    await runtime.start([profile], prefixProof);
+    await coordinator.reopen(2);
     console.log(`[${provider} live] isolated runtime cold-reopened`);
     const reopened = await runtime.transcripts.read({ threadId, turnLimit: 20 });
     assert.ok(reopened, "The transcript must survive a cold WB reopen");
@@ -692,8 +699,13 @@ test("selected provider completes the shared thread boundary journey", {
     assert.ok(retained, "Deleting provider state must retain isolated WB transcript history");
     await providerRegistry[provider].verifyLegacyFiles?.();
   } catch (error) {
-    console.error("thread scenario failed", error, "\napp tail\n", runtime.appOutput.slice(-12000),
-      "\ndaemon tail\n", runtime.output.slice(-12000));
+    const failure = error instanceof Error ? error : new Error("Provider journey failed.");
+    primaryFailure = failure;
+    coordinator.fail(failure);
+    groupAbort.abort(failure);
+    console.error(`${provider} thread scenario failed`, error, "\nfake model failure\n", fakeModel?.lastFailure,
+      "\napp tail\n", runtime.appOutput.slice(-1500),
+      "\ndaemon tail\n", runtime.output.slice(-1500));
     throw error;
   } finally {
     const removeNativeSession = async () => {
@@ -710,16 +722,60 @@ test("selected provider completes the shared thread boundary journey", {
         if (!retained?.turns.some(turn => turn.state === "inProgress")) break;
         await runtime.until(() => runtime.events.length > offset, cleanup);
       }
+      assert.ok(retained, "Stopped thread must retain its transcript before native deletion");
+      const before = projectWorkbenchTranscript(retained);
+      assert.ok(before.success);
       await runtime.request("thread/provider/delete", { threadId }, {}, cleanup);
-      assert.deepEqual(await runtime.transcripts.read({ threadId, turnLimit: 20 }), retained,
-        "Provider deletion must retain WB transcript history");
+      const afterSnapshot = await runtime.transcripts.read({ threadId, turnLimit: 20 });
+      assert.ok(afterSnapshot, "Provider deletion must retain WB transcript history");
+      const after = projectWorkbenchTranscript(afterSnapshot);
+      assert.ok(after.success);
+      assert.equal(after.data.thread.id, before.data.thread.id);
+      for (const turn of before.data.turns) {
+        const preserved = after.data.turns.find(candidate => candidate.id === turn.id);
+        assert.ok(preserved, "Provider deletion must retain each earlier WB turn");
+        assert.equal(preserved.status, turn.status);
+        assert.deepEqual(preserved.items, turn.items);
+      }
     };
     try {
-      if (codexGate) await fs.writeFile(codexGate.release, "");
+      if (provider === "codex" && codexGate) await fs.writeFile(codexGate.release, "");
       if (journeyGate) await Promise.all([journeyGate.release(activeProof), journeyGate.release(stopProof)]);
       await removeNativeSession();
-    } finally {
-      await runtime.close();
+    } catch (cleanupError) {
+      if (primaryFailure) throw new AggregateError([primaryFailure, cleanupError], "Provider journey and native cleanup failed.");
+      throw cleanupError;
     }
+  }
+  };
+
+  const runs: Promise<void>[] = [];
+  try {
+    if (selectedSelection.codex) codexGate = await prepareCodexFixture(runtime);
+    journeyGate = await prepareJourneyGate(runtime);
+    await runtime.start(activeProfiles, prefixProof);
+    checkpoints = new SharedRuntimeCheckpoints(runtime, activeProfiles, prefixProof, selectedProviders.length);
+    console.log(`[thread live] isolated runtime started for ${selectedProviders.join(", ")}`);
+    await runtime.request("project/discovery-settings/update", { paths: [path.dirname(runtime.project)] });
+    const catalog = await runtime.waitForProjects([runtime.project]);
+    const found = catalog.find(entry => path.resolve(entry.rootPath) === runtime.project);
+    assert.ok(found, "Isolated project must be discoverable");
+    project = found;
+    if (selectedSelection.codex) {
+      runs.push(runProvider("codex"));
+    }
+    if (selectedSelection.opencode) runs.push(runProvider("opencode"));
+    const outcomes = await Promise.allSettled(runs);
+    const failures = outcomes.filter(result => result.status === "rejected").map(result => result.reason);
+    if (failures.length) throw new AggregateError(failures, "Provider journeys failed.");
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error("Shared provider scenario failed.");
+    groupAbort.abort(failure);
+    checkpoints?.fail(failure);
+    await Promise.allSettled(runs);
+    throw error;
+  } finally {
+    try { await runtime.close(); }
+    finally { await Promise.all(Object.values(fakeModels).map(model => model.close())); }
   }
 });

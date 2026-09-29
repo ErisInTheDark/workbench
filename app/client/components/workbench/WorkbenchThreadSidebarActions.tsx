@@ -6,7 +6,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import type { ThreadSummary, WorkbenchHarness, WorkbenchLogicalThreadRow } from "workbench-shared/types";
+import type { WorkbenchHarness, WorkbenchLogicalThreadRow } from "workbench-shared/types";
 import { projectLogicalPinnedDisplayOrder, projectLogicalThreadDisplayOrder } from "workbench-shared/workbench/project/workbench-project-projection";
 import type { WorkbenchThreadRowDragPayload } from "../../workbench/layout/workbench-drag";
 import { writeTextToClipboard } from "../../workbench/dom/clipboard";
@@ -26,6 +26,7 @@ import {
   type WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import { getNeedsAttentionThreadStatusTone } from "./workbench-thread-status-colors";
+import { getThreadStopIntent } from "./thread-row-actions";
 import {
   useWorkbenchHomeThreadDisplayOrder,
   useWorkbenchHomeThreadDisplayOrderSupported,
@@ -185,12 +186,6 @@ function WorkbenchThreadSidebarActionsProvider({
     const intervalId = window.setInterval(() => setRelativeTimeNowMs(Date.now()), THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(intervalId);
   }, [entryCount]);
-
-  const stopThread = useCallback(async (thread: ThreadSummary) => {
-    if (!controls) return;
-    const payload = await controls.readThread(thread.id, thread.harness);
-    if (payload) await controls.stopThread(payload);
-  }, [controls]);
 
   const mutateEntry = useCallback(async (entry: ThreadListEntry, ownerProjectId: ProjectId, method: "archive/set" | "pin/set" | "restore" | "settle" | "snooze/set" | "status/set", value?: boolean | "completed" | "needsAttention" | "stopped", source?: ProjectLocationReference) => {
     if (!controls || !ownerProjectId) return;
@@ -370,10 +365,17 @@ function WorkbenchThreadSidebarActionsProvider({
       const canComplete = isWorkbenchSidebarThreadCompletionAvailable(entry);
       const selectStatus = (status: "completed" | "needsAttention" | "stopped") => {
         if (providerOwned && !(status === "completed" && canComplete)) {
-          if (status === "stopped" && source && controls) {
-            void controls.threadAction(entry.identity.threadId, { kind: "stop" }).catch(error =>
-              console.error("Unable to stop owning thread", boundedFolderMutationError(error)));
-          } else if (status === "stopped" && thread) void stopThread(thread);
+          if (status === "stopped" && controls) {
+            const stopEntry = "pendingQuestionnaire" in entry ? entry
+              : qualifiedRow?.entry.entryKind === "thread" ? qualifiedRow.entry : null;
+            runDragMutation(
+              () => {
+                if (!stopEntry) throw new Error("The thread's current sidebar state is unavailable.");
+                return controls.threadAction(entry.identity.threadId, getThreadStopIntent(stopEntry));
+              },
+              "Unable to stop owning thread",
+            );
+          }
           return;
         }
         if (entry.lifecycle.kind !== status) void mutateEntry(
@@ -463,7 +465,7 @@ function WorkbenchThreadSidebarActionsProvider({
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}`, placementScope: "thread-list" };
   }, [controls, logicalPinnedOrder, logicalProjectOrders, logicalThreads, mutateEntry, onOpenQualifiedThread, onOpenThread,
     onPresentationDraftDeleted, pinnedThreadLayout.displayOrder, presentation, projectId,
-    projectThreadSidebars.projects, stopThread, threadSummariesById, layoutKey, layoutProject, runDragMutation]);
+    projectThreadSidebars.projects, threadSummariesById, layoutKey, layoutProject, runDragMutation]);
 
   const value = useMemo<WorkbenchThreadSidebarActionsValue>(() => ({
     autoFocusFolderId,

@@ -1,10 +1,11 @@
 /*
- * Keywords: sidebar, row actions, completion, settlement, priority.
  * Exports:
  * - ThreadRowAction: intents available from a thread row.
  * - getThreadRowActions: choose ordinary and shift-only row intents without changing subagent authority.
+ * - getThreadStopIntent: carry the sidebar's current interruption evidence to the stop owner.
  */
 import {
+  getWorkbenchLifecycleTurnId,
   isWorkbenchThreadSettlementAvailable,
   isWorkbenchSidebarThreadCompletionAvailable,
   type WorkbenchPinnedThreadSummaryEntry,
@@ -13,6 +14,13 @@ import {
 } from "workbench-shared/workbench/thread/thread-state";
 
 export type ThreadRowAction = "archive" | "complete" | "discard" | "restore" | "settle" | "snooze" | "wake";
+
+export function getThreadStopIntent(entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>) {
+  const requestKey = entry.pendingQuestionnaire?.requestKey;
+  if (requestKey) return { kind: "stop" as const, requestKey };
+  const turnId = entry.lifecycle.kind === "working" ? getWorkbenchLifecycleTurnId(entry.lifecycle) : null;
+  return turnId ? { kind: "stop" as const, turnId } : { kind: "stop" as const };
+}
 
 export function getThreadRowActions(
   entry: WorkbenchThreadSidebarEntry | WorkbenchPinnedThreadSummaryEntry,

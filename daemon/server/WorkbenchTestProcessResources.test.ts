@@ -47,3 +47,29 @@ test("failed retirement preserves the ownership record and never counts as clean
     assert.ok(await fs.stat(record));
   } finally { await temporary.dispose(); }
 });
+
+test("parent cleanup removes only registered project-owned scenario roots", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-scenario-retirement-");
+  context.after(async () => await temporary.dispose());
+  const source = temporary.path;
+  const fixtures = path.join(source, ".workbench", "test-runs");
+  const owned = path.join(fixtures, "wb-scenario-owned");
+  const unrelated = path.join(fixtures, "other");
+  await fs.mkdir(owned, { recursive: true });
+  await fs.mkdir(unrelated);
+  const resources = await WorkbenchTestProcessResources.create(false, source);
+  const previous = process.env.WORKBENCH_TEST_SERVICE_RECORDS;
+  process.env.WORKBENCH_TEST_SERVICE_RECORDS = resources.file;
+  context.after(() => {
+    if (previous === undefined) delete process.env.WORKBENCH_TEST_SERVICE_RECORDS;
+    else process.env.WORKBENCH_TEST_SERVICE_RECORDS = previous;
+  });
+  await assert.rejects(
+    WorkbenchTestProcessResources.trackWorkspace(source, unrelated),
+    /scenario workspace/u,
+  );
+  await WorkbenchTestProcessResources.trackWorkspace(source, owned);
+  await resources.dispose();
+  await assert.rejects(fs.stat(owned), { code: "ENOENT" });
+  assert.ok(await fs.stat(unrelated));
+});

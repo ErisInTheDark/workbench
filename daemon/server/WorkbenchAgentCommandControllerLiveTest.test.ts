@@ -18,7 +18,7 @@ function child() {
   return process;
 }
 
-test("runs one exact provider scenario and rejects overlap", async () => {
+test("runs one exact provider selection and rejects overlap", async () => {
   const spawned: Array<{ args: string[]; command: string; options: SpawnOptions }> = [];
   const running = child();
   let didSpawn!: () => void;
@@ -34,20 +34,20 @@ test("runs one exact provider scenario and rejects overlap", async () => {
   const execution = controller.execute({
     cwd: "C:/git/web/workbench",
     file: "test/scenarios/thread.scenario.test.ts",
-    provider: "opencode",
+    providers: { opencode: "fake" },
   }, new AbortController().signal);
 
   await spawnedChild;
   await assert.rejects(controller.execute({
     cwd: "C:/git/web/workbench",
     file: "test/scenarios/thread.scenario.test.ts",
-    provider: "codex",
+    providers: { codex: "paid" },
   }, new AbortController().signal), /already running/u);
 
   (running.stdout as PassThrough | null)?.write("journey\n");
   running.emit("close", 0, null);
   assert.equal(await (await execution).text(), "journey\n");
-  assert.deepEqual(spawned[0]?.args.slice(-2), ["opencode", "test/scenarios/thread.scenario.test.ts"]);
+  assert.deepEqual(spawned[0]?.args.slice(-2), ["--opencode=fake", "test/scenarios/thread.scenario.test.ts"]);
 });
 
 test("cancellation retires the exact owned child", async () => {
@@ -67,7 +67,7 @@ test("cancellation retires the exact owned child", async () => {
   const execution = controller.execute({
     cwd: "C:/git/web/workbench",
     file: "test/scenarios/thread.scenario.test.ts",
-    provider: "codex",
+    providers: { codex: "paid" },
   }, abort.signal);
 
   await didSpawn;
@@ -93,7 +93,7 @@ test("explicit cancellation retires the active child", async () => {
   const execution = controller.execute({
     cwd: "C:/git/web/workbench",
     file: "test/scenarios/thread.scenario.test.ts",
-    provider: "opencode",
+    providers: { opencode: "fake" },
   }, new AbortController().signal);
 
   await didSpawn;
@@ -121,7 +121,7 @@ test("cancellation during spawn still retires the child", async () => {
   await assert.rejects(controller.execute({
     cwd: "C:/git/web/workbench",
     file: "test/scenarios/thread.scenario.test.ts",
-    provider: "opencode",
+    providers: { opencode: "paid" },
   }, abort.signal), /cancelled while spawning/u);
   assert.deepEqual(retired, [42]);
 });
@@ -147,7 +147,7 @@ test("cancellation remains owned until the detached service cleanup finishes", a
   const request = {
     cwd: "C:/git/web/workbench",
     file: "test/scenarios/thread.scenario.test.ts",
-    provider: "opencode",
+    providers: { opencode: "paid" },
   };
   const execution = controller.execute(request, new AbortController().signal);
   const rejected = assert.rejects(execution, /cancelled/u);
