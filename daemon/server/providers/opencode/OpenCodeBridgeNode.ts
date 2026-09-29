@@ -9,6 +9,7 @@ import OpenCodeEventStreamController from "./OpenCodeEventStreamController";
 import OpenCodeThreadOperations from "./OpenCodeThreadOperations";
 import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
+import WorkbenchServerSettings from "../../lib/workbench/settings/WorkbenchServerSettings";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import { logError } from "../../process-helpers";
@@ -40,8 +41,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
     });
     const reader = build.get("transcriptReader");
+    const settings = new WorkbenchServerSettings(build.get("database"));
     const managed = new OpenCodeManagedSessionController({
       acquire,
+      readLocalCapabilities: () => settings.readLocalCapabilities(),
       workbenchOrigin: context.localDaemonOrigin,
     });
     const threads = new OpenCodeThreadOperations({

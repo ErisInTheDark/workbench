@@ -12,8 +12,6 @@ import { contextCompactionThreshold } from "workbench-shared/workbench/thread/th
 
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchPromptInstructions } from "./lib/workbench/instructions/WorkbenchPromptFiles";
-import { formatWorkbenchInstructionFilterWarning } from "./lib/workbench/instructions/instruction-context-filter";
-import type { InstructionSourceSpan } from "./lib/workbench/instructions/instruction-file-generation";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import type { JsonRpcRequest } from "./bridge-types";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
@@ -82,7 +80,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
   constructor(
     private readonly bridgeUrl: string,
     workbenchRoot: string,
-    private readonly readLocalCapabilities?: () => Promise<WorkbenchLocalCapabilitySettings>,
+    private readonly readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>,
   ) {
     this.workbenchRoot = path.resolve(workbenchRoot);
   }
@@ -150,25 +148,16 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     if (!promptContext) return message;
     const params = asRecord(message.params);
     // This adapter installs Workbench MCP even before native creation returns an id.
-    const context = { ...promptContext, harness: "codex" as const, skillCatalogPresentation: "references" as const, managedThread: true };
-    const available = await workbenchPromptFiles.listWorkbenchInstructionMechanics(context, this.readLocalCapabilities);
-    const filter = (
-      value: string | null,
-      field: string,
-      sources: readonly InstructionSourceSpan[] = [],
-    ) => workbenchPromptFiles.filterWorkbenchInstructionContent(value, {
-      available,
-      field,
-      harness: "codex",
+    const context = {
+      ...promptContext,
+      harness: "codex" as const,
+      managedThread: true,
       model: typeof params.model === "string" ? params.model : null,
-      onWarning: (warning) => process.stderr.write(`${formatWorkbenchInstructionFilterWarning(warning)}\n`),
-      shell: process.platform === "win32" ? "pwsh" : "bash",
-      sourceSections: value ? [{ content: value, sources }] : undefined,
-    });
+    };
     if (isPromptAugmentedTurnMethod(method)) {
-      const activatedSkillCatalog = filter(
-        await workbenchPromptFiles.buildWorkbenchActivatedSkillCatalog(context),
-        "input.wb:activated-skills",
+      const activatedSkillCatalog = await workbenchPromptFiles.buildWorkbenchManagedThreadActivatedSkills(
+        context,
+        this.readLocalCapabilities,
       );
       if (!activatedSkillCatalog) return message;
       const input = Array.isArray(params.input) ? params.input : [];
@@ -184,20 +173,13 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
       };
     }
 
-    const promptInstructions = await workbenchPromptFiles.buildWorkbenchPromptInstructions(context);
+    const promptInstructions = await workbenchPromptFiles.buildWorkbenchManagedThreadInstructions(
+      context,
+      this.readLocalCapabilities,
+    );
     return {
       ...message,
-      params: this.withMcpConfig(buildWorkbenchOwnedPromptParams(params, {
-        baseInstructions: filter(
-          promptInstructions.baseInstructions,
-          "baseInstructions",
-          promptInstructions.baseInstructionSources,
-        ),
-        developerInstructions: filter(
-          promptInstructions.developerInstructions,
-          "developerInstructions",
-        ),
-      }), context.cwd),
+      params: this.withMcpConfig(buildWorkbenchOwnedPromptParams(params, promptInstructions), context.cwd),
     };
   }
 }

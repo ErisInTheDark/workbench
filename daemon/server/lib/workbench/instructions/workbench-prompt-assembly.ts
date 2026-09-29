@@ -20,7 +20,6 @@ import type {
 } from "workbench-shared/types";
 import {
   buildWorkbenchActivatedSkillCatalog as buildActivatedSkillCatalog,
-  buildWorkbenchSkillBodyCatalog,
   buildWorkbenchSkillCatalog,
   ensureWorkbenchLibrary,
   listWorkbenchLibraryInstructions,
@@ -276,9 +275,7 @@ export async function buildWorkbenchPromptInstructions(context: WorkbenchPromptC
     voice ? Promise.resolve([]) : listProjectSkillDefinitionsForPrompt(context),
     listWorkbenchLibraryInstructions(),
   ]);
-  const skillManifest = voice ? null : context.skillCatalogPresentation === "references"
-    ? await buildWorkbenchSkillCatalog(projectSkills)
-    : await buildWorkbenchSkillBodyCatalog(projectSkills);
+  const skillManifest = voice ? null : await buildWorkbenchSkillCatalog(projectSkills);
   const slots: Record<string, string> = {
     ...(agentDefinition ? buildAgentRuntimeSlots(agentDefinition) : {
       "agent.description": "", "agent.name": "", "agent.path": "", "agent.prompt": "",

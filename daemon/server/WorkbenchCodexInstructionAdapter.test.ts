@@ -38,6 +38,8 @@ function readPromptInstructions(request: JsonRpcRequest) {
   };
 }
 
+const readNoLocalCapabilities = async () => ({ browseRawCommandsEnabled: false });
+
 test("voice assembly omits the selected agent while preserving role-targeted packs", async () => {
   const { buildWorkbenchPromptInstructions, filterWorkbenchInstructionContent } = await import("./lib/workbench/instructions/workbench-prompt-assembly");
   const { default: buildWorkbenchOwnedPromptFields } = await import("./codex-owned-prompt");
@@ -78,7 +80,7 @@ test("voice assembly omits the selected agent while preserving role-targeted pac
 });
 
 test("configured creation, resume and fork retain installed mechanics in the final packet", async () => {
-  const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:4500", process.cwd());
+  const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:4500", process.cwd(), readNoLocalCapabilities);
   await adapter.augment({ method: "thread/start", params: {}, workbenchPromptContext: {} }, "thread/start");
   const override = path.join(testWorkbenchLibraryRoot, "AGENTS.override.md");
   const mechanics = ["task-title", "task-status", "thread-git", "thread-recall", "thread-refresh", "long-waits"];
@@ -109,7 +111,7 @@ test("configured creation, resume and fork retain installed mechanics in the fin
 });
 
 test("context settings configure thread admission without leaking unsupported config into turns", () => {
-  const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", process.cwd());
+  const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", process.cwd(), readNoLocalCapabilities);
   const configuration = {
     cwd: process.cwd(), projectId: "project", roots: [], subagentName: null, threadId: "thread",
     settings: { agentPath: null, agentSource: null, harness: "codex" as const, model: "model", reasoningEffort: null, serviceTier: null, contextWindowTokens: 600_000 },
@@ -126,7 +128,7 @@ test("context settings configure thread admission without leaking unsupported co
 });
 
 test("daemon thread configuration replaces stale caller settings while preserving message intent", () => {
-  const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", process.cwd());
+  const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", process.cwd(), readNoLocalCapabilities);
   const input = [{ type: "text", text: "answer", text_elements: [] }];
   const result = adapter.withThreadConfiguration({
     method: "turn/start",
@@ -153,7 +155,7 @@ test("daemon thread configuration replaces stale caller settings while preservin
 test("start, resume, and fork rebuild one filtered project prefix and disable native project docs", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-codex-project-instructions-");
   const root = temporary.path;
-  const adapter = new WorkbenchCodexInstructionAdapter("ws://0.0.0.0:4500", root);
+  const adapter = new WorkbenchCodexInstructionAdapter("ws://0.0.0.0:4500", root, readNoLocalCapabilities);
   const clientScopes = new Set<string>();
   const prompts: ReturnType<typeof readPromptInstructions>[] = [];
   const roots = [{ id: "project", isPrimary: true, name: "project", relativePath: "project", rootPath: root }];
@@ -249,7 +251,7 @@ test("start, resume, and fork rebuild one filtered project prefix and disable na
 });
 
 test("internal resume inherits the full prompt context from its triggering request", async () => {
-  const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:4500", "C:/workbench");
+  const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:4500", "C:/workbench", readNoLocalCapabilities);
   const local = adapter.createThreadResume({ threadId: "thread" }, { cwd: "C:/workbench", kind: "cwd" });
   const outside = adapter.createThreadResume({ threadId: "thread" }, { cwd: "C:/other", kind: "cwd" });
   const triggeringRequest: JsonRpcRequest = {
@@ -310,7 +312,7 @@ description: Use when the user says /brainstorm.
 ${brainstormMarker}
 `, "utf8");
 
-  const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:4500", root);
+  const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:4500", root, readNoLocalCapabilities);
   const roots = [{ id: "project", isPrimary: true, name: "project", relativePath: "project", rootPath: root }];
   const promptContext = {
     activatedSkillPaths: [iteratePath, iteratePath],

@@ -33,6 +33,7 @@ test("marks managed sessions and refreshes filtered instructions before each pro
       developerInstructions: `developer-${context.model}`,
       activatedSkills: context.activatedSkillPaths?.join(",") ?? null,
     }),
+    readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
   });
 
   assert.deepEqual(controller.creation(), {

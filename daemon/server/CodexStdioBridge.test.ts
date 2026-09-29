@@ -65,6 +65,8 @@ const fixtureIdentityValues = {
 
 const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
 let testWorkbenchLibraryRoot = "";
+
+const readNoLocalCapabilities = async () => ({ browseRawCommandsEnabled: false });
 let testWorkbenchLibraryTemporary: WorkbenchTemporaryDirectory | null = null;
 let databaseImage: Buffer;
 let CodexStdioBridge: typeof import("./CodexStdioBridge.js").default;
@@ -391,7 +393,7 @@ for (const route of ["managed-creation", "internal"] as const) {
           root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
         }),
         handleWorkbenchRequest: rejectWorkbenchRequest,
-        instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+        instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities),
         onNotification() {},
       });
       try {
@@ -1100,7 +1102,7 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
   bridge = new CodexStdioBridge({
     appServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
-    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities),
     onNotification() {},
     resolveProjectFromCwd: async () => null,
   });
@@ -1663,7 +1665,7 @@ test("usage context follows resolved defaults, reloads, overrides and queued mod
         queueMicrotask(() => { void bridge.handleUpstreamMessage({ id: message.id ?? null, result }); });
       },
     } as unknown as CodexAppServer, handleWorkbenchRequest: rejectWorkbenchRequest,
-    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities),
     initialState, restartingAppServer, onNotification() {},
     recordSqliteTranscript: async (batch) => { observations.push(...batch); },
     resolveProjectFromCwd: async () => ({
@@ -2174,7 +2176,7 @@ test("an expired page read cannot begin transcript hydration after the old provi
 test("expired command preparation cannot send through a bridge resumed after rollback", async () => {
   const entered = deferred<void>();
   const release = deferred<void>();
-  const instructions = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", testWorkbenchLibraryRoot);
+  const instructions = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", testWorkbenchLibraryRoot, readNoLocalCapabilities);
   instructions.augment = async message => { entered.resolve(); await release.promise; return message; };
   let sends = 0;
   const bridge = new CodexStdioBridge({
@@ -3828,7 +3830,7 @@ test("fresh first turn prepares its stored profile across reload and failed admi
     appServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
     initialState,
-    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities),
     onNotification() {},
     prepareThreadConfiguration: async (thread, requests) => {
       assert.equal(thread.id, "fresh");
@@ -4033,7 +4035,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
   bridge = new CodexStdioBridge({
     appServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
-    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities),
     onNotification() { events.push("receive:notification"); },
     prepareInputContext: async (threadId, trigger, inject) => {
       assert.equal(threadId, "thread");
@@ -4045,7 +4047,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
     withThreadAdmission: async (thread, requests, admit) => {
       assert.equal(thread.id, "thread");
       events.push("prepare:profile");
-      const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root);
+      const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities);
       const configuration = {
         cwd: root, projectId: fixtureIdentityValues.ProjectId.project, roots: [], subagentName: null, threadId: thread.id,
         settings: {
@@ -4170,7 +4172,7 @@ test("explicit refresh rebuilds the current instruction prefix and prepares MCP 
   const root = temporary.path;
   const agentPath = path.join(testWorkbenchLibraryRoot, "agents", "refresh.md");
   await fs.writeFile(agentPath, "---\nname: refresh test\n---\nOLD REFRESH PREFIX", "utf8");
-  const instructions = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root);
+  const instructions = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities);
   const resumeRequest: JsonRpcRequest = {
     method: "thread/resume", params: { threadId: "thread", cwd: root },
     workbenchPromptContext: { agentPath: "library:agents/refresh.md", agentSource: "library", cwd: root, harness: "codex", threadId: "thread", workflowIds: [] },
@@ -4251,7 +4253,7 @@ test("profile preparation failure prevents native effects for ordinary, detached
   } as unknown as CodexAppServer;
   bridge = new CodexStdioBridge({
     appServer, handleWorkbenchRequest: rejectWorkbenchRequest,
-    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities),
     onNotification() {}, resolveProjectFromCwd: async () => null,
     prepareThreadConfiguration: async () => { throw new Error("Profile persistence failed"); },
   });
@@ -4869,7 +4871,7 @@ test("exact transcript windows await ordered provider recording and Thread Recal
     ...sql.ports,
     appServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
-    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities),
     onNotification() {},
     recordSqliteTranscript: async (observations) => {
       sqliteBatches.push([...observations]);
@@ -5032,7 +5034,7 @@ test("durable transcript and recall materialisation propagate SQLite failure and
       queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result }));
     } } as unknown as CodexAppServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
-    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities),
     onNotification() {},
     recordSqliteTranscript: async (observations) => {
       if (observations.some(observation => observation.kind === "providerTurnScope" && observation.completeTurnIds.length > 0)) {
@@ -5085,7 +5087,7 @@ test("transcript materialisation waits for an admitted live turn to settle", asy
     identities: fixtureIdentities,
     appServer: { send() {} } as unknown as CodexAppServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
-    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities),
     onNotification() {},
     readSqliteTranscriptMaterializedTurnIds: async (_threadId, turnIds) => {
       materializationReads += 1;
@@ -5237,7 +5239,7 @@ test("turn start responses admit the live turn before materialisation reads SQL"
     identities: fixtureIdentities,
     appServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
-    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities),
     onNotification() {},
     readSqliteTranscriptMaterializedTurnIds: async (_threadId, turnIds) => {
       materializationReads += 1;
@@ -5400,7 +5402,7 @@ test("bounded context reads bootstrap unseen threads through one full turn page"
     ...sql.ports,
     appServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
-    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root),
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", root, readNoLocalCapabilities),
     onNotification() {},
     resolveProjectFromCwd: sql.ports.resolveProjectFromCwd,
   });

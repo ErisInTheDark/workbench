@@ -54,6 +54,7 @@ user-owned agent prompt
       "{subagent.identity}",
       "workflow:",
       "{workflow.content}",
+      "{skills.catalog}",
     ].join("\n\n");
     const workflowOverride = "user workflow override: {custom.runtime}\n";
     const gitOverride = "user git override\n";
@@ -226,7 +227,8 @@ user-owned agent prompt
     const workbenchLibrary = require("../../workbench-library") as typeof import("../../workbench-library");
     const skillManifest = await workbenchLibrary.buildWorkbenchSkillManifestInstructions();
     assert.match(skillManifest ?? "", /skill policy revision two/u);
-    assert.match(skillManifest ?? "", /builtin skill revision two/u);
+    assert.match(skillManifest ?? "", /skills[/\\]builtin[/\\]browse[/\\]SKILL\.md/u);
+    assert.doesNotMatch(skillManifest ?? "", /builtin skill revision two/u);
 
     const projectSkillPath = path.join(temporaryProjectRoot, ".agents", "skills", "browse", "SKILL.md");
     await fs.mkdir(path.dirname(projectSkillPath), { recursive: true });

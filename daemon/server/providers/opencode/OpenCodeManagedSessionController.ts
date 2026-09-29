@@ -4,14 +4,12 @@
  * - OpenCodeManagedSessionControllerOptions: injectable managed-session boundaries.
  * - default OpenCodeManagedSessionController: own OpenCode session marking, native command denial, and fresh instructions.
  */
+import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 import {
-  buildWorkbenchActivatedSkillCatalog,
-  buildWorkbenchPromptInstructions,
-  filterWorkbenchInstructionContent,
-  listWorkbenchInstructionMechanics,
+  buildWorkbenchManagedThreadActivatedSkills,
+  buildWorkbenchManagedThreadInstructions,
 } from "../../lib/workbench/instructions/WorkbenchPromptFiles";
-import { formatWorkbenchInstructionFilterWarning } from "../../lib/workbench/instructions/instruction-context-filter";
 
 const NATIVE_COMMAND_ACTIONS = ["bash", "shell"] as const;
 
@@ -43,6 +41,7 @@ interface BuiltInstructions {
 export interface OpenCodeManagedSessionControllerOptions {
   acquire: () => Promise<WorkbenchOpenCodeClient>;
   build?: (context: OpenCodeManagedSessionContext & { harness: "opencode" }) => Promise<BuiltInstructions>;
+  readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>;
   workbenchOrigin?: string;
 }
 
@@ -83,29 +82,20 @@ export default class OpenCodeManagedSessionController {
       cwd: context.cwd,
       harness: context.harness,
       managedThread: true,
+      model: context.model,
       projectId: context.projectId,
-      skillCatalogPresentation: "bodies" as const,
       threadId: context.threadId,
       workbenchOrigin: this.options.workbenchOrigin,
       workflowIds: context.workflowIds,
     };
-    const [instructions, activatedSkills, available] = await Promise.all([
-      buildWorkbenchPromptInstructions(promptContext),
-      buildWorkbenchActivatedSkillCatalog(promptContext),
-      listWorkbenchInstructionMechanics(promptContext),
+    const [instructions, activatedSkills] = await Promise.all([
+      buildWorkbenchManagedThreadInstructions(promptContext, this.options.readLocalCapabilities),
+      buildWorkbenchManagedThreadActivatedSkills(promptContext, this.options.readLocalCapabilities),
     ]);
-    const filter = (content: string | null, field: string) => filterWorkbenchInstructionContent(content, {
-      available,
-      field,
-      harness: "opencode",
-      model: context.model,
-      onWarning: warning => process.stderr.write(`${formatWorkbenchInstructionFilterWarning(warning)}\n`),
-      shell: process.platform === "win32" ? "pwsh" : "bash",
-    });
     return {
-      baseInstructions: filter(instructions.baseInstructions, "baseInstructions"),
-      developerInstructions: filter(instructions.developerInstructions, "developerInstructions"),
-      activatedSkills: filter(activatedSkills, "input.wb:activated-skills"),
+      baseInstructions: instructions.baseInstructions,
+      developerInstructions: instructions.developerInstructions,
+      activatedSkills,
     };
   }
 }

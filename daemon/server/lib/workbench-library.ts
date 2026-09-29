@@ -9,7 +9,7 @@
  * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files. Keywords: agent, prompt, library.
  * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs. Keywords: instructions, universal, bootstrap, fingerprint.
  * - WorkbenchLibraryBootstrapInstructionsOptions: controls duplicate instruction-pack filtering. Keywords: bootstrap, dedupe, codex.
- * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillBodyCatalog/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build harness skill instructions, body and compact catalogs, activated skill bodies, and universal instruction content. Keywords: bootstrap, skills, catalog.
+ * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build harness skill instructions, compact manifest catalogs, activated skill bodies, and universal instruction content. Keywords: bootstrap, skills, catalog.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -493,25 +493,8 @@ function escapeXmlAttribute(value: string) {
     .replace(/>/g, "&gt;");
 }
 
-function buildDetectedSkillBodyCatalog(skills: readonly WorkbenchSkillDefinition[]) {
-  if (!skills.length) {
-    return null;
-  }
-
-  return skills.map((skill) => [
-      `<skill filename="${escapeXmlAttribute(skill.path)}">`,
-      skill.content,
-      "</skill>",
-    ].join("\n")).join("\n");
-}
-
-export async function buildWorkbenchSkillBodyCatalog(projectSkills: readonly WorkbenchSkillDefinition[] = []) {
-  const activeSkills = await listActiveWorkbenchSkillDefinitions(projectSkills);
-  return buildDetectedSkillBodyCatalog(activeSkills);
-}
-
 export async function buildWorkbenchSkillManifestInstructions(projectSkills: WorkbenchSkillDefinition[] = []) {
-  const catalog = await buildWorkbenchSkillBodyCatalog(projectSkills);
+  const catalog = await buildWorkbenchSkillCatalog(projectSkills);
   if (!catalog) return null;
   return createLibraryInstructionFileGeneration().render("wb/mechanics/skills.md", {
     "skills.catalog": catalog,
