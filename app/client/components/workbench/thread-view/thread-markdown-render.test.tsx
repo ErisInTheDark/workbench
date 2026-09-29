@@ -222,6 +222,42 @@ test("thread notices without a title render under a literal notice title", () =>
   assert.doesNotMatch(html, /&lt;notice/u);
 });
 
+test("thread notices accept the color-first attribute order", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    '<notice color="red" title="Breaking change">Update **every caller** before merging.</notice>',
+    "",
+    '<notice color="purple" title="Decision needed">',
+    "The current owner cannot enforce this rule.",
+    "</notice>",
+  ].join("\n"))));
+
+  assert.equal(Array.from(html.matchAll(/data-thread-notice="true"/gu)).length, 2);
+  assert.match(html, /aria-label="Breaking change"/u);
+  assert.match(html, /data-thread-notice-color="red"/u);
+  assert.match(html, /Update <strong>every caller<\/strong> before merging\./u);
+  assert.match(html, /aria-label="Decision needed"/u);
+  assert.match(html, /data-thread-notice-color="purple"/u);
+  assert.doesNotMatch(html, /&lt;notice/u);
+});
+
+test('thread notices accept quotes inside title attributes', () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
+    '<notice color="red" title="Breaking "API" change">Update **every caller** before merging.</notice>',
+    "",
+    '<notice title="Decision "required" now" color="purple">',
+    "The current owner cannot enforce this rule.",
+    "</notice>",
+  ].join("\n"))));
+
+  assert.equal(Array.from(html.matchAll(/data-thread-notice="true"/gu)).length, 2);
+  assert.match(html, /aria-label="Breaking &quot;API&quot; change"/u);
+  assert.match(html, /data-thread-notice-color="red"/u);
+  assert.match(html, /Update <strong>every caller<\/strong> before merging\./u);
+  assert.match(html, /aria-label="Decision &quot;required&quot; now"/u);
+  assert.match(html, /data-thread-notice-color="purple"/u);
+  assert.doesNotMatch(html, /&lt;notice/u);
+});
+
 test("thread notices accept body text beside multiline delimiters", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
     '<notice title="Mixed delimiters" color="yellow">Opening-line **body**.',

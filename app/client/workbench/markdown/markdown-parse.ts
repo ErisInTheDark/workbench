@@ -27,9 +27,9 @@ import {
     parsePlaintextProjectFileLink,
 } from "./markdown-file-autolinks";
 import {
-    type WorkspaceFileLinkRoot,
     normalizeMarkdownHref,
     resolveProjectFileLinkTarget,
+    type WorkspaceFileLinkRoot,
 } from "./markdown-links";
 
 export interface ParsedListItem {
@@ -103,7 +103,8 @@ export interface MarkdownParseOptions {
 
 const THREAD_STATE_CHANGE_TAG_PATTERN = /^<set-state\s+mode=(["'])((?:(?!\1).)*)\1\s*\/>$/;
 const THREAD_STATE_CHANGE_BOUNDARY_PATTERN = /<set-state\s+mode=(["'])((?:(?!\1).)*)\1\s*\/>/g;
-const THREAD_NOTICE_OPEN_TAG_BOUNDARY_PATTERN = /<notice(?: title="[^"\r\n]*")? color="[a-z][a-z0-9-]*">/;
+const THREAD_NOTICE_OPEN_ATTRIBUTES_PATTERN = /(?:(?: color="([a-z][a-z0-9-]*)" title="([^\r\n]*)")|(?: title="([^\r\n]*)")? color="([a-z][a-z0-9-]*)")/;
+const THREAD_NOTICE_OPEN_TAG_BOUNDARY_PATTERN = new RegExp(`<notice${THREAD_NOTICE_OPEN_ATTRIBUTES_PATTERN.source}>`);
 const THREAD_NOTICE_CLOSE_TAG_BOUNDARY_PATTERN = /<\/notice>/;
 const THREAD_DETAILS_TAG_BOUNDARY_PATTERN = /<\/?details(?: open)?>/;
 const THREAD_BLOCK_TAG_BOUNDARY_PATTERN = new RegExp(
@@ -1183,7 +1184,7 @@ function isThreadStrayPlanCloseLine(line: string, options: MarkdownParseOptions)
     && isThreadPlanCloseLine(line);
 }
 
-const THREAD_NOTICE_OPEN_LINE_PATTERN = /^<notice(?: title="([^"\r\n]*)")? color="([a-z][a-z0-9-]*)">\s*$/u;
+const THREAD_NOTICE_OPEN_LINE_PATTERN = new RegExp(`^<notice${THREAD_NOTICE_OPEN_ATTRIBUTES_PATTERN.source}>\\s*$`, "u");
 const THREAD_NOTICE_CLOSE_LINE_PATTERN = /^<\/notice>\s*$/u;
 
 function isThreadNoticeOpenLine(line: string, options: MarkdownParseOptions) {
@@ -1225,10 +1226,10 @@ function parseThreadNoticeBlock(lines: string[], startIndex: number, options: Ma
     if (THREAD_NOTICE_CLOSE_LINE_PATTERN.test(line.trim())) {
       return {
         block: {
-          color: openingMatch[2],
+          color: openingMatch[1] ?? openingMatch[4],
           source: lines.slice(startIndex, index + 1).join("\n"),
           text: noticeLines.join("\n").trim(),
-          title: openingMatch[1]?.trim() || "notice",
+          title: (openingMatch[2] ?? openingMatch[3])?.trim() || "notice",
           type: "notice" as const,
         },
         nextIndex: index + 1,
