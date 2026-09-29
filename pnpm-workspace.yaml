@@ -4,6 +4,8 @@ packages:
   - package
   - shared
 
+runtime: false
+
 allowBuilds:
   '@google/genai': false
   '@parcel/watcher': true
