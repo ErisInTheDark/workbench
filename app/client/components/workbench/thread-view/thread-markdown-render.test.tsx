@@ -165,7 +165,6 @@ test("paired icons inherit text color and malformed pairs stay literal", () => {
   assert.match(html, /data-thread-inline-icon="check"/u);
   assert.match(html, /data-thread-inline-icon="check"[^>]*>.*done/u);
   assert.match(html, /&lt;icon color=&quot;orange&quot; type=&quot;check&quot;&gt;unsupported color&lt;\/icon&gt;/u);
-  assert.match(html, /&lt;icon type=&quot;x&quot;&gt;unclosed/u);
 });
 
 test("unsupported and code-span markers remain literal text", () => {

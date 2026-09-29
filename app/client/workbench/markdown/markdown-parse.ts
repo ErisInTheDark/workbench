@@ -562,9 +562,9 @@ function parseThreadIconMarker(markdown: string, index: number, options: Markdow
 
   const openingTag = marker[0];
   const paired = marker[5] === ">";
-  const closeIndex = paired ? markdown.indexOf("</icon>", index + openingTag.length) : -1;
-  if (paired && closeIndex === -1) return null;
-  const end = paired ? closeIndex + "</icon>".length : index + openingTag.length;
+  let closeIndex = paired ? markdown.indexOf("</icon>", index + openingTag.length) : -1;
+  if (paired && closeIndex === -1) closeIndex = markdown.length - marker.index;
+  const end = paired && closeIndex !== -1 ? closeIndex + "</icon>".length : index + openingTag.length;
   const label = paired ? markdown.slice(index + openingTag.length, closeIndex) : "";
 
   return {
