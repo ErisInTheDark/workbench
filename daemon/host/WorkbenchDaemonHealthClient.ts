@@ -1,9 +1,9 @@
 /*
  * Exports:
  * - WorkbenchDaemonHealthClientOptions: injectable socket and timer edge for runner tests.
- * - default WorkbenchDaemonHealthClient: perform one bounded typed health round trip over the existing shared socket client.
+ * - default WorkbenchDaemonHealthClient: perform one bounded typed health round trip over the RPC transport.
  */
-import WorkbenchSocketClient from "../../shared/workbench/WorkbenchSocketClient.ts";
+import WorkbenchRpcSocketClient from "../../shared/workbench/WorkbenchRpcSocketClient.ts";
 import { isWorkbenchRpcFailure, type WorkbenchRpcResponse } from "../../shared/workbench/workbench-rpc.ts";
 import {
   WORKBENCH_DAEMON_HEALTH_METHOD,
@@ -11,7 +11,7 @@ import {
 } from "../../shared/workbench/daemon-health.ts";
 
 interface HealthSocketClient {
-  connectSocket(url: string): Promise<void>;
+  connect(url: string): Promise<void>;
   dispose(): void;
   sendRequest(
     message: { method: string; params: object },
@@ -33,7 +33,9 @@ export default class WorkbenchDaemonHealthClient {
 
   constructor(options: WorkbenchDaemonHealthClientOptions = {}) {
     this.cancelTimer = options.clearTimeout ?? globalThis.clearTimeout;
-    this.createClient = options.createClient ?? (() => new WorkbenchSocketClient());
+    this.createClient = options.createClient ?? (() => new WorkbenchRpcSocketClient(async () => {
+      throw new Error("An explicit daemon health endpoint is required.");
+    }));
     this.scheduleTimer = options.setTimeout ?? globalThis.setTimeout;
   }
 
@@ -72,7 +74,7 @@ export default class WorkbenchDaemonHealthClient {
   }
 
   private async request(client: HealthSocketClient, url: string): Promise<WorkbenchRpcResponse<unknown>> {
-    await client.connectSocket(url);
+    await client.connect(url);
     return await client.sendRequest({
       method: WORKBENCH_DAEMON_HEALTH_METHOD,
       params: {},

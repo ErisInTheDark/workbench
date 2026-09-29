@@ -23,7 +23,7 @@ function fixture(response: Promise<WorkbenchRpcResponse<unknown>>) {
   const urls: string[] = [];
   const client = new WorkbenchDaemonHealthClient({
     createClient: () => ({
-      connectSocket: async (url) => { urls.push(url); },
+      connect: async (url) => { urls.push(url); },
       dispose: () => { disposed += 1; },
       sendRequest: async (message) => {
         requests.push(message);
@@ -60,7 +60,7 @@ test("bounds and cancels an unsettled health request", async () => {
   const client = new WorkbenchDaemonHealthClient({
     clearTimeout: () => {},
     createClient: () => ({
-      connectSocket: async () => {},
+      connect: async () => {},
       dispose: () => { disposed += 1; },
       sendRequest: async () => await pending.promise,
     }),

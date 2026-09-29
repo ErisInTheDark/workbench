@@ -39,6 +39,11 @@ export default class WorkbenchForegroundHost {
     return this.options.read?.() ?? readServiceEndpoint(path.join(this.options.dataRoot, "service", "runtime.json"));
   }
 
+  private warnAttachmentFailure(stage: string, error: unknown) {
+    const message = (error instanceof Error ? error.message : String(error)).replace(/[\r\n]/gu, " ").slice(0, 512);
+    this.options.warn(`Foreground ${stage} failed: ${message}`);
+  }
+
   async run() {
     if (this.running || this.closed) throw new Error("Foreground host has already started or closed.");
     this.running = true;
@@ -99,7 +104,8 @@ export default class WorkbenchForegroundHost {
         if (!endpoint || endpoint.pid !== record.pid) throw new Error("Foreground readiness does not match its owned host.");
         await (this.options.verify ?? verifyServiceEndpoint)(endpoint, this.cancellation.signal);
         if (this.closed) return;
-        await this.control?.close();
+        try { await this.control?.close(); }
+        catch (error) { this.warnAttachmentFailure("retired control cleanup", error); }
         this.endpoint = null;
         const control = this.options.createControl?.() ?? new WorkbenchServiceClient({
           endpointPath: path.join(this.options.dataRoot, "service", "runtime.json"), warn: this.options.warn,
@@ -108,7 +114,8 @@ export default class WorkbenchForegroundHost {
         await control.start();
         if (!this.closed) {
           this.endpoint = endpoint;
-          await control.request({ method: "service/daemon/wake", retry: false });
+          try { await control.request({ method: "service/daemon/wake", retry: false }); }
+          catch (error) { this.warnAttachmentFailure("daemon wake", error); }
         }
       }).catch(error => {
         if (this.closed) return;

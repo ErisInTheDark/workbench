@@ -79,6 +79,107 @@ for (const platform of ["win32", "linux"] as const) {
   });
 }
 
+test("replacement keeps foreground ownership when the retired control cannot close cleanly", async () => {
+  const child = new EventEmitter() as ChildProcess;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin.once("finish", () => child.emit("close", 0, null));
+  const wakes = [event(), event()];
+  const spawned = event();
+  const closeAttempted = event();
+  const warned = event();
+  const warnings: string[] = [];
+  let readCount = 0;
+  let controls = 0;
+  const replacement = { ...endpoint, instanceId: "30e59606-6ba9-4cd6-99ac-3dbec9083651", pid: 12346 };
+  const host = new WorkbenchForegroundHost({
+    root: "/repo", dataRoot: "/data", platform: "win32", environment: {},
+    output: () => {}, warn: message => { warnings.push(message); warned.resolve(); },
+    read: async () => readCount++ === 0 ? null : readCount === 2 ? endpoint : replacement,
+    verify: async () => {},
+    spawn: () => { spawned.resolve(); return child; },
+    createControl: () => {
+      const generation = controls++;
+      return {
+        start: async () => {},
+        request: async intent => {
+          if (intent.method === "service/daemon/wake") wakes[generation]?.resolve();
+          return { kind: "ok" as const, id: endpoint.instanceId };
+        },
+        close: async () => {
+          if (generation === 0) {
+            closeAttempted.resolve();
+            throw new Error("retired endpoint vanished");
+          }
+        },
+      };
+    },
+  });
+  const running = host.run();
+  void running.catch(() => {});
+  try {
+    await spawned.promise;
+    child.stdout.emit("data", Buffer.from(`\u001eWORKBENCH_HOST_V1 ${JSON.stringify({ pid: endpoint.pid })}\n`));
+    await wakes[0]!.promise;
+    child.stdout.emit("data", Buffer.from(`\u001eWORKBENCH_HOST_V1 ${JSON.stringify({ pid: replacement.pid })}\n`));
+    await closeAttempted.promise;
+    await warned.promise;
+    assert.equal(child.stdin.writableEnded, false);
+    await wakes[1]!.promise;
+    assert.ok(warnings.some(message => message.includes("retired endpoint vanished")));
+    await host.stop();
+    await running;
+  } finally {
+    child.stdin.end();
+  }
+});
+
+test("a failed daemon wake leaves the verified foreground host available for retry", async () => {
+  const child = new EventEmitter() as ChildProcess;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin.once("finish", () => child.emit("close", 0, null));
+  const attempted = event();
+  const spawned = event();
+  const warned = event();
+  const warnings: string[] = [];
+  let readCount = 0;
+  const host = new WorkbenchForegroundHost({
+    root: "/repo", dataRoot: "/data", platform: "win32", environment: {},
+    output: () => {}, warn: message => { warnings.push(message); warned.resolve(); },
+    read: async () => readCount++ === 0 ? null : endpoint,
+    verify: async () => {},
+    spawn: () => { spawned.resolve(); return child; },
+    createControl: () => ({
+      start: async () => {},
+      request: async intent => {
+        if (intent.method === "service/daemon/wake") {
+          attempted.resolve();
+          throw new Error("daemon startup failed");
+        }
+        return { kind: "ok" as const, id: endpoint.instanceId };
+      },
+      close: async () => {},
+    }),
+  });
+  const running = host.run();
+  void running.catch(() => {});
+  try {
+    await spawned.promise;
+    child.stdout.emit("data", Buffer.from(`\u001eWORKBENCH_HOST_V1 ${JSON.stringify({ pid: endpoint.pid })}\n`));
+    await attempted.promise;
+    await warned.promise;
+    assert.equal(child.stdin.writableEnded, false);
+    assert.ok(warnings.some(message => message.includes("daemon startup failed")));
+    await host.stop();
+    await running;
+  } finally {
+    child.stdin.end();
+  }
+});
+
 test("foreground emergency input closes its owner pipe while graceful control is stuck", async () => {
   const child = new EventEmitter() as ChildProcess;
   child.stdin = new PassThrough();
