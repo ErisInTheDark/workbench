@@ -551,10 +551,7 @@ impl DesktopAppController {
         let entry_path = self.repository_root_path.join("app").join("server").join("index.ts");
         require_file(&tsx_path)?;
         require_file(&entry_path)?;
-        let node_path = self.repository_root_path.join("node_modules").join(".bin")
-            .join(if cfg!(windows) { "node.exe" } else { "node" });
-        require_file(&node_path)?;
-        let mut command = Command::new(node_path);
+        let mut command = Command::new("node");
         command
             .arg("--disable-warning=ExperimentalWarning")
             .arg(tsx_path)

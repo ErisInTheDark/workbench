@@ -4,7 +4,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import SetupCommand from "./SetupCommand.mjs";
-import { access } from "node:fs/promises";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -16,10 +15,7 @@ try {
       throw new Error("Managed threads cannot launch or configure Workbench services.");
     }
     const entry = view ? "package/view.ts" : ["start", "shortcut"].includes(command) ? "app/server/desktop.ts" : "daemon/host/connect.ts";
-    const node = path.join(root, "node_modules", ".bin", process.platform === "win32" ? "node.exe" : "node");
-    try { await access(node); }
-    catch (error) { throw new Error("The checkout's Node runtime is unavailable. Run pnpm install in the Workbench repository.", { cause: error }); }
-    await new SetupCommand().run(node, [
+    await new SetupCommand().run(process.execPath, [
       "--disable-warning=ExperimentalWarning", "--import", "tsx", path.join(root, entry), ...(view ? args.slice(1) : [command]),
     ], { cwd: root, interactive: view });
   } else {
