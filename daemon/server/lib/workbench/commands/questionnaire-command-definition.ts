@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchRequestUserInputSchema: validate and describe public questionnaire fields without a fixed header-length cap. Keywords: questionnaire, command, schema, header, freeform.
+ * - WorkbenchRequestUserInputSchema: validate and describe public questionnaire fields with repairable question identity and no option cap. Keywords: questionnaire, command, schema, header, freeform.
  * - WorkbenchRequestUserInputCommandSchema/WorkbenchRequestUserInputCommandInput: validate one trusted questionnaire command request with stable replay identity. Keywords: questionnaire, caller, cwd, reload.
  * - WORKBENCH_QUESTIONNAIRE_COMMANDS: expose the steer-safe, reload-preserved request_user_input Code Mode long wait. Keywords: questionnaire, MCP, wait, Code Mode.
  */
@@ -21,14 +21,14 @@ const optionSchema = z.object({
   label: requiredText,
 }).strict();
 const questionSchema = z.object({
-  header: requiredText.describe("Short topic label; hidden for a single question."),
-  id: requiredText,
-  options: z.array(optionSchema).max(3),
+  header: z.string().optional().describe("Short topic label; hidden for a single question."),
+  id: requiredText.optional().describe("Answer key for the response; generated when omitted."),
+  options: z.array(optionSchema),
   question: requiredText.describe("Full question text; used as the title for a single question."),
 }).strict();
 
 export const WorkbenchRequestUserInputSchema = z.object({
-  questions: z.array(questionSchema).min(1).max(3),
+  questions: z.array(questionSchema).min(1),
 }).strict();
 
 export const WorkbenchRequestUserInputCommandSchema = WorkbenchRequestUserInputSchema.extend({

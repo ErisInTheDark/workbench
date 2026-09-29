@@ -10,7 +10,8 @@ import { randomUUID } from "node:crypto";
 import type WorkbenchCommandApprovalController from "./WorkbenchCommandApprovalController";
 import { canonicalApprovalWorkdir, COMMAND_APPROVAL_CONFIRMATION, hasApprovalConfirmation, matchesApprovalPrefix, parseApprovalCommand } from "./lib/workbench/command-approval-prefix";
 import { getPackageScriptPrefix } from "./lib/workbench/package-script-prefixes";
-import { hasWorkbenchApprovalDecisionSelection } from "workbench-shared/workbench/thread/thread-user-input-requests";
+import { hasWorkbenchApprovalDecisionSelection, WORKBENCH_APPROVAL_ALLOW_ONCE_LABEL, WORKBENCH_APPROVAL_ALLOW_SESSION_LABEL, WORKBENCH_APPROVAL_DECISION_QUESTION_ID, WORKBENCH_APPROVAL_DECLINE_LABEL } from "workbench-shared/workbench/thread/thread-user-input-requests";
+import { buildWorkbenchApprovalRequest, buildWorkbenchQuestionnaireRequest } from "workbench-shared/workbench/thread/thread-questionnaire-request";
 import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadLaunchReadSchema } from "workbench-shared/workbench/thread/thread-launch";
 import type { WorkbenchContextTrigger } from "workbench-shared/workbench/provider/provider-context";
@@ -42,12 +43,11 @@ import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-se
 import type { ThreadResumeResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadResumeResponse";
 import { getCurrentInProgressTurn, isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type { ToolRequestUserInputParams } from "workbench-shared/codex/generated/app-server/v2/ToolRequestUserInputParams";
-import type { ToolRequestUserInputQuestion } from "workbench-shared/codex/generated/app-server/v2/ToolRequestUserInputQuestion";
 import type { ToolRequestUserInputResponse } from "workbench-shared/codex/generated/app-server/v2/ToolRequestUserInputResponse";
 import type { TurnSteerResponse } from "workbench-shared/codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { WorkbenchThreadHydrationRequest } from "./lib/codex/thread-hydration";
-import type { WorkbenchApprovalCommandContext, WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry, WorkbenchUserInputQuestion, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
+import type { WorkbenchApprovalCommandContext, WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 import type { AgentEndpointProjectResolver } from "./lib/workbench/project/agent-endpoint-project";
 import {
   readWorkbenchFileChangeFailureMarker,
@@ -325,10 +325,6 @@ type PendingCodexUserInputRequest =
 
 type ApprovalDecisionChoice = "allow-once" | "allow-session" | "decline";
 
-const APPROVAL_DECISION_QUESTION_ID = "decision";
-const APPROVAL_ALLOW_ONCE_LABEL = "Allow once";
-const APPROVAL_ALLOW_SESSION_LABEL = "Allow for session";
-const APPROVAL_DECLINE_LABEL = "Decline";
 const WORKBENCH_REQUEST_SOURCE_FIELD = "workbenchRequestSource";
 const WORKBENCH_THREAD_HYDRATION_FIELD = "workbenchThreadHydration";
 const WORKBENCH_THREAD_CONTEXT_ENTRIES_FIELD = "workbenchThreadContextEntries";
@@ -453,87 +449,21 @@ function shouldCapturePollingTranscript(method: string | null, requestSource: Wo
   }
 }
 
-function normalizeQuestionId(value: string | null, index: number) {
-  const sanitized = (value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return sanitized || `question-${index + 1}`;
-}
-
-function normalizeQuestionOptions(options: ToolRequestUserInputQuestion["options"]) {
-  if (!Array.isArray(options)) {
-    return [];
-  }
-
-  return options.map((option) => {
-    const label = option.label.trim();
-    if (!label) {
-      return null;
-    }
-
-    return {
-      description: option.description.trim(),
-      label,
-    };
-  }).filter((option): option is WorkbenchUserInputQuestion["options"][number] => option !== null);
-}
-
-function normalizeQuestion(
-  question: ToolRequestUserInputQuestion,
-  index: number,
-): WorkbenchUserInputQuestion | null {
-  const header = question.header.trim();
-  const questionText = question.question.trim();
-  const options = normalizeQuestionOptions(question.options);
-  if (!header && !questionText && !options.length) {
-    return null;
-  }
-
-  return {
-    allowOther: false,
-    header,
-    id: normalizeQuestionId(question.id, index),
-    isSecret: question.isSecret,
-    options,
-    question: questionText || header || `Question ${index + 1}`,
-  };
-}
-
-function createFallbackQuestion(): WorkbenchUserInputQuestion {
-  return {
-    allowOther: false,
-    header: "Question 1",
-    id: "question-1",
-    isSecret: false,
-    options: [],
-    question: "How should Codex continue?",
-  };
-}
-
 function normalizeQuestionnaireRequest(
   params: ToolRequestUserInputParams,
   requestKey: string,
 ): WorkbenchUserInputRequest {
-  const questions = params.questions
-    .map((question, index) => normalizeQuestion(question, index))
-    .filter((question): question is WorkbenchUserInputQuestion => question !== null)
-    .slice(0, 3);
-  const normalizedQuestions = questions.length ? questions : [createFallbackQuestion()];
-  const singleQuestion = normalizedQuestions.length === 1 ? normalizedQuestions[0] : null;
-
-  return {
+  return buildWorkbenchQuestionnaireRequest({
     id: `codex:${params.threadId}:${requestKey}`,
-    questions: normalizedQuestions,
-    submitLabel: "Submit response",
-    summary: singleQuestion ? "" : "The agent is paused until you provide a response.",
-    title: singleQuestion?.question.trim() || "Follow-up questions",
-  };
-}
-
-function createApprovalQuestionText(prompt: string, details: Array<string | null>) {
-  return [prompt, ...details.filter((value): value is string => Boolean(value?.trim()))].join("\n\n");
+    questions: params.questions.map((question) => ({
+      allowOther: question.isOther,
+      header: question.header,
+      id: question.id,
+      isSecret: question.isSecret,
+      options: question.options ?? [],
+      question: question.question,
+    })),
+  });
 }
 
 function createApprovalDetail(label: string, value: string | null | undefined) {
@@ -600,23 +530,6 @@ function describeRequestedPermissions(permissions: RequestPermissionProfile) {
   return sections.length ? sections.join("\n\n") : null;
 }
 
-function createApprovalQuestionOptions(actionLabel: string) {
-  return [
-    {
-      description: `Approve this ${actionLabel} just for the current action.`,
-      label: APPROVAL_ALLOW_ONCE_LABEL,
-    },
-    {
-      description: `Approve this ${actionLabel} for the rest of the session.`,
-      label: APPROVAL_ALLOW_SESSION_LABEL,
-    },
-    {
-      description: `Do not approve this ${actionLabel}.`,
-      label: APPROVAL_DECLINE_LABEL,
-    },
-  ] satisfies WorkbenchUserInputQuestion["options"];
-}
-
 function createApprovalRequest(
   threadId: string,
   requestKey: string,
@@ -634,21 +547,14 @@ function createApprovalRequest(
     title: string;
   },
 ): WorkbenchUserInputRequest {
-  return {
-    id: `codex:${threadId}:${requestKey}`,
+  return buildWorkbenchApprovalRequest({
+    actionLabel,
     approval,
-    questions: [{
-      allowOther: false,
-      header: "Approval",
-      id: APPROVAL_DECISION_QUESTION_ID,
-      isSecret: false,
-      options: createApprovalQuestionOptions(actionLabel),
-      question: createApprovalQuestionText(prompt, details),
-    }],
-    submitLabel: "Submit response",
-    summary: "",
+    details,
+    id: `codex:${threadId}:${requestKey}`,
+    prompt,
     title,
-  };
+  });
 }
 
 function createCommandApprovalContext({
@@ -792,14 +698,14 @@ function toToolRequestUserInputResponse(response: WorkbenchUserInputResponse): T
 }
 
 function readApprovalDecision(response: WorkbenchUserInputResponse) {
-  const answers = response.answers[APPROVAL_DECISION_QUESTION_ID]?.answers ?? [];
-  if (answers.includes(APPROVAL_ALLOW_ONCE_LABEL)) {
+  const answers = response.answers[WORKBENCH_APPROVAL_DECISION_QUESTION_ID]?.answers ?? [];
+  if (answers.includes(WORKBENCH_APPROVAL_ALLOW_ONCE_LABEL)) {
     return "allow-once" satisfies ApprovalDecisionChoice;
   }
-  if (answers.includes(APPROVAL_ALLOW_SESSION_LABEL)) {
+  if (answers.includes(WORKBENCH_APPROVAL_ALLOW_SESSION_LABEL)) {
     return "allow-session" satisfies ApprovalDecisionChoice;
   }
-  if (answers.includes(APPROVAL_DECLINE_LABEL)) {
+  if (answers.includes(WORKBENCH_APPROVAL_DECLINE_LABEL)) {
     return "decline" satisfies ApprovalDecisionChoice;
   }
 
@@ -2612,12 +2518,12 @@ export default class CodexStdioBridge {
         pending.savedChoices = { projectId, workdir, candidates };
         pending.request = {
           ...pending.request,
-          questions: pending.request.questions.map(question => question.id !== APPROVAL_DECISION_QUESTION_ID ? question : {
+          questions: pending.request.questions.map(question => question.id !== WORKBENCH_APPROVAL_DECISION_QUESTION_ID ? question : {
             ...question,
-            options: [...question.options.filter(option => option.label !== APPROVAL_DECLINE_LABEL), ...candidates.map(candidate => ({
+            options: [...question.options.filter(option => option.label !== WORKBENCH_APPROVAL_DECLINE_LABEL), ...candidates.map(candidate => ({
               label: candidate.label,
               description: `Remember for this project in ${params.cwd}. Includes trailing arguments and future script contents; explicit single-command confirmation is required.`,
-            })), ...question.options.filter(option => option.label === APPROVAL_DECLINE_LABEL)],
+            })), ...question.options.filter(option => option.label === WORKBENCH_APPROVAL_DECLINE_LABEL)],
           }),
         };
       } catch (error) {
@@ -3277,7 +3183,7 @@ export default class CodexStdioBridge {
         throw new Error("That command approval is not awaiting a user decision.");
       }
       const savedChoices = pendingRequest.kind === "commandExecutionApproval" ? pendingRequest.savedChoices : undefined;
-      const answers = resolvedResponse.response.answers[APPROVAL_DECISION_QUESTION_ID]?.answers ?? [];
+      const answers = resolvedResponse.response.answers[WORKBENCH_APPROVAL_DECISION_QUESTION_ID]?.answers ?? [];
       const persistent = savedChoices?.candidates.find(candidate => answers.includes(candidate.label));
       const result = persistent ? { decision: "accept" as const } : this.buildApprovalResponse(pendingRequest, resolvedResponse.response);
       await this.collectInputContext(NativeThreadIdSchema.parse(pendingRequest.threadId), "answer", this.generation.signal);

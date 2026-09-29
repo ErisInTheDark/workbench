@@ -428,15 +428,15 @@ test("questionnaire CLI reports field validation separately from malformed JSON"
   const parse = (source: string) => parseWorkbenchAgentCliCommand([
     "request", "user", "input", "--questions-json", source,
   ], { callerThreadId: "thread/1", cwd: "C:/workspace" });
-  const emptyHeader = await parse(JSON.stringify([{
-    header: " ",
-    id: "approval",
+  const blankQuestion = await parse(JSON.stringify([{
+    header: "details",
+    id: "details",
     options: [],
-    question: "Should the approved implementation proceed?",
+    question: "  ",
   }]));
-  assert.equal(emptyHeader.kind, "error");
-  assert.match(emptyHeader.error, /header/u);
-  assert.doesNotMatch(emptyHeader.error, /requires --questions-json to contain/u);
+  assert.equal(blankQuestion.kind, "error");
+  assert.match(blankQuestion.error, /question/u);
+  assert.doesNotMatch(blankQuestion.error, /requires --questions-json to contain/u);
 
   const malformed = await parse("[");
   assert.equal(malformed.kind, "error");
@@ -480,17 +480,6 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     path: "/api/request-user-input",
     responseKind: "json",
   });
-  assert.equal((await parseWorkbenchAgentCliCommand([
-    "request", "user", "input", "--questions-json", JSON.stringify([...questions, ...questions, ...questions, ...questions]),
-  ], { callerThreadId: "thread/1", cwd: "C:/workspace" })).kind, "error");
-  assert.equal((await parseWorkbenchAgentCliCommand([
-    "request", "user", "input", "--questions-json", JSON.stringify([{ ...questions[0], options: [
-      { description: "", label: "one" },
-      { description: "", label: "two" },
-      { description: "", label: "three" },
-      { description: "", label: "four" },
-    ] }]),
-  ], { callerThreadId: "thread/1", cwd: "C:/workspace" })).kind, "error");
 
   const title = await parseWorkbenchAgentCliCommand([
     "task", "set", "--title", "A title", "--current-title", "Current title",

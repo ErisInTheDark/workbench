@@ -7,6 +7,7 @@
 import { useState, type ReactNode } from "react";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { repairQuestionnaireQuestion } from "workbench-shared/workbench/thread/thread-questionnaire-request";
 import type {
   WorkbenchUserInputOption,
   WorkbenchUserInputQuestion,
@@ -56,27 +57,18 @@ function asBoolean (value: unknown) {
   return typeof value === "boolean" ? value : false;
 }
 
-function createFallbackQuestionId (index: number) {
-  return `question-${index + 1}`;
-}
-
-function parseQuestionOptions (value: unknown) {
+function parseQuestionOptions (value: unknown): WorkbenchUserInputOption[] {
   if (!Array.isArray(value)) {
     return [];
   }
 
   return value.map((entry) => {
     const record = asRecord(entry);
-    const label = asString(record?.label)?.trim() ?? "";
-    if (!label) {
-      return null;
-    }
-
     return {
-      description: asString(record?.description)?.trim() ?? "",
-      label,
-    } satisfies WorkbenchUserInputOption;
-  }).filter((entry): entry is WorkbenchUserInputOption => entry !== null);
+      description: asString(record?.description) ?? "",
+      label: asString(record?.label) ?? "",
+    };
+  });
 }
 
 function parseQuestion (value: unknown, index: number) {
@@ -85,23 +77,15 @@ function parseQuestion (value: unknown, index: number) {
     return null;
   }
 
-  const header = asString(record.header)?.trim() ?? "";
-  const questionText = asString(record.question)?.trim() ?? "";
-  const options = parseQuestionOptions(record.options);
-  if (!header && !questionText && !options.length) {
-    return null;
-  }
-
-  const parsedQuestion: WorkbenchUserInputQuestion = {
-    allowOther: false,
-    header,
-    id: asString(record.id)?.trim() || createFallbackQuestionId(index),
+  return repairQuestionnaireQuestion(index, {
+    allowOther: typeof record.allowOther === "boolean" ? record.allowOther
+      : typeof record.isOther === "boolean" ? record.isOther : undefined,
+    header: asString(record.header),
+    id: asString(record.id),
     isSecret: asBoolean(record.isSecret),
-    options,
-    question: questionText,
-  };
-
-  return parsedQuestion;
+    options: parseQuestionOptions(record.options),
+    question: asString(record.question),
+  });
 }
 
 function parseQuestionnaireRequest (value: unknown, requestId: string) {

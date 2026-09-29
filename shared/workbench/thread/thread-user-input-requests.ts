@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_APPROVAL_DECISION_QUESTION_ID: stable approval decision question id. Keywords: questionnaire, approval, decision.
+ * - WORKBENCH_APPROVAL_ALLOW_ONCE_LABEL/WORKBENCH_APPROVAL_ALLOW_SESSION_LABEL/WORKBENCH_APPROVAL_DECLINE_LABEL: shared approval option vocabulary. Keywords: questionnaire, approval, labels.
  * - WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER: UI-hidden accepted/declined context around custom approval notes. Keywords: approval, note, tag, wrapper.
  * - isWorkbenchApprovalDecisionQuestion: detect Workbench approval option questions. Keywords: questionnaire, approval, options.
  * - isWorkbenchApprovalRequest: detect fixed-option Workbench approval requests. Keywords: questionnaire, approval, guard.
@@ -20,8 +21,14 @@ export const WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER = defineTagWrapper("wb:run-outs
   attributes: ["type"] as const,
 });
 
-const WORKBENCH_APPROVAL_ACCEPT_LABELS = new Set(["Allow once", "Allow for session"]);
-const WORKBENCH_APPROVAL_DECLINE_LABEL = "Decline";
+export const WORKBENCH_APPROVAL_ALLOW_ONCE_LABEL = "Allow once";
+export const WORKBENCH_APPROVAL_ALLOW_SESSION_LABEL = "Allow for session";
+export const WORKBENCH_APPROVAL_DECLINE_LABEL = "Decline";
+
+const WORKBENCH_APPROVAL_ACCEPT_LABELS = new Set([
+  WORKBENCH_APPROVAL_ALLOW_ONCE_LABEL,
+  WORKBENCH_APPROVAL_ALLOW_SESSION_LABEL,
+]);
 const WORKBENCH_APPROVAL_OPTION_LABELS = new Set([
   ...WORKBENCH_APPROVAL_ACCEPT_LABELS,
   WORKBENCH_APPROVAL_DECLINE_LABEL,

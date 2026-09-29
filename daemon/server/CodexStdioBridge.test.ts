@@ -2936,6 +2936,37 @@ test("native questionnaire resolution during context collection prevents a stale
   } finally { await bridge.disposeImmediately(); }
 });
 
+test("questionnaire wire input keeps every question and repairs identity at the boundary", async () => {
+  const notifications: JsonRpcNotification[] = [];
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification: notification => { notifications.push(notification); },
+    resolveProjectFromCwd: async () => null,
+  });
+  try {
+    await bridge.handleUpstreamMessage({
+      id: "questionnaire", method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread", turnId: "turn", itemId: "item",
+        questions: [
+          { id: "", header: "", isOther: true, isSecret: false, options: [{ description: "", label: "yes" }, { description: "", label: "  " }], question: "First?" },
+          { id: "second", header: "second", isOther: false, isSecret: true, options: null, question: "Second?" },
+          { id: "third", header: "third", isOther: false, isSecret: false, options: [], question: "Third?" },
+          { id: "fourth", header: "fourth", isOther: false, isSecret: false, options: [], question: "Fourth?" },
+        ],
+      },
+    });
+    const requested = notifications.find(({ method }) => method === "questionnaire/requested");
+    const questions = (requested?.params as { request: { questions: Array<{ allowOther: boolean; id: string; options: unknown[] }> } })
+      ?.request.questions ?? [];
+    assert.deepEqual(questions.map(question => question.id), ["question-1", "second", "third", "fourth"]);
+    assert.equal(questions[0]?.allowOther, true);
+    assert.deepEqual(questions[0]?.options, [{ description: "", label: "yes" }]);
+    assert.equal(questions[1]?.options.length, 0);
+  } finally { await bridge.disposeImmediately(); }
+});
+
 test("detached questionnaire history records directly without answering a provider request", async () => {
   const sql = await recordingFixture("C:/repo", true);
   const fixtureIdentities = sql.ports.identities;

@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 
 import type { WorkbenchDurableQuestionnaire } from "workbench-shared/workbench/thread/thread-state";
 import { WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
-import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
+import { buildWorkbenchQuestionnaireRequest } from "workbench-shared/workbench/thread/thread-questionnaire-request";
 import type { WorkbenchPendingUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 import type { WorkbenchRequestUserInputCommandInput } from "./lib/workbench/commands/questionnaire-command-definition";
 import type { WorkbenchThreadId, WorkbenchTurnId, ProjectId } from "workbench-shared/workbench/identity";
@@ -120,20 +120,7 @@ export default class WorkbenchQuestionnaireController {
     const restored = pendingQuestionnaire?.requestKey === requestKey ? pendingQuestionnaire : null;
     const questionnaire: WorkbenchQuestionnaire = {
       itemId: restored?.itemId ?? randomUUID(),
-      request: {
-        id: requestKey,
-        questions: input.questions.map((question) => ({
-          allowOther: true,
-          header: question.header,
-          id: question.id,
-          isSecret: false,
-          options: question.options,
-          question: question.question,
-        })),
-        submitLabel: "Submit",
-        summary: "",
-        title: getQuestionnaireTitle({ title: "Questionnaire", questions: input.questions }),
-      },
+      request: buildWorkbenchQuestionnaireRequest({ id: requestKey, questions: input.questions }),
       requestKey,
       turnId: restored?.turnId ?? turnId,
     };
