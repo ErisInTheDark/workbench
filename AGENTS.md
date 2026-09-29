@@ -58,15 +58,18 @@ Run `wb test` and `pnpm typecheck` from the repository root.
 ### Allowed Validation
 do not apply timeouts for validation command runs! they own their own timeouts
 
-`pnpm typecheck`
+1. `pnpm typecheck`
 
+2. tests:
 `wb test` tests full suite filtered by claims (run this first!)
 `wb test -- [<file>...]` tests only the specified files (useful for targeted retests)
 
+3. expensive scenario tests if necessary:
 note: the following two scenario tests take a LONG time, and should be used for FINAL validation
 `pnpm test:lifecycle` runs a clone of the full app, testing schema migration; do not use if you have not changed the db!
 `pnpm test:codex` and `pnpm test:opencode` run clones of the full app, testing with a paid provider turn; only use when the user asks for it!
 
+also available:
 `cargo test --manifest-path ..\tray\Cargo.toml`
 `cargo build --release --manifest-path ..\tray\Cargo.toml`
 
