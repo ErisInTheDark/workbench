@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchStoredThreadDraft: draft body and its persistent sidebar flags.
  * - WorkbenchThreadStateCommit: changed facts committed together before publication.
- * - WorkbenchThreadRecordQuery: project-qualified live, history or explicit-record selection.
+ * - WorkbenchThreadRecordQuery: project, provider-working, history or explicit-record selection.
  * - WorkbenchThreadStateProjectDocument/WorkbenchThreadStateGlobalDocument: assembled consumer documents, never stored JSON blobs.
  * - WorkbenchThreadStatePersistence: typed worker boundary; all thread and turn references are canonical.
  * - WorkbenchSubagentRelationshipRead/WorkbenchSubagentPersistence: scoped membership reads and atomic parent allocation.
@@ -13,7 +13,7 @@ import type {
 import type { ThreadDisplayLayout } from "workbench-shared/workbench/thread/thread-display-layout";
 import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
 import type { WorkbenchThreadLayoutOwner } from "./WorkbenchThreadStateLayoutRepository";
-import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
+import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchSubagentReservation } from "../../workbench-subagent-record";
 import type { ProjectDocument } from "./workbench-thread-state-document-source";
 import type { DraftId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -57,6 +57,7 @@ export interface WorkbenchThreadStateCommit {
 
 export type WorkbenchThreadRecordQuery =
   | { selection: "live"; projectId: ProjectId }
+  | { selection: "working"; harness: WorkbenchHarness }
   | { selection: "threads"; threadIds: readonly WorkbenchThreadId[]; projectId?: ProjectId }
   | { selection: "children"; parentThreadId: WorkbenchThreadId }
   | { selection: "parentStatus"; parentThreadIds: readonly WorkbenchThreadId[] }

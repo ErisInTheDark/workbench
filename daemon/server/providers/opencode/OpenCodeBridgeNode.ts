@@ -41,6 +41,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
     });
     const reader = build.get("transcriptReader");
+    const readWorkingRecords = () => build.get("database").readThreadStateRecords({
+      selection: "working", harness: "opencode",
+    });
     const settings = new WorkbenchServerSettings(build.get("database"));
     const managed = new OpenCodeManagedSessionController({
       acquire,
@@ -61,6 +64,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       transcript,
       reader,
       reconciliation: build.get("transcriptReconciliation"),
+      readWorkingRecords,
       readProviderCursor: (threadId, turnId) => build.get("database").readTranscriptProviderCursor!(threadId, turnId),
       signal: lifetime.signal,
       recovery: build.get("turnRecovery"),
@@ -101,7 +105,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           },
         },
       },
-      start: () => undefined,
+      start: async () => {
+        if ((await readWorkingRecords()).length) stream.start();
+      },
       dispose: async () => {
         lifetime.abort(new Error("OpenCode bridge disposed."));
         await Promise.all([stream.dispose(), threads.settle()]);

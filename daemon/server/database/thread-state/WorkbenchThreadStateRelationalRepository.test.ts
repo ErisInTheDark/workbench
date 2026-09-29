@@ -70,6 +70,44 @@ test("navigation summaries preserve lifecycle counts and pinned title projection
   } finally { database.close(); }
 });
 
+test("working recovery selection includes only unsettled threads from its provider across projects", () => {
+  const database = openDatabase();
+  try {
+    const identities = new WorkbenchThreadIdentityRepository(database);
+    const make = (harness: "opencode" | "codex", projectId: keyof typeof fixtureIdentityValues.ProjectId, nativeThreadId: string) =>
+      identities.observe({
+        native: { harness, nativeLocation: `C:/${projectId}`, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(nativeThreadId) },
+        projectId: fixtureIdentityValues.ProjectId[projectId], projectRoot: `C:/${projectId}`,
+        title: nativeThreadId, createdAt: 1, updatedAt: 2, activityAt: 2,
+      }).threadId;
+    const wanted = make("opencode", "project", "wanted");
+    const otherProject = make("opencode", "other", "other-project");
+    const wrongProvider = make("codex", "project", "wrong-provider");
+    const settled = make("opencode", "project", "settled");
+    const repository = new WorkbenchThreadStateRelationalRepository(database);
+    const records = [
+      [wanted, "opencode", false],
+      [otherProject, "opencode", false],
+      [wrongProvider, "codex", false],
+      [settled, "opencode", true],
+    ] as const;
+    repository.writeRecords(records.map(([threadId, harness, isSettled]) => ({
+      entryKind: "thread" as const,
+      identity: { harness, threadId },
+      title: "Stored thread", activityAt: 1,
+      lifecycle: isSettled
+        ? { kind: "completed" as const, reason: "userCompleted" as const, settled: true }
+        : { kind: "working" as const, reason: "acceptedIntent" as const, agent: { agentStatus: "working" as const }, settled: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+    })));
+    assert.deepEqual(
+      new Set(repository.readRecords({ selection: "working", harness: "opencode" }).map(record => record.identity.threadId)),
+      new Set([wanted, otherProject]),
+    );
+  } finally { database.close(); }
+});
+
 test("full hydration query growth is per batch rather than per thread", () => {
   let queries = 0;
   const database = new Database(":memory:", { verbose: () => { queries++; } });

@@ -95,7 +95,7 @@ export default class OpenCodeEventController {
       if (fact.active) {
         this.options.threads.markExecutionStarted(fact.sessionID);
         await this.options.observe({
-          activity: null, displayLabel: null,
+          projectId: fact.projectId, activity: null, displayLabel: null,
           lifecycle: { threadId: fact.threadId, event: { kind: "acceptedIntent", turnId } },
         });
         this.broadcastThreadStatus(fact.threadId, { activeFlags: [], type: "active" });
@@ -114,7 +114,7 @@ export default class OpenCodeEventController {
       if (wasTouched(fact.sessionID)) continue;
       this.options.threads.markExecutionSettled(fact.sessionID);
       const lifecycle = await this.options.observe({
-        activity: null, displayLabel: null,
+        projectId: fact.projectId, activity: null, displayLabel: null,
         lifecycle: { threadId: fact.threadId, event: { kind: "turnCompleted", turnId, status } },
       });
       this.broadcastTurn("turn/completed", fact.threadId, { ...fact.turn, status });

@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import type { SessionInboxInfo, SessionInfo, SessionMessageInfo, SessionMessageUser } from "@opencode/client";
 import {
   NativeThreadIdSchema, ThreadReferenceSchema, WorkbenchItemIdSchema, WorkbenchThreadIdSchema,
-  type WorkbenchThreadId, type WorkbenchTurnId, WorkbenchTurnIdSchema, TurnReferenceSchema,
+  type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId, WorkbenchTurnIdSchema, TurnReferenceSchema,
 } from "workbench-shared/workbench/identity";
 import type { WorkbenchProviderThreads, WorkbenchProviderTranscriptReconcile } from "workbench-shared/workbench/provider/provider-thread";
 import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
@@ -17,7 +17,7 @@ import type { WorkbenchProviderObservation } from "workbench-shared/workbench/pr
 import type { WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
 import type { WorkbenchThreadMessageResult } from "workbench-shared/workbench/thread/thread-actions";
 import type { WorkbenchUserInput } from "workbench-shared/workbench/provider/provider-input";
-import { createWorkbenchTextInput, toWorkbenchThreadUserInput } from "workbench-shared/workbench/provider/provider-input";
+import { createWorkbenchTextInput, toWorkbenchThreadUserInput, WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
@@ -34,7 +34,8 @@ import OpenCodeThreadWindowLoader from "./OpenCodeThreadWindowLoader";
 import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
 import type WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
 import type { WorkbenchToolAdmissionOptions } from "../../WorkbenchToolAdmissionController";
-import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import {
   createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput,
@@ -74,6 +75,7 @@ export interface OpenCodeThreadOperationsOptions {
   reader: Pick<WorkbenchTranscriptReader, "readPage">;
   signal: AbortSignal;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
+  readWorkingRecords(): Promise<Array<Pick<WorkbenchThreadStateRecord, "identity" | "lifecycle">>>;
   readProviderCursor(threadId: string, turnId: string): Promise<string | null | undefined>;
   recovery: Pick<WorkbenchTurnRecoveryController, "shouldContinue">;
 }
@@ -90,6 +92,7 @@ interface SessionExecution {
 export interface OpenCodeNativeActivity {
   sessionID: string;
   threadId: WorkbenchThreadId;
+  projectId: ProjectId;
   turn: Turn | null;
   active: boolean;
   outcome: SessionInfo["outcome"] | null;
@@ -395,7 +398,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
           || latest.status === "inProgress" && session.outcome === undefined
         ));
     }
-    const activeTurn = execution.active && execution.kind !== "compaction" ? execution.turn : null;
+    const activeTurn = execution.active ? execution.turn : null;
     const delivery = input.intent === "newTurn" || !activeTurn ? "queue" : "steer";
     const workingStatus = toWorkbenchThreadUserInput(input.input).some(isWorkbenchQuestionnaireResponsePart);
     const nativePrompt = prompt(input.input);
@@ -408,6 +411,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       workbench: {
         version: 1 as const,
         delivery,
+        ...(delivery === "steer" && activeTurn ? { turnId: activeTurn.turnId } : {}),
         itemId,
         clientMessageId: input.clientMessageId,
         input: input.input,
@@ -631,10 +635,19 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     signal.throwIfAborted();
     const client = await this.options.acquire();
     const active = await client.session.active({ signal });
+    const durableWorking = new Map<string, WorkbenchTurnId>();
+    for (const record of await this.options.readWorkingRecords()) {
+      signal.throwIfAborted();
+      const turnId = getWorkbenchLifecycleTurnId(record.lifecycle);
+      if (!turnId) continue;
+      const { binding } = await this.native(record.identity.threadId);
+      durableWorking.set(binding.nativeThreadId, turnId);
+    }
     const candidates = new Set([
       ...Object.keys(active),
       ...[...this.executions].filter(([sessionID, execution]) => execution.active
         || execution.admission !== null || this.pendingSteerSessions.has(sessionID)).map(([sessionID]) => sessionID),
+      ...durableWorking.keys(),
     ]);
     const observations: OpenCodeNativeActivity[] = [];
     for (const sessionID of candidates) {
@@ -652,19 +665,54 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       const nativeActive = Boolean(active[sessionID]);
       const identity = await this.syncNative(sessionID, signal);
       if (wasTouched(sessionID)) continue;
-      const pending = !nativeActive && (this.execution(sessionID).admission !== null
-        || this.pendingSteerSessions.has(sessionID)
-        || (await client.session.inbox.list({ sessionID }, { signal })).some(isManagedWorkbenchPrompt));
-      if (pending || wasTouched(sessionID)) continue;
       const turn = (await this.read(identity.threadId)).turns.at(-1) ?? null;
       if (wasTouched(sessionID)) continue;
+      const durableTurnId = durableWorking.get(sessionID);
+      if (!nativeActive && durableTurnId && turn?.id !== durableTurnId) continue;
+      let inbox = !nativeActive ? await client.session.inbox.list({ sessionID }, { signal }) : [];
+      const interruptedRoot = !nativeActive && durableTurnId === turn?.id
+        && turn?.status === "interrupted" && identity.outcome === "interrupted";
+      if (interruptedRoot && durableTurnId && inbox.length) {
+        inbox = await this.retireInterruptedRoot(
+          client, sessionID, identity.threadId, durableTurnId, inbox, signal, wasTouched,
+        );
+      }
+      if (wasTouched(sessionID)) continue;
+      const pending = !nativeActive && (this.execution(sessionID).admission !== null
+        || this.pendingSteerSessions.has(sessionID) || inbox.some(isManagedWorkbenchPrompt));
+      if (pending || wasTouched(sessionID)) continue;
+      if (interruptedRoot && Boolean((await client.session.active({ signal }))[sessionID])) continue;
       observations.push({
-        sessionID, threadId: identity.threadId, turn,
+        sessionID, threadId: identity.threadId, projectId: identity.projectId, turn,
         active: nativeActive && turn?.status === "inProgress",
-        outcome: identity.outcome, idleAt: identity.idleAt, maintenance: identity.maintenance,
+        outcome: identity.outcome, idleAt: identity.idleAt,
+        maintenance: identity.maintenance && !interruptedRoot,
       });
     }
     return observations;
+  }
+
+  private async retireInterruptedRoot(
+    client: WorkbenchOpenCodeClient,
+    sessionID: string,
+    threadId: WorkbenchThreadId,
+    turnId: WorkbenchTurnId,
+    inbox: SessionInboxInfo[],
+    signal: AbortSignal,
+    wasTouched: (sessionID: string) => boolean,
+  ) {
+    const identity = await this.options.identities.resolveTurn({
+      threadId, turnId: TurnReferenceSchema.parse(turnId),
+    });
+    const nativeTurnId = identity?.native.nativeTurnId;
+    if (!nativeTurnId || identity.native.nativeThreadId !== sessionID) return inbox;
+    const queued = inbox.find(item => item.id === nativeTurnId
+      && item.delivery === "queue" && isManagedWorkbenchPrompt(item));
+    if (!queued) return inbox;
+    signal.throwIfAborted();
+    if (wasTouched(sessionID)) return inbox;
+    await client.session.inbox.cancel({ sessionID, inboxID: queued.id }, { signal });
+    return await client.session.inbox.list({ sessionID }, { signal });
   }
 
   currentTurn(nativeThreadId: string) {
@@ -920,8 +968,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const interruptedTurnId = execution.active ? execution.turn?.turnId : undefined;
     let intentVersion = ++execution.intentVersion;
     this.requestedInterruptions.add(nativeThreadId);
+    let client: WorkbenchOpenCodeClient;
     try {
-      await (await this.options.acquire()).session.interrupt({ sessionID: nativeThreadId });
+      client = await this.options.acquire();
+      await client.session.interrupt({ sessionID: nativeThreadId });
     } catch (error) {
       this.requestedInterruptions.delete(nativeThreadId);
       throw error;
@@ -944,6 +994,65 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       console.warn(`[opencode] interrupted turn transcript settlement failed: ${
         error instanceof Error ? error.message.slice(0, 500) : "unknown failure"
       }`);
+    }
+    await this.retireStoppedInbox(client, nativeThreadId, synced.threadId, turnId);
+    const [active, inbox] = await Promise.all([
+      client.session.active({ signal: this.options.signal }),
+      client.session.inbox.list({ sessionID: nativeThreadId }, { signal: this.options.signal }),
+    ]);
+    if (execution.intentVersion !== intentVersion || active[nativeThreadId]
+      || inbox.some(isManagedWorkbenchPrompt)) return;
+    await this.options.observe({
+      projectId: synced.projectId,
+      activity: null,
+      displayLabel: null,
+      lifecycle: { threadId: synced.threadId, event: { kind: "turnCompleted", turnId, status: "interrupted" } },
+    });
+  }
+
+  private async retireStoppedInbox(
+    client: WorkbenchOpenCodeClient,
+    sessionID: string,
+    threadId: WorkbenchThreadId,
+    turnId: WorkbenchTurnId,
+  ) {
+    const inbox = await client.session.inbox.list({ sessionID }, { signal: this.options.signal });
+    const turn = await this.options.identities.resolveTurn({
+      threadId, turnId: TurnReferenceSchema.parse(turnId),
+    });
+    const nativeTurnId = turn?.native.nativeThreadId === sessionID ? turn.native.nativeTurnId : null;
+    for (const item of inbox) {
+      if (!isManagedWorkbenchPrompt(item)) continue;
+      if (item.id === nativeTurnId) {
+        await client.session.inbox.cancel({ sessionID, inboxID: item.id }, { signal: this.options.signal });
+        continue;
+      }
+      if (item.type !== "user" || item.delivery !== "steer") continue;
+      const workbench = item.payload.metadata?.workbench;
+      if (!workbench || typeof workbench !== "object" || Array.isArray(workbench)) continue;
+      const clientMessageId = typeof workbench.clientMessageId === "string" ? workbench.clientMessageId : null;
+      const pending = clientMessageId ? this.pendingSteers.get(threadId)?.get(clientMessageId) : null;
+      if (workbench.turnId !== turnId && pending?.turnId !== turnId) continue;
+      const itemId = WorkbenchItemIdSchema.safeParse(workbench.itemId);
+      const input = WorkbenchUserInputSchema.array().safeParse(workbench.input);
+      if (!pending && (!itemId.success || !input.success || !clientMessageId)) {
+        throw new Error("OpenCode managed steer metadata is incomplete for stop.");
+      }
+      await client.session.inbox.cancel({ sessionID, inboxID: item.id }, { signal: this.options.signal });
+      if (pending) {
+        await this.options.transcript.recordSteer({
+          ...pending, threadId, turnId, status: "interrupted", resolvedAt: Date.now(),
+        });
+        this.deletePendingSteer(pending);
+      } else if (itemId.success && input.success && clientMessageId) {
+        await this.options.transcript.recordSteer({
+          threadId, turnId, itemId: itemId.data, entryKey: itemId.data,
+          input: steerInput(input.data), status: "interrupted",
+          attemptedAt: item.time.created, resolvedAt: Date.now(),
+          requestId: null, canonicalItemId: null, clientUserMessageId: clientMessageId,
+          dispatchSequence: null, error: null,
+        });
+      }
     }
   }
 

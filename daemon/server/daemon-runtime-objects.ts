@@ -119,6 +119,7 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   readInitialProjectCatalog(): WorkbenchProjectStartup | null;
   queryTranscript(request: import("./database/transcript/transcript-query-contract").TranscriptQuery): Promise<import("./database/transcript/transcript-query-contract").TranscriptQueryPage>;
   readThreadContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
+  readThreadStateRecords: import("./database/WorkbenchDatabaseController").default["readThreadStateRecords"];
   readTranscriptProviderCursor?(threadId: string, turnId: string): Promise<string | null | undefined>;
   readTranscriptContext?(threadId: string): Promise<WorkbenchTranscriptContextSnapshot | null>;
   assertReady(): void;

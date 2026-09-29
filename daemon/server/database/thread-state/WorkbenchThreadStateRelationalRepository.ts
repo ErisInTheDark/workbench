@@ -431,6 +431,10 @@ export default class WorkbenchThreadStateRelationalRepository {
     const parameters: Array<string | number> = [];
     let where: string;
     switch (query.selection) {
+      case "working":
+        where = "state.harness_id = ? AND lifecycle.lifecycle_kind = 'working' AND lifecycle.settled = 0";
+        parameters.push(query.harness);
+        break;
       case "threads":
         if (!query.threadIds.length) return [];
         where = `state.thread_id IN (${query.threadIds.map(() => "?").join(",")})`;

@@ -4,9 +4,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+  NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
-import OpenCodeThreadOperations from "./OpenCodeThreadOperations";
+import OpenCodeThreadOperations, { type OpenCodeThreadOperationsOptions } from "./OpenCodeThreadOperations";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
 import WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
 import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
@@ -117,6 +117,7 @@ test("late child completion stays in its starting turn after a newer turn is adm
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
 const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");
 const nativeThreadId = NativeThreadIdSchema.parse("native-session");
+const nativeTurnId = NativeTurnIdSchema.parse("msg_queued-turn");
 const session = {
   id: nativeThreadId,
   projectID: "native-project",
@@ -135,9 +136,14 @@ function operations(
     observe?: (facts: object) => Promise<void>;
     questionnaires?: object;
     readPage?: () => Promise<object>;
-    resolveTurn?: (input: { threadId: string; turnId: string }) => Promise<{ threadId: typeof threadId; turnId: typeof turnId } | null>;
+    resolveTurn?: (input: { threadId: string; turnId: string }) => Promise<{
+      threadId: typeof threadId;
+      turnId: typeof turnId;
+      native?: { nativeThreadId: typeof nativeThreadId; nativeTurnId: typeof nativeTurnId };
+    } | null>;
     signal?: AbortSignal;
     refresh?: OpenCodeManagedSessionController["refresh"];
+    workingRecords?: OpenCodeThreadOperationsOptions["readWorkingRecords"];
   } = {},
 ) {
   const owner: OpenCodeThreadOperations = new OpenCodeThreadOperations({
@@ -157,7 +163,8 @@ function operations(
     },
     observe: lifecycle.observe ?? (async () => undefined),
     identities: {
-      findNativeThread: () => null,
+      findNativeThread: ({ nativeThreadId: candidate }: { nativeThreadId: string }) =>
+        candidate === nativeThreadId ? { threadId } : null,
       resolve: async () => ({
         threadId,
         projectId: ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003"),
@@ -173,6 +180,7 @@ function operations(
       resolveTurn: lifecycle.resolveTurn ?? (async ({ turnId: requestedTurnId }) => ({
         threadId,
         turnId: WorkbenchTurnIdSchema.parse(requestedTurnId),
+        native: { nativeThreadId, nativeTurnId },
       })),
     } as never,
     projects: {
@@ -216,6 +224,7 @@ function operations(
     } as never,
     signal: lifecycle.signal ?? new AbortController().signal,
     recovery: new WorkbenchTurnRecoveryController(() => undefined),
+    readWorkingRecords: lifecycle.workingRecords ?? (async () => []),
   });
   return owner;
 }
@@ -367,6 +376,7 @@ test("fails a public read when no OpenCode binding exists", async () => {
   const owner = new OpenCodeThreadOperations({
     recovery: new WorkbenchTurnRecoveryController(() => undefined),
     reconciliation: { reconcile: async () => { throw new Error("Unexpected recovery"); } },
+    readWorkingRecords: async () => [],
     readProviderCursor: async () => undefined,
     acquire: async () => ({}) as never,
     observe: async () => undefined,
@@ -481,6 +491,7 @@ test("provider-owned active execution submits a steer once with native steer del
       workbench: {
         version: 1,
         delivery: "steer",
+        turnId,
         itemId: "<uuid>",
         clientMessageId: "00000000-0000-4000-8000-000000000010",
         input: [{ type: "text", text: "please continue", text_elements: [] }],
@@ -1126,6 +1137,83 @@ test("connection recovery reads native activity for tracked work and ignores ses
   assert.deepEqual(await owner.reconcileActivity(signal, id => id === nativeThreadId), []);
 });
 
+test("connection recovery includes a persisted working OpenCode thread after its execution owner is lost", async () => {
+  const projectId = ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003");
+  let latestTurnId = turnId;
+  let pending = false;
+  const owner = operations({
+    session: {
+      active: async () => ({}),
+      get: async () => ({ ...session, outcome: "interrupted", time: { ...session.time, idle: 4 } }),
+      inbox: { list: async () => pending ? [{ type: "user", payload: { metadata: { workbench: {} } } }] : [] },
+      message: { list: async () => ({ data: [], cursor: {} }) },
+    },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, { record: async () => ({ threadId, latestTurnId, latestTurnState: "interrupted" }) },
+  {}, {
+    readPage: async () => ({ thread: { turns: [{ id: latestTurnId, status: "interrupted", items: [] }] } }),
+    workingRecords: async () => [{
+      identity: { harness: "opencode", threadId },
+      lifecycle: { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working", turnId }, settled: false },
+    }],
+  });
+  const facts = await owner.reconcileActivity(new AbortController().signal, () => false);
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0]?.sessionID, nativeThreadId);
+  assert.equal(facts[0]?.active, false);
+  assert.equal(facts[0]?.projectId, projectId);
+  assert.equal(facts[0]?.turn?.id, turnId);
+  assert.deepEqual(await owner.reconcileActivity(new AbortController().signal, id => id === nativeThreadId), []);
+  pending = true;
+  assert.deepEqual(await owner.reconcileActivity(new AbortController().signal, () => false), []);
+  pending = false;
+  latestTurnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000004");
+  assert.deepEqual(await owner.reconcileActivity(new AbortController().signal, () => false), []);
+});
+
+test("connection recovery retires only the interrupted turn's undelivered queue item after compaction", async () => {
+  const cancelled: string[] = [];
+  let failCancel = false;
+  const queued = {
+    id: nativeTurnId, sessionID: nativeThreadId, time: { created: 3 }, type: "user",
+    delivery: "queue", payload: { text: "undelivered", metadata: { workbench: { version: 1, delivery: "queue" } } },
+  };
+  let inbox = [queued];
+  const owner = operations({
+    session: {
+      active: async () => ({}),
+      get: async () => ({ ...session, outcome: "interrupted", time: { ...session.time, idle: 4 } }),
+      inbox: {
+        list: async () => inbox,
+        cancel: async ({ inboxID }: { inboxID: string }) => {
+          if (failCancel) throw new Error("native cancel failed");
+          cancelled.push(inboxID);
+          inbox = inbox.filter(item => item.id !== inboxID);
+        },
+      },
+      message: { list: async () => ({ data: [], cursor: {} }) },
+    },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, { record: async () => ({
+    threadId, latestTurnId: turnId, latestTurnState: "interrupted", latestOperation: "compaction",
+  }) }, {}, {
+    readPage: async () => ({ thread: { turns: [{ id: turnId, status: "interrupted", items: [] }] } }),
+    workingRecords: async () => [{
+      identity: { harness: "opencode", threadId },
+      lifecycle: { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working", turnId }, settled: false },
+    }],
+  });
+  const facts = await owner.reconcileActivity(new AbortController().signal, () => false);
+  assert.deepEqual(cancelled, [nativeTurnId]);
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0]?.maintenance, false);
+  assert.equal(facts[0]?.active, false);
+  assert.equal(facts[0]?.turn?.id, turnId);
+  inbox = [queued];
+  failCancel = true;
+  await assert.rejects(owner.reconcileActivity(new AbortController().signal, () => false), /native cancel failed/u);
+});
+
 test("native idle history prevents a stale active snapshot from reopening a turn", async () => {
   const owner = operations({
     session: { active: async () => ({ [nativeThreadId]: { type: "running" } }) },
@@ -1223,6 +1311,146 @@ test("session interruption settles the active continuation rather than an older 
   await owner.settle();
 });
 
+test("successful stop retires its queued root and settles the matching lifecycle", async () => {
+  const cancelled: string[] = [];
+  const observed: Array<{ projectId: string | undefined; turnId: string; status: string }> = [];
+  let inbox = [{
+    id: nativeTurnId, sessionID: nativeThreadId, time: { created: 3 }, type: "user",
+    delivery: "queue", payload: { text: "undelivered", metadata: { workbench: { version: 1, delivery: "queue" } } },
+  }];
+  const owner = operations({
+    session: {
+      interrupt: async () => undefined,
+      active: async () => ({}),
+      get: async () => ({ ...session, outcome: "interrupted", time: { ...session.time, idle: 4 } }),
+      inbox: {
+        list: async () => inbox,
+        cancel: async ({ inboxID }: { inboxID: string }) => {
+          cancelled.push(inboxID);
+          inbox = inbox.filter(item => item.id !== inboxID);
+        },
+      },
+      message: { list: async () => ({ data: [], cursor: {} }) },
+    },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, {
+    record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "inProgress" }),
+    recordTurnState: async () => undefined,
+  }, {}, {
+    observe: async facts => {
+      const observation = facts as {
+        projectId?: string;
+        lifecycle?: { event: { kind: string; turnId: string; status: string } };
+      };
+      if (observation.lifecycle?.event.kind === "turnCompleted") {
+        observed.push({ projectId: observation.projectId,
+          turnId: observation.lifecycle.event.turnId, status: observation.lifecycle.event.status });
+      }
+    },
+    readPage: async () => ({ thread: { turns: [{ id: turnId, status: "inProgress", items: [] }] } }),
+  });
+  await owner.syncNative(nativeThreadId);
+  await owner.interrupt(threadId, turnId);
+  assert.deepEqual(cancelled, [nativeTurnId]);
+  assert.deepEqual(observed, [{
+    projectId: ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003"),
+    turnId, status: "interrupted",
+  }]);
+});
+
+test("stop cancels a compaction steer and records that it was interrupted", async () => {
+  const deliveries: string[] = [];
+  const cancelled: string[] = [];
+  const statuses: string[] = [];
+  let inbox: Array<{
+    id: string; sessionID: typeof nativeThreadId; time: { created: number }; type: "user";
+    delivery: string; payload: { metadata: object };
+  }> = [];
+  const owner = operations({
+    session: {
+      interrupt: async () => undefined,
+      active: async () => ({}),
+      get: async () => ({ ...session, outcome: "interrupted", time: { ...session.time, idle: 4 } }),
+      inbox: {
+        list: async () => inbox,
+        cancel: async ({ inboxID }: { inboxID: string }) => {
+          cancelled.push(inboxID);
+          inbox = inbox.filter(item => item.id !== inboxID);
+        },
+      },
+      prompt: async (input: { id: string; delivery: string; metadata: object }) => {
+        deliveries.push(input.delivery);
+        inbox = [{
+          id: input.id, sessionID: nativeThreadId, time: { created: 3 },
+          type: "user", delivery: input.delivery, payload: { metadata: input.metadata },
+        }];
+        return {};
+      },
+      message: { list: async () => ({ data: [], cursor: {} }) },
+    },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, {
+    record: async () => ({
+      threadId, latestTurnId: turnId, latestTurnState: "inProgress", latestOperation: "compaction",
+    }),
+    recordTurnState: async () => undefined,
+    recordSteer: async (entry: { status: string }) => { statuses.push(entry.status); },
+  });
+  await owner.syncNative(nativeThreadId);
+  await owner.submit({
+    threadId, clientMessageId: "compaction-steer", intent: "continue",
+    input: [{ type: "text", text: "new direction", text_elements: [] }],
+  });
+  await owner.interrupt(threadId, turnId);
+  assert.deepEqual(deliveries, ["steer"]);
+  assert.deepEqual(cancelled, ["msg_compaction-steer"]);
+  assert.deepEqual(statuses, ["pending", "interrupted"]);
+});
+
+test("stop after owner reload retires a steer using its native turn identity", async () => {
+  const cancelled: string[] = [];
+  const recorded: Array<{ turnId: string; status: string; clientUserMessageId?: string | null }> = [];
+  let inbox = [{
+    id: "msg_waiting-steer", sessionID: nativeThreadId, time: { created: 3 }, type: "user",
+    delivery: "steer", payload: { metadata: { workbench: {
+      version: 1, delivery: "steer", turnId,
+      itemId: "00000000-0000-4000-8000-000000000005",
+      clientMessageId: "waiting-steer",
+      input: [{ type: "text", text: "new direction", text_elements: [] }],
+    } } },
+  }];
+  const owner = operations({
+    session: {
+      interrupt: async () => undefined,
+      active: async () => ({}),
+      get: async () => ({ ...session, outcome: "interrupted", time: { ...session.time, idle: 4 } }),
+      inbox: {
+        list: async () => inbox,
+        cancel: async ({ inboxID }: { inboxID: string }) => {
+          cancelled.push(inboxID);
+          inbox = inbox.filter(item => item.id !== inboxID);
+        },
+      },
+      message: { list: async () => ({ data: [], cursor: {} }) },
+    },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, {
+    record: async () => ({
+      threadId, latestTurnId: turnId, latestTurnState: "inProgress", latestOperation: "compaction",
+    }),
+    recordTurnState: async () => undefined,
+    recordSteer: async (entry: { turnId: string; status: string; clientUserMessageId?: string | null }) => {
+      recorded.push(entry);
+    },
+  });
+  await owner.syncNative(nativeThreadId);
+  await owner.interrupt(threadId, turnId);
+  assert.deepEqual(cancelled, ["msg_waiting-steer"]);
+  assert.deepEqual(recorded.map(entry => ({
+    turnId: entry.turnId, status: entry.status, clientUserMessageId: entry.clientUserMessageId,
+  })), [{ turnId, status: "interrupted", clientUserMessageId: "waiting-steer" }]);
+});
+
 test("a native read begun before interruption loses permission to commit or reactivate execution", async () => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -1287,16 +1515,20 @@ test("a current-generation native read cannot commit the old turn while a newer 
   await owner.settle();
 });
 
-test("a message during compaction queues a user turn instead of steering maintenance", async () => {
+test("a message during compaction stays a pending steer on the existing user turn", async () => {
   const deliveries: string[] = [];
+  let speculativeRoots = 0;
   const owner = operations({
     session: { prompt: async (input: { delivery: string }) => { deliveries.push(input.delivery); return {}; } },
     message: { list: async () => ({ data: [], cursor: {} }) },
   }, {
-    record: async (_session: object, messages: object[]) => ({
-      threadId, latestTurnId: turnId, latestTurnState: "inProgress",
-      latestOperation: messages.length ? "prompt" : "compaction",
-    }),
+    record: async (_session: object, messages: object[]) => {
+      if (messages.length) speculativeRoots++;
+      return {
+        threadId, latestTurnId: turnId, latestTurnState: "inProgress",
+        latestOperation: messages.length ? "prompt" : "compaction",
+      };
+    },
     recordSteer: async () => undefined,
   });
   assert.equal((await owner.syncNative(nativeThreadId)).maintenance, true);
@@ -1304,6 +1536,7 @@ test("a message during compaction queues a user turn instead of steering mainten
     await owner.submit({ threadId, clientMessageId: id, intent: "continue",
       input: [{ type: "text", text: id, text_elements: [] }] });
   }
-  assert.deepEqual(deliveries, ["queue", "steer"]);
+  assert.deepEqual(deliveries, ["steer", "steer"]);
+  assert.equal(speculativeRoots, 0);
   await owner.settle();
 });
