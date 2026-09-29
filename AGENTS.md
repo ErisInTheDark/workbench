@@ -67,7 +67,7 @@ do not apply timeouts for validation command runs! they own their own timeouts
 3. expensive scenario tests if necessary:
 note: the following two scenario tests take a LONG time, and should be used for FINAL validation
 `pnpm test:lifecycle` runs a clone of the full app, testing schema migration; do not use if you have not changed the db!
-`pnpm test:codex` and `pnpm test:opencode` run clones of the full app, testing with a paid provider turn; only use when the user asks for it!
+`pnpm test:thread --<provider>=<paid|fake> [...--<provider>=<paid|fake>]` (eg `pnpm test:thread --codex=fake --opencode=paid`) runs clones of the full app, testing with paid or emulated provider turns, only use paid when the user asks for it!
 
 also available:
 `cargo test --manifest-path ..\tray\Cargo.toml`
