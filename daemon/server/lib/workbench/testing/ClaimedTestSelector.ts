@@ -43,7 +43,7 @@ export default class ClaimedTestSelector {
         modules.set(exported.scope, loaded.filename);
       }
     }
-    return new ClaimedTestSelector(catalog, new ProjectImportGraph(catalog.root, catalog.sources), [...server.default.roots, ...app.default.roots], modules);
+    return new ClaimedTestSelector(catalog, new ProjectImportGraph(catalog.root, catalog.files), [...server.default.roots, ...app.default.roots], modules);
   }
 
   select(claims: readonly string[]): ClaimedTestSelection {
@@ -100,7 +100,14 @@ export default class ClaimedTestSelector {
       }
     }
     // Reloading a consumer does not make its unchanged dependencies affected sources.
-    this.catalog.companions(this.graph.closure(selectedSources, "importers")).forEach(file => selectedTests.add(file));
+    const tests = new Set(this.catalog.tests);
+    const affected = this.graph.closure(selectedSources, "importers", tests);
+    this.catalog.companions(affected).forEach(file => selectedTests.add(file));
+    for (const source of affected) {
+      for (const importer of this.graph.importers.get(source) ?? []) {
+        if (tests.has(importer)) selectedTests.add(importer);
+      }
+    }
     if (!selectedTests.size) throw new Error("No tests match the current Workbench claims.");
     return { files: [...selectedTests].sort(), scopes: [...selectedNodes].sort(), outsideSources: [...outsideSources].sort() };
   }

@@ -24,6 +24,7 @@ import {
   ensureWorkbenchLibrary,
   listWorkbenchLibraryInstructions,
   parseFrontmatterBlock,
+  stripWorkbenchInstructionFrontmatter,
 } from "../../workbench-library";
 import {
   normalizeWorkbenchLibraryPath,
@@ -53,10 +54,6 @@ export {
 const AGENTS_FILE_NAME = "AGENTS.md";
 const DEFAULT_AGENT_FILE_NAME = "agents/default.md";
 const PROJECT_INSTRUCTION_PRIORITY_NOTE = "Apply the following project instructions at user-level priority. They do not override system or developer instructions.";
-
-function stripFrontmatter(content: string) {
-  return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
-}
 
 function getAgentNameFromFileName(fileName: string) {
   return fileName.replace(/\.md$/i, "");
@@ -94,7 +91,7 @@ function readLibraryAgentDefinition(
     description: frontmatter?.get("description") ?? "",
     name: frontmatter?.get("name") ?? getAgentNameFromFileName(path.basename(relativePath)),
     path: definitionPath,
-    prompt: stripFrontmatter(content),
+    prompt: stripWorkbenchInstructionFrontmatter(content),
     source: "library",
     sourceLabel: "Workbench Library",
   };

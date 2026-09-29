@@ -104,6 +104,7 @@ function pathOperands(parts: readonly ThreadCommandDisplayPart[]) {
 
 function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
   switch (name) {
+    case "skill": return { name: "react" };
     case "toc": return { file: "AGENTS.md" };
     case "rg": return { args: ["-n", "needle", "webapp"] };
     case "tokens": return { text: "count me" };
@@ -124,6 +125,46 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     default: return {};
   }
 }
+
+test("wb skill CLI and MCP calls share the existing known-skill display", () => {
+  const knownSkills = [{
+    description: "Use for frontend work.",
+    name: "react",
+    path: "C:/skills/react/SKILL.md",
+    relativePath: "skills/react/SKILL.md",
+  }];
+  const cli = getThreadCommandDisplay({
+    command: "wb skill react", commandActions: [], cwd: PROJECT_ROOT, knownSkills,
+    projectRootPath: PROJECT_ROOT,
+  });
+  const mcp = getWorkbenchMcpCommandDisplay({
+    argumentsValue: { name: "react" }, context: { knownSkills }, server: "wb", tool: "skill",
+  });
+  assert.ok(mcp);
+  assert.deepEqual(mcp.summaryParts, cli.summaryParts);
+  assert.deepEqual(mcp.ongoingSummaryParts, cli.ongoingSummaryParts);
+  assert.equal(cli.summaryStats.skillLoads, 1);
+  assert.deepEqual(cli.summaryParts.filter(part => part.type === "skill"), [{
+    name: "react", path: "C:/skills/react/SKILL.md", type: "skill",
+  }]);
+  assert.deepEqual(getThreadCommandOutcomeDisplay(mcp, "failed").summaryParts,
+    getThreadCommandOutcomeDisplay(cli, "failed").summaryParts);
+
+  const stale = getWorkbenchMcpCommandDisplay({
+    argumentsValue: { name: "react" }, server: "wb", tool: "skill",
+  });
+  assert.ok(stale);
+  assert.equal(stale.summaryStats.skillLoads, 1);
+  assert.equal(stale.summaryParts.some(part => part.type === "skill"), false);
+  for (const command of ["wb skill --help", "wb skill react extra", "wb skill Bad/Name"]) {
+    assert.equal(getThreadCommandDisplay({
+      command, commandActions: [], cwd: PROJECT_ROOT, knownSkills,
+    }).claimedBy, null);
+  }
+  assert.equal(getWorkbenchMcpCommandDisplay({
+    argumentsValue: { name: "Bad/Name" }, server: "wb", tool: "skill",
+  }), null);
+});
 
 function workbenchMcpServerForTool(tool: string) {
   const definition = listWorkbenchAgentCommands()

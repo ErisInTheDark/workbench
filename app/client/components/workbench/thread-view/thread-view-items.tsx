@@ -1381,7 +1381,7 @@ function ThreadRegularCommandItem ({
   if (item.type === "mcpToolCall") {
     const route = getWorkbenchMcpCommandRoute({
       argumentsValue: item.arguments,
-      context: threadCwdPath ? { cwd: threadCwdPath, projectRootPath, workspaceRoots } : undefined,
+      context: { knownSkills, ...(threadCwdPath ? { cwd: threadCwdPath, projectRootPath, workspaceRoots } : {}) },
       server: item.server,
       tool: item.tool,
     });
@@ -1465,12 +1465,12 @@ function ThreadRegularCommandSequence ({
     }
     const display = getWorkbenchMcpCommandDisplay({
       argumentsValue: item.arguments,
-      context: threadCwdPath ? { cwd: threadCwdPath, projectRootPath, workspaceRoots } : undefined,
+      context: { knownSkills, ...(threadCwdPath ? { cwd: threadCwdPath, projectRootPath, workspaceRoots } : {}) },
       server: item.server,
       tool: item.tool,
     });
     return display ? [{ display }] : [];
-  }), [items, projectRootPath, threadCwdPath, workspaceRoots]);
+  }), [items, knownSkills, projectRootPath, threadCwdPath, workspaceRoots]);
   const commandBlockDisplay = useMemo(() => {
     if (items.length <= 1 || allBrowseRequests) {
       return null;
@@ -1897,7 +1897,7 @@ function ThreadRenderableBlockViewComponent ({
     case "mcpToolCall": {
       const route = getWorkbenchMcpCommandRoute({
         argumentsValue: block.item.arguments,
-        context: threadCwdPath ? { cwd: threadCwdPath, projectRootPath, workspaceRoots } : undefined,
+        context: { knownSkills, ...(threadCwdPath ? { cwd: threadCwdPath, projectRootPath, workspaceRoots } : {}) },
         server: block.item.server,
         tool: block.item.tool,
       });
@@ -1968,7 +1968,7 @@ function ThreadRenderableBlockViewComponent ({
       );
     }
     case "dynamicToolCall":
-      return <ThreadDynamicToolCallItem hasCapturedChildren={block.hasCapturedChildren} answeredAt={findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline)?.completedAt ?? null} inlineMentionSources={inlineMentionSources} item={block.item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
+      return <ThreadDynamicToolCallItem hasCapturedChildren={block.hasCapturedChildren} answeredAt={findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline)?.completedAt ?? null} inlineMentionSources={inlineMentionSources} item={block.item} knownSkills={knownSkills} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
     case "webSearch":
       return <ThreadWebSearchItem item={block.item} />;
     case "collabAgentToolCall":

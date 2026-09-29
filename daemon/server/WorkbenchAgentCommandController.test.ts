@@ -562,6 +562,44 @@ test("dispatches native subagent commands directly without waiting on Next fetch
   }
 });
 
+test("skill command returns its daemon-owned plain text without an envelope", async () => {
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      resolveCaller: async () => ({
+        harness: "codex",
+        nativeThreadId: NativeThreadIdSchema.parse("native-thread"),
+        threadId: WorkbenchThreadIdSchema.parse("managed-thread"),
+      }),
+      executeSkillRequest: async body => {
+        assert.deepEqual(body, {
+          cwd: process.cwd(),
+          harness: "codex",
+          name: "react",
+          threadId: "managed-thread",
+        });
+        return new Response("# rendered body\n", { headers: { "content-type": "text/plain" } });
+      },
+    },
+    async () => { throw new Error("unexpected internal fetch"); },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
+  );
+  const server = await startController(controller);
+  try {
+    const body = new URLSearchParams(agentCommandBody(["skill", "react"]));
+    body.set("callerThreadId", "managed-thread");
+    body.set("callerHarness", "codex");
+    const response = await fetch(`${server.origin}/daemon/agent-command`, {
+      body, headers: { "Content-Type": "application/x-www-form-urlencoded" }, method: "POST",
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "# rendered body\n");
+  } finally {
+    await server.close();
+  }
+});
+
 test("dispatches global messages through the direct managed-thread transport", async () => {
   let receivedRequest: { method?: string; params?: unknown } | null = null;
   const controller = new WorkbenchAgentCommandController(

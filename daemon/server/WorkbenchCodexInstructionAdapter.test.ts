@@ -339,11 +339,12 @@ ${brainstormMarker}
     assert.doesNotMatch(instructions, new RegExp(iterateMarker, "u"));
     assert.doesNotMatch(instructions, new RegExp(brainstormMarker, "u"));
     assert.ok(instructions.includes(
-      `<skill filename="${iteratePath.replaceAll("\\", "/")}" trigger="Use when the user says /iterate &amp; the project allows it." />`,
+      '<skill name="iterate" trigger="Use when the user says /iterate &amp; the project allows it." />',
     ));
     assert.ok(instructions.includes(
-      `<skill filename="${brainstormPath.replaceAll("\\", "/")}" trigger="Use when the user says /brainstorm." />`,
+      '<skill name="brainstorm" trigger="Use when the user says /brainstorm." />',
     ));
+    assert.doesNotMatch(instructions, /<skill filename=/u);
     assert.equal(instructions.split("<workbench_skills>").length - 1, 1);
 
     for (const method of ["turn/start", "turn/steer"] as const) {
@@ -379,8 +380,9 @@ ${brainstormMarker}
       assert.doesNotMatch(activatedInput, new RegExp(brainstormMarker, "u"));
       assert.doesNotMatch(activatedInput, /\nname: iterate\n/u);
       assert.ok(activatedInput.includes(
-        `<skill filename="${iteratePath.replaceAll("\\", "/")}" trigger="Use when the user says /iterate &amp; the project allows it.">`,
+        '<skill name="iterate" trigger="Use when the user says /iterate &amp; the project allows it.">',
       ));
+      assert.doesNotMatch(activatedInput, /<skill filename=/u);
     }
 
     await fs.writeFile(iteratePath, `---

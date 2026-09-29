@@ -58,12 +58,13 @@ description: Use when the user says /iterate.
 ${bodyMarker}
 `, "utf8");
   await fs.writeFile(override, "{skills.catalog}\n", "utf8");
-  const manifestEntry = `<skill filename="${skillPath.replaceAll("\\", "/")}" trigger="Use when the user says /iterate." />`;
+  const manifestEntry = '<skill name="iterate" trigger="Use when the user says /iterate." />';
 
   try {
     const instructions = await managed.buildWorkbenchManagedThreadInstructions(createContext(), readNoLocalCapabilities);
     const prompt = [instructions.baseInstructions ?? "", instructions.developerInstructions ?? ""].join("\n");
     assert.ok(prompt.includes(manifestEntry));
+    assert.doesNotMatch(prompt, /<skill filename=/u);
     assert.doesNotMatch(prompt, new RegExp(bodyMarker, "u"));
     assert.doesNotMatch(prompt, /<\/skill>/u);
 
@@ -73,6 +74,7 @@ ${bodyMarker}
     );
     assert.match(activatedSkills ?? "", new RegExp(bodyMarker, "u"));
     assert.ok((activatedSkills ?? "").includes(manifestEntry.replace(" />", ">")));
+    assert.doesNotMatch(activatedSkills ?? "", /<skill filename=/u);
   } finally {
     await Promise.all([override, skillPath].map(file => fs.rm(file, { force: true })));
   }
@@ -126,5 +128,53 @@ test("managed instructions and activated skills render provider tool references"
     assert.match(activated ?? "", /`tools\.wb\.git_arc_release`/u);
   } finally {
     await Promise.all([override, skillPath].map(file => fs.rm(file, { force: true })));
+  }
+});
+
+test("slash-activated skills render source-relative imports and overrides before filtering", async () => {
+  const projectSkillDirectory = path.join(projectRoot, ".agents", "skills", "expand");
+  const librarySkillDirectory = path.join(libraryRoot, "skills", "library-expand");
+  const projectSkillPath = path.join(projectSkillDirectory, "SKILL.md");
+  const librarySkillPath = path.join(librarySkillDirectory, "SKILL.md");
+  await Promise.all([
+    fs.mkdir(projectSkillDirectory, { recursive: true }),
+    fs.mkdir(librarySkillDirectory, { recursive: true }),
+  ]);
+  await Promise.all([
+    fs.writeFile(projectSkillPath, "---\nname: expand\ndescription: Project expansion.\n---\nbase body\n"),
+    fs.writeFile(path.join(projectSkillDirectory, "SKILL.override.md"), [
+      "---", "name: expand", "description: Project expansion.", "---",
+      "project {./reference.md}",
+      "<!-- private note -->",
+      "<harness:opencode>call <tool id=\"rg\" /></harness:opencode>",
+      "<model:gpt-other>wrong model</model:gpt-other>",
+    ].join("\n")),
+    fs.writeFile(path.join(projectSkillDirectory, "reference.md"), "project reference content\n"),
+    fs.writeFile(librarySkillPath, "---\nname: library-expand\ndescription: Library expansion.\n---\nlibrary {./reference.md}\n"),
+    fs.writeFile(path.join(librarySkillDirectory, "reference.md"), "library reference content\n"),
+  ]);
+
+  try {
+    const output = await managed.buildWorkbenchManagedThreadActivatedSkills(
+      createContext([projectSkillPath, librarySkillPath]), readNoLocalCapabilities,
+    );
+    assert.match(output ?? "", /project project reference content/u);
+    assert.match(output ?? "", /library library reference content/u);
+    assert.match(output ?? "", /`tools\.wb\.rg`/u);
+    assert.doesNotMatch(output ?? "", /base body|private note|wrong model|\{\.\/reference\.md\}|name: expand/u);
+    assert.equal((output ?? "").split("<skill ").length - 1, 2);
+
+    await fs.writeFile(path.join(projectSkillDirectory, "SKILL.override.md"), "---\nname: expand\n---\n{./../../../../outside.md}\n");
+    await assert.rejects(
+      managed.buildWorkbenchManagedThreadActivatedSkills(
+        createContext([projectSkillPath]), readNoLocalCapabilities,
+      ),
+      /escapes the selected skill source/u,
+    );
+  } finally {
+    await Promise.all([
+      fs.rm(projectSkillDirectory, { recursive: true, force: true }),
+      fs.rm(librarySkillDirectory, { recursive: true, force: true }),
+    ]);
   }
 });

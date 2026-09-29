@@ -61,6 +61,25 @@ test("historical WB calls use the shared matcher without inventing child results
   assert.deepEqual(wrapper, before);
 });
 
+test("nested WB skill calls reuse the known-skill identity without inventing a missing path", () => {
+  const knownSkills = [{
+    description: "Use for frontend work.",
+    name: "react",
+    path: "C:/skills/react/SKILL.md",
+    relativePath: "skills/react/SKILL.md",
+  }];
+  const wrapper = { ...item("execute", { code: "opaque" }), metadata: { toolCalls: [
+    { tool: "wb.skill", input: { name: "react" }, status: "completed" },
+  ] } };
+  const known = getOpenCodeToolDisplay(wrapper, { knownSkills });
+  assert.deepEqual(known?.detailRows?.[0]?.summaryParts.filter(part => part.type === "skill"), [{
+    name: "react", path: "C:/skills/react/SKILL.md", type: "skill",
+  }]);
+  const stale = getOpenCodeToolDisplay(wrapper);
+  assert.equal(stale?.detailRows?.[0]?.summaryParts.some(part => part.type === "skill"), false);
+  assert.match(stale?.summaryText ?? "", /react/u);
+});
+
 test("failed native edits retain attempted targets without applied counts", () => {
   const failed = { ...item("edit", { path: "src/failed.ts", oldString: "old", newString: "new" }),
     status: "failed" as const, success: false };

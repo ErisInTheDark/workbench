@@ -36,6 +36,7 @@ import {
   WORKBENCH_LIBRARY_PROJECT_ID,
   workbenchLibraryRoot,
 } from "./workbench-library";
+import { listSkillDefinitionsFromDirectory } from "./workbench/skills/skill-discovery";
 
 export { appRoot, projectRoot };
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
@@ -75,16 +76,8 @@ function getAgentDirectoryPath(rootDir = projectRoot) {
   return path.join(rootDir, ".agents", "agents");
 }
 
-function getProjectSkillDirectoryPath(rootDir = projectRoot) {
-  return path.join(rootDir, ".agents", "skills");
-}
-
 function createAgentRelativePath(fileName: string) {
   return normalizeRelativePath(path.join(".agents", "agents", fileName));
-}
-
-function createProjectSkillRelativePath(directoryName: string) {
-  return normalizeRelativePath(path.join(".agents", "skills", directoryName, "SKILL.md"));
 }
 
 function isAgentMarkdownFile(fileName: string) {
@@ -1143,41 +1136,7 @@ export async function getProjectSnapshotFromResolvedProject(resolvedProject: Res
 }
 
 export async function listProjectSkillDefinitionsFromRoot(rootDir: string): Promise<WorkbenchSkillDefinition[]> {
-  let entries;
-  try {
-    entries = await fs.readdir(getProjectSkillDirectoryPath(rootDir), { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-
-    throw error;
-  }
-
-  const skills: WorkbenchSkillDefinition[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-
-    const relativePath = createProjectSkillRelativePath(entry.name);
-    const absolutePath = safeResolveProjectPath(rootDir, relativePath);
-    const content = await readTextFile(absolutePath);
-    if (!content?.trim()) {
-      continue;
-    }
-
-    const frontmatter = parseFrontmatterBlock(content);
-    skills.push({
-      content: content.trim(),
-      description: frontmatter?.get("description") ?? "",
-      name: frontmatter?.get("name") ?? entry.name,
-      path: normalizeRelativePath(absolutePath),
-      relativePath,
-    });
-  }
-
-  return skills.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+  return await listSkillDefinitionsFromDirectory(rootDir, ".agents/skills", parseFrontmatterBlock);
 }
 
 export async function listUserInvocableAgentsFromResolvedProject(resolvedProject: ResolvedProject) {

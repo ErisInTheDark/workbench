@@ -3,15 +3,17 @@
  * - WORKBENCH_LIBRARY_PROJECT_ID: stable project id for the external Workbench Library. Keywords: workbench library, project id.
  * - workbenchLibraryRoot: absolute root for personal Workbench skills, agents, workflows, mechanics, and instructions. Keywords: workbench library, root.
  * - parseFrontmatterBlock: parse simple markdown frontmatter fields. Keywords: frontmatter, markdown, metadata.
+ * - stripWorkbenchInstructionFrontmatter: return body text without YAML metadata.
  * - ensureWorkbenchLibrary: create the library root and standard folders. Keywords: workbench library, mkdir, scaffold.
  * - isExcludedWorkbenchLibraryFile: test whether a library file is documentation or a template ignored by scanners. Keywords: template, exclusion, scan.
- * - listWorkbenchLibrarySkills/listWorkbenchLibrarySkillDefinitions/listActiveWorkbenchSkillDefinitions: discover active Workbench Skill metadata and full file content with builtin shadowing. Keywords: skills, manifest, discovery, builtin.
+ * - listWorkbenchLibrarySkills/listWorkbenchLibrarySkillDefinitions/listActiveWorkbenchSkillDefinitions: discover active Workbench Skill metadata and full file content with source precedence. Keywords: skills, manifest, discovery, builtin.
  * - listWorkbenchLibraryAgents/readWorkbenchLibraryAgentDefinition: discover and load library agent files. Keywords: agent, prompt, library.
  * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs. Keywords: instructions, universal, bootstrap, fingerprint.
  * - WorkbenchLibraryBootstrapInstructionsOptions: controls duplicate instruction-pack filtering. Keywords: bootstrap, dedupe, codex.
  * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build harness skill instructions, compact manifest catalogs, activated skill bodies, and universal instruction content. Keywords: bootstrap, skills, catalog.
  */
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import type { WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "workbench-shared/types";
@@ -23,6 +25,8 @@ import {
 } from "./workbench-library-paths";
 import { ensureWorkbenchInstructionSourceFiles } from "./workbench/instructions/instruction-source";
 import { createLibraryInstructionFileGeneration } from "./workbench/instructions/library-instruction-files";
+import { renderWorkbenchSkillContent } from "./workbench/instructions/skill-rendering";
+import { listSkillDefinitionsFromDirectory } from "./workbench/skills/skill-discovery";
 
 export { WORKBENCH_LIBRARY_PROJECT_ID, workbenchLibraryRoot };
 
@@ -277,41 +281,11 @@ async function readWorkbenchLibrarySkillDefinitionsFromDirectory(
   directoryPath: string,
   relativeDirectory: string,
 ): Promise<WorkbenchSkillDefinition[]> {
-  let entries;
-  try {
-    entries = await fs.readdir(directoryPath, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
-  const skills: WorkbenchSkillDefinition[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || isExcludedWorkbenchLibraryFile(entry.name)) {
-      continue;
-    }
-
-    const relativePath = normalizeRelativePath(path.join(relativeDirectory, entry.name, "SKILL.md"));
-    if (isExcludedWorkbenchLibraryFile(relativePath)) {
-      continue;
-    }
-
-    const absolutePath = safeResolveLibraryPath(relativePath);
-    const content = await readTextFile(absolutePath);
-    if (!content?.trim()) {
-      continue;
-    }
-
-    const frontmatter = parseFrontmatterBlock(content);
-    skills.push({
-      content: content.trim(),
-      description: frontmatter?.get("description") ?? "",
-      name: frontmatter?.get("name") ?? entry.name,
-      path: normalizeRelativePath(absolutePath),
-      relativePath,
-    });
-  }
-
-  return skills.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+  return await listSkillDefinitionsFromDirectory(
+    workbenchLibraryRoot,
+    path.relative(workbenchLibraryRoot, directoryPath),
+    parseFrontmatterBlock,
+  );
 }
 
 async function listWorkbenchUserSkillDefinitions(): Promise<WorkbenchSkillDefinition[]> {
@@ -346,12 +320,14 @@ export async function listWorkbenchLibrarySkillDefinitions(): Promise<WorkbenchS
 
 export async function listActiveWorkbenchSkillDefinitions(
   projectSkills: readonly WorkbenchSkillDefinition[] = [],
+  userHome = os.homedir(),
 ): Promise<WorkbenchSkillDefinition[]> {
-  const [userSkills, builtinSkills] = await Promise.all([
+  const [userSkills, userAgentSkills, builtinSkills] = await Promise.all([
     listWorkbenchUserSkillDefinitions(),
+    listSkillDefinitionsFromDirectory(userHome, ".agents/skills", parseFrontmatterBlock, true),
     listWorkbenchBuiltinSkillDefinitions(),
   ]);
-  return applySkillShadowing([projectSkills, userSkills, builtinSkills]);
+  return applySkillShadowing([projectSkills, userSkills, userAgentSkills, builtinSkills]);
 }
 
 export async function listWorkbenchLibraryAgents(): Promise<WorkbenchAgentOption[]> {
@@ -508,7 +484,7 @@ function normalizeSkillPathIdentity(value: string) {
     : normalizedPath;
 }
 
-function stripFrontmatter(content: string) {
+export function stripWorkbenchInstructionFrontmatter(content: string) {
   return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
 }
 
@@ -521,7 +497,7 @@ export async function buildWorkbenchSkillCatalog(
   }
 
   return activeSkills.map((skill) => (
-    `<skill filename="${escapeXmlAttribute(skill.path)}" trigger="${escapeXmlAttribute(skill.description)}" />`
+    `<skill name="${escapeXmlAttribute(createSkillShadowKey(skill))}" trigger="${escapeXmlAttribute(skill.description)}" />`
   )).join("\n");
 }
 
@@ -547,8 +523,8 @@ export async function buildWorkbenchActivatedSkillCatalog(
   }
 
   return activatedSkills.map((skill) => {
-    const attributes = `filename="${escapeXmlAttribute(skill.path)}" trigger="${escapeXmlAttribute(skill.description)}"`;
-    const body = stripFrontmatter(skill.content);
+    const attributes = `name="${escapeXmlAttribute(createSkillShadowKey(skill))}" trigger="${escapeXmlAttribute(skill.description)}"`;
+    const body = stripWorkbenchInstructionFrontmatter(renderWorkbenchSkillContent(skill));
     return body
       ? `<skill ${attributes}>\n${body}\n</skill>`
       : `<skill ${attributes} />`;

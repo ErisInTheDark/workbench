@@ -16,6 +16,11 @@ import WorkbenchTranscriptCommandController from "./WorkbenchTranscriptCommandCo
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { ThreadReferenceSchema, TurnReferenceSchema, ItemReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import WorkbenchSkillController from "./WorkbenchSkillController";
+import { WorkbenchSkillExecutionRequestSchema } from "./lib/workbench/commands/skill-command-definition";
+import { listProjectSkillDefinitionsFromRoot } from "./lib/project";
+import { listActiveWorkbenchSkillDefinitions } from "./lib/workbench-library";
+import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
@@ -54,6 +59,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const messages = build.get("messages");
     const subagents = build.get("subagents");
     const threadState = build.get("threadState");
+    const settings = new WorkbenchServerSettings(database);
+    const skill = new WorkbenchSkillController({
+      listSkills: async root => await listActiveWorkbenchSkillDefinitions(await listProjectSkillDefinitionsFromRoot(root)),
+      readInstructionTools: () => build.run("mcp", mcp => mcp.listInstructionTools(), "Skill instruction tool catalogue"),
+      readLocalCapabilities: () => settings.readLocalCapabilities(),
+    });
     const transcript = build.get("transcript");
     const reloadDirt = build.get("reloadDirt");
     const tokens = new WorkbenchTokenCountController({
@@ -128,6 +139,24 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executeTokenCount: async (body, signal) => await tokens.execute(body, signal),
       executeTranscriptQuery: async (body, signal) => await transcriptCommands.execute(body, signal),
       executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
+      executeSkillRequest: async (body, signal) => {
+        const request = WorkbenchSkillExecutionRequestSchema.parse(body);
+        const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
+        const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "Workbench skill" });
+        const profile = await threadState.controller.readComposerProfileTarget({
+          harness: request.harness,
+          kind: "thread",
+          projectId: resolved.project.id,
+          threadId: identity.threadId,
+        });
+        return await skill.execute({
+          cwd: resolved.root.rootPath,
+          harness: request.harness,
+          model: profile?.settings.model ?? "",
+          name: request.name,
+          threadId: identity.threadId,
+        }, signal);
+      },
       executeSessionRequest: context.executeBrowseSessionRequest,
       getReloadScopeCatalog: () => reloadDirt.getCatalog(),
       resolveCaller: async (threadId, cwd, harness) => {

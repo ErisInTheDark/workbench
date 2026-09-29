@@ -11,6 +11,7 @@
  * - getWorkbenchCommandRoute/getWorkbenchCommandRendering/getWorkbenchCommandSummaryDisplay/getWorkbenchCommandRouteSummaryDisplay: resolve arguments into shared presentation.
  */
 import type { JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { WorkbenchSkillSummary } from "workbench-shared/types";
 
 import type { GitArcMoveArguments } from "workbench-shared/workbench/git/git-arc-move-arguments";
 import { CommandMatcher } from "./core";
@@ -31,6 +32,7 @@ import type { WorkbenchThreadRecallOperation } from "./thread-context";
 
 export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "toc",
+  "skill",
   "rg",
   "tokens",
   "tokens_instructions",
@@ -131,7 +133,9 @@ export interface WorkbenchCommandRendering {
   result: CommandMatcherResult;
 }
 
-export type WorkbenchCommandPresentationContext = RipgrepCommand.PresentationContext;
+export interface WorkbenchCommandPresentationContext extends RipgrepCommand.PresentationContext {
+  readonly knownSkills?: readonly WorkbenchSkillSummary[];
+}
 
 export type WorkbenchCommandRoute =
   | { kind: "simple"; rendering: WorkbenchCommandRendering }
@@ -213,6 +217,24 @@ function simple(
   stats?: Partial<ThreadCommandSummaryStats>,
 ) {
   return { kind: "simple", rendering: rendering({ claimedBy, ongoing, stats, summary }) } satisfies WorkbenchCommandRoute;
+}
+
+function renderSkillLoad(name: string | null, context: WorkbenchCommandPresentationContext) {
+  if (!name || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name)) return null;
+  const known = context.knownSkills?.find((skill) => {
+    const relativePath = skill.relativePath.replaceAll("\\", "/");
+    const directory = /^(?:\.agents\/)?skills\/(?:builtin\/)?([^/]+)\/SKILL\.md$/iu.exec(relativePath)?.[1];
+    return directory?.toLocaleLowerCase() === name;
+  });
+  const target = known
+    ? CommandMatcher.Skill({ name: known.name, path: known.path })
+    : CommandMatcher.Code(name);
+  return simple(
+    "workbench-cli.skill",
+    [CommandMatcher.Text("Loading "), target],
+    [CommandMatcher.Text("Load "), target],
+    { skillLoads: 1 },
+  );
 }
 
 function hidden(claimedBy: string) {
@@ -551,6 +573,8 @@ export function getWorkbenchCommandRoute(
   if (name.startsWith("subagent_")) return renderSubagent(name, args);
   if (name.startsWith("browse_")) return renderBrowse(name, args);
   switch (name) {
+    case "skill":
+      return renderSkillLoad(readString(args.name), context);
     case "git_arc_wait":
       return specialized("git-arc.wait", { kind: "gitArcWait", ref: readString(args.ref) });
     case "request_user_input":

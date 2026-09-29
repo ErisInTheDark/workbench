@@ -9,6 +9,7 @@
 import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 import { CommandMatcher } from "./core";
+import { tokenizeCommand } from "./helpers";
 import type { CommandMatcherDefinition } from "./types";
 import { getWorkbenchCommandRendering } from "./workbench-command-rendering";
 
@@ -276,6 +277,16 @@ function renderSubagentCliFallback(command: WorkbenchSubagentCommand) {
 }
 
 export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
+  CommandMatcher({
+    id: "workbench-cli.skill",
+    match: ({ knownSkills, stage, summaryParts }) => {
+      if (summaryParts.length) return null;
+      const tokens = tokenizeCommand(stage.text.trim());
+      if (tokens?.length !== 3 || !/^wb(?:\.cmd)?$/iu.test(tokens[0]!)
+        || tokens[1]?.toLocaleLowerCase() !== "skill") return null;
+      return getWorkbenchCommandRendering("skill", { name: tokens[2]! }, { knownSkills })?.result ?? null;
+    },
+  }),
   CommandMatcher({
     id: "workbench-cli.toc",
     match: ({ stage, summaryParts }) => {

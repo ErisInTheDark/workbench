@@ -9,6 +9,7 @@ import { useState, type ReactNode } from "react";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { repairQuestionnaireQuestion } from "workbench-shared/workbench/thread/thread-questionnaire-request";
 import type {
+  WorkbenchSkillSummary,
   WorkbenchUserInputOption,
   WorkbenchUserInputQuestion,
   WorkbenchUserInputRequest,
@@ -409,16 +410,18 @@ function ThreadQuestionnaireToolCallItem ({
 function ThreadGenericDynamicToolCallItem ({
   item,
   hasCapturedChildren,
+  knownSkills,
   projectFilePaths,
   projectId,
 }: {
   item: DynamicToolCallItem;
   hasCapturedChildren?: boolean;
+  knownSkills?: readonly WorkbenchSkillSummary[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
 }) {
   const metaParts = buildMetaParts(item);
-  const display = getOpenCodeToolDisplay(item);
+  const display = getOpenCodeToolDisplay(item, { knownSkills });
   const outcome = item.success === false ? "failed" : item.status;
   const outcomeDisplay = display ? getThreadCommandOutcomeDisplay(display, outcome) : null;
   const state = useWorkbenchClientStateSnapshot();
@@ -467,6 +470,7 @@ export default function ThreadDynamicToolCallItem ({
   hasCapturedChildren,
   inlineMentionSources,
   item,
+  knownSkills,
   threadCwdPath,
   projectFilePaths,
   projectId,
@@ -477,6 +481,7 @@ export default function ThreadDynamicToolCallItem ({
   hasCapturedChildren?: boolean;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   item: DynamicToolCallItem;
+  knownSkills?: readonly WorkbenchSkillSummary[];
   threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -491,6 +496,6 @@ export default function ThreadDynamicToolCallItem ({
     return <ThreadFileChangeItem items={[item]} projectFilePaths={projectFilePaths} projectId={projectId}
       projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
-  return <ThreadGenericDynamicToolCallItem item={item} hasCapturedChildren={hasCapturedChildren}
+  return <ThreadGenericDynamicToolCallItem item={item} hasCapturedChildren={hasCapturedChildren} knownSkills={knownSkills}
     projectFilePaths={projectFilePaths} projectId={projectId} />;
 }

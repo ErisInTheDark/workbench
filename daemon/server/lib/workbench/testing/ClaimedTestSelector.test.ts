@@ -25,17 +25,19 @@ test("selects affected consumers and reload boundaries without unrelated depende
       "unchanged.ts": "export const value = 3",
       "unrelated.ts": "export const value = 4",
       "worker.ts": "export const value = 5",
+      "cross-owner.ts": "export const value = 6",
     };
     const names = Object.keys(contents);
     await Promise.all(Object.entries(contents).map(([name, value]) => writeFile(file(name), value)));
     const tests = names.map(name => name.replace(".ts", ".test.ts"));
     await Promise.all(tests.map(name => writeFile(file(name), "")));
+    await writeFile(file("cross-owner.test.ts"), 'import "./input";');
     const catalog = await ProjectTestCatalog.read(root);
     const child = { scope: "child", sources: "Child.ts", children: [] };
     const parent = { scope: "parent", sources: "Parent.ts", boundarySources: "worker.ts", children: [child] };
-    const selector = new ClaimedTestSelector(catalog, new ProjectImportGraph(root, catalog.sources), [parent],
+    const selector = new ClaimedTestSelector(catalog, new ProjectImportGraph(root, catalog.files), [parent],
       new Map([["parent", file("Parent.ts")], ["child", file("Child.ts")]]));
-    assert.deepEqual(selector.select(["input.ts"]).files, ["Child.test.ts", "Parent.test.ts", "input.test.ts"].map(file).sort());
+    assert.deepEqual(selector.select(["input.ts"]).files, ["Child.test.ts", "Parent.test.ts", "input.test.ts", "cross-owner.test.ts"].map(file).sort());
     assert.deepEqual(selector.select(["worker.ts"]).files, ["Child.test.ts", "Parent.test.ts", "worker.test.ts"].map(file).sort());
     assert.deepEqual(selector.select(["outside.ts"]).files, ["consumer.test.ts", "outer-consumer.test.ts", "outside.test.ts"].map(file));
     assert.deepEqual(selector.select(["Child.ts"]).scopes, ["child"]);
@@ -75,4 +77,7 @@ test("loads project reload definitions without starting their services and selec
   for (const companion of catalog.companions([path.join(root, "daemon/server/daemon-root-node.ts")])) {
     assert.ok(bridgeSelection.files.includes(companion), `Production graph validation omitted: ${companion}`);
   }
+  const skillSelection = selector.select(["daemon/server/lib/workbench/commands/skill-command-definition.ts"]);
+  assert.ok(skillSelection.files.includes(path.join(root, "app/client/workbench/thread/thread-command-matchers.test.ts")));
+  assert.ok(!skillSelection.files.includes(path.join(root, "app/client/workbench/thread/inline-mention-highlights.skills.test.ts")));
 });

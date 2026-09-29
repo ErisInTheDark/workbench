@@ -227,11 +227,29 @@ user-owned agent prompt
     const workbenchLibrary = require("../../workbench-library") as typeof import("../../workbench-library");
     const skillManifest = await workbenchLibrary.buildWorkbenchSkillManifestInstructions();
     assert.match(skillManifest ?? "", /skill policy revision two/u);
-    assert.match(skillManifest ?? "", /skills[/\\]builtin[/\\]browse[/\\]SKILL\.md/u);
+    assert.match(skillManifest ?? "", /<skill name="browse" trigger=/u);
+    assert.doesNotMatch(skillManifest ?? "", /<skill filename=/u);
     assert.doesNotMatch(skillManifest ?? "", /builtin skill revision two/u);
 
     const projectSkillPath = path.join(temporaryProjectRoot, ".agents", "skills", "browse", "SKILL.md");
     await fs.mkdir(path.dirname(projectSkillPath), { recursive: true });
+    await fs.writeFile(projectSkillPath, "---\nname: browse\n---\nproject browse skill\n", "utf8");
+    const userAgentSkillPath = path.join(temporaryRoot, ".agents", "skills", "browse", "SKILL.md");
+    const userLibrarySkillPath = path.join(temporaryLibraryRoot, "skills", "browse", "SKILL.md");
+    await fs.mkdir(path.dirname(userAgentSkillPath), { recursive: true });
+    await fs.mkdir(path.dirname(userLibrarySkillPath), { recursive: true });
+    await fs.writeFile(userAgentSkillPath, "---\nname: browse\n---\nuser agent browse skill\n", "utf8");
+    await fs.writeFile(userLibrarySkillPath, "---\nname: browse\n---\nuser library browse skill\n", "utf8");
+    assert.equal((await workbenchLibrary.listActiveWorkbenchSkillDefinitions(
+      await (require("../../project") as typeof import("../../project")).listProjectSkillDefinitionsFromRoot(temporaryProjectRoot),
+      temporaryRoot,
+    )).find(skill => skill.name === "browse")?.path, projectSkillPath.replaceAll("\\", "/"));
+    await fs.rm(projectSkillPath);
+    assert.equal((await workbenchLibrary.listActiveWorkbenchSkillDefinitions([], temporaryRoot))
+      .find(skill => skill.name === "browse")?.path, userLibrarySkillPath.replaceAll("\\", "/"));
+    await fs.rm(userLibrarySkillPath);
+    assert.equal((await workbenchLibrary.listActiveWorkbenchSkillDefinitions([], temporaryRoot))
+      .find(skill => skill.name === "browse")?.path, userAgentSkillPath.replaceAll("\\", "/"));
     await fs.writeFile(projectSkillPath, "---\nname: browse\n---\nproject browse skill\n", "utf8");
     const projectRoots = [{
       id: "project",

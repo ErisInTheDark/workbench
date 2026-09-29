@@ -8,6 +8,7 @@ import type { ThreadItem, FileUpdateChange } from "workbench-shared/workbench/th
 import { createEmptyCommandSummaryStats, summarizeDisplayParts } from "./helpers";
 import type { ThreadCommandDisplayPart, ThreadCommandSummaryDisplay, ThreadCommandDetailRow } from "./types";
 import { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute } from "./workbench-mcp";
+import type { WorkbenchCommandPresentationContext } from "./workbench-command-rendering";
 
 type NativeItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 interface NativeFileChange {
@@ -63,7 +64,10 @@ function summary(tool: string, args: Record<string, unknown>): ThreadCommandSumm
     summaryText: summarizeDisplayParts(summaryParts), ongoingSummaryText: summarizeDisplayParts(ongoingSummaryParts) };
 }
 
-export function getOpenCodeToolDisplay(item: NativeItem): ThreadCommandSummaryDisplay | null {
+export function getOpenCodeToolDisplay(
+  item: NativeItem,
+  context?: WorkbenchCommandPresentationContext,
+): ThreadCommandSummaryDisplay | null {
   if (item.namespace !== "opencode") return null;
   const args = record(item.arguments);
   if (item.tool !== "execute") return args ? summary(item.tool, args) : null;
@@ -75,10 +79,10 @@ export function getOpenCodeToolDisplay(item: NativeItem): ThreadCommandSummaryDi
     const input = record(call.input);
     const wbTool = call.tool.startsWith("wb.") ? call.tool.slice(3) : null;
     const display = wbTool
-      ? getWorkbenchMcpCommandDisplay({ server: "wb", tool: wbTool, argumentsValue: (call.input ?? {}) as NativeItem["arguments"] })
+      ? getWorkbenchMcpCommandDisplay({ server: "wb", tool: wbTool, argumentsValue: (call.input ?? {}) as NativeItem["arguments"], context })
       : input ? summary(call.tool, input) : null;
     const wbRoute = wbTool ? getWorkbenchMcpCommandRoute({
-      server: "wb", tool: wbTool, argumentsValue: (call.input ?? {}) as NativeItem["arguments"],
+      server: "wb", tool: wbTool, argumentsValue: (call.input ?? {}) as NativeItem["arguments"], context,
     }) : null;
     const query = input && typeof input.query === "string" ? input.query : null;
     const state = call.status === "running" ? "inProgress" : call.status === "completed" ? "completed"

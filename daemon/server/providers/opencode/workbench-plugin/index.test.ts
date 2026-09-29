@@ -140,17 +140,20 @@ for (const failure of ["rpc", "http.response"]) {
   });
 }
 
-test("managed native command and question denial preserves file tools and hosted request identity", async () => {
+test("managed native command, question, and skill denial preserves ordinary skill use and hosted request identity", async () => {
   const owner = await fixture();
   const cleanup = await owner.setup();
   try {
-    const tools = Object.fromEntries(["bash", "shell", "question", "edit", "write", "patch", "execute"].map(name => [name, { description: name }]));
+    const tools = Object.fromEntries(["bash", "shell", "question", "skill", "edit", "write", "patch", "execute"].map(name => [name, { description: name }]));
     await owner.hooks.get("context")!({ sessionID: "managed", tools } as never);
     assert.deepEqual(Object.keys(tools), ["edit", "write", "patch", "execute"]);
-    for (const tool of ["bash", "shell", "question"]) {
+    for (const tool of ["bash", "shell", "question", "skill"]) {
       await assert.rejects(owner.hooks.get("execute.before")!({ sessionID: "managed", tool } as never), /unavailable/);
       await owner.hooks.get("execute.before")!({ sessionID: "ordinary", tool } as never);
     }
+    const ordinaryTools = { skill: { description: "native skill with <available_skills>" } };
+    await owner.hooks.get("context")!({ sessionID: "ordinary", tools: ordinaryTools } as never);
+    assert.equal(ordinaryTools.skill.description, "native skill with <available_skills>");
     const hosted = { sessionID: "managed", model: { providerID: "opencode" },
       request: new Request("https://example.test", { headers: { existing: "retained" } }) };
     await owner.hooks.get("http.request")!(hosted as never);

@@ -12,6 +12,7 @@ import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/dae
 import { WORKBENCH_QUESTIONNAIRE_COMMANDS } from "./questionnaire-command-definition";
 import { createWorkbenchReloadCommands } from "./reload-command-definitions";
 import { WORKBENCH_RIPGREP_COMMANDS } from "./ripgrep-command-definition";
+import { WORKBENCH_SKILL_COMMANDS } from "./skill-command-definition";
 import { WORKBENCH_SUBAGENT_COMMANDS } from "./subagent-command-definitions";
 import { WORKBENCH_THREAD_COMMANDS } from "./thread-command-definitions";
 import { WORKBENCH_TOKEN_COMMANDS } from "./token-command-definition";
@@ -27,6 +28,7 @@ const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Obj
   ...WORKBENCH_TOC_COMMANDS,
   ...WORKBENCH_STATS_COMMANDS,
   ...WORKBENCH_RIPGREP_COMMANDS,
+  ...WORKBENCH_SKILL_COMMANDS,
   ...WORKBENCH_QUESTIONNAIRE_COMMANDS,
   ...WORKBENCH_MESSAGE_COMMANDS,
   ...WORKBENCH_SUBAGENT_COMMANDS,

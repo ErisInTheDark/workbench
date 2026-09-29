@@ -25,6 +25,7 @@ import WorkbenchAgentCommandLiveTestController from "./WorkbenchAgentCommandCont
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const RELOAD_POLL_INTERVAL_MS = 250;
 interface WorkbenchAgentDirectPort {
+  executeSkillRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   resolveCaller?: (threadId: string, cwd: string, harness: string) => Promise<{ threadId: WorkbenchThreadId; nativeThreadId: NativeThreadId; harness: WorkbenchHarness }>;
   patchClaims?: (harness: string, input: { raw: string; callerThreadId: string | null }, signal: AbortSignal) => Promise<string>;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
@@ -352,6 +353,10 @@ export default class WorkbenchAgentCommandController {
     }
     if (request.path === "/api/toc" && request.body) {
       return await this.markdownToc.execute(request.body, signal);
+    }
+    if (request.path === "/api/skill" && request.body) {
+      if (!this.direct.executeSkillRequest) throw new Error("Skill loading is not configured.");
+      return await this.direct.executeSkillRequest(request.body, signal);
     }
     if (request.path === "/api/rg" && request.body) {
       return await this.ripgrep.execute(request.body, signal);

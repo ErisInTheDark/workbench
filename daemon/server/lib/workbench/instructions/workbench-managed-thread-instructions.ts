@@ -2,6 +2,7 @@
  * Exports:
  * - ManagedThreadInstructionContext: managed prompt context plus the model used for selector filtering.
  * - WorkbenchManagedThreadInstructions: filtered base and developer instructions for one managed thread.
+ * - createManagedThreadFilter: bind one managed caller's selectors, tools, and capability context.
  * - buildWorkbenchManagedThreadInstructions: assemble and filter managed base and developer instructions.
  * - buildWorkbenchManagedThreadActivatedSkills: assemble and filter activated skill bodies for one managed thread.
  */
@@ -24,7 +25,7 @@ export interface WorkbenchManagedThreadInstructions {
   readonly developerInstructions: string | null;
 }
 
-async function createManagedThreadFilter(
+export async function createManagedThreadFilter(
   context: ManagedThreadInstructionContext,
   readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>,
 ) {

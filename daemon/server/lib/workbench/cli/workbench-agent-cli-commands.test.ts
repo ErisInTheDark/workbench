@@ -1434,6 +1434,28 @@ test("redirects a PATH-resolved wb command to the Workbench install in cwd", asy
   }
 });
 
+test("skill CLI requires a managed caller and routes its name without output adornments", async () => {
+  const context = {
+    callerHarness: "codex",
+    callerThreadId: "thread-one",
+    cwd: "C:/workspace",
+  };
+  const parsed = await parseWorkbenchAgentCliCommand(["skill", "react"], context);
+  assert.equal(parsed.kind, "request");
+  if (parsed.kind !== "request") return;
+  assert.deepEqual(parsed.request.body, {
+    cwd: "C:/workspace", harness: "codex", name: "react", threadId: "thread-one",
+  });
+  assert.equal(parsed.request.path, "/api/skill");
+  assert.equal(parsed.request.responseKind, "native");
+  assert.equal((await parseWorkbenchAgentCliCommand(
+    ["skill", "react"], { ...context, callerThreadId: null },
+  )).kind, "error");
+  const help = await parseWorkbenchAgentCliCommand(["skill", "--help"]);
+  assert.equal(help.kind, "help");
+  assert.match(help.help, /wb skill <name>/u);
+});
+
 test("compare keeps CLI text and MCP file facts from the same response", () => {
   const change = { additions: 1, deletions: 0, diff: "diff --git a/a.ts b/a.ts", kind: { type: "add" }, path: "a.ts" };
   const request: WorkbenchAgentCliRequest = {
