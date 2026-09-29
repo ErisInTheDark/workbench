@@ -47,6 +47,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/CodexToolsNode.ts",
     "daemon/server/CodexToolsController.ts",
     "daemon/server/CodexShellController.ts",
+    "daemon/server/WorkbenchApprovedCommandExecutor.ts",
     "daemon/server/CodexCommandExecController.ts",
   ].join("\n"),
 });

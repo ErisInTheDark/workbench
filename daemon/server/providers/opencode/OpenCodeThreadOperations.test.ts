@@ -10,7 +10,11 @@ import OpenCodeThreadOperations from "./OpenCodeThreadOperations";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
 import WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
 import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
-import { isWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import {
+  createWorkbenchQuestionnaireResponseInput,
+  isWorkbenchUnfinishedTurnInput,
+  WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
+} from "workbench-shared/workbench/thread/thread-recovery-message";
 import type OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
 import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import { createThreadStateTestDatabase } from "../../workbench-thread-state-test-database";
@@ -18,6 +22,24 @@ import WorkbenchTranscriptRepository from "../../database/transcript/WorkbenchTr
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { normalizeProviderSidebarEntry } from "../../WorkbenchThreadStateFeature";
+
+test("passive Workbench context enters native instructions without starting a user turn", async () => {
+  const entries: Array<{ sessionID: string; key: string; value: string }> = [];
+  const owner = operations({
+    session: {
+      instructions: { entry: { put: async (input: { sessionID: string; key: string; value: string }) => {
+        entries.push(input);
+      } } },
+    },
+  }, {});
+  assert.equal(await owner.context.inject({
+    threadId, text: '<wb:thread-status value="working" />',
+  }, new AbortController().signal), "admitted");
+  assert.deepEqual(entries.map(entry => ({
+    sessionID: entry.sessionID, value: entry.value,
+  })), [{ sessionID: nativeThreadId, value: '<wb:thread-status value="working" />' }]);
+  assert.match(entries[0]!.key, /^workbench-context:/u);
+});
 
 test("accepted questionnaires persist once in their accepted turn and recording failures propagate", async () => {
   const fixture = createThreadStateTestDatabase();
@@ -1054,6 +1076,28 @@ test("retains a questionnaire while interrupting its exact OpenCode session", as
     `interrupt:${nativeThreadId}`,
     "state:interrupted",
   ]);
+});
+
+test("questionnaire continuation keeps a native prompt object while delivering working status", async () => {
+  const prompts: Array<{ text: string; metadata: { workbench: { input: object[] } } }> = [];
+  const owner = operations({
+    session: { prompt: async (input: { text: string; metadata: { workbench: { input: object[] } } }) => {
+      prompts.push(input);
+      return {};
+    } },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
+  {}, { readPage: async () => ({ thread: { turns: [{ id: turnId, status: "interrupted" }] } }) });
+  const response = createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["yes"] } } });
+  await owner.submit({
+    threadId, clientMessageId: "answer", intent: "continue",
+    input: [...response, { type: "text", text: "continue working", text_elements: [] }],
+  });
+  assert.equal(prompts.length, 1);
+  assert.ok(prompts[0]!.text.startsWith(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE));
+  assert.match(prompts[0]!.text, /<wb:questionnaire-response>/u);
+  assert.equal(prompts[0]!.metadata.workbench.input.length, 2);
+  await owner.settle();
 });
 
 test("connection recovery reads native activity for tracked work and ignores sessions changed by live events", async () => {

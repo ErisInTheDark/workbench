@@ -18,15 +18,8 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - "@opencode/*"
   - "@github/copilot"
-  - "@github/copilot-sdk"
-  - "@github/copilot-linux-x64"
-  - "@github/copilot-win32-x64"
-  - "@github/copilot-darwin-x64"
-  - "@github/copilot-linuxmusl-x64"
-  - "@github/copilot-win32-arm64"
-  - "@github/copilot-linux-arm64"
-  - "@github/copilot-darwin-arm64"
-  - "@github/copilot-linuxmusl-arm64"
+  - "@github/copilot-*"
+  - "@anthropic-ai/*"
 trustPolicyExclude:
   - "@smithy/core@3.33.0"
   - "pino@9.14.0"

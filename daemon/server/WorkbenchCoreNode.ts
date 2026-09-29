@@ -16,6 +16,7 @@ import type { WorkbenchProjectStartup } from "./database/project/workbench-proje
 import BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import CodexBridgeNode from "./CodexBridgeNode";
 import OpenCodeBridgeNode from "./providers/opencode/OpenCodeBridgeNode";
+import ClaudeBridgeNode from "./providers/claude/ClaudeBridgeNode";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type {
   DaemonDatabaseRegistration,
@@ -474,7 +475,7 @@ function createWorkbenchCoreFeature(
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, import("./daemon-runtime-objects").DaemonProviderNotification>()({
   access: "agent",
   boundarySources: "shared/workbench/stats/**",
-  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchBrowseNode, WorkbenchVoiceNode, WorkbenchWebSocketNode],
+  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchBrowseNode, WorkbenchVoiceNode, WorkbenchWebSocketNode],
   create: (context, { get, run, lease, handoffState, isReplacing }) => createWorkbenchCoreFeature(
     context,
     run,

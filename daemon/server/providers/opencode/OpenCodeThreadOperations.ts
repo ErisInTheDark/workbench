@@ -14,9 +14,10 @@ import {
 import type { WorkbenchProviderThreads, WorkbenchProviderTranscriptReconcile } from "workbench-shared/workbench/provider/provider-thread";
 import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
+import type { WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
 import type { WorkbenchThreadMessageResult } from "workbench-shared/workbench/thread/thread-actions";
 import type { WorkbenchUserInput } from "workbench-shared/workbench/provider/provider-input";
-import { createWorkbenchTextInput } from "workbench-shared/workbench/provider/provider-input";
+import { createWorkbenchTextInput, toWorkbenchThreadUserInput } from "workbench-shared/workbench/provider/provider-input";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
@@ -32,9 +33,13 @@ import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
 import OpenCodeThreadWindowLoader from "./OpenCodeThreadWindowLoader";
 import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
 import type WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
+import type { WorkbenchToolAdmissionOptions } from "../../WorkbenchToolAdmissionController";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import { createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import {
+  createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput,
+  isWorkbenchQuestionnaireResponsePart, WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
+} from "workbench-shared/workbench/thread/thread-recovery-message";
 
 type OpenCodeSteerEntry = Omit<WorkbenchSteerHistoryEntry, "threadId" | "turnId"> & {
   threadId: WorkbenchThreadId;
@@ -61,7 +66,7 @@ export interface OpenCodeThreadOperationsOptions {
   projects: Pick<WorkbenchProjectCatalogController, "resolveAgentEndpointProjectFromCwd" | "resolveProjectById">;
   questionnaires: Pick<
     WorkbenchQuestionnaireController,
-    "canDeliver" | "deliver" | "interruptRetainingQuestionnaire"
+    "canDeliver" | "deliver" | "interruptRetainingQuestionnaire" | "requestShellApproval"
   >;
   state: Pick<WorkbenchThreadStateFeature, "controller" | "installCreatedProfile">;
   managed: Pick<OpenCodeManagedSessionController, "creation" | "refresh">;
@@ -159,6 +164,30 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   };
 
   constructor(private readonly options: OpenCodeThreadOperationsOptions) {}
+
+  readonly context: WorkbenchProviderContext = {
+    inject: async (input, signal) => {
+      signal.throwIfAborted();
+      const { binding } = await this.native(input.threadId);
+      const client = await this.options.acquire();
+      signal.throwIfAborted();
+      await client.session.instructions.entry.put({
+        sessionID: binding.nativeThreadId,
+        key: `workbench-context:${randomUUID()}`,
+        value: input.text,
+      });
+      return "admitted";
+    },
+  };
+
+  async requestShellApproval(
+    request: Parameters<WorkbenchToolAdmissionOptions["approve"]>[0],
+    signal: AbortSignal,
+  ) {
+    return this.options.questionnaires.requestShellApproval({
+      callerThreadId: request.caller.threadId, cwd: request.cwd, command: request.command,
+    }, signal);
+  }
 
   readonly interactions: WorkbenchProviderInteractions = {
     pending: async () => [],
@@ -368,7 +397,11 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     }
     const activeTurn = execution.active && execution.kind !== "compaction" ? execution.turn : null;
     const delivery = input.intent === "newTurn" || !activeTurn ? "queue" : "steer";
-    const request = prompt(input.input);
+    const workingStatus = toWorkbenchThreadUserInput(input.input).some(isWorkbenchQuestionnaireResponsePart);
+    const nativePrompt = prompt(input.input);
+    const request = workingStatus
+      ? { ...nativePrompt, text: `${WORKBENCH_THREAD_WORKING_STATUS_MESSAGE}\n\n${nativePrompt.text}` }
+      : nativePrompt;
     const messageId = nativeMessageId(input.clientMessageId);
     const itemId = WorkbenchItemIdSchema.parse(randomUUID());
     const metadata = {
@@ -392,6 +425,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       agentPath: settings?.agentPath ?? null,
       workflowIds: input.context?.workflowIds ?? [],
       activatedSkillPaths: input.context?.activatedSkillPaths ?? [],
+      workingStatus,
     });
     if (continuation && !continuation()) throw supersededContinuation;
     if (continuation && input.context) {

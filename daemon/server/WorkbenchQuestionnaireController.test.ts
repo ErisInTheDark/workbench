@@ -129,6 +129,27 @@ test("freeform request publishes one durable question and returns its correlated
   await nextWaiting;
 });
 
+test("outside-sandbox shell approval accepts only its exact one-shot decision", async () => {
+  for (const choice of ["Allow once", "Decline", "custom text"]) {
+    const harness = createHarness();
+    const waiting = harness.controller.requestShellApproval({
+      callerThreadId: freeformInput.callerThreadId,
+      cwd: "C:/workspace",
+      command: ["pwsh", "-Command", "Get-Content secret.txt"],
+    }, new AbortController().signal);
+    const pending = await harness.published;
+    assert.match(pending.request.questions[0]!.question, /Get-Content secret\.txt/u);
+    assert.match(pending.request.questions[0]!.question, /C:\/workspace/u);
+    await harness.controller.respond({
+      threadId: freeformInput.callerThreadId,
+      requestKey: pending.requestKey,
+      response: { answers: { decision: { answers: [choice] } } },
+    });
+    assert.equal(await waiting, choice === "Allow once");
+    await harness.controller.dispose();
+  }
+});
+
 test("both answer routes collect context before resolving their unchanged response", async () => {
   for (const route of ["respond", "deliver"] as const) {
     const events: string[] = [];

@@ -140,7 +140,7 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
 
   readonly tools: NonNullable<WorkbenchProvider["tools"]> = {
     transcript: {
-      start: (input, signal) => this.tool(tools => tools.transcript?.start(input, signal) ?? Promise.resolve(null), "transcript.start"),
+      start: (input, signal, context) => this.tool(tools => tools.transcript?.start(input, signal, context) ?? Promise.resolve(null), "transcript.start"),
       finish: (reference, result) => this.tool(tools => {
         if (!tools.transcript) throw new Error(`Provider ${this.key} no longer supports admitted tool capture.`);
         return tools.transcript.finish(reference, result);
@@ -152,8 +152,8 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     }, "execute"),
     patchClaims: (input, check, signal) => this.tool(tools => tools.patchClaims(input, check, signal), "patchClaims"),
     describe: () => this.tool(tools => tools.describe(), "describe"),
-    caller: (metadata, signal) => this.tool(tools => tools.caller(metadata, signal), "caller"),
-    shell: (input, metadata, signal) => this.tool(tools => tools.shell(input, metadata, signal), "shell"),
+    caller: (metadata, signal, context) => this.tool(tools => tools.caller(metadata, signal, context), "caller"),
+    shell: (input, metadata, signal, context) => this.tool(tools => tools.shell(input, metadata, signal, context), "shell"),
   };
 
   readonly browse: NonNullable<WorkbenchProvider["browse"]> = {

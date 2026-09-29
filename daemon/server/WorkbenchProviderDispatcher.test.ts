@@ -52,6 +52,7 @@ function fixture() {
   type Objects = {
     codexProvider: WorkbenchProvider;
     openCodeProvider: WorkbenchProvider;
+    claudeProvider: WorkbenchProvider;
     providers: WorkbenchProviderDispatcher;
   };
   let generation = 0;

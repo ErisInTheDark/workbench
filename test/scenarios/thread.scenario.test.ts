@@ -16,8 +16,11 @@ import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
 import type { ThreadPayload } from "../../shared/types";
 import type { Turn } from "../../shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "../../shared/types";
+import { WORKBENCH_THREAD_WORKING_STATUS_MESSAGE } from "../../shared/workbench/thread/thread-recovery-message";
 import { projectWorkbenchTranscript, type WorkbenchTranscriptProjection } from "../../shared/workbench/transcript/workbench-transcript-projection";
-import IsolatedWorkbench from "./IsolatedWorkbench";
+import IsolatedWorkbench, {
+  CLAUDE_NATIVE_INSTRUCTION_SENTINEL, WORKBENCH_INSTRUCTION_SENTINEL,
+} from "./IsolatedWorkbench";
 import FakeThreadModelServer from "./FakeThreadModelServer";
 import ProviderThreadJourney, { SharedRuntimeCheckpoints } from "./ProviderThreadJourney";
 import { parseThreadTestArguments, type ThreadTestMode } from "../thread-test-arguments";
@@ -27,7 +30,7 @@ import {
 } from "./provider-boundary-journey";
 
 const modelId = "opencode-go/muse-spark-1.3-contributor";
-type Provider = "codex" | "opencode";
+type Provider = "codex" | "opencode" | "claude";
 type ProjectedItems = WorkbenchTranscriptProjection["turns"][number]["items"];
 type ProviderScenario = {
   initialPrompt?: string;
@@ -45,7 +48,7 @@ const selectedSelection = process.env.WORKBENCH_THREAD_TEST_SELECTION
     .map(([provider, mode]) => `--${provider}=${mode}`))
   : null;
 const selectedProviders = selectedSelection
-  ? (["codex", "opencode"] as const).filter(provider => selectedSelection[provider])
+  ? (["codex", "opencode", "claude"] as const).filter(provider => selectedSelection[provider])
   : [];
 
 function assertFirstTurnPending(events: IsolatedWorkbench["events"], turnId: string, durableState?: string) {
@@ -278,7 +281,7 @@ async function verifyCodexFirstTurn(
 
 test("selected providers complete the shared thread boundary journey in one clone", {
   skip: !selectedProviders.length
-    ? "run with pnpm test:thread --codex=paid|fake or --opencode=paid|fake" : false,
+    ? "run with pnpm test:thread --codex=paid|fake, --opencode=paid|fake, or --claude=fake" : false,
 }, async t => {
   assert.ok(selectedSelection);
   const now = Date.now();
@@ -324,6 +327,13 @@ test("selected providers complete the shared thread boundary journey in one clon
     reasoningEffort: null, serviceTier: null, agentPath: null, agentSource: null,
     createdAt: now, updatedAt: now,
   };
+  if (selectedSelection.claude) profiles.claude = {
+    id: randomUUID(), name: `claude ${selectedSelection.claude} scenario`,
+    description: "Claude Code provider diagnostic through the installed executable.",
+    scope: { kind: "global" }, harness: "claude", model: "sonnet",
+    reasoningEffort: null, serviceTier: null, agentPath: null, agentSource: null,
+    createdAt: now, updatedAt: now,
+  };
   const activeProfiles = selectedProviders.map(provider => profiles[provider]!);
   try {
     for (const provider of selectedProviders) {
@@ -338,6 +348,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     runtime = await IsolatedWorkbench.create(source, t.signal, {
       codexIdentity: selectedSelection.codex === "paid",
       ...(fakeModels.codex ? { codexModelEndpoint: fakeModels.codex.baseUrl } : {}),
+      ...(fakeModels.claude ? { claudeModelEndpoint: fakeModels.claude.baseUrl } : {}),
       ...(selectedSelection.opencode ? { openCodeIdentity: openCodePaths ? {
         configDirectory: openCodePaths[1].trim(), database: openCodePaths[0].trim(),
       } : {
@@ -367,6 +378,10 @@ test("selected providers complete the shared thread boundary journey in one clon
   const mode = selectedSelection[provider] as ThreadTestMode;
   const profile = profiles[provider]!;
   const fakeModel = fakeModels[provider] ?? null;
+  if (provider === "claude") {
+    fakeModel?.forbidPromptText(CLAUDE_NATIVE_INSTRUCTION_SENTINEL);
+    fakeModel?.requirePromptText(WORKBENCH_INSTRUCTION_SENTINEL);
+  }
   let threadId: string | null = null;
   let nativeThreadId: string | null = null;
   let nativeSessionDeleted = false;
@@ -455,6 +470,28 @@ test("selected providers complete the shared thread boundary journey in one clon
         } finally { privateDatabase.close(); }
       },
     },
+    claude: {
+      tools: {
+        search: "mcp__wb__rg",
+        shell: "mcp__wb__shell",
+        taskGet: "mcp__wb__task_get",
+        taskComplete: "mcp__wb__task_completed",
+        questionnaire: "mcp__wb__request_user_input",
+      },
+      verifySearch: items => {
+        assert.ok(items.some(item => item.type === "mcpToolCall"
+          && item.tool === "rg" && item.status === "completed"), "Claude must complete WB search");
+      },
+      verifyCapabilities: async () => {
+        assert.ok((await runtime.daemon.models.list("claude")).data.some(entry => entry.id === profile.model));
+      },
+      verifyNativeDeletion: async id => {
+        const root = path.join(runtime.root, "claude", "projects");
+        const files = await fs.readdir(root, { recursive: true });
+        assert.ok(!files.some(file => String(file).endsWith(`${id}.jsonl`)),
+          "The diagnostic must delete only its exact native Claude session");
+      },
+    },
   };
   try {
     if (provider === "codex" && fakeModel) {
@@ -479,7 +516,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     }
     const shellProofFile = `${PROVIDER_SHELL_PROOF_FILE}-${provider}`;
     const journey = createProviderBoundaryJourney(provider, providerRegistry[provider].tools, journeyGate.command, shellProofFile);
-    if (provider === "opencode" && fakeModel) {
+    if (provider !== "codex" && fakeModel) {
       fakeModel.enqueue(journey.fake.active(prefixProof, activeProof, steerProof, liveProof));
     }
     threadId = await runtime.launchDraft(project.id, selection,
@@ -508,8 +545,8 @@ test("selected providers complete the shared thread boundary journey in one clon
       await journeyGate.release(activeProof);
       return id;
     };
-    if (provider === "opencode") await subscribe();
-    let activeTurn = provider === "opencode" ? await steerIntoActiveTurn(firstTurn.id) : null;
+    if (provider !== "codex") await subscribe();
+    let activeTurn = provider !== "codex" ? await steerIntoActiveTurn(firstTurn.id) : null;
     await runtime.daemon.threads.title({ threadId, title });
 
     const database = new Database(path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"), {
@@ -593,6 +630,9 @@ test("selected providers complete the shared thread boundary journey in one clon
       question.request.questions.some(entry => entry.id === "held-answer"))!;
     const heldProof = passphrase();
     if (fakeModel) fakeModel.enqueue(journey.fake.held(prefixProof, heldProof));
+    if (fakeModel && provider !== "codex") {
+      fakeModel.expectNextPromptText(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE, "<wb:questionnaire-response>");
+    }
     assert.equal((await answer(
       retainedQuestion,
       "held-answer",
@@ -652,8 +692,20 @@ test("selected providers complete the shared thread boundary journey in one clon
     const finalProof = passphrase();
     if (fakeModel) fakeModel.enqueue(journey.fake.final(prefixProof, finalProof, title));
     const finalTurn = await submit(journey.final(prefixProof, finalProof));
+    if (provider !== "codex") {
+      const approval = await pending("decision");
+      assert.equal(approval.turnId, finalTurn);
+      assert.match(approval.request.questions[0]!.question, /outside the sandbox/u);
+      assert.equal((await answer(approval, "decision", "Allow once")).route, "live");
+    }
     durableProjection = { success: true, data: await waitTurn(finalTurn) };
     const finalItems = durableProjection.data.turns.find(turn => turn.id === finalTurn)?.items ?? [];
+    if (provider !== "codex") {
+      const approvedShell = finalItems.find(item => item.type === "mcpToolCall"
+        && JSON.stringify(item).includes(`${shellProofFile}-approved`));
+      assert.ok(approvedShell?.type === "mcpToolCall", "Approved shell call must appear in the canonical transcript");
+      assert.equal(approvedShell.status, "completed", JSON.stringify(approvedShell).slice(0, 1500));
+    }
     assert.ok(JSON.stringify(finalItems).includes(finalProof));
     assert.ok(JSON.stringify(finalItems).includes(prefixProof));
     assert.ok(JSON.stringify(finalItems).includes(title));
@@ -662,6 +714,9 @@ test("selected providers complete the shared thread boundary journey in one clon
     assert.equal(finalPage.thread.model, profile.model);
     assert.equal(finalPage.thread.reasoningEffort, profile.reasoningEffort);
     assert.equal(await fs.readFile(path.join(runtime.project, shellProofFile), "utf8"), finalProof);
+    if (provider !== "codex") {
+      assert.equal(await fs.readFile(path.join(runtime.project, `${shellProofFile}-approved`), "utf8"), finalProof);
+    }
     const lifecycle = new Database(path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"), {
       readonly: true,
     });
@@ -681,10 +736,8 @@ test("selected providers complete the shared thread boundary journey in one clon
     assert.ok([...owner.liveText.values()].some(update => update.text.includes(prefixProof)),
       "The provider text stream must reach the shared live projection");
     await owner.unsubscribe();
-    console.log(`[${provider} live] shared provider journey passed`);
 
     await coordinator.reopen(2);
-    console.log(`[${provider} live] isolated runtime cold-reopened`);
     const reopened = await runtime.transcripts.read({ threadId, turnLimit: 20 });
     assert.ok(reopened, "The transcript must survive a cold WB reopen");
     const reopenedProjection = projectWorkbenchTranscript(reopened);
@@ -765,6 +818,7 @@ test("selected providers complete the shared thread boundary journey in one clon
       runs.push(runProvider("codex"));
     }
     if (selectedSelection.opencode) runs.push(runProvider("opencode"));
+    if (selectedSelection.claude) runs.push(runProvider("claude"));
     const outcomes = await Promise.allSettled(runs);
     const failures = outcomes.filter(result => result.status === "rejected").map(result => result.reason);
     if (failures.length) throw new AggregateError(failures, "Provider journeys failed.");

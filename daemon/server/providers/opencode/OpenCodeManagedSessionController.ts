@@ -6,6 +6,7 @@
  */
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import type { WorkbenchInstructionTool } from "../../lib/workbench/instructions/instruction-tool-reference";
+import { WORKBENCH_THREAD_WORKING_STATUS_MESSAGE } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 import {
   buildWorkbenchManagedThreadActivatedSkills,
@@ -31,6 +32,7 @@ export interface OpenCodeManagedSessionContext {
   agentPath: string | null;
   workflowIds: readonly string[];
   activatedSkillPaths: readonly string[];
+  workingStatus?: boolean;
 }
 
 interface BuiltInstructions {
@@ -64,6 +66,7 @@ export default class OpenCodeManagedSessionController {
       built.baseInstructions,
       built.developerInstructions,
       built.activatedSkills,
+      input.workingStatus ? WORKBENCH_THREAD_WORKING_STATUS_MESSAGE : null,
     ].filter((part): part is string => Boolean(part?.trim())).join("\n\n");
     const session = (await this.options.acquire()).session;
     await session.update({

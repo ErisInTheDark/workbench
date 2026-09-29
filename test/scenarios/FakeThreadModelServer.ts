@@ -12,11 +12,16 @@ export type FakeThreadAction = {
     | { nameSuffix: string; input: string };
 };
 
-type ProviderWire = "codex" | "opencode";
+type ProviderWire = "codex" | "opencode" | "claude";
 type Tool = { type?: string; name?: string; namespace?: string; function?: { name?: string }; tools?: Tool[] };
 type ModelRequest = {
   input?: Array<{ type?: string; call_id?: string; tools?: Tool[] }>;
-  messages?: Array<{ role?: string; tool_call_id?: string }>;
+  messages?: Array<{
+    role?: string;
+    tool_call_id?: string;
+    content?: string | Array<{ type?: string; tool_use_id?: string }>;
+  }>;
+  model?: string;
   stream?: boolean;
   tools?: Tool[];
 };
@@ -45,6 +50,9 @@ export default class FakeThreadModelServer {
   private pendingResult: PendingResult | null = null;
   private failure: Error | null = null;
   private closed = false;
+  private forbiddenPromptText: string | null = null;
+  private requiredPromptText: string | null = null;
+  private readonly nextPromptText: string[][] = [];
 
   private constructor(private readonly server: Server, readonly baseUrl: string) {}
 
@@ -82,17 +90,50 @@ export default class FakeThreadModelServer {
     this.actions.push(...actions);
   }
 
+  forbidPromptText(text: string) {
+    this.forbiddenPromptText = text;
+  }
+
+  requirePromptText(text: string) {
+    this.requiredPromptText = text;
+  }
+
+  expectNextPromptText(...texts: string[]) {
+    this.nextPromptText.push(texts);
+  }
+
   forgetInterruptedTool() {
     this.pendingResult = null;
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse) {
     const route = new URL(request.url ?? "/", this.baseUrl).pathname;
+    if (request.method === "HEAD" && route === "/api/hello") {
+      response.writeHead(200);
+      response.end();
+      return;
+    }
     const provider: ProviderWire = route === "/v1/responses" ? "codex"
       : route === "/v1/chat/completions" ? "opencode"
+        : route === "/v1/messages" ? "claude"
         : (() => { throw new Error("Unsupported fake model route."); })();
     if (request.method !== "POST") throw new Error("Fake model accepts POST only.");
     const body = await readRequest(request);
+    if (this.forbiddenPromptText && JSON.stringify(body).includes(this.forbiddenPromptText)) {
+      throw new Error("A forbidden native instruction reached the fake model.");
+    }
+    if (this.requiredPromptText && !JSON.stringify(body).includes(this.requiredPromptText)) {
+      throw new Error("A required Workbench instruction did not reach the fake model.");
+    }
+    const expected = this.nextPromptText[0];
+    if (expected) {
+      const requestText = JSON.stringify(body);
+      const missing = expected.filter(text => !requestText.includes(JSON.stringify(text).slice(1, -1)));
+      if (missing.length) {
+        throw new Error(`Hidden Workbench context missing from next model request: ${missing.map(text => text.slice(0, 80)).join(", ")}`);
+      }
+      this.nextPromptText.shift();
+    }
     if (body.stream !== true) throw new Error("Fake model requires streaming requests.");
     if (provider === "opencode" && !body.tools?.length
       && body.messages?.length === 2
@@ -111,7 +152,10 @@ export default class FakeThreadModelServer {
       const observed = pending.provider === "codex"
         ? body.input?.some(item => ["function_call_output", "custom_tool_call_output"].includes(item.type ?? "")
           && item.call_id === pending.callId)
-        : body.messages?.some(item => item.role === "tool" && item.tool_call_id === pending.callId);
+        : pending.provider === "opencode"
+          ? body.messages?.some(item => item.role === "tool" && item.tool_call_id === pending.callId)
+          : body.messages?.some(item => item.role === "user" && Array.isArray(item.content)
+            && item.content.some(part => part.type === "tool_result" && part.tool_use_id === pending.callId));
       if (pending.provider !== provider || !observed) {
         this.recordFailure(new Error("Fake model tool result was not observed."));
         response.writeHead(409);
@@ -126,6 +170,9 @@ export default class FakeThreadModelServer {
     const tools = advertised.flatMap(tool => tool.type === "namespace"
       ? (tool.tools ?? []).map(inner => ({ ...inner, namespace: tool.name }))
       : [tool]);
+    if (provider === "claude" && tools.some(tool => (tool.name ?? tool.function?.name) === "Bash")) {
+      throw new Error("Claude exposed native Bash in fake mode.");
+    }
     const matches = action.tool ? tools.filter(tool => {
       const name = tool.name ?? tool.function?.name ?? "";
       return name === action.tool?.nameSuffix || name.endsWith(`__${action.tool?.nameSuffix}`)
@@ -139,7 +186,7 @@ export default class FakeThreadModelServer {
       throw new Error("Fake model tool wire type does not match its scripted action.");
     }
     this.actions.shift();
-    const callId = action.tool ? `call_${randomUUID()}` : null;
+    const callId = action.tool ? `${provider === "claude" ? "toolu" : "call"}_${randomUUID()}` : null;
     this.pendingResult = callId ? { callId, provider } : null;
     response.writeHead(200, {
       "Cache-Control": "no-store",
@@ -147,8 +194,10 @@ export default class FakeThreadModelServer {
     });
     if (provider === "codex") {
       await this.codexResponse(response, action, matches[0], callId);
-    } else {
+    } else if (provider === "opencode") {
       this.openCodeResponse(response, action, matches[0], callId);
+    } else {
+      this.claudeResponse(response, body.model ?? "claude-sonnet-4-6", action, matches[0], callId);
     }
     response.end();
   }
@@ -216,6 +265,43 @@ export default class FakeThreadModelServer {
     }));
     response.write(chunk({}, action.tool ? "tool_calls" : "stop"));
     response.write("data: [DONE]\n\n");
+  }
+
+  private claudeResponse(
+    response: ServerResponse, model: string, action: FakeThreadAction, tool: Tool | undefined, callId: string | null,
+  ) {
+    const emit = (value: object) => response.write(event(value, (value as { type: string }).type));
+    emit({
+      type: "message_start",
+      message: {
+        id: `msg_${randomUUID()}`, type: "message", role: "assistant", content: [], model,
+        stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 },
+      },
+    });
+    let index = 0;
+    if (action.text !== undefined) {
+      emit({ type: "content_block_start", index, content_block: { type: "text", text: "" } });
+      emit({ type: "content_block_delta", index, delta: { type: "text_delta", text: action.text } });
+      emit({ type: "content_block_stop", index });
+      index++;
+    }
+    if (action.tool && callId && tool && "arguments" in action.tool) {
+      emit({
+        type: "content_block_start", index,
+        content_block: { type: "tool_use", id: callId, name: tool.name, input: {} },
+      });
+      emit({
+        type: "content_block_delta", index,
+        delta: { type: "input_json_delta", partial_json: JSON.stringify(action.tool.arguments) },
+      });
+      emit({ type: "content_block_stop", index });
+    }
+    emit({
+      type: "message_delta",
+      delta: { stop_reason: action.tool ? "tool_use" : "end_turn", stop_sequence: null },
+      usage: { output_tokens: 1 },
+    });
+    emit({ type: "message_stop" });
   }
 
   async close() {

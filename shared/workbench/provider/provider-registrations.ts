@@ -9,6 +9,7 @@
 const providerRegistrations = {
   codex: "codexProvider",
   opencode: "openCodeProvider",
+  claude: "claudeProvider",
 } as const;
 export default providerRegistrations;
 export type WorkbenchProviderKey = keyof typeof providerRegistrations;

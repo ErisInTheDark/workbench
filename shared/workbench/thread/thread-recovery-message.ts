@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - WORKBENCH_THREAD_RECOVERY_MESSAGE/WORKBENCH_UNFINISHED_TURN_MESSAGE/WORKBENCH_THREAD_RECOVERY_ID_PREFIX: reserved hidden continuation contracts.
+ * - WORKBENCH_THREAD_RECOVERY_MESSAGE/WORKBENCH_UNFINISHED_TURN_MESSAGE/WORKBENCH_THREAD_RECOVERY_ID_PREFIX/WORKBENCH_THREAD_WORKING_STATUS_MESSAGE: reserved hidden continuation and status contracts.
  * - createWorkbenchThreadRecoveryId/createWorkbenchThreadRecoveryInput/createWorkbenchUnfinishedTurnInput/createWorkbenchQuestionnaireResponseInput: construct provider-safe hidden Workbench steers.
  * - stripWorkbenchQuestionnaireResponseInput: remove valid hidden questionnaire parts while preserving visible sibling input.
- * - isWorkbenchThreadRecoveryInput/isWorkbenchUnfinishedTurnInput/isWorkbenchUnfinishedContinuationTurn/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize reserved hidden Workbench content and continuation turns.
+ * - isWorkbenchThreadRecoveryInput/isWorkbenchUnfinishedTurnInput/isWorkbenchUnfinishedContinuationTurn/isWorkbenchQuestionnaireResponsePart/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize reserved hidden Workbench content and continuation turns.
  * - isWorkbenchThreadRecoveryEligible: derive the manual resume boundary from authoritative lifecycle and pending-input state.
  */
 
@@ -19,6 +19,7 @@ const WORKBENCH_RESUME_TAG_WRAPPER = defineTagWrapper("wb:resume", {
   attributes: [],
 });
 export const WORKBENCH_THREAD_RECOVERY_MESSAGE = "<wb:resume />";
+export const WORKBENCH_THREAD_WORKING_STATUS_MESSAGE = '<wb:thread-status value="working" />';
 export const WORKBENCH_UNFINISHED_TURN_MESSAGE = WORKBENCH_RESUME_TAG_WRAPPER.wrap(
   `You inappropriately ended the turn without finishing the task. The correct next action could be: 
 1. continuing your work or
@@ -72,7 +73,7 @@ export function createWorkbenchQuestionnaireResponseInput(response: WorkbenchUse
   }];
 }
 
-function isWorkbenchQuestionnaireResponsePart(input: UserInput) {
+export function isWorkbenchQuestionnaireResponsePart(input: UserInput) {
   if (input.type !== "text") return false;
   const parsed = WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER.read(input.text);
   if (!parsed) return false;

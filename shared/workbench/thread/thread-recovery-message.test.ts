@@ -16,6 +16,7 @@ import {
   createWorkbenchThreadRecoveryInput,
   createWorkbenchUnfinishedTurnInput,
   isWorkbenchHiddenSystemSteerInput,
+  isWorkbenchQuestionnaireResponsePart,
   isWorkbenchQuestionnaireResponseInput,
   isWorkbenchThreadRecoveryEligible,
   isWorkbenchThreadRecoveryInput,
@@ -118,6 +119,8 @@ test("skill transport does not hide other input alongside questionnaire response
     assert.equal(isWorkbenchQuestionnaireResponseInput(input), false);
     assert.equal(isWorkbenchHiddenSystemSteerInput(input), false);
   }
+  assert.equal([...response, ordinary].some(isWorkbenchQuestionnaireResponsePart), true);
+  assert.equal([malformed, ordinary].some(isWorkbenchQuestionnaireResponsePart), false);
 });
 
 test("mixed questionnaire response transport preserves only visible siblings for display", () => {

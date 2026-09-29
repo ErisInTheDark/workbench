@@ -46,7 +46,7 @@ function fakeOpenCodeTool(name: string, args: Record<string, unknown>, textValue
 }
 
 export function createProviderBoundaryJourney(
-  provider: "codex" | "opencode",
+  provider: "codex" | "opencode" | "claude",
   tools: ProviderBoundaryToolNames,
   holdCommand: (proof: string) => string,
   shellProofFile = PROVIDER_SHELL_PROOF_FILE,
@@ -67,7 +67,8 @@ export function createProviderBoundaryJourney(
       ? nameSuffix === "task_completed"
         ? { ...(text === undefined ? {} : { text }), tool: { nameSuffix, arguments: args } }
         : fakeCodexTool(nameSuffix, args, text)
-      : fakeOpenCodeTool(nameSuffix, args, text);
+      : provider === "opencode" ? fakeOpenCodeTool(nameSuffix, args, text)
+        : { ...(text === undefined ? {} : { text }), tool: { nameSuffix, arguments: args } };
   return {
     ask,
     fake: {
@@ -81,11 +82,15 @@ export function createProviderBoundaryJourney(
       ],
       stop: (proof: string): FakeThreadAction[] => [call("shell", { command: holdCommand(proof) })],
       final: (prefixProof: string, finalProof: string, title: string): FakeThreadAction[] => [
+        ...(provider === "codex" ? [] : [call("shell", {
+          command: `node -e "require('fs').writeFileSync('${shellProofFile}-approved','${finalProof}')"`,
+          outside_sandbox: true,
+        })]),
         call("task_get", {}),
         call("rg", { args: ["-n", PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE] }),
         call("shell", { command: `node -e "require('fs').writeFileSync('${shellProofFile}','${finalProof}')"` }),
-        call("task_completed", {}, provider === "opencode" ? `${finalProof} ${prefixProof} ${title}` : undefined),
-        { text: provider === "codex" ? `${finalProof} ${prefixProof} ${title}` : "" },
+        call("task_completed", {}, provider !== "codex" ? `${finalProof} ${prefixProof} ${title}` : undefined),
+        { text: provider === "codex" ? `${finalProof} ${prefixProof} ${title}` : provider === "claude" ? "Done." : "" },
       ],
     },
     active: (prefixProof: string, activeProof: string) => [
@@ -113,6 +118,12 @@ export function createProviderBoundaryJourney(
     ].join("\n"),
     final: (prefixProof: string, finalProof: string) => [
       "Authorised final provider scenario. Follow exactly, in order.",
+      ...(provider === "codex" ? [] : [
+        `First call ${tools.shell} with ${JSON.stringify({
+          command: `node -e "require('fs').writeFileSync('${shellProofFile}-approved','${finalProof}')"`,
+          outside_sandbox: true,
+        })}. Wait for Workbench approval.`,
+      ]),
       `1. Call ${tools.taskGet}.`,
       `2. Call ${tools.search} with exactly ${JSON.stringify({
         args: ["-n", PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE],

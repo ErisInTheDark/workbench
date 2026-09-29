@@ -6,5 +6,5 @@
 import type { WorkbenchHarness } from "workbench-shared/types";
 
 export function formatHarnessLabel(harness: WorkbenchHarness) {
-  return harness === "codex" ? "Codex" : harness === "copilot" ? "Copilot" : harness === "opencode" ? "OpenCode" : harness;
+  return harness === "codex" ? "Codex" : harness === "copilot" ? "Copilot" : harness === "opencode" ? "OpenCode" : harness === "claude" ? "Claude" : harness;
 }

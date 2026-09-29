@@ -8,11 +8,12 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import CodexExecServer from "./CodexExecServer";
 import CodexToolsNode from "./CodexToolsNode";
 import OpenCodeProvider from "./providers/opencode/OpenCodeProvider";
+import ClaudeProviderNode from "./providers/claude/ClaudeProviderNode";
 import { logError } from "./process-helpers";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
-  children: [CodexToolsNode, OpenCodeProvider],
+  children: [CodexToolsNode, OpenCodeProvider, ClaudeProviderNode],
   create: context => {
     const executor = new CodexExecServer({ cwd: context.daemonPackageRoot });
     return {

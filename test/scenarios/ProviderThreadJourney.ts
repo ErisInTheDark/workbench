@@ -61,7 +61,7 @@ export default class ProviderThreadJourney {
 
   constructor(
     private readonly runtime: IsolatedWorkbench,
-    readonly provider: "codex" | "opencode",
+    readonly provider: "codex" | "opencode" | "claude",
     readonly projectId: string,
     readonly threadId: string,
     private readonly signal: AbortSignal,
@@ -156,12 +156,21 @@ export default class ProviderThreadJourney {
 
   async pending(id: string) {
     const questions = await this.waitForFact(
-      async () => (await this.runtime.daemon.questionnaires.pending()).data
-        .filter(question => question.harness === this.provider && question.threadId === this.threadId),
-      value => value.some(question => question.turnId
-        && question.request.questions.some(entry => entry.id === id)),
+      async () => ({
+        questions: (await this.runtime.daemon.questionnaires.pending()).data
+          .filter(question => question.harness === this.provider && question.threadId === this.threadId),
+        latest: (await this.durable()).turns.at(-1),
+      }),
+      value => {
+        const found = value.questions.some(question => question.turnId
+          && question.request.questions.some(entry => entry.id === id));
+        if (!found && value.latest && value.latest.status !== "inProgress") {
+          throw new Error(`${this.provider} turn settled as ${value.latest.status} before question ${id}.`);
+        }
+        return found;
+      },
     );
-    const found = questions.find(question => question.turnId
+    const found = questions.questions.find(question => question.turnId
       && question.request.questions.some(entry => entry.id === id));
     assert.ok(found, `Question ${id} must be pending on ${this.provider}.`);
     return found;

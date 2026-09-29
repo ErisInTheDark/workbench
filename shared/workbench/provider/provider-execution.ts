@@ -2,7 +2,7 @@
  * Exports:
  * - ProviderToolMetadataSchema/ProviderToolMetadata: uninterpreted JSON metadata delivered to the selected provider.
  * - WorkbenchProviderCaller: validated WB identity and authoritative working directory.
- * - WorkbenchProviderTools: provider-owned MCP adaptation and sandbox execution.
+ * - ProviderToolRequestContext/WorkbenchProviderTools: server-read MCP scope and provider-owned sandbox execution.
  * - WorkbenchReadOnlyExecution: validated read-only command invocation.
  * - WorkbenchAdmittedExecution: daemon-owned caller and resolved one-command permissions.
  * - WorkbenchPatchClaimCheck: shared claim policy called with validated WB ownership.
@@ -39,8 +39,12 @@ export interface WorkbenchToolTranscriptReference {
 }
 
 export interface WorkbenchToolTranscript {
-  start(input: { tool: string; arguments: JsonValue; metadata: ProviderToolMetadata }, signal: AbortSignal): Promise<WorkbenchToolTranscriptReference | null>;
+  start(input: { tool: string; arguments: JsonValue; metadata: ProviderToolMetadata }, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchToolTranscriptReference | null>;
   finish(reference: WorkbenchToolTranscriptReference, result: ProviderToolResult): Promise<void>;
+}
+
+export interface ProviderToolRequestContext {
+  clientScope: string;
 }
 
 export interface WorkbenchProviderCaller {
@@ -77,6 +81,6 @@ export interface WorkbenchProviderTools {
     experimental: Record<string, Record<string, JsonValue>>;
     shellDescription: string;
   }>;
-  caller(metadata: ProviderToolMetadata, signal: AbortSignal): Promise<WorkbenchProviderCaller>;
-  shell(input: WorkbenchShellInput, metadata: ProviderToolMetadata, signal: AbortSignal): Promise<WorkbenchShellResult>;
+  caller(metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchProviderCaller>;
+  shell(input: WorkbenchShellInput, metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchShellResult>;
 }

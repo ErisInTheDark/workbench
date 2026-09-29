@@ -117,3 +117,39 @@ test("fake Codex code-mode call waits for its custom tool result", async () => {
     assert.match(await finished.text(), /finished/u);
   } finally { await server.close(); }
 });
+
+test("fake Claude Messages stream requires the matching tool result before advancing", async () => {
+  const server = await FakeThreadModelServer.start();
+  try {
+    server.enqueue([
+      { text: "before", tool: { nameSuffix: "shell", arguments: { command: "echo proof" } } },
+      { text: "after" },
+    ]);
+    const request = (messages: object[]) => fetch(`${server.baseUrl}/v1/messages?beta=true`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6", stream: true,
+        tools: [{ name: "mcp__wb__shell", input_schema: { type: "object" } }],
+        messages,
+      }),
+    });
+    const first = await request([{ role: "user", content: "start" }]);
+    assert.equal(first.status, 200);
+    const events = [...(await first.text()).matchAll(/^data: (.+)$/gmu)]
+      .map(match => JSON.parse(match[1]!));
+    const start = events.find(event => event.type === "content_block_start"
+      && event.content_block?.type === "tool_use");
+    assert.equal(start?.content_block?.name, "mcp__wb__shell");
+    assert.ok(events.some(event => event.type === "content_block_delta"
+      && event.delta?.type === "input_json_delta"
+      && JSON.parse(event.delta.partial_json).command === "echo proof"));
+    assert.equal((await request([{ role: "user", content: "no result" }])).status, 409);
+    const next = await request([{
+      role: "user", content: [{
+        type: "tool_result", tool_use_id: start.content_block.id, content: "proof",
+      }],
+    }]);
+    assert.equal(next.status, 200);
+    assert.match(await next.text(), /after/u);
+  } finally { await server.close(); }
+});

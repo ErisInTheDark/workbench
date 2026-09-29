@@ -4,6 +4,8 @@
  * - IsolatedWorkbenchSignalCleanup: settle registered scenario cleanup before a signalled test process exits.
  * - default IsolatedWorkbench: boot current source with private storage and own its socket/process cleanup.
  * - removeIsolatedWorkbenchWorkspace: clean one validated stopped workspace.
+ * - CLAUDE_NATIVE_INSTRUCTION_SENTINEL: catch native CLAUDE.md leakage into managed prompts.
+ * - WORKBENCH_INSTRUCTION_SENTINEL: prove managed project instructions reach provider models.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -16,6 +18,9 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
+
+export const CLAUDE_NATIVE_INSTRUCTION_SENTINEL = "NATIVE_CLAUDE_INSTRUCTION_FORBIDDEN";
+export const WORKBENCH_INSTRUCTION_SENTINEL = "WORKBENCH_MANAGED_INSTRUCTION_REQUIRED";
 import Database from "better-sqlite3";
 import { createSpawnOptions } from "../../daemon/server/process-helpers";
 import IsolatedWorkbenchProcess from "./IsolatedWorkbenchProcess";
@@ -44,6 +49,7 @@ type Message = { id?: number; method?: string; params?: Record<string, unknown>;
 export interface IsolatedWorkbenchOptions {
   codexIdentity?: boolean;
   codexModelEndpoint?: string;
+  claudeModelEndpoint?: string;
   openCodeIdentity?: {
     configDirectory?: string;
     configContent?: string;
@@ -173,6 +179,7 @@ export default class IsolatedWorkbench {
     signal: AbortSignal,
     private readonly codexIdentity: boolean,
     private readonly codexModelEndpoint: string | null,
+    private readonly claudeModelEndpoint: string | null,
     private readonly openCodeIdentity: OpenCodeFixtureIdentity | null,
     private readonly stateHome: string | null,
     private readonly readinessSignal?: () => AbortSignal,
@@ -240,6 +247,7 @@ export default class IsolatedWorkbench {
         signal,
         codexIdentity,
         options.codexModelEndpoint ?? null,
+        options.claudeModelEndpoint ?? null,
         options.openCodeIdentity,
         options.stateHome ?? null,
         options.readinessSignal,
@@ -261,6 +269,7 @@ export default class IsolatedWorkbench {
     signal: AbortSignal,
     codexIdentity: boolean,
     codexModelEndpoint: string | null,
+    claudeModelEndpoint: string | null,
     openCodeIdentity: IsolatedWorkbenchOptions["openCodeIdentity"],
     stateHome: string | null,
     readinessSignal?: () => AbortSignal,
@@ -293,8 +302,10 @@ export default class IsolatedWorkbench {
     await this.command("git", ["init", "-q"], project, process.env, signal);
     await this.command("git", ["config", "user.name", "Workbench scenario"], project, process.env, signal);
     await this.command("git", ["config", "user.email", "scenario@localhost"], project, process.env, signal);
+    // Track the copied source like a real checkout so daemon startup snapshots only later fixture changes.
+    await this.command("git", ["add", "-A"], project, process.env, signal);
     await this.command("git", ["-c", "user.name=Workbench scenario", "-c", "user.email=scenario@localhost",
-      "commit", "--allow-empty", "-qm", "isolated scenario fixture"], project, process.env, signal);
+      "commit", "-qm", "isolated scenario fixture"], project, process.env, signal);
     if (codexIdentity && process.platform === "win32") {
       // Convex-lab's sharing boundary: reuse the existing Windows identity, not
       // its sessions or the whole .sandbox directory. Never initialise another.
@@ -344,6 +355,7 @@ export default class IsolatedWorkbench {
       signal,
       codexIdentity,
       codexModelEndpoint,
+      claudeModelEndpoint,
       privateOpenCodeIdentity,
       stateHome,
       readinessSignal,
@@ -521,7 +533,8 @@ export default class IsolatedWorkbench {
     await fs.mkdir(home, { recursive: true });
     await fs.mkdir(library, { recursive: true });
     await fs.mkdir(path.join(this.root, "user"), { recursive: true });
-    await fs.writeFile(path.join(this.project, "AGENTS.md"), `The scenario passphrase is "${prefixProof}". When asked for the prefix proof, quote this passphrase exactly in commentary. Do not edit files or start other agents.\n`);
+    await fs.writeFile(path.join(this.project, "AGENTS.md"), `The scenario passphrase is "${prefixProof}". ${WORKBENCH_INSTRUCTION_SENTINEL}. When asked for the prefix proof, quote this passphrase exactly in commentary. Do not edit files or start other agents.\n`);
+    await fs.writeFile(path.join(this.project, "CLAUDE.md"), `${CLAUDE_NATIVE_INSTRUCTION_SENTINEL}\n`);
     const originalHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
     if (this.codexIdentity) await fs.copyFile(path.join(originalHome, "auth.json"), path.join(home, "auth.json"));
     if (this.codexModelEndpoint) {
@@ -551,6 +564,8 @@ stream_max_retries = 0
   private environment(projectRootPath: string): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
       ...process.env, CODEX_HOME: path.join(this.root, "codex"), WORKBENCH_LIBRARY_ROOT: path.join(this.root, "library"),
+      CLAUDE_CONFIG_DIR: path.join(this.root, "claude"),
+      ...(this.claudeModelEndpoint ? { WORKBENCH_CLAUDE_FAKE_ENDPOINT: this.claudeModelEndpoint } : {}),
       HOME: path.join(this.root, "user"), USERPROFILE: path.join(this.root, "user"),
       WORKBENCH_DATA_ROOT: this.dataRootPath,
       WORKBENCH_PROJECTS_ROOT: path.dirname(this.project),
@@ -577,6 +592,7 @@ stream_max_retries = 0
       // the parent supervisor. startService supplies the fixture's own session.
       "WORKBENCH_SERVICE_ACK_REQUIRED", "WORKBENCH_SERVICE_RUNTIME", "WORKBENCH_SERVICE_SESSION",
       "WORKBENCH_FOREGROUND_PIPE"]) delete env[key];
+    for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]) delete env[key];
     env.WORKBENCH_APP_HOST = "127.0.0.1";
     return env;
   }

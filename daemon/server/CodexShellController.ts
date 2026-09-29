@@ -16,6 +16,7 @@ import {
 } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { WorkbenchAdmittedExecution } from "workbench-shared/workbench/provider/provider-execution";
 import type CodexExecServer from "./CodexExecServer";
+import executeApprovedCommand from "./WorkbenchApprovedCommandExecutor";
 import { CodexExecPermissionSchema, type CodexExecPermission, type CodexExecRequest } from "./codex-exec-protocol";
 
 export const WORKBENCH_SHELL_SANDBOX_CAPABILITY = "codex/sandbox-state-meta";
@@ -75,6 +76,7 @@ export const WORKBENCH_SHELL_TOOL_DESCRIPTION = "Run a shell command inside the 
 export interface CodexShellControllerOptions {
   executor: Pick<CodexExecServer, "execute">;
   readConfiguration(cwd: string): Promise<unknown>;
+  executeApproved?: typeof executeApprovedCommand;
   platform?: NodeJS.Platform;
   shellEnvironment?: NodeJS.ProcessEnv;
 }
@@ -157,6 +159,7 @@ export default class CodexShellController {
     caller: { nativeThreadId: string; workbenchThreadId: string },
   ) {
     const request = WorkbenchShellInputSchema.parse(input);
+    if (request.outside_sandbox) throw new Error("Codex Workbench shell cannot request outside-sandbox execution; use Codex's direct approval tool.");
     const sandboxState = readSandboxState(meta);
     const sandboxCwd = fileURLToPath(sandboxState.sandboxCwd);
     const commandCwd = request.workdir ? path.resolve(sandboxCwd, request.workdir) : sandboxCwd;
@@ -193,6 +196,14 @@ export default class CodexShellController {
   async executeAdmitted(request: WorkbenchAdmittedExecution, signal: AbortSignal) {
     const configuration = await this.configuration(request.cwd);
     signal.throwIfAborted();
+    if (request.permissions.mode === "approved-unrestricted" && this.platform === "win32") {
+      const policy = configuration.envPolicy;
+      if (policy.inherit !== "all" || !policy.ignoreDefaultExcludes || policy.exclude.length
+        || policy.includeOnly.length || Object.keys(policy.set).length) {
+        throw new Error("Outside-sandbox execution cannot bypass the configured shell environment policy.");
+      }
+      return (this.options.executeApproved ?? executeApprovedCommand)(request, signal, this.shellEnvironment);
+    }
     const permissions: CodexExecPermission = request.permissions.mode === "approved-unrestricted"
       ? { type: "disabled" }
       : {
@@ -229,6 +240,7 @@ export function prepareWorkbenchShellExecution(
     command: shell.command,
     cwd: commandCwd,
     shell: shell.shell,
+    outsideSandbox: request.outside_sandbox === true,
     ...(request.timeout_ms === undefined ? {} : { timeoutMs: request.timeout_ms }),
   };
 }

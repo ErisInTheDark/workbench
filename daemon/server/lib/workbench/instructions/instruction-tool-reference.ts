@@ -22,5 +22,6 @@ export function resolveWorkbenchInstructionToolReference(
     return `tools.mcp__${namespace}__${id}`;
   }
   if (harness === "opencode") return `tools.wb.${id}`;
+  if (harness === "claude") return `mcp__wb__${id}`;
   return null;
 }

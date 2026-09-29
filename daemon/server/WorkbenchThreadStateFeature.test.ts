@@ -16,6 +16,7 @@ import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import CodexThreadOperations from "./CodexThreadOperations";
 import type WorkbenchProvider from "./WorkbenchProvider";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
 const canonicalFixtureLookup = {
   knownThread: (reference: fixtureIdentitySchemas.ThreadReference) => ({ threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(reference) }),
@@ -977,7 +978,7 @@ test("provider reconciliation publishes its first page before deeper history and
 
   await feature.controller.readProject(fixtureIdentityValues.ProjectId["project"]);
   await waitFor(() => publications.some((snapshot) => "entries" in snapshot && snapshot.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.harness === "codex")), "First page did not publish while deeper history remained pending.");
-  assert.deepEqual(starts, ["codex", "opencode"]);
+  assert.deepEqual(starts, installedProviderKeys);
   assert.deepEqual(codexCursors, [null, "codex-next"]);
   assert.equal(codexRequests[0]?.workbenchRequestSource, "autoRefresh");
   assert.deepEqual(codexRequests[0]?.params, {

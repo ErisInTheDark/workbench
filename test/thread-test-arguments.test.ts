@@ -5,9 +5,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseThreadTestArguments } from "./thread-test-arguments";
 
-test("thread scenario requires one or two explicit provider modes", () => {
+test("thread scenario requires explicit provider modes", () => {
   assert.deepEqual(parseThreadTestArguments(["--codex=paid"]), { codex: "paid" });
   assert.deepEqual(parseThreadTestArguments(["--opencode=fake"]), { opencode: "fake" });
+  assert.deepEqual(parseThreadTestArguments(["--claude=fake"]), { claude: "fake" });
   assert.deepEqual(parseThreadTestArguments(["--", "--codex=paid", "--opencode=fake"]), {
     codex: "paid", opencode: "fake",
   });

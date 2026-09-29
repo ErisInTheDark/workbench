@@ -20,6 +20,7 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
 import OpenCodeProvider from "./providers/opencode/OpenCodeProvider";
+import ClaudeProviderNode from "./providers/claude/ClaudeProviderNode";
 import { applyServerCodexSandboxPolicy } from "./codex-sandbox-policy";
 import { NativeThreadIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
@@ -63,7 +64,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   boundarySources: [
     "daemon/server/codex-transcript-*.ts",
   ].join("\n"),
-  children: [CodexProvider, CodexToolsNode, OpenCodeProvider],
+  children: [CodexProvider, CodexToolsNode, OpenCodeProvider, ClaudeProviderNode],
   create: (context, build) => {
     const parent = build.get("codexAppServer");
     const restartingAppServer = build.isReplacing("harness:codex");

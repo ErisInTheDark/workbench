@@ -19,7 +19,7 @@ const { default: ProjectTestRunner } = await import("./ProjectTestRunner.ts");
 const result = await new ProjectTestRunner(projectRoot, {
   testConcurrency: 1,
   testTimeoutMs: null,
-  fileTimeoutMs: 1_200_000,
+  fileTimeoutMs: 300_000,
   // Like lifecycle, real-provider journeys intentionally report progress and
   // retained diagnostics. Unit suites still enforce the concise noise policy.
   spawnProcess: (command, args, options) => spawn(command,

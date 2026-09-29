@@ -13,6 +13,7 @@ test("native mutation admission checks every resource against the resolved calle
   const controller: WorkbenchProviderTools = new OpenCodeToolsController({
     resolveCaller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("owner"), cwd: "/repo" }),
     execute: async () => { throw new Error("must not execute"); },
+    approve: async () => false,
   });
   const input = { callerThreadId: null, raw: JSON.stringify({
     sessionID: "native", resources: ["src/old.ts", "src/new.ts", "removed.ts"],
@@ -36,6 +37,7 @@ test("native admission propagates cancellation and never substitutes caller-supp
   const owner = new OpenCodeToolsController({
     resolveCaller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("real-owner"), cwd: "/real" }),
     execute: async () => { throw new Error("must not execute"); },
+    approve: async () => false,
   });
   const input = { callerThreadId: "forged", raw: JSON.stringify({ sessionID: "native", resources: ["ignored/generated.ts"] }) };
   assert.deepEqual(JSON.parse(await owner.patchClaims(input, async caller => {
@@ -65,6 +67,7 @@ test("transcript capture requires valid child context and resolves authoritative
       return { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("owned"), cwd: "/repo" };
     },
     execute: async () => { throw new Error("not executing"); },
+    approve: async () => false,
     transcript: {
       start: async (_input, context, caller) => {
         starts++;
@@ -99,6 +102,7 @@ test("binds MCP session identity and runs shell through admitted execution", asy
       executions.push(request);
       return { exitCode: 0, stdout: "ok", stderr: "" };
     },
+    approve: async () => false,
   });
 
   const result = await controller.shell(
@@ -118,4 +122,33 @@ test("binds MCP session identity and runs shell through admitted execution", asy
     writableRoots: [process.cwd()],
     network: false,
   });
+});
+
+test("OpenCode shell escalates only after the Workbench approval gate accepts", async () => {
+  const modes: string[] = [];
+  const commands: string[][] = [];
+  let allowed = false;
+  const controller = new OpenCodeToolsController({
+    resolveCaller: async () => ({
+      harness: "opencode",
+      threadId: WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001"),
+      cwd: process.cwd(),
+    }),
+    approve: async request => {
+      commands.push(request.command);
+      return allowed;
+    },
+    execute: async request => {
+      modes.push(request.permissions.mode);
+      return { exitCode: 0, stdout: "ok", stderr: "" };
+    },
+  });
+  const input = { command: "echo approved", outside_sandbox: true };
+  const signal = new AbortController().signal;
+  await assert.rejects(controller.shell(input, { sessionID: "native-session" }, signal), /declined/u);
+  assert.deepEqual(modes, []);
+  allowed = true;
+  assert.equal((await controller.shell(input, { sessionID: "native-session" }, signal)).stdout, "ok");
+  assert.deepEqual(modes, ["approved-unrestricted"]);
+  assert.ok(commands[0]?.some(part => part.includes("echo approved")));
 });

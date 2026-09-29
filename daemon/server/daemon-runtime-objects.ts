@@ -214,6 +214,9 @@ export interface DaemonRuntimeObjects {
   };
   openCodeThreadOperations: import("./providers/opencode/OpenCodeThreadOperations").default;
   openCodeProvider: WorkbenchProvider;
+  claudeThreadOperations: import("./providers/claude/ClaudeThreadOperations").default;
+  claudeTranscriptAdapter: import("./providers/claude/ClaudeTranscriptAdapter").default;
+  claudeProvider: WorkbenchProvider;
   agentCommand: WorkbenchAgentCommandController;
   browseExecution: DaemonBrowseExecution;
   browseSessionCleanup: BrowseSessionCleanupSupervisor;

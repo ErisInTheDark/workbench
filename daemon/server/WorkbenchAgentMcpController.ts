@@ -331,7 +331,7 @@ export default class WorkbenchAgentMcpController {
     tools: WorkbenchProviderTools,
     sendProgress?: (progress: number) => Promise<void>,
   ) {
-    return this.observeTool("shell", input, meta, signal, tools,
+    return this.observeTool("shell", input, meta, clientScope, signal, tools,
       () => this.executeShell(input, meta, clientScope, requestId, signal, tools, sendProgress));
   }
 
@@ -360,7 +360,7 @@ export default class WorkbenchAgentMcpController {
         "wb shell",
         signal,
         async () => {
-          return await tools.shell(WorkbenchShellInputSchema.parse(input), ProviderToolMetadataSchema.parse(meta ?? {}), signal);
+          return await tools.shell(WorkbenchShellInputSchema.parse(input), ProviderToolMetadataSchema.parse(meta ?? {}), signal, { clientScope });
         },
         (value) => value.exitCode === 0,
       );
@@ -391,7 +391,7 @@ export default class WorkbenchAgentMcpController {
     tools: WorkbenchProviderTools,
     sendProgress?: (progress: number) => Promise<void>,
   ) {
-    return this.observeTool(getWorkbenchAgentCommandToolName(definition), input, meta, signal, tools,
+    return this.observeTool(getWorkbenchAgentCommandToolName(definition), input, meta, clientScope, signal, tools,
       () => this.executeTool(definition, input, meta, clientScope, requestId, signal, tools, sendProgress));
   }
 
@@ -408,14 +408,14 @@ export default class WorkbenchAgentMcpController {
   }
 
   private async observeTool(
-    tool: string, input: object, meta: Record<string, unknown> | undefined, signal: AbortSignal,
+    tool: string, input: object, meta: Record<string, unknown> | undefined, clientScope: string, signal: AbortSignal,
     tools: WorkbenchProviderTools, execute: () => Promise<CallToolResult>,
   ): Promise<CallToolResult> {
     let reference: WorkbenchToolTranscriptReference | null = null;
     try {
       if (tools.transcript) reference = await tools.transcript.start({
         tool, arguments: ProviderToolMetadataSchema.parse(input), metadata: ProviderToolMetadataSchema.parse(meta ?? {}),
-      }, signal);
+      }, signal, { clientScope });
     } catch (error) {
       this.lifecycleLogError("workbench-mcp", sanitizeError(error));
       return { content: [{ type: "text", text: "Tool was not executed because transcript admission failed." }], isError: true };
@@ -462,7 +462,7 @@ export default class WorkbenchAgentMcpController {
       if (definition.mcpCodeModeEligible && definition.mcpRuntimeDrainPolicy === "preserve-across-reload") {
         stopProgress = this.startProgressKeepalive(sendProgress, signal);
       }
-      const caller = await tools.caller(ProviderToolMetadataSchema.parse(meta ?? {}), signal);
+      const caller = await tools.caller(ProviderToolMetadataSchema.parse(meta ?? {}), signal, { clientScope });
       if (signal.aborted) throw signal.reason;
       registration.setWorkbenchThreadId(caller.threadId);
       const request = await definition.buildRequestFromJson(input, {

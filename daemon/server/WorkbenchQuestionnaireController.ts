@@ -10,6 +10,11 @@ import { randomUUID } from "node:crypto";
 import type { WorkbenchDurableQuestionnaire } from "workbench-shared/workbench/thread/thread-state";
 import { WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { buildWorkbenchQuestionnaireRequest } from "workbench-shared/workbench/thread/thread-questionnaire-request";
+import {
+  WORKBENCH_APPROVAL_ALLOW_ONCE_LABEL,
+  WORKBENCH_APPROVAL_DECISION_QUESTION_ID,
+  WORKBENCH_APPROVAL_DECLINE_LABEL,
+} from "workbench-shared/workbench/thread/thread-user-input-requests";
 import type { WorkbenchPendingUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 import type { WorkbenchRequestUserInputCommandInput } from "./lib/workbench/commands/questionnaire-command-definition";
 import type { WorkbenchThreadId, WorkbenchTurnId, ProjectId } from "workbench-shared/workbench/identity";
@@ -99,6 +104,31 @@ export default class WorkbenchQuestionnaireController {
           turnId: pending.questionnaire.turnId,
         })),
     };
+  }
+
+  async requestShellApproval(input: {
+    callerThreadId: WorkbenchThreadId;
+    cwd: string;
+    command: readonly string[];
+  }, signal: AbortSignal) {
+    const command = JSON.stringify(input.command);
+    if (command.length > 4000) throw new Error("Outside-sandbox command is too long to review safely.");
+    const response = await this.request({
+      callerThreadId: input.callerThreadId,
+      cwd: input.cwd,
+      questions: [{
+        id: WORKBENCH_APPROVAL_DECISION_QUESTION_ID,
+        header: "Approval",
+        question: `Run this command outside the sandbox?\n\nCommand: ${command}\nWorking directory: ${input.cwd}`,
+        options: [
+          { label: WORKBENCH_APPROVAL_ALLOW_ONCE_LABEL, description: "Approve only this command." },
+          { label: WORKBENCH_APPROVAL_DECLINE_LABEL, description: "Do not run this command." },
+        ],
+      }],
+    }, signal);
+    const choices = response.answers[WORKBENCH_APPROVAL_DECISION_QUESTION_ID]?.answers
+      .filter(value => value === WORKBENCH_APPROVAL_ALLOW_ONCE_LABEL || value === WORKBENCH_APPROVAL_DECLINE_LABEL) ?? [];
+    return choices.length === 1 && choices[0] === WORKBENCH_APPROVAL_ALLOW_ONCE_LABEL;
   }
 
   async request(input: Omit<WorkbenchRequestUserInputCommandInput, "callerThreadId"> & { callerThreadId: WorkbenchThreadId }, signal: AbortSignal): Promise<WorkbenchUserInputResponse> {

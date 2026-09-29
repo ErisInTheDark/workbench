@@ -29,6 +29,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-presentation-export";
 import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
+import { WORKBENCH_THREAD_WORKING_STATUS_MESSAGE } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { currentThreadTitleName, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
 import {
   getThreadDisplayDraftKey,
@@ -894,7 +895,7 @@ export default class WorkbenchThreadStateController {
     if (previous.kind !== "completed" && !(previous.kind === "needsAttention"
       && (previous.reason === "agentBlocked" || (answered && previous.reason === "pendingInput")))) return;
     try {
-      await this.options.publishAgentContext?.(after.identity.harness, after.identity.threadId, '<wb:thread-status value="working" />');
+      await this.options.publishAgentContext?.(after.identity.harness, after.identity.threadId, WORKBENCH_THREAD_WORKING_STATUS_MESSAGE);
     } catch {
       this.options.log?.("Working status was saved, but agent context admission failed.");
     }

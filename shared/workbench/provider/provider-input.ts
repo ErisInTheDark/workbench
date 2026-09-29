@@ -3,8 +3,10 @@
  * - WorkbenchUserInputSchema/WorkbenchUserInput: submitted content, independent of provider packets.
  * - WorkbenchMessageContextSchema/WorkbenchMessageContext: instruction selections accompanying user intent.
  * - createWorkbenchTextInput: plain text input without annotation spans.
+ * - toWorkbenchThreadUserInput: normalise submitted text annotations for canonical thread content.
  */
 import { z } from "zod";
+import type { UserInput } from "../thread/workbench-thread-items.ts";
 
 const imageDetail = z.enum(["auto", "low", "high", "original"]).optional();
 export const WorkbenchUserInputSchema = z.discriminatedUnion("type", [
@@ -27,6 +29,14 @@ export type WorkbenchUserInput = z.infer<typeof WorkbenchUserInputSchema>;
 
 export function createWorkbenchTextInput(text: string): Extract<WorkbenchUserInput, { type: "text" }> {
   return { type: "text", text, text_elements: [] };
+}
+
+export function toWorkbenchThreadUserInput(parts: readonly WorkbenchUserInput[]): UserInput[] {
+  return parts.map(part => part.type === "text" ? {
+    ...part, text_elements: part.text_elements.map(element => ({
+      ...element, placeholder: element.placeholder ?? "",
+    })),
+  } : part);
 }
 
 export const WorkbenchMessageContextSchema = z.object({

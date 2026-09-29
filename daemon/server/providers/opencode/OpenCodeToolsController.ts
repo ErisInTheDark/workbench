@@ -9,6 +9,7 @@ import type { WorkbenchProviderCaller, WorkbenchToolTranscript } from "workbench
 import { OpenCodeFileClaimRequestSchema, OpenCodeToolContextSchema, type OpenCodeToolContext } from "./opencode-workbench-rpc";
 import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchToolAdmissionController from "../../WorkbenchToolAdmissionController";
+import type { WorkbenchToolAdmissionOptions } from "../../WorkbenchToolAdmissionController";
 import { prepareWorkbenchShellExecution } from "../../CodexShellController";
 
 export interface OpenCodeToolsControllerOptions {
@@ -18,6 +19,7 @@ export interface OpenCodeToolsControllerOptions {
     cwd: string;
   }>;
   execute: NonNullable<WorkbenchProviderTools["execute"]>;
+  approve: WorkbenchToolAdmissionOptions["approve"];
   transcript?: {
     start(input: Parameters<WorkbenchToolTranscript["start"]>[0], context: OpenCodeToolContext, caller: WorkbenchProviderCaller): ReturnType<WorkbenchToolTranscript["start"]>;
     finish: WorkbenchToolTranscript["finish"];
@@ -65,7 +67,7 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
         writableRoots: [caller.cwd],
         network: false,
       }),
-      approve: async () => false,
+      approve: this.options.approve,
       execute: this.options.execute,
     });
     const result = await admission.execute(prepared, signal);
@@ -75,7 +77,7 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
   async describe() {
     return {
       experimental: {},
-      shellDescription: "Run a shell command inside the current managed Workbench sandbox.",
+      shellDescription: "Run a shell command in the managed Workbench sandbox, or request Workbench approval for one outside-sandbox command.",
     };
   }
 

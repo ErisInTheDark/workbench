@@ -231,9 +231,15 @@ test("external enforcement becomes locally enforced read-only permissions and ke
 
 test("admitted non-Codex calls use their own WB identity and only admitted permissions", async () => {
   const calls: CodexExecRequest[] = [];
+  const approved: string[] = [];
   const controller = new WorkbenchShellController({
     executor: { execute: async request => { calls.push(request); return { exitCode: 0, stdout: "", stderr: "" }; } },
     readConfiguration: async () => ({ config: { windows: { sandbox: "elevated" } } }),
+    platform: "win32",
+    executeApproved: async request => {
+      approved.push(request.caller.threadId);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
   });
   const input = {
     caller: { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("other"), cwd: process.cwd() },
@@ -243,6 +249,7 @@ test("admitted non-Codex calls use their own WB identity and only admitted permi
   await controller.executeAdmitted(input, new AbortController().signal);
   await controller.executeAdmitted({ ...input, permissions: { mode: "approved-unrestricted" } }, new AbortController().signal);
   assert.equal(calls[0]?.permissions.type, "managed");
-  assert.equal(calls[1]?.permissions.type, "disabled");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(approved, ["other"]);
   assert.deepEqual(calls[0]?.env, { CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "other", WORKBENCH_HARNESS: "opencode" });
 });

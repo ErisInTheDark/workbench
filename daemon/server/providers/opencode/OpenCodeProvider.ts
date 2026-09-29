@@ -77,11 +77,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
       resolveCaller: (nativeThreadId, signal) => threads.resolveToolCaller(nativeThreadId, signal),
       execute: shell.executeAdmitted.bind(shell),
+      approve: (request, signal) => threads.requestShellApproval(request, signal),
     });
     return {
       registrations: {
         openCodeProvider: {
           threads,
+          context: threads.context,
           interactions: threads.interactions,
           tools,
           account: {
@@ -120,6 +122,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   sources: [
     "daemon/server/providers/opencode/OpenCodeProvider.ts",
     "daemon/server/providers/opencode/OpenCodeToolsController.ts",
+    "daemon/server/CodexShellController.ts",
+    "daemon/server/WorkbenchApprovedCommandExecutor.ts",
     "shared/workbench/provider/provider-registrations.ts",
   ].join("\n"),
 });

@@ -16,6 +16,7 @@ import WorkbenchDaemonReloadController, { type WorkbenchDaemonReloadControllerSt
 import WorkbenchReloadDirtController, { type WorkbenchReloadDirtControllerState } from "./WorkbenchReloadDirtController";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import OpenCodeBridgeNode from "./providers/opencode/OpenCodeBridgeNode";
+import ClaudeBridgeNode from "./providers/claude/ClaudeBridgeNode";
 import WorkbenchDaemonSleepController from "./WorkbenchDaemonSleepController";
 
 interface WorkbenchTurnLifecycleState {
@@ -27,7 +28,7 @@ interface WorkbenchTurnLifecycleState {
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
-  children: [CodexRecoveryNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, WorkbenchWebSocketNode],
+  children: [CodexRecoveryNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchWebSocketNode],
   create: (context, build) => {
     const state = build.handoffState as WorkbenchTurnLifecycleState | undefined;
     const daemonSleep = new WorkbenchDaemonSleepController(context.sleep);

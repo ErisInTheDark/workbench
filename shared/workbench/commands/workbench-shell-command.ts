@@ -15,6 +15,7 @@ export type WorkbenchShell = z.infer<typeof WorkbenchShellSchema>;
 export const WorkbenchShellInputSchema = z.object({
   command: z.string().min(1).describe("Shell command string to run inside the current turn sandbox."),
   login: z.boolean().optional().describe("Use login-shell semantics. Defaults to true."),
+  outside_sandbox: z.boolean().optional().describe("Ask Workbench to approve this exact command outside the sandbox. Available only where the provider supports it."),
   timeout_ms: z.number().int().nonnegative().optional().describe("Maximum command runtime in milliseconds. Codex's command default applies when omitted."),
   workdir: z.string().min(1).optional().describe("Working directory. Relative paths resolve from the current turn sandbox cwd."),
 });
