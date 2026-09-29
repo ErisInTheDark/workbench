@@ -88,6 +88,7 @@ test("configured creation, resume and fork retain installed mechanics in the fin
     ...mechanics.map(mechanic => `<available:${mechanic}>\nfixture ${mechanic}\n</available:${mechanic}>`),
     "<model:model>\nfixture matching model\n</model:model>",
     "<model:other>\nfixture other model\n</model:other>",
+    "use <tool id=\"rg\" /> and <tool id=\"git_arc_release\" />.",
   ].join("\n"));
   try {
     for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
@@ -98,6 +99,8 @@ test("configured creation, resume and fork retain installed mechanics in the fin
           settings: { harness: "codex", model: "model", agentPath: null, agentSource: null, reasoningEffort: null, serviceTier: null },
         });
         const packet = readPromptInstructions(await adapter.augment(configured, method)).baseInstructions ?? "";
+        assert.match(packet, /`tools\.mcp__wb__rg` and `tools\.mcp__wbex__git_arc_release`/u);
+        assert.doesNotMatch(packet, /<tool id=/u);
         for (const mechanic of mechanics) {
           assert.equal(packet.includes(`fixture ${mechanic}`), mechanic !== "task-title" || subagentName === null, `${method} ${subagentName} ${mechanic}`);
         }

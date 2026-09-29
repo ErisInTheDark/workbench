@@ -12,6 +12,10 @@ import { contextCompactionThreshold } from "workbench-shared/workbench/thread/th
 
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchPromptInstructions } from "./lib/workbench/instructions/WorkbenchPromptFiles";
+import type { WorkbenchInstructionTool } from "./lib/workbench/instructions/instruction-tool-reference";
+import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-agent-command-registry";
+import { getWorkbenchAgentCommandToolName } from "./lib/workbench/commands/workbench-agent-command-definition";
+import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "workbench-shared/workbench/commands/workbench-shell-command";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import type { JsonRpcRequest } from "./bridge-types";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
@@ -74,6 +78,18 @@ function pathsEqual(left: string, right: string) {
     : normalizedLeft === normalizedRight;
 }
 
+function readDefaultInstructionTools(): Promise<readonly WorkbenchInstructionTool[]> {
+  return Promise.resolve([
+    { id: WORKBENCH_SHELL_MCP_TOOL_NAME, codeModeEligible: true },
+    ...listWorkbenchAgentCommands()
+      .filter(definition => !definition.hideFromMcp)
+      .map(definition => ({
+        id: getWorkbenchAgentCommandToolName(definition),
+        codeModeEligible: definition.mcpCodeModeEligible === true,
+      })),
+  ]);
+}
+
 export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexInstructionPort {
   private readonly workbenchRoot: string;
 
@@ -81,6 +97,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     private readonly bridgeUrl: string,
     workbenchRoot: string,
     private readonly readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>,
+    private readonly readInstructionTools: () => Promise<readonly WorkbenchInstructionTool[]> = readDefaultInstructionTools,
   ) {
     this.workbenchRoot = path.resolve(workbenchRoot);
   }
@@ -153,6 +170,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
       harness: "codex" as const,
       managedThread: true,
       model: typeof params.model === "string" ? params.model : null,
+      readInstructionTools: this.readInstructionTools,
     };
     if (isPromptAugmentedTurnMethod(method)) {
       const activatedSkillCatalog = await workbenchPromptFiles.buildWorkbenchManagedThreadActivatedSkills(

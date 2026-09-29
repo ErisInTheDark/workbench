@@ -19,6 +19,7 @@ import {
   type WorkbenchAgentCommandDefinition,
   type WorkbenchAgentCommandRequest,
 } from "./lib/workbench/commands/workbench-agent-command-definition";
+import type { WorkbenchInstructionTool } from "./lib/workbench/instructions/instruction-tool-reference";
 import {
   getWorkbenchShellAggregatedOutput,
   WORKBENCH_SHELL_MCP_TOOL_NAME,
@@ -392,6 +393,18 @@ export default class WorkbenchAgentMcpController {
   ) {
     return this.observeTool(getWorkbenchAgentCommandToolName(definition), input, meta, signal, tools,
       () => this.executeTool(definition, input, meta, clientScope, requestId, signal, tools, sendProgress));
+  }
+
+  listInstructionTools(): WorkbenchInstructionTool[] {
+    return [
+      { id: WORKBENCH_SHELL_MCP_TOOL_NAME, codeModeEligible: true },
+      ...listWorkbenchAgentCommands(this.getReloadScopeCatalog(), "agent")
+        .filter(definition => !definition.hideFromMcp)
+        .map(definition => ({
+          id: getWorkbenchAgentCommandToolName(definition),
+          codeModeEligible: definition.mcpCodeModeEligible === true,
+        })),
+    ];
   }
 
   private async observeTool(

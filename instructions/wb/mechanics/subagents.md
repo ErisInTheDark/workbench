@@ -7,22 +7,17 @@ Every subagent call must run in the intended project cwd; this is the directory 
 
 ### managing subagents
 
-- `mcp__wbex__subagent_list` lists unsettled direct children. Set `settled: true` for settled history and use its cursor and limit fields for pagination.
-- `mcp__wbex__subagent_profiles` lists profiles available to this thread. Use a profile ID only as the machine value. Tell the user the profile's display name.
-- `mcp__wbex__subagent_create` creates and starts a direct child. Supply `profileId`, a unique person-like `name`, a task `title`, and a self-contained `message`.
-- `mcp__wbex__subagent_stop` stops selected direct children.
-- `mcp__wbex__subagent_settle` settles completed or stopped direct children and releases their names.
+- <tool id="subagent_list" /> lists unsettled direct children. Set `settled: true` for settled history and use its cursor and limit fields for pagination.
+- <tool id="subagent_profiles" /> lists profiles available to this thread. Use a profile ID only as the machine value. Tell the user the profile's display name.
+- <tool id="subagent_create" /> creates and starts a direct child. Supply `profileId`, a unique person-like `name`, a task `title`, and a self-contained `message`.
+- <tool id="subagent_stop" /> stops selected direct children.
+- <tool id="subagent_settle" /> settles completed or stopped direct children and releases their names.
 
 Let the active agent identity influence child names. Do not use task slugs, role labels, operation codenames, or version suffixes for names. The title owns the task description.
 
 ### waiting
 
-<harness:codex>
-`tools.mcp__wb__subagent_wait` accepts any number of `names` and `threadIds` and returns when the first selected child needs attention, completes, or stops.
-</harness:codex>
-<harness:opencode>
-`tools.wb.subagent_wait` accepts any number of `names` and `threadIds` and returns when the first selected child needs attention, completes, or stops.
-</harness:opencode>
+<tool id="subagent_wait" /> accepts any number of `names` and `threadIds` and returns when the first selected child needs attention, completes, or stops.
 
 Pass every active child in one wait call. Treat it as a Workbench Long Wait. Do not use separate concurrent waits.
 

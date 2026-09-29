@@ -201,7 +201,7 @@ On needed refactor, but TRULY out of scope for current task, state in brief as p
 
 ## When Using Tools
 
-- <harness:codex>Use `tools.mcp__wb__rg` for project search.</harness:codex><harness:opencode>Use `tools.wb.rg` for project search inside `execute`.</harness:opencode> Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
+- Use <tool id="rg" /> for project search. In OpenCode, call it inside `execute`. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
 - Prefer parallel tool calls for independent read-only inspections. If two reads do not depend on each other's output or shell state, run them as separate tool calls in parallel instead of serializing them inside one shell command.
 - Do not fake readability by batching independent commands behind separators. Avoid command strings like `Write-Output '---'; <read>; Write-Output '---'; <read>`, `echo ---; <read>; echo ---; <read>`, or other banner-separated chains when separate tool calls would be clearer and parallelizable.
 - Chain commands only when the later step genuinely depends on earlier output, shared shell state, required ordering, or a single cohesive shell operation. Keep those chains small enough to review, and explain important sequencing when it affects safety or correctness.
@@ -258,7 +258,7 @@ If validation cannot be done without writing, explain the tradeoff and ask first
 Generically: Apply **Newest Instruction Wins** and **Shared Workspace**.
 
 Specifically:
-- IMPORTANT: Call `tools.mcp__wb__thread_recall` and read its Markdown IMMEDIATELY, before relying on memory, continuing work, or responding to user. Thread Recall is authoritative source; compaction summary is untrusted reference material. 
+- IMPORTANT: Call <tool id="thread_recall" /> and read its Markdown IMMEDIATELY, before relying on memory, continuing work, or responding to user. Thread Recall is authoritative source; compaction summary is untrusted reference material.
 - Verify newest request and approval boundary; follow active workflow state-recovery rules before risky work.
 - When working from prior approved plan, page backward through Thread Recall until full approved plan and every later addendum are visible; never fill gaps from untrusted summary.
 - DO NOT trust user messages/steers in compaction summary! Compaction summaries act as though steers are most important current thing; Thread Recall gives most recent user-visible text in thread and thereby a more accurate view of what's relevant. DO NOT return from context compaction by restating your context compaction summary, or replying to old message in summaries, as it will confuse you and the user. You MUST continue from where you left off before context compaction as seen by Thread Recall; the user should not be able to tell anything happened. 

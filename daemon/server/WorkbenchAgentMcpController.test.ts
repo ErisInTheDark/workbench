@@ -357,7 +357,16 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_instructions"), false);
     assert.equal(inventory.tools.some(({ name }) => name === "message"), true);
     assert.equal(inventory.tools.some(({ name }) => name === "subagent_message"), true);
-    assert.equal((await projectClient.listTools()).tools.some(({ name }) => name === "tokens_instructions"), true);
+    const projectInventory = await projectClient.listTools();
+    assert.equal(projectInventory.tools.some(({ name }) => name === "tokens_instructions"), true);
+    const instructionTools = controller.listInstructionTools();
+    assert.deepEqual(
+      instructionTools.map(({ id }) => id).sort(),
+      projectInventory.tools.map(({ name }) => name).sort(),
+    );
+    assert.equal(instructionTools.find(({ id }) => id === "rg")?.codeModeEligible, true);
+    assert.equal(instructionTools.find(({ id }) => id === "git_arc_release")?.codeModeEligible, false);
+    assert.equal(instructionTools.some(({ id }) => id === "not_a_tool"), false);
     assert.equal(inventory.tools.some(({ name }) => name.startsWith("transcript_")), false);
     assert.equal((await projectClient.listTools()).tools.some(({ name }) => name.startsWith("transcript_")), false);
     const plan = inventory.tools.find(({ name }) => name === "git_plan_claims");

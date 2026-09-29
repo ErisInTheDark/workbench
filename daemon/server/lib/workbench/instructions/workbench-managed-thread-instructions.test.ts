@@ -33,6 +33,10 @@ function createContext(activatedSkillPaths: readonly string[] = []) {
     harness: "opencode" as const,
     managedThread: true,
     model: "gpt-test",
+    readInstructionTools: async () => [
+      { id: "rg", codeModeEligible: true },
+      { id: "git_arc_release", codeModeEligible: false },
+    ],
     roots: [{ id: "project", isPrimary: true, name: "project", relativePath: "project", rootPath: projectRoot }],
     threadId: "managed-thread",
   };
@@ -99,5 +103,28 @@ test("managed mechanics availability follows injected local capabilities", async
     assert.doesNotMatch(disabled.baseInstructions ?? "", new RegExp(rawMarker, "u"));
   } finally {
     await fs.rm(override, { force: true });
+  }
+});
+
+test("managed instructions and activated skills render provider tool references", async () => {
+  const override = path.join(libraryRoot, "AGENTS.override.md");
+  const skillPath = path.join(projectRoot, ".agents", "skills", "tools", "SKILL.md");
+  await fs.mkdir(path.dirname(skillPath), { recursive: true });
+  await fs.writeFile(override, 'use <tool id="rg" /> and <tool id="git_arc_release" />.\n', "utf8");
+  await fs.writeFile(skillPath, "---\nname: tools\ndescription: Use when asked for /tools.\n---\n\ncall <tool id=\"git_arc_release\" />.\n", "utf8");
+  try {
+    const opencode = await managed.buildWorkbenchManagedThreadInstructions(createContext(), readNoLocalCapabilities);
+    assert.match(opencode.baseInstructions ?? "", /`tools\.wb\.rg` and `tools\.wb\.git_arc_release`/u);
+    assert.doesNotMatch(opencode.baseInstructions ?? "", /<tool id=/u);
+    const codex = await managed.buildWorkbenchManagedThreadInstructions({
+      ...createContext(), harness: "codex",
+    }, readNoLocalCapabilities);
+    assert.match(codex.baseInstructions ?? "", /`tools\.mcp__wb__rg` and `tools\.mcp__wbex__git_arc_release`/u);
+    const activated = await managed.buildWorkbenchManagedThreadActivatedSkills(
+      createContext([skillPath]), readNoLocalCapabilities,
+    );
+    assert.match(activated ?? "", /`tools\.wb\.git_arc_release`/u);
+  } finally {
+    await Promise.all([override, skillPath].map(file => fs.rm(file, { force: true })));
   }
 });

@@ -10,5 +10,5 @@ Triggers:
 
 1. Reconcile current request and unresolved steers
 2. Findings, spec edits, corrections and sidequests do not complete outstanding parent work. If work can continue, return to workflow. Only user may narrow or defer work
-3. If work complete, call `mcp__wbex__task_completed`. If truly blocked and user input is unavailable or would not help, call `mcp__wbex__task_blocked`
+3. If work complete, call <tool id="task_completed" />. If truly blocked and user input is unavailable or would not help, call <tool id="task_blocked" />
 </available:task-status>

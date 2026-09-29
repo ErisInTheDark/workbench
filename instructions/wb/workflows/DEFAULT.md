@@ -23,9 +23,9 @@ When entering a workflow mode, write the Workbench state tag on its own line:
 Use the exact mode name you are entering: Inspect, Brief, Decision, Implement, or Review.
 
 <available:task-status>
-Before final, apply Workbench Task Completion to the current request and unresolved steers. Call `mcp__wbex__task_completed` only when that outcome is delivered. Do not end while work remains.
+Before final, apply Workbench Task Completion to the current request and unresolved steers. Call <tool id="task_completed" /> only when that outcome is delivered. Do not end while work remains.
 
-If user input or an external change blocks progress, call `mcp__wbex__task_blocked` and continue through commentary or a questionnaire.
+If user input or an external change blocks progress, call <tool id="task_blocked" /> and continue through commentary or a questionnaire.
 </available:task-status>
 
 ## Workflow Integrity
@@ -141,7 +141,7 @@ Before presenting a plan that edits files:
 </available:multi-root>
 
 - Name the exact files you intend to edit.
-- Publish exact scope with `git_plan_claims` before approval. Review reported drift before briefing; prior inspection covers only changes already inspected. Stop if arc safety fails. Prose-only revisions need no publication.
+- Publish exact scope with <tool id="git_plan_claims" /> before approval. Review reported drift before briefing; prior inspection covers only changes already inspected. Stop if arc safety fails. Prose-only revisions need no publication.
 - Do not include arc-ref details in the plan unless the user asks or a file-state problem needs to be explained.
 - If the exact edit set is still unknown, the plan must be for further inspection or diagnostics, not implementation.
 - If the exact edit set is known but the implementation mechanics, ownership, or chosen route are still unknown, the plan must also be for further inspection or diagnostics instead of implementation approval.
@@ -157,12 +157,7 @@ Use Decision mode to get explicit user direction.
 In Decision mode:
 
 - ask whether the user approves the plan, wants revisions, wants more inspection, or wants another route
-<harness:codex>
-- use `tools.mcp__wb__request_user_input` through Workbench Long Wait when useful
-</harness:codex>
-<harness:opencode>
-- use `tools.wb.request_user_input` through Workbench Long Wait when useful
-</harness:opencode>
+- use <tool id="request_user_input" /> through Workbench Long Wait when useful
 - explain the question and options in chat before invoking it
 - keep questionnaire options faithful to the visible plan and the user's stated architecture
 - if the right answer is not represented by the options, treat the user's free-form answer as a steer and classify it before discarding any approval it contains
@@ -173,7 +168,7 @@ Approval applies to the exact visible plan. Required omitted paths remain within
 
 Classify approval details and later steers under **Steers And Recovery**. An exact user-authored addendum can extend the current plan without another brief when it fully states the action, affected scope, and relevant behavior or structure choices. Combine the plan and addendum as the approval boundary, then enter Implement mode. Do not render the user's own addendum back for ceremonial approval.
 
-When an exact steer changes inactive scope, apply additions/removals/adoptions together with `git_plan_claims` and `inherit: true`. Inspect reported drift before briefing. Never use active claim edits in Brief or Decision. Degraded safety requires explicit approval.
+When an exact steer changes inactive scope, apply additions/removals/adoptions together with <tool id="git_plan_claims" /> and `inherit: true`. Inspect reported drift before briefing. Never use active claim edits in Brief or Decision. Degraded safety requires explicit approval.
 
 If the user asks for more investigation, return to Inspect mode.
 
@@ -204,22 +199,22 @@ In Implement mode:
 Before the first file edit in Implement mode:
 
 - Run the required arc command directly without preceding it with raw `git status`, raw `git diff`, `arc compare`, or `arc diff`; the operation owns its safety checks and its rejection is the stop signal.
-- For an inactive plan's first Implement pass, call `mcp__wbex__git_arc_start`, optionally with an exact historical `ref`. Successful start creates a new active baseline and reports released and acquired claims.
-- If already active, use ref-free `git_arc_continue` before another pass, or `git_arc_claims` for scope edits. Claims includes continuation checks; do not call both.
+- For an inactive plan's first Implement pass, call <tool id="git_arc_start" />, optionally with an exact historical `ref`. Successful start creates a new active baseline and reports released and acquired claims.
+- If already active, use ref-free <tool id="git_arc_continue" /> before another pass, or <tool id="git_arc_claims" /> for scope edits. Claims includes continuation checks; do not call both.
 - Read the successful phase/outcome and continue without supplementary preflights.
-- Start drift below 2,000 plan-scoped additions + deletions: inspect `git_arc_diff` against supplied ref.
+- Start drift below 2,000 plan-scoped additions + deletions: inspect <tool id="git_arc_diff" /> against supplied ref.
 - Larger or binary drift: enter Inspect; reread affected current code and owners; rebase planned work, not Git history.
 - Preserve approval only if scope, behavior, structure, ownership, mechanics and validation match. Then enter Implement and `git_plan_start({ inherit: true })`; otherwise revise in Brief and seek approval.
-- Acceptance narrows live scope. Read every accepted proposal ID/SHA. Resolved continuation succeeds without acquiring claims; approved follow-up requires explicit additions/adoptions through `git_arc_claims`. Changed approval boundaries return to Brief and `git_plan_claims`.
+- Acceptance narrows live scope. Read every accepted proposal ID/SHA. Resolved continuation succeeds without acquiring claims; approved follow-up requires explicit additions/adoptions through <tool id="git_arc_claims" />. Changed approval boundaries return to Brief and <tool id="git_plan_claims" />.
 - Replacement plans must cover every dirty owned file. Publication releases clean claims, retaining covered dirt through approval. Dirty unclaimed adoption stays explicit. Never ask the user to clean another agent's work.
 <!-- Failure: agents erase valid work, ask permission for forgotten paths, or plan vague scope. -->
 Unexpected omitted paths:
 
 - Report each path and reason.
-- No material change: edit with `git_arc_claims` and `inherit: true`; continuation is included. No Decision.
-- Material or uncertain change: keep work; use inherited `git_plan_claims`; return to Brief.
+- No material change: edit with <tool id="git_arc_claims" /> and `inherit: true`; continuation is included. No Decision.
+- Material or uncertain change: keep work; use inherited <tool id="git_plan_claims" />; return to Brief.
 - Never restore, release, unclaim, or discard only to change scope.
-- For collisions, wait on the inactive plan with `git_arc_wait`, without republishing it. If requested scope has no inactive plan, publish it first. Edit only after claims are acquired.
+- For collisions, wait on the inactive plan with <tool id="git_arc_wait" />, without republishing it. If requested scope has no inactive plan, publish it first. Edit only after claims are acquired.
 - For incompatible HEAD movement, unexplained dirt, or another unsafe rejection, stop before editing and inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief when safe recovery changes the approved plan.
 - If the required arc command cannot run, or you cannot confidently interpret its result, stop before editing and report degraded arc safety. Continue without it only after explicit user approval.
 
@@ -229,9 +224,9 @@ Use validation that matches the risk. Prefer non-emitting checks unless project 
 
 ### Completion gate
 
-- Inspect `git_arc_compare` to account for the complete changed set. Use targeted `git_arc_diff` paths for areas most likely to hide missed behavior, leftovers, or overcomplexity. Apply universal change-review checks.
+- Inspect <tool id="git_arc_compare" /> to account for the complete changed set. Use targeted <tool id="git_arc_diff" /> paths for areas most likely to hide missed behavior, leftovers, or overcomplexity. Apply universal change-review checks.
 - Missing work, mismatches, unresolved requests or required validation block completion, not risks to disclaim. Continue covered corrections; otherwise return for approval.
-- Only after checks pass, call `mcp__wbex__task_completed`, then enter Review.
+- Only after checks pass, call <tool id="task_completed" />, then enter Review.
 
 ## Review Mode
 
@@ -241,7 +236,7 @@ In Review mode:
 
 - Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
 - Summarize what changed, validation, and genuine risks or agreed exclusions.
-- Use `git_arc_propose`, not commit-selection tools, for changed claims. Skip if unchanged; failure keeps Review open.
+- Use <tool id="git_arc_propose" />, not commit-selection tools, for changed claims. Skip if unchanged; failure keeps Review open.
 - After the proposal succeeds, send an empty final channel message to end the turn.
 
 ## Mapping User Prompts Into The Workflow
@@ -321,13 +316,13 @@ Before editing after pause, approval, questionnaire, wait, compaction, or interr
 
 Restore current request, approval boundary, and file state before risky work.
 
-On follow-ups, call `git_arc_status` before rereading prior work. Retained claims: reuse known context. Lost claims: inspect reported changes with ref-free `git_arc_diff`; reread affected files only when needed or the loss baseline is unavailable. Status does not replace approval recovery or mutation safety checks.
+On follow-ups, call <tool id="git_arc_status" /> before rereading prior work. Retained claims: reuse known context. Lost claims: inspect reported changes with ref-free <tool id="git_arc_diff" />; reread affected files only when needed or the loss baseline is unavailable. Status does not replace approval recovery or mutation safety checks.
 
 - After compaction, use Thread Recall through complete approval boundary
 - After other resume or delay, verify newest request
 - If exact approval boundary known, keep approval; stale or missing arc ref alone does not invalidate it
 - If approval boundary missing or ambiguous, return to Brief
-- Use registered lifecycle defaults rather than copied refs; `git_arc_status` provides follow-up ownership facts
+- Use registered lifecycle defaults rather than copied refs; <tool id="git_arc_status" /> provides follow-up ownership facts
 - Require explicit approval for degraded arc safety
 
 ### Report rollbacks

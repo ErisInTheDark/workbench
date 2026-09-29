@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings.
  * - stripWorkbenchInstructionHtmlComments: remove source comments outside Markdown fences while preserving line structure.
- * - filterWorkbenchInstructionContent: strip comments, apply role, harness, exact/regex model, shell and capability selectors, and collapse inline wrapper regions.
+ * - filterWorkbenchInstructionContent: strip comments, apply selectors and provider tool references, and collapse inline wrapper regions.
  * - formatWorkbenchInstructionFilterWarning: render one bounded source diagnostic with ANSI emphasis.
  */
 
@@ -12,7 +12,7 @@ import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { InstructionSourceSpan, RenderedInstructionContent } from "./instruction-file-generation";
 
-type SelectorAxis = "available" | "harness" | "model" | "shell" | "role" | "wrapper";
+type SelectorAxis = "available" | "harness" | "model" | "shell" | "role" | "tool" | "wrapper";
 type WorkbenchShell = "bash" | "pwsh";
 
 export interface WorkbenchInstructionFilterContext {
@@ -22,6 +22,7 @@ export interface WorkbenchInstructionFilterContext {
   model: string | null;
   role?: "agent" | "voice-to-text";
   onWarning: (warning: WorkbenchInstructionFilterWarning) => void;
+  resolveTool?: (id: string) => string | null;
   shell: WorkbenchShell;
   sourceSections?: readonly RenderedInstructionContent[];
 }
@@ -58,7 +59,8 @@ const MODEL_MATCHES_TAG = /<model matches="([^"\n]+)">/uy;
 const MODEL_NAME_CLOSE_TAG = /<\/model>/uy;
 const MODEL_ATTR_CLOSE_TAG = /<\/model(\s[^>]*)>/uy;
 const WRAPPER_TAG = /<(\/)?>/uy;
-const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|harness|model|shell|role)(?::|\s|>)/u;
+const TOOL_TAG = /<tool id="([a-z][a-z0-9_]*)"\s*\/>/uy;
+const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|harness|model|shell|role|tool)(?::|\s|>)/u;
 const AVAILABLE_VALUE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
 const MODEL_VALUE = /^[^\s<>]{1,200}$/u;
 const MAX_MODEL_REGEX_LENGTH = 200;
@@ -120,6 +122,25 @@ function scanSelectorTags(line: string, lineIndex: number, onMalformed: (column:
       continue;
     }
     if (line[index] !== "<") { index += 1; continue; }
+    TOOL_TAG.lastIndex = index;
+    const toolMatch = TOOL_TAG.exec(line);
+    if (toolMatch) {
+      tags.push({
+        control: {
+          axis: "tool",
+          closing: false,
+          matchMode: "exact",
+          neutral: false,
+          pattern: null,
+          value: toolMatch[1] ?? "",
+        },
+        end: index + toolMatch[0].length,
+        line: lineIndex,
+        start: index,
+      });
+      index += toolMatch[0].length;
+      continue;
+    }
     WRAPPER_TAG.lastIndex = index;
     const wrapperMatch = WRAPPER_TAG.exec(line);
     if (wrapperMatch) {
@@ -286,6 +307,7 @@ export function stripWorkbenchInstructionHtmlComments(value: string) {
 
 function isKnownValue(axis: SelectorAxis, value: string) {
   if (axis === "wrapper") return true;
+  if (axis === "tool") return false;
   if (axis === "role") return value === "agent" || value === "voice-to-text";
   if (axis === "harness") return ProviderKeySchema.safeParse(value).success;
   if (axis === "model") return MODEL_VALUE.test(value);
@@ -295,6 +317,7 @@ function isKnownValue(axis: SelectorAxis, value: string) {
 
 function matches(control: SelectorControl, context: WorkbenchInstructionFilterContext) {
   if (control.axis === "wrapper") return true;
+  if (control.axis === "tool") return true;
   if (control.axis === "role") return control.value === (context.role ?? "agent");
   if (control.axis === "harness") return control.value === context.harness;
   if (control.axis === "model") {
@@ -393,6 +416,7 @@ function warningMessage(
   if (recovery === "malformed" && axis === "available" && value) {
     return `Unable to check availability of ${sanitizeWarningSource(value).slice(0, MAX_WARNING_VALUE_LENGTH)}`;
   }
+  if (recovery === "malformed" && axis === "tool") return "Unknown Workbench tool id";
   if (recovery === "malformed") return "Malformed instruction selector";
   if (recovery === "unclosed") return "Instruction selector is not closed";
   if (recovery === "unmatched") return "Instruction selector has no matching opener";
@@ -489,6 +513,7 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
     if (tags.length) tagsByLine.set(lineIndex, tags);
     tags.forEach((tag) => {
       const { control } = tag;
+      if (control.axis === "tool" && !openTags.every(opened => opened.control.neutral || matches(opened.control, context))) return;
       const valueColumn = control.value
         ? tag.start + line.slice(tag.start, tag.end).indexOf(control.value)
         : tag.start + Math.max(0, line.slice(tag.start, tag.end).indexOf(":") + 1);
@@ -498,7 +523,9 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
         length: Math.max(1, control.value.length),
         value: control.value,
       };
-      let valid = control.matchMode === "regex"
+      let valid = control.axis === "tool"
+        ? Boolean(context.resolveTool?.(control.value))
+        : control.matchMode === "regex"
         ? control.value.length <= MAX_MODEL_REGEX_LENGTH
         : isKnownValue(control.axis, control.value);
       if (valid && control.matchMode === "regex") {
@@ -510,6 +537,7 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
         warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "malformed", line, detail);
         return;
       }
+      if (control.axis === "tool") return;
       if (!control.closing) { openTags.push(tag); return; }
       const matchingStackIndex = findLastMatchingIndex(openTags, (opened) => pairsWithCloser(opened.control, control));
       if (matchingStackIndex < 0) {
@@ -623,6 +651,11 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
         cursor = tag.end + afterWs.length;
         emit(afterWs);
         flushInline(afterWs);
+        continue;
+      }
+      if (control.axis === "tool") {
+        if (included()) emit(control.neutral ? line.slice(tag.start, tag.end) : `\`${context.resolveTool!(control.value)}\``);
+        cursor = tag.end;
         continue;
       }
       if (!control.closing && control.value) active.push(control);

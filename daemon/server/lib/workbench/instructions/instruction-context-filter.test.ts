@@ -10,6 +10,7 @@ import {
   type WorkbenchInstructionFilterWarning,
 } from "./instruction-context-filter";
 import type { RenderedInstructionContent } from "./instruction-file-generation";
+import { resolveWorkbenchInstructionToolReference } from "./instruction-tool-reference";
 
 function filter(
   value: string,
@@ -27,12 +28,54 @@ function filter(
       harness,
       model,
       onWarning: (warning) => warnings.push(warning),
+      resolveTool: id => id === "missing" ? null : `tools.${harness}.${id}`,
       shell,
       sourceSections,
     }),
     warnings,
   };
 }
+
+test("tool references expand in ordinary text without disturbing selectors or examples", () => {
+  const value = [
+    "use <tool id=\"rg\" /> now.",
+    "<harness:codex>call <tool id=\"git_arc_release\" />.</harness:codex>",
+    "<harness:opencode>skip <tool id=\"git_arc_release\" />.</harness:opencode>",
+    "keep `<tool id=\"rg\" />` literal.",
+    "```md",
+    "<tool id=\"rg\" />",
+    "```",
+  ].join("\n");
+  assert.equal(filter(value).output, [
+    "use `tools.codex.rg` now.",
+    "call `tools.codex.git_arc_release`.",
+    "keep `<tool id=\"rg\" />` literal.",
+    "```md",
+    "<tool id=\"rg\" />",
+    "```",
+  ].join("\n"));
+  assert.equal(filter(value, "opencode").output.includes("`tools.opencode.rg`"), true);
+});
+
+test("invalid tool references stay visible and report their source", () => {
+  const result = filter("before <tool id=\"missing\" /> after");
+  assert.equal(result.output, "before <tool id=\"missing\" /> after");
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0]?.recovery, "malformed");
+  assert.equal(result.warnings[0]?.message, "Unknown Workbench tool id");
+  assert.deepEqual(filter("<harness:opencode><tool id=\"missing\" /></harness:opencode>").warnings, []);
+});
+
+test("registered tool references follow each provider's real MCP route", () => {
+  const catalogue = [
+    { id: "rg", codeModeEligible: true },
+    { id: "git_arc_release", codeModeEligible: false },
+  ];
+  assert.equal(resolveWorkbenchInstructionToolReference("rg", "codex", catalogue), "tools.mcp__wb__rg");
+  assert.equal(resolveWorkbenchInstructionToolReference("git_arc_release", "codex", catalogue), "tools.mcp__wbex__git_arc_release");
+  assert.equal(resolveWorkbenchInstructionToolReference("git_arc_release", "opencode", catalogue), "tools.wb.git_arc_release");
+  assert.equal(resolveWorkbenchInstructionToolReference("not_a_tool", "codex", catalogue), null);
+});
 
 test("selectors are conjunctive and control lines never escape", () => {
   const value = "before\n<harness:codex>\n<model:gpt-6-astra>\n<shell:pwsh>\nkept\n</shell:pwsh>\n</model:gpt-6-astra>\n</harness:codex>\n<model:gpt-5>\nremoved\n</model:gpt-5>\n<harness:copilot>\nremoved\n</harness:copilot>\nafter";

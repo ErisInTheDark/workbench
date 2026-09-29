@@ -44,6 +44,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const settings = new WorkbenchServerSettings(build.get("database"));
     const managed = new OpenCodeManagedSessionController({
       acquire,
+      readInstructionTools: () => build.run("mcp", mcp => mcp.listInstructionTools(), "OpenCode instruction tool catalogue"),
       readLocalCapabilities: () => settings.readLocalCapabilities(),
       workbenchOrigin: context.localDaemonOrigin,
     });

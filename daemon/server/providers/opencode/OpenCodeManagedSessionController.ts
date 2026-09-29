@@ -5,6 +5,7 @@
  * - default OpenCodeManagedSessionController: own OpenCode session marking, native command denial, and fresh instructions.
  */
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
+import type { WorkbenchInstructionTool } from "../../lib/workbench/instructions/instruction-tool-reference";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 import {
   buildWorkbenchManagedThreadActivatedSkills,
@@ -41,6 +42,7 @@ interface BuiltInstructions {
 export interface OpenCodeManagedSessionControllerOptions {
   acquire: () => Promise<WorkbenchOpenCodeClient>;
   build?: (context: OpenCodeManagedSessionContext & { harness: "opencode" }) => Promise<BuiltInstructions>;
+  readInstructionTools: () => Promise<readonly WorkbenchInstructionTool[]>;
   readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>;
   workbenchOrigin?: string;
 }
@@ -83,6 +85,7 @@ export default class OpenCodeManagedSessionController {
       harness: context.harness,
       managedThread: true,
       model: context.model,
+      readInstructionTools: this.options.readInstructionTools,
       projectId: context.projectId,
       threadId: context.threadId,
       workbenchOrigin: this.options.workbenchOrigin,

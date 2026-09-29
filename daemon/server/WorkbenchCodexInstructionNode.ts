@@ -18,6 +18,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       context.webSocketUrl,
       context.legacyMigrationProjectRoot,
       () => settings.readLocalCapabilities(),
+      () => build.run("mcp", mcp => mcp.listInstructionTools(), "Codex instruction tool catalogue"),
     );
     return {
       dispose: () => undefined,

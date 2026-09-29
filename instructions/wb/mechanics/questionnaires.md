@@ -7,10 +7,7 @@ Trigger criteria:
 
 Process:
 1. Ensure the context of the impending questionnaire is fully presented to the user BEFORE invoking the tool, in commentary.
-2. Call <>
-<harness:codex>`tools.mcp__wb__request_user_input` in one Code mode cell</harness:codex>
-<harness:opencode>`tools.wb.request_user_input`</harness:opencode>
-</>. Treat it as a Workbench Long Wait.
+2. Call <tool id="request_user_input" />. In Codex, use one Code mode cell. Treat it as a Workbench Long Wait.
 
 Constraints:
 - Must faithfully represent the plan or choice explained in commentary
@@ -22,10 +19,7 @@ Constraints:
 - The wait survives user steers and scoped Workbench reloads. Do not restart it
 
 Response:
-- **On questionnaire tool timeout error (not your Workbench Long Wait intervals!), override normal workflow completion: immediately call <>
-<harness:codex>`mcp__wbex__task_blocked`</harness:codex>
-<harness:opencode>`tools.wb.task_blocked`</harness:opencode>
-</>; end the turn with empty final. No commentary, retries, recall, or other work**
+- **On questionnaire tool timeout error (not your Workbench Long Wait intervals!), override normal workflow completion: immediately call <tool id="task_blocked" />; end the turn with empty final. No commentary, retries, recall, or other work**
 - If custom text response, classify whether it narrows, clarifies, or changes the visible plan
 - Treat explicit approval plus a bounded narrowing constraint as approval plus detail under the active workflow
 - Treat added scope, ownership changes, lifecycle changes, behavior changes outside the visible plan, validation changes, feasibility changes, or ambiguous approval as a steer that returns to the appropriate workflow mode
