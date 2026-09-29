@@ -9,7 +9,6 @@ import {
   createPinnedThreadRoute, createSettingsRoute, createStatsRoute, createLogicalProjectRoute,
   createLogicalExistingThreadRoute,
   createLogicalThreadRoute, withProjectSelection,
-  createObservedProjectRoute,
   createToggledProjectSelectionRoute,
   createWorkbenchHref, parseWorkbenchRouteFromLocation,
 } from "workbench-shared/workbench/navigation/workbench-route";
@@ -265,28 +264,83 @@ test("a verified observed-only thread still has a Home link", () => {
     `/@/thread/repo/@/${threadId}`);
 });
 
-test("observed-folder thread links resolve selection without losing their location", () => {
+function createFolderNavigation() {
   const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
   const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
-  const location = {
-    daemonId: DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c"),
-    projectId: ProjectIdSchema.parse("observed-folder"),
+  const one = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
+  const two = DaemonIdSchema.parse("9b8f5ac2-1c44-4f0e-9d22-77f50b0f4b11");
+  const workbenchOnOne = {
+    target: { daemonId: one, projectId: ProjectIdSchema.parse("repo-a") },
+    daemonId: one, hostname: "alpha", name: "workbench", rootPath: "/home/me/workbench", project: null,
   };
-  const navigation = new WorkbenchProjectNavigation([], [], [
-    { id: first, matchKey: "remote://github.com/team/one", label: "one", locations: [] },
-    { id: second, matchKey: "remote://github.com/team/two", label: "two", locations: [] },
-  ]);
-  const thread = { ...createObservedProjectRoute(location), view: "thread" as const,
-    threadTarget: { kind: "new" as const }, threadId: "new" };
-  const href = navigation.href(withProjectSelection(thread, [first, second]));
-  assert.equal(href, `/one/+/two/@/location/${location.daemonId}/${location.projectId}/thread/new`);
-  const beforeCatalogue = new WorkbenchProjectNavigation([], []).readRoute(href!);
-  assert.equal(beforeCatalogue.view, "thread");
-  assert.deepEqual(beforeCatalogue.selectedProjectIds, ["one", "two"]);
-  const restored = navigation.readRoute(href!);
-  assert.deepEqual(restored.selectedProjectIds, [first, second]);
-  assert.deepEqual(restored.logical?.location, location);
-  assert.deepEqual(restored.threadTarget, { kind: "new" });
+  const workbenchOnTwo = {
+    target: { daemonId: two, projectId: ProjectIdSchema.parse("repo-b") },
+    daemonId: two, hostname: "beta", name: "workbench", rootPath: "/srv/other/workbench", project: null,
+  };
+  const worktree = {
+    target: { daemonId: one, projectId: ProjectIdSchema.parse("repo-c") },
+    daemonId: one, hostname: "alpha", name: "convex-lab",
+    rootPath: "/home/me/repo/.workbench/worktrees/convex-lab", project: null,
+  };
+  const navigation = new WorkbenchProjectNavigation([], [], [{
+    id: first, matchKey: "remote://github.com/team/one", label: "one", locations: [workbenchOnOne],
+  }, {
+    id: second, matchKey: "remote://github.com/team/two", label: "two",
+    locations: [workbenchOnTwo, worktree],
+  }]);
+  return { first, navigation, second, workbenchOnOne, workbenchOnTwo, worktree };
+}
+
+test("a folder equal to its project address is omitted from the path as redundant", () => {
+  const id = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const daemonId = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
+  const folder = {
+    target: { daemonId, projectId: ProjectIdSchema.parse("repo") },
+    daemonId, hostname: "alpha", name: "workbench", rootPath: "/home/me/workbench", project: null,
+  };
+  const navigation = new WorkbenchProjectNavigation([], [], [{
+    id, matchKey: "remote://github.com/team/workbench", label: "workbench", locations: [folder],
+  }]);
+  assert.equal(navigation.folderAddressFor(folder.target), null);
+  assert.deepEqual(navigation.href(withProjectSelection(createProjectRoute(""), [id])), "/workbench/@/");
+  // A folder that still needs its slot keeps it.
+  const worktree = {
+    target: { daemonId, projectId: ProjectIdSchema.parse("repo-lab") },
+    daemonId, hostname: "alpha", name: "convex-lab",
+    rootPath: "/home/me/repo/.workbench/worktrees/convex-lab", project: null,
+  };
+  const multi = new WorkbenchProjectNavigation([], [], [{
+    id, matchKey: "remote://github.com/team/workbench", label: "workbench",
+    locations: [folder, worktree],
+  }]);
+  assert.deepEqual(multi.folderAddressFor(worktree.target), ["+convex-lab"]);
+});
+
+test("folder addresses disambiguate colliding paths across daemons and never guess", () => {
+  const { navigation, workbenchOnOne, workbenchOnTwo, worktree } = createFolderNavigation();
+  assert.deepEqual(navigation.folderAddressFor(workbenchOnOne.target), [workbenchOnOne.daemonId, "workbench"]);
+  assert.deepEqual(navigation.folderAddressFor(workbenchOnTwo.target), [workbenchOnTwo.daemonId, "workbench"]);
+  assert.deepEqual(navigation.folderAddressFor(worktree.target), ["+convex-lab"]);
+  assert.deepEqual(navigation.folderForAddress(["+convex-lab"]), worktree.target);
+  assert.deepEqual(navigation.folderForAddress([workbenchOnOne.daemonId, "workbench"]), workbenchOnOne.target);
+  assert.equal(navigation.folderForAddress(["workbench"]), null);
+  assert.equal(navigation.folderForAddress(["missing"]), null);
+});
+
+test("folder selection rides hrefs and stays scoped to its owning project", () => {
+  const { first, navigation, second, worktree } = createFolderNavigation();
+  const current = {
+    ...createProjectRoute(""), selectedProjectIds: [first, second], folderAddress: ["+convex-lab"],
+  };
+  const href = navigation.href(createLogicalThreadRoute(first, first, null, { kind: "new" }), current, "inherit");
+  assert.deepEqual(parseWorkbenchRouteFromLocation(href!).folderAddress, ["+convex-lab"]);
+
+  const outOfScope = withProjectSelection(
+    { ...createThreadRoute("repo-a", "t1"), folderAddress: ["+convex-lab"] }, [first]);
+  assert.equal(navigation.folderForRoute(outOfScope), null);
+  const inScope = withProjectSelection(
+    { ...createThreadRoute("repo-a", "t1"), folderAddress: ["+convex-lab"] }, [second]);
+  assert.deepEqual(navigation.folderForRoute(inScope), worktree.target);
 });
 
 test("catalogue addresses replace junction aliases without changing thread identity", () => {

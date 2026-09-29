@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import type { ExplorerSnapshot, WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkspaceProjects, WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
-import { DaemonIdSchema, DraftIdSchema, FolderIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createObservedProjectRoute, createProjectSelectionRoute, withProjectSelection } from "workbench-shared/workbench/navigation/workbench-route";
+import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createProjectSelectionRoute, withProjectSelection } from "workbench-shared/workbench/navigation/workbench-route";
 import { createWorkspaceClientFixture } from "./workbench/app/workspace-client-fixture";
 import { WorkbenchClient } from "./WorkbenchClient";
 
@@ -494,32 +494,6 @@ test("a thread viewed from another project keeps demand for its owning project r
     }
   }
   assert.ok(warnings.some(message => message.includes("source read unavailable")));
-});
-
-test("late durable registration canonicalises the existing draft without replacing its local state", async context => {
-  const fixture = createWorkspaceClientFixture();
-  const socket = await fixture.open();
-  const client = WorkbenchClient({ workspace: fixture.workspace });
-  context.after(() => { client.dispose(); fixture.dispose(); });
-  const query = socket.sent.find(item => item.method === "workspace/observe" && item.params.query.kind === "projects");
-  assert.ok(query?.method === "workspace/observe");
-  socket.observation(query, { kind: "projects", phase: "stale", failure: null, data: facts(false) });
-  const folderId = FolderIdSchema.parse(crypto.randomUUID());
-  const route = { ...createObservedProjectRoute(location), view: "thread" as const,
-    threadTarget: { kind: "new" as const, folderId }, threadId: "new" };
-  assert.equal((await client.controls.applyRoute(route)).ok, true);
-  const draft = client.threadRuntime.getSnapshot().currentThread;
-  assert.ok(draft?.isDraft);
-  client.controls.setCurrentThreadModel(draft.id, "chosen-model");
-  const canonical = Promise.withResolvers<void>();
-  client.routeIntents.subscribeCanonical(() => canonical.resolve());
-  socket.observation(query, { kind: "projects", phase: "stale", failure: null, data: facts(true) }, 2);
-  await canonical.promise;
-  assert.equal(client.navigation.getSnapshot().route.logical?.threadOwnerProjectId, logicalId);
-  assert.deepEqual(client.navigation.getSnapshot().route.threadTarget, { kind: "new", folderId });
-  assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, draft.id);
-  assert.equal(client.threadRuntime.getSnapshot().currentThread?.model, "chosen-model");
-  assert.deepEqual(client.draftLocationFor(draft.id), location);
 });
 
 test("source-scoped renderers never reuse another daemon's provider model cache", async context => {

@@ -17,7 +17,6 @@ import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import {
   createFileRoute,
   createLogicalFileRoute,
-  createObservedProjectRoute,
   type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
@@ -70,7 +69,10 @@ export function resolveWorkbenchFileRoute({
     const owner = logicalProjects?.find(project => project.locations.some(item =>
       item.target.daemonId === source.daemonId && item.target.projectId === source.projectId));
     return owner ? createLogicalFileRoute(owner.id, source, path)
-      : { ...createObservedProjectRoute(source), view: "file", filePath: path };
+      : {
+        ...createFileRoute(projectId, path),
+        logical: { projectId: null, threadOwnerProjectId: null, location: source, browseLocation: null },
+      };
   }
   if (route.logical?.projectId) return createLogicalFileRoute(route.logical.projectId, null, path);
   return createFileRoute(projectId || currentProjectId || route.projectId, path);

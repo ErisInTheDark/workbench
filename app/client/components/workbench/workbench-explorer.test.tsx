@@ -7,13 +7,11 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 test("threads render one keyboard-navigable tablist with settled rows and custom drag ownership", async () => {
-  const [draggableSource, homeListSource, listSource, itemSource, sidebarSource, workbenchSource] = await Promise.all([
+  const [draggableSource, listSource, itemSource, sidebarSource] = await Promise.all([
     readFile(new URL("./drag/Draggable.tsx", import.meta.url), "utf8"),
-    readFile(new URL("./WorkbenchHomeThreadList.tsx", import.meta.url), "utf8"),
     readFile(new URL("./WorkbenchThreadList.tsx", import.meta.url), "utf8"),
     readFile(new URL("./WorkbenchThreadListItem.tsx", import.meta.url), "utf8"),
-    readFile(new URL("./WorkbenchAllProjectsThreadSidebar.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../workbench.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./WorkbenchThreadSidebar.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(listSource, /role="tablist"/u);
   assert.match(listSource, /role="tab"/u);
@@ -21,7 +19,7 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
   assert.match(listSource, /event\.key === "ArrowUp"/u);
   assert.match(listSource, /event\.key === "Home"/u);
   assert.match(listSource, /event\.key === "End"/u);
-  assert.match(listSource, /summary="Settled threads"/u);
+  assert.match(listSource, /<span>Settled threads<\/span>/u);
   assert.match(listSource, /WORKBENCH_THREAD_ORDER_DROP_TARGET_ID/u);
   assert.match(listSource, /THREAD_ORDER_DROP_RANGE = \{ x: 24, y: 100_000 \}/u);
   assert.match(listSource, /range=\{THREAD_ORDER_DROP_RANGE\}/u);
@@ -29,17 +27,16 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
   assert.match(listSource, /<DropTargetBoundary/u);
   assert.match(draggableSource, /draggable: false/u);
   assert.match(draggableSource, /onDragStart[\s\S]*?event\.preventDefault\(\)/u);
-  assert.match(listSource, /draggable=\{draggable\}/u);
+  assert.match(listSource, /draggable=\{draggable/u);
   assert.match(itemSource, /<a[\s\S]*?draggable=\{draggable\}/u);
-  assert.match(sidebarSource, /<WorkbenchHomeThreadList/u);
-  assert.doesNotMatch(sidebarSource, /<WorkbenchThreadList/u);
-  assert.match(homeListSource, /projectWorkbenchHomeThreadList/u);
+  assert.match(sidebarSource, /<WorkbenchThreadList/u);
+  assert.match(listSource, /projectWorkbenchHomeThreadList/u);
   assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?isDragActive=\{isDragActive\}/u);
   assert.match(itemSource, /<WorkbenchTooltip[\s\S]*?enabled=\{showTooltip && !isDragActive\}[\s\S]*?<a/u);
   assert.match(itemSource, /More actions for \$\{entry\.title\}/u);
-  assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?href=\{getThreadHref\(target\)\}[\s\S]*?role="tab"/u);
+  assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?href=\{getThreadHref[\s\S]*?role="tab"/u);
   assert.match(itemSource, /<a[\s\S]*?href=\{href\}[\s\S]*?role=\{role\}/u);
-  assert.match(listSource, /href=\{getThreadHref\(\{ kind: "new" \}\)\}/u);
+  assert.match(listSource, /getThreadHref\(\{ kind: "new" \}/u);
   assert.match(itemSource, /event\.preventDefault\(\);[\s\S]*?onActivate\(target\)/u);
   assert.match(listSource, /attentionLabelsByThreadId/u);
 });
@@ -67,18 +64,18 @@ test("thread context actions group priority checkboxes and canonical status radi
   const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
   assert.match(sidebarSource, /presentation: "independent"/u);
   assert.match(sidebarSource, /presentation: "connected"/u);
-  assert.match(sidebarSource, /method: "workbench\/thread-state\/status\/set"/u);
+  assert.match(sidebarSource, /"status\/set"/u);
   assert.match(sidebarSource, /label: "Needs attention"/u);
   assert.match(sidebarSource, /label: "Completed"/u);
   assert.match(sidebarSource, /label: "Stopped"/u);
   assert.match(sidebarSource, /tone: "completed"/u);
   assert.match(sidebarSource, /tone: "stopped"/u);
-  assert.match(sidebarSource, /status === "stopped" && thread/u);
-  assert.match(sidebarSource, /void stopThread\(thread\)/u);
+  assert.match(sidebarSource, /status === "stopped" && controls/u);
+  assert.match(sidebarSource, /getThreadStopIntent\(stopEntry\)/u);
   assert.match(sidebarSource, /checked: pinned/u);
   assert.match(sidebarSource, /checked: snoozed/u);
-  assert.match(sidebarSource, /workbench\/thread-state\/draft\/pin\/set/u);
-  assert.match(sidebarSource, /workbench\/thread-state\/draft\/snooze\/set/u);
+  assert.match(sidebarSource, /setPresentationDraftPriority\(draftId, \{/u);
+  assert.match(sidebarSource, /pinned: method === "pin\/set" \? Boolean\(value\) : entry\.metadata\.pinned/u);
   assert.doesNotMatch(sidebarSource, /if \(entry\.entryKind !== "draft"\) \{\s*const snoozed/u);
   assert.match(sidebarSource, /label: snoozed \? "Wake" : "Snooze thread"/u);
   assert.doesNotMatch(sidebarSource, /Unsnooze thread/u);
@@ -88,7 +85,7 @@ test("thread context actions group priority checkboxes and canonical status radi
 test("successful settlement leaves the still-selected thread for a fresh draft", async () => {
   const workbenchSource = await readFile(new URL("../workbench.tsx", import.meta.url), "utf8");
   const sidebarSource = await readFile(new URL("./WorkbenchThreadSidebarActions.tsx", import.meta.url), "utf8");
-  assert.match(sidebarSource, /const accepted = await controls\.updateThreadStateWithAcceptance\(request\);[\s\S]*?method === "settle" && accepted[\s\S]*?onThreadSettled/u);
+  assert.match(sidebarSource, /const accepted = await controls\.threadAction\(identity\.threadId, intent\);[\s\S]*?method === "settle" && accepted[\s\S]*?onThreadSettled/u);
   assert.match(workbenchSource, /currentRouteRef\.current[\s\S]*?isWorkbenchThreadTargetSelected\(settledTarget, currentRoute\.threadTarget\)[\s\S]*?createThreadRoute\(currentRoute\.projectId, \{ kind: "new" \}\)/u);
   assert.match(workbenchSource, /onThreadSettled=\{handleThreadSettled\}/u);
 });

@@ -7,7 +7,9 @@
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 
 import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchProjectOption } from "workbench-shared/types";
-import { groupProjectSelection, nextProjectSelectionTier, type DisplaySidebarProject } from "./project-sidebar-groups";
+import {
+  groupProjectSelection, nextProjectSelectionTier, type DisplaySidebarProject,
+} from "./project-sidebar-groups";
 import { useWorkbenchProjectThreadSummaries } from "./use-workbench-client";
 import { EllipsisIcon, ProjectIcon } from "./workbench-icons";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
@@ -16,9 +18,6 @@ import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosu
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButton";
 import { useWorkbenchClientController } from "./workbench-client-context";
-import { createObservedProjectRoute, createWorkbenchHref } from "workbench-shared/workbench/navigation/workbench-route";
-import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
-import { WorkbenchDaemonAssetOriginContext } from "./WorkbenchWorkspaceContext";
 
 export default function ProjectSidebar ({
   activeProjectId,
@@ -32,7 +31,6 @@ export default function ProjectSidebar ({
   logicalError,
   logicalLoading,
   onProjectLinkClick,
-  onObservedProjectLinkClick,
   projects,
 }: {
   activeProjectId: string;
@@ -46,12 +44,10 @@ export default function ProjectSidebar ({
   logicalError?: string | null;
   logicalLoading?: boolean;
   onProjectLinkClick (event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
-  onObservedProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, location: ProjectLocationReference): void;
   projects: readonly WorkbenchProjectOption[];
 }) {
   const { preferences } = useWorkbenchSidebarPreferences();
   const workspace = useWorkbenchClientController().explorer.workspaceProjects;
-  const observed = workspace?.observedProjects.flatMap(item => item.locations) ?? [];
   const summaries = useWorkbenchProjectThreadSummaries();
   const displayedProjects = logicalProjects ?? projects;
   const entriesByProjectId = useMemo(() => new Map<string, DisplaySidebarProject>(displayedProjects.map(project => {
@@ -94,7 +90,7 @@ export default function ProjectSidebar ({
     ...(revealedTier >= 2 ? projectSelectionGroups.unarchived : []),
     ...(revealedTier >= 3 ? projectSelectionGroups.all : []),
   ];
-  const nextTier = nextProjectSelectionTier(revealedTier, projectSelectionGroups, observed.length);
+  const nextTier = nextProjectSelectionTier(revealedTier, projectSelectionGroups);
   const nextLabel = nextTier === 1 ? "show unsettled" : nextTier === 2 ? "show unarchived" : "show all projects";
   const nowMs = Date.now();
 
@@ -123,19 +119,6 @@ export default function ProjectSidebar ({
             />
           ))}
           {emptySelectionMessage ? <p className="m-0 px-2 py-1 text-[0.8rem] text-fg/muted">{emptySelectionMessage}</p> : null}
-          {revealedTier >= 3 ? observed.map(item => (
-            <WorkbenchDaemonAssetOriginContext.Provider
-              key={`${item.location.daemonId}/${item.location.projectId}`}
-              value={{ kind: "source", daemonId: item.location.daemonId }}
-            >
-            <WorkbenchProjectListItem
-              entry={{ project: item.project, summary: null, activityAt: item.project.lastCommitTimeMs }}
-              nowMs={nowMs}
-              href={createWorkbenchHref(createObservedProjectRoute(item.location))}
-              onProjectLinkClick={event => onObservedProjectLinkClick(event, item.location)}
-            />
-            </WorkbenchDaemonAssetOriginContext.Provider>
-          )) : null}
           {nextTier !== null ? (
             <div className="flex min-w-0 items-center">
               <button
@@ -155,7 +138,7 @@ export default function ProjectSidebar ({
             </div>
           ) : null}
           {logicalError ? <p role="alert" className="m-0 px-2 text-[0.8rem] leading-5 text-danger">{logicalError}</p> : null}
-          {!displayedProjects.length && !observed.length && !logicalError ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">
+          {!displayedProjects.length && !logicalError ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">
             {logicalLoading || !workspace || workspace.catalogues.some(item => item.phase === "pending")
               ? "Loading projects..." : "No projects were found."}
           </p> : null}

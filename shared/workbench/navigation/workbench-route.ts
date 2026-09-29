@@ -1,10 +1,10 @@
 /*
  * Exports:
  * - WORKBENCH_ROUTE_MARKER: route marker for workbench URLs.
+ * - WORKBENCH_FOLDER_MARKER: marker segment for the sidebar folder selection slot.
  * - WorkbenchRouteView/WorkbenchSettingsScope/WorkbenchRoute/WorkbenchRouteParseResult: normalized route contracts.
  * - createHomeRoute/createProjectSelectionRoute/createToggledProjectSelectionRoute/withProjectSelection/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
  * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute/createLogicalMosaicRoute: internal project, target and UUID routes.
- * - createObservedProjectRoute: address a verified folder before durable logical registration.
  * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse URL state without changing history.
  * - createWorkbenchHref/createHomeHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createHomeThreadHref/createSettingsHref/createStatsHref/createMosaicHref: build hrefs.
@@ -23,6 +23,7 @@ import { DraftIdSchema, LogicalProjectIdSchema, type LogicalProjectId, type Proj
 import { ProjectLocationReferenceSchema, type ProjectLocationReference } from "../project/project-location.ts";
 
 export const WORKBENCH_ROUTE_MARKER = "@";
+export const WORKBENCH_FOLDER_MARKER = "*";
 
 const LEGACY_FILE_SEARCH_PARAM = "file";
 const LEGACY_THREAD_SEARCH_PARAM = "thread";
@@ -36,6 +37,8 @@ export type WorkbenchSettingsScope = "global" | "project";
 export interface WorkbenchRoute {
   error: string;
   filePath: string;
+  /** Sidebar folder selection from the `*` url slot. Absent means inherit; null means explicitly no folder. */
+  folderAddress?: string[] | null;
   mosaicNode: WorkbenchMosaicNode | null;
   projectId: ProjectId | "";
   selectedProjectIds: readonly string[] | null;
@@ -129,13 +132,6 @@ export function createLogicalProjectRoute(logicalProjectId: string, location: Pr
     threadOwnerProjectId: null,
     location: location ? ProjectLocationReferenceSchema.parse(location) : null,
     browseLocation: null,
-  } };
-}
-
-export function createObservedProjectRoute(location: ProjectLocationReference): WorkbenchRoute {
-  return { ...createProjectRoute(""), selectedProjectIds: null, logical: {
-    projectId: null, threadOwnerProjectId: null,
-    location: ProjectLocationReferenceSchema.parse(location), browseLocation: null,
   } };
 }
 
@@ -558,6 +554,15 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
 function parseProjectSelectionRouteFromSegments(segments: string[], searchParams: URLSearchParams): WorkbenchRoute {
   const markerIndex = segments.indexOf(WORKBENCH_ROUTE_MARKER);
   const prefix = markerIndex < 0 ? segments : segments.slice(0, markerIndex);
+  const folderMarkerIndex = prefix.indexOf(WORKBENCH_FOLDER_MARKER);
+  if (folderMarkerIndex >= 0) {
+    const decoded = decodeRouteSegments(prefix.slice(folderMarkerIndex + 1));
+    if (decoded.ok === false) return createInvalidWorkbenchRoute(decoded.error);
+    if (!decoded.value.length) return createInvalidWorkbenchRoute("Folder selection is empty.");
+    const rest = [...prefix.slice(0, folderMarkerIndex), ...(markerIndex < 0 ? [] : segments.slice(markerIndex))];
+    const parsed = parseProjectSelectionRouteFromSegments(rest, searchParams);
+    return parsed.view === "invalid" ? parsed : { ...parsed, folderAddress: decoded.value };
+  }
   if (!prefix.includes("+")) return parseLegacyRouteFromSegments(segments, searchParams);
   const groups: string[][] = [[]];
   for (const segment of prefix) {
@@ -586,23 +591,10 @@ function parseProjectSelectionRouteFromSegments(segments: string[], searchParams
 }
 
 export function parseWorkbenchRouteFromPath(pathname: string, search = ""): WorkbenchRouteParseResult {
-  const observed = /^(.*)\/@\/location\/([^/]+)\/([^/]+)(\/.*)?$/u.exec(pathname);
-  if (observed) {
-    try {
-      const selection = parseWorkbenchRouteFromPath(`${observed[1] || ""}/@/`);
-      if (selection.view !== "home" && selection.view !== "project") {
-        return createInvalidWorkbenchRoute("Observed folder selection is invalid.");
-      }
-      const location = ProjectLocationReferenceSchema.parse({
-        daemonId: decodeURIComponent(observed[2]!), projectId: decodeURIComponent(observed[3]!),
-      });
-      const route = observed[4]
-        ? parseWorkbenchRouteFromPath(`/${encodeURIComponent(location.projectId)}/@${observed[4]}`, search)
-        : createProjectRoute("");
-      return { ...route, projectId: "", threadOwnerProjectId: "", selectedProjectIds: selection.selectedProjectIds,
-        logical: { projectId: null, threadOwnerProjectId: null, location, browseLocation: null } };
-    } catch { return createInvalidWorkbenchRoute("Observed folder address is invalid."); }
-  }
+  return parseWorkbenchRouteSegments(pathname, search);
+}
+
+function parseWorkbenchRouteSegments(pathname: string, search: string): WorkbenchRouteParseResult {
   const searchParams = parseSearch(search);
   const segments = pathname.split("/").filter((segment) => segment.length > 0);
   if (!segments.length) {
@@ -636,21 +628,16 @@ export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike 
 export function createWorkbenchHref(route: WorkbenchRoute): string {
   const projectPath = route.selectedProjectIds === null ? ""
     : route.selectedProjectIds.length ? route.selectedProjectIds.map(encodeWorkbenchRoutePath).join("/+/") : "+";
-  const markedPath = projectPath ? `/${projectPath}/${WORKBENCH_ROUTE_MARKER}` : `/${WORKBENCH_ROUTE_MARKER}`;
-  if (route.logical && !route.logical.projectId && route.logical.location) {
-    const location = route.logical.location;
-    const legacy = createWorkbenchHref({ ...route, logical: undefined,
-      projectId: location.projectId, selectedProjectIds: [location.projectId],
-      threadOwnerProjectId: location.projectId });
-    const marker = legacy.indexOf("/@");
-    return `${markedPath}/location/${encodeURIComponent(location.daemonId)}/${encodeURIComponent(location.projectId)}${marker < 0 ? "" : legacy.slice(marker + 2)}`;
-  }
+  const folderPath = route.folderAddress?.length
+    ? `${WORKBENCH_FOLDER_MARKER}/${route.folderAddress.map(encodeRouteSegment).join("/")}/`
+    : "";
+  const markedPath = projectPath ? `/${projectPath}/${folderPath}${WORKBENCH_ROUTE_MARKER}` : `/${folderPath}${WORKBENCH_ROUTE_MARKER}`;
   if (route.logical) throw new Error("Logical routes need project-address resolution before serialisation.");
   if (route.view === "home") {
     return "/";
   }
   if (route.view === "file") {
-    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/file/${encodeWorkbenchRoutePath(route.filePath)}`;
+    return `${markedPath}/file/${encodeWorkbenchRoutePath(route.filePath)}`;
   }
   if (route.view === "thread") {
     const target = route.threadTarget ?? (route.threadId === "new" ? { kind: "new" as const } : { kind: "provider" as const, threadId: RouteThreadReferenceSchema.parse(route.threadId) });
@@ -665,14 +652,14 @@ export function createWorkbenchHref(route: WorkbenchRoute): string {
       return `${markedPath}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/${encodeRouteSegment(target.threadId)}`;
     }
     if (threadOwnerProjectId !== route.projectId) {
-      return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/pin${createWorkbenchHref(createThreadRoute(threadOwnerProjectId, target))}`;
+      return `${markedPath}/pin${createWorkbenchHref(createThreadRoute(threadOwnerProjectId, target))}`;
     }
     if (target.kind === "new") return target.folderId
-      ? `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/folder/${target.folderId}/thread/new`
-      : `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/new`;
-    if (target.kind === "draft") return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/new/${target.draftId}`;
-    if (target.kind === "subagent") return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/${encodeRouteSegment(target.parentThreadId)}/sub/${encodeRouteSegment(target.threadId)}`;
-    return `/${projectPath}/${WORKBENCH_ROUTE_MARKER}/thread/${encodeRouteSegment(target.threadId)}`;
+      ? `${markedPath}/folder/${target.folderId}/thread/new`
+      : `${markedPath}/thread/new`;
+    if (target.kind === "draft") return `${markedPath}/thread/new/${target.draftId}`;
+    if (target.kind === "subagent") return `${markedPath}/thread/${encodeRouteSegment(target.parentThreadId)}/sub/${encodeRouteSegment(target.threadId)}`;
+    return `${markedPath}/thread/${encodeRouteSegment(target.threadId)}`;
   }
   if (route.view === "settings") {
     return `${markedPath}/settings/${route.settingsScope}`;
@@ -726,6 +713,7 @@ export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute
   return left.view === right.view
     && left.projectId === right.projectId
     && areDeeplyEqual(left.selectedProjectIds, right.selectedProjectIds)
+    && areDeeplyEqual(left.folderAddress ?? null, right.folderAddress ?? null)
     && left.filePath === right.filePath
     && areDeeplyEqual(left.mosaicNode, right.mosaicNode)
     && left.settingsScope === right.settingsScope

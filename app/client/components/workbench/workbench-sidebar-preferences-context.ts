@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchSidebarPreferencesContext/useWorkbenchSidebarPreferences: provide and consume global and active-project sidebar preferences.
- * - WorkbenchSidebarDisplayState: memory-only git/settled disclosure and pagination.
+ * - WorkbenchSidebarDisplayState: memory-only git/settled/snoozed disclosure and pagination.
  * - WorkbenchSidebarDisclosurePreferenceKey/WorkbenchSidebarPreferencesValue: describe disclosure keys and persistent or transient intents.
  */
 import { createContext, useContext } from "react";
@@ -15,12 +15,14 @@ export type WorkbenchSidebarDisclosurePreferenceKey =
   | "pinnedThreadsOpen"
   | "projectsOpen"
   | "settledThreadsOpen"
+  | "snoozedThreadsOpen"
   | "threadsOpen";
 
 export interface WorkbenchSidebarDisplayState {
   gitOpen: boolean;
   settledThreadItemLimit: number;
   settledThreadsOpen: boolean;
+  snoozedThreadsOpen: boolean;
 }
 
 export interface WorkbenchSidebarPreferencesValue {

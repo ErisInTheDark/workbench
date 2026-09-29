@@ -45,6 +45,7 @@ export default function WorkbenchSidebarPreferencesProvider({
     gitOpen: true,
     settledThreadItemLimit: 50,
     settledThreadsOpen: false,
+    snoozedThreadsOpen: false,
   });
   const [pendingDisclosure, setPendingDisclosure] = useState<Partial<Record<WorkbenchSidebarDisclosurePreferenceKey, boolean>>>({});
   const disclosureGeneration = useRef(new Map<WorkbenchSidebarDisclosurePreferenceKey, number>());
@@ -88,6 +89,11 @@ export default function WorkbenchSidebarPreferencesProvider({
           ...previous,
           settledThreadsOpen: open,
           settledThreadItemLimit: open ? 50 : previous.settledThreadItemLimit,
+        });
+      } else if (key === "snoozedThreadsOpen") {
+        setDisplayState(previous => previous.snoozedThreadsOpen === open ? previous : {
+          ...previous,
+          snoozedThreadsOpen: open,
         });
       } else {
         if (preferences[key] === open || key !== "projectsOpen" && !projectId) return;

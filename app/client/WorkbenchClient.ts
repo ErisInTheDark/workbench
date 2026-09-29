@@ -137,6 +137,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   let browseLocation: ProjectLocationReference | null = null;
   let draftLocation: ProjectLocationReference | null = null;
   let draftRoute: WorkbenchRoute | null = null;
+  let lastLoadedRoute: WorkbenchRoute | null = null;
   let activePath = "";
   let disposed = false;
   let scheduled = false;
@@ -287,10 +288,15 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     id => locationForThread(id),
   );
   function refreshProjectNavigator() {
+    const daemonId = network.snapshot().snapshot?.daemon?.daemonId ?? null;
     projectNavigator.update(
       projectClient.getSnapshot().projects,
       state?.getProjectAliases() ?? [],
       projectFacts()?.projects ?? [],
+      daemonId ? {
+        daemonId: DaemonIdSchema.parse(daemonId),
+        hostname: projectFacts()?.sources.find(item => item.daemonId === daemonId)?.hostname ?? daemonId,
+      } : null,
     );
   }
   const sidebar = new ThreadSidebarClient({
@@ -408,7 +414,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         selectedRows.push({ kind: "location", location: ownerFact.location });
       }
     }
-    const explicit = route.logical?.browseLocation ?? route.logical?.location;
+    const explicit = projectNavigator.folderForRoute(route) ?? route.logical?.browseLocation ?? route.logical?.location;
     selectRows(selectedRows.length ? selectedRows : explicit ? [{ kind: "location", location: explicit }] : null);
   }
 
@@ -468,21 +474,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         && !row.entry.lifecycle.settled) warmOpenCode(row.location);
     }
     prepareMosaicRenderers(route.mosaicNode);
-    const currentDraft = threadClient.getSnapshot().currentThread;
-    if (route.logical && !route.logical.threadOwnerProjectId && route.logical.location
-      && route.view === "thread" && currentDraft?.isDraft) {
-      const registered = logicalFor(route.logical.location);
-      if (registered) {
-        const canonical = withProjectSelection(createLogicalThreadRoute(registered.id, registered.id,
-          route.threadTarget?.kind === "draft" ? null : route.logical.location,
-          route.threadTarget?.kind === "draft" || route.threadTarget?.kind === "new"
-            ? route.threadTarget : { kind: "new" }), route.selectedProjectIds);
-        if (navigation.retargetDraftSession(canonical, DraftIdSchema.parse(currentDraft.id), route.logical.location)) {
-          draftRoute = canonical;
-          routeIntents.canonicalise(canonical);
-        }
-      }
-    }
     routeIntents.factsChanged();
     for (const listener of factListeners) listener();
     emit();
@@ -550,6 +541,19 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   async function loadRoute(route: WorkbenchRoute,
     context: { isCurrent(): boolean; signal: AbortSignal }): Promise<WorkbenchRouteLoadResult> {
     if (route.view === "invalid") return { ok: false, error: route.error };
+    // A folder-scope change re-scopes the sidebar without reloading the open view.
+    if (lastLoadedRoute && isSameWorkbenchRoute(
+      { ...lastLoadedRoute, folderAddress: undefined }, { ...route, folderAddress: undefined })) {
+      selectFolder(projectNavigator.folderForRoute(route) ?? route.logical?.browseLocation ?? route.logical?.location ?? null);
+      return { ok: true };
+    }
+    const result = await loadView(route, context);
+    if (result.ok) lastLoadedRoute = route;
+    return result;
+  }
+
+  async function loadView(route: WorkbenchRoute,
+    context: { isCurrent(): boolean; signal: AbortSignal }): Promise<WorkbenchRouteLoadResult> {
     const target = route.threadTarget;
     if (route.view !== "thread" || target?.kind !== "new" && target?.kind !== "draft") draftRoute = null;
     const root = target && (target.kind === "provider" || target.kind === "subagent")
@@ -557,11 +561,13 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     retainOwners(route.mosaicNode ? [...getWorkbenchMosaicThreadRootIds(route.mosaicNode)] : root ? [root] : []);
     const logicalId = route.logical?.projectId;
     const explicit = route.logical?.browseLocation ?? route.logical?.location;
+    // The url folder owns the browse scope; the draft channel keeps its own folder intent.
+    const browseFolder = projectNavigator.folderForRoute(route) ?? null;
     selectRowsForRoute(route);
     if (route.view === "home" || route.view === "project" && route.selectedProjectIds?.length !== 1
       || route.view === "settings" && route.settingsScope === "global"
       || route.view === "stats") {
-      selectFolder(null);
+      selectFolder(browseFolder);
       draftLocation = null;
       activePath = "";
       threadClient.clearThreadSelection();
@@ -588,7 +594,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     if (draftRouteTarget && location) warmOpenCode(location);
     if (route.view === "mosaic") {
       // Each pane consumes its own owner and transcript facts. A slow pane cannot block its siblings.
-      selectFolder(location);
+      selectFolder(browseFolder ?? location);
       prepareMosaicRenderers(route.mosaicNode);
       return { ok: true };
     }
@@ -605,7 +611,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       }
       const project = threadProject(data.location);
       if (!project) return { ok: false, pending: true };
-      selectFolder(route.logical ? browseTarget : location ?? data.location);
+      selectFolder(browseFolder ?? (route.logical ? browseTarget : location ?? data.location));
       selectRenderer(data.location);
       draftLocation = null;
       const outcome = await threadClient.openThread(data.identity.threadId, {
@@ -614,14 +620,17 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       if (!context.isCurrent() || outcome.kind === "superseded") return { ok: false };
       if (outcome.kind === "failure") return { ok: false, error: outcome.failure.message };
       activePath = "";
-      const canonical = withProjectSelection(createLogicalExistingThreadRoute(logicalId ?? null,
-        target?.kind === "provider" ? { ...target, harness: data.identity.harness } : target!, null),
-        route.selectedProjectIds);
+      const canonical = {
+        ...withProjectSelection(createLogicalExistingThreadRoute(logicalId ?? null,
+          target?.kind === "provider" ? { ...target, harness: data.identity.harness } : target!, null),
+          route.selectedProjectIds),
+        folderAddress: route.folderAddress,
+      };
       emit();
       return { ok: true, ...(isSameWorkbenchRoute(route, canonical) ? {} : { canonicalRoute: canonical }) };
     }
     if (!location && logical && route.view === "project") {
-      selectFolder(null);
+      selectFolder(browseFolder);
       activePath = "";
       threadClient.clearThreadSelection();
       return { ok: true };
@@ -635,7 +644,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       && !logical.observedLocations?.some(item => item.daemonId === location!.daemonId && item.projectId === location!.projectId)) {
       return { ok: false, error: "The chosen folder does not belong to this project." };
     }
-    selectFolder(draftRouteTarget ? browseTarget : location);
+    selectFolder(browseFolder ?? (draftRouteTarget ? browseTarget : location));
     activePath = route.view === "file" ? route.filePath : "";
     if (route.view === "thread" && target && (target.kind === "new" || target.kind === "draft")) {
       if (target.kind === "draft" && !saved) {

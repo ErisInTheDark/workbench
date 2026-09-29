@@ -112,21 +112,30 @@ test("project toggles keep the active thread until its owning project is deselec
     `/beta/@/thread/new/${draftId}`);
 });
 
-test("observed-folder threads keep their target while the selection prefix changes", () => {
-  const location = {
-    daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029"),
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("observed"),
-  };
-  const route = {
-    ...parseWorkbenchRouteFromPath(`/@/location/${location.daemonId}/${location.projectId}/thread/new`),
-    selectedProjectIds: ["alpha", "beta"],
-  };
-  const href = createWorkbenchHref(route);
-  assert.equal(href, `/alpha/+/beta/@/location/${location.daemonId}/${location.projectId}/thread/new`);
-  const restored = parseWorkbenchRouteFromPath(href);
-  assert.deepEqual(restored.selectedProjectIds, ["alpha", "beta"]);
-  assert.deepEqual(restored.logical?.location, location);
-  assert.deepEqual(restored.threadTarget, { kind: "new" });
+test("sidebar folder selection rides the url between the selection and the view", () => {
+  const thread = parseWorkbenchRouteFromPath("/alpha/+/beta/*/%2Bconvex-lab/@/thread/alpha/@/t1");
+  assert.equal(thread.view, "thread");
+  assert.deepEqual(thread.selectedProjectIds, ["alpha", "beta"]);
+  assert.deepEqual(thread.folderAddress, ["+convex-lab"]);
+  assert.equal(createWorkbenchHref(thread), "/alpha/+/beta/*/%2Bconvex-lab/@/thread/alpha/@/t1");
+
+  const bare = parseWorkbenchRouteFromPath("/alpha/*/web/workbench/@/git");
+  assert.equal(bare.view, "git");
+  assert.deepEqual(bare.folderAddress, ["web", "workbench"]);
+  assert.equal(createWorkbenchHref(bare), "/alpha/*/web/workbench/@/git");
+
+  const qualified = parseWorkbenchRouteFromPath(`/alpha/*/${fixtureIdentitySchemas.DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029")}/repo/@/`);
+  assert.deepEqual(qualified.folderAddress, ["502902c0-9512-40be-bb06-c65d86ef2029", "repo"]);
+  assert.equal(createWorkbenchHref(qualified), `/alpha/*/${fixtureIdentitySchemas.DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029")}/repo/@/`);
+
+  const home = parseWorkbenchRouteFromPath("/*/repo/@/thread/owner/project/@/new");
+  assert.deepEqual(home.folderAddress, ["repo"]);
+  assert.equal(createWorkbenchHref(home), "/*/repo/@/thread/owner/project/@/new");
+
+  const none = parseWorkbenchRouteFromPath("/alpha/+/beta/@/thread/alpha/@/t1");
+  assert.equal(none.folderAddress ?? null, null);
+  assert.equal(parseWorkbenchRouteFromPath("/alpha/*/@/").view, "invalid");
+  assert.equal(parseWorkbenchRouteFromPath("/@/location/502902c0-9512-40be-bb06-c65d86ef2029/repo").view, "invalid");
 });
 
 test("home thread routes preserve the owning project without selecting it", () => {

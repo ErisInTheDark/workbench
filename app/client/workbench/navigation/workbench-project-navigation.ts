@@ -9,16 +9,23 @@ import {
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import {
+  ProjectFolderAddress, projectFolderOptions, type ProjectFolderOption,
+} from "workbench-shared/workbench/project/project-folder-address";
 
 export default class WorkbenchProjectNavigation {
   private readonly addressOwners = new Map<string, Set<WorkbenchLogicalProject>>();
+  private folders: readonly ProjectFolderOption[] = [];
+  private attached: { daemonId: ProjectLocationReference["daemonId"]; hostname: string } | null = null;
 
   constructor(
     private projects: readonly WorkbenchProjectOption[],
     private aliases: readonly WorkbenchProjectAlias[],
     private logicalProjects: readonly WorkbenchLogicalProject[] = [],
     readonly threadLocation?: (threadId: string) => ProjectLocationReference | null,
+    attached?: { daemonId: ProjectLocationReference["daemonId"]; hostname: string } | null,
   ) {
+    this.attached = attached ?? null;
     this.rebuildAddressOwners();
   }
 
@@ -26,8 +33,12 @@ export default class WorkbenchProjectNavigation {
     projects: readonly WorkbenchProjectOption[],
     aliases: readonly WorkbenchProjectAlias[],
     logicalProjects: readonly WorkbenchLogicalProject[],
+    attached?: { daemonId: ProjectLocationReference["daemonId"]; hostname: string } | null,
   ) {
-    if (this.projects === projects && this.logicalProjects === logicalProjects
+    const attachedChanged = attached !== undefined
+      && (this.attached?.daemonId !== attached?.daemonId || this.attached?.hostname !== attached?.hostname);
+    if (attached !== undefined) this.attached = attached;
+    if (!attachedChanged && this.projects === projects && this.logicalProjects === logicalProjects
       && this.aliases.length === aliases.length
       && this.aliases.every((alias, index) => alias.alias === aliases[index]?.alias
         && alias.projectId === aliases[index]?.projectId)) return;
@@ -39,6 +50,7 @@ export default class WorkbenchProjectNavigation {
   }
 
   private rebuildAddressOwners() {
+    this.folders = projectFolderOptions(this.logicalProjects, this.projects, this.attached);
     const add = (address: string, project: WorkbenchLogicalProject) => {
       if (!address) return;
       const owners = this.addressOwners.get(address) ?? new Set<WorkbenchLogicalProject>();
@@ -66,14 +78,7 @@ export default class WorkbenchProjectNavigation {
 
   resolveRoute(route: WorkbenchRoute): WorkbenchRoute {
     if (route.view === "invalid") return route;
-    if (route.logical) {
-      if (route.logical.projectId || !route.logical.location || route.selectedProjectIds === null) return route;
-      const selected = route.selectedProjectIds.map(address => this.logicalForAddress(address));
-      if (selected.includes("ambiguous")) return createInvalidWorkbenchRoute(
-        "Observed folder selection matches multiple remote identities.");
-      if (selected.some(project => !project)) return route;
-      return { ...route, selectedProjectIds: selected.map(project => (project as WorkbenchLogicalProject).id) };
-    }
+    if (route.logical) return route;
     const selected = route.selectedProjectIds?.map(address => this.logicalForAddress(address)) ?? null;
     const owner = this.logicalForAddress(route.threadOwnerProjectId);
     if (selected?.includes("ambiguous") || owner === "ambiguous") {
@@ -112,6 +117,60 @@ export default class WorkbenchProjectNavigation {
     };
   }
 
+  /** Resolve one url folder address against the known folder universe. Unknown or ambiguous addresses select no folder. */
+  folderForAddress(address: readonly string[]): ProjectLocationReference | null {
+    return ProjectFolderAddress.resolve(this.folders, address)?.target ?? null;
+  }
+
+  /** Resolve the route's url folder within its project selection. Out-of-scope folders select no folder. */
+  folderForRoute(route: WorkbenchRoute): ProjectLocationReference | null {
+    if (!route.folderAddress?.length) {
+      const ownerProjectId =
+        route.logical?.projectId ?? route.logical?.threadOwnerProjectId;
+
+      if (!ownerProjectId) return null;
+
+      const ownFolders = this.folders.filter(folder =>
+        folder.ownerProjectId === ownerProjectId
+        && this.isProjectOwnFolder(folder)
+      );
+
+      return ownFolders.length === 1
+        ? ownFolders[0]!.target
+        : null;
+    }
+
+    const folder = ProjectFolderAddress.resolve(this.folders, route.folderAddress);
+    if (!folder) return null;
+
+    return route.selectedProjectIds && !route.selectedProjectIds.includes(folder.ownerProjectId)
+      ? null
+      : folder.target;
+  }
+
+  /** Derive one folder's url address segments. Null when the address is redundant with its project. */
+  folderAddressFor(target: ProjectLocationReference): string[] | null {
+    const address = ProjectFolderAddress.forFolder(this.folders, target);
+    if (!address.length) return null;
+    return this.isProjectOwnFolder(this.folders.find(folder =>
+      folder.target.daemonId === target.daemonId && folder.target.projectId === target.projectId)) ? null : address;
+  }
+
+  /** A folder whose address equals its owning project's address is that project's own folder. */
+  private isProjectOwnFolder(folder: ProjectFolderOption | undefined): boolean {
+    if (!folder) return false;
+    const owner = this.logicalProjects.find(project => project.id === folder.ownerProjectId);
+    const ownerAddress = owner ? this.canonicalAddress(owner) : this.address(folder.ownerProjectId, []);
+    return !!ownerAddress && ProjectFolderAddress.forFolder(this.folders, folder.target).join("/") === ownerAddress;
+  }
+
+  /** Every folder available to the sidebar folder picker for the selected projects. */
+  folderOptions(selectedProjectIds?: readonly string[]): ProjectFolderOption[] {
+    return selectedProjectIds
+      ? this.folders.filter(folder => selectedProjectIds.includes(folder.ownerProjectId))
+      : [...this.folders];
+  }
+
   readRoute(location: string, launchProjectId?: string): WorkbenchRoute {
     const url = new URL(location, "http://workbench.local");
     return this.resolveRoute(url.pathname === "/launch"
@@ -124,7 +183,10 @@ export default class WorkbenchProjectNavigation {
     const intent = selection === "inherit" && current && route.view === "thread"
       && (current.selectedProjectIds !== null || route.selectedProjectIds === null)
       ? withProjectSelection(route, current.selectedProjectIds) : route;
-    const resolved = this.resolveRoute(intent);
+    const withFolder = intent.folderAddress === undefined && selection === "inherit" && current?.folderAddress?.length
+      ? { ...intent, folderAddress: [...current.folderAddress] }
+      : intent;
+    const resolved = this.resolveRoute(withFolder);
     if (resolved.view === "invalid" || resolved.view === "mosaic") return undefined;
     if (resolved.logical) {
       const logical = resolved.logical;
@@ -140,7 +202,7 @@ export default class WorkbenchProjectNavigation {
           || project.observedLocations?.some(item =>
             item.daemonId === location?.daemonId && item.projectId === location?.projectId));
       }
-      if (resolved.view === "thread" && !owner && !(logical.location && !logical.projectId)) return undefined;
+      if (resolved.view === "thread" && !owner) return undefined;
       if (logical.projectId && !selected) return undefined;
       const selectedAddresses = resolved.selectedProjectIds?.map(id => {
         const project = this.logicalProjects.find(candidate => candidate.id === id)
@@ -149,9 +211,6 @@ export default class WorkbenchProjectNavigation {
         return project ? this.canonicalAddress(project) : undefined;
       }) ?? null;
       if (selectedAddresses?.includes(undefined)) return undefined;
-      if (!logical.projectId && logical.location) {
-        return createWorkbenchHref({ ...resolved, selectedProjectIds: selectedAddresses as string[] | null });
-      }
       return createWorkbenchHref({
         ...resolved,
         logical: undefined,
@@ -161,12 +220,12 @@ export default class WorkbenchProjectNavigation {
       });
     }
     const preferred = current ? [current.projectId, current.threadOwnerProjectId] : [];
-    const projectId = this.address(intent.projectId, preferred);
-    const ownerId = this.address(intent.threadOwnerProjectId, preferred);
-    const selectedAddresses = intent.selectedProjectIds?.map(id => this.address(id, preferred)) ?? null;
+    const projectId = this.address(withFolder.projectId, preferred);
+    const ownerId = this.address(withFolder.threadOwnerProjectId, preferred);
+    const selectedAddresses = withFolder.selectedProjectIds?.map(id => this.address(id, preferred)) ?? null;
     if (projectId === undefined || ownerId === undefined || selectedAddresses?.includes(undefined)) return undefined;
     return createWorkbenchHref({
-      ...intent, projectId: projectId ? ProjectIdSchema.parse(projectId) : "",
+      ...withFolder, projectId: projectId ? ProjectIdSchema.parse(projectId) : "",
       selectedProjectIds: selectedAddresses as string[] | null,
       threadOwnerProjectId: ownerId ? ProjectIdSchema.parse(ownerId) : "",
     });

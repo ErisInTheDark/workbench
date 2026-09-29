@@ -27,6 +27,7 @@ type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children
   leadingClassName?: string;
   leadingLabel?: string;
   renderContent?: () => ReactNode;
+  keepMounted?: boolean;
   summary: ReactNode;
   summaryClassName?: string;
   summaryContentClassName?: string;
@@ -54,6 +55,7 @@ function ThreadDisclosureContent ({
   children,
   className,
   compactSummary = false,
+  keepMounted = false,
   contentClassName,
   defaultOpen,
   initialOpen = false,
@@ -167,7 +169,7 @@ function ThreadDisclosureContent ({
         ) : null}
         <div className={joinClasses("min-w-0 flex-1", summaryContentClassName)}>{summary}</div>
       </summary>
-      {hasMountedContent ? (
+      {hasMountedContent || keepMounted ? (
         <div className={joinClasses("min-w-0 max-w-full", contentClassName)}>{renderContent ? renderContent() : children}</div>
       ) : null}
     </details>

@@ -52,10 +52,9 @@ export function groupProjectSelection<P extends { id: string }, S>(
 export function nextProjectSelectionTier(
   revealedTier: number,
   groups: Pick<ReturnType<typeof groupProjectSelection>, "unsettled" | "unarchived" | "all">,
-  observedProjectCount: number,
 ): 1 | 2 | 3 | null {
   if (revealedTier < 1 && groups.unsettled.length) return 1;
   if (revealedTier < 2 && groups.unarchived.length) return 2;
-  if (revealedTier < 3 && (groups.all.length || observedProjectCount)) return 3;
+  if (revealedTier < 3 && groups.all.length) return 3;
   return null;
 }

@@ -54,7 +54,7 @@ export default function WorkbenchWorkingTreeProvider({ projectId, children, sour
       state.dispose();
     };
   }, [daemon, reuse, state]);
-  if (reuse) return <>{children}</>;
+  // One render shape for every scope: swapping structure here would remount every child.
   return <DaemonIdContext.Provider value={sourceDaemonId ?? null}>
     <Context.Provider value={state}>{children}</Context.Provider>
   </DaemonIdContext.Provider>;

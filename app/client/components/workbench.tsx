@@ -8,7 +8,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 
-import { projectLogicalThreadDisplayOrder } from "workbench-shared/workbench/project/workbench-project-projection";
 import type {
     ExplorerSnapshot,
     RevealProjectEntryRequest, ThreadPayload, ThreadSummary, TreeNode,
@@ -22,8 +21,7 @@ import type {
     WorkbenchSendThreadMessageOptions,
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
-import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type FolderId } from "workbench-shared/workbench/identity";
 import WorkbenchMainLayout, {
     type WorkbenchDropPlacement,
     type WorkbenchMainLayout as WorkbenchMainLayoutState,
@@ -37,43 +35,46 @@ import {
     createFileRoute,
     createGitRoute,
     createHomeRoute,
-    createObservedProjectRoute,
     createHomeThreadRoute,
     createLogicalExistingThreadRoute,
-    createLogicalProjectRoute,
     createLogicalFileRoute,
     createLogicalGitRoute,
     createLogicalMosaicRoute,
+    createLogicalProjectRoute,
     createLogicalThreadRoute,
     createMosaicRoute,
     createPinnedThreadRoute,
     createProjectRoute,
-    createToggledProjectSelectionRoute,
     createSettingsRoute,
     createStatsRoute,
     createThreadRoute,
+    createToggledProjectSelectionRoute,
     getWorkbenchMosaicThreadRootIds,
     getWorkbenchThreadTargetRootId,
     getWorkbenchThreadTargetSelectedId,
-    isWorkbenchRouteOwnerOfThread,
     isSameDraftRouteIntent,
+    isWorkbenchRouteOwnerOfThread,
     isWorkbenchThreadTargetSelected,
     withProjectSelection,
     type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
+import { projectFolderOptions } from "workbench-shared/workbench/project/project-folder-address";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
-import type { WorkbenchSearchHit } from "../workbench/search/WorkbenchSearchController";
+import { projectLogicalThreadDisplayOrder } from "workbench-shared/workbench/project/workbench-project-projection";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
-import { createDraftTitle, type WorkbenchThreadDraft, type WorkbenchThreadSidebarEntry, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import { createDraftTitle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { useWorkbenchAppRpc } from "../workbench/app/WorkbenchAppRpcContext";
+import { WorkbenchNetworkClientContext } from "../workbench/app/WorkbenchNetworkClient";
 import WorkbenchBrowseSessionController from "../workbench/browse/WorkbenchBrowseSessionController";
 import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
+import { FileActionContext, FileScopeContext, useFileActions } from "../workbench/file/use-file";
 import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../workbench/layout/workbench-drag";
 import { replaceWorkbenchMosaicTarget } from "../workbench/layout/workbench-mosaic-layout";
 import WorkbenchDragController from "../workbench/layout/WorkbenchDragController";
 import WorkbenchWorkspaceController from "../workbench/layout/WorkbenchWorkspaceController";
 import type { WorkspaceFileLinkRoot } from "../workbench/markdown/markdown-links";
-import { FileActionContext, FileScopeContext, useFileActions } from "../workbench/file/use-file";
 import { useWorkbenchProjectNavigation } from "../workbench/navigation/use-workbench-project-navigation";
 import { useWorkbenchRoute, useWorkbenchRouteIntent } from "../workbench/navigation/use-workbench-route";
 import WorkbenchProjectNavigation from "../workbench/navigation/workbench-project-navigation";
@@ -82,9 +83,8 @@ import {
     runWorkbenchAction,
     type WorkbenchActionContext,
 } from "../workbench/search/workbench-action-registry";
+import type { WorkbenchSearchHit } from "../workbench/search/WorkbenchSearchController";
 import WorkbenchSearchController from "../workbench/search/WorkbenchSearchController";
-import { WorkbenchNetworkClientContext } from "../workbench/app/WorkbenchNetworkClient";
-import { useWorkbenchAppRpc } from "../workbench/app/WorkbenchAppRpcContext";
 import { createComposerProfilePersistence, createComposerProfileTargetPersistence } from "../workbench/state/composer-profile-api";
 import {
     clearComposerDraft, presentationDraftToInput, projectComposerDrafts, saveComposerDraft,
@@ -126,13 +126,12 @@ import { resolveSelectedProjectIds } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
 import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
+import type DraftSessionController from "./workbench/thread-view/DraftSessionController";
 import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
 import ThreadView from "./workbench/thread-view/ThreadView";
-import type DraftSessionController from "./workbench/thread-view/DraftSessionController";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
-import { ImageIcon } from "./workbench/workbench-icons";
 import {
     useWorkbenchClientMount,
     useWorkbenchProjectThreadSidebar,
@@ -169,23 +168,21 @@ import {
     DraftThreadIcon,
     ExternalLinkIcon,
     FolderOpenIcon,
-    GearIcon,
-    ProjectIcon,
+    GearIcon, ImageIcon, ProjectIcon,
     SaveIcon,
     SearchIcon,
     SidebarCollapseIcon,
     SidebarExpandIcon,
     SparkleIcon,
-    StatsIcon,
+    StatsIcon
 } from "./workbench/workbench-icons";
-import WorkbenchAllProjectsThreadSidebar from "./workbench/WorkbenchAllProjectsThreadSidebar";
 import WorkbenchAmbientCanvas, { type WorkbenchAmbientCanvasVariant } from "./workbench/WorkbenchAmbientCanvas";
 import WorkbenchBrowseSessionsSection from "./workbench/WorkbenchBrowseSessionsSection";
 import WorkbenchClientProvider from "./workbench/WorkbenchClientProvider";
 import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfileProvider";
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
-import { WorkbenchOperationsContext as WorkbenchDaemonClientContext, WorkbenchDaemonAssetOriginContext } from "./workbench/WorkbenchWorkspaceContext";
+import WorkbenchFolderSidebar from "./workbench/WorkbenchFolderSidebar";
 import WorkbenchIconButton from "./workbench/WorkbenchIconButton";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
 import WorkbenchProjectIcon from "./workbench/WorkbenchProjectIcon";
@@ -200,6 +197,7 @@ import WorkbenchThreadSidebar from "./workbench/WorkbenchThreadSidebar";
 import WorkbenchThreadSidebarActionsProvider from "./workbench/WorkbenchThreadSidebarActions";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
 import WorkbenchWorkspace from "./workbench/WorkbenchWorkspace";
+import { WorkbenchDaemonAssetOriginContext, WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "./workbench/WorkbenchWorkspaceContext";
 import WorkbenchZoomButton from "./workbench/WorkbenchZoomButton";
 
 installBrowserRandomUuidPolyfill();
@@ -505,7 +503,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       : null;
   const routeOwnerMetadata = routeExistingThreadId
     ? workbenchClient.mounted?.threadOwnerFor(routeExistingThreadId) : null;
-  const browseLocation = route.logical ? explorer.browseLocation ?? null : null;
+  const browseLocation = explorer.browseLocation ?? null;
   const browseDaemon = useMemo(() => browseLocation
     ? workbenchClient.mounted?.workspace.daemon({ kind: "folder", location: browseLocation }) ?? null
     : route.logical ? null : controls?.daemon ?? null,
@@ -814,6 +812,17 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     project.id === route.logical?.projectId) ?? null;
   const viewedProjectId = route.logical ? route.logical.projectId ?? "" : activeProjectId;
   const browseProjectId = browseLocation?.projectId ?? explorer.currentProjectId;
+  const folderOptions =
+    workbenchClient.mounted?.projectNavigator?.folderOptions(selectionProjectIds) ?? [];
+  const implicitFolderLocation =
+    !route.folderAddress && selectedLogicalProject
+      ? folderOptions.find(option =>
+        option.name === selectedLogicalProject.displayName
+      )?.target ?? null
+      : null;
+  const selectedFolderLocation =
+    browseLocation ?? implicitFolderLocation;
+  const folderSelected = Boolean(selectedFolderLocation);
   const attachedProjectId = route.logical
     ? browseProjectId && browseLocation?.daemonId === workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId
       ? browseProjectId : ""
@@ -1097,11 +1106,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         project.id === route.logical?.threadOwnerProjectId
         || project.id === route.logical?.projectId
         || project.locations.some(location => location.target.projectId === targetProjectId));
-      if (!owner && route.logical.location) {
-        navigateToRoute({ ...createObservedProjectRoute(route.logical.location),
-          view: "thread", threadTarget: target, threadId: target.kind === "draft" ? target.draftId : "new" });
-        return true;
-      }
       if (!owner) return false;
       navigateToRoute(createLogicalThreadRoute(route.logical.projectId, owner.id, null, target));
       return true;
@@ -1496,11 +1500,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const createThreadFromSidebar = useCallback((ownerProjectId: string, folderId?: FolderId) => {
     if (showMosaicView || !controls) return;
     const target = folderId ? { folderId, kind: "new" as const } : { kind: "new" as const };
-    if (route.logical && !route.logical.projectId && route.logical.location) {
-      navigateToRoute({ ...createObservedProjectRoute(route.logical.location),
-        view: "thread", threadTarget: target, threadId: "new" });
-      return;
-    }
     if (workbenchClient.mounted?.presentationClient) {
       if (!explorer.logicalProjects?.length) {
         setSelectionError("Project identities are not ready yet.");
@@ -2476,21 +2475,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     ].filter(Boolean).join(" ") || null}
                     logicalLoading={workbenchClient.mounted?.presentationClient?.snapshot().phase === "loading"}
                     onProjectLinkClick={selectProjectFromLink}
-                    onObservedProjectLinkClick={(event, location) => {
-                      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                      event.preventDefault();
-                      navigateToRoute(createObservedProjectRoute(location));
-                    }}
                     projects={explorer.projects}
                   />
-                  {(!route.logical || browseLocation) ? <WorkbenchGitSidebar active={showGitView} onNavigate={event => {
-                    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                    event.preventDefault();
-                    navigateToRoute(route.logical?.projectId
-                      ? createLogicalGitRoute(route.logical.projectId, browseLocation)
-                      : browseLocation ? { ...createObservedProjectRoute(browseLocation), view: "git" }
-                        : createGitRoute(activeProjectId));
-                  }} /> : null}
                   <section className="shrink-0 pb-3">
                     <WorkbenchSidebarSectionDisclosure
                       contentClassName="space-y-2"
@@ -2498,55 +2484,62 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       preferenceKey="threadsOpen"
                       title="Threads"
                     >
-                      {selectionProjectIds.length === 1 || browseLocation ? (
-                        <WorkbenchThreadSidebar
-                          activeDragPayload={activeWorkbenchDrag?.payload ?? null}
-                          logicalProject={selectedLogicalProject}
-                          logicalThreads={explorer.logicalThreads}
-                          presentation={workbenchClient.mounted?.presentationClient?.snapshot().data}
-                          controls={controls}
-                          selectedLocation={browseLocation}
-                          onOpenQualifiedThread={row => openQualifiedThread(row, row.logicalProjectId)}
-                          attentionLabelsByThreadId={threadAttentionLabelsById}
-                          currentTarget={route.view === "thread" ? route.threadTarget : null}
-                          harness={harness}
-                          onBeginPointerDrag={beginWorkbenchPointerDrag}
-                          onCreateThread={(folderId) => createThreadFromSidebar(browseProjectId, folderId)}
-                          onOpenThread={openThreadFromExplorer}
-                          projectId={browseProjectId}
-                          renderThreadTooltipDetails={renderThreadTooltipDetails}
-                          showMosaicView={showMosaicView}
-                        />
-                      ) : (
-                        <WorkbenchAllProjectsThreadSidebar
-                          activeDragPayload={activeWorkbenchDrag?.payload ?? null}
-                          logicalProjects={displayedLogicalProjects}
-                          logicalThreads={explorer.logicalThreads}
-                          presentation={workbenchClient.mounted?.presentationClient?.snapshot().data}
-                          controls={controls}
-                          attachedDaemonId={workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId}
-                          onOpenQualifiedThread={row => openQualifiedThread(row, null)}
-                          attentionLabelsByThreadId={threadAttentionLabelsById}
-                          createProjectId={sidebarCreateProjectId}
-                          currentTarget={route.view === "thread" ? route.threadTarget : null}
-                          onCreateThread={createThreadFromSidebar}
-                          onOpenThread={openThreadFromExplorer}
-                          projects={explorer.projects}
-                          selectedProjectIds={selectionProjectIds}
-                          emptySelectionMessage={route.selectedProjectIds === null
-                            ? dynamicSelectionPending ? "Loading projects..." : "No projects have unarchived threads."
-                            : undefined}
-                          renderThreadTooltipDetails={renderThreadTooltipDetails}
-                          selectedOwnerProjectId={route.view === "thread"
-                            ? route.logical?.threadOwnerProjectId ?? (route.threadOwnerProjectId || route.projectId)
-                            : viewedProjectId}
-                        />
-                      )}
+                      <WorkbenchThreadSidebar
+                        activeDragPayload={activeWorkbenchDrag?.payload ?? null}
+                        attachedDaemonId={workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId ?? null}
+                        createProjectId={sidebarCreateProjectId}
+                        emptySelectionMessage={route.selectedProjectIds === null
+                          ? dynamicSelectionPending ? "Loading projects..." : "No projects have unarchived threads."
+                          : undefined}
+                        logicalProject={selectedLogicalProject}
+                        logicalProjects={displayedLogicalProjects}
+                        logicalThreads={explorer.logicalThreads}
+                        presentation={workbenchClient.mounted?.presentationClient?.snapshot().data}
+                        controls={controls}
+                        selectedLocation={browseLocation}
+                        onOpenQualifiedThread={row => openQualifiedThread(row, row.logicalProjectId)}
+                        attentionLabelsByThreadId={threadAttentionLabelsById}
+                        currentTarget={route.view === "thread" ? route.threadTarget : null}
+                        harness={harness}
+                        onBeginPointerDrag={beginWorkbenchPointerDrag}
+                        onCreateThread={createThreadFromSidebar}
+                        onOpenThread={openThreadFromExplorer}
+                        projectId={browseProjectId}
+                        projects={explorer.projects}
+                        renderThreadTooltipDetails={renderThreadTooltipDetails}
+                        selectedOwnerProjectId={route.view === "thread"
+                          ? route.logical?.threadOwnerProjectId ?? (route.threadOwnerProjectId || route.projectId)
+                          : viewedProjectId}
+                        selectedProjectIds={selectionProjectIds}
+                        showMosaicView={showMosaicView}
+                      />
                     </WorkbenchSidebarSectionDisclosure>
                   </section>
                 </WorkbenchThreadSidebarActionsProvider>
-
-                  {browseProjectId && (!route.logical || browseLocation) ? <section className="shrink-0 pb-3">
+                  <WorkbenchFolderSidebar
+                    folders={folderOptions}
+                    label="Choose folder"
+                    onSelect={location => {
+                      navigateToRoute({
+                        ...route,
+                        folderAddress:
+                          workbenchClient.mounted?.projectNavigator?.folderAddressFor(location) ?? null,
+                      });
+                    }}
+                    selected={selectedFolderLocation}
+                  >
+                    {folderSelected ? <WorkbenchGitSidebar active={showGitView} onNavigate={event => {
+                      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                      event.preventDefault();
+                      navigateToRoute(route.logical?.projectId
+                        ? createLogicalGitRoute(route.logical.projectId, browseLocation)
+                        : createGitRoute(activeProjectId));
+                    }} /> : (
+                      <p className="m-0 px-2 py-1 text-[0.8rem] leading-5 text-fg/muted">
+                        Choose a folder to see its working tree and files.
+                      </p>
+                    )}
+                    {folderSelected ? <section className="shrink-0 pb-3">
                     <WorkbenchSidebarSectionDisclosure
                       actions={(
                         <div className="flex items-center gap-1">
@@ -2630,6 +2623,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       ) : null}
                     </WorkbenchSidebarSectionDisclosure>
                   </section> : null}
+                  </WorkbenchFolderSidebar>
                   <WorkbenchBrowseSessionsSection controller={browseSessionController} />
                   <ReloadNecessary
                     appRuntime={appRuntime}
@@ -2807,7 +2801,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       draftLeadingContent={projectRotator}
                       draftTargetControl={route.logical && logicalThreadProject && threadForThreadView?.isDraft ? (
                         <WorkbenchProjectLocationMenu
-                          project={logicalThreadProject}
+                          folders={projectFolderOptions([logicalThreadProject])}
                           selected={routeLaunchLocation ?? null}
                           label={`Start thread in ${logicalThreadProject.label} at`}
                           onSelect={location => {

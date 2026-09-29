@@ -18,7 +18,6 @@ import {
 } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientStateProvider from "./WorkbenchClientStateProvider";
 import WorkbenchComposerDraftPresenceProvider from "./WorkbenchComposerDraftPresenceProvider";
-import WorkbenchHomeThreadList from "./WorkbenchHomeThreadList";
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
 import ThreadRateLimits from "./thread-view/ThreadRateLimits";
 import WorkbenchSidebarPreferencesProvider from "./WorkbenchSidebarPreferencesProvider";
@@ -105,58 +104,18 @@ function createThreadEntry({
   };
 }
 
-function renderThreads(
-  entries: ThreadEntry[],
-  activeDragPayload: ComponentProps<typeof WorkbenchThreadList>["activeDragPayload"] = null,
-  displayOrder: ComponentProps<typeof WorkbenchThreadList>["displayOrder"] = {},
-) {
-  return renderToStaticMarkup(createElement(
-    WorkbenchSidebarPreferencesProvider,
-    {
-      children: () => createElement(
-        WorkbenchContextMenuContext.Provider,
-        { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
-        createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
-            activeDragPayload,
-            currentTarget: null,
-            displayOrder,
-            entries,
-            getThreadHref: () => "/agent/thread/thread-one",
-            nowMs: 1_723_456_790_000,
-            onCreateThread: () => undefined,
-            onOpenThread: () => undefined,
-            onProjectFolderDrop: () => undefined,
-            onSetPriority: () => undefined,
-            onSnoozeUntil: () => undefined,
-            projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-          })),
-      ),
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    },
-  ));
-}
-
-function renderHomeThreads({
-  activeDragPayload = null,
-  displayOrder = {},
-  projectThreadSidebars,
-  projects,
-  selectedProjectIds = projects.map(project => project.id),
-}: {
-  activeDragPayload?: ComponentProps<typeof WorkbenchHomeThreadList>["activeDragPayload"];
-  displayOrder?: ComponentProps<typeof WorkbenchHomeThreadList>["actions"]["homeDisplayOrder"];
-  projectThreadSidebars: WorkbenchProjectThreadSidebars;
-  projects: WorkbenchProjectOption[];
-  selectedProjectIds?: string[];
-}) {
-  const actions: ComponentProps<typeof WorkbenchHomeThreadList>["actions"] = {
+function createActions(
+  projectThreadSidebars: WorkbenchProjectThreadSidebars,
+  homeDisplayOrder: ComponentProps<typeof WorkbenchThreadList>["actions"]["homeDisplayOrder"] = {},
+): ComponentProps<typeof WorkbenchThreadList>["actions"] {
+  return {
     autoFocusFolderId: null,
     displayOrder: {},
     entries: [],
     error: "",
     getThreadContextMenu: () => ({ id: "home-thread-menu", items: [], label: "Thread actions" }),
     getThreadContextMenuFor: () => null,
-    homeDisplayOrder: displayOrder,
+    homeDisplayOrder,
     homeDisplayOrderSupported: true,
     isLoading: false,
     nowMs: 1_723_456_790_000,
@@ -176,6 +135,61 @@ function renderHomeThreads({
     projectThreadSidebars,
     projectThreadSummaries: { projects: [] },
   };
+}
+
+function renderThreads(
+  entries: ThreadEntry[],
+  activeDragPayload: ComponentProps<typeof WorkbenchThreadList>["activeDragPayload"] = null,
+  displayOrder: ComponentProps<typeof WorkbenchThreadList>["displayOrder"] = {},
+) {
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
+  return renderToStaticMarkup(createElement(
+    WorkbenchSidebarPreferencesProvider,
+    {
+      children: () => createElement(
+        WorkbenchClientProvider,
+        {
+          client: { controls: null, explorer: {} as ExplorerSnapshot, mounted: null },
+          children: createElement(
+            WorkbenchContextMenuContext.Provider,
+            { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
+            createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
+              actions: createActions({ projects: [{ projectId, entries, displayOrder, error: null, freshness: "fresh", revision: 1 }] }),
+              activeDragPayload,
+              canCreateThread: true,
+              currentTarget: null,
+              displayOrder,
+              entries,
+              getThreadHref: () => "/agent/thread/thread-one",
+              onCreateThread: () => undefined,
+              onOpenThread: () => undefined,
+              projectId,
+              projects: [],
+              selectedOwnerProjectId: projectId,
+              selectedProjectIds: [projectId],
+            })),
+          ),
+        },
+      ),
+      projectId,
+    },
+  ));
+}
+
+function renderHomeThreads({
+  activeDragPayload = null,
+  displayOrder = {},
+  projectThreadSidebars,
+  projects,
+  selectedProjectIds = projects.map(project => project.id),
+}: {
+  activeDragPayload?: ComponentProps<typeof WorkbenchThreadList>["activeDragPayload"];
+  displayOrder?: ComponentProps<typeof WorkbenchThreadList>["actions"]["homeDisplayOrder"];
+  projectThreadSidebars: WorkbenchProjectThreadSidebars;
+  projects: WorkbenchProjectOption[];
+  selectedProjectIds?: string[];
+}) {
+  const actions = createActions(projectThreadSidebars, displayOrder);
   return renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
@@ -184,7 +198,7 @@ function renderHomeThreads({
         children: createElement(
         WorkbenchContextMenuContext.Provider,
         { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
-        createElement(WorkbenchDragProvider, null, createElement(WorkbenchHomeThreadList, {
+        createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
           actions,
           activeDragPayload,
           attentionLabelsByThreadId: {},
@@ -692,6 +706,41 @@ test("home renders one combined priority list with project-owned folders and for
   });
   assert.match(sameProjectHtml, /group\/thread-folder relative"/u);
   assert.doesNotMatch(sameProjectHtml, /group\/thread-folder relative pointer-events-none/u);
+});
+
+test("snoozed threads hide behind their disclosure by default in project and home lists", () => {
+  const snoozed = {
+    ...createThreadEntry({ threadId: "snoozed-hidden", title: "Snoozed hidden" }),
+    lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
+    metadata: { archived: false as const, pinned: false, snoozed: true },
+  };
+  const projects: WorkbenchProjectOption[] = [{
+    id: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"), kind: "git", lastCommitTimeMs: null, name: "Beta", relativePath: "web/beta",
+    rootPath: "C:/git/web/beta", roots: [{ id: "beta", isPrimary: true, name: "beta", relativePath: "web/beta", rootPath: "C:/git/web/beta" }],
+  }];
+  for (const html of [
+    renderThreads([createThreadEntry({ threadId: "main-hidden", title: "Main hidden" }), snoozed]),
+    renderHomeThreads({
+      projectThreadSidebars: {
+        projects: [{
+          displayOrder: {},
+          entries: [snoozed],
+          error: null,
+          freshness: "fresh",
+          projectId: fixtureIdentityValues.ProjectId["beta"],
+          revision: 1,
+        }],
+      },
+      projects,
+    }),
+  ]) {
+    const summaryAt = html.indexOf("Snoozed threads");
+    const rowAt = html.indexOf("Snoozed hidden");
+    assert.equal(summaryAt >= 0 && rowAt > summaryAt, true, "snoozed rows render inside their disclosure");
+    const detailsAt = html.lastIndexOf("<details", summaryAt);
+    assert.equal(detailsAt >= 0, true);
+    assert.doesNotMatch(html.slice(detailsAt, summaryAt), /\sopen(?:\s|>)/u);
+  }
 });
 
 test("other-project status subtraction removes pins and clamps mixed-version underflow", () => {

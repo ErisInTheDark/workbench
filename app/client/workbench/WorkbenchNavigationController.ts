@@ -2,13 +2,12 @@
  * Exports:
  * - WorkbenchNavigationSnapshot: active route, generation, failure, and pinned draft projection.
  * - WorkbenchNavigationPorts: cancellable view application without connection orchestration.
- * - default WorkbenchNavigationController: own route intent, supersession and draft-preserving canonicalisation.
+ * - default WorkbenchNavigationController: own route intent and supersession.
  */
 
 import type { WorkbenchRouteLoadResult } from "workbench-shared/types";
-import { ProjectIdSchema, type DraftId } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import {
   isSameWorkbenchRoute,
   type WorkbenchRoute,
@@ -68,33 +67,6 @@ export default class WorkbenchNavigationController {
       && active.route.threadId === route.threadId
       && active.route.threadOwnerProjectId === route.threadOwnerProjectId
       && isSameWorkbenchRoute(active.route, route);
-  }
-
-  retargetDraftSession(route: WorkbenchRoute, draftId: DraftId, admittedLocation?: ProjectLocationReference) {
-    const current = this.snapshot.route;
-    if (current.view !== "thread" || route.view !== "thread") return false;
-    const sameOwner = current.logical?.threadOwnerProjectId
-      && current.logical.threadOwnerProjectId === route.logical?.threadOwnerProjectId;
-    const fromLocation = current.logical?.location;
-    const toLocation = route.logical?.location ?? admittedLocation;
-    const sameLocation = fromLocation && toLocation && fromLocation.daemonId === toLocation.daemonId
-      && fromLocation.projectId === toLocation.projectId;
-    const from = current.threadTarget;
-    const to = route.threadTarget;
-    if (!from || !to || !(
-      from.kind === "new" && to.kind === "draft" && to.draftId === draftId
-      || from.kind === "draft" && from.draftId === draftId && to.kind === "new"
-      || from.kind === "new" && to.kind === "new"
-      || from.kind === "draft" && to.kind === "draft" && from.draftId === draftId && to.draftId === draftId
-    )) return false;
-    if (!sameOwner && !sameLocation && !(from.kind === "draft" && to.kind === "draft" && from.draftId === to.draftId)) return false;
-    if (this.snapshot.phase === "ready" && isSameWorkbenchRoute(current, route)) return true;
-    this.operation?.abort(new Error("Draft route canonicalised."));
-    this.publish({
-      ...this.snapshot, error: null, generation: this.snapshot.generation + 1,
-      phase: "ready", route, selectedPinnedThreadDraft: null,
-    });
-    return true;
   }
 
   rejectRoute(route: WorkbenchRoute, error: string): WorkbenchRouteLoadResult {

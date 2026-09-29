@@ -1,45 +1,51 @@
 /*
  * Exports:
- * - default WorkbenchProjectLocationMenu: choose one concrete folder for browsing or a new draft.
+ * - default WorkbenchProjectLocationMenu: choose one concrete folder from the selectable folder universe.
  */
 "use client";
 
-import type { WorkbenchLogicalProject } from "workbench-shared/types";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import type { ProjectFolderOption } from "workbench-shared/workbench/project/project-folder-address";
 import WorkbenchPressDragMenu from "./WorkbenchPressDragMenu";
 import WorkbenchProjectLocationLabel from "./WorkbenchProjectLocationLabel";
 import { ProjectIcon } from "./workbench-icons";
 
 export default function WorkbenchProjectLocationMenu({
-  project, selected, onSelect, label,
+  folders,
+  label,
+  onSelect,
+  selected,
 }: {
-  project: WorkbenchLogicalProject;
-  selected: ProjectLocationReference | null;
-  onSelect: (location: ProjectLocationReference) => void;
+  folders: readonly ProjectFolderOption[];
   label: string;
+  onSelect: (location: ProjectLocationReference) => void;
+  selected: ProjectLocationReference | null;
 }) {
-  const locations = project.locations;
-  const current = locations.find(location =>
-    location.target.daemonId === selected?.daemonId && location.target.projectId === selected?.projectId);
+  const current = folders.find(folder =>
+    folder.target.daemonId === selected?.daemonId && folder.target.projectId === selected?.projectId);
+  const showOwners = new Set(folders.map(folder => folder.ownerProjectId)).size > 1;
   return (
     <WorkbenchPressDragMenu
       label={label}
-      items={locations.map((location, index) => ({
-        id: String(index),
-        checked: location === current,
+      items={folders.map(folder => ({
+        id: `${folder.target.daemonId}/${folder.target.projectId}`,
+        checked: folder === current,
         content: (
-          <span className="flex min-w-0 flex-col text-left" title={location.rootPath}>
+          <span className="flex min-w-0 flex-col text-left" title={folder.rootPath}>
+            {showOwners && folder.ownerLabel
+              ? <span className="text-[0.72em] text-fg/muted">{folder.ownerLabel}</span>
+              : null}
             <WorkbenchProjectLocationLabel
-              displayPath={location.displayPath ?? `${location.hostname}:${location.rootPath}`}
-              hostname={location.hostname}
+              displayPath={folder.displayPath ?? `${folder.hostname}:${folder.rootPath}`}
+              hostname={folder.hostname}
             />
-            {!location.project ? <span className="text-[0.72em] text-danger">Unavailable</span> : null}
+            {!folder.project ? <span className="text-[0.72em] text-danger">Unavailable</span> : null}
           </span>
         ),
       }))}
       onSelect={id => {
-        const location = locations[Number(id)];
-        if (location) onSelect(location.target);
+        const folder = folders.find(item => `${item.target.daemonId}/${item.target.projectId}` === id);
+        if (folder) onSelect(folder.target);
       }}
     >
       <ProjectIcon className="shrink-0" size={16} />
