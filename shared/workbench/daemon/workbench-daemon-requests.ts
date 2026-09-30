@@ -148,9 +148,10 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "browse/sessions/forget": { params: BrowseSessionParams; result: WorkbenchBrowseSessionControlResponse };
   "browse/sessions/read": { params: WorkbenchBrowseSessionListRequest; result: WorkbenchBrowseSessionListResponse };
   "browse/sessions/stop": { params: BrowseSessionParams; result: WorkbenchBrowseSessionControlResponse };
-  "sandbox-network/read": { params: { projectId: string }; result: import("../provider/provider-settings").WorkbenchSandboxNetworkSettingsResponse };
+  "sandbox-network/read": { params: { projectId?: string }; result: import("../provider/provider-settings").WorkbenchSandboxNetworkSettingsResponse };
   "command-approvals/read": { params: import("../settings/command-approvals").CommandApprovalRead; result: import("../settings/command-approvals").CommandApprovalSnapshot };
   "command-approvals/remove": { params: import("../settings/command-approvals").CommandApprovalRemove; result: import("../settings/command-approvals").CommandApprovalSnapshot };
+  "command-approvals/patch": { params: import("../settings/command-approvals").CommandApprovalPatch; result: import("../settings/command-approvals").CommandApprovalSnapshot };
   "project/discovery-settings/read": { params: object; result: import("../project/project-discovery-settings").ProjectDiscoverySettingsUpdate };
   "project/discovery-settings/update": { params: import("../project/project-discovery-settings").ProjectDiscoverySettingsUpdate; result: import("../project/project-discovery-settings").ProjectDiscoverySettingsResult };
   "project/locations/read": { params: object; result: import("../project/project-location").WorkbenchProjectLocationsPayload };

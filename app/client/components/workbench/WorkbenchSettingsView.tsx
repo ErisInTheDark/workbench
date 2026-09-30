@@ -1,404 +1,238 @@
 /*
  * Exports:
- * - default WorkbenchSettingsView: own settings presentation, persistence intents, and local capability lifecycle.
+ * - default WorkbenchSettingsView: group real settings owners by page, logical project, daemon, and folder.
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
-
-import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
-import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
-import {
-  createSettingsRoute,
-  type WorkbenchSettingsScope,
-} from "workbench-shared/workbench/navigation/workbench-route";
-import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
-import {
-  createDefaultProjectWorkbenchSettings,
-  MAX_EDITOR_FONT_SIZE,
-  MIN_EDITOR_FONT_SIZE,
-  readGlobalWorkbenchSettings,
-  readProjectWorkbenchSettings,
-  WORKBENCH_SETTING_DEFINITIONS,
-  writeGlobalWorkbenchSetting,
-  writeProjectWorkbenchSetting,
-  type WorkbenchGlobalSettings,
-  type WorkbenchSettingKey,
-} from "../../workbench/state/workbench-settings";
+import { useEffect, useState, type ReactNode } from "react";
+import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import type { WorkbenchLocalCapabilitySettings, WorkbenchProjectOption } from "workbench-shared/types";
+import type { DaemonId, LogicalProjectId } from "workbench-shared/workbench/identity";
+import type { ProjectFolderOption } from "workbench-shared/workbench/project/project-folder-address";
 import CommandApprovalSettings from "./CommandApprovalSettings";
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import VoiceSettings from "./voice/VoiceSettings";
-import {
-  useWorkbenchClientStateController,
-  useWorkbenchClientStateSnapshot,
-} from "./workbench-client-state-context";
-import { ResetIcon } from "./workbench-icons";
-import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
-import WorkbenchIconButton from "./WorkbenchIconButton";
 import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
-import WorkbenchOptionCards, { WorkbenchOptionCard } from "./WorkbenchOptionCards";
 import WorkbenchProjectDiscoverySettings from "./WorkbenchProjectDiscoverySettings";
 import WorkbenchReactDevelopmentModeSetting from "./WorkbenchReactDevelopmentModeSetting";
-import WorkbenchStepSlider from "./WorkbenchStepSlider";
+import WorkbenchSettingsContextRow from "./WorkbenchSettingsContextRow";
+import WorkbenchSettingsPreferences from "./WorkbenchSettingsPreferences";
+import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
+import { WorkbenchOperationsContext } from "./WorkbenchWorkspaceContext";
+import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
+import { ProjectIcon } from "./workbench-icons";
 
-const SETTINGS_ORDER: WorkbenchSettingKey[] = [
-  "theme",
-  "editorFontFamily",
-  "editorSpellCheck",
-  "composerSpellCheck",
-  "fileOpenBehavior",
-  "showUnopenableFiles",
-  "threadCodeBlockWrap",
-  "threadCodeDetails",
-  "editorFontSize",
+type Page = "general" | "projects" | "agents" | "network";
+const pages: { id: Page; label: string; sections: { id: string; label: string }[] }[] = [
+  { id: "general", label: "General", sections: [
+    { id: "settings-appearance", label: "Appearance" },
+    { id: "settings-editing", label: "Editing" },
+    { id: "settings-threads", label: "Threads" },
+    { id: "settings-voice", label: "Voice" },
+    { id: "settings-runtime", label: "Runtime" },
+  ] },
+  { id: "projects", label: "Projects & folders", sections: [
+    { id: "settings-files", label: "Files" },
+    { id: "settings-sidebar", label: "Sidebar" },
+    { id: "settings-discovery", label: "Discovery" },
+  ] },
+  { id: "agents", label: "Agents", sections: [
+    { id: "settings-agent-network", label: "Network access" },
+    { id: "settings-capabilities", label: "Capabilities" },
+    { id: "settings-permissions", label: "Permissions" },
+  ] },
+  { id: "network", label: "Networking", sections: [
+    { id: "settings-connection", label: "Connection" },
+    { id: "settings-daemons", label: "Daemons" },
+    { id: "settings-app-access", label: "Access" },
+  ] },
 ];
-const DEFAULT_LOCAL_CAPABILITY_SETTINGS: WorkbenchLocalCapabilitySettings = {
-  browseRawCommandsEnabled: false,
-};
-const EDITOR_FONT_SIZE_OPTIONS = [0.9, 1, 1.08, 1.18, 1.32, 1.48].map((value, index) => ({
-  label: String(index + 1),
-  value,
-}));
+const defaultCapabilities: WorkbenchLocalCapabilitySettings = { browseRawCommandsEnabled: false };
 
-function clampEditorFontSize (value: number) {
-  return Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, value));
+function Group({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+  return <section id={id} className="scroll-mt-24 space-y-1">
+    <h2 className="m-0 pb-1 pt-6 text-base font-semibold text-text">{title}</h2>
+    {children}
+  </section>;
 }
 
-export default function WorkbenchSettingsView ({
-  activeProjectId,
-  onGitRootsSaved,
-  onError,
-  onNavigate,
-  projectLabel,
-  scope,
-}: {
-  activeProjectId: string;
-  onGitRootsSaved: () => Promise<void>;
-  onError: (message: string) => void;
-  onNavigate: (scope: WorkbenchSettingsScope) => void;
-  projectLabel: string;
-  scope: WorkbenchSettingsScope;
-}) {
-  const clientStateController = useWorkbenchClientStateController();
-  const clientState = useWorkbenchClientStateSnapshot();
-  const daemon = useWorkbenchDaemonClient();
-  const projectHref = useWorkbenchProjectNavigation();
-  const globalSettings = useMemo(
-    () => readGlobalWorkbenchSettings(clientState.records),
-    [clientState.records],
-  );
-  const projectSettings = useMemo(() => (
-    activeProjectId
-      ? readProjectWorkbenchSettings(
-        clientState.daemonRegistrationId,
-        activeProjectId,
-        clientState.records,
-      )
-      : createDefaultProjectWorkbenchSettings()
-  ), [activeProjectId, clientState.daemonRegistrationId, clientState.records]);
-  const [localCapabilitySettings, setLocalCapabilitySettings] = useState<WorkbenchLocalCapabilitySettings>(
-    DEFAULT_LOCAL_CAPABILITY_SETTINGS,
-  );
-  const [isLocalCapabilitySettingsLoading, setIsLocalCapabilitySettingsLoading] = useState(false);
-  const [localCapabilitySettingsError, setLocalCapabilitySettingsError] = useState("");
-
+function BrowseCapability({ daemon }: { daemon: WorkbenchDaemonClient }) {
+  const [settings, setSettings] = useState(defaultCapabilities);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   useEffect(() => {
     let cancelled = false;
-    setIsLocalCapabilitySettingsLoading(true);
-    setLocalCapabilitySettingsError("");
-    void daemon.localCapabilities.read()
-      .then((payload) => {
-        if (!cancelled) setLocalCapabilitySettings(payload.localCapabilities);
-      })
-      .catch((error: Error) => {
-        if (cancelled) return;
-        setLocalCapabilitySettings(DEFAULT_LOCAL_CAPABILITY_SETTINGS);
-        setLocalCapabilitySettingsError(error.message);
-      })
-      .finally(() => {
-        if (!cancelled) setIsLocalCapabilitySettingsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    setLoading(true);
+    setError("");
+    void daemon.localCapabilities.read().then(payload => {
+      if (!cancelled) setSettings(payload.localCapabilities);
+    }).catch((failure: Error) => {
+      if (!cancelled) setError(failure.message);
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
   }, [daemon]);
+  function update() {
+    if (loading) return;
+    setLoading(true);
+    setError("");
+    void daemon.localCapabilities.update({ localCapabilities: {
+      browseRawCommandsEnabled: !settings.browseRawCommandsEnabled,
+    } }).then(payload => setSettings(payload.localCapabilities))
+      .catch((failure: Error) => setError(failure.message))
+      .finally(() => setLoading(false));
+  }
+  return <div className="py-1">
+    <WorkbenchOptionCard label="Raw Browse commands"
+      description="Allow raw Browse CLI usage outside the sandbox."
+      isSingleChoice={false} isChecked={settings.browseRawCommandsEnabled}
+      disabled={loading} onClick={update} />
+    {error ? <p role="alert" className="m-0 text-xs text-danger">{error}</p> : null}
+  </div>;
+}
 
-  const updateBrowseRawCommandsEnabled = useCallback((enabled: boolean) => {
-    const previousSettings = localCapabilitySettings;
-    setLocalCapabilitySettings((current) => ({
-      ...current,
-      browseRawCommandsEnabled: enabled,
-    }));
-    setIsLocalCapabilitySettingsLoading(true);
-    setLocalCapabilitySettingsError("");
-    void daemon.localCapabilities.update({
-      localCapabilities: {
-        browseRawCommandsEnabled: enabled,
-      },
-    })
-      .then((payload) => {
-        setLocalCapabilitySettings(payload.localCapabilities);
-      })
-      .catch((error: Error) => {
-        setLocalCapabilitySettings(previousSettings);
-        setLocalCapabilitySettingsError(error.message);
-      })
-      .finally(() => {
-        setIsLocalCapabilitySettingsLoading(false);
-      });
-  }, [daemon, localCapabilitySettings]);
+export default function WorkbenchSettingsView({
+  attachedDaemonId,
+  daemons,
+  folders,
+  getDaemon,
+  logicalProject,
+  onError,
+  onGitRootsSaved,
+  onPageChange,
+  selectionError,
+  selectionPending,
+}: {
+  attachedDaemonId: DaemonId | null;
+  daemons: readonly { id: DaemonId; hostname: string }[];
+  folders: readonly ProjectFolderOption[];
+  getDaemon: (id: DaemonId) => WorkbenchDaemonClient | null;
+  logicalProject: { id: LogicalProjectId; label: string; iconProject: WorkbenchProjectOption | null } | null;
+  onError: (message: string) => void;
+  onGitRootsSaved: (daemonId: DaemonId) => Promise<void>;
+  onPageChange: (title: string) => void;
+  selectionError: string | null;
+  selectionPending: boolean;
+}) {
+  const [page, setPage] = useState<Page>("general");
+  const [chosenDaemonId, setChosenDaemonId] = useState<DaemonId | null>(null);
+  const [chosenFolderKey, setChosenFolderKey] = useState("");
+  const daemonId = daemons.some(item => item.id === chosenDaemonId) ? chosenDaemonId
+    : daemons.find(item => item.id === attachedDaemonId)?.id ?? daemons[0]?.id ?? null;
+  const daemon = daemonId ? getDaemon(daemonId) : null;
+  const daemonFolders = folders.filter(folder => folder.target.daemonId === daemonId && folder.project);
+  const folder = daemonFolders.find(item => `${item.target.daemonId}/${item.target.projectId}` === chosenFolderKey)
+    ?? daemonFolders[0] ?? null;
+  const visibleSections = pages.find(item => item.id === page)!.sections
+    .filter(item => item.id !== "settings-permissions" || logicalProject);
 
-  const updateGlobalSetting = useCallback(<K extends WorkbenchSettingKey> (
-    key: K,
-    value: WorkbenchGlobalSettings[K],
-  ) => {
-    const nextValue = (key === "editorFontSize" && typeof value === "number"
-      ? clampEditorFontSize(value)
-      : value) as WorkbenchGlobalSettings[K];
-    void writeGlobalWorkbenchSetting(clientStateController, key, nextValue)
-      .catch((error: Error) => onError(error.message));
-  }, [clientStateController, onError]);
+  useEffect(() => { onPageChange(pages.find(item => item.id === page)!.label); }, [onPageChange, page]);
+  if (selectionPending) return <p role="status" className="mx-auto max-w-content px-5 py-6 text-sm text-fg/muted">Loading project selection...</p>;
+  if (selectionError) return <p role="alert" className="mx-auto max-w-content px-5 py-6 text-sm text-danger">{selectionError}</p>;
 
-  const updateProjectSetting = useCallback(<K extends WorkbenchSettingKey> (
-    key: K,
-    value: WorkbenchGlobalSettings[K],
-  ) => {
-    if (!activeProjectId) return;
-    const nextValue = (key === "editorFontSize" && typeof value === "number"
-      ? clampEditorFontSize(value)
-      : value) as WorkbenchGlobalSettings[K];
-    void writeProjectWorkbenchSetting(clientStateController, activeProjectId, key, {
-      enabled: true,
-      value: nextValue,
-    }).catch((error: Error) => onError(error.message));
-  }, [activeProjectId, clientStateController, onError]);
-
-  const resetProjectSettingOverride = useCallback((key: WorkbenchSettingKey) => {
-    if (!activeProjectId) return;
-    void writeProjectWorkbenchSetting(clientStateController, activeProjectId, key, {
-      ...projectSettings[key],
-      enabled: false,
-    }).catch((error: Error) => onError(error.message));
-  }, [activeProjectId, clientStateController, onError, projectSettings]);
-
-  const openScope = (event: MouseEvent<HTMLAnchorElement>, nextScope: WorkbenchSettingsScope) => {
-    if (
-      event.button !== 0
-      || event.metaKey
-      || event.ctrlKey
-      || event.shiftKey
-      || event.altKey
-    ) return;
-    event.preventDefault();
-    onNavigate(nextScope);
-  };
-
-  const renderSettingControl = (
-    key: WorkbenchSettingKey,
-    value: WorkbenchGlobalSettings[WorkbenchSettingKey],
-    disabled: boolean,
-    onChange: (nextValue: WorkbenchGlobalSettings[WorkbenchSettingKey]) => void,
-  ) => {
-    const definition = WORKBENCH_SETTING_DEFINITIONS[key];
-    if (key === "editorFontSize") {
-      return (
-        <WorkbenchStepSlider
-          ariaLabel={definition.label}
-          disabled={disabled}
-          steps={EDITOR_FONT_SIZE_OPTIONS}
-          value={typeof value === "number" ? value : 1.08}
-          onChange={onChange}
-        />
-      );
-    }
-    if (definition.type === "boolean" && typeof value === "boolean") {
-      return (
-        <WorkbenchOptionCard
-          description={definition.description}
-          isChecked={value}
-          isSingleChoice={false}
-          label={definition.label}
-          onClick={() => onChange(!value)}
-        />
-      );
-    }
-    if (!definition.options) return null;
-    return (
-      <WorkbenchOptionCards<WorkbenchGlobalSettings[WorkbenchSettingKey]>
-        ariaLabel={definition.label}
-        columns={definition.columns ?? "one"}
-        disabled={disabled}
-        mode="radio"
-        options={definition.options}
-        value={value}
-        onChange={(nextValue) => {
-          if (!disabled) onChange(nextValue);
-        }}
-      />
-    );
-  };
-
-  const renderGlobalSettingRow = (key: WorkbenchSettingKey) => {
-    const definition = WORKBENCH_SETTING_DEFINITIONS[key];
-    const unavailable = key === "threadCodeDetails" && clientState.schemaVersion < appStateReleases.threadCodeDetails.version;
-    if (definition.type === "boolean") {
-      return (
-        <section key={key} className="rounded-[0.85rem] py-1">
-          {renderSettingControl(key, globalSettings[key], unavailable, (nextValue) => {
-            updateGlobalSetting(key, nextValue as never);
-          })}
-          {unavailable ? <p>Available after the app database is reloaded.</p> : null}
-        </section>
-      );
-    }
-    return (
-      <section key={key} className="space-y-3 rounded-[0.85rem] py-1">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">{definition.label}</h3>
-            <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-fg/muted">{definition.description}</p>
-          </div>
+  const daemonControl = <WorkbenchSettingsContextRow label="Daemon" value={daemonId ?? ""}
+    options={daemons.map(item => ({ id: item.id, label: item.hostname }))}
+    onSelect={id => { setChosenDaemonId(id as DaemonId); setChosenFolderKey(""); }} />;
+  return <div className="mx-auto w-full max-w-content px-5 pb-10 pt-1 text-text">
+    <div className="grid gap-5 md:grid-cols-[11rem_minmax(0,1fr)] lg:gap-9">
+      <aside className="scrollbar-hover-reveal hidden md:sticky md:top-20 md:block md:max-h-[calc(100dvh-6rem)] md:self-start md:overflow-y-auto">
+        <div className="mb-3 flex min-w-0 items-center gap-2 px-2 py-2 text-sm text-text">
+          {logicalProject?.iconProject ? <WorkbenchProjectIcon project={logicalProject.iconProject} />
+            : logicalProject ? <ProjectIcon aria-hidden="true" className="size-5 shrink-0" />
+            : <svg aria-hidden="true" className="size-5 shrink-0" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+              <path d="M2 12h20" />
+            </svg>}
+          <span className="min-w-0 truncate">{logicalProject ? `${logicalProject.label} settings` : "Global settings"}</span>
         </div>
-        {renderSettingControl(key, globalSettings[key], false, (nextValue) => {
-          updateGlobalSetting(key, nextValue as never);
-        })}
-      </section>
-    );
-  };
-
-  const renderProjectSettingRow = (key: WorkbenchSettingKey) => {
-    const definition = WORKBENCH_SETTING_DEFINITIONS[key];
-    const unavailable = key === "threadCodeDetails" && clientState.schemaVersion < appStateReleases.threadCodeDetails.version;
-    const override = projectSettings[key];
-    const inheritedValue = globalSettings[key];
-    const displayedValue = override.enabled ? override.value : inheritedValue;
-    if (definition.type === "boolean" && typeof displayedValue === "boolean") {
-      return (
-        <section key={key} className="relative rounded-[0.85rem] py-1">
-          <WorkbenchOptionCard
-            className={override.enabled ? "pr-12" : undefined}
-            description={definition.description}
-            disabled={unavailable}
-            isChecked={displayedValue}
-            isSingleChoice={false}
-            label={definition.label}
-            onClick={() => updateProjectSetting(key, !displayedValue as never)}
-          />
-          {override.enabled ? (
-            <WorkbenchIconButton
-              type="button"
-              label={`Reset ${definition.label} to global`}
-              display="hover-border"
-              title={`Reset ${definition.label} to global`}
-              className="absolute top-1/2 right-3 -translate-y-1/2"
-              onClick={() => resetProjectSettingOverride(key)}
-              disabled={unavailable}
-            >
-              <ResetIcon size={20} />
-            </WorkbenchIconButton>
-          ) : null}
-          {unavailable ? <p>Available after the app database is reloaded.</p> : null}
-        </section>
-      );
-    }
-    return (
-      <section key={key} className="space-y-3 rounded-[0.85rem] py-1">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">{definition.label}</h3>
-            <p className="mt-1 mb-0 text-[0.82rem] leading-6 text-fg/muted">{definition.description}</p>
-          </div>
-          {override.enabled ? (
-            <WorkbenchIconButton
-              type="button"
-              label={`Reset ${definition.label} to global`}
-              display="hover-border"
-              title={`Reset ${definition.label} to global`}
-              onClick={() => resetProjectSettingOverride(key)}
-            >
-              <ResetIcon size={20} />
-            </WorkbenchIconButton>
-          ) : null}
+        <nav aria-label="Settings sections" className="space-y-1">
+          {pages.map(item => <div key={item.id}>
+            <button type="button" aria-current={page === item.id ? "page" : undefined}
+              onClick={() => setPage(item.id)}
+              className={`block w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-fg/5 ${page === item.id
+                ? "bg-fg/5 font-semibold text-text" : "text-fg/muted"}`}>{item.label}</button>
+            {page === item.id ? <div className="mb-1 ml-3 flex flex-col">
+              {visibleSections.map(section => <a key={section.id} href={`#${section.id}`}
+                className="rounded-lg px-2 py-1 text-xs text-fg/muted hover:bg-fg/5 hover:text-text">{section.label}</a>)}
+            </div> : null}
+          </div>)}
+        </nav>
+      </aside>
+      <div className="min-w-0">
+        <div className="mb-3 md:hidden">
+          <p className="m-0 mb-2 text-sm">{logicalProject ? `${logicalProject.label} settings` : "Global settings"}</p>
+          <nav aria-label="Settings pages" className="flex gap-1 overflow-x-auto scrollbar-hover-reveal">
+            {pages.map(item => <button key={item.id} type="button" onClick={() => setPage(item.id)}
+              aria-current={page === item.id ? "page" : undefined}
+              className={`shrink-0 rounded-lg px-2 py-2 text-sm hover:bg-fg/5 ${page === item.id
+                ? "font-semibold text-text" : "text-fg/muted"}`}>{item.label}</button>)}
+          </nav>
         </div>
-        {renderSettingControl(key, displayedValue, false, (nextValue) => {
-          updateProjectSetting(key, nextValue as never);
-        })}
-      </section>
-    );
-  };
-
-  return (
-    <div className="mx-auto flex w-full max-w-content flex-col gap-8 py-8">
-      <section className="space-y-6">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div className="space-y-2">
-            <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-fg/muted uppercase">Preferences</p>
-            <h1 className="m-0 text-[1.65rem] font-semibold leading-tight text-text">Settings</h1>
-          </div>
-          <div className="flex min-w-0 items-end gap-4" role="tablist" aria-label="Settings scope">
-            <a
-              href={projectHref(createSettingsRoute(activeProjectId, "global"))}
-              role="tab"
-              aria-selected={scope === "global"}
-              className={`border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${scope === "global"
-                ? " border-text text-text"
-                : " border-transparent text-fg/muted hover:text-text"}`}
-              onClick={(event) => openScope(event, "global")}
-            >
-              Global
-            </a>
-            <a
-              href={projectHref(createSettingsRoute(activeProjectId, "project"))}
-              role="tab"
-              aria-selected={scope === "project"}
-              className={`min-w-0 border-b-2 px-0 pb-1 text-[0.9rem] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft${scope === "project"
-                ? " border-text text-text"
-                : " border-transparent text-fg/muted hover:text-text"}`}
-              onClick={(event) => openScope(event, "project")}
-            >
-              <span className="block max-w-[12rem] truncate">{projectLabel}</span>
-            </a>
-          </div>
-        </div>
-
-        <div className="space-y-7" role="tabpanel">
-          {scope === "global"
-            ? (
-              <>
-                {SETTINGS_ORDER.map(renderGlobalSettingRow)}
-                <WorkbenchNetworkSettings />
-                <WorkbenchProjectDiscoverySettings onSaved={onGitRootsSaved} />
-                <VoiceSettings />
-                <WorkbenchReactDevelopmentModeSetting />
-                <section className="space-y-3 rounded-[0.85rem] py-1">
-                  <div className="min-w-0">
-                    <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">Local command capabilities</h3>
-                  </div>
-                  <SandboxNetworkSettings key={`global:${activeProjectId}`} projectId={activeProjectId} scope="global" />
-                  <WorkbenchOptionCard
-                    description="Allow raw Browse CLI usage outside the sandbox."
-                    disabled={isLocalCapabilitySettingsLoading}
-                    isChecked={localCapabilitySettings.browseRawCommandsEnabled}
-                    isSingleChoice={false}
-                    label="Raw Browse commands"
-                    onClick={() => updateBrowseRawCommandsEnabled(!localCapabilitySettings.browseRawCommandsEnabled)}
-                  />
-                  {localCapabilitySettingsError ? (
-                    <p className="m-0 text-[0.78rem] leading-5 text-danger">{localCapabilitySettingsError}</p>
-                  ) : null}
-                </section>
-              </>
-            )
-            : (
-              <>
-                {SETTINGS_ORDER.map(renderProjectSettingRow)}
-                <SandboxNetworkSettings key={`project:${activeProjectId}`} projectId={activeProjectId} scope="project" />
-                <CommandApprovalSettings key={`command-approvals:${activeProjectId}`} projectId={activeProjectId} />
-              </>
-            )}
-        </div>
-      </section>
+        {page === "general" ? <>
+          <Group id="settings-appearance" title="Appearance">
+            <WorkbenchSettingsPreferences keys={["theme", "editorFontSize"]} logicalProjectId={logicalProject?.id ?? null} onError={onError} />
+          </Group>
+          <Group id="settings-editing" title="Editing">
+            <WorkbenchSettingsPreferences keys={["editorFontFamily", "editorSpellCheck", "composerSpellCheck"]}
+              logicalProjectId={logicalProject?.id ?? null} onError={onError} />
+          </Group>
+          <Group id="settings-threads" title="Threads">
+            <WorkbenchSettingsPreferences keys={["threadCodeBlockWrap", "threadCodeDetails"]}
+              logicalProjectId={logicalProject?.id ?? null} onError={onError} />
+          </Group>
+          <Group id="settings-voice" title="Voice"><VoiceSettings /></Group>
+          <Group id="settings-runtime" title="Runtime"><WorkbenchReactDevelopmentModeSetting /></Group>
+        </> : null}
+        {page === "projects" ? <>
+          <Group id="settings-files" title="Files">
+            <WorkbenchSettingsPreferences keys={["fileOpenBehavior", "showUnopenableFiles"]}
+              logicalProjectId={logicalProject?.id ?? null} onError={onError} />
+          </Group>
+          <Group id="settings-sidebar" title="Sidebar">
+            <WorkbenchSettingsPreferences keys={["selectedProjectPinPlacement"]}
+              logicalProjectId={logicalProject?.id ?? null} onError={onError} />
+          </Group>
+          <Group id="settings-discovery" title="Discovery">
+            <div className="space-y-3 py-3"><h3 className="m-0 text-sm font-semibold">Git roots</h3>
+              {daemonControl}
+              {daemon ? <WorkbenchOperationsContext.Provider value={daemon}>
+                <WorkbenchProjectDiscoverySettings key={daemonId} onSaved={() => onGitRootsSaved(daemonId!)} />
+              </WorkbenchOperationsContext.Provider> : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
+            </div>
+          </Group>
+        </> : null}
+        {page === "agents" ? <>
+          <Group id="settings-agent-network" title="Network access">
+            {daemonControl}
+            {logicalProject && daemonFolders.length > 1 ? <WorkbenchSettingsContextRow label="Folder"
+              value={folder ? `${folder.target.daemonId}/${folder.target.projectId}` : ""}
+              options={daemonFolders.map(item => ({
+                id: `${item.target.daemonId}/${item.target.projectId}`,
+                label: item.displayPath ?? `${item.hostname}:${item.rootPath}`,
+              }))}
+              onSelect={setChosenFolderKey} /> : null}
+            {daemon ? <WorkbenchOperationsContext.Provider value={daemon}>
+              <SandboxNetworkSettings key={`${daemonId}/${folder?.target.projectId ?? ""}`}
+                projectId={logicalProject ? folder?.target.projectId ?? null : null}
+                scope={logicalProject ? "project" : "global"} />
+            </WorkbenchOperationsContext.Provider> : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
+            {logicalProject && !folder ? <p role="status" className="text-sm text-fg/muted">No folder is available on this daemon.</p> : null}
+          </Group>
+          <Group id="settings-capabilities" title="Capabilities">
+            {daemon ? <BrowseCapability key={daemonId} daemon={daemon} /> : null}
+          </Group>
+          {logicalProject ? <Group id="settings-permissions" title="Permissions">
+            {daemon && folder ? <WorkbenchOperationsContext.Provider value={daemon}>
+              <CommandApprovalSettings key={`${daemonId}/${folder.target.projectId}`}
+                projectId={folder.target.projectId} folders={daemonFolders} />
+            </WorkbenchOperationsContext.Provider>
+              : <p role="status" className="text-sm text-fg/muted">Choose an available folder to edit permissions.</p>}
+          </Group> : null}
+        </> : null}
+        {page === "network" ? <WorkbenchNetworkSettings /> : null}
+      </div>
     </div>
-  );
+  </div>;
 }

@@ -43,10 +43,16 @@ test("saved permissions survive owner replacement and isolate project, directory
     assert.equal(await owner.match(other, "C:/repo", ["pnpm", "test"]), null);
     assert.equal(await owner.match(project, "C:/repo/sub", ["pnpm", "test"]), null);
     assert.equal(await owner.match(project, "C:/repo", ["pnpm", "testing"]), null);
+    await assert.rejects(owner.patch(project, "C:/repo", ["git status; whoami"], []), /single|literal|shell/u);
+    await assert.rejects(owner.patch(project, "C:/repo/sub", [], [saved.id]), /directory|workdir/u);
+    assert.equal((await owner.list(project)).length, 1);
+    await owner.patch(project, "C:/repo", ["git status"], [saved.id]);
+    assert.equal(await owner.match(project, "C:/repo", ["pnpm", "test"]), null);
+    assert.deepEqual((await owner.match(project, "C:/repo", ["git", "status"]))?.prefix, ["git", "status"]);
     await owner.remove(other, saved.id);
     assert.equal((await owner.list(project)).length, 1);
-    await owner.remove(project, saved.id);
-    assert.equal(await owner.match(project, "C:/repo", ["pnpm", "test"]), null);
+    await owner.remove(project, (await owner.list(project))[0]!.id);
+    assert.equal(await owner.match(project, "C:/repo", ["git", "status"]), null);
     assert.equal((database.prepare("SELECT COUNT(*) AS count FROM command_approval_tokens").get() as { count: number }).count, 0);
     await assert.rejects(owner.save(project, "relative", ["pnpm", "test"]));
     await assert.rejects(owner.save(project, "C:/repo", []));

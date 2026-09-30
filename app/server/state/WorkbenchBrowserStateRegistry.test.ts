@@ -13,7 +13,7 @@ import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/s
 import { appStateSchema } from "workbench-shared/state/workbench-app-state-schema";
 import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
-import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { DATABASE_LOG_PREFIX } from "workbench-shared/database/database-log-format";
 import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
@@ -58,6 +58,20 @@ test("voice enabled preference remains browser-local and survives reopening", as
   try {
     assert.ok(records(await reopened.readBrowser(BROWSER_A)).some(item => item.kind === "globalPreference" && item.preference.key === "voiceInputEnabled" && item.preference.value === false));
   } finally { await reopened.close(); }
+});
+
+test("logical project preference seeds a later browser without becoming a per-browser draft", async context => {
+  const { registry } = await fixture(context);
+  await registry.readBrowser(BROWSER_A);
+  const logicalProjectId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  await registry.mutateBrowser(BROWSER_A, { action: "put", record: {
+    kind: "logicalProjectPreference", logicalProjectId,
+    preference: { key: "theme", enabled: true, value: "winter" },
+  } });
+  const read = records(await registry.readBrowser(BROWSER_B));
+  assert.ok(read.some(record => record.kind === "logicalProjectPreference"
+    && record.logicalProjectId === logicalProjectId && record.preference.key === "theme"
+    && record.preference.value === "winter"));
 });
 
 test("model group disclosures persist independently across browser reopening", async context => {

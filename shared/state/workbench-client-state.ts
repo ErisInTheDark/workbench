@@ -34,7 +34,7 @@ import { appStateClientTables } from "./workbench-app-state-schema.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
 import { z } from "zod";
 import { WorkbenchProjectAliasSchema } from "../workbench/project/project-state.ts";
-import { DaemonIdSchema } from "../workbench/identity.ts";
+import { DaemonIdSchema, LogicalProjectIdSchema, type LogicalProjectId } from "../workbench/identity.ts";
 import { ProviderKeySchema } from "../workbench/provider/provider-key.ts";
 
 export const WorkbenchDaemonRegistrationRequestSchema = z.object({
@@ -152,6 +152,7 @@ export type WorkbenchClientStateRecord =
   | { kind: "modelPreference"; harness: WorkbenchHarnessValue; modelId: string; favourite: boolean }
   | { kind: "modelGroupDisclosure"; groupId: string; open: boolean }
   | { kind: "globalPreference"; preference: WorkbenchGlobalPreference }
+  | { kind: "logicalProjectPreference"; logicalProjectId: LogicalProjectId; preference: WorkbenchProjectPreference }
   | (ProjectScoped & { kind: "projectPreference"; preference: WorkbenchProjectPreference })
   | (ProjectScoped & { kind: "sidebarPreference"; preference: WorkbenchSidebarPreference })
   | (ProjectScoped & { folderId: string; kind: "sidebarFolder"; scope: "pinned" | "thread" })
@@ -165,6 +166,7 @@ export type WorkbenchClientStateIdentity =
   | { kind: "modelPreference"; harness: WorkbenchHarnessValue; modelId: string }
   | { kind: "modelGroupDisclosure"; groupId: string }
   | { kind: "globalPreference"; key: WorkbenchGlobalPreference["key"] }
+  | { kind: "logicalProjectPreference"; logicalProjectId: LogicalProjectId; key: WorkbenchProjectPreference["key"] }
   | (ProjectScoped & { key: WorkbenchProjectPreference["key"]; kind: "projectPreference" })
   | (ProjectScoped & { key: WorkbenchSidebarPreference["key"]; kind: "sidebarPreference" })
   | (ProjectScoped & { folderId: string; kind: "sidebarFolder"; scope: "pinned" | "thread" })
@@ -242,6 +244,8 @@ export const WorkbenchClientStateRecordSchema = z.discriminatedUnion("kind", [
     modelId: z.string(), favourite: z.boolean() }),
   z.object({ kind: z.literal("modelGroupDisclosure"), groupId: z.string().min(1).max(600), open: z.boolean() }),
   z.object({ kind: z.literal("globalPreference"), preference: GlobalPreferenceSchema }),
+  z.object({ kind: z.literal("logicalProjectPreference"), logicalProjectId: LogicalProjectIdSchema,
+    preference: ProjectPreferenceSchema }),
   z.object({ kind: z.literal("projectPreference"), ...projectAddress,
     preference: ProjectPreferenceSchema }),
   z.object({ kind: z.literal("sidebarPreference"), ...projectAddress,
@@ -279,6 +283,10 @@ export const WorkbenchClientStateIdentitySchema = z.discriminatedUnion("kind", [
     "editorFontFamily", "appPort", "editorFontSize", "projectTimeGroupCount", "fileOpenBehavior",
     "harness", "selectedProjectPinPlacement", "theme", "transcriptProjectionMode",
   ]) }),
+  z.object({ kind: z.literal("logicalProjectPreference"), logicalProjectId: LogicalProjectIdSchema,
+    key: z.enum(["composerSpellCheck", "editorSpellCheck", "showUnopenableFiles", "threadCodeBlockWrap",
+      "threadCodeDetails", "editorFontFamily", "editorFontSize", "fileOpenBehavior",
+      "selectedProjectPinPlacement", "theme"]) }),
   z.object({ kind: z.literal("projectPreference"), ...projectAddress,
     key: z.enum(["composerSpellCheck", "editorSpellCheck", "showUnopenableFiles", "threadCodeBlockWrap",
       "threadCodeDetails", "editorFontFamily", "editorFontSize", "fileOpenBehavior",
@@ -338,6 +346,7 @@ const mutationPathByKind = {
   expandedDirectory: "/api/workbench-client-state/expanded-directory",
   fileDraft: "/api/workbench-client-state/file-draft",
   globalPreference: "/api/workbench-client-state/global-preference",
+  logicalProjectPreference: "/api/workbench-client-state/project-preference",
   lastLaunchTarget: "/api/workbench-client-state/launch-target",
   projectPreference: "/api/workbench-client-state/project-preference",
   questionnaireDraft: "/api/workbench-client-state/questionnaire-draft",

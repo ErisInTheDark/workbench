@@ -372,7 +372,7 @@ for (const identity of identities) {
       createProjectRoute(address), createFileRoute(address, "src/a file.ts"),
       createThreadRoute(address, "thread"), createHomeThreadRoute(address, "thread"),
       createPinnedThreadRoute("other/project", address, "thread"),
-      createSettingsRoute(address, "project"), createStatsRoute(address),
+      createSettingsRoute(address), createStatsRoute(address),
     ];
     for (const publicRoute of routes.map(route => parseWorkbenchRouteFromLocation(createWorkbenchHref(route)))) {
       const internal = navigation.resolveRoute(publicRoute);

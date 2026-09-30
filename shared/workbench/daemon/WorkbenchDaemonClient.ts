@@ -99,6 +99,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "sandbox-network/update": return WorkbenchSandboxNetworkSettingsResponseSchema;
     case "command-approvals/read":
     case "command-approvals/remove": return CommandApprovalSnapshotSchema;
+    case "command-approvals/patch": return CommandApprovalSnapshotSchema;
     case "project/discovery-settings/read": return ProjectDiscoverySettingsReadSchema;
     case "project/discovery-settings/update": return ProjectDiscoverySettingsResultSchema;
     case "project/catalog/read": return WorkbenchProjectsPayloadSchema;
@@ -305,6 +306,7 @@ class WorkbenchDaemonClient {
   readonly commandApprovals = {
     read: (params: WorkbenchDaemonParams<"command-approvals/read">) => this.request("command-approvals/read", params),
     remove: (params: WorkbenchDaemonParams<"command-approvals/remove">) => this.request("command-approvals/remove", params),
+    patch: (params: WorkbenchDaemonParams<"command-approvals/patch">) => this.request("command-approvals/patch", params),
   };
 
   readonly projectDiscoverySettings = {

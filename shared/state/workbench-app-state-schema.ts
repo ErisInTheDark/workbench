@@ -506,6 +506,40 @@ const projectPreferencesHistory = defineTableHistory({
   current: projectPreferencesV3,
 });
 
+const logicalProjectPreferences = defineTable("logical_project_preferences", {
+  logical_project_id: text().notNull(),
+  key: enumText(
+    "composerSpellCheck", "editorFontFamily", "editorFontSize", "editorSpellCheck",
+    "fileOpenBehavior", "selectedProjectPinPlacement", "showUnopenableFiles", "theme",
+    "threadCodeBlockWrap", "threadCodeDetails",
+  ).notNull(),
+  enabled: booleanInteger(),
+  boolean_value: booleanInteger(),
+  integer_value: integer(),
+  text_value: text(),
+  ...revisionColumns(),
+}, table => ({
+  constraints: [
+    primaryKey([table.logical_project_id, table.key]),
+    check(sql`
+      (${table.deleted} = ${literal(1)} AND ${table.enabled} IS NULL AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+      OR (${table.deleted} = ${literal(0)} AND ${table.enabled} IS NOT NULL AND (
+        (${table.key} IN (${literal("composerSpellCheck")}, ${literal("editorSpellCheck")}, ${literal("showUnopenableFiles")}, ${literal("threadCodeBlockWrap")}, ${literal("threadCodeDetails")}) AND ${table.boolean_value} IS NOT NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+        OR (${table.key} = ${literal("editorFontSize")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NOT NULL AND ${table.text_value} IS NULL)
+        OR (${table.key} IN (${literal("editorFontFamily")}, ${literal("fileOpenBehavior")}, ${literal("selectedProjectPinPlacement")}, ${literal("theme")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NOT NULL)
+      ))
+    `),
+  ],
+}));
+const logicalProjectPreferencesHistory = defineTableHistory({
+  versions: [tableVersion({
+    schemaVersion: appStateReleases.logicalProjectPreferences.version,
+    table: logicalProjectPreferences,
+    migration: createTable(logicalProjectPreferences),
+  })],
+  current: logicalProjectPreferences,
+});
+
 const projectSidebarPreferencesHistory = initialHistory(defineTable("project_sidebar_preferences", {
   daemon_registration_id: registrationForeignKey(),
   project_id: text().notNull(),
@@ -828,6 +862,7 @@ const histories = [
   lastLaunchTargetHistory,
   globalPreferencesHistory,
   projectPreferencesHistory,
+  logicalProjectPreferencesHistory,
   projectSidebarPreferencesHistory,
   projectSidebarFoldersHistory,
   projectExpandedDirectoriesHistory,
@@ -852,6 +887,7 @@ export const appStateClientTables = Object.freeze({
   lastLaunchTarget: lastLaunchTargetHistory.current,
   projectExpandedDirectories: projectExpandedDirectoriesHistory.current,
   projectPreferences: projectPreferencesHistory.current,
+  logicalProjectPreferences: logicalProjectPreferencesHistory.current,
   projectSidebarFolders: projectSidebarFoldersHistory.current,
   projectSidebarPreferences: projectSidebarPreferencesHistory.current,
   questionnaireDraftAnswers: questionnaireDraftAnswersHistory.current,

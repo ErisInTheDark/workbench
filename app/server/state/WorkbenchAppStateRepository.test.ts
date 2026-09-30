@@ -139,6 +139,29 @@ test("model preferences upgrade v6 without losing existing preferences or the ba
   } finally { await repository.close(); }
 });
 
+test("logical project preferences upgrade alongside retained physical preferences", async context => {
+  const databasePath = await temporaryDatabase(context);
+  const old = new Database(databasePath);
+  applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 17 });
+  old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('theme','winter',0,1)").run();
+  old.prepare("INSERT INTO daemon_registrations(id,kind,created_at,revision) VALUES ('retained','local',0,1)").run();
+  old.prepare("INSERT INTO project_preferences(daemon_registration_id,project_id,key,enabled,text_value,deleted,revision) VALUES ('retained','folder','theme',1,'default',0,2)").run();
+  old.close();
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  try {
+    await repository.start();
+    assert.deepEqual(repository.query(selectRows(appStateTables.logicalProjectPreferences)), []);
+    assert.equal(repository.query(selectRows(appStateTables.projectPreferences))[0]?.project_id, "folder");
+    repository.commit(revision => [insertRow(appStateTables.logicalProjectPreferences, {
+      logical_project_id: "112f7e1e-81b6-4c30-bdc0-f83475981001",
+      key: "theme", enabled: 1, text_value: "magical-girl", boolean_value: null,
+      integer_value: null, deleted: 0, revision,
+    })]);
+    assert.equal(repository.query(selectRows(appStateTables.logicalProjectPreferences))[0]?.text_value, "magical-girl");
+    assert.equal(repository.query(selectRows(appStateTables.globalPreferences))[0]?.text_value, "winter");
+  } finally { await repository.close(); }
+});
+
 test("model disclosure table upgrades v16 without disturbing existing app preferences", async context => {
   const databasePath = await temporaryDatabase(context);
   const old = new Database(databasePath);

@@ -9,29 +9,29 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
+import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
 import { WorkbenchClientStateContext } from "../workbench-client-state-context";
 import WorkbenchClientStateController from "../../../workbench/state/WorkbenchClientStateController";
-import { writeGlobalWorkbenchSetting, writeProjectWorkbenchSetting } from "../../../workbench/state/workbench-settings";
+import { writeGlobalWorkbenchSetting } from "../../../workbench/state/workbench-settings";
 
 type DynamicItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
-test("code details follow current global and project preferences without changing the tool", async () => {
+test("captured code details follow the owning pane setting rather than the physical folder", async () => {
   const controller = new WorkbenchClientStateController({ mode: "memory" });
   const item: DynamicItem = {
     type: "dynamicToolCall", id: "execute", namespace: "opencode", tool: "execute",
     arguments: {}, contentItems: null, durationMs: null, status: "completed", success: true,
   };
-  const render = (projectId: string) => renderToStaticMarkup(createElement(WorkbenchClientStateContext.Provider, {
+  const render = (details: boolean | null, projectId: string) => renderToStaticMarkup(createElement(WorkbenchClientStateContext.Provider, {
     value: controller,
-  }, createElement(ThreadDynamicToolCallItem, { item, projectId, hasCapturedChildren: true })));
-  assert.ok(!render("alpha"));
+  }, createElement(WorkbenchThreadDisplaySettingsContext.Provider, { value: details },
+    createElement(ThreadDynamicToolCallItem, { item, projectId, hasCapturedChildren: true }))));
+  assert.ok(!render(null, "alpha"));
   await writeGlobalWorkbenchSetting(controller, "threadCodeDetails", true);
-  assert.ok(render("alpha"));
-  await writeProjectWorkbenchSetting(controller, "alpha", "threadCodeDetails", { enabled: true, value: false });
-  assert.ok(!render("alpha"));
-  assert.ok(render("beta"));
-  await writeProjectWorkbenchSetting(controller, "alpha", "threadCodeDetails", { enabled: false, value: false });
-  assert.ok(render("alpha"));
+  assert.ok(render(null, "alpha"));
+  assert.ok(!render(false, "alpha"));
+  assert.ok(!render(false, "beta"));
+  assert.ok(render(true, "alpha"));
 });
 
 test("captured execution details are hidden by default without hiding failure or uncaptured output", () => {

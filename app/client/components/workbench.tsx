@@ -49,6 +49,7 @@ import {
     createStatsRoute,
     createThreadRoute,
     createToggledProjectSelectionRoute,
+    createWorkbenchHref,
     getWorkbenchMosaicThreadRootIds,
     getWorkbenchThreadTargetRootId,
     getWorkbenchThreadTargetSelectedId,
@@ -101,10 +102,10 @@ import {
     MAX_EDITOR_FONT_SIZE,
     MIN_EDITOR_FONT_SIZE,
     readGlobalWorkbenchSettings,
-    readProjectWorkbenchSettings,
+    readLogicalProjectWorkbenchSettings,
     resolveWorkbenchSettings,
     writeGlobalWorkbenchSetting,
-    writeProjectWorkbenchSetting,
+    writeLogicalProjectWorkbenchSetting,
     type WorkbenchEditorFontFamily,
     type WorkbenchGlobalSettings,
     type WorkbenchSettingKey,
@@ -453,6 +454,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     (displayedLogicalProjects ?? explorer.projects).map(project => project.id),
     route.selectedProjectIds, unarchivedProjectIds,
   ), [displayedLogicalProjects, explorer.projects, route.selectedProjectIds, unarchivedProjectIds]);
+  const settingsRoute = useMemo(() => withProjectSelection(
+    createSettingsRoute(""),
+    selectionProjectIds.length ? selectionProjectIds : null,
+  ), [selectionProjectIds]);
+  const settingsHref = projectHref(settingsRoute) ?? createWorkbenchHref(settingsRoute);
   const dynamicSelectionPending = route.selectedProjectIds === null
     && !appProjectGroups && explorer.isThreadsLoading;
   const selectedLogicalProjects = useMemo(() => selectionProjectIds.flatMap(id => {
@@ -553,6 +559,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const [mobileShellHeaderHeight, setMobileShellHeaderHeight] = useState(0);
   const [isMobileShellHeaderVisible, setIsMobileShellHeaderVisible] = useState(true);
   const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
+  const [settingsPageTitle, setSettingsPageTitle] = useState("General");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [pendingDeleteFilePath, setPendingDeleteFilePath] = useState("");
   const [isDeletingFile, setIsDeletingFile] = useState(false);
@@ -772,7 +779,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       return withProjectSelection(threadRoute, route.selectedProjectIds);
     }
     if (route.view === "settings") {
-      return createSettingsRoute(route.projectId, route.settingsScope);
+      return route;
     }
     if (route.view === "stats" || route.view === "git") {
       return route.projectId ? createProjectRoute(route.projectId) : createHomeRoute();
@@ -794,7 +801,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     route.logical?.browseLocation?.projectId,
     route.projectId,
     route.selectedProjectIds,
-    route.settingsScope,
     route.threadId,
     route.threadTarget,
     route.view,
@@ -889,15 +895,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     ? selectedLogicalProject?.displayName ?? selectedLogicalProject?.label ?? null
     : currentProjectDisplayName ?? explorer.root ?? explorer.currentProjectId;
   const pageTitle = formatWorkbenchPageTitle(viewedProjectDisplayName);
+  const settingsLogicalProjectId = route.logical?.threadOwnerProjectId ?? route.logical?.projectId
+    ?? (selectionProjectIds.length === 1
+      ? displayedLogicalProjects?.find(project => project.id === selectionProjectIds[0])?.id ?? null
+      : null);
   const projectSettings = useMemo(() => (
-    browseProjectId
-      ? readProjectWorkbenchSettings(
-        clientState.daemonRegistrationId,
-        browseProjectId,
-        clientState.records,
-      )
+    settingsLogicalProjectId
+      ? readLogicalProjectWorkbenchSettings(settingsLogicalProjectId, clientState.records)
       : createDefaultProjectWorkbenchSettings()
-  ), [browseProjectId, clientState.daemonRegistrationId, clientState.records]);
+  ), [settingsLogicalProjectId, clientState.records]);
   const resolvedSettings = resolveWorkbenchSettings(globalSettings, projectSettings);
   const [editorFontSizePreview, setEditorFontSizePreview] = useState<number | null>(null);
   const displayedEditorFontSize = editorFontSizePreview ?? resolvedSettings.editorFontSize;
@@ -913,7 +919,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     [explorer.tree, isProjectTreeLoading, showUnopenableFiles],
   );
   const projectTabLabel = getProjectTabLabel(viewedProjectDisplayName);
-  const settingsScope = route.view === "settings" ? route.settingsScope : "global";
   const editorFontClassName = EDITOR_FONT_CLASS_NAMES[resolvedSettings.editorFontFamily];
 
   useEffect(() => {
@@ -957,30 +962,29 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [clientStateController]);
 
   const updateProjectSetting = useCallback(<K extends WorkbenchSettingKey> (key: K, value: WorkbenchGlobalSettings[K]) => {
-    const projectId = browseProjectId;
-    if (!projectId) {
+    if (!settingsLogicalProjectId) {
       return;
     }
 
     const nextValue = (key === "editorFontSize" && typeof value === "number"
       ? clampEditorFontSize(value)
       : value) as WorkbenchGlobalSettings[K];
-    void writeProjectWorkbenchSetting(clientStateController, projectId, key, {
+    void writeLogicalProjectWorkbenchSetting(clientStateController, settingsLogicalProjectId, key, {
       enabled: true,
       value: nextValue,
     }).catch((error: Error) => {
       setSelectionError(error.message);
     });
-  }, [browseProjectId, clientStateController]);
+  }, [settingsLogicalProjectId, clientStateController]);
 
   const updateThreadCodeBlockWrapSetting = useCallback((nextValue: boolean) => {
-    if (browseProjectId) {
+    if (settingsLogicalProjectId) {
       updateProjectSetting("threadCodeBlockWrap", nextValue);
       return;
     }
 
     updateGlobalSetting("threadCodeBlockWrap", nextValue);
-  }, [browseProjectId, updateGlobalSetting, updateProjectSetting]);
+  }, [settingsLogicalProjectId, updateGlobalSetting, updateProjectSetting]);
 
   useEffect(() => {
     document.documentElement.dataset.workbenchTheme = resolvedSettings.theme;
@@ -1007,8 +1011,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       || event.altKey
     ) return;
     event.preventDefault();
-    navigateToRoute(createSettingsRoute(attachedProjectId, "global"));
-  }, [attachedProjectId, navigateToRoute]);
+    navigateToRoute(settingsRoute);
+  }, [navigateToRoute, settingsRoute]);
 
   const openStatsScopeFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string | null) => {
     if (
@@ -1134,13 +1138,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     hasProject: Boolean(viewedProjectId),
     home: () => navigateToRoute(createHomeRoute()),
     openSearch: () => searchController.open(),
-    openSettings: () => navigateToRoute(createSettingsRoute(attachedProjectId, "global")),
+    openSettings: () => navigateToRoute(settingsRoute),
     toggleSidebar: () => {
       if (!isMobile) document.querySelector<HTMLElement>("[aria-label='Hide sidebar'], [aria-label='Show sidebar']")?.click();
     },
     zoomIn: () => updateEditorFontSize(resolvedSettings.editorFontSize + 0.08),
     zoomOut: () => updateEditorFontSize(resolvedSettings.editorFontSize - 0.08),
-  }), [attachedProjectId, isMobile, navigateToRoute, selectedLogicalProjects, selectedPhysicalProjects,
+  }), [attachedProjectId, isMobile, navigateToRoute, selectedLogicalProjects, selectedPhysicalProjects, settingsRoute,
     resolvedSettings.editorFontSize, route.logical?.projectId, searchController, selectedLogicalProject,
     updateEditorFontSize, viewedProjectId, workbenchClient.mounted]);
   searchActivationRef.current = (result) => {
@@ -1153,9 +1157,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
           ? createLogicalProjectRoute(result.logicalProjectId)
           : createProjectRoute(result.projectId));
         break;
-      case "projectSetting":
-        navigateToRoute(createSettingsRoute(result.projectId, "project"));
+      case "projectSetting": {
+        const logicalProjectId = result.logicalProjectId
+          ?? displayedLogicalProjects?.find(project => project.locations.some(location =>
+            location.target.projectId === result.projectId))?.id;
+        navigateToRoute(withProjectSelection(createSettingsRoute(""),
+          logicalProjectId ? [logicalProjectId] : null), { selection: "exact" });
         break;
+      }
       case "thread":
         if (result.logicalProjectId) {
           navigateToRoute(createLogicalExistingThreadRoute(result.logicalProjectId,
@@ -1490,6 +1499,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const showThreadView = route.view === "thread" || mobileMosaicFallbackTarget?.kind === "thread";
   const showFileView = route.view === "file" || mobileMosaicFallbackTarget?.kind === "file";
   const showSettingsView = route.view === "settings";
+  const selectedSettingsProject = selectionProjectIds.length === 1
+    ? displayedLogicalProjects?.find(project => project.id === selectionProjectIds[0]) ?? null
+    : null;
   const showStatsView = route.view === "stats";
   const showGitView = route.view === "git";
   const sidebarCreateProjectId = workbenchClient.mounted?.presentationClient
@@ -1852,11 +1864,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       return { kind: "thread", target: effectiveThreadTarget ?? { kind: "new" } };
     }
     if (showSettingsView) {
-      return { kind: "settings", scope: settingsScope };
+      return { kind: "settings" };
     }
 
     return { kind: "empty" };
-  }, [effectiveFilePath, effectiveThreadTarget, settingsScope, showFileView, showSettingsView, showThreadView]);
+  }, [effectiveFilePath, effectiveThreadTarget, showFileView, showSettingsView, showThreadView]);
   const navigateToPanelTarget = useCallback((target: WorkbenchPanelTarget, options?: { replace?: boolean }) => {
     if (target.kind === "file") {
       navigateToRoute(route.logical?.projectId
@@ -1874,15 +1886,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       return;
     }
     if (target.kind === "settings") {
-      navigateToRoute(createSettingsRoute(route.logical ? "" : explorer.currentProjectId || route.projectId,
-        route.logical ? "global" : target.scope), options);
+      navigateToRoute(settingsRoute, options);
       return;
     }
 
     navigateToRoute(route.logical?.projectId
       ? createLogicalProjectRoute(route.logical.projectId)
       : createProjectRoute(explorer.currentProjectId || route.projectId), options);
-  }, [browseLocation, explorer.currentProjectId, navigateToRoute, route]);
+  }, [browseLocation, explorer.currentProjectId, navigateToRoute, route, settingsRoute]);
   const navigateToMosaicNode = useCallback((mosaicNode: WorkbenchMosaicNode, options?: { replace?: boolean }) => {
     if (!route.logical?.projectId) {
       navigateToRoute(createMosaicRoute(explorer.currentProjectId || route.projectId, mosaicNode), options);
@@ -2433,7 +2444,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     as="a"
                     label="Open settings"
                     display="hover-border"
-                    href={projectHref(createSettingsRoute(attachedProjectId, "global"))}
+                    href={settingsHref}
                     onClick={openSettingsFromLink}
                     title="Open settings"
                   >
@@ -2637,6 +2648,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               ref={mainPaneRef}
               className={`scrollbar-hover-reveal flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden md:w-auto${showGitView
                 ? " min-h-0 overflow-hidden px-5 pb-0 md:h-screen md:px-6"
+                : showSettingsView
+                ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-y-auto md:px-6"
                 : isDirectThreadSurface
                 ? " overflow-hidden px-0 pb-0 md:h-screen md:min-h-0 md:overflow-hidden"
                 : showFullBleedMainView
@@ -2695,10 +2708,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
                           {isThreadShellTitleLoading ? (
                             <span className="block h-4 w-48 max-w-[60vw] rounded-full workbench-skeleton" aria-hidden="true" />
-                          ) : showGitView ? "Working tree" : showSettingsView ? "Settings" : "Select a file"}
+                          ) : showGitView ? "Working tree" : showSettingsView ? `Settings / ${settingsPageTitle}` : "Select a file"}
                         </p>
-                        <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
-                          {showGitView ? <WorkbenchGitRepositoryControl /> : showSettingsView ? "Theme and local Workbench preferences." : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
+                        <p id="status-line" ref={statusLineRef} hidden={showSettingsView} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
+                          {showGitView ? <WorkbenchGitRepositoryControl /> : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
                         </p>
                       </>
                     )}
@@ -2869,6 +2882,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       projectRoots={threadProjectRoots}
                       scrollViewportRef={directThreadScrollViewportRef}
                       threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
+                      threadCodeDetails={resolvedSettings.threadCodeDetails}
                       threadComposerDraft={activeThreadComposerDraft}
                       threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                       viewInstanceKey={threadViewInstanceKey}
@@ -2881,14 +2895,31 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : null}
                 {showSettingsView && !shouldRenderMainLayout ? (
                   <WorkbenchSettingsView
-                    activeProjectId={attachedProjectId}
-                    onGitRootsSaved={async () => { await controls?.refreshProjectCatalog(); }}
+                    attachedDaemonId={DaemonIdSchema.safeParse(
+                      workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId,
+                    ).data ?? null}
+                    daemons={presentationState?.data?.daemons ?? []}
+                    folders={selectedSettingsProject
+                      ? projectFolderOptions([selectedSettingsProject])
+                      : []}
+                    getDaemon={daemonId => workbenchClient.mounted?.workspace.daemon({ kind: "installation", daemonId }) ?? null}
+                    logicalProject={selectedSettingsProject ? {
+                      id: selectedSettingsProject.id,
+                      label: selectedSettingsProject.displayName ?? selectedSettingsProject.label,
+                      iconProject: selectedSettingsProject.locations.find(location => location.project)?.project ?? null,
+                    } : null}
                     onError={setSelectionError}
-                    onNavigate={(scope) => {
-                      navigateToRoute(createSettingsRoute(attachedProjectId, scope));
+                    onGitRootsSaved={async daemonId => {
+                      await workbenchClient.mounted?.workspace.daemon({ kind: "installation", daemonId }).projects.catalog();
+                      await workbenchClient.mounted?.presentationClient?.refresh();
                     }}
-                    projectLabel={projectTabLabel}
-                    scope={settingsScope}
+                    onPageChange={setSettingsPageTitle}
+                    selectionPending={dynamicSelectionPending
+                      || (selectionProjectIds.length === 1 && !selectedSettingsProject
+                        && presentationState?.phase !== "failed")}
+                    selectionError={selectionProjectIds.length === 1 && !selectedSettingsProject
+                      && presentationState?.phase === "failed"
+                      ? presentationState.error ?? "Project identity is unavailable." : null}
                   />
                 ) : null}
                 {showGitView && selectionError && !shouldRenderMainLayout ? (
@@ -3045,6 +3076,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       }
 
                       if (target.kind === "thread") {
+                        const panelLogicalProjectId = mosaicTarget?.source?.logicalProjectId
+                          ?? route.logical?.threadOwnerProjectId ?? route.logical?.projectId ?? null;
+                        const panelSettings = resolveWorkbenchSettings(globalSettings,
+                          panelLogicalProjectId
+                            ? readLogicalProjectWorkbenchSettings(panelLogicalProjectId, clientState.records)
+                            : createDefaultProjectWorkbenchSettings());
                         return (
                           <WorkbenchThreadPanel
                             routeOwned
@@ -3104,7 +3141,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                                 ? createLogicalMosaicRoute(route.logical.projectId, nextNode)
                                 : createMosaicRoute(route.projectId, nextNode));
                             }}
-                            onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
+                            onThreadCodeBlockWrapChange={nextValue => {
+                              void (panelLogicalProjectId
+                                ? writeLogicalProjectWorkbenchSetting(clientStateController, panelLogicalProjectId,
+                                  "threadCodeBlockWrap", { enabled: true, value: nextValue })
+                                : writeGlobalWorkbenchSetting(clientStateController, "threadCodeBlockWrap", nextValue))
+                                .catch((error: Error) => setSelectionError(error.message));
+                            }}
                             profileController={profileControllerFor(
                               target.target.kind === "provider" || target.target.kind === "subagent"
                                 ? workbenchClient.mounted?.threadOwnerFor(getWorkbenchThreadTargetRootId(target.target))
@@ -3117,7 +3160,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             projectFilePaths={explorer.projectFilePaths}
                             projectRootPath={explorer.rootPath}
                             projectRoots={explorer.roots}
-                            threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
+                            threadCodeBlockWrap={panelSettings.threadCodeBlockWrap}
+                            threadCodeDetails={panelSettings.threadCodeDetails}
                             threadTarget={target.target}
                             threadComposerDraft={getThreadComposerDraftForTarget(target.target)}
                             threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}

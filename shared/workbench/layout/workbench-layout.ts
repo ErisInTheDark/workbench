@@ -7,7 +7,6 @@
  * - default WorkbenchMainLayout: layout creation, traversal, mutation, normalization and persistence helpers.
  */
 
-import type { WorkbenchSettingsScope } from "../navigation/workbench-route.ts";
 import { WorkbenchThreadRouteTargetSchema, type WorkbenchThreadRouteTarget } from "../thread/thread-state.ts";
 
 // @ts-ignore see user-to-implementer-communication.md
@@ -34,7 +33,6 @@ export type WorkbenchPanelTarget =
   }
   | {
     readonly kind: "settings";
-    readonly scope: WorkbenchSettingsScope;
   }
   | {
     readonly kind: "thread";
@@ -106,7 +104,7 @@ function normalizePanelTarget(value: unknown): WorkbenchPanelTarget | null {
     return parsed.success ? { kind: "thread", target: parsed.data } : null;
   }
   if (candidate.kind === "settings") {
-    return candidate.scope === "global" || candidate.scope === "project" ? { kind: "settings", scope: candidate.scope } : null;
+    return { kind: "settings" };
   }
 
   return null;
@@ -203,7 +201,7 @@ function targetsEqual(left: WorkbenchPanelTarget, right: WorkbenchPanelTarget) {
     return threadTargetsEqual(left.target, right.target);
   }
   if (left.kind === "settings" && right.kind === "settings") {
-    return left.scope === right.scope;
+    return true;
   }
   return left.kind === "empty";
 }

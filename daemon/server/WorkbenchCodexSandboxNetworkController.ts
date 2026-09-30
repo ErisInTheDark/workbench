@@ -34,7 +34,7 @@ export default class WorkbenchCodexSandboxNetworkController {
     return this.operationQueue;
   }
 
-  async read(projectId: string): Promise<WorkbenchCodexSandboxNetworkSnapshot> {
+  async read(projectId: string | null): Promise<WorkbenchCodexSandboxNetworkSnapshot> {
     return await this.enqueue(async () => await this.readSnapshot(projectId));
   }
 
@@ -72,12 +72,12 @@ export default class WorkbenchCodexSandboxNetworkController {
     });
   }
 
-  private async readSnapshot(projectId: string): Promise<WorkbenchCodexSandboxNetworkSnapshot> {
+  private async readSnapshot(projectId: string | null): Promise<WorkbenchCodexSandboxNetworkSnapshot> {
     const [globalRows, projectRows] = await Promise.all([
       this.database.query(selectRows(codexSandboxNetworkGlobalSettings, {
         where: { id: "global" },
       })),
-      this.database.query(selectRows(codexSandboxNetworkProjectOverrides, {
+      projectId === null ? Promise.resolve([]) : this.database.query(selectRows(codexSandboxNetworkProjectOverrides, {
         where: { project_id: projectId },
       })),
     ]);

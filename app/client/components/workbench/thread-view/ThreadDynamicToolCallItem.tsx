@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useContext, useState, type ReactNode } from "react";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { repairQuestionnaireQuestion } from "workbench-shared/workbench/thread/thread-questionnaire-request";
@@ -36,7 +36,8 @@ import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 import { humanizeThreadLabel } from "./thread-view-formatters";
 import { useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
-import { readGlobalWorkbenchSettings, readProjectWorkbenchSettings, resolveWorkbenchSettings } from "../../../workbench/state/workbench-settings";
+import { readGlobalWorkbenchSettings } from "../../../workbench/state/workbench-settings";
+import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
 
 type DynamicToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
@@ -425,11 +426,9 @@ function ThreadGenericDynamicToolCallItem ({
   const outcome = item.success === false ? "failed" : item.status;
   const outcomeDisplay = display ? getThreadCommandOutcomeDisplay(display, outcome) : null;
   const state = useWorkbenchClientStateSnapshot();
-  const settings = resolveWorkbenchSettings(
-    readGlobalWorkbenchSettings(state.records),
-    readProjectWorkbenchSettings(state.daemonRegistrationId, projectId ?? "", state.records),
-  );
-  if (hasCapturedChildren && !settings.threadCodeDetails && outcome !== "failed") return null;
+  const paneCodeDetails = useContext(WorkbenchThreadDisplaySettingsContext);
+  const showCodeDetails = paneCodeDetails ?? readGlobalWorkbenchSettings(state.records).threadCodeDetails;
+  if (hasCapturedChildren && !showCodeDetails && outcome !== "failed") return null;
 
   return (
     <ThreadDisclosure

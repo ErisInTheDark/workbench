@@ -63,7 +63,6 @@ export default class WorkbenchNavigationController {
       && active.route.view === route.view
       && active.route.projectId === route.projectId
       && active.route.filePath === route.filePath
-      && active.route.settingsScope === route.settingsScope
       && active.route.threadId === route.threadId
       && active.route.threadOwnerProjectId === route.threadOwnerProjectId
       && isSameWorkbenchRoute(active.route, route);

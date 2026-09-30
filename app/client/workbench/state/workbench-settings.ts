@@ -25,6 +25,8 @@
  * - writeGlobalWorkbenchSetting: persist one global intent.
  * - readProjectWorkbenchSettings: project scoped override records.
  * - writeProjectWorkbenchSetting: persist one project override.
+ * - readLogicalProjectWorkbenchSettings: logical-project override records.
+ * - writeLogicalProjectWorkbenchSetting: persist one logical-project override.
  * - readWorkbenchGlobalSidebarPreferences: project global sidebar records.
  * - writeWorkbenchGlobalSidebarPreference: persist one global sidebar intent.
  * - readWorkbenchProjectSidebarPreferences: project scoped sidebar records.
@@ -37,6 +39,7 @@ import type {
   WorkbenchGlobalPreference,
   WorkbenchSidebarPreference,
 } from "workbench-shared/state/workbench-client-state";
+import { LogicalProjectIdSchema, type LogicalProjectId } from "workbench-shared/workbench/identity";
 import {
   WORKBENCH_SETTING_DEFINITIONS,
   type WorkbenchEditorFontFamily,
@@ -326,18 +329,7 @@ export async function writeGlobalWorkbenchSetting<K extends WorkbenchSettingKey>
   } as Extract<WorkbenchClientStateRecord, { kind: "globalPreference" }>);
 }
 
-export function readProjectWorkbenchSettings(
-  daemonRegistrationId: string,
-  projectId: string,
-  records: readonly WorkbenchClientStateRecord[] = [],
-) {
-  const candidate = Object.fromEntries(records.flatMap((record) => (
-    record.kind === "projectPreference"
-    && record.daemonRegistrationId === daemonRegistrationId
-    && record.projectId === projectId
-      ? [[record.preference.key, record.preference]]
-      : []
-  )));
+function normalizePreferenceOverrides(candidate: Record<string, unknown>): WorkbenchProjectSettings {
   return {
     composerSpellCheck: normalizeProjectOverride("composerSpellCheck", candidate.composerSpellCheck),
     editorFontFamily: normalizeProjectOverride("editorFontFamily", candidate.editorFontFamily),
@@ -352,6 +344,21 @@ export function readProjectWorkbenchSettings(
   } satisfies WorkbenchProjectSettings;
 }
 
+export function readProjectWorkbenchSettings(
+  daemonRegistrationId: string,
+  projectId: string,
+  records: readonly WorkbenchClientStateRecord[] = [],
+) {
+  const candidate = Object.fromEntries(records.flatMap((record) => (
+    record.kind === "projectPreference"
+    && record.daemonRegistrationId === daemonRegistrationId
+    && record.projectId === projectId
+      ? [[record.preference.key, record.preference]]
+      : []
+  )));
+  return normalizePreferenceOverrides(candidate);
+}
+
 export async function writeProjectWorkbenchSetting<K extends WorkbenchSettingKey>(
   controller: WorkbenchClientStateController,
   projectId: string,
@@ -363,6 +370,32 @@ export async function writeProjectWorkbenchSetting<K extends WorkbenchSettingKey
     kind: "projectPreference",
     preference: { ...normalizeProjectOverride(key, override), key } as never,
     projectId,
+  });
+}
+
+export function readLogicalProjectWorkbenchSettings(
+  logicalProjectId: LogicalProjectId | null,
+  records: readonly WorkbenchClientStateRecord[] = [],
+): WorkbenchProjectSettings {
+  if (!logicalProjectId) return createDefaultProjectWorkbenchSettings();
+  const candidate = Object.fromEntries(records.flatMap(record => (
+    record.kind === "logicalProjectPreference" && record.logicalProjectId === logicalProjectId
+      ? [[record.preference.key, record.preference]]
+      : []
+  )));
+  return normalizePreferenceOverrides(candidate);
+}
+
+export async function writeLogicalProjectWorkbenchSetting<K extends WorkbenchSettingKey>(
+  controller: WorkbenchClientStateController,
+  logicalProjectId: LogicalProjectId,
+  key: K,
+  override: WorkbenchProjectSettingOverride<K>,
+) {
+  await controller.put({
+    kind: "logicalProjectPreference",
+    logicalProjectId: LogicalProjectIdSchema.parse(logicalProjectId),
+    preference: { ...normalizeProjectOverride(key, override), key } as never,
   });
 }
 

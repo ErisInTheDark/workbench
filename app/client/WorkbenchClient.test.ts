@@ -4,7 +4,7 @@ import test, { type TestContext } from "node:test";
 import type { ExplorerSnapshot, WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkspaceProjects, WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
 import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createProjectSelectionRoute, withProjectSelection } from "workbench-shared/workbench/navigation/workbench-route";
+import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createProjectSelectionRoute, createSettingsRoute, withProjectSelection } from "workbench-shared/workbench/navigation/workbench-route";
 import { createWorkspaceClientFixture } from "./workbench/app/workspace-client-fixture";
 import { WorkbenchClient } from "./WorkbenchClient";
 
@@ -48,6 +48,20 @@ test("empty and multi-project list routes do not invent a browsed folder", async
   for (const selected of [[], [logicalId, "another-project"]]) {
     const result = await client.controls.applyRoute(createProjectSelectionRoute(selected));
     assert.equal(result.ok, true);
+    assert.deepEqual(client.navigation.getSnapshot().route.selectedProjectIds, selected);
+  }
+  assert.equal(socket.sent.some(item => item.method === "workspace/observe"
+    && item.params.query.kind === "projectTree"), false);
+});
+
+test("settings keeps zero, one or many selected logical projects without browsing a physical folder", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  for (const selected of [[], [logicalId], [logicalId, "another-project"]]) {
+    const route = withProjectSelection(createSettingsRoute(""), selected);
+    assert.equal((await client.controls.applyRoute(route)).ok, true);
     assert.deepEqual(client.navigation.getSnapshot().route.selectedProjectIds, selected);
   }
   assert.equal(socket.sent.some(item => item.method === "workspace/observe"

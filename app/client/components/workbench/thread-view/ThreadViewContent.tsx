@@ -6,6 +6,7 @@
 import { useWorkbenchThread } from "../use-workbench-thread";
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
+import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
 
 import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchComposerInputDraft, WorkbenchComposerSettings, WorkbenchHarness, WorkbenchProjectRoot, WorkbenchSendThreadMessageOptions, WorkbenchSkillSummary } from "workbench-shared/types";
@@ -260,6 +261,7 @@ export default memo(function ThreadViewContent ({
   scrollViewportRef,
   selectedThreadId,
   threadCodeBlockWrap,
+  threadCodeDetails = null,
   threadComposerDraft,
   threadComposerDraftsByThreadId,
   rootTarget,
@@ -303,6 +305,7 @@ export default memo(function ThreadViewContent ({
   scrollViewportRef: RefObject<HTMLDivElement | null>;
   selectedThreadId?: string;
   threadCodeBlockWrap: boolean;
+  threadCodeDetails?: boolean | null;
   threadComposerDraft: WorkbenchComposerInputDraft | null;
   threadComposerDraftsByThreadId: Record<string, WorkbenchComposerInputDraft | undefined>;
   rootTarget: Exclude<WorkbenchThreadTarget, { kind: "new" }>;
@@ -1047,6 +1050,7 @@ export default memo(function ThreadViewContent ({
     activeThread && (!usesSqlTranscript || activeTranscriptProjection || transcriptSourceMessage),
   );
   return (
+    <WorkbenchThreadDisplaySettingsContext.Provider value={threadCodeDetails}>
     <ThreadScrollViewportContext.Provider value={entryMotionContext}>
     <ProjectFilePathDisplayProvider
       disambiguationIndex={projectFilePathDisambiguationIndex}
@@ -1285,5 +1289,6 @@ export default memo(function ThreadViewContent ({
       </ThreadGitArcObservationProvider>
     </ProjectFilePathDisplayProvider>
     </ThreadScrollViewportContext.Provider>
+    </WorkbenchThreadDisplaySettingsContext.Provider>
   );
 });

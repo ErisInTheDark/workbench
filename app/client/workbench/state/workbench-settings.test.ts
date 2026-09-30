@@ -9,17 +9,39 @@ import {
   createDefaultWorkbenchGlobalSidebarPreferences,
   createDefaultWorkbenchProjectSidebarPreferences,
   readGlobalWorkbenchSettings,
+  readLogicalProjectWorkbenchSettings,
   readProjectWorkbenchSettings,
   readWorkbenchGlobalSidebarPreferences,
   readWorkbenchProjectSidebarPreferences,
   resolveWorkbenchSettings,
   setWorkbenchProjectSidebarFolderOpen,
   writeGlobalWorkbenchSetting,
+  writeLogicalProjectWorkbenchSetting,
   writeProjectWorkbenchSetting,
   writeWorkbenchGlobalSidebarPreference,
   writeWorkbenchProjectSidebarPreference,
 } from "./workbench-settings";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
+import { LogicalProjectIdSchema } from "workbench-shared/workbench/identity";
+
+test("one logical project override applies across daemon folders and reset reaches global", async () => {
+  const controller = new WorkbenchClientStateController({ mode: "memory" });
+  const project = LogicalProjectIdSchema.parse("84c24145-0460-489c-ac05-b382b38d4b12");
+  const other = LogicalProjectIdSchema.parse("84c24145-0460-489c-ac05-b382b38d4b13");
+  await writeGlobalWorkbenchSetting(controller, "theme", "magical-girl");
+  await writeProjectWorkbenchSetting(controller, "desktop-folder", "theme", { enabled: true, value: "default" });
+  const resolved = (logicalId: typeof project) => resolveWorkbenchSettings(
+    readGlobalWorkbenchSettings(controller.getSnapshot().records),
+    readLogicalProjectWorkbenchSettings(logicalId, controller.getSnapshot().records),
+  ).theme;
+  assert.equal(resolved(project), "magical-girl");
+  await writeLogicalProjectWorkbenchSetting(controller, project, "theme", { enabled: true, value: "winter" });
+  assert.equal(resolved(project), "winter");
+  assert.equal(resolved(other), "magical-girl");
+  await writeLogicalProjectWorkbenchSetting(controller, project, "theme", { enabled: false, value: "winter" });
+  assert.equal(resolved(project), "magical-girl");
+  assert.equal(controller.records("projectPreference").length, 1);
+});
 
 test("code details inherit globally and project overrides reset without crossing projects", async () => {
   const controller = new WorkbenchClientStateController({ mode: "memory" });

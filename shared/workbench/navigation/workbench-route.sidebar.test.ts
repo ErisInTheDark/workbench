@@ -51,7 +51,6 @@ test("/ and /@/ select projects with unarchived threads", () => {
     mosaicNode: null,
     projectId: "",
     selectedProjectIds: null,
-    settingsScope: "global",
     threadId: "",
     threadOwnerProjectId: "",
     threadTarget: null,
@@ -68,6 +67,16 @@ test("project hrefs preserve slash and reserved-character identities", () => {
     assert.equal(route.view, "project");
     assert.equal(route.projectId, projectId);
   }
+});
+
+test("settings use one selection-preserving route without scope suffixes", () => {
+  for (const path of ["/@/settings", "/alpha/@/settings", "/alpha/+/beta/@/settings"]) {
+    const route = parseWorkbenchRouteFromPath(path);
+    assert.equal(route.view, "settings");
+    assert.equal(createWorkbenchHref(route), path);
+  }
+  assert.equal(parseWorkbenchRouteFromPath("/alpha/@/settings/global").view, "invalid");
+  assert.equal(parseWorkbenchRouteFromPath("/alpha/@/settings/project").view, "invalid");
 });
 
 test("explicit project selection round-trips while distinguishing an empty set and encoded plus", () => {

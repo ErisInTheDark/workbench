@@ -12,6 +12,8 @@ import type {
   WorkbenchProjectPreference,
   WorkbenchSidebarPreference,
 } from "./workbench-client-state.ts";
+import { LogicalProjectIdSchema } from "../workbench/identity.ts";
+import reportClientSchemaError from "../workbench/report-client-schema-error.ts";
 
 export type WorkbenchClientStateProjectionChange =
   | { change: "delete"; identity: WorkbenchClientStateIdentity; revision: number }
@@ -41,6 +43,8 @@ export function workbenchClientStateRecordIdentity(
     case "modelPreference": return { kind: record.kind, harness: record.harness, modelId: record.modelId };
     case "modelGroupDisclosure": return { kind: record.kind, groupId: record.groupId };
     case "globalPreference": return { key: record.preference.key, kind: record.kind };
+    case "logicalProjectPreference": return { key: record.preference.key, kind: record.kind,
+      logicalProjectId: record.logicalProjectId };
     case "projectPreference": return { daemonRegistrationId: record.daemonRegistrationId, key: record.preference.key, kind: record.kind, projectId: record.projectId };
     case "sidebarPreference": return { daemonRegistrationId: record.daemonRegistrationId, key: record.preference.key, kind: record.kind, projectId: record.projectId };
     case "sidebarFolder": return { daemonRegistrationId: record.daemonRegistrationId, folderId: record.folderId, kind: record.kind, projectId: record.projectId, scope: record.scope };
@@ -101,6 +105,25 @@ export function projectWorkbenchClientStateRows(
       kind: "projectPreference",
       preference: { enabled: row.enabled === 1, key: row.key, value: scalarValue(row) } as WorkbenchProjectPreference,
       projectId: row.project_id,
+    });
+  }
+  for (const row of rows.logicalProjectPreferences) {
+    const parsedId = LogicalProjectIdSchema.safeParse(row.logical_project_id);
+    if (!parsedId.success) {
+      reportClientSchemaError("Rejected logical project preference identity", parsedId.error);
+      continue;
+    }
+    const logicalProjectId = parsedId.data;
+    const identity = {
+      key: row.key,
+      kind: "logicalProjectPreference" as const,
+      logicalProjectId,
+    };
+    if (row.deleted) remove(row.revision, identity);
+    else add(row.revision, 0, {
+      kind: "logicalProjectPreference",
+      logicalProjectId,
+      preference: { enabled: row.enabled === 1, key: row.key, value: scalarValue(row) } as WorkbenchProjectPreference,
     });
   }
   for (const row of rows.projectSidebarPreferences) {

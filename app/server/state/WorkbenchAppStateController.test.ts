@@ -8,7 +8,7 @@ import Database from "better-sqlite3";
 
 import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
 import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { appStateSchema } from "workbench-shared/state/workbench-app-state-schema";
 
@@ -42,6 +42,27 @@ function projectedRecords(response: WorkbenchClientStateResponse) {
     change.change === "upsert" ? [change.record] : []
   ));
 }
+
+test("logical project preferences persist independently of physical project addresses", async context => {
+  const fixture = await controllerFixture(context);
+  const logicalProjectId = LogicalProjectIdSchema.parse("84c24145-0460-489c-ac05-b382b38d4b12");
+  const record = {
+    kind: "logicalProjectPreference" as const,
+    logicalProjectId,
+    preference: { enabled: true, key: "editorFontSize" as const, value: 1.18 },
+  };
+  try {
+    await fixture.controller.mutate({ action: "put", record });
+    assert.deepEqual(projectedRecords(fixture.controller.read()).filter(item =>
+      item.kind === "logicalProjectPreference"), [record]);
+  } finally { await fixture.controller.close(); }
+  const restarted = fixture.create();
+  try {
+    await restarted.start();
+    assert.deepEqual(projectedRecords(restarted.read()).filter(item =>
+      item.kind === "logicalProjectPreference"), [record]);
+  } finally { await restarted.close(); }
+});
 
 test("UUID conversion flattens saved aliases without resurrecting deleted drafts across restart", async context => {
   const fixture = await controllerFixture(context);

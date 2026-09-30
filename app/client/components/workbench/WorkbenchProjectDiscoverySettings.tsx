@@ -14,6 +14,8 @@ import {
   removeProjectDiscoveryRow,
 } from "../../workbench/project-discovery-path-editor";
 import InputList from "./InputList";
+import { ResetIcon, SaveIcon } from "./workbench-icons";
+import WorkbenchIconButton from "./WorkbenchIconButton";
 import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
 
 const ISSUE_LABELS: Record<Extract<ProjectDiscoverySettingsResult, { accepted: false }>["issues"][number]["reason"], string> = {
@@ -110,10 +112,7 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
 
   return (
     <section className="space-y-3 py-1">
-      <div>
-        <h3 className="m-0 text-[0.98rem] font-semibold leading-tight text-text">Git roots</h3>
-        <p className="mt-1 text-[0.8rem] leading-5 text-fg/muted">Folders scanned for git repositories and workspaces.</p>
-      </div>
+      <p className="m-0 text-[0.8rem] leading-5 text-fg/muted">Folders scanned for git repositories and workspaces.</p>
       <InputList
         disabled={loading || saving || !available}
         idPrefix="git-root"
@@ -145,9 +144,11 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
         }))}
       />
       <div className="flex flex-wrap items-center gap-2">
-        <button className="rounded-lg px-3 py-1.5 text-[0.83rem] font-medium text-accent hover:bg-accent-soft disabled:opacity-40" disabled={blocked} onClick={() => { void save(); }} type="button">Save Git roots</button>
-        <button
-          className="rounded-lg px-3 py-1.5 text-[0.83rem] text-fg/muted hover:bg-surface-hover disabled:opacity-40"
+        <WorkbenchIconButton
+          label="Save Git roots" disabled={blocked} onClick={() => { void save(); }} type="button"
+        ><SaveIcon size={16} /></WorkbenchIconButton>
+        <WorkbenchIconButton
+          label="Reset Git root changes"
           disabled={loading || saving || !available || !dirty}
           onClick={() => {
             setRows(createProjectDiscoveryRows(savedPaths));
@@ -156,7 +157,7 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
             setStatus("");
           }}
           type="button"
-        >Reset</button>
+        ><ResetIcon size={16} /></WorkbenchIconButton>
       </div>
       {error ? <p role="alert" className="m-0 text-[0.8rem] text-danger">{error}</p> : null}
       {!available && !loading ? <button className="rounded-lg px-3 py-1.5 text-[0.83rem] text-accent hover:bg-accent-soft" onClick={() => setReloadKey(value => value + 1)} type="button">Retry connection</button> : null}

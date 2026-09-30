@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CommandApprovalSettingsState: saved-rule presentation state.
- * - default CommandApprovalSettingsController: own settings reads and removal intent.
+ * - default CommandApprovalSettingsController: own settings reads and exact-workdir save intent.
  */
 import type { CommandApprovalRule, CommandApprovalSnapshot } from "workbench-shared/workbench/settings/command-approvals";
 
@@ -16,23 +16,23 @@ export default class CommandApprovalSettingsController {
   private listeners = new Set<() => void>();
   private generation = 0;
   private disposed = false;
-  private removing = false;
+  private saving = false;
   constructor(private readonly port: {
     read(): Promise<CommandApprovalSnapshot>;
-    remove(id: string): Promise<CommandApprovalSnapshot>;
+    patch(workdir: string, add: string[], removeIds: string[]): Promise<CommandApprovalSnapshot>;
   }) {}
 
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   async refresh(): Promise<void> {
-    if (this.removing) return;
+    if (this.saving) return;
     await this.perform(() => this.port.read());
   }
-  async remove(id: string): Promise<void> {
-    if (this.removing || this.disposed) return;
-    this.removing = true;
-    try { await this.perform(() => this.port.remove(id)); }
-    finally { this.removing = false; }
+  async save(workdir: string, add: string[], removeIds: string[]): Promise<void> {
+    if (this.saving || this.disposed) return;
+    this.saving = true;
+    try { await this.perform(() => this.port.patch(workdir, add, removeIds)); }
+    finally { this.saving = false; }
   }
   dispose() {
     this.disposed = true;

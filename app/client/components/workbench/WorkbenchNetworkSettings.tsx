@@ -53,15 +53,14 @@ function NetworkSettingsContent () {
   }
 
   return (
-    <section className="max-w-3xl space-y-5 py-1">
+    <section id="settings-connection" className="max-w-3xl scroll-mt-24 space-y-5 py-1">
       <header className="flex flex-wrap items-center gap-5">
-        <h3 className="m-0 text-base font-semibold text-text">Networking</h3>
         <p role="status" className="m-0 flex flex-wrap items-center gap-2 text-sm text-fg/muted">
           {connectionReady ? <CheckIcon className="size-4 text-success" /> : null}
           <span>{connectionStatus}{mode !== "localhost" ? discoverable ? " · discoverable" : " · not discoverable" : ""}</span>
         </p>
       </header>
-      <div className="space-y-3 border-l-3 border-fg/10 pl-3">
+      <div className="space-y-3">
         {mode !== "localhost" && status.daemonServe?.message ? <p className="m-0 text-fg/muted">{status.daemonServe.message}</p> : null}
         {mode !== "localhost" && status.hostServe.message ? <p className="m-0 text-fg/muted">{status.hostServe.message}</p> : null}
         {snapshot.configuration.rename ? <p className="m-0 text-fg/muted">Changing address to {snapshot.configuration.rename.to}.wb.inthedark.boo...</p> : null}
@@ -74,7 +73,7 @@ function NetworkSettingsContent () {
           onClick={() => { void act({ action: "retry" }); }}>Reconnect</PrimaryButton> : null}
         {!snapshot.capabilities ? <p role="status" className="m-0 text-sm text-fg/muted">Networking controls are waiting for the updated app runtime. Reload client:database, then refresh this page.</p> : null}
         <WorkbenchNetworkConnectionForm />
-        <WorkbenchDaemonDiscovery />
+        <div id="settings-daemons" className="scroll-mt-24"><WorkbenchDaemonDiscovery /></div>
         <div className="flex flex-wrap items-center gap-2 text-sm"><span>App URL</span>
           {appUrl ? <>
             <a className="min-w-0 break-all font-mono text-accent" href={appUrl} target="_blank" rel="noreferrer">{appUrl}</a>
@@ -94,9 +93,11 @@ function NetworkSettingsContent () {
             <WorkbenchQrCode text={tailnetUrl} />
           </> : <p className="m-0 text-fg/muted">Enable another device for this app under Shared network → App access.</p>}
         </ThreadDisclosure> : null}
-        {snapshot.configuration.group ? <ThreadDisclosure summary="Shared network" contentClassName="pt-3">
-          <WorkbenchNetworkAccessSettings />
-        </ThreadDisclosure> : null}
+        {snapshot.configuration.group ? <div id="settings-app-access" className="scroll-mt-24">
+          <ThreadDisclosure summary="Shared network" contentClassName="pt-3">
+            <WorkbenchNetworkAccessSettings />
+          </ThreadDisclosure>
+        </div> : null}
         {busy && editable ? <PrimaryButton
           onClick={() => { void network.client.action({ action: "cancel" }).catch(() => setError("Cancellation could not be sent.")); }}>
           Cancel pending action

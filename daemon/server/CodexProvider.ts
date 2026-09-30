@@ -20,7 +20,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const threads = get("codexThreadOperations");
     const configuration = get("codexNativeConfiguration");
     const network = get("codexSandboxNetwork");
-    const readNetwork = async (projectId: string) => ({
+    const readNetwork = async (projectId: string | null) => ({
       ...await network.read(projectId), label: "Codex sandbox network access",
     });
     return {
@@ -37,12 +37,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
             read: readNetwork,
             update: async input => {
               if (input.scope === "global") {
-                if (input.enabled === null) throw new Error("Global sandbox network access requires a boolean.");
                 await network.setGlobal(input.enabled);
               } else {
                 await network.setProjectOverride(input.projectId, input.enabled);
               }
-              return readNetwork(input.projectId);
+              return readNetwork(input.projectId ?? null);
             },
           },
           modelContext: local,

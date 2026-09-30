@@ -365,6 +365,7 @@ export default class WorkbenchAppStateController {
       modelPreferences: changed(this.#repository.query(selectRows(appStateClientTables.modelPreferences))),
       modelGroupDisclosures: changed(this.#repository.query(selectRows(appStateClientTables.modelGroupDisclosures))),
       lastLaunchTarget: changed(this.#repository.query(selectRows(appStateClientTables.lastLaunchTarget))),
+      logicalProjectPreferences: changed(this.#repository.query(selectRows(appStateClientTables.logicalProjectPreferences))),
       projectExpandedDirectories: changed(this.#repository.query(selectRows(appStateClientTables.projectExpandedDirectories))),
       projectPreferences: changed(this.#repository.query(selectRows(appStateClientTables.projectPreferences))),
       projectSidebarFolders: changed(this.#repository.query(selectRows(appStateClientTables.projectSidebarFolders))),
@@ -414,6 +415,16 @@ export default class WorkbenchAppStateController {
           key: record.preference.key,
           revision,
         }, { conflictColumns: ["key"], updateColumns: ["boolean_value", "integer_value", "text_value", "deleted", "revision"] })];
+      case "logicalProjectPreference":
+        return [upsertRow(appStateTables.logicalProjectPreferences, {
+          ...scalarColumns(record.preference),
+          deleted: 0,
+          enabled: Number(record.preference.enabled) as 0 | 1,
+          key: record.preference.key,
+          logical_project_id: record.logicalProjectId,
+          revision,
+        }, { conflictColumns: ["logical_project_id", "key"],
+          updateColumns: ["enabled", "boolean_value", "integer_value", "text_value", "deleted", "revision"] })];
       case "projectPreference":
         return [upsertRow(appStateTables.projectPreferences, {
           ...scalarColumns(record.preference),
@@ -515,6 +526,10 @@ export default class WorkbenchAppStateController {
         return [updateRows(appStateTables.globalPreferences, {
           boolean_value: null, deleted: 1, integer_value: null, revision, text_value: null,
         }, { key: identity.key })];
+      case "logicalProjectPreference":
+        return [updateRows(appStateTables.logicalProjectPreferences, {
+          boolean_value: null, deleted: 1, enabled: null, integer_value: null, revision, text_value: null,
+        }, { key: identity.key, logical_project_id: identity.logicalProjectId })];
       case "lastLaunchTarget":
         return [updateRows(appStateTables.lastLaunchTarget, { deleted: 1, project_id: "", revision }, { id: "singleton" })];
       case "projectPreference":

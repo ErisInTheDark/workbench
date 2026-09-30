@@ -18,7 +18,7 @@ import {
 } from "workbench-shared/workbench/daemon/workbench-daemon-requests";
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import type WorkbenchModelUsageStore from "./WorkbenchModelUsageStore";
-import { CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
+import { CommandApprovalPatchSchema, CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
 import { WorkbenchProjectFileIndexRequestSchema } from "workbench-shared/workbench/project/project-file-index";
 import ProjectTreeFileIndex from "workbench-shared/workbench/project/ProjectTreeFileIndex";
@@ -85,7 +85,7 @@ const METHODS = new Set([
   "agents/list", "agents/read",
   "browse/sessions/forget", "browse/sessions/read", "browse/sessions/stop",
   "sandbox-network/read", "sandbox-network/update",
-  "command-approvals/read", "command-approvals/remove",
+  "command-approvals/read", "command-approvals/remove", "command-approvals/patch",
   "project/discovery-settings/read", "project/discovery-settings/update",
   ...Object.keys(WORKBENCH_GIT_ARC_ACTION_BY_METHOD),
   "local-capabilities/read", "local-capabilities/update",
@@ -219,7 +219,7 @@ export default class WorkbenchDaemonRequestController {
   private browse: WorkbenchBrowseSessionPort | null = null;
 
   constructor(private readonly owners: {
-    commandApprovals?: Pick<import("./WorkbenchCommandApprovalController").default, "list" | "remove">;
+    commandApprovals?: Pick<import("./WorkbenchCommandApprovalController").default, "list" | "remove" | "patch">;
     providers?: Pick<WorkbenchProviderDispatcher, "get">;
     threadActions?: Pick<WorkbenchThreadActionController, "handle">;
     launches?: Pick<WorkbenchThreadLaunchController, "launch" | "read">;
@@ -347,7 +347,8 @@ export default class WorkbenchDaemonRequestController {
           break;
         }
         case "command-approvals/read":
-        case "command-approvals/remove": {
+        case "command-approvals/remove":
+        case "command-approvals/patch": {
           const { id: projectId } = await this.owners.projects.resolveProjectById(requiredString(params, "projectId"));
           if (!this.owners.commandApprovals) throw new Error("Command approvals are unavailable.");
           if (request.method === "command-approvals/remove") {
@@ -355,11 +356,20 @@ export default class WorkbenchDaemonRequestController {
             if (!parsed.success) throw new InvalidParamsError("Invalid command approval removal.");
             await this.owners.commandApprovals.remove(projectId, parsed.data.id);
           }
-          result = { rules: await this.owners.commandApprovals.list(projectId) };
+          if (request.method === "command-approvals/patch") {
+            const parsed = CommandApprovalPatchSchema.safeParse({ ...params, projectId });
+            if (!parsed.success) throw new InvalidParamsError("Invalid command approval patch.");
+            result = { rules: await this.owners.commandApprovals.patch(
+              projectId, parsed.data.workdir, parsed.data.add, parsed.data.removeIds,
+            ) };
+          } else {
+            result = { rules: await this.owners.commandApprovals.list(projectId) };
+          }
           break;
         }
         case "sandbox-network/read": {
-          const { id: projectId } = await this.owners.projects.resolveProjectById(requiredString(params, "projectId"));
+          const projectId = params.projectId === undefined ? null
+            : (await this.owners.projects.resolveProjectById(requiredString(params, "projectId"))).id;
           if (!this.owners.providers) throw new Error("Provider settings are unavailable.");
           const settings = await Promise.all(installedProviderKeys.map(async provider => {
             const setting = await this.owners.providers!.get(provider).configuration.sandboxNetwork?.read(projectId);
@@ -372,12 +382,17 @@ export default class WorkbenchDaemonRequestController {
           const parsed = WorkbenchSandboxNetworkUpdateSchema.safeParse(params);
           if (!parsed.success) throw new InvalidParamsError("Invalid sandbox network setting update.");
           const { provider: requestedProvider, ...input } = parsed.data;
-          const { id: projectId } = await this.owners.projects.resolveProjectById(input.projectId);
+          const projectId = input.projectId === undefined ? null
+            : (await this.owners.projects.resolveProjectById(input.projectId)).id;
           const provider = installedProviderKeys.find(provider => provider === requestedProvider);
           if (!provider) throw new InvalidParamsError("The requested provider is not installed.");
           const capability = this.owners.providers?.get(provider).configuration.sandboxNetwork;
           if (!capability) throw new InvalidParamsError("The requested provider does not expose sandbox network settings.");
-          result = { data: [{ ...await capability.update({ ...input, projectId }), provider }] };
+          const updated = input.scope === "global"
+            ? await capability.update({ scope: "global", enabled: input.enabled,
+              ...(projectId ? { projectId } : {}) })
+            : await capability.update({ scope: "project", enabled: input.enabled, projectId: projectId! });
+          result = { data: [{ ...updated, provider }] };
           break;
         }
         case "project/catalog/read": result = await this.owners.projects.readCatalog(); break;

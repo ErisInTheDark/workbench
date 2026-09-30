@@ -89,11 +89,23 @@ test("Codex sandbox network settings persist global and project inheritance", as
       projectId,
       projectOverride: null,
     });
+    assert.deepEqual(await settings.read(null), {
+      effectiveEnabled: false,
+      globalEnabled: false,
+      projectId: null,
+      projectOverride: null,
+    });
 
     await settings.setGlobal(true);
     assert.equal((await settings.read(projectId)).effectiveEnabled, true);
 
     await settings.setProjectOverride(projectId, false);
+    assert.deepEqual(await settings.read(null), {
+      effectiveEnabled: true,
+      globalEnabled: true,
+      projectId: null,
+      projectOverride: null,
+    });
     assert.deepEqual(await settings.read(projectId), {
       effectiveEnabled: false,
       globalEnabled: true,

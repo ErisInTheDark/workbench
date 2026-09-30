@@ -25,6 +25,7 @@ const appStateReleases = Object.freeze({
   durableDaemonRegistrations: release(15, "b593abd418c048f3249ac01a65acde30e87136214323814062e58cd32ea38a48"),
   draftImageContent: release(16, "7d51fa91521ddd7760c1d5d09e29a8aa10089b697a19c259e46206a806ffdc59"),
   modelGroupDisclosures: release(17, "e15eecd9879a69bd0b7e2e2975a5c887df96685793b5b6dc4744732604662107"),
+  logicalProjectPreferences: release(18, "652efedddbb92a089513cd47dfdfdd1f0f41b3b30bb12c61da9793855c486b1b"),
 });
 
 export default appStateReleases;

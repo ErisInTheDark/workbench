@@ -48,6 +48,7 @@ function identityKey(identity: WorkbenchClientStateIdentity) {
     case "modelPreference": return JSON.stringify([identity.kind, identity.harness, identity.modelId]);
     case "modelGroupDisclosure": return JSON.stringify([identity.kind, identity.groupId]);
     case "globalPreference": return JSON.stringify([identity.kind, identity.key]);
+    case "logicalProjectPreference": return JSON.stringify([identity.kind, identity.logicalProjectId, identity.key]);
     case "projectPreference":
     case "sidebarPreference": return JSON.stringify([identity.kind, identity.daemonRegistrationId, identity.projectId, identity.key]);
     case "sidebarFolder": return JSON.stringify([identity.kind, identity.daemonRegistrationId, identity.projectId, identity.scope, identity.folderId]);

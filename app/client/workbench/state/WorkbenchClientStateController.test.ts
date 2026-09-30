@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import type { WorkbenchClientStateResponse, WorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { conformWorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state-conformance";
 import { createWorkspaceClientFixture } from "../app/workspace-client-fixture";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
@@ -13,7 +13,8 @@ function response(revision: number, rows: Partial<WorkbenchClientStateRows> = {}
     daemonRegistrationId: "registration", kind, oldestAvailableRevision: 0, revision, schemaVersion: 0,
     rows: {
       composerDraftAttachments: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
-      modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [], projectExpandedDirectories: [], projectPreferences: [],
+      modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [], logicalProjectPreferences: [],
+      projectExpandedDirectories: [], projectPreferences: [],
       projectSidebarFolders: [], projectSidebarPreferences: [], questionnaireDraftAnswers: [],
       questionnaireDraftAttachments: [], questionnaireDraftSelections: [], questionnaireDrafts: [], ...rows,
     },
@@ -24,6 +25,24 @@ const identity = {
   kind: "composerDraft" as const, daemonRegistrationId: "registration", projectId: "project", threadId: "thread",
 };
 const record = (text: string, updatedAt = 1) => ({ ...identity, value: { text, updatedAt, attachments: [] } });
+
+test("logical project preferences keep independent optimistic identities across project IDs", async () => {
+  const state = new WorkbenchClientStateController({ mode: "memory" });
+  const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const second = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981002");
+  try {
+    await state.put({ kind: "logicalProjectPreference", logicalProjectId: first,
+      preference: { key: "theme", enabled: true, value: "winter" } });
+    await state.put({ kind: "logicalProjectPreference", logicalProjectId: second,
+      preference: { key: "theme", enabled: true, value: "magical-girl" } });
+    await state.put({ kind: "logicalProjectPreference", logicalProjectId: first,
+      preference: { key: "theme", enabled: false, value: "winter" } });
+    assert.deepEqual(state.records("logicalProjectPreference")
+      .map(item => [item.logicalProjectId, item.preference.enabled, item.preference.value])
+      .sort((left, right) => String(left[0]).localeCompare(String(right[0]))),
+    [[first, false, "winter"], [second, true, "magical-girl"]]);
+  } finally { state.dispose(); }
+});
 function draftResponse(revision: number, text: string, deleted = false) {
   return response(revision, { composerDrafts: [{
     daemon_registration_id: identity.daemonRegistrationId, project_id: identity.projectId,

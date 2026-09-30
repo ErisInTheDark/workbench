@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - WorkbenchBrowserApp: select the ordinary Workbench SPA or a chrome-free thread rendering surface from browser location. Keywords: React, route, app shell.
+ * - WorkbenchBrowserApp: select the ordinary Workbench SPA or chrome-free thread rendering surface from browser location.
  */
 import { useLayoutEffect } from "react";
 

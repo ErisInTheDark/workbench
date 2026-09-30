@@ -15,7 +15,7 @@ export default function SandboxNetworkSettings ({
   projectId,
   scope,
 }: {
-  projectId: string;
+  projectId: string | null;
   scope: "global" | "project";
 }) {
   const daemon = useWorkbenchDaemonClient();
@@ -25,12 +25,17 @@ export default function SandboxNetworkSettings ({
   const requestGeneration = useRef(0);
 
   useEffect(() => {
+    if (scope === "project" && !projectId) {
+      setSettings([]);
+      setIsLoading(false);
+      return;
+    }
     const generation = requestGeneration.current + 1;
     requestGeneration.current = generation;
     let cancelled = false;
     setError("");
     setIsLoading(true);
-    void daemon.sandboxNetwork.read({ projectId })
+    void daemon.sandboxNetwork.read(projectId ? { projectId } : {})
       .then(({ data }) => {
         if (!cancelled && requestGeneration.current === generation) setSettings(data);
       })
@@ -46,19 +51,18 @@ export default function SandboxNetworkSettings ({
     return () => {
       cancelled = true;
     };
-  }, [daemon, projectId]);
+  }, [daemon, projectId, scope]);
 
   const update = useCallback((provider: string, enabled: boolean | null) => {
+    if (scope === "global" && enabled === null) return;
+    if (scope === "project" && !projectId) return;
     const generation = requestGeneration.current + 1;
     requestGeneration.current = generation;
     setError("");
     setIsLoading(true);
-    void daemon.sandboxNetwork.update({
-      enabled,
-      projectId,
-      provider,
-      scope,
-    })
+    void daemon.sandboxNetwork.update(scope === "global"
+      ? { enabled: enabled!, ...(projectId ? { projectId } : {}), provider, scope }
+      : { enabled, projectId: projectId!, provider, scope })
       .then(({ data }) => {
         if (requestGeneration.current === generation) {
           setSettings(current => current.map(setting => data.find(updated => updated.provider === setting.provider) ?? setting));
@@ -97,7 +101,7 @@ export default function SandboxNetworkSettings ({
           label={`Reset ${setting.label} to global`}
           display="hover-border"
           title={`Reset ${setting.label} to global`}
-          className="absolute top-1/2 right-3 -translate-y-1/2"
+          className="absolute top-1/2 right-3 -translate-y-1/2 lg:-right-12"
           disabled={isLoading}
           onClick={() => {
             update(setting.provider, null);

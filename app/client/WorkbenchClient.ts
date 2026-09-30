@@ -565,7 +565,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     const browseFolder = projectNavigator.folderForRoute(route) ?? null;
     selectRowsForRoute(route);
     if (route.view === "home" || route.view === "project" && route.selectedProjectIds?.length !== 1
-      || route.view === "settings" && route.settingsScope === "global"
+      || route.view === "settings"
       || route.view === "stats") {
       selectFolder(browseFolder);
       draftLocation = null;

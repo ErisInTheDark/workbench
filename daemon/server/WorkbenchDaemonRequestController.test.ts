@@ -40,7 +40,7 @@ test("modern locations read does not change the legacy project catalogue respons
 });
 
 test("command approval settings resolve canonical project ownership before listing or removal", async () => {
-  const calls: Array<{ projectId: string; id?: string }> = [];
+  const calls: Array<{ projectId: string; id?: string; workdir?: string; add?: readonly string[] }> = [];
   const canonicalProjectId = "a6652caf-f7c1-4a2a-ab55-6b387a19ab05";
   const id = "6ec53578-a9ef-44df-8f4b-bb62f2d8ae4a";
   const { controller } = createController({
@@ -48,6 +48,10 @@ test("command approval settings resolve canonical project ownership before listi
     commandApprovals: {
       list: async projectId => { calls.push({ projectId }); return []; },
       remove: async (projectId, id) => { calls.push({ projectId, id }); },
+      patch: async (projectId, workdir, add) => {
+        calls.push({ projectId, workdir, add });
+        return [];
+      },
     },
   });
   assert.deepEqual((await controller.handle({ id: 1, method: "command-approvals/read", params: { projectId: "alias" } })).result, { rules: [] });
@@ -56,6 +60,15 @@ test("command approval settings resolve canonical project ownership before listi
   assert.ok((await controller.handle({ id: 3, method: "command-approvals/remove", params: { projectId: "alias", id: "invalid" } })).error);
   assert.ok((await controller.handle({ id: 4, method: "command-approvals/remove", params: { projectId: "missing", id } })).error);
   assert.equal(calls.length, 3);
+  assert.deepEqual((await controller.handle({ id: 5, method: "command-approvals/patch", params: {
+    projectId: "alias", workdir: "C:/repo", add: ["git status"], removeIds: [],
+  } })).result, { rules: [] });
+  assert.deepEqual(calls.slice(3), [
+    { projectId: canonicalProjectId, workdir: "C:/repo", add: ["git status"] },
+  ]);
+  assert.ok((await controller.handle({ id: 6, method: "command-approvals/patch", params: {
+    projectId: "alias", workdir: "C:/repo", add: ["git status"], removeIds: ["not-a-rule"],
+  } })).error);
 });
 
 test("context capability bounds reject invalid target mutations without writing", async () => {
@@ -111,8 +124,8 @@ function createController(options: {
   const statsRequests: object[] = [];
   let statsRefreshes = 0;
   const unused = async (): Promise<never> => { throw new Error("Unexpected provider operation."); };
-  const readNetwork = async (projectId: string) => {
-    const projectOverride = projectNetworkOverrides.get(projectId) ?? null;
+  const readNetwork = async (projectId: string | null) => {
+    const projectOverride = projectId ? projectNetworkOverrides.get(projectId) ?? null : null;
     return {
       label: "Sandbox network access", effectiveEnabled: projectOverride ?? globalNetworkEnabled,
       globalEnabled: globalNetworkEnabled, projectId, projectOverride,
@@ -137,7 +150,7 @@ function createController(options: {
               if (enabled === null) projectNetworkOverrides.delete(projectId);
               else projectNetworkOverrides.set(projectId, enabled);
             }
-            return readNetwork(projectId);
+            return readNetwork(projectId ?? null);
           },
         },
       },
@@ -607,6 +620,22 @@ test("sandbox network requests validate project ownership and preserve explicit 
   assert.match(rejected.error?.message ?? "", /Unknown project/u);
   assert.deepEqual(networkWrites, []);
 
+  const withoutProject = await controller.handle({
+    id: 5, method: "sandbox-network/update",
+    params: { provider: "codex", enabled: true, scope: "global" },
+  });
+  assert.equal(withoutProject.error, undefined);
+  assert.deepEqual(withoutProject.result, { data: [{
+    provider: "codex", label: "Sandbox network access",
+    effectiveEnabled: true, globalEnabled: true, projectId: null, projectOverride: null,
+  }] });
+  const globalRead = await controller.handle({
+    id: 6, method: "sandbox-network/read", params: {},
+  });
+  assert.equal(globalRead.error, undefined);
+  assert.ok((globalRead.result as { data: { provider: string; projectId: string | null; globalEnabled: boolean }[] })
+    .data.some((entry) => entry.provider === "codex" && entry.projectId === null && entry.globalEnabled));
+
   const global = await controller.handle({
     id: 2,
     method: "sandbox-network/update",
@@ -636,6 +665,7 @@ test("sandbox network requests validate project ownership and preserve explicit 
   });
   assert.equal((inherited.result as { data: { effectiveEnabled: boolean }[] }).data[0].effectiveEnabled, true);
   assert.deepEqual(networkWrites, [
+    { enabled: true, scope: "global" },
     { enabled: true, scope: "global" },
     { enabled: false, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "project" },
     { enabled: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), scope: "project" },
