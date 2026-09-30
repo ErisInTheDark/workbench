@@ -144,7 +144,8 @@ import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import useThreadPresentedText from "./use-thread-presented-text";
 import {
   buildRenderableBlocks, buildCommandSequenceRenderSegments, getWorkedBlockRows,
-  hasReasoningSteps, isBrowseCommandItem,
+  getRenderableBlockItems, getRenderableBlockKey, hasReasoningSteps, hasSameBlockTimeline,
+  isBrowseCommandItem, reuseRenderableBlocks,
   type CommandItem, type CommandSequenceItem, type HiddenThreadItemIds, type ThreadRenderableBlock,
 } from "./thread-render-blocks";
 import ThreadWorkedRun from "./ThreadWorkedRun";
@@ -309,26 +310,6 @@ interface StableRenderableBlockEntry {
   signature: string;
 }
 
-function getRenderableBlockItems(block: ThreadRenderableBlock): readonly ThreadItem[] {
-  switch (block.kind) {
-    case "commandSequence":
-    case "fileChangeSequence":
-    case "reasoningSequence":
-    case "userMessageSequence":
-    case "webSearchSequence":
-      return block.items;
-    case "item":
-      return [block.item];
-  }
-}
-
-function getRenderableBlockKey(block: ThreadRenderableBlock) {
-  return [
-    block.kind,
-    ...getRenderableBlockItems(block).map((item) => item.id),
-  ].join(":");
-}
-
 function getRenderableBlockSignature(block: ThreadRenderableBlock) {
   return [
     block.kind,
@@ -336,9 +317,13 @@ function getRenderableBlockSignature(block: ThreadRenderableBlock) {
   ].join("\n");
 }
 
-function useStableRenderableBlocks(blocks: ThreadRenderableBlock[]) {
+function useStableRenderableBlocks(blocks: ThreadRenderableBlock[], mode: "signature" | "identity" = "signature") {
   const previousEntriesRef = useRef<StableRenderableBlockEntry[]>([]);
   const stableEntries = useMemo(() => {
+    if (mode === "identity") {
+      return reuseRenderableBlocks(previousEntriesRef.current.map(entry => entry.block), blocks)
+        .map(block => ({ block, blockKey: getRenderableBlockKey(block), signature: "" }));
+    }
     const previousEntriesByBlockKey = new Map(previousEntriesRef.current.map((entry) => [entry.blockKey, entry]));
     return blocks.map((block): StableRenderableBlockEntry => {
       const blockKey = getRenderableBlockKey(block);
@@ -353,7 +338,7 @@ function useStableRenderableBlocks(blocks: ThreadRenderableBlock[]) {
         signature,
       };
     });
-  }, [blocks]);
+  }, [blocks, mode]);
 
   useEffect(() => {
     previousEntriesRef.current = stableEntries;
@@ -1983,7 +1968,7 @@ const ThreadRenderableBlockView = memo(ThreadRenderableBlockViewComponent, (left
   && left.browseResultEntries === right.browseResultEntries
   && left.finalAgentMessageId === right.finalAgentMessageId
   && (left.inlineMentionSources?.cacheKey ?? "") === (right.inlineMentionSources?.cacheKey ?? "")
-  && left.itemTimeline === right.itemTimeline
+  && hasSameBlockTimeline(left.block, left.itemTimeline, right.itemTimeline)
   && left.isMostRecentBlock === right.isMostRecentBlock
   && left.knownSkills === right.knownSkills
   && left.presentationSource?.kind === right.presentationSource?.kind
@@ -2102,8 +2087,12 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
     }
   }
   flushItems();
+  const stableBlocks = useStableRenderableBlocks(entries.flatMap(entry => entry.kind === "block" ? [entry.block] : []), "identity");
+  let stableBlockIndex = 0;
+  const stableEntries = entries.map(entry => entry.kind === "block"
+    ? { ...entry, block: stableBlocks[stableBlockIndex++]! } : entry);
 
-  const primaryUserBlock = entries.flatMap((entry) => (
+  const primaryUserBlock = stableEntries.flatMap((entry) => (
     entry.kind === "block" && entry.block.kind === "item" && entry.block.item.id === initialUserItemId
       ? [entry.block] : []
   )).at(0) ?? null;
@@ -2139,7 +2128,7 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
               finalAgentMessageId={finalAgentMessageId}
               inlineMentionSources={inlineMentionSources}
               itemTimeline={renderItemTimeline}
-              isMostRecentBlock={index === entries.length - 1}
+              isMostRecentBlock={index === stableEntries.length - 1}
               knownSkills={knownSkills}
               presentationSource={presentationSource}
               primaryUserBlock={primaryUserBlock}
@@ -2161,9 +2150,9 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
       </div>}
     </ThreadEntryMotion>;
   };
-  if (!initialInactiveItemIds) return <div className="space-y-2">{entries.map(renderEntry)}</div>;
+  if (!initialInactiveItemIds) return <div className="space-y-2">{stableEntries.map(renderEntry)}</div>;
   let offset = 0;
-  return <div className="space-y-2">{partitionWorkedRows(entries).map(group => {
+  return <div className="space-y-2">{partitionWorkedRows(stableEntries).map(group => {
     const start = offset;
     offset += group.length;
     const children = group.map((entry, index) => renderEntry(entry, start + index));

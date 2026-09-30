@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
-import { buildRenderableBlocks, getWorkedBlockRows, type CommandItem } from "./thread-render-blocks";
+import { buildRenderableBlocks, getWorkedBlockRows, reuseRenderableBlocks, hasSameBlockTimeline, type CommandItem } from "./thread-render-blocks";
 import { partitionWorkedRows } from "./thread-worked-run";
 
 function command(id: string, text = "pwd"): CommandItem {
@@ -174,4 +174,30 @@ test("subagent creation and incoming native messages cannot enter worked groups"
   for (const item of items) {
     assert.deepEqual(rows([command("before"), item, command("after")]).map(row => row.eligible), [true, false, true]);
   }
+});
+
+test("new transcript items retain unrelated blocks but invalidate an extended group or replaced item", () => {
+  const first = command("first");
+  const second = user("second");
+  const previous = buildRenderableBlocks([first, second]);
+  const appended = reuseRenderableBlocks(previous, buildRenderableBlocks([first, second, user("third")]));
+  assert.equal(appended[0], previous[0]);
+  assert.equal(appended[1], previous[1]);
+
+  const extended = reuseRenderableBlocks(previous, buildRenderableBlocks([first, command("next"), second]));
+  assert.notEqual(extended[0], previous[0]);
+  assert.equal(extended[1], previous[1]);
+
+  const replaced = reuseRenderableBlocks(previous, buildRenderableBlocks([{ ...first, status: "failed" }, second]));
+  assert.notEqual(replaced[0], previous[0]);
+  assert.equal(replaced[1], previous[1]);
+});
+
+test("block timing changes only when one of its own item observations changes", () => {
+  const [block] = buildRenderableBlocks([command("first")]);
+  assert.ok(block);
+  const first = { itemId: "first", startedAt: 1, firstSeenAt: 1, lastSeenAt: 2, completedAt: 2 };
+  const other = { itemId: "other", startedAt: 3, firstSeenAt: 3, lastSeenAt: 4, completedAt: 4 };
+  assert.equal(hasSameBlockTimeline(block, [first], [first, other]), true);
+  assert.equal(hasSameBlockTimeline(block, [first], [{ ...first, completedAt: 5 }, other]), false);
 });

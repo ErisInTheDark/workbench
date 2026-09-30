@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchThreadList: render the selected projects as one combined thread list with pinned, main, snoozed, and settled sections.
+ * - createWorkbenchThreadRowLookup: resolve project/source-qualified sidebar rows without per-entry scans.
  */
 "use client";
 
@@ -106,6 +107,25 @@ function mergeDisplayItems (
     : { ...item, entry: current(item.entry) });
 }
 
+export function createWorkbenchThreadRowLookup(
+  rows: readonly WorkbenchLogicalThreadRow[],
+  { logical, attachedDaemonId }: { logical: boolean; attachedDaemonId: string | null | undefined },
+) {
+  const byLogicalKey = new Map<string, WorkbenchLogicalThreadRow>();
+  const byPhysicalKey = new Map<string, WorkbenchLogicalThreadRow>();
+  for (const row of rows) {
+    const logicalKey = getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry);
+    const physicalKey = `${row.location.daemonId}:${getWorkbenchHomeThreadKey(row.location.projectId, row.entry)}`;
+    if (!byLogicalKey.has(logicalKey)) byLogicalKey.set(logicalKey, row);
+    if (!byPhysicalKey.has(physicalKey)) byPhysicalKey.set(physicalKey, row);
+  }
+  return (homeEntry: WorkbenchHomeThreadEntry) => logical
+    ? byLogicalKey.get(homeEntry.threadKey) ?? null
+    : attachedDaemonId
+      ? byPhysicalKey.get(`${attachedDaemonId}:${homeEntry.threadKey}`) ?? null
+      : null;
+}
+
 export default function WorkbenchThreadList ({
   actions,
   activeDragPayload = null,
@@ -177,28 +197,39 @@ export default function WorkbenchThreadList ({
   const projectsById = useMemo(() => new Map<string, WorkbenchProjectOption | WorkbenchLogicalProject>(
     (logicalProjects ?? projects).map(project => [project.id, project] as const),
   ), [logicalProjects, projects]);
-  const currentList = useMemo(() => projectWorkbenchHomeThreadList(
-    logicalProjects && presentation ? {
-      projects: logicalProjects.filter(project => selectedProjectIds.includes(project.id)).map(project => ({
-        projectId: project.id,
-        entries: (logicalThreads ?? []).filter(row => row.logicalProjectId === project.id).map(row => row.entry),
-        displayOrder: projectLogicalThreadDisplayOrder(project.id, logicalThreads ?? [], presentation),
-      })),
-    } : {
-      projects: entries && displayOrder && projectId
-        ? [{ projectId, entries, displayOrder }]
-        : actions.projectThreadSidebars.projects.filter(sidebar => selectedProjectIds.includes(sidebar.projectId)),
-    },
-    logicalProjects && presentation
-      ? projectLogicalHomeDisplayOrder(logicalThreads ?? [], presentation)
-      : actions.homeDisplayOrder,
-  ), [actions.homeDisplayOrder, actions.projectThreadSidebars, displayOrder, entries, logicalProjects, logicalThreads, presentation, projectId, selectedProjectIds]);
-  const qualifiedFor = (homeEntry: WorkbenchHomeThreadEntry) => logicalProjects
-    ? logicalThreads?.find(row => row.logicalProjectId === homeEntry.projectId
-      && getWorkbenchThreadDisplayKey(row.entry) === getWorkbenchThreadDisplayKey(homeEntry.entry))
-    : attachedDaemonId ? logicalThreads?.find(row => row.location.daemonId === attachedDaemonId
-      && row.location.projectId === homeEntry.projectId
-      && getWorkbenchThreadDisplayKey(row.entry) === getWorkbenchThreadDisplayKey(homeEntry.entry)) : null;
+  const currentList = useMemo(() => {
+    const rows = logicalThreads ?? [];
+    const rowsByProject = new Map<string, WorkbenchLogicalThreadRow[]>();
+    if (logicalProjects && presentation) {
+      for (const row of rows) {
+        const projectRows = rowsByProject.get(row.logicalProjectId);
+        if (projectRows) projectRows.push(row);
+        else rowsByProject.set(row.logicalProjectId, [row]);
+      }
+    }
+    return projectWorkbenchHomeThreadList(
+      logicalProjects && presentation ? {
+        projects: logicalProjects.filter(project => selectedProjectIds.includes(project.id)).map(project => {
+          const projectRows = rowsByProject.get(project.id) ?? [];
+          return {
+            projectId: project.id,
+            entries: projectRows.map(row => row.entry),
+            displayOrder: projectLogicalThreadDisplayOrder(project.id, projectRows, presentation),
+          };
+        }),
+      } : {
+        projects: entries && displayOrder && projectId
+          ? [{ projectId, entries, displayOrder }]
+          : actions.projectThreadSidebars.projects.filter(sidebar => selectedProjectIds.includes(sidebar.projectId)),
+      },
+      logicalProjects && presentation
+        ? projectLogicalHomeDisplayOrder(rows, presentation)
+        : actions.homeDisplayOrder,
+    );
+  }, [actions.homeDisplayOrder, actions.projectThreadSidebars, displayOrder, entries, logicalProjects, logicalThreads, presentation, projectId, selectedProjectIds]);
+  const qualifiedFor = useMemo(() => createWorkbenchThreadRowLookup(
+    logicalThreads ?? [], { logical: Boolean(logicalProjects), attachedDaemonId },
+  ), [attachedDaemonId, logicalProjects, logicalThreads]);
   const rowForPayload = (payload: WorkbenchThreadRowDragPayload) => logicalThreads?.find(row =>
     getWorkbenchThreadDisplayKey(row.entry) === payload.projectSourceKey
     && (row.logicalProjectId === payload.ownerProjectId

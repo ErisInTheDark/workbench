@@ -8,7 +8,8 @@ import { test } from "node:test";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { ExplorerSnapshot, WorkbenchProjectOption } from "workbench-shared/types";
+import type { ExplorerSnapshot, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
+import { getWorkbenchHomeThreadKey } from "workbench-shared/workbench/thread/home-thread-display-order";
 import WorkbenchClientStateController from "../../workbench/state/WorkbenchClientStateController";
 import {
   WorkbenchThreadSidebarEntrySchema,
@@ -22,11 +23,45 @@ import WorkbenchClientProvider from "./WorkbenchClientProvider";
 import ThreadRateLimits from "./thread-view/ThreadRateLimits";
 import WorkbenchSidebarPreferencesProvider from "./WorkbenchSidebarPreferencesProvider";
 import WorkbenchThreadList from "./WorkbenchThreadList";
+import { createWorkbenchThreadRowLookup } from "./WorkbenchThreadList";
 import WorkbenchThreadListItem, { ThreadTooltipContent } from "./WorkbenchThreadListItem";
 import WorkbenchContextMenuContext, { type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchDragProvider from "./drag/WorkbenchDragProvider";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+
+test("qualified thread rows retain logical and physical source ownership", () => {
+  const shared = createThreadEntry({ threadId: "source", title: "same display key" });
+  const daemonA = fixtureIdentitySchemas.DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
+  const daemonB = fixtureIdentitySchemas.DaemonIdSchema.parse("00000000-0000-4000-8000-000000000002");
+  const logicalA = fixtureIdentitySchemas.LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000003");
+  const logicalB = fixtureIdentitySchemas.LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000004");
+  const physicalProjectId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
+  const row = (logicalProjectId: string, daemonId: typeof daemonA): WorkbenchLogicalThreadRow => ({
+    entry: shared,
+    hostname: "test",
+    location: { daemonId, projectId: physicalProjectId },
+    logicalProjectId: fixtureIdentitySchemas.LogicalProjectIdSchema.parse(logicalProjectId),
+    rootPath: "C:/repo",
+  });
+  const first = row(logicalA, daemonA);
+  const second = row(logicalB, daemonB);
+  const duplicate = row(logicalA, daemonB);
+  const rows = [first, second, duplicate];
+  const homeEntry = (projectId: string) => ({
+    entry: shared,
+    projectId,
+    threadKey: getWorkbenchHomeThreadKey(projectId, shared),
+  });
+  const logical = createWorkbenchThreadRowLookup(rows, { logical: true, attachedDaemonId: null });
+  assert.equal(logical(homeEntry(logicalA)), first);
+  assert.equal(logical(homeEntry(logicalB)), second);
+
+  const physical = createWorkbenchThreadRowLookup(rows, { logical: false, attachedDaemonId: daemonB });
+  assert.equal(physical(homeEntry(physicalProjectId)), second);
+  assert.equal(createWorkbenchThreadRowLookup(rows, { logical: false, attachedDaemonId: daemonA })(
+    homeEntry(physicalProjectId)), first);
+});
 
 const fixtureIdentityValues = {
   ProjectId: {

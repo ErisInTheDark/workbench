@@ -6,8 +6,12 @@
  * - CommandSequenceRenderSegment/buildCommandSequenceRenderSegments: final command presentation groups.
  * - isBrowseCommandItem: identify commands rendered separately as Browse requests.
  * - getWorkedBlockRows: split independently rendered work rows and identify protected content.
+ * - getRenderableBlockItems/getRenderableBlockKey: identify grouped render rows.
+ * - reuseRenderableBlocks/hasSameBlockTimeline: retain unchanged rows across SQL item arrivals.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
 import { isWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
@@ -51,6 +55,47 @@ export interface HiddenThreadItemIds {
   itemIds?: ReadonlySet<string> | null;
   reasoningStep?: ThreadReasoningStepReference | null;
   webSearchItemIds?: ReadonlySet<string> | null;
+}
+
+export function getRenderableBlockItems(block: ThreadRenderableBlock): readonly ThreadItem[] {
+  return block.kind === "item" ? [block.item] : block.items;
+}
+
+export function getRenderableBlockKey(block: ThreadRenderableBlock) {
+  return [block.kind, ...getRenderableBlockItems(block).map(item => item.id)].join(":");
+}
+
+export function reuseRenderableBlocks(
+  previous: readonly ThreadRenderableBlock[],
+  next: readonly ThreadRenderableBlock[],
+): ThreadRenderableBlock[] {
+  const previousByKey = new Map(previous.map(block => [getRenderableBlockKey(block), block]));
+  return next.map(block => {
+    const old = previousByKey.get(getRenderableBlockKey(block));
+    if (!old || old.kind !== block.kind) return block;
+    if (old.kind === "item" && block.kind === "item") {
+      return old.item === block.item && old.hasCapturedChildren === block.hasCapturedChildren ? old : block;
+    }
+    const oldItems = getRenderableBlockItems(old);
+    const nextItems = getRenderableBlockItems(block);
+    return oldItems.length === nextItems.length
+      && oldItems.every((item, index) => item === nextItems[index])
+      && (old.kind !== "userMessageSequence" || block.kind !== "userMessageSequence" || old.state === block.state)
+      ? old : block;
+  });
+}
+
+export function hasSameBlockTimeline(
+  block: ThreadRenderableBlock,
+  left: readonly WorkbenchThreadItemTimelineEntry[] | null | undefined,
+  right: readonly WorkbenchThreadItemTimelineEntry[] | null | undefined,
+) {
+  if (left === right) return true;
+  return getRenderableBlockItems(block).every(item => {
+    const before = findWorkbenchThreadItemTimelineEntry(item.id, left);
+    const after = findWorkbenchThreadItemTimelineEntry(item.id, right);
+    return before === after || areDeeplyEqual(before, after);
+  });
 }
 
 export function isHiddenCommandExecution(command: string) {
