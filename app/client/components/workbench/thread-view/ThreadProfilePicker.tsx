@@ -5,18 +5,17 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { WorkbenchAgentOption, WorkbenchComposerProfile, WorkbenchComposerSettings, WorkbenchModelOption } from "workbench-shared/types";
-import type { WorkbenchComposerProfileSlot } from "workbench-shared/types";
+import type { WorkbenchAgentOption, WorkbenchComposerProfile, WorkbenchComposerProfileSlot, WorkbenchComposerSettings, WorkbenchModelOption } from "workbench-shared/types";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
-import { BinIcon, SparkleIcon } from "../workbench-icons";
 import WorkbenchIconButton from "../WorkbenchIconButton";
-import PlaintextEditable from "./PlaintextEditable";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
+import { BinIcon, SparkleIcon } from "../workbench-icons";
+import PlaintextEditable from "./PlaintextEditable";
 import ThreadPickerGroupMoveButton from "./ThreadPickerGroupMoveButton";
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import { orderComposerProfiles } from "./composer-profile-order";
 
-function ProfileNameEditable({ fallback, name, onCommit }: { fallback: string; name: string; onCommit: (name: string) => void }) {
+function ProfileNameEditable ({ fallback, name, onCommit }: { fallback: string; name: string; onCommit: (name: string) => void }) {
   const editableRef = useRef<HTMLSpanElement>(null);
   const [hasText, setHasText] = useState(Boolean(name));
 
@@ -40,11 +39,11 @@ function ProfileNameEditable({ fallback, name, onCommit }: { fallback: string; n
   </span>;
 }
 
-function normalizeProfileDescription(value: string) {
+function normalizeProfileDescription (value: string) {
   return value.replace(/\r\n?/gu, "\n").trim();
 }
 
-function ProfileDescriptionEditable({ description = "", onCommit }: { description?: string; onCommit: (description: string | undefined) => void }) {
+function ProfileDescriptionEditable ({ description = "", onCommit }: { description?: string; onCommit: (description: string | undefined) => void }) {
   const [draft, setDraft] = useState(description);
 
   useEffect(() => {
@@ -70,7 +69,7 @@ function ProfileDescriptionEditable({ description = "", onCommit }: { descriptio
   </div>;
 }
 
-export default function ThreadProfilePicker({ agents, currentSettings, models, projectId, slot }: {
+export default function ThreadProfilePicker ({ agents, currentSettings, models, projectId, slot }: {
   agents: WorkbenchAgentOption[]; currentSettings: WorkbenchComposerSettings;
   models: WorkbenchModelOption[];
   projectId: string | null; slot: WorkbenchComposerProfileSlot;
@@ -93,14 +92,15 @@ export default function ThreadProfilePicker({ agents, currentSettings, models, p
       key={profile.id}
       density="tight"
       isChecked={active}
+      showMarker={false}
       label={label}
       onClick={() => controller.selectProfile(slot, profile.id)}
       labelEditor={active ? <ProfileNameEditable fallback={label} name={profile.name} onCommit={(name) => { void controller.updateProfile(profile.id, { name }); }} /> : undefined}
       actions={<>
-          {projectId ? <ThreadPickerGroupMoveButton direction={profile.scope.kind === "global" ? "down" : "up"} disabled={profile.scope.kind === "project" && profile.agentSource === "project"} label={profile.scope.kind === "global" ? `Move ${label} to this project` : `Promote ${label} globally`} onClick={() => { void controller.updateProfile(profile.id, { scope: profile.scope.kind === "global" ? { kind: "project", projectId } : { kind: "global" } }); }} /> : null}
-          <WorkbenchIconButton size="small" tone="danger" label={`Remove ${label}`} onClick={() => { void controller.deleteProfile(profile.id); }}><BinIcon size={16} /></WorkbenchIconButton>
+        {projectId ? <ThreadPickerGroupMoveButton direction={profile.scope.kind === "global" ? "down" : "up"} disabled={profile.scope.kind === "project" && profile.agentSource === "project"} label={profile.scope.kind === "global" ? `Move ${label} to this project` : `Promote ${label} globally`} onClick={() => { void controller.updateProfile(profile.id, { scope: profile.scope.kind === "global" ? { kind: "project", projectId } : { kind: "global" } }); }} /> : null}
+        <WorkbenchIconButton size="small" tone="danger" label={`Remove ${label}`} onClick={() => { void controller.deleteProfile(profile.id); }}><BinIcon size={16} /></WorkbenchIconButton>
       </>}
-      description={!active ? profile.description : undefined}
+      description={!active ? <span className="line-clamp-2">{profile.description}</span> : undefined}
     >
       {active ? <ProfileDescriptionEditable description={profile.description} onCommit={(description) => { void controller.updateProfile(profile.id, { description }); }} /> : null}
     </WorkbenchOptionCard>;

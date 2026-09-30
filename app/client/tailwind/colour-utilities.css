@@ -80,6 +80,11 @@
   --fg-bg: color-mix(in srgb, black 5%, var(--app-bg-solid));
 }
 
+@utility bg-alpha-* {
+  background-color: color-mix(in srgb, --value(--default(var(--app-bg-solid))) calc(--modifier(number, [number]) * 1%), transparent);
+  background-color: color-mix(in srgb, --value(--default(var(--app-bg-solid))) --modifier(--opacity-*), transparent);
+}
+
 /* Hue degrees: text-hue-210, border-hue-300/35, bg-hue-(--identity-hue)/22.
  * Set --hue-chroma to a percentage to override 90%; lightness follows the theme.
  * Keep each colour local so text, border, and background can use different hues.

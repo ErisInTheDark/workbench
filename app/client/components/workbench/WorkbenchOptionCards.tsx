@@ -30,7 +30,7 @@ type WorkbenchOptionCardProps = {
   ariaLabel?: string;
   children?: ReactNode;
   className?: string;
-  description?: string;
+  description?: ReactNode | string;
   density?: "normal" | "tight";
   disabled?: boolean;
   isChecked: boolean;
@@ -70,7 +70,7 @@ export function WorkbenchOptionCard ({
   showMarker = true,
   wrapLabel = false,
 }: WorkbenchOptionCardProps) {
-  const optionDescription = description.trim();
+  const optionDescription = typeof description === "string" ? description.trim() : description;
   const compactInline = presentation === "compact-inline";
   const compactPresentation = presentation !== "card";
   const isComposed = !isHistoryMode && Boolean(actions || labelEditor || children || inlineContent);
@@ -159,7 +159,7 @@ export function WorkbenchOptionCard ({
             aria-pressed={showMarker ? isChecked : undefined}
             disabled={disabled}
             onClick={onClick}
-            className="shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+            className={`shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft ${showMarker ? "" : "absolute"}`}
           >{optionMarker}</button>
           <div className="min-w-0 flex-1">{labelEditor}</div>
         </div> : <button
@@ -177,7 +177,7 @@ export function WorkbenchOptionCard ({
         {inlineContent ? <div className="flex min-w-0 flex-wrap items-center gap-2">{inlineContent}</div> : null}
         {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
       </div>
-      {children ? <div className={joinClasses("w-full min-w-0 pl-7", selectedBackdropClassName)}>{children}</div> : null}
+      {children ? <div className={joinClasses(`w-full min-w-0 ${showMarker ? "pl-7" : ""}`, selectedBackdropClassName)}>{children}</div> : null}
     </div>;
   }
 

@@ -5,12 +5,12 @@
 "use client";
 
 import { JSX, useRef, useState } from "react";
-import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
+import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import { ClockIcon, HarnessIcon, StarIcon } from "../workbench-icons";
-import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import WorkbenchIconButton from "../WorkbenchIconButton";
+import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import WorkbenchTag from "../WorkbenchTag";
 import type { ThreadGroupedModel, ThreadModelGroup } from "./thread-model-groups";
 import ThreadDisclosure from "./ThreadDisclosure";
@@ -116,29 +116,30 @@ export default function ThreadModelPicker ({
 		const favourite = favouriteKeys.has(`${harness}\0${model.id}`);
 
 		return (
-				<WorkbenchOptionCard
-					key={`${harness}:${model.id}`}
-					density="tight"
-					className="min-w-0"
-					isChecked={isSelected}
-					onClick={() => onSelectModel(entry)}
-					label={<span className="grid gap-1">
-						<span className="inline-flex min-w-0 items-center gap-2">
-							{special ? <HarnessIcon harness={harness} size={16} className="shrink-0" /> : null}
-							<span className="truncate">{model.displayName}</span>
-						</span>
-						{featureList.length ? <span className="mb-1 flex flex-wrap gap-1.5">
-							{featureList.map((feature, index) => <WorkbenchTag key={index}>{feature}</WorkbenchTag>)}
-						</span> : null}
-					</span>}
-					actions={<WorkbenchIconButton
-						size="small"
-						disabled={favouritesDisabled}
-						label={`${favourite ? "Unfavourite" : "Favourite"} ${model.displayName}`}
-						aria-pressed={favourite}
-						onClick={() => onToggleFavourite(entry)}
-					><StarIcon size={16} className={favourite ? "fill-current" : undefined} /></WorkbenchIconButton>}
-				/>
+			<WorkbenchOptionCard
+				key={`${harness}:${model.id}`}
+				density="tight"
+				className="min-w-0"
+				showMarker={false}
+				isChecked={isSelected}
+				onClick={() => onSelectModel(entry)}
+				label={<span className="grid gap-1">
+					<span className="inline-flex min-w-0 items-center gap-2">
+						{special ? <HarnessIcon harness={harness} size={16} className="shrink-0" /> : null}
+						<span className="truncate">{model.displayName}</span>
+					</span>
+					{featureList.length ? <span className="mb-1 flex flex-wrap gap-1.5">
+						{featureList.map((feature, index) => <WorkbenchTag key={index}>{feature}</WorkbenchTag>)}
+					</span> : null}
+				</span>}
+				actions={<WorkbenchIconButton
+					size="small"
+					disabled={favouritesDisabled}
+					label={`${favourite ? "Unfavourite" : "Favourite"} ${model.displayName}`}
+					aria-pressed={favourite}
+					onClick={() => onToggleFavourite(entry)}
+				><StarIcon size={16} className={favourite ? "fill-current" : undefined} /></WorkbenchIconButton>}
+			/>
 		);
 	};
 

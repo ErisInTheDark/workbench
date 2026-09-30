@@ -33,6 +33,7 @@ export default function ThreadAgentPicker ({
 						<WorkbenchOptionCard
 							key={agent.path}
 							density="tight"
+							showMarker={false}
 							isChecked={selectedAgentPath === agent.path}
 							onClick={() => onSelectAgent(agent.path)}
 							label={<span className="grid gap-1">
