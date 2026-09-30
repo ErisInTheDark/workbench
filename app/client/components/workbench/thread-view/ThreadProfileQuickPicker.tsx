@@ -72,6 +72,7 @@ export default function ThreadProfileQuickPicker({
   };
   return <WorkbenchPressDragMenu
     label={`Composer profile: ${label}`}
+    triggerClassName="text-text"
     getItems={getItems}
     onOpen={() => { onOpen(); void profiles.controller.refreshProfiles(); }}
     onActivate={openEditor}

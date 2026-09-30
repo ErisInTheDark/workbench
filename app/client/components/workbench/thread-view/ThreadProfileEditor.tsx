@@ -11,6 +11,7 @@ import type { WorkbenchComposerProfileSlot, WorkbenchComposerSettings } from "wo
 import { getWorkbenchAgentPathLabel } from "workbench-shared/workbench/agent-paths";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
+import { groupWorkbenchModels, type WorkbenchGroupedModel } from "../workbench-model-groups";
 import ChevronIcon from "../ChevronIcon";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import { ReloadIcon, ZapIcon } from "../workbench-icons";
@@ -19,7 +20,6 @@ import WorkbenchIconButton from "../WorkbenchIconButton";
 import WorkbenchPopover from "../WorkbenchPopover";
 import WorkbenchPressDragSlider from "../WorkbenchPressDragSlider";
 import { formatHarnessLabel } from "./harness-label";
-import { groupThreadModels, type ThreadGroupedModel } from "./thread-model-groups";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
 import ThreadModelPicker from "./ThreadModelPicker";
@@ -65,14 +65,14 @@ export default function ThreadProfileEditor ({
       ? [{ harness: record.harness, modelId: record.modelId }] : []);
   const favouriteKeys = new Set(favourites.map(item => `${item.harness}\0${item.modelId}`));
   const allowedHarnesses = slot.kind === "thread" ? [settings.harness] : [...installedProviderKeys];
-  const groups = groupThreadModels({
+  const groups = groupWorkbenchModels({
     catalogues: state.modelsByHarness,
     favourites,
     allowedHarnesses,
     now: Date.now(),
   });
   const canSaveFavourites = clientState.schemaVersion >= 7;
-  const toggleFavourite = async ({ harness, model }: ThreadGroupedModel) => {
+  const toggleFavourite = async ({ harness, model }: WorkbenchGroupedModel) => {
     if (!canSaveFavourites) return;
     setFavouriteError("");
     try {

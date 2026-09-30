@@ -1,20 +1,20 @@
 /*
  * Exports:
- * - groupThreadModels: ordered favourite, recent and provider model sections.
- * - ThreadModelGroup/ThreadGroupedModel: section and model identities for both pickers.
+ * - groupWorkbenchModels: favourite, recent and provider sections with optional drag order.
+ * - WorkbenchModelGroup/WorkbenchGroupedModel: section and model identities for both pickers.
  */
 import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
 
-export interface ThreadGroupedModel {
+export interface WorkbenchGroupedModel {
   harness: WorkbenchHarness;
   model: WorkbenchModelOption;
 }
 
-export interface ThreadModelGroup {
+export interface WorkbenchModelGroup {
   id: string;
   kind: "favourites" | "recent" | "provider";
   label: string;
-  models: ThreadGroupedModel[];
+  models: WorkbenchGroupedModel[];
   harness?: WorkbenchHarness;
   providerId?: string;
 }
@@ -37,22 +37,23 @@ function openCodeLabel(providerId: string) {
   return providerId === "opencode" ? "OpenCode" : `OpenCode / ${providerId}`;
 }
 
-export function groupThreadModels({
-  catalogues, favourites, allowedHarnesses, now,
+export function groupWorkbenchModels({
+  catalogues, favourites, allowedHarnesses, now, order = "editor",
 }: {
   catalogues: Partial<Record<WorkbenchHarness, readonly WorkbenchModelOption[]>>;
   favourites: readonly { harness: WorkbenchHarness; modelId: string }[];
   allowedHarnesses: readonly WorkbenchHarness[];
   now: number;
-}): ThreadModelGroup[] {
+  order?: "editor" | "drag";
+}): WorkbenchModelGroup[] {
   const orderedHarnesses = [...allowedHarnesses].sort((left, right) => {
     const a = HARNESS_ORDER.indexOf(left as typeof HARNESS_ORDER[number]);
     const b = HARNESS_ORDER.indexOf(right as typeof HARNESS_ORDER[number]);
     return (a < 0 ? HARNESS_ORDER.length : a) - (b < 0 ? HARNESS_ORDER.length : b)
       || left.localeCompare(right);
   });
-  const available = new Map<string, ThreadGroupedModel>();
-  const providers: ThreadModelGroup[] = [];
+  const available = new Map<string, WorkbenchGroupedModel>();
+  const providers: WorkbenchModelGroup[] = [];
   for (const harness of orderedHarnesses) {
     const models = (catalogues[harness] ?? []).filter(model => model.policyState !== "disabled");
     if (harness !== "opencode") {
@@ -78,15 +79,26 @@ export function groupThreadModels({
   }
   const favouriteKeys = new Set(favourites.map(item => modelKey(item.harness, item.modelId)));
   const favouriteModels = [...favouriteKeys].flatMap(key => available.get(key) ?? []);
-  favouriteModels.sort((a, b) => a.model.displayName.localeCompare(b.model.displayName));
+  favouriteModels.sort((a, b) => order === "drag"
+    ? (a.model.lastUsedAt ?? 0) - (b.model.lastUsedAt ?? 0)
+      || a.model.displayName.localeCompare(b.model.displayName)
+    : a.model.displayName.localeCompare(b.model.displayName));
   const recentModels = [...available.values()]
     .filter(entry => entry.model.lastUsedAt !== null && entry.model.lastUsedAt !== undefined
       && entry.model.lastUsedAt >= now - WEEK_MS && entry.model.lastUsedAt <= now
       && !favouriteKeys.has(modelKey(entry.harness, entry.model.id)))
-    .sort((a, b) => (b.model.lastUsedAt ?? 0) - (a.model.lastUsedAt ?? 0));
-  return [
+    .sort((a, b) => (order === "drag"
+      ? (a.model.lastUsedAt ?? 0) - (b.model.lastUsedAt ?? 0)
+      : (b.model.lastUsedAt ?? 0) - (a.model.lastUsedAt ?? 0))
+      || a.model.displayName.localeCompare(b.model.displayName));
+  const groups = [
     ...(favouriteModels.length ? [{ id: "favourites", kind: "favourites" as const, label: "Favourites", models: favouriteModels }] : []),
     ...(recentModels.length ? [{ id: "recent", kind: "recent" as const, label: "Recent", models: recentModels }] : []),
     ...providers,
   ];
+  if (order === "editor") return groups;
+  return groups.toReversed().map(group => group.kind === "provider" ? {
+    ...group,
+    models: [...group.models].sort((a, b) => a.model.displayName.localeCompare(b.model.displayName)),
+  } : group);
 }

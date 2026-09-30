@@ -150,6 +150,7 @@ interface WorkbenchThreadClient {
   dispose: () => void;
   getSnapshot: () => WorkbenchThreadRuntimeSnapshot;
   getPublishedSnapshot: () => WorkbenchThreadRuntimeSnapshot;
+  getModelCatalogues: () => ReadonlyMap<WorkbenchHarness, readonly WorkbenchModelOption[]>;
   hasThread: (threadId: string) => boolean;
   isCurrentThreadUpToDate: (threadId: string) => boolean;
   isDraftThreadId: (threadId: string) => threadId is DraftId;
@@ -4631,6 +4632,7 @@ function WorkbenchThreadClient(
     dispose,
     getSnapshot,
     getPublishedSnapshot,
+    getModelCatalogues: () => account.getSnapshot().modelsByHarness,
     hasThread,
     installThreadStateSources,
     isCurrentThreadUpToDate,

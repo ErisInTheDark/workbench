@@ -2,6 +2,7 @@
  * Exports:
  * - useWorkbenchClientMount: own async Workbench client mount and disposal around root-owned DOM surfaces.
  * - useWorkbenchThreads: read and act on the route-owned thread collection through one visible namespace.
+ * - useWorkbenchModelCatalogues: subscribe to the thread owner's account model cache by identity.
  * - useWorkbenchProjectThreadSidebar: read one project-owned sidebar in every observation mode.
  * - useThreadClaimIntersections/useThreadCollisionEntries/useThreadArcEntry: select narrow source-qualified Git arc facts.
  * - useWorkbenchThreadSidebarEntry: read one project-owned thread sidebar entry by identity.
@@ -32,6 +33,7 @@ import type {
   ExplorerSnapshot,
   WorkbenchControls,
   WorkbenchHarness,
+  WorkbenchModelOption,
   WorkbenchReadThreadOptions,
   WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadRuntimeSnapshot,
@@ -142,6 +144,17 @@ const EMPTY_THREAD_RUNTIME_SNAPSHOT: WorkbenchThreadRuntimeSnapshot = {
   threadsError: "",
 };
 const EMPTY_SUBSCRIBE = (_listener: () => void) => () => {};
+const EMPTY_MODEL_CATALOGUES: ReadonlyMap<WorkbenchHarness, readonly WorkbenchModelOption[]> = new Map();
+
+export function useWorkbenchModelCatalogues(threadId: string) {
+  const mounted = useWorkbenchClientController().mounted;
+  const store = (mounted?.threadContextFor(threadId) ?? mounted?.draftContextFor(threadId))?.threads;
+  return useSyncExternalStore(
+    store?.subscribe ?? EMPTY_SUBSCRIBE,
+    store?.getModelCatalogues ?? (() => EMPTY_MODEL_CATALOGUES),
+    () => EMPTY_MODEL_CATALOGUES,
+  );
+}
 const EMPTY_PROJECT_SOURCE_ERROR = () => "";
 const INITIAL_PRESENTATION: ReturnType<NonNullable<MountedWorkbenchClient["presentationClient"]>["snapshot"]> = {
   phase: "idle", error: null, data: null,

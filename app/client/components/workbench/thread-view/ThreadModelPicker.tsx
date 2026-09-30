@@ -12,7 +12,7 @@ import { ClockIcon, HarnessIcon, StarIcon } from "../workbench-icons";
 import WorkbenchIconButton from "../WorkbenchIconButton";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import WorkbenchTag from "../WorkbenchTag";
-import type { ThreadGroupedModel, ThreadModelGroup } from "./thread-model-groups";
+import type { WorkbenchGroupedModel, WorkbenchModelGroup } from "../workbench-model-groups";
 import ThreadDisclosure from "./ThreadDisclosure";
 
 function formatContextWindow (tokens: number | null) {
@@ -78,11 +78,11 @@ export default function ThreadModelPicker ({
 }: {
 	appliesOnNextTurnOnly: boolean;
 	favouriteKeys: ReadonlySet<string>;
-	groups: readonly ThreadModelGroup[];
+	groups: readonly WorkbenchModelGroup[];
 	loadingByHarness: Partial<Record<WorkbenchHarness, boolean>>;
 	errorByHarness: Partial<Record<WorkbenchHarness, string>>;
-	onSelectModel: (entry: ThreadGroupedModel) => void;
-	onToggleFavourite: (entry: ThreadGroupedModel) => void;
+	onSelectModel: (entry: WorkbenchGroupedModel) => void;
+	onToggleFavourite: (entry: WorkbenchGroupedModel) => void;
 	selectedModelId: string | null;
 	selectedHarness: WorkbenchHarness;
 	favouritesDisabled?: boolean;
@@ -109,7 +109,7 @@ export default function ThreadModelPicker ({
 		}
 	};
 
-	const renderModelCard = (entry: ThreadGroupedModel, special: boolean) => {
+	const renderModelCard = (entry: WorkbenchGroupedModel, special: boolean) => {
 		const { harness, model } = entry;
 		const featureList = buildFeatureList(model);
 		const isSelected = selectedHarness === harness && selectedModelId === model.id;

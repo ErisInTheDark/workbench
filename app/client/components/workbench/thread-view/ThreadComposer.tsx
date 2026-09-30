@@ -46,7 +46,7 @@ import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./m
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
 import StickyComposerSurface from "./StickyComposerSurface";
 import ThreadProfileQuickPicker from "./ThreadProfileQuickPicker";
-import ThreadModelQuickPicker from "./ThreadModelQuickPicker";
+import WorkbenchModelQuickPicker from "../WorkbenchModelQuickPicker";
 import type DraftSessionController from "./DraftSessionController";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
@@ -730,12 +730,13 @@ export default function ThreadComposer ({
                       agentLabel={agentButtonLabel}
                       currentReasoningEffort={currentReasoningEffort ?? "default"}
                       isFastModeEnabled={isFastModeEnabled}
-                      modelControl={<ThreadModelQuickPicker
+                      modelControl={<WorkbenchModelQuickPicker
                         allowedHarnesses={allowedHarnesses}
-                        catalogues={editorState.modelsByHarness}
                         harness={currentComposerSettings.harness}
-                        label={`${formatHarnessLabel(currentComposerSettings.harness)} · ${modelButtonLabel}`}
+                        modelName={modelButtonLabel}
+                        providerLabel={formatHarnessLabel(currentComposerSettings.harness)}
                         modelId={currentComposerSettings.model}
+                        threadId={thread.id}
                         onOpen={() => {
                           profileEditor.close();
                           void Promise.all(allowedHarnesses.map(harness => loadAvailableModels(harness, true)));
