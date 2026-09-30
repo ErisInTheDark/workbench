@@ -1,11 +1,11 @@
 /*
  * Exports:
  * - default WorkbenchPressDragMenu: anchored menu with press-drag, click, touch and keyboard selection.
- * - PressDragMenuItem: stable action identity and its display content.
+ * - PressDragMenuItem/PressDragMenuGroup: stable action and optional grouped navigation content.
  */
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { transitionPressDragMenu, type PressDragMenuEvent, type PressDragMenuState } from "./press-drag-menu-state";
 import { positionWorkbenchPopover } from "./workbench-popover-geometry";
@@ -18,26 +18,36 @@ export interface PressDragMenuItem {
   checked?: boolean;
 }
 
+export interface PressDragMenuGroup {
+  id: string;
+  label: string;
+  navigation?: ReactNode;
+  items: readonly PressDragMenuItem[];
+}
+
 export default function WorkbenchPressDragMenu({
-  children, label, getItems, items: suppliedItems, onOpen, onSelect, onActivate,
+  children, label, getItems, items: suppliedItems, groups, onOpen, onSelect, onActivate,
 }: {
   children: ReactNode;
   label: string;
   getItems?: () => readonly PressDragMenuItem[];
   items?: readonly PressDragMenuItem[];
+  groups?: readonly PressDragMenuGroup[];
   onOpen?: () => void;
   onSelect: (id: string, trigger: HTMLButtonElement) => void;
   onActivate?: (trigger: HTMLButtonElement) => void;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   const popup = useRef<HTMLDivElement>(null);
+  const hoveredGroup = useRef<string | null>(null);
   const menuId = useId();
   const [menu, setMenu] = useState<{ interaction: PressDragMenuState; items: readonly PressDragMenuItem[] }>({
     interaction: { kind: "closed" }, items: [],
   });
   const [position, setPosition] = useState<CSSProperties | null>(null);
   const open = menu.interaction.kind !== "closed";
-  const items = suppliedItems ?? menu.items;
+  const items = useMemo(() => groups?.flatMap(group => group.items) ?? suppliedItems ?? menu.items,
+    [groups, suppliedItems, menu.items]);
   const activeId = menu.interaction.kind === "closed" ? null : menu.interaction.activeId;
   const activeIndex = items.findIndex(item => item.id === activeId);
 
@@ -67,7 +77,7 @@ export default function WorkbenchPressDragMenu({
     // Blur before opening so its cancellation cannot close the new drag.
     // Pointer capture owns drag input; focus could inherit the editor's focus-visible state.
     if (event.kind === "press") trigger.current.blur();
-    const items = suppliedItems ?? getItems?.() ?? [];
+    const items = groups?.flatMap(group => group.items) ?? suppliedItems ?? getItems?.() ?? [];
     const viewport = window.visualViewport;
     const bounds = positionWorkbenchPopover(trigger.current.getBoundingClientRect(), {
       width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight,
@@ -75,6 +85,7 @@ export default function WorkbenchPressDragMenu({
     }, { width: 440, height: 480, align: "end" });
     setPosition({ ...bounds, height: "auto", maxHeight: bounds.height, visibility: "hidden" });
     setMenu({ interaction: transitionPressDragMenu(menu.interaction, event).state, items });
+    hoveredGroup.current = null;
     if (event.kind === "open") trigger.current.focus({ preventScroll: true });
     onOpen?.();
   }
@@ -85,6 +96,21 @@ export default function WorkbenchPressDragMenu({
     return row && popup.current?.contains(row) ? row.dataset.menuRow ?? null : null;
   }
 
+  function scrollToGroup(id: string) {
+    const scroll = popup.current;
+    const section = [...(scroll?.querySelectorAll<HTMLElement>("[data-menu-section]") ?? [])]
+      .find(candidate => candidate.dataset.menuSection === id);
+    if (scroll && section) scroll.scrollTop += section.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
+  }
+
+  function hoverGroup(x: number, y: number) {
+    const target = document.elementFromPoint(x, y);
+    const button = target?.closest<HTMLElement>("[data-menu-group]");
+    const id = button && popup.current?.contains(button) ? button.dataset.menuGroup ?? null : null;
+    if (id && id !== hoveredGroup.current) scrollToGroup(id);
+    hoveredGroup.current = id;
+  }
+
   function keyboard(event: ReactKeyboardEvent<HTMLElement>) {
     if (!["ArrowUp", "ArrowDown", "Home", "End", "Enter", " ", "Escape", "Tab"].includes(event.key)) return;
     if (event.key !== "Tab") event.preventDefault();
@@ -93,7 +119,7 @@ export default function WorkbenchPressDragMenu({
         if (trigger.current) onActivate(trigger.current);
         return;
       }
-      const items = suppliedItems ?? getItems?.() ?? [];
+      const items = groups?.flatMap(group => group.items) ?? suppliedItems ?? getItems?.() ?? [];
       begin({ kind: "open", activeId: event.key === "ArrowUp" || event.key === "End" ? items.at(-1)?.id ?? null : items[0]?.id ?? null });
       return;
     }
@@ -102,28 +128,28 @@ export default function WorkbenchPressDragMenu({
     if (event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "Home" || event.key === "End") {
       const next = transitionPressDragMenu(menu.interaction, action).state;
       const index = next.kind === "closed" ? -1 : items.findIndex(item => item.id === next.activeId);
-      popup.current?.children[index]?.scrollIntoView({ block: "nearest" });
+      popup.current?.querySelectorAll<HTMLElement>("[data-menu-row]")[index]?.scrollIntoView({ block: "nearest" });
     }
   }
 
   useLayoutEffect(() => {
     if (!open || !popup.current) return;
-    if ((position?.visibility === "hidden" || suppliedItems) && trigger.current) {
+    if ((position?.visibility === "hidden" || suppliedItems || groups) && trigger.current) {
       const viewport = window.visualViewport;
       // Live catalogues can arrive after an initially empty menu. Measure its
       // natural height again rather than retaining that first tiny scroll box.
-      if (suppliedItems) popup.current.style.height = "auto";
+      if (suppliedItems || groups) popup.current.style.height = "auto";
       const rect = popup.current.getBoundingClientRect();
       const bounds = positionWorkbenchPopover(trigger.current.getBoundingClientRect(), {
         width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight,
         left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0,
       }, { width: rect.width, height: rect.height, align: "end" });
-      setPosition(suppliedItems ? {
+      setPosition(suppliedItems || groups ? {
         ...bounds, height: "auto", maxHeight: Math.min(480, (viewport?.height ?? window.innerHeight) - 24),
       } : bounds);
     }
-    popup.current.scrollTop = popup.current.scrollHeight;
-    if (activeIndex >= 0) popup.current.children[activeIndex]?.scrollIntoView({ block: "nearest" });
+    if (!groups) popup.current.scrollTop = popup.current.scrollHeight;
+    if (activeIndex >= 0) popup.current.querySelectorAll<HTMLElement>("[data-menu-row]")[activeIndex]?.scrollIntoView({ block: "nearest" });
   }, [open, items, position?.visibility]);
 
   useEffect(() => {
@@ -187,6 +213,7 @@ export default function WorkbenchPressDragMenu({
       }}
       onPointerMove={event => {
         if (menu.interaction.kind !== "dragging") return;
+        if (groups) hoverGroup(event.clientX, event.clientY);
         dispatch({ kind: "move", pointerId: event.pointerId, x: event.clientX, y: event.clientY, id: hit(event.clientX, event.clientY) });
       }}
       onPointerUp={event => {
@@ -228,9 +255,46 @@ export default function WorkbenchPressDragMenu({
         dispatch({ kind: "cancel" });
       }}
       style={{ ...position, zIndex: 60 }}
-      className="overflow-y-auto overscroll-contain outline-none"
+      className={groups ? "grid min-h-0 grid-cols-[2.5rem_minmax(0,1fr)] items-start overflow-y-auto overscroll-contain outline-none" : "overflow-y-auto overscroll-contain outline-none"}
     >
-      {items.map((item, index) => <WorkbenchMenuAction
+      {groups ? <>
+        <nav aria-label="Model providers" className="sticky top-0 flex max-h-[min(30rem,calc(100vh-1.5rem))] flex-col items-center overflow-y-auto overscroll-contain">
+          {groups.filter(group => group.navigation !== undefined).map(group => <button
+            key={group.id}
+            type="button"
+            data-menu-group={group.id}
+            tabIndex={-1}
+            aria-label={group.label}
+            title={group.label}
+            className="enabled:cursor-pointer flex size-9 shrink-0 items-center justify-center rounded-lg text-fg/muted hover:bg-button-hover hover:text-text"
+            onPointerDown={event => event.preventDefault()}
+            onPointerMove={() => { if (menu.interaction.kind === "open") scrollToGroup(group.id); }}
+            onClick={() => scrollToGroup(group.id)}
+          >{group.navigation}</button>)}
+        </nav>
+        <div className="min-w-0">
+          {groups.map(group => <section key={group.id} data-menu-section={group.id} role="group" aria-label={group.label} className="pb-2">
+            <div className="flex items-center gap-2 px-3 py-2 text-[0.68rem] font-semibold uppercase tracking-widest text-fg/muted">
+              <span>{group.label}</span><span className="h-px min-w-2 flex-1 bg-[color-mix(in_srgb,var(--text)_12%,transparent)]" />
+            </div>
+            {group.items.length ? group.items.map(item => {
+              const index = items.findIndex(candidate => candidate.id === item.id);
+              return <WorkbenchMenuAction
+                key={item.id}
+                id={`${menuId}-${index}`}
+                data-menu-row={item.id}
+                role={item.checked === undefined ? "menuitem" : "menuitemradio"}
+                aria-checked={item.checked}
+                tabIndex={-1}
+                highlighted={activeId === item.id}
+                onPointerDown={event => { if (event.pointerType !== "touch") event.preventDefault(); }}
+                onPointerMove={event => { if (event.pointerType !== "touch" && menu.interaction.kind === "open") dispatch({ kind: "highlight", id: item.id }); }}
+                onClick={() => dispatch({ kind: "select", id: item.id })}
+              ><span className="block w-full min-w-0">{item.content}</span></WorkbenchMenuAction>;
+            }) : <p className="m-0 px-3 py-2 text-xs text-fg/muted">No models here yet.</p>}
+          </section>)}
+        </div>
+      </> : items.map((item, index) => <WorkbenchMenuAction
         key={item.id}
         id={`${menuId}-${index}`}
         data-menu-row={item.id}

@@ -3369,6 +3369,7 @@ test("restarted preview refreshes linked profiles, retains deleted snapshots and
 test("profile admission publishes only accepted candidates and orders later edits without blocking lifecycle writes", async (context) => {
   const persistence = new MemoryThreadStatePersistence();
   const usage: Array<{ id: string; at: number }> = [];
+  const modelUsage: Array<{ harness: string; model: string; at: number }> = [];
   const original = { kind: "profile" as const, profileId: "named", settings: { ...EMPTY_CODEX_SETTINGS, model: "old" } };
   const latest = { ...original.settings, model: "new" };
   const controller = new WorkbenchThreadStateController({
@@ -3377,6 +3378,7 @@ test("profile admission publishes only accepted candidates and orders later edit
     reconcileProject: async () => [],
     now: () => 1234,
     recordComposerProfileUsage: async (id: string, at: number) => { usage.push({ id, at }); },
+    recordComposerModelUsage: async (harness, model, at) => { modelUsage.push({ harness, model, at }); },
     readComposerProfiles: async () => ({ profiles: [{ ...latest, id: "named", name: "Named", scope: { kind: "global" }, createdAt: 1, updatedAt: 1 }] }),
   });
   context.after(() => controller.dispose());
@@ -3397,9 +3399,11 @@ test("profile admission publishes only accepted candidates and orders later edit
   assert.deepEqual(await controller.readComposerProfileSnapshot(slot), original);
   assert.deepEqual((await controller.readComposerProfileTarget(slot))?.settings, latest);
   assert.deepEqual(usage, []);
+  assert.deepEqual(modelUsage, []);
   const accepted = await controller.withComposerProfileAdmission(slot, async () => ({ accepted: true, result: "sent" }), signal);
   assert.equal(accepted.profilePersistenceError, null);
   assert.deepEqual(usage, [{ id: "named", at: 1234 }]);
+  assert.deepEqual(modelUsage, [{ harness: "codex", model: "new", at: 1234 }]);
   assert.deepEqual((await controller.readComposerProfileTarget(slot))?.settings, latest);
 
   let enter!: () => void;

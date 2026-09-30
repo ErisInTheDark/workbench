@@ -13,7 +13,7 @@ function response(revision: number, rows: Partial<WorkbenchClientStateRows> = {}
     daemonRegistrationId: "registration", kind, oldestAvailableRevision: 0, revision, schemaVersion: 0,
     rows: {
       composerDraftAttachments: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
-      modelPreferences: [], lastLaunchTarget: [], projectExpandedDirectories: [], projectPreferences: [],
+      modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [], projectExpandedDirectories: [], projectPreferences: [],
       projectSidebarFolders: [], projectSidebarPreferences: [], questionnaireDraftAnswers: [],
       questionnaireDraftAttachments: [], questionnaireDraftSelections: [], questionnaireDrafts: [], ...rows,
     },
@@ -109,6 +109,30 @@ test("out-of-order acknowledgements for unrelated rows retain both confirmed cha
   f.socket.reply(a, preference(1, "composerSpellCheck")); await left;
   assert.deepEqual(f.state.records("globalPreference").map(record => record.preference.key).sort(),
     ["composerSpellCheck", "editorSpellCheck"]);
+});
+
+test("model section edits keep independent optimistic identities and roll back only a failed section", async context => {
+  const f = await fixture(context);
+  const start = f.socket.sent.length;
+  const codex = f.state.put({ kind: "modelGroupDisclosure", groupId: "provider:codex", open: false });
+  const opencode = f.state.put({ kind: "modelGroupDisclosure", groupId: "provider:opencode:opencode-go", open: false });
+  const codexRequest = await f.socket.request("app/state/mutate", start, request =>
+    request.params.mutation.action === "put"
+    && request.params.mutation.record.kind === "modelGroupDisclosure"
+    && request.params.mutation.record.groupId === "provider:codex");
+  const opencodeRequest = await f.socket.request("app/state/mutate", start, request => request.id !== codexRequest.id);
+  assert.deepEqual(f.state.records("modelGroupDisclosure").map(record => record.groupId).sort(), [
+    "provider:codex", "provider:opencode:opencode-go",
+  ]);
+  f.socket.reply(opencodeRequest, response(2, { modelGroupDisclosures: [{
+    group_id: "provider:opencode:opencode-go", open: 0, deleted: 0, revision: 2,
+  }] }));
+  await opencode;
+  f.socket.fail(codexRequest, "write failed");
+  await assert.rejects(codex, /write failed/);
+  assert.deepEqual(f.state.records("modelGroupDisclosure"), [{
+    kind: "modelGroupDisclosure", groupId: "provider:opencode:opencode-go", open: false,
+  }]);
 });
 
 test("a full snapshot fences absent rows but preserves acknowledgements newer than itself", async context => {

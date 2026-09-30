@@ -516,7 +516,18 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     }
     const turn = (await this.read(identity.threadId)).turns.at(-1);
     if (!turn) throw new Error("OpenCode accepted a root intent without materialising its Workbench turn.");
-    return { kind: "started", turn };
+    try {
+      if (entry && entry.entryKind !== "draft" && entry.profile) {
+        await this.options.state.controller.recordAcceptedSelection(entry.profile, Date.now());
+      }
+      return { kind: "started", turn };
+    } catch (error) {
+      const warning = `Turn accepted, but model/profile recency could not be saved: ${
+        error instanceof Error ? error.message.slice(0, 300) : "unknown failure"
+      }`;
+      console.warn("[opencode]", warning);
+      return { kind: "started", turn, warning };
+    }
   }
 
   async messageAgent(input: Parameters<WorkbenchProviderThreads["messageAgent"]>[0]) {

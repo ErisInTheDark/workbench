@@ -60,6 +60,39 @@ test("voice enabled preference remains browser-local and survives reopening", as
   } finally { await reopened.close(); }
 });
 
+test("model group disclosures persist independently across browser reopening", async context => {
+  const { directory, registry, shared } = await fixture(context);
+  await registry.readBrowser(BROWSER_A);
+  await registry.readBrowser(BROWSER_B);
+  await registry.mutateBrowser(BROWSER_A, { action: "put", record: {
+    kind: "modelGroupDisclosure", groupId: "provider:codex", open: false,
+  } });
+  await registry.mutateBrowser(BROWSER_A, { action: "put", record: {
+    kind: "modelGroupDisclosure", groupId: "provider:opencode:opencode-go", open: false,
+  } });
+  const disclosures = async (owner: WorkbenchBrowserStateRegistry, browser: string) =>
+    records(await owner.readBrowser(browser))
+      .filter(record => record.kind === "modelGroupDisclosure")
+      .sort((a, b) => a.groupId.localeCompare(b.groupId));
+  assert.deepEqual(await disclosures(registry, BROWSER_B), []);
+  await registry.close();
+  const reopened = new WorkbenchBrowserStateRegistry(shared, { browserStateDirectoryPath: path.join(directory, "browser-state") });
+  reopened.start();
+  try {
+    assert.deepEqual(await disclosures(reopened, BROWSER_A), [
+      { kind: "modelGroupDisclosure", groupId: "provider:codex", open: false },
+      { kind: "modelGroupDisclosure", groupId: "provider:opencode:opencode-go", open: false },
+    ]);
+    await reopened.mutateBrowser(BROWSER_A, { action: "put", record: {
+      kind: "modelGroupDisclosure", groupId: "provider:codex", open: true,
+    } });
+    assert.deepEqual(await disclosures(reopened, BROWSER_A), [
+      { kind: "modelGroupDisclosure", groupId: "provider:codex", open: true },
+      { kind: "modelGroupDisclosure", groupId: "provider:opencode:opencode-go", open: false },
+    ]);
+  } finally { await reopened.close(); }
+});
+
 test("committed browser-state writes notify both tabs of that browser without waking another browser", async context => {
   const { registry } = await fixture(context);
   await registry.readBrowser(BROWSER_A);

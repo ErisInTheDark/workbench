@@ -139,6 +139,27 @@ test("model preferences upgrade v6 without losing existing preferences or the ba
   } finally { await repository.close(); }
 });
 
+test("model disclosure table upgrades v16 without disturbing existing app preferences", async context => {
+  const databasePath = await temporaryDatabase(context);
+  const old = new Database(databasePath);
+  applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 16 });
+  old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('theme','winter',0,1)").run();
+  old.close();
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  try {
+    await repository.start();
+    assert.deepEqual(repository.query(selectRows(appStateTables.modelGroupDisclosures)), []);
+    assert.equal(repository.query(selectRows(appStateTables.globalPreferences))[0]?.text_value, "winter");
+    const backupDirectory = path.join(path.dirname(databasePath), "backups", path.basename(databasePath));
+    const backups = await fs.readdir(backupDirectory);
+    assert.equal(backups.length, 1);
+    const backup = new Database(path.join(backupDirectory, backups[0]!), { readonly: true });
+    try {
+      assert.equal(backup.pragma("user_version", { simple: true }), 16);
+    } finally { backup.close(); }
+  } finally { await repository.close(); }
+});
+
 test("v15 draft rows survive binary image table upgrade with a retained rollback backup", async context => {
   const databasePath = await temporaryDatabase(context);
   const old = new Database(databasePath);

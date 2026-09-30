@@ -22,5 +22,6 @@ export const WorkbenchModelOptionSchema = z.object({
   additionalSpeedTiers: z.array(z.string()),
   policyState: z.string().nullable(),
   billingMultiplier: z.number().nullable(),
+  lastUsedAt: z.number().int().nonnegative().nullable().default(null),
 });
-export type WorkbenchModelOption = z.infer<typeof WorkbenchModelOptionSchema>;
+export type WorkbenchModelOption = z.input<typeof WorkbenchModelOptionSchema>;

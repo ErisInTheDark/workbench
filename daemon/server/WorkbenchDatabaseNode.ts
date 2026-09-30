@@ -211,5 +211,7 @@ export default ReloadableNode.define<
     "shared/workbench/thread/thread-command-output.ts",
     "shared/workbench/thread/retained-transcript-identity.ts",
     "shared/workbench/provider/provider-observation.ts",
+    "daemon/server/lib/workbench/database/schema/composer-profile-schema.ts",
+    "shared/workbench/database/schema/releases.ts",
   ].join("\n"),
 });

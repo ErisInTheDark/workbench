@@ -363,6 +363,7 @@ export default class WorkbenchAppStateController {
       fileDrafts: changed(this.#repository.query(selectRows(appStateClientTables.fileDrafts))),
       globalPreferences: changed(this.#repository.query(selectRows(appStateClientTables.globalPreferences))),
       modelPreferences: changed(this.#repository.query(selectRows(appStateClientTables.modelPreferences))),
+      modelGroupDisclosures: changed(this.#repository.query(selectRows(appStateClientTables.modelGroupDisclosures))),
       lastLaunchTarget: changed(this.#repository.query(selectRows(appStateClientTables.lastLaunchTarget))),
       projectExpandedDirectories: changed(this.#repository.query(selectRows(appStateClientTables.projectExpandedDirectories))),
       projectPreferences: changed(this.#repository.query(selectRows(appStateClientTables.projectPreferences))),
@@ -402,6 +403,10 @@ export default class WorkbenchAppStateController {
           harness: record.harness, model_id: record.modelId, favourite: Number(record.favourite) as 0 | 1, deleted: 0, revision,
           }, { conflictColumns: ["harness", "model_id"], updateColumns: ["favourite", "deleted", "revision"] }),
         ];
+      case "modelGroupDisclosure":
+        return [upsertRow(appStateTables.modelGroupDisclosures, {
+          group_id: record.groupId, open: Number(record.open) as 0 | 1, deleted: 0, revision,
+        }, { conflictColumns: ["group_id"], updateColumns: ["open", "deleted", "revision"] })];
       case "globalPreference":
         return [upsertRow(appStateTables.globalPreferences, {
           ...scalarColumns(record.preference),
@@ -501,6 +506,10 @@ export default class WorkbenchAppStateController {
       case "modelPreference":
         return [updateRows(appStateTables.modelPreferences, { deleted: 1, revision }, {
           harness: identity.harness, model_id: identity.modelId,
+        })];
+      case "modelGroupDisclosure":
+        return [updateRows(appStateTables.modelGroupDisclosures, { deleted: 1, revision }, {
+          group_id: identity.groupId,
         })];
       case "globalPreference":
         return [updateRows(appStateTables.globalPreferences, {

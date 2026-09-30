@@ -41,23 +41,43 @@ test("target reset fences old failures and current failures remain visible", asy
   controller.reset();
   reject(new Error("Previous target unavailable"));
   await pending;
-  assert.equal(controller.getSnapshot().modelsError, "");
+  assert.equal(controller.getSnapshot().modelsErrorByHarness.codex, undefined);
   await controller.loadModels("codex", async () => { throw new Error("Current target unavailable"); });
-  assert.equal(controller.getSnapshot().modelsError, "Current target unavailable");
-  assert.equal(controller.getSnapshot().modelsLoading, false);
+  assert.equal(controller.getSnapshot().modelsErrorByHarness.codex, "Current target unavailable");
+  assert.equal(controller.getSnapshot().modelsLoadingByHarness.codex, false);
 });
 
 test("model results retain their provider identity across a later selection", async () => {
   const controller = new ThreadProfileEditorController();
   const codex = Promise.withResolvers<[]>();
   const stale = controller.loadModels("codex", () => codex.promise);
-  assert.equal(controller.getSnapshot().modelsHarness, "codex");
+  assert.equal(controller.getSnapshot().modelsLoadingByHarness.codex, true);
   const loading = controller.loadModels("opencode", async () => []);
-  assert.equal(controller.getSnapshot().modelsHarness, "opencode");
+  assert.equal(controller.getSnapshot().modelsLoadingByHarness.opencode, true);
   await loading;
   codex.resolve([]);
   await stale;
-  assert.equal(controller.getSnapshot().modelsHarness, "opencode");
+  assert.deepEqual(controller.getSnapshot().modelsByHarness, { codex: [], opencode: [] });
   controller.resetModels();
-  assert.equal(controller.getSnapshot().modelsHarness, null);
+  assert.deepEqual(controller.getSnapshot().modelsByHarness, {});
+});
+
+test("model catalogues remain available after another provider finishes loading", async () => {
+  const controller = new ThreadProfileEditorController();
+  const codexModel = { id: "codex-model" };
+  const openCodeModel = { id: "opencode-go/model" };
+  await controller.loadModels("codex", async () => [codexModel] as never);
+  await controller.loadModels("opencode", async () => [openCodeModel] as never);
+  assert.deepEqual(controller.getSnapshot().modelsByHarness?.codex, [codexModel]);
+  assert.deepEqual(controller.getSnapshot().modelsByHarness?.opencode, [openCodeModel]);
+});
+
+test("a late refresh cannot replace a newer catalogue for the same provider", async () => {
+  const controller = new ThreadProfileEditorController();
+  const older = Promise.withResolvers<[]>();
+  const pending = controller.loadModels("codex", () => older.promise);
+  await controller.loadModels("codex", async () => [{ id: "new" }] as never);
+  older.resolve([]);
+  await pending;
+  assert.deepEqual(controller.getSnapshot().modelsByHarness.codex, [{ id: "new" }]);
 });

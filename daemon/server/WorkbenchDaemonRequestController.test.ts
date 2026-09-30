@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController.ts";
 import { applyComposerProfileMutation, normalizeComposerProfileMutation } from "workbench-shared/workbench/state/composer-profile-state";
-import type { WorkbenchComposerProfile } from "workbench-shared/types";
+import type { WorkbenchComposerProfile, WorkbenchModelOption } from "workbench-shared/types";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema.ts";
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository.ts";
 import { WorkbenchStatsResponseSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
@@ -97,6 +97,8 @@ function createController(options: {
   questionnaireResponses?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["questionnaireResponses"];
   commandApprovals?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["commandApprovals"];
   projectSnapshot?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["projectSnapshot"];
+  modelUsage?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["modelUsage"];
+  models?: WorkbenchModelOption[];
 } = {}) {
   let globalNetworkEnabled = false;
   const projectNetworkOverrides = new Map<string, boolean>();
@@ -118,10 +120,11 @@ function createController(options: {
   };
   const controller = new WorkbenchDaemonRequestController({
     commandApprovals: options.commandApprovals,
+    modelUsage: options.modelUsage ?? { read: async () => [] },
     providers: options.providers ?? { get: () => ({
       threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
       configuration: {
-        modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused },
+        modelContext: { read: unused }, models: { read: async () => options.models ?? [] }, guidance: { contains: unused },
         sandboxNetwork: {
           read: readNetwork,
           update: async ({ enabled, projectId, scope }) => {
@@ -276,6 +279,36 @@ function createController(options: {
     targetWrites,
   };
 }
+
+test("model catalogue includes durable accepted use without a second request", async () => {
+  const now: number[] = [];
+  const { controller } = createController({
+    models: [{ id: "opencode-go/model" }, { id: "opencode-go/unused" }] as WorkbenchModelOption[],
+    modelUsage: { read: async at => {
+      now.push(at);
+      return [{ harness: "opencode", modelId: "opencode-go/model", lastUsedAt: at }];
+    } },
+  });
+  const response = await controller.handle({ id: 1, method: "models/list", params: { provider: "opencode" } });
+  assert.equal(response.error, undefined);
+  assert.deepEqual(response.result, { data: [
+    { id: "opencode-go/model", lastUsedAt: now[0] },
+    { id: "opencode-go/unused", lastUsedAt: null },
+  ] });
+});
+
+test("model catalogue remains usable if accepted-use storage fails", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (message: string) => { warnings.push(message); });
+  const { controller } = createController({
+    models: [{ id: "model" }] as WorkbenchModelOption[],
+    modelUsage: { read: async () => { throw new Error("private-storage-marker"); } },
+  });
+  const response = await controller.handle({ id: 1, method: "models/list", params: { provider: "codex" } });
+  assert.deepEqual(response.result, { data: [{ id: "model", lastUsedAt: null }] });
+  assert.equal(warnings.length, 1);
+  assert.ok(!warnings[0]!.includes("private-storage-marker"));
+});
 
 test("questionnaire response dispatch validates and delegates one semantic daemon intent", async () => {
   const submissions: object[] = [];

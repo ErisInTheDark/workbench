@@ -28,6 +28,7 @@
  * - WorkbenchProjectRemap: daemon-scoped address adoption.
  * - WorkbenchDaemonRegistrationRequestSchema/WorkbenchDaemonRegistrationSchema: durable peer-to-browser registration mapping.
  * - WorkbenchClientStateProjectAliasesSchema: app-owned source-qualified canonical project addresses.
+ * - modelGroupDisclosure records: browser-scoped model section visibility.
  */
 import { appStateClientTables } from "./workbench-app-state-schema.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
@@ -149,6 +150,7 @@ export interface WorkbenchQuestionnaireDraftValue {
 
 export type WorkbenchClientStateRecord =
   | { kind: "modelPreference"; harness: WorkbenchHarnessValue; modelId: string; favourite: boolean }
+  | { kind: "modelGroupDisclosure"; groupId: string; open: boolean }
   | { kind: "globalPreference"; preference: WorkbenchGlobalPreference }
   | (ProjectScoped & { kind: "projectPreference"; preference: WorkbenchProjectPreference })
   | (ProjectScoped & { kind: "sidebarPreference"; preference: WorkbenchSidebarPreference })
@@ -161,6 +163,7 @@ export type WorkbenchClientStateRecord =
 
 export type WorkbenchClientStateIdentity =
   | { kind: "modelPreference"; harness: WorkbenchHarnessValue; modelId: string }
+  | { kind: "modelGroupDisclosure"; groupId: string }
   | { kind: "globalPreference"; key: WorkbenchGlobalPreference["key"] }
   | (ProjectScoped & { key: WorkbenchProjectPreference["key"]; kind: "projectPreference" })
   | (ProjectScoped & { key: WorkbenchSidebarPreference["key"]; kind: "sidebarPreference" })
@@ -237,6 +240,7 @@ const attachment = z.object({ id: address, url: z.string() });
 export const WorkbenchClientStateRecordSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("modelPreference"), harness: ProviderKeySchema,
     modelId: z.string(), favourite: z.boolean() }),
+  z.object({ kind: z.literal("modelGroupDisclosure"), groupId: z.string().min(1).max(600), open: z.boolean() }),
   z.object({ kind: z.literal("globalPreference"), preference: GlobalPreferenceSchema }),
   z.object({ kind: z.literal("projectPreference"), ...projectAddress,
     preference: ProjectPreferenceSchema }),
@@ -267,6 +271,7 @@ export const WorkbenchClientStateRecordSchema = z.discriminatedUnion("kind", [
 
 export const WorkbenchClientStateIdentitySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("modelPreference"), harness: ProviderKeySchema, modelId: z.string() }),
+  z.object({ kind: z.literal("modelGroupDisclosure"), groupId: z.string().min(1).max(600) }),
   z.object({ kind: z.literal("globalPreference"), key: z.enum([
     "composerSpellCheck", "editorSpellCheck", "projectStatusCountsExpanded", "projectsOpen",
     "reactDevelopmentMode", "reloadNecessaryOpen", "showUnopenableFiles", "sidebarCollapsed",
@@ -328,6 +333,7 @@ export function isWorkbenchBrowserStateId(value: string): boolean {
 
 const mutationPathByKind = {
   modelPreference: "/api/workbench-client-state/model-preference",
+  modelGroupDisclosure: "/api/workbench-client-state/model-group-disclosure",
   composerDraft: "/api/workbench-client-state/composer-draft",
   expandedDirectory: "/api/workbench-client-state/expanded-directory",
   fileDraft: "/api/workbench-client-state/file-draft",

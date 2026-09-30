@@ -71,11 +71,6 @@ test("isolated host and app do not inherit the caller's supervisor ownership", a
     });
   }
   const rejectBorrowedOwner = `
-    import path from "node:path";
-    const expectedTemporaryRoot = path.resolve(process.cwd(), "..", ".workbench", "tmp");
-    if (path.resolve(process.env.WORKBENCH_TEMPORARY_ROOT ?? "") !== expectedTemporaryRoot) {
-      throw new Error("Fixture temporary root does not belong to this process's project root");
-    }
     for (const key of ["WORKBENCH_SERVICE_ACK_REQUIRED", "WORKBENCH_SERVICE_RUNTIME", "WORKBENCH_FOREGROUND_PIPE"]) {
       if (process.env[key]) throw new Error("Borrowed parent supervision: " + key);
     }
@@ -83,6 +78,9 @@ test("isolated host and app do not inherit the caller's supervisor ownership", a
   const fixture = await runtime(context, context.signal, undefined, {
     host: `
       ${rejectBorrowedOwner}
+      if (process.env.WORKBENCH_TEMPORARY_ROOT) {
+        throw new Error("Host must not pass its temporary root to a daemon child");
+      }
       if (!process.env.WORKBENCH_SERVICE_SESSION || process.env.WORKBENCH_SERVICE_SESSION === "parent-supervision-session") {
         throw new Error("Host must own a fresh supervision session");
       }
@@ -90,6 +88,11 @@ test("isolated host and app do not inherit the caller's supervisor ownership", a
     `,
     app: `
       ${rejectBorrowedOwner}
+      import path from "node:path";
+      const expectedTemporaryRoot = path.resolve(process.cwd(), "..", ".workbench", "tmp");
+      if (path.resolve(process.env.WORKBENCH_TEMPORARY_ROOT ?? "") !== expectedTemporaryRoot) {
+        throw new Error("App temporary root does not belong to its project");
+      }
       if (process.env.WORKBENCH_SERVICE_SESSION) throw new Error("App inherited a host session");
       console.log("listening at http://127.0.0.1:12345");
       process.on("message", message => {

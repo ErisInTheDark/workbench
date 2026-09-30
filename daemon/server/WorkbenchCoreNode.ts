@@ -29,6 +29,7 @@ import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 import WorkbenchAgentSkillCatalogController from "./WorkbenchAgentSkillCatalogController";
 import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
+import WorkbenchModelUsageStore from "./WorkbenchModelUsageStore";
 import VoiceSettingsStore from "./voice/VoiceSettingsStore";
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import WorkbenchAgentContextController from "./WorkbenchAgentContextController";
@@ -120,6 +121,7 @@ function createWorkbenchCoreFeature(
     identities: threadIdentity,
   });
   const profileStore = new WorkbenchComposerProfileStore(database);
+  const modelUsage = new WorkbenchModelUsageStore(database);
   const voiceSettings = new VoiceSettingsStore(database);
   const logThreadStateWarning = (message: string) => {
     console.warn("[thread-state-ws]", message.slice(0, 500));
@@ -241,6 +243,7 @@ function createWorkbenchCoreFeature(
     identities: { threads: threadIdentity, items: transcriptIdentity },
     readComposerProfiles: () => profileStore.read(),
     recordComposerProfileUsage: (profileId, at) => profileStore.recordUsage(profileId, at),
+    recordComposerModelUsage: (harness, modelId, at) => modelUsage.record(harness, modelId, at),
     database,
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
     gitArcs: gitArc,
@@ -352,6 +355,7 @@ function createWorkbenchCoreFeature(
     gitArc,
     nativeFiles: new WorkbenchNativeFileController(projectCatalog),
     profiles: profileStore,
+    modelUsage,
     profileTargets: {
       readComposerProfileTarget: async (slot) => await threadState.controller.readComposerProfileTarget(slot),
       setComposerProfileTarget: async (slot, selection) => await threadState.controller.setComposerProfileTarget(slot, selection),
@@ -441,6 +445,7 @@ function createWorkbenchCoreFeature(
       reportPhase("composer profile disposal");
       await voiceSettings.dispose();
       await profileStore.dispose();
+      await modelUsage.dispose();
       reportPhase("search disposal");
       await search.dispose();
       reportPhase("project snapshot disposal");
@@ -505,6 +510,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "shared/workbench/daemon/workbench-daemon-requests.ts",
     "shared/workbench/daemon/WorkbenchDaemonClient.ts",
     "daemon/server/WorkbenchComposerProfileStore.ts",
+    "daemon/server/WorkbenchModelUsageStore.ts",
     "shared/workbench/state/composer-profile-state.ts",
     "daemon/server/lib/codex/codex-home.ts",
     "shared/workbench/thread/thread-profile.ts",

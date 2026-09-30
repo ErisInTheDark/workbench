@@ -786,6 +786,20 @@ const modelPreferencesHistory = defineTableHistory({
   })],
 });
 
+const modelGroupDisclosures = defineTable("model_group_disclosures", {
+  group_id: text().primaryKey(),
+  open: booleanInteger().notNull(),
+  ...revisionColumns(),
+});
+const modelGroupDisclosuresHistory = defineTableHistory({
+  current: modelGroupDisclosures,
+  versions: [tableVersion({
+    migration: createTable(modelGroupDisclosures),
+    schemaVersion: appStateReleases.modelGroupDisclosures.version,
+    table: modelGroupDisclosures,
+  })],
+});
+
 const projectAliases = defineTable("project_aliases", {
   daemon_registration_id: registrationForeignKey(),
   alias: text().notNull(),
@@ -807,6 +821,7 @@ const histories = [
   ...workbenchNetworkHistory(appStateReleases.privateNetworking.version, appStateReleases.networkModes.version, appStateReleases.networkGroups.version),
   workbenchHarnessesHistory,
   modelPreferencesHistory,
+  modelGroupDisclosuresHistory,
   appStateMetadataHistory,
   daemonRegistrationsHistory,
   projectAliasesHistory,
@@ -829,6 +844,7 @@ const histories = [
 
 export const appStateClientTables = Object.freeze({
   modelPreferences: modelPreferencesHistory.current,
+  modelGroupDisclosures: modelGroupDisclosuresHistory.current,
   composerDraftAttachments: composerDraftAttachmentsHistory.current,
   composerDrafts: composerDraftsHistory.current,
   fileDrafts: fileDraftsHistory.current,

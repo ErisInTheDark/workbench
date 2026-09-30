@@ -46,6 +46,7 @@ export interface WorkbenchClientStateControllerOptions {
 function identityKey(identity: WorkbenchClientStateIdentity) {
   switch (identity.kind) {
     case "modelPreference": return JSON.stringify([identity.kind, identity.harness, identity.modelId]);
+    case "modelGroupDisclosure": return JSON.stringify([identity.kind, identity.groupId]);
     case "globalPreference": return JSON.stringify([identity.kind, identity.key]);
     case "projectPreference":
     case "sidebarPreference": return JSON.stringify([identity.kind, identity.daemonRegistrationId, identity.projectId, identity.key]);

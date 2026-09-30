@@ -1,0 +1,70 @@
+/* No production exports. Tests protect Claude model-use admission and post-acceptance failure reporting. */
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import ClaudeThreadOperations from "./ClaudeThreadOperations";
+
+const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
+const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");
+const projectId = ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003");
+const selection = { kind: "custom" as const, settings: {
+  harness: "claude", model: "sonnet", agentPath: null, agentSource: null,
+  reasoningEffort: null, serviceTier: null,
+} };
+
+function fixture({
+  failNative = false, failUsage = false, usage,
+}: {
+  failNative?: boolean;
+  failUsage?: boolean;
+  usage: string[];
+}) {
+  let reads = 0;
+  const owner = new ClaudeThreadOperations({
+    daemonOrigin: "http://127.0.0.1:1",
+    signal: new AbortController().signal,
+    resolveExecutable: () => "fake-claude",
+    createQuery: () => {
+      if (failNative) throw new Error("native start failed");
+      return {} as never;
+    },
+    buildInstructions: async () => "instructions",
+    state: { controller: {
+      getCanonicalThreadEntry: async () => ({
+        entryKind: "thread", lifecycle: { kind: "needsAttention" }, profile: selection,
+      }),
+      recordAcceptedSelection: async (applied: typeof selection) => {
+        usage.push(applied.settings.model);
+        if (failUsage) throw new Error("history unavailable");
+      },
+    } },
+    transcript: {
+      startTurn: async () => turnId,
+      settleTurn: async () => undefined,
+    },
+  } as never);
+  Object.assign(owner, {
+    identity: async () => ({
+      threadId, projectId,
+      bindings: [{ harness: "claude", nativeLocation: "C:/repo", nativeThreadId: "native-session" }],
+    }),
+    read: async () => ({ turns: reads++ === 0 ? [] : [{ id: turnId, status: "inProgress" }] }),
+    consume: async () => undefined,
+  });
+  return owner;
+}
+
+test("Claude records accepted model use and treats recency failure as a warning, not an unsent turn", async context => {
+  context.mock.method(console, "warn", () => undefined);
+  const usage: string[] = [];
+  const input = { threadId, clientMessageId: "message", intent: "newTurn" as const,
+    input: [{ type: "text" as const, text: "hello", text_elements: [] }] };
+  const accepted = await fixture({ usage }).submit(input);
+  assert.equal(accepted.kind, "started");
+  assert.equal(accepted.warning, undefined);
+  const warned = await fixture({ usage, failUsage: true }).submit(input);
+  assert.equal(warned.kind, "started");
+  assert.match(warned.warning ?? "", /history unavailable/u);
+  await assert.rejects(fixture({ usage, failNative: true }).submit(input), /native start failed/u);
+  assert.deepEqual(usage, ["sonnet", "sonnet"]);
+});

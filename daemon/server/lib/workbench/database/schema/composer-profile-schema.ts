@@ -1,12 +1,13 @@
 /*
  * Exports:
  * - composerProfiles: named profiles with typed settings and scope.
+ * - composerModelUsage: last accepted turn per harness/model.
  * - composerProfileTables/composerProfileSchemaHistory: current catalogue inventory and schema history.
  */
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { ownProjectReferences } from "workbench-shared/workbench/database/schema/project-schema";
 import { workbenchHarnesses } from "workbench-shared/workbench/database/schema/core-schema";
-import { check, defineTable, enumText, evolveTable, integer, literal, sql, text } from "workbench-shared/database/schema/schema-definition";
+import { check, defineTable, enumText, evolveTable, integer, literal, primaryKey, sql, text } from "workbench-shared/database/schema/schema-definition";
 import { addColumns, copyDistinctValues, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion, retireTableHistory } from "workbench-shared/database/schema/schema-history";
 
 const profiles = defineTable("workbench_composer_profiles", {
@@ -65,9 +66,26 @@ const importHistory = defineTableHistory({
   current: imports,
   versions: [tableVersion({ schemaVersion: databaseReleases.composerProfiles.version, table: imports, migration: createTable(imports) })],
 });
+const modelUsage = defineTable("workbench_composer_model_usage", {
+  harness: text().notNull().references("workbench_harnesses", "id"),
+  model_id: text().notNull(),
+  last_used_at: integer().notNull().nonNegative(),
+}, table => ({
+  constraints: [primaryKey([table.harness, table.model_id])],
+}));
+const modelUsageHistory = defineTableHistory({
+  current: modelUsage,
+  versions: [tableVersion({
+    schemaVersion: databaseReleases.composerModelUsage.version,
+    table: modelUsage,
+    migration: createTable(modelUsage),
+  })],
+});
 export const composerProfiles = profileHistory.current;
-export const composerProfileTables = Object.freeze({ composerProfiles });
+export const composerModelUsage = modelUsageHistory.current;
+export const composerProfileTables = Object.freeze({ composerProfiles, composerModelUsage });
 export const composerProfileSchemaHistory = defineSubsystemHistory([
   ownProjectReferences(profileHistory, "scope_project_id"),
   retireTableHistory(importHistory, databaseReleases.retireLegacyImportReceipts.version),
+  modelUsageHistory,
 ]);

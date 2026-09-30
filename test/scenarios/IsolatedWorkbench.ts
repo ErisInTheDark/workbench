@@ -603,10 +603,12 @@ stream_max_retries = 0
       this.serviceChild.assertRunning();
       return;
     }
+    const hostEnvironment = this.environment(path.dirname(this.project));
+    delete hostEnvironment.WORKBENCH_TEMPORARY_ROOT;
     const child = spawn(process.execPath, ["--import", "tsx", "--import",
       pathToFileURL(path.join(this.project, ".workbench/isolated-shutdown.mjs")).href, "daemon/host/launch-node.mjs"], {
       ...createSpawnOptions(this.project, {
-        ...this.environment(path.dirname(this.project)), WORKBENCH_SERVICE_SESSION: this.serviceSession,
+        ...hostEnvironment, WORKBENCH_SERVICE_SESSION: this.serviceSession,
       }, true),
       windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe", "ipc"],
     });

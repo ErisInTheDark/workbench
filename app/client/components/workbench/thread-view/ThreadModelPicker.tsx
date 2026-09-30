@@ -1,15 +1,18 @@
 /*
  * Exports:
- * - default ThreadModelPicker: model radio cards with favourite actions and an Other disclosure.
+ * - default ThreadModelPicker: grouped model cards with sticky provider navigation and favourites.
  */
 "use client";
 
-import { JSX } from "react";
+import { JSX, useRef, useState } from "react";
 import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
-import { StarIcon, StarOffIcon } from "../workbench-icons";
+import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
+import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
+import { ClockIcon, HarnessIcon, StarIcon } from "../workbench-icons";
 import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import WorkbenchIconButton from "../WorkbenchIconButton";
 import WorkbenchTag from "../WorkbenchTag";
+import type { ThreadGroupedModel, ThreadModelGroup } from "./thread-model-groups";
 import ThreadDisclosure from "./ThreadDisclosure";
 
 function formatContextWindow (tokens: number | null) {
@@ -63,44 +66,67 @@ function buildFeatureList (model: WorkbenchModelOption) {
 
 export default function ThreadModelPicker ({
 	appliesOnNextTurnOnly,
-	unfavouritedModelIds,
-	error,
-	harness,
-	isLoading,
-	models,
+	favouriteKeys,
+	groups,
+	loadingByHarness,
+	errorByHarness,
 	onSelectModel,
 	onToggleFavourite,
 	selectedModelId,
+	selectedHarness,
 	favouritesDisabled = false,
 }: {
 	appliesOnNextTurnOnly: boolean;
-	unfavouritedModelIds: string[];
-	error: string;
-	harness: WorkbenchHarness;
-	isLoading: boolean;
-	models: WorkbenchModelOption[];
-	onSelectModel: (model: WorkbenchModelOption) => void;
-	onToggleFavourite: (modelId: string) => void;
+	favouriteKeys: ReadonlySet<string>;
+	groups: readonly ThreadModelGroup[];
+	loadingByHarness: Partial<Record<WorkbenchHarness, boolean>>;
+	errorByHarness: Partial<Record<WorkbenchHarness, string>>;
+	onSelectModel: (entry: ThreadGroupedModel) => void;
+	onToggleFavourite: (entry: ThreadGroupedModel) => void;
 	selectedModelId: string | null;
+	selectedHarness: WorkbenchHarness;
 	favouritesDisabled?: boolean;
 }) {
-	const visibleModels = models.filter((model) => model.policyState !== "disabled");
-	const topGroup = visibleModels.filter((model) => !unfavouritedModelIds.includes(model.id));
-	const bottomGroup = visibleModels.filter((model) => unfavouritedModelIds.includes(model.id));
+	const scroll = useRef<HTMLDivElement>(null);
+	const clientStateController = useWorkbenchClientStateController();
+	const clientState = useWorkbenchClientStateSnapshot();
+	const canPersistDisclosures = clientState.schemaVersion >= appStateReleases.modelGroupDisclosures.version;
+	const [disclosureError, setDisclosureError] = useState("");
+	const disclosureOpen = new Map(clientState.records.flatMap(record =>
+		record.kind === "modelGroupDisclosure" ? [[record.groupId, record.open] as const] : []));
+	const toggleDisclosure = (groupId: string, open: boolean) => {
+		setDisclosureError("");
+		void clientStateController.put({ kind: "modelGroupDisclosure", groupId, open }).catch(() => {
+			console.warn("Unable to save model section preference.");
+			setDisclosureError("Unable to save model section preference. Please try again.");
+		});
+	};
+	const scrollToGroup = (id: string) => {
+		const section = [...(scroll.current?.querySelectorAll<HTMLElement>("[data-model-group]") ?? [])]
+			.find(candidate => candidate.dataset.modelGroup === id);
+		if (scroll.current && section) {
+			scroll.current.scrollTop += section.getBoundingClientRect().top - scroll.current.getBoundingClientRect().top;
+		}
+	};
 
-	const renderModelCard = (model: WorkbenchModelOption, unfavourited: boolean) => {
+	const renderModelCard = (entry: ThreadGroupedModel, special: boolean) => {
+		const { harness, model } = entry;
 		const featureList = buildFeatureList(model);
-		const isSelected = selectedModelId === model.id;
+		const isSelected = selectedHarness === harness && selectedModelId === model.id;
+		const favourite = favouriteKeys.has(`${harness}\0${model.id}`);
 
 		return (
 				<WorkbenchOptionCard
-					key={model.id}
+					key={`${harness}:${model.id}`}
 					density="tight"
 					className="min-w-0"
 					isChecked={isSelected}
-					onClick={() => onSelectModel(model)}
+					onClick={() => onSelectModel(entry)}
 					label={<span className="grid gap-1">
-						<span>{model.displayName}</span>
+						<span className="inline-flex min-w-0 items-center gap-2">
+							{special ? <HarnessIcon harness={harness} size={16} className="shrink-0" /> : null}
+							<span className="truncate">{model.displayName}</span>
+						</span>
 						{featureList.length ? <span className="mb-1 flex flex-wrap gap-1.5">
 							{featureList.map((feature, index) => <WorkbenchTag key={index}>{feature}</WorkbenchTag>)}
 						</span> : null}
@@ -108,42 +134,55 @@ export default function ThreadModelPicker ({
 					actions={<WorkbenchIconButton
 						size="small"
 						disabled={favouritesDisabled}
-						label={`${unfavourited ? "Favourite" : "Unfavourite"} ${model.displayName}`}
-						onClick={() => onToggleFavourite(model.id)}
-					>{unfavourited ? <StarIcon size={16} /> : <StarOffIcon size={16} />}</WorkbenchIconButton>}
+						label={`${favourite ? "Unfavourite" : "Favourite"} ${model.displayName}`}
+						aria-pressed={favourite}
+						onClick={() => onToggleFavourite(entry)}
+					><StarIcon size={16} className={favourite ? "fill-current" : undefined} /></WorkbenchIconButton>}
 				/>
 		);
 	};
 
 	return (
-		<>
-			{appliesOnNextTurnOnly ? <p className="text-xs text-fg/muted">Changes apply to the next new turn.</p> : null}
-			{error ? (
-				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-danger">{error}</p>
-			) : null}
-			{isLoading ? (
-				<div role="status" aria-label="Loading models" className="mt-1 grid gap-2">
-					{Array.from({ length: 3 }, (_, index) => (
-						<div key={index} className="h-10 w-full rounded-lg workbench-skeleton" aria-hidden="true" />
-					))}
+		<div className="flex min-h-0 flex-col -ml-2 -mt-1 -mr-1">
+			{disclosureError ? <p role="alert" className="m-0 px-2 pb-2 text-xs text-danger">{disclosureError}</p> : null}
+			<div ref={scroll} className="min-h-0 flex-1 flex items-start gap-2">
+				<nav aria-label="Model providers" className="sticky -top-1 flex max-h-full flex-col items-center overflow-y-auto overscroll-contain">
+					{groups.filter(group => !group.providerId || group.providerId === "opencode").map(group => <button
+						key={group.id}
+						type="button"
+						aria-label={group.label}
+						title={group.label}
+						className="enabled:cursor-pointer flex size-9 shrink-0 items-center justify-center rounded-lg text-fg/muted hover:bg-button-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+						onClick={() => scrollToGroup(group.id)}
+					>
+						{group.kind === "favourites" ? <StarIcon size={20} />
+							: group.kind === "recent" ? <ClockIcon size={20} />
+								: <HarnessIcon harness={group.harness!} size={20} />}
+					</button>)}
+				</nav>
+				<div className="min-w-0 flex-grow">
+					{groups.map(group => <ThreadDisclosure key={group.id}
+						data-model-group={group.id}
+						role="group" aria-label={group.label}
+						className="pb-3"
+						defaultOpen={true}
+						open={canPersistDisclosures ? disclosureOpen.get(group.id) ?? true : undefined}
+						onToggle={canPersistDisclosures ? event => {
+							const open = event.currentTarget.open;
+							if (open !== (disclosureOpen.get(group.id) ?? true)) toggleDisclosure(group.id, open);
+						} : undefined}
+						summary={<div className="flex items-center gap-2 py-2 text-[0.68rem] font-semibold uppercase tracking-widest text-fg/muted">
+							<span>{group.label}</span><span className="h-px min-w-2 flex-1 bg-[color-mix(in_srgb,var(--text)_12%,transparent)]" />
+						</div>}
+					>
+						{group.models.length ? <div className="grid gap-2">
+							{group.models.map(entry => renderModelCard(entry, group.kind !== "provider"))}
+						</div> : group.harness && loadingByHarness[group.harness] ? <p role="status" className="m-0 text-xs text-fg/muted">Loading models...</p>
+							: group.harness && errorByHarness[group.harness] ? <p role="alert" className="m-0 text-xs text-danger">{errorByHarness[group.harness]}</p>
+								: <p className="m-0 text-xs text-fg/muted">No models here yet.</p>}
+					</ThreadDisclosure>)}
 				</div>
-			) : (
-				<div className="mt-1 space-y-2">
-					<div role="group" aria-label={`${harness} models`} className="grid gap-2">
-						{topGroup.map((model) => renderModelCard(model, false))}
-					</div>
-					{bottomGroup.length ? (
-						<ThreadDisclosure summary="Other" contentClassName="pt-1">
-							<div role="group" aria-label={`${harness} other models`} className="grid gap-2">
-								{bottomGroup.map((model) => renderModelCard(model, true))}
-							</div>
-						</ThreadDisclosure>
-					) : null}
-					{!visibleModels.length && !error ? (
-						<p className="m-0 text-[0.84em] leading-[1.6] text-fg/muted">No models are available for this harness.</p>
-					) : null}
-				</div>
-			)}
-		</>
+			</div>
+		</div>
 	);
 }

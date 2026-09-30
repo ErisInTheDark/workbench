@@ -168,6 +168,7 @@ export interface WorkbenchThreadStateControllerOptions {
   resolveProjectId: (projectId: ProjectId) => ProjectId;
   readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
   recordComposerProfileUsage?: (profileId: string, at: number) => Promise<void>;
+  recordComposerModelUsage?: (harness: WorkbenchHarnessId, modelId: string, at: number) => Promise<void>;
   getProjectCatalog: () => WorkbenchProjectsPayload;
   hasGitArcBlockingSettlement: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<boolean>;
   log?: (message: string) => void;
@@ -679,7 +680,7 @@ export default class WorkbenchThreadStateController {
       try {
         const [snapshot, usage] = await Promise.allSettled([
           this.persistComposerProfileTarget(state, slot, selection),
-          selection.kind === "profile" ? this.options.recordComposerProfileUsage?.(selection.profileId, acceptedAt) : undefined,
+          this.recordAcceptedSelection(selection, acceptedAt),
         ] as const);
         const failures = [
           snapshot.status === "rejected" ? sanitizeError(snapshot.reason)
@@ -1306,6 +1307,17 @@ export default class WorkbenchThreadStateController {
 
   private assertActive() {
     if (!this.active) throw this.retiredError;
+  }
+
+  async recordAcceptedSelection(selection: WorkbenchComposerProfileTargetSelection, at: number) {
+    const results = await Promise.allSettled([
+      selection.settings.model ? this.options.recordComposerModelUsage?.(
+        selection.settings.harness, selection.settings.model, at,
+      ) : undefined,
+      selection.kind === "profile" ? this.options.recordComposerProfileUsage?.(selection.profileId, at) : undefined,
+    ]);
+    const failures = results.flatMap(result => result.status === "rejected" ? [sanitizeError(result.reason)] : []);
+    if (failures.length) throw new Error(failures.join(" / "));
   }
 
   subscribeProjects(listener: (projectId: ProjectId) => void) {

@@ -4,7 +4,6 @@
  */
 "use client";
 import { useWorkbenchThread } from "../use-workbench-thread";
-import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 
@@ -416,9 +415,6 @@ export default memo(function ThreadViewContent ({
   const resolvedActiveThread = activeThread && activeProfileSlot
     ? composerProfileController.resolveThread(activeProfileSlot, activeThread)
     : activeThread;
-  const canSelectHarness = Boolean(activeThread?.isDraft && activeProfileSlot
-    && (installedProviderKeys.length > 1 || !installedProviderKeys.some(harness => harness === activeThread.harness))
-    && composerProfileController.getDisplaySelection(activeProfileSlot).kind === "custom");
   void composerProfileSnapshot;
   useEffect(() => {
     if (activeProfileSlot) void composerProfileController.loadSelection(activeProfileSlot);
@@ -939,16 +935,6 @@ export default memo(function ThreadViewContent ({
     onThreadCodeBlockWrapChange(nextValue);
   }, [handleCodeBlockCopy, onThreadCodeBlockWrapChange, syncCodeBlockWrapDomState]);
 
-  const handleComposerHarnessSelect = (nextHarness: WorkbenchHarness) => {
-    if (!activeThread?.isDraft || !activeProfileSlot || activeThread.harness === nextHarness) return;
-    const selectedThread = activeThread;
-    const slot = activeProfileSlot;
-    void composerProfileController.selectHarness(slot, nextHarness, () => threads.listModels(nextHarness)).then((saved) => {
-      if (!saved) return;
-      const settings = composerProfileController.resolveSettings(slot);
-      if (settings) handleThreadSettingsChange(selectedThread.id, settings);
-    });
-  };
   const composerStatus = activeThread ? (
     <ThreadRateLimits
       harness={resolvedActiveThread?.harness ?? activeThread.harness}
@@ -975,14 +961,12 @@ export default memo(function ThreadViewContent ({
       autoFocusOnEntry={isFocused}
       onDraftSessionChange={onDraftSessionChange}
       targetControl={isDraftThreadView ? draftTargetControl : null}
-      canToggleHarness={canSelectHarness}
       header={fileIndexError}
       key={`${projectId}:${activeThread.id}`}
       composerSpellCheck={composerSpellCheck}
       onListModels={threads.listModels}
       subscribeModelUpdates={threads.subscribeModelUpdates}
       highlightSources={inlineMentionSources}
-      onHarnessSelect={handleComposerHarnessSelect}
       onSendMessage={handleSendMessage}
       onStopThread={handleStopThread}
       onThreadComposerDraftChange={onThreadComposerDraftChange}

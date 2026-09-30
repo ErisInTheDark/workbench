@@ -17,13 +17,13 @@ import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } fr
 import { ReloadIcon, ZapIcon } from "../workbench-icons";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import WorkbenchIconButton from "../WorkbenchIconButton";
-import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
 import WorkbenchPopover from "../WorkbenchPopover";
 import WorkbenchPressDragSlider from "../WorkbenchPressDragSlider";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
-import ThreadHarnessControl from "./ThreadHarnessControl";
 import ThreadModelPicker from "./ThreadModelPicker";
+import { groupThreadModels, type ThreadGroupedModel } from "./thread-model-groups";
+import { formatHarnessLabel } from "./harness-label";
 import type ThreadProfileEditorController from "./ThreadProfileEditorController";
 import type { ProfileEditorSection } from "./ThreadProfileEditorController";
 import ThreadProfilePicker from "./ThreadProfilePicker";
@@ -42,7 +42,7 @@ export function profileContextColour (fraction: number) {
 }
 
 export default function ThreadProfileEditor ({
-  anchor, trigger, controller, slot, fallbackSettings, onCustomChange, onRefreshModels, onRefreshAgents, onHarnessSelect, canToggleHarness, onProfileHarnessSelect,
+  anchor, trigger, controller, slot, fallbackSettings, onCustomChange, onRefreshModels, onRefreshAgents,
 }: {
   anchor: HTMLElement;
   trigger: HTMLElement;
@@ -52,9 +52,6 @@ export default function ThreadProfileEditor ({
   onCustomChange: (settings: WorkbenchComposerSettings) => void;
   onRefreshModels: (harness: WorkbenchComposerSettings["harness"]) => void;
   onRefreshAgents: () => void;
-  onHarnessSelect?: (harness: WorkbenchComposerSettings["harness"]) => void;
-  canToggleHarness: boolean;
-  onProfileHarnessSelect?: (profileId: string, harness: WorkbenchComposerSettings["harness"]) => void;
 }) {
   const profiles = useWorkbenchComposerProfiles();
   const clientStateController = useWorkbenchClientStateController();
@@ -62,28 +59,39 @@ export default function ThreadProfileEditor ({
   const [favouriteError, setFavouriteError] = useState("");
   const sectionId = useId();
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
-  const profile = profiles.controller.getLinkedProfile(slot);
+  const profile = profiles.controller.getSelectedProfile(slot);
   const settings = profile ? copyComposerSettings(profile) : profiles.controller.resolveSettings(slot) ?? fallbackSettings;
-  const unfavouritedModelIds = clientState.records.flatMap(record =>
-    record.kind === "modelPreference" && record.harness === settings.harness && !record.favourite ? [record.modelId] : []);
+  const favourites = clientState.records.flatMap(record =>
+    record.kind === "modelPreference" && record.favourite
+      ? [{ harness: record.harness, modelId: record.modelId }] : []);
+  const favouriteKeys = new Set(favourites.map(item => `${item.harness}\0${item.modelId}`));
+  const allowedHarnesses = slot.kind === "thread" ? [settings.harness] : [...installedProviderKeys];
+  const groups = groupThreadModels({
+    catalogues: state.modelsByHarness,
+    favourites,
+    allowedHarnesses,
+    now: Date.now(),
+  });
   const canSaveFavourites = clientState.schemaVersion >= 7;
-  const toggleFavourite = async (modelId: string) => {
+  const toggleFavourite = async ({ harness, model }: ThreadGroupedModel) => {
     if (!canSaveFavourites) return;
     setFavouriteError("");
     try {
-      await clientStateController.put({
-        kind: "modelPreference", harness: settings.harness, modelId, favourite: unfavouritedModelIds.includes(modelId),
-      });
+      if (favouriteKeys.has(`${harness}\0${model.id}`)) {
+        await clientStateController.delete({ kind: "modelPreference", harness, modelId: model.id });
+      } else {
+        await clientStateController.put({ kind: "modelPreference", harness, modelId: model.id, favourite: true });
+      }
     } catch {
       console.warn("Unable to save model favourite preference.");
       setFavouriteError("Unable to save model favourite. Please try again.");
     }
   };
-  const visibleModels = state.modelsHarness === settings.harness ? state.models : [];
+  const visibleModels = state.modelsByHarness[settings.harness] ?? [];
   const model = visibleModels.find((entry) => entry.id === settings.model);
-  const modelError = state.modelsHarness === settings.harness ? state.modelsError : "";
-  const modelsLoading = state.modelsHarness !== settings.harness || state.modelsLoading
-    || settings.harness === "opencode" && !visibleModels.length && !modelError;
+  const modelError = state.modelsErrorByHarness[settings.harness] ?? "";
+  const modelsLoading = Boolean(state.modelsLoadingByHarness[settings.harness])
+    || !state.modelsByHarness[settings.harness] && !modelError;
   const efforts = model?.supportedReasoningEfforts ?? [];
   const capability = model?.contextWindow;
   const showsEffort = Boolean(model?.supportsReasoningEffort && efforts.length);
@@ -118,16 +126,16 @@ export default function ThreadProfileEditor ({
         role="region"
         aria-labelledby={`${sectionId}-${section}-summary`}
         hidden={!active}
-        className="min-h-0 overflow-y-auto overscroll-contain px-4 py-3 border-b border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
+        className={`min-h-0 overflow-y-auto overscroll-contain px-4 py-3 border-b border-[color-mix(in_srgb,var(--text)_10%,transparent)]`}
       >{content}</div>
     </section>;
   };
   const refresh = state.activeSection === "model"
-    ? { label: "Refresh models", loading: state.modelsLoading, run: () => onRefreshModels(settings.harness) }
+    ? { label: "Refresh models", loading: allowedHarnesses.some(harness => state.modelsLoadingByHarness[harness]), run: () => allowedHarnesses.forEach(onRefreshModels) }
     : state.activeSection === "agent"
       ? { label: "Refresh agents", loading: state.agentsLoading, run: onRefreshAgents }
       : null;
-  const rows = ["profile", "harness", "model", ...(showsEffort || showsFastMode ? ["effort"] : []), ...(capability ? ["context"] : []), "agent"];
+  const rows = ["profile", "model", ...(showsEffort || showsFastMode ? ["effort"] : []), ...(capability ? ["context"] : []), "agent"];
 
   return <WorkbenchPopover anchor={anchor} trigger={trigger} label="Profile customisation" onClose={controller.close}>
     <header className="min-w-0 px-4 py-3">
@@ -151,30 +159,24 @@ export default function ThreadProfileEditor ({
       {block("profile", "Profile", profile?.name || (profile ? profile.model : "Custom"), <ThreadProfilePicker
         agents={state.agents} currentSettings={settings} models={visibleModels} projectId={slot.projectId} slot={slot}
       />)}
-      {block("harness", "Provider", <ThreadHarnessControl harness={settings.harness} />, <div className="text-sm text-fg/muted">
-        {profile
-          ? <div className="grid gap-2">{installedProviderKeys.map((harness) => <WorkbenchOptionCard key={harness} density="tight" label={<ThreadHarnessControl harness={harness} />} isChecked={harness === settings.harness} onClick={() => { onProfileHarnessSelect?.(profile.id, harness); }} />)}</div>
-          : canToggleHarness && slot.kind !== "thread" && onHarnessSelect
-            ? <div className="grid gap-2">{installedProviderKeys.map((harness) => <WorkbenchOptionCard key={harness} density="tight" label={<ThreadHarnessControl harness={harness} />} isChecked={harness === settings.harness} onClick={() => onHarnessSelect(harness)} />)}</div>
-            : <p className="m-0">The provider is fixed for this thread.</p>}
-      </div>)}
-      {block("model", "Model", modelsLoading ? "Loading..." : modelError ? "Unavailable" : model?.displayName ?? settings.model, <>
+      {block("model", "Model", `${formatHarnessLabel(settings.harness)} · ${modelsLoading ? "Loading..." : modelError ? "Unavailable" : model?.displayName ?? settings.model}`, <div className="flex h-full min-h-0 flex-col gap-2">
         {!canSaveFavourites ? <p className="text-xs text-fg/muted">Reload the app database to enable saving model favourites.</p> : null}
         {favouriteError ? <p role="alert" className="text-sm text-danger">{favouriteError}</p> : null}
-        <ThreadModelPicker
-          appliesOnNextTurnOnly={slot.kind === "thread"} unfavouritedModelIds={unfavouritedModelIds}
+        <div className="min-h-0 flex-1"><ThreadModelPicker
+          appliesOnNextTurnOnly={slot.kind === "thread"} favouriteKeys={favouriteKeys}
           favouritesDisabled={!canSaveFavourites}
-          error={modelError} harness={settings.harness} isLoading={modelsLoading}
-          models={visibleModels} selectedModelId={settings.model}
-          onToggleFavourite={(id) => { void toggleFavourite(id); }}
-          onSelectModel={(selected) => update({
+          groups={groups} loadingByHarness={state.modelsLoadingByHarness} errorByHarness={state.modelsErrorByHarness}
+          selectedHarness={settings.harness} selectedModelId={settings.model}
+          onToggleFavourite={(entry) => { void toggleFavourite(entry); }}
+          onSelectModel={({ harness, model: selected }) => update({
+            harness,
             model: selected.id,
             reasoningEffort: selected.supportsReasoningEffort ? selected.defaultReasoningEffort ?? selected.supportedReasoningEfforts[0] ?? null : null,
-            serviceTier: selected.supportsFastMode ? settings.serviceTier : null,
+            serviceTier: harness === settings.harness && selected.supportsFastMode ? settings.serviceTier : null,
             contextWindowTokens: selected.contextWindow?.defaultTokens ?? null,
           })}
-        />
-      </>)}
+        /></div>
+      </div>)}
       {showsEffort || showsFastMode || capability ? <div className="grid [grid-template-columns:auto_1fr_auto_auto] pr-3">
         {showsEffort ? <div className="grid grid-cols-subgrid col-span-3 min-w-0 items-center gap-3 px-4 py-0.5 text-sm">
           <span className="text-fg/muted">Effort</span>

@@ -1089,6 +1089,40 @@ test("retains a questionnaire while interrupting its exact OpenCode session", as
   ]);
 });
 
+test("accepted OpenCode roots record their applied model and keep storage failures as warnings", async context => {
+  context.mock.method(console, "warn", () => undefined);
+  const usage: string[] = [];
+  const profile = { kind: "custom", settings: {
+    harness: "opencode", model: "opencode-go/model", agentPath: null, agentSource: null,
+    reasoningEffort: null, serviceTier: null,
+  } };
+  const make = (fail: boolean) => {
+    const owner = operations({
+      session: { prompt: async () => ({}) },
+      message: { list: async () => ({ data: [], cursor: {} }) },
+    }, { record: async () => ({ threadId, latestTurnId: turnId }) }, {
+      controller: {
+        getCanonicalThreadEntry: async () => ({ entryKind: "thread", profile }),
+        recordAcceptedSelection: async (selection: typeof profile) => {
+          usage.push(selection.settings.model);
+          if (fail) throw new Error("history unavailable");
+        },
+      },
+    });
+    Object.assign(owner, { read: async () => ({ turns: [{ id: turnId, status: "inProgress", items: [] }] }) });
+    return owner;
+  };
+  const input = { threadId, clientMessageId: "used", intent: "newTurn" as const,
+    input: [{ type: "text" as const, text: "hello", text_elements: [] }] };
+  const accepted = await make(false).submit(input);
+  assert.equal(accepted.kind, "started");
+  assert.equal(accepted.warning, undefined);
+  const warned = await make(true).submit({ ...input, clientMessageId: "warning" });
+  assert.equal(warned.kind, "started");
+  assert.match(warned.warning ?? "", /history unavailable/u);
+  assert.deepEqual(usage, ["opencode-go/model", "opencode-go/model"]);
+});
+
 test("questionnaire continuation keeps a native prompt object while delivering working status", async () => {
   const prompts: Array<{ text: string; metadata: { workbench: { input: object[] } } }> = [];
   const owner = operations({

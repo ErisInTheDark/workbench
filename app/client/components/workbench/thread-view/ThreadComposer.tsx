@@ -16,6 +16,7 @@ import type {
   WorkbenchComposerSettings,
   WorkbenchListModelsOptions,
   WorkbenchModelOption,
+  WorkbenchHarness,
   WorkbenchSkillSummary,
   WorkbenchComposerInputDraft,
 } from "workbench-shared/types";
@@ -45,6 +46,7 @@ import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./m
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
 import StickyComposerSurface from "./StickyComposerSurface";
 import ThreadProfileQuickPicker from "./ThreadProfileQuickPicker";
+import ThreadModelQuickPicker from "./ThreadModelQuickPicker";
 import type DraftSessionController from "./DraftSessionController";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
@@ -96,14 +98,12 @@ const stickyComposerContentClassName = `
 export default function ThreadComposer ({
   autoFocusOnEntry = false,
   children,
-  canToggleHarness = false,
   composerSpellCheck,
   controlsMode = "thread",
   header,
   layout = "thread",
   onListModels,
   subscribeModelUpdates,
-  onHarnessSelect,
   onSendMessage,
   onStopThread,
   onThreadComposerDraftChange,
@@ -134,14 +134,12 @@ export default function ThreadComposer ({
 }: {
   autoFocusOnEntry?: boolean;
   children?: ReactNode | ((state: { isProfilePickerOpen: boolean }) => ReactNode);
-  canToggleHarness?: boolean;
   composerSpellCheck: boolean;
   controlsMode?: "comment" | "thread";
   header?: ReactNode;
   layout?: "thread" | "inline";
   onListModels: (harness: ThreadPayload["harness"], options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   subscribeModelUpdates?: (listener: (harness: ThreadPayload["harness"]) => void) => () => void;
-  onHarnessSelect?: (harness: ThreadPayload["harness"]) => void;
   onSendMessage: (
     threadId: string,
     input: UserInput[],
@@ -198,7 +196,9 @@ export default function ThreadComposer ({
   const [editorAnchor, setEditorAnchor] = useState<{ trigger: HTMLElement; ribbon: HTMLElement } | null>(null);
   const resolvedComposerSettings = profileSlot ? composerProfileController.resolveSettings(profileSlot) : null;
   const activeHarness = resolvedComposerSettings?.harness ?? thread.harness;
-  const availableModels = editorState.modelsHarness === activeHarness ? editorState.models : [];
+  const allowedHarnesses = useMemo<readonly WorkbenchHarness[]>(() => profileSlot?.kind === "thread"
+    ? [activeHarness] : installedProviderKeys, [profileSlot?.kind, activeHarness]);
+  const availableModels = editorState.modelsByHarness[activeHarness] ?? [];
   const availableAgents = editorState.agents;
   const [localError, setError] = useState("");
   const error = localError || editing.error || composerProfileSnapshot.error;
@@ -279,7 +279,7 @@ export default function ThreadComposer ({
   const defaultModelOption = availableModels.find((model) => model.isDefault) ?? null;
   const modelOptionForControls = selectedModel ? selectedModelOption : defaultModelOption;
   const modelButtonLabel = activeHarness === "opencode" && !availableModels.length
-    ? editorState.modelsHarness === activeHarness && editorState.modelsError ? "Model unavailable" : "Loading..."
+    ? editorState.modelsErrorByHarness[activeHarness] ? "Model unavailable" : "Loading..."
     : selectedModelOption?.displayName ?? selectedModel ?? "Default model";
   const supportedReasoningEfforts = modelOptionForControls?.supportedReasoningEfforts ?? [];
   const currentReasoningEffort = thread.reasoningEffort;
@@ -322,12 +322,13 @@ export default function ThreadComposer ({
     setEditorAnchor({ trigger, ribbon });
     profileEditor.toggle(section);
     void composerProfileController.refreshProfiles();
+    if (section === "model") void Promise.all(allowedHarnesses.map(harness => loadAvailableModels(harness, true)));
   };
   const loadAvailableAgents = useCallback(() => profileEditor.loadAgents(async () => {
     const payload = await daemon.agents.list({ projectId });
     return payload.data ?? [];
   }), [daemon, profileEditor, projectId]);
-  const loadAvailableModels = useCallback(async (harness: WorkbenchComposerSettings["harness"] = activeHarness, forceRefresh = false) => {
+  const loadAvailableModels = useCallback(async (harness: WorkbenchComposerSettings["harness"], forceRefresh = false) => {
     const models = await profileEditor.loadModels(harness, () => onListModels(harness, { forceRefresh }));
     if (models && profileSlot && harness === "opencode"
       && await composerProfileController.fillMissingModel(profileSlot, harness, models)) {
@@ -335,26 +336,7 @@ export default function ThreadComposer ({
       if (settings) onThreadSettingsChange?.(thread.id, settings);
     }
     return models;
-  }, [activeHarness, composerProfileController, onListModels, onThreadSettingsChange, profileEditor, profileSlot, thread.id]);
-  const changeProfileHarness = (profileId: string, harness: WorkbenchComposerSettings["harness"]) => {
-    void (async () => {
-      const models = await profileEditor.loadModels(harness, () => onListModels(harness));
-      if (!models) return;
-      const available = models.filter((entry) => entry.policyState !== "disabled");
-      const model = available.find((entry) => entry.isDefault) ?? available[0];
-      if (!model) {
-        setError("No models are available for that provider.");
-        return;
-      }
-      await composerProfileController.updateProfile(profileId, {
-        harness,
-        model: model.id,
-        reasoningEffort: model.supportsReasoningEffort ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null : null,
-        serviceTier: null,
-        contextWindowTokens: model.contextWindow?.defaultTokens ?? null,
-      });
-    })();
-  };
+  }, [composerProfileController, onListModels, onThreadSettingsChange, profileEditor, profileSlot, thread.id]);
   const composerHighlights = useMemo(() => (
     buildInlineMentionHighlights(value, highlightSources)
   ), [highlightSources, value]);
@@ -374,17 +356,17 @@ export default function ThreadComposer ({
   }, [isCommentMode, profileEditor, loadAvailableAgents]);
   useEffect(() => {
     profileEditor.resetModels();
-    if (!isCommentMode) void loadAvailableModels();
+    if (!isCommentMode) void Promise.all(allowedHarnesses.map(harness => loadAvailableModels(harness)));
     return () => profileEditor.resetModels();
-  }, [isCommentMode, profileEditor, loadAvailableModels]);
+  }, [allowedHarnesses, isCommentMode, profileEditor, loadAvailableModels]);
   useEffect(() => subscribeModelUpdates?.((harness) => {
-    if (!isCommentMode && harness === currentComposerSettings.harness) void loadAvailableModels(harness);
-  }), [subscribeModelUpdates, isCommentMode, currentComposerSettings.harness, loadAvailableModels]);
+    if (!isCommentMode && allowedHarnesses.includes(harness)) void loadAvailableModels(harness);
+  }), [subscribeModelUpdates, isCommentMode, allowedHarnesses, loadAvailableModels]);
   const wasEditorOpenRef = useRef(false);
   useEffect(() => {
-    if (wasEditorOpenRef.current && !editorState.open) void loadAvailableModels();
+    if (wasEditorOpenRef.current && !editorState.open) void loadAvailableModels(activeHarness);
     wasEditorOpenRef.current = editorState.open;
-  }, [editorState.open, loadAvailableModels]);
+  }, [activeHarness, editorState.open, loadAvailableModels]);
 
   const submit = async () => {
     if ((!trimmedValue && !attachments.length) || isSendDisabled) {
@@ -504,6 +486,23 @@ export default function ThreadComposer ({
     }
 
     applyCustomChange();
+  };
+  const selectQuickModel = (harness: WorkbenchComposerSettings["harness"], model: WorkbenchModelOption) => {
+    const nextSettings: WorkbenchComposerSettings = {
+      ...currentComposerSettings,
+      harness,
+      model: model.id,
+      reasoningEffort: model.supportsReasoningEffort
+        ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null : null,
+      serviceTier: harness === currentComposerSettings.harness && model.supportsFastMode
+        ? currentComposerSettings.serviceTier : null,
+      contextWindowTokens: model.contextWindow?.defaultTokens ?? null,
+    };
+    applyDirectSettingsChange(nextSettings, () => {
+      onThreadModelChange(thread.id, model.id);
+      onThreadReasoningEffortChange(thread.id, nextSettings.reasoningEffort);
+      onThreadServiceTierChange(thread.id, nextSettings.serviceTier);
+    });
   };
 
   const changeReasoningEffort = (nextEffort: string) => {
@@ -731,7 +730,18 @@ export default function ThreadComposer ({
                       agentLabel={agentButtonLabel}
                       currentReasoningEffort={currentReasoningEffort ?? "default"}
                       isFastModeEnabled={isFastModeEnabled}
-                      modelLabel={modelButtonLabel}
+                      modelControl={<ThreadModelQuickPicker
+                        allowedHarnesses={allowedHarnesses}
+                        catalogues={editorState.modelsByHarness}
+                        harness={currentComposerSettings.harness}
+                        label={`${formatHarnessLabel(currentComposerSettings.harness)} · ${modelButtonLabel}`}
+                        modelId={currentComposerSettings.model}
+                        onOpen={() => {
+                          profileEditor.close();
+                          void Promise.all(allowedHarnesses.map(harness => loadAvailableModels(harness, true)));
+                        }}
+                        onSelect={({ harness, model }) => selectQuickModel(harness, model)}
+                      />}
                       profileControl={profileSlot ? <ThreadProfileQuickPicker
                         slot={profileSlot}
                         fallbackSettings={currentComposerSettings}
@@ -746,11 +756,8 @@ export default function ThreadComposer ({
                           void composerProfileController.refreshProfiles();
                         }}
                       /> : null}
-                      onProviderOpen={(trigger, ribbon) => openProfileEditor("harness", trigger, ribbon)}
-                      providerLabel={formatHarnessLabel(currentComposerSettings.harness)}
                       selectedProfileLabel={selectedProfile ? profileButtonLabel : null}
                       showsFastModeControl={showsFastModeControl}
-                      showsProviderControl={canToggleHarness}
                       showsReasoningEffortControl={showsReasoningEffortControl}
                       onAgentOpen={(trigger, ribbon) => openProfileEditor("agent", trigger, ribbon)}
                       onFastModeToggle={() => {
@@ -760,7 +767,6 @@ export default function ThreadComposer ({
                           () => onThreadServiceTierChange(thread.id, serviceTier),
                         );
                       }}
-                      onModelOpen={(trigger, ribbon) => openProfileEditor("model", trigger, ribbon)}
                       onReasoningEffortChange={changeReasoningEffort}
                       supportedReasoningEfforts={supportedReasoningEfforts}
                       context={modelOptionForControls?.contextWindow ? {
@@ -852,9 +858,6 @@ export default function ThreadComposer ({
         })}
         onRefreshModels={(harness) => { void loadAvailableModels(harness, true); }}
         onRefreshAgents={() => { void loadAvailableAgents(); }}
-        canToggleHarness={canToggleHarness}
-        onHarnessSelect={onHarnessSelect}
-        onProfileHarnessSelect={changeProfileHarness}
       /> : null}
       {typeof children === "function" ? children({ isProfilePickerOpen }) : children}
     </>

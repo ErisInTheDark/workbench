@@ -384,7 +384,7 @@ class WorkbenchDaemonClient {
       reportClientSchemaError(`Rejected ${method} response`, parsed.error);
       throw new Error(`The ${method} response was invalid.`);
     }
-    if (method === "profiles/read" || method === "profiles/upsert" || method === "profiles/delete") {
+    if (method === "models/list" || method === "profiles/read" || method === "profiles/upsert" || method === "profiles/delete") {
       return parsed.data as WorkbenchDaemonResult<TMethod>;
     }
     return result;

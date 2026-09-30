@@ -138,6 +138,8 @@ interface LiveQuery {
 
 export interface ClaudeThreadOperationsOptions {
   daemonOrigin: string;
+  createQuery?: typeof query;
+  resolveExecutable?: () => string;
   identities: WorkbenchThreadIdentityController;
   projects: WorkbenchProjectCatalogController;
   questionnaires: WorkbenchQuestionnaireController;
@@ -316,7 +318,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       ? `${instructions}\n\n${WORKBENCH_THREAD_WORKING_STATUS_MESSAGE}` : instructions;
     const sdkText = workingStatusInPrompt
       ? `${WORKBENCH_THREAD_WORKING_STATUS_MESSAGE}\n\n${text}` : text;
-    const executable = claudeExecutable();
+    const executable = this.options.resolveExecutable?.() ?? claudeExecutable();
     const turnId = await this.options.transcript.startTurn({
       threadId: identity.threadId, sessionId: binding.nativeThreadId, cwd: binding.nativeLocation,
       clientMessageId: input.clientMessageId, content: toWorkbenchThreadUserInput(input.input),
@@ -332,7 +334,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     let processExit: Promise<void> | null = null;
     let sdkQuery: Query;
     try {
-      sdkQuery = query({
+      sdkQuery = (this.options.createQuery ?? query)({
         prompt: queue,
         options: {
           cwd: binding.nativeLocation,
@@ -380,7 +382,18 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     );
     const turn = (await this.read(identity.threadId)).turns.at(-1);
     if (!turn) throw new Error("Claude turn admission did not materialise a turn.");
-    return { kind: "started" as const, turn };
+    try {
+      if (entry && entry.entryKind !== "draft" && entry.profile) {
+        await this.options.state.controller.recordAcceptedSelection(entry.profile, Date.now());
+      }
+      return { kind: "started" as const, turn };
+    } catch (error) {
+      const warning = `Turn accepted, but model/profile recency could not be saved: ${
+        error instanceof Error ? error.message.slice(0, 300) : "unknown failure"
+      }`;
+      console.warn("[claude]", warning);
+      return { kind: "started" as const, turn, warning };
+    }
   }
 
   private sdkPrompt(text: string, synthetic = false): SDKUserMessage {

@@ -17,6 +17,7 @@ import {
     type WorkbenchQuestionnaireRespondRequest,
 } from "workbench-shared/workbench/daemon/workbench-daemon-requests";
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
+import type WorkbenchModelUsageStore from "./WorkbenchModelUsageStore";
 import { CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
 import { WorkbenchProjectFileIndexRequestSchema } from "workbench-shared/workbench/project/project-file-index";
@@ -231,6 +232,7 @@ export default class WorkbenchDaemonRequestController {
     workingTree?: Pick<WorkbenchWorkingTreeController, "read" | "diff" | "preview" | "mutate">;
     nativeFiles: Pick<WorkbenchNativeFileController, "linkRoots" | "open" | "reveal">;
     profiles: Pick<WorkbenchComposerProfileStore, "mutate" | "read">;
+    modelUsage: Pick<WorkbenchModelUsageStore, "read">;
     profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
     projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "readLocations" | "resolveProjectById" | "readDiscoverySettings" | "updateDiscoverySettings">;
     projectSnapshot: Pick<WorkbenchProjectSnapshotController, "readProjectSnapshot" | "handleRequest">;
@@ -314,7 +316,16 @@ export default class WorkbenchDaemonRequestController {
           if (!key || !this.owners.providers) throw new InvalidParamsError("The requested provider is unavailable.");
           const provider = this.owners.providers.get(key);
           if (request.method === "models/list") {
-            result = { data: await provider.configuration.models.read() };
+            const models = await provider.configuration.models.read();
+            let used = new Map<string, number>();
+            try {
+              used = new Map((await this.owners.modelUsage.read(Date.now()))
+                .filter(entry => entry.harness === key)
+                .map(entry => [entry.modelId, entry.lastUsedAt]));
+            } catch {
+              console.warn("Unable to read model usage while listing models.");
+            }
+            result = { data: models.map(model => ({ ...model, lastUsedAt: used.get(model.id) ?? null })) };
           } else if (request.method === "models/context/read") {
             result = { data: await provider.configuration.modelContext.read() };
           } else {

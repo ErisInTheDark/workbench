@@ -64,6 +64,7 @@ export interface WorkbenchThreadStateFeatureContext {
   identities: NativeTranscriptIdentityOwners;
   readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
   recordComposerProfileUsage?: (profileId: string, at: number) => Promise<void>;
+  recordComposerModelUsage?: (harness: WorkbenchHarness, modelId: string, at: number) => Promise<void>;
   database: WorkbenchThreadStateStoreDatabase;
   gitArcs: {
     findActiveClaim(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcActiveClaim | null>;
@@ -169,6 +170,7 @@ export default class WorkbenchThreadStateFeature {
       resolveProjectId: projectId => this.canonicalProjectId(projectId),
       readComposerProfiles: context.readComposerProfiles,
       recordComposerProfileUsage: context.recordComposerProfileUsage,
+      recordComposerModelUsage: context.recordComposerModelUsage,
       log: context.log,
       publishAgentContext: async (harness, threadId, text) => {
         const key = installedProviderKeys.find(key => key === harness);

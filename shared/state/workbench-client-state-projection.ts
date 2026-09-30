@@ -39,6 +39,7 @@ export function workbenchClientStateRecordIdentity(
 ): WorkbenchClientStateIdentity {
   switch (record.kind) {
     case "modelPreference": return { kind: record.kind, harness: record.harness, modelId: record.modelId };
+    case "modelGroupDisclosure": return { kind: record.kind, groupId: record.groupId };
     case "globalPreference": return { key: record.preference.key, kind: record.kind };
     case "projectPreference": return { daemonRegistrationId: record.daemonRegistrationId, key: record.preference.key, kind: record.kind, projectId: record.projectId };
     case "sidebarPreference": return { daemonRegistrationId: record.daemonRegistrationId, key: record.preference.key, kind: record.kind, projectId: record.projectId };
@@ -72,6 +73,11 @@ export function projectWorkbenchClientStateRows(
   for (const row of rows.modelPreferences) {
     add(row.revision, row.deleted, {
       kind: "modelPreference", harness: row.harness, modelId: row.model_id, favourite: row.favourite === 1,
+    });
+  }
+  for (const row of rows.modelGroupDisclosures) {
+    add(row.revision, row.deleted, {
+      kind: "modelGroupDisclosure", groupId: row.group_id, open: row.open === 1,
     });
   }
   for (const row of rows.globalPreferences) {

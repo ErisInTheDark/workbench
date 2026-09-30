@@ -119,6 +119,25 @@ test("profile recency defaults for old servers and rejects malformed values", as
   assert.ok(logged.every(message => message.length < 1200 && !message.includes("private-recency-marker")));
 });
 
+test("model catalogue defaults old-server recency and rejects malformed values without leaking ids", async context => {
+  const logged: string[] = [];
+  context.mock.method(console, "error", (message: string) => { logged.push(message); });
+  const model = {
+    id: "private-model-id", displayName: "Model", description: "", hidden: false, isDefault: false,
+    supportsPersonality: false, supportsReasoningEffort: false, supportedReasoningEfforts: [],
+    defaultReasoningEffort: null, supportsVision: false, supportsFastMode: false, inputModalities: [],
+    maxContextWindowTokens: null, additionalSpeedTiers: [], policyState: null, billingMultiplier: null,
+  };
+  const legacy = new WorkbenchDaemonClient({ request: async <TResponse>() => ({ data: [model] }) as TResponse });
+  assert.equal((await legacy.models.list("codex")).data[0]?.lastUsedAt, null);
+  const malformed = new WorkbenchDaemonClient({ request: async <TResponse>() => ({
+    data: [{ ...model, lastUsedAt: "not-a-time" }],
+  }) as TResponse });
+  await assert.rejects(malformed.models.list("codex"), /response was invalid/);
+  assert.ok(logged.length > 0);
+  assert.ok(logged.every(message => !message.includes("private-model-id") && message.length < 1200));
+});
+
 test("model capabilities reject invalid bounds at the daemon response boundary", async (context) => {
   const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("Rejected models/context/read response:"));
   context.after(() => assert.equal(diagnostics.length, 1));
