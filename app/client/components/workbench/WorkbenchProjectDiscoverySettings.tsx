@@ -112,7 +112,7 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
 
   return (
     <section className="space-y-3 py-1">
-      <p className="m-0 text-[0.8rem] leading-5 text-fg/muted">Folders scanned for git repositories and workspaces.</p>
+      <p className="m-0 mb-2 text-[0.8rem] leading-5 text-fg/muted">Folders scanned for git repositories and workspaces.</p>
       <InputList
         disabled={loading || saving || !available}
         idPrefix="git-root"

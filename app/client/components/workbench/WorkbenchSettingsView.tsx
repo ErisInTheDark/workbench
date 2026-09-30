@@ -5,22 +5,22 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { WorkbenchLocalCapabilitySettings, WorkbenchProjectOption } from "workbench-shared/types";
+import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { DaemonId, LogicalProjectId } from "workbench-shared/workbench/identity";
 import type { ProjectFolderOption } from "workbench-shared/workbench/project/project-folder-address";
 import CommandApprovalSettings from "./CommandApprovalSettings";
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import VoiceSettings from "./voice/VoiceSettings";
+import { ProjectIcon } from "./workbench-icons";
 import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
+import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
 import WorkbenchProjectDiscoverySettings from "./WorkbenchProjectDiscoverySettings";
+import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
 import WorkbenchReactDevelopmentModeSetting from "./WorkbenchReactDevelopmentModeSetting";
 import WorkbenchSettingsContextRow from "./WorkbenchSettingsContextRow";
 import WorkbenchSettingsPreferences from "./WorkbenchSettingsPreferences";
-import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
 import { WorkbenchOperationsContext } from "./WorkbenchWorkspaceContext";
-import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
-import { ProjectIcon } from "./workbench-icons";
 
 type Page = "general" | "projects" | "agents" | "network";
 const pages: { id: Page; label: string; sections: { id: string; label: string }[] }[] = [
@@ -195,7 +195,7 @@ export default function WorkbenchSettingsView({
               logicalProjectId={logicalProject?.id ?? null} onError={onError} />
           </Group>
           <Group id="settings-discovery" title="Discovery">
-            <div className="space-y-3 py-3"><h3 className="m-0 text-sm font-semibold">Git roots</h3>
+            <div className="space-y-3 py-3">
               {daemonControl}
               {daemon ? <WorkbenchOperationsContext.Provider value={daemon}>
                 <WorkbenchProjectDiscoverySettings key={daemonId} onSaved={() => onGitRootsSaved(daemonId!)} />

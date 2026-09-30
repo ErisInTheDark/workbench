@@ -33,7 +33,7 @@ export function getPressDragGroupItems (group: PressDragMenuGroup): readonly Pre
 }
 
 export default function WorkbenchPressDragMenu ({
-  children, label, getItems, items: suppliedItems, groups, groupNavigationLabel = "Menu sections", onOpen, onSelect, onActivate, triggerClassName,
+  children, label, getItems, items: suppliedItems, groups, groupNavigationLabel = "Menu sections", onOpen, onSelect, onActivate, triggerAppearance = "default", triggerClassName,
 }: {
   children: ReactNode;
   label: string;
@@ -44,6 +44,7 @@ export default function WorkbenchPressDragMenu ({
   onOpen?: () => void;
   onSelect: (id: string, trigger: HTMLButtonElement) => void;
   onActivate?: (trigger: HTMLButtonElement) => void;
+  triggerAppearance?: "default" | "plain";
   triggerClassName?: string;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
@@ -210,8 +211,11 @@ export default function WorkbenchPressDragMenu ({
       aria-expanded={open}
       aria-controls={open ? menuId : undefined}
       className={`
-        enabled:cursor-pointer relative isolate inline-flex min-w-0 items-center justify-center gap-2 rounded-lg touch-none select-none bg-transparent px-2.5 py-2 outline-none transition hover:text-text
-        before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover
+        enabled:cursor-pointer relative isolate inline-flex min-w-0 items-center touch-none select-none outline-none transition
+        ${triggerAppearance === "default" ? `
+          justify-center gap-2 rounded-lg bg-transparent px-2.5 py-2 hover:text-text
+          before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover
+        ` : ""}
         ${triggerClassName ?? "text-fg/muted"}
         ${menu.interaction.kind === "dragging" ? "" : "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"}
       `}
