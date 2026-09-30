@@ -24,6 +24,17 @@ const zeroToNull = (value: string) => /^0+$/u.test(value) ? null : value;
 export default class WorkbenchWorkingTreeRepository {
   constructor(readonly git: WorkbenchGitRepository) {}
 
+  async summary(): Promise<string[]> {
+    const status = await this.git.run(
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"],
+      { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+    );
+    return status.split("\0")
+      .filter(Boolean)
+      .map(entry => entry.slice(3))
+      .filter(file => file !== ".workbench/transcripts" && !file.startsWith(".workbench/transcripts/"));
+  }
+
   async read(): Promise<WorkingTreeRepository> {
     const { head, tree } = await this.git.writeWorktreeSnapshot();
     const base = await this.git.resolveTree(head);

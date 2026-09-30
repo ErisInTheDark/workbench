@@ -69,6 +69,12 @@ test("initial commit works while stale selections and publication failures prese
   const git = await WorkbenchGitRepository.open(fixture.root);
   const owner = new WorkbenchWorkingTreeRepository(git);
   await fs.writeFile(path.join(fixture.root, "new.txt"), "new\n");
+  const materialise = git.writeWorktreeSnapshot.bind(git);
+  git.writeWorktreeSnapshot = async () => { throw new Error("status must not materialise a tree"); };
+  const paths = await owner.summary();
+  assert.ok(paths.includes("new.txt"));
+  assert.equal(paths.includes(".workbench/transcripts"), false);
+  git.writeWorktreeSnapshot = materialise;
   const snapshot = await owner.read();
   const file = snapshot.files[0]!;
   const request: WorkingTreeMutation = {

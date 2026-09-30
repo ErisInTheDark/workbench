@@ -13,7 +13,7 @@ import type {
 import { WORKBENCH_GIT_ARC_ACTION_BY_METHOD } from "./workbench-daemon-requests.ts";
 import { z } from "zod";
 import { VoiceConfigurationSchema, VoiceSessionEventSchema, type VoiceSessionEvent } from "../voice/voice-session-contract";
-import { WorkingTreeReadSchema, WorkingTreeDiffSchema, WorkingTreePreviewSchema, WorkingTreeResultSchema } from "../git/working-tree-contracts";
+import { WorkingTreeReadSchema, WorkingTreeSummarySchema, WorkingTreeDiffSchema, WorkingTreePreviewSchema, WorkingTreeResultSchema } from "../git/working-tree-contracts";
 import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provider-settings";
 import { CommandApprovalSnapshotSchema } from "../settings/command-approvals";
 import { ProjectDiscoverySettingsReadSchema, ProjectDiscoverySettingsResultSchema } from "../project/project-discovery-settings";
@@ -89,6 +89,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "voice/finish":
     case "voice/cancel": return z.object({ ok: z.literal(true) }).strict();
     case "git/working-tree/read": return WorkingTreeReadSchema;
+    case "git/working-tree/summary": return WorkingTreeSummarySchema;
     case "git/working-tree/diff": return WorkingTreeDiffSchema;
     case "git/working-tree/preview": return WorkingTreePreviewSchema;
     case "git/working-tree/mutate": return WorkingTreeResultSchema;
@@ -340,6 +341,7 @@ class WorkbenchDaemonClient {
   readonly git = {
     workingTree: {
       read: (params: WorkbenchDaemonParams<"git/working-tree/read">) => this.request("git/working-tree/read", params),
+      summary: (params: WorkbenchDaemonParams<"git/working-tree/summary">) => this.request("git/working-tree/summary", params),
       diff: (params: WorkbenchDaemonParams<"git/working-tree/diff">) => this.request("git/working-tree/diff", params),
       preview: (params: WorkbenchDaemonParams<"git/working-tree/preview">) => this.request("git/working-tree/preview", params),
       mutate: (params: WorkbenchDaemonParams<"git/working-tree/mutate">) => this.request("git/working-tree/mutate", params),

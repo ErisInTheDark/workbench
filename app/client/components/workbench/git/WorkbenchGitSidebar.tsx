@@ -1,23 +1,26 @@
 /* Exports: default WorkbenchGitSidebar: render selected-project unclaimed Git status and navigation. */
 "use client";
-import type { MouseEvent } from "react";
+import { useEffect, type MouseEvent } from "react";
 import { createGitRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListLabelClassName } from "../workbench-class-names";
 import { GitArcCleanClaimIcon, GitArcDirtyClaimIcon, GitGraphIcon } from "../workbench-icons";
 import WorkbenchSidebarSectionDisclosure from "../WorkbenchSidebarSectionDisclosure";
+import { useWorkbenchSidebarPreferences } from "../workbench-sidebar-preferences-context";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 
 export default function WorkbenchGitSidebar ({ active, onNavigate }: { active: boolean; onNavigate (event: MouseEvent<HTMLAnchorElement>): void }) {
   const state = useWorkingTree();
   const snapshot = useWorkingTreeSnapshot();
+  const { preferences } = useWorkbenchSidebarPreferences();
+  useEffect(() => preferences.gitOpen ? state.acquireDemand("summary") : undefined, [preferences.gitOpen, state]);
   const projectHref = useWorkbenchProjectNavigation();
   if (!state.projectId) return null;
-  const dirty = snapshot.data.repositories.some(repository => repository.files.some(file => !file.ownerIds.length));
+  const dirty = snapshot.summary.repositories.some(repository => repository.dirty);
   const Icon = dirty ? GitArcDirtyClaimIcon : GitArcCleanClaimIcon;
-  const label = snapshot.status === "idle" || snapshot.status === "loading" ? "Checking changes..."
-    : snapshot.status === "error" || snapshot.data.errors.length ? "Changes unavailable"
-      : snapshot.status === "unavailable" ? "Git unavailable"
+  const label = snapshot.summaryStatus === "idle" || snapshot.summaryStatus === "loading" ? "Checking changes..."
+    : snapshot.summaryStatus === "error" || snapshot.summary.errors.length ? "Changes unavailable"
+      : snapshot.summaryStatus === "unavailable" ? "Git unavailable"
         : dirty ? "Uncommitted changes" : "No changes";
   return <section className="shrink-0 pb-3">
     <WorkbenchSidebarSectionDisclosure icon={GitGraphIcon} preferenceKey="gitOpen" title="Git">

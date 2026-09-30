@@ -36,7 +36,7 @@ test("retained directory claims protect rename sources and reject mutations afte
     openRepository: async cwd => {
       if (cwd === "inaccessible") throw new Error("access denied");
       return {
-        git, read: async () => structuredClone(snapshot),
+        git, read: async () => structuredClone(snapshot), summary: async () => ["src/old.txt"],
         diff: async () => ({ identity: "file", patch: "", unavailable: null }),
         preview: async () => ({ identity: "file", before: null, after: null, encoding: "text", mime: "text/plain", unavailable: null }),
         mutate: async (_snapshot, _request, verify) => {
@@ -58,6 +58,9 @@ test("retained directory claims protect rename sources and reject mutations afte
   const read = await controller.read("project");
   assert.deepEqual(read.repositories[0]!.files[0]!.ownerIds, ["owner"]);
   assert.equal(read.repositories[0]!.files.filter(file => !file.ownerIds.length).length, 0);
+  assert.equal((await controller.summary("project")).repositories[0]?.dirty, false);
+  claims = [];
+  assert.equal((await controller.summary("project")).repositories[0]?.dirty, true);
   inaccessible = true;
   const partial = await controller.read("project");
   assert.equal(partial.repositories.length, 1);
@@ -79,6 +82,7 @@ test("disposal rejects new work and drains an admitted mutation", async () => {
     listClaims: async () => [],
     openRepository: async () => ({
       git,
+      summary: async () => [],
       read: async () => ({
         rootId: "root", label: "root", cwd: git.root, head: "a".repeat(40), tree: "b".repeat(40),
         branch: "main", message: "", amendReason: null, blockedReason: null, files: [], owners: [],
@@ -125,7 +129,7 @@ test("content reuses the scan snapshot while mutations always read fresh and inv
     readOwner: async () => null,
     listClaims: async () => [],
     openRepository: async () => ({
-      git, read: async () => { scans++; return structuredClone(snapshot); },
+      git, summary: async () => [], read: async () => { scans++; return structuredClone(snapshot); },
       diff: async () => ({ identity: "version", patch: "", unavailable: null }),
       preview: async () => ({ identity: "version", before: "", after: "", encoding: "text", mime: "text/plain", unavailable: null }),
       mutate: async () => { throw new Error("publication failed"); },
@@ -166,6 +170,7 @@ test("cached openings bypass in-flight scans, expire, and are invalidated across
     readOwner: async () => null, listClaims: async () => [],
     openRepository: async () => ({
       git,
+      summary: async () => [],
       read: async () => {
         scans++;
         if (deferred) { entered(); await new Promise<void>(resolve => { finish = resolve; }); }

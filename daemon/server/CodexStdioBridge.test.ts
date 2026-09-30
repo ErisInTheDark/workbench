@@ -2173,6 +2173,37 @@ test("an expired page read cannot begin transcript hydration after the old provi
   }
 });
 
+test("a responsive Codex child answers health while command preparation is held", async () => {
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  bridge = new CodexStdioBridge({
+    appServer: { send(request: JsonRpcRequest) {
+      queueMicrotask(() => { void bridge.handleUpstreamMessage({ id: request.id, result: {} }); });
+    } } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    instructions: {
+      augment: async request => {
+        if (request.method === "models/list") { entered.resolve(); await release.promise; }
+        return request;
+      },
+      createThreadResume: () => { throw new Error("unused"); },
+    },
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+  });
+  try {
+    const command = bridge.handleServerRequest({ id: "command", method: "models/list", params: {} });
+    await entered.promise;
+    assert.equal((await bridge.probeAccount(new AbortController().signal, 10_000)).error, undefined);
+    release.resolve();
+    assert.equal((await command).error, undefined);
+  } finally {
+    release.resolve();
+    await bridge.disposeImmediately();
+  }
+});
+
 test("expired command preparation cannot send through a bridge resumed after rollback", async () => {
   const entered = deferred<void>();
   const release = deferred<void>();

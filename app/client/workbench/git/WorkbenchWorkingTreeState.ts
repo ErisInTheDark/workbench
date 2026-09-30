@@ -5,13 +5,15 @@
  */
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import type { WorkingTreeDiff, WorkingTreeMutation, WorkingTreePreview, WorkingTreeRead, WorkingTreeRepository, WorkingTreeResult, WorkingTreeSelection } from "workbench-shared/workbench/git/working-tree-contracts";
+import type { WorkingTreeDiff, WorkingTreeMutation, WorkingTreePreview, WorkingTreeRead, WorkingTreeRepository, WorkingTreeResult, WorkingTreeSelection, WorkingTreeSummary } from "workbench-shared/workbench/git/working-tree-contracts";
 import { describeWorkingTreeDiff } from "workbench-shared/workbench/git/working-tree-selection";
 import WorkingTreeContentCache from "./WorkingTreeContentCache";
 
 export interface WorkingTreeDraft { mode: "commit" | "amend" | "stash"; title: string; description: string; targetCommit: string | null }
 export interface WorkingTreeStateSnapshot {
   data: WorkingTreeRead;
+  summary: WorkingTreeSummary;
+  summaryStatus: "idle" | "loading" | "ready" | "error" | "unavailable";
   status: "idle" | "loading" | "ready" | "error" | "unavailable";
   initialising: boolean;
   refreshing: boolean;
@@ -28,12 +30,14 @@ export interface WorkingTreeStateSnapshot {
   busy: boolean;
   result: WorkingTreeResult | null;
 }
-type Port = WorkbenchDaemonClient["git"]["workingTree"];
+type Port = Pick<WorkbenchDaemonClient["git"]["workingTree"], "read" | "diff" | "preview" | "mutate">
+  & Partial<Pick<WorkbenchDaemonClient["git"]["workingTree"], "summary">>;
 const blankDraft = (): WorkingTreeDraft => ({ mode: "commit", title: "", description: "", targetCommit: null });
 
 export default class WorkbenchWorkingTreeState {
   private snapshot: WorkingTreeStateSnapshot = {
-    data: { repositories: [], errors: [] }, status: "idle", initialising: true, refreshing: false, error: "", operationError: "", rootId: "", path: "",
+    data: { repositories: [], errors: [] }, summary: { repositories: [], errors: [] }, summaryStatus: "idle",
+    status: "idle", initialising: true, refreshing: false, error: "", operationError: "", rootId: "", path: "",
     diff: null, preview: null, contentStatus: "idle", contentError: "", selections: [],
     draft: blankDraft(), busy: false, result: null,
   };
@@ -42,6 +46,9 @@ export default class WorkbenchWorkingTreeState {
   private readonly reviews = new Map<string, { repository: WorkingTreeRepository; selections: WorkingTreeSelection[] }>();
   private readonly content: WorkingTreeContentCache | null;
   private refreshWork: { lifetime: object; promise: Promise<void> } | null = null;
+  private summaryWork: { lifetime: object; promise: Promise<void> } | null = null;
+  private statusRequest: object = {};
+  private readonly demands = new Map<object, "summary" | "full">();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private visible = false;
   private lifetime: object | null = {};
@@ -71,7 +78,30 @@ export default class WorkbenchWorkingTreeState {
     this.visible = visible;
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
-    if (visible) void this.refresh();
+    if (visible) this.driveDemand();
+  }
+
+  acquireDemand(kind: "summary" | "full") {
+    const token = {};
+    this.demands.set(token, kind);
+    this.driveDemand();
+    return () => {
+      this.demands.delete(token);
+      this.scheduleNext();
+    };
+  }
+
+  private driveDemand() {
+    if (!this.visible || !this.lifetime || !this.demands.size) return;
+    if ([...this.demands.values()].includes("full")) void this.refresh();
+    else void this.refreshSummary();
+  }
+
+  private scheduleNext() {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    if (!this.visible || !this.lifetime || !this.demands.size || this.snapshot.busy) return;
+    this.timer = setTimeout(() => { this.timer = null; this.driveDemand(); }, 5_000);
   }
 
   activate() {
@@ -81,11 +111,14 @@ export default class WorkbenchWorkingTreeState {
   dispose() {
     this.lifetime = null;
     this.visible = false;
+    this.demands.clear();
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     this.contentRequest = null;
     this.content?.clear();
     this.previewWork = null;
+    this.summaryWork = null;
+    this.statusRequest = {};
     this.listeners.clear();
   }
 
@@ -101,23 +134,27 @@ export default class WorkbenchWorkingTreeState {
     }
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
+    const statusRequest = {};
+    this.statusRequest = statusRequest;
     const preferCached = this.snapshot.status === "idle";
     this.publish({ refreshing: true, status: preferCached ? "loading" : this.snapshot.status });
     const work = async () => {
       try {
         const data = await port.read({ projectId: this.projectId, preferCached });
         if (this.lifetime !== lifetime || this.snapshot.busy) return;
-        const content = this.acceptRead(data);
+        const content = this.acceptRead(data, statusRequest);
         if (data.cacheHit) {
           const fresh = await port.read({ projectId: this.projectId });
           if (this.lifetime !== lifetime) return;
-          await this.acceptRead(fresh);
+          await this.acceptRead(fresh, statusRequest);
         } else await content;
       } catch (error) {
         if (this.lifetime !== lifetime || this.snapshot.busy) return;
+        const unavailable = error instanceof WorkbenchDaemonRequestError && error.code === -32601;
         this.publish({
-          status: error instanceof WorkbenchDaemonRequestError && error.code === -32601 ? "unavailable" : "error",
-          error: error instanceof WorkbenchDaemonRequestError && error.code === -32601
+          status: unavailable ? "unavailable" : "error",
+          ...(this.statusRequest === statusRequest ? { summaryStatus: unavailable ? "unavailable" as const : "error" as const } : {}),
+          error: unavailable
             ? "This daemon does not support the working-tree view yet."
             : error instanceof Error ? error.message : "Unable to read working-tree changes.",
         });
@@ -126,13 +163,52 @@ export default class WorkbenchWorkingTreeState {
     const promise = work().finally(() => {
       this.refreshWork = null;
       if (this.lifetime === lifetime) this.publish({ refreshing: false });
-      if (this.visible && this.lifetime === lifetime && !this.snapshot.busy) this.timer = setTimeout(() => { this.timer = null; void this.refresh(); }, 5_000);
+      if (this.lifetime === lifetime) this.scheduleNext();
     });
     this.refreshWork = { lifetime, promise };
     await promise;
   }
 
-  private acceptRead(incoming: WorkingTreeRead) {
+  async refreshSummary() {
+    const lifetime = this.lifetime;
+    const port = this.port;
+    if (!lifetime || !port || !this.projectId || this.snapshot.busy) return;
+    if (this.summaryWork) return await this.summaryWork.promise;
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    const statusRequest = {};
+    this.statusRequest = statusRequest;
+    this.publish({ summaryStatus: this.snapshot.summaryStatus === "idle" ? "loading" : this.snapshot.summaryStatus });
+    const work = async () => {
+      try {
+        if (!port.summary) {
+          await this.refresh();
+          return;
+        }
+        const summary = await port.summary({ projectId: this.projectId });
+        if (this.lifetime !== lifetime || this.statusRequest !== statusRequest) return;
+        this.publish({ summary, summaryStatus: summary.errors.length ? "error" : "ready" });
+      } catch (error) {
+        if (this.lifetime !== lifetime || this.statusRequest !== statusRequest) return;
+        if (error instanceof WorkbenchDaemonRequestError && error.code === -32601) {
+          await this.refresh();
+          return;
+        }
+        this.publish({
+          summaryStatus: "error",
+          summary: { ...this.snapshot.summary, errors: [{ rootId: "", message: error instanceof Error ? error.message : "Unable to read Git status." }] },
+        });
+      }
+    };
+    const promise = work().finally(() => {
+      if (this.summaryWork?.promise === promise) this.summaryWork = null;
+      if (this.lifetime === lifetime) this.scheduleNext();
+    });
+    this.summaryWork = { lifetime, promise };
+    await promise;
+  }
+
+  private acceptRead(incoming: WorkingTreeRead, statusRequest: object) {
     const data: WorkingTreeRead = {
       ...incoming,
       repositories: [...incoming.repositories, ...this.snapshot.data.repositories.filter(repository =>
@@ -162,6 +238,12 @@ export default class WorkbenchWorkingTreeState {
       ?? repository?.files.find(file => !file.ownerIds.length) ?? repository?.files[0];
     this.publish({
       data, rootId: repository?.rootId ?? "", path: file?.path ?? "",
+      ...(this.statusRequest === statusRequest ? { summary: {
+        repositories: data.repositories.map(item => ({
+          rootId: item.rootId, label: item.label, dirty: item.files.some(changed => !changed.ownerIds.length),
+        })),
+        errors: data.errors,
+      }, summaryStatus: data.errors.length ? "error" as const : "ready" as const } : {}),
       status: data.errors.length && !repository ? "error" : "ready",
       error: data.errors.map(error => error.message).join("\n"),
     });

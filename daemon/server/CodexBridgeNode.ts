@@ -308,10 +308,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       probe: signal => persist(async () => {
         await lifecycle.initialize(bridge);
         signal.throwIfAborted();
-        const response = await bridge.handleServerRequest(
-          { id: "codex-health", method: "account/read", params: {} },
-          { signal, timeoutMs: 10_000 },
-        );
+        const response = await bridge.probeAccount(signal, 10_000);
         if (response.error) throw new Error(response.error.message);
       }),
       requestRecovery: reason => lifecycle.requestRecovery(reason),

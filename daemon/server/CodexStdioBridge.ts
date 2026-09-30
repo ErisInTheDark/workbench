@@ -1092,12 +1092,24 @@ export default class CodexStdioBridge {
     return await this.enqueueCommand(() => this.handleBridgeRequestImmediately(message));
   }
 
-  async handleServerRequest(message: JsonRpcRequest, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<JsonRpcResponse> {
+  async probeAccount(signal: AbortSignal, timeoutMs: number): Promise<JsonRpcResponse> {
+    return await this.handleServerRequest(
+      { id: "codex-health", method: "account/read", params: {} },
+      { signal, timeoutMs, healthProbe: true },
+    );
+  }
+
+  async handleServerRequest(message: JsonRpcRequest, options: { signal?: AbortSignal; timeoutMs?: number; healthProbe?: boolean } = {}): Promise<JsonRpcResponse> {
     const controller = options.timeoutMs === undefined && !options.signal ? null : new AbortController();
     const abortFromCaller = () => controller?.abort(options.signal?.reason);
     if (options.signal?.aborted) abortFromCaller();
     else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     const run = async () => {
+      if (options.healthProbe) {
+        if (message.method !== "account/read") throw new Error("Only account health may bypass the Codex command queue.");
+        const dispatch = await this.dispatchRequest(message, { signal: controller?.signal });
+        return await dispatch.response;
+      }
       if (message.method === "turn/start") {
         return await this.enqueueCommand(async () => {
           if (controller?.signal.aborted) throw controller.signal.reason;

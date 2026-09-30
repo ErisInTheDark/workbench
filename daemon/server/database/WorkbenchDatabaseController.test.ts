@@ -2,6 +2,8 @@
  * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, transcript materialization, search, and relational discriminator constraints.
  */
 import assert from "node:assert/strict";
+import { once } from "node:events";
+import { Worker } from "node:worker_threads";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
@@ -14,6 +16,7 @@ import Database from "better-sqlite3";
 
 import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository";
 import WorkbenchDatabaseController, { WorkbenchDatabaseRequestFailure } from "./WorkbenchDatabaseController";
+import { getWorkbenchDatabaseReadLane } from "./workbench-database-protocol";
 import {
   coreTables,
   projectTables,
@@ -50,6 +53,13 @@ const fixtureIdentityValues = {
     "turn": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
   },
 };
+
+test("database read lanes isolate transcript work from interactive state reads", () => {
+  assert.equal(getWorkbenchDatabaseReadLane({ type: "query", statement: selectRows(coreTables.workbenchHarnesses) }), "core");
+  assert.equal(getWorkbenchDatabaseReadLane({ type: "readThreadStateProject", projectId: testProjectIds.project }), "core");
+  assert.equal(getWorkbenchDatabaseReadLane({ type: "queryTranscript", request: TranscriptQuerySchema.parse({ action: "stats" }) }), "transcript");
+  assert.equal(getWorkbenchDatabaseReadLane({ type: "settleTranscript", observations: [] }), null);
+});
 
 function seedProviderCursor(databasePath: string, projectId = fixtureIdentityValues.ProjectId.project) {
   const database = new Database(databasePath);
@@ -89,6 +99,49 @@ test("fresh database is ready without a prepared project catalogue", async () =>
     await controller.start();
     assert.equal(controller.readInitialProjectCatalog(), null);
   } finally {
+    await controller.close();
+    await temporary.dispose();
+  }
+});
+
+test("a database reader opens the migrated database without accepting writes", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-reader-");
+  const databasePath = join(temporary.path, "workbench.sqlite3");
+  const writer = new WorkbenchDatabaseController({ databasePath });
+  await writer.start();
+  const reader = new Worker(new URL("./workbench-database-worker-bootstrap.mjs", import.meta.url));
+  try {
+    reader.postMessage({ id: 1, type: "initializeReader", databasePath });
+    const [ready] = await once(reader, "message");
+    assert.equal(ready.type, "ready", ready.message);
+    reader.postMessage({ id: 2, type: "executeTransaction", statements: [] });
+    const [rejected] = await once(reader, "message");
+    assert.equal(rejected.type, "requestFailure");
+    assert.match(rejected.message, /read-only/u);
+  } finally {
+    await reader.terminate();
+    await writer.close();
+    await temporary.dispose();
+  }
+});
+
+test("committed reads continue while a writer waits for a SQLite write lock", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-read-lane-");
+  const databasePath = join(temporary.path, "workbench.sqlite3");
+  const controller = new WorkbenchDatabaseController({ databasePath });
+  await controller.start();
+  const external = new Database(databasePath);
+  external.exec("BEGIN IMMEDIATE");
+  try {
+    const write = controller.executeTransaction([insertRow(coreTables.workbenchHarnesses, { id: "read-lane" })]);
+    const read = await controller.query(selectRows(coreTables.workbenchHarnesses));
+    assert.ok(Array.isArray(read));
+    external.exec("ROLLBACK");
+    await write;
+    assert.ok((await controller.query(selectRows(coreTables.workbenchHarnesses))).some(row => row.id === "read-lane"));
+  } finally {
+    if (external.inTransaction) external.exec("ROLLBACK");
+    external.close();
     await controller.close();
     await temporary.dispose();
   }

@@ -78,7 +78,7 @@ export interface WorkbenchBrowseSessionPort {
 
 const METHODS = new Set([
   "project/tree/refresh", "project/entry/create", "project/file/delete",
-  "git/working-tree/read", "git/working-tree/diff", "git/working-tree/preview", "git/working-tree/mutate",
+  "git/working-tree/read", "git/working-tree/summary", "git/working-tree/diff", "git/working-tree/preview", "git/working-tree/mutate",
   ...Object.keys(workbenchThreadActions),
   "models/context/read",
   "models/list", "account/limits/read",
@@ -229,7 +229,7 @@ export default class WorkbenchDaemonRequestController {
     agents: Pick<WorkbenchAgentSkillCatalogController, "listAgents" | "readAgent" | "readSkills">;
     files: Pick<WorkbenchProjectFileController, "read" | "write">;
     gitArc: Pick<WorkbenchGitArcFeature, "executeRequest">;
-    workingTree?: Pick<WorkbenchWorkingTreeController, "read" | "diff" | "preview" | "mutate">;
+    workingTree?: Pick<WorkbenchWorkingTreeController, "read" | "summary" | "diff" | "preview" | "mutate">;
     nativeFiles: Pick<WorkbenchNativeFileController, "linkRoots" | "open" | "reveal">;
     profiles: Pick<WorkbenchComposerProfileStore, "mutate" | "read">;
     modelUsage: Pick<WorkbenchModelUsageStore, "read">;
@@ -295,6 +295,12 @@ export default class WorkbenchDaemonRequestController {
           if (!this.owners.workingTree) throw new Error("Working tree is unavailable.");
           const input = WorkingTreeReadRequestSchema.parse(params);
           result = await this.owners.workingTree.read(input.projectId, input.preferCached);
+          break;
+        }
+        case "git/working-tree/summary": {
+          if (!this.owners.workingTree) throw new Error("Working tree is unavailable.");
+          const input = WorkingTreeReadRequestSchema.parse(params);
+          result = await this.owners.workingTree.summary(input.projectId);
           break;
         }
         case "git/working-tree/diff":

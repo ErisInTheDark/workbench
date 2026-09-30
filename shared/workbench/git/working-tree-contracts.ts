@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkingTreeFileSchema/WorkingTreeRepositorySchema/WorkingTreeReadSchema: scanned files, owners and repository state.
+ * - WorkingTreeSummarySchema/WorkingTreeSummary: lightweight sidebar status without content snapshots.
  * - WorkingTreeReadRequestSchema/WorkingTreeFileRequestSchema/WorkingTreeMutationSchema: validated working-tree intents.
  * - WorkingTreeDiffSchema/WorkingTreePreviewSchema/WorkingTreeResultSchema: bounded content and mutation outcomes.
  * - WorkingTreeFile/WorkingTreeRepository/WorkingTreeRead/WorkingTreeFileRequest/WorkingTreeMutation/WorkingTreeDiff/WorkingTreePreview/WorkingTreeResult/WorkingTreeSelection: domain types.
@@ -29,6 +30,10 @@ export const WorkingTreeReadSchema = z.object({
   errors: z.array(z.object({ rootId: z.string(), message: z.string() })),
   cacheHit: z.boolean().optional(),
 });
+export const WorkingTreeSummarySchema = z.object({
+  repositories: z.array(z.object({ rootId: z.string(), label: z.string(), dirty: z.boolean() }).strict()),
+  errors: z.array(z.object({ rootId: z.string(), message: z.string() }).strict()),
+}).strict();
 const projectRequest = z.object({ projectId: z.string().min(1) });
 export const WorkingTreeReadRequestSchema = projectRequest.extend({ preferCached: z.boolean().default(false) });
 export const WorkingTreeFileRequestSchema = projectRequest.extend({
@@ -55,6 +60,7 @@ export const WorkingTreeResultSchema = z.object({
 export type WorkingTreeFile = z.infer<typeof WorkingTreeFileSchema>;
 export type WorkingTreeRepository = z.infer<typeof WorkingTreeRepositorySchema>;
 export type WorkingTreeRead = z.infer<typeof WorkingTreeReadSchema>;
+export type WorkingTreeSummary = z.infer<typeof WorkingTreeSummarySchema>;
 export type WorkingTreeFileRequest = z.infer<typeof WorkingTreeFileRequestSchema>;
 export type WorkingTreeMutation = z.infer<typeof WorkingTreeMutationSchema>;
 export type WorkingTreeDiff = z.infer<typeof WorkingTreeDiffSchema>;

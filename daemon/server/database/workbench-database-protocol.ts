@@ -3,6 +3,7 @@
  * WorkbenchDatabaseRequestPayload: typed request payloads admitted by the database worker.
  * WorkbenchDatabaseRequest: correlated requests admitted by the database worker.
  * WorkbenchDatabaseResponse: typed responses returned by the database worker.
+ * getWorkbenchDatabaseReadLane/isWorkbenchDatabaseReadRequest: route pure reads to isolated core or transcript workers.
  * WorkbenchDatabaseInventory: installed schema inventory returned after readiness.
  * WorkbenchDatabaseMutationResult: aggregate result of one atomic mutation batch.
  */
@@ -90,6 +91,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "writeTranscriptAsset"; input: TranscriptAssetWrite }
   | { type: "readTranscriptAsset"; input: TranscriptAssetRead }
   | { type: "initialize"; databasePath: string; acknowledgeMigration?: boolean; projects?: WorkbenchProjectPreparation }
+  | { type: "initializeReader"; databasePath: string }
   | { type: "reconcileProjectCatalog"; discovery: WorkbenchProjectDiscovery }
   | { type: "readRetainedProjectCatalog"; discoveryRoots: readonly string[] }
   | { type: "readProjectAliases" }
@@ -161,6 +163,33 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "close" };
 
 export type WorkbenchDatabaseRequest = WorkbenchDatabaseRequestPayload & { id: number };
+
+const CORE_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>([
+  "getInventory", "query", "readLegacyDiffArtifact",
+  "readRetainedProjectCatalog", "readProjectAliases", "resolveProjectIdentity", "readThreadLaunch",
+  "resolveThreadIdentity", "resolveNativeThreadIdentity", "listThreadIdentities", "resolveTurnIdentity",
+  "resolveTranscriptItemIdentity", "readThreadStateNavigationSummary", "readThreadStateProject",
+  "readThreadStateTitleHistories", "readThreadStateGlobal", "readThreadStateRecords",
+  "readThreadStateDrafts", "readThreadStateProfile", "readThreadStateLayout",
+  "readThreadStatePinnedImports", "readThreadStateArchiveDeadline", "readThreadStateActivity",
+  "readThreadStateSnoozeSources", "readThreadStateArchiveEligible", "readSubagents",
+  "readOwnedSubagents",
+  "readStats", "readStatsDetailed", "readClaimStats", "readStatsImportProgress",
+]);
+const TRANSCRIPT_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>([
+  "readTranscriptAsset", "readTranscript", "readTranscriptProviderCursor",
+  "readTranscriptContext", "queryTranscript", "readThreadContextUsage",
+  "readTranscriptMaterializedTurnIds",
+]);
+
+export function getWorkbenchDatabaseReadLane(request: WorkbenchDatabaseRequestPayload): "core" | "transcript" | null {
+  return CORE_READ_REQUEST_TYPES.has(request.type) ? "core"
+    : TRANSCRIPT_READ_REQUEST_TYPES.has(request.type) ? "transcript" : null;
+}
+
+export function isWorkbenchDatabaseReadRequest(request: WorkbenchDatabaseRequestPayload): boolean {
+  return getWorkbenchDatabaseReadLane(request) !== null;
+}
 
 export type WorkbenchDatabaseResponse =
   | { id: number; type: "threadGitSelection"; result: ThreadGitSelectionResult }

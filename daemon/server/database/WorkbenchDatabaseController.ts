@@ -2,7 +2,7 @@
  * WorkbenchDatabaseControllerOptions: construction inputs for the database lifecycle owner.
  * WorkbenchDatabaseRequestFailure: one rolled-back request that leaves the database lifecycle ready.
  * WorkbenchDatabaseFailure: stable controller failure carrying one bounded cause.
- * WorkbenchDatabaseController: owns one worker and the complete database lifecycle.
+ * WorkbenchDatabaseController: owns writer/reader workers and the complete database lifecycle.
  */
 import { Worker } from "node:worker_threads";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -62,6 +62,7 @@ import type {
     WorkbenchDatabaseRequestPayload,
     WorkbenchDatabaseResponse,
 } from "./workbench-database-protocol";
+import { getWorkbenchDatabaseReadLane } from "./workbench-database-protocol";
 
 export interface WorkbenchDatabaseControllerOptions {
   beforeMigration?(backupPath: string): void;
@@ -96,8 +97,13 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
   #preparation: AbortController | null = null;
   #initialProjects: WorkbenchProjectStartup | null = null;
   readonly #databasePath: string;
+  readonly #workerUrl: URL;
   readonly #worker: Worker;
+  #reader: Worker | null = null;
+  #transcriptReader: Worker | null = null;
   readonly #pending = new Map<number, PendingRequest>();
+  // Thread-state readers retain write-before-read ordering across worker lanes.
+  #threadStateWrite: Promise<void> = Promise.resolve();
   #nextRequestId = 1;
   #state: WorkbenchDatabaseControllerState = "starting";
   #failure: WorkbenchDatabaseFailure | null = null;
@@ -109,6 +115,7 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     this.#beforeMigration = beforeMigration;
     this.#prepareProjects = prepareProjects;
     this.#databasePath = databasePath;
+    this.#workerUrl = workerUrl;
     this.#worker = new Worker(workerUrl);
     this.#worker.on("message", (response: WorkbenchDatabaseResponse) => this.#settle(response));
     this.#worker.on("error", (error) => this.#fail(error));
@@ -152,6 +159,7 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       });
       if (response.type !== "ready") throw new WorkbenchDatabaseFailure(`Unexpected database startup response: ${response.type}`);
       this.#initialProjects = response.projects ?? null;
+      await this.#openReaders();
       this.#state = "ready";
       return response.inventory;
     })().catch((error: unknown) => {
@@ -176,7 +184,7 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     // The node can retire an unused gate. Individual callers still receive its rejection.
     void admission.catch(() => {});
     this.#state = "suspended";
-    const closed = this.#request({ type: "suspend" }).then((response) => {
+    const closed = this.#closeReaders().then(() => this.#request({ type: "suspend" })).then((response) => {
       if (response.type !== "suspended") throw new WorkbenchDatabaseFailure(`Unexpected database suspension response: ${response.type}`);
     }).catch((error: unknown) => {
       this.#fail(error);
@@ -203,6 +211,8 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     this.#state = "starting";
     this.#startPromise = this.#request({ type: "resume", restoreBackupPath }).then((response) => {
       if (response.type !== "ready") throw new WorkbenchDatabaseFailure(`Unexpected database resume response: ${response.type}`);
+      return this.#openReaders().then(() => response);
+    }).then((response) => {
       this.#state = "ready";
       this.#failure = null;
       this.#suspension = null;
@@ -230,6 +240,12 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     this.#pending.clear();
     this.#suspension?.release();
     this.#suspension = null;
+    const reader = this.#reader;
+    const transcriptReader = this.#transcriptReader;
+    this.#reader = null;
+    this.#transcriptReader = null;
+    if (reader) await reader.terminate();
+    if (transcriptReader) await transcriptReader.terminate();
     await (this.#termination ??= this.#worker.terminate());
     try { await this.#startPromise; }
     catch (failure) { if (failure !== error && failure !== this.#failure) throw failure; }
@@ -796,10 +812,12 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       return;
     }
     if (this.#state === "failed") {
+      await this.#closeReaders();
       await (this.#termination ??= this.#worker.terminate());
       this.#state = "closed";
       return;
     }
+    await this.#closeReaders();
     const response = await this.#request({ type: "close" });
     if (response.type !== "closed") throw new WorkbenchDatabaseFailure(`Unexpected database close response: ${response.type}`);
     this.#state = "closed";
@@ -808,17 +826,66 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     await (this.#termination ??= this.#worker.terminate());
   }
 
-  async #request(request: WorkbenchDatabaseRequestPayload): Promise<WorkbenchDatabaseResponse> {
-    if (this.#suspension && request.type !== "suspend" && request.type !== "resume" && request.type !== "close") {
+  async #openReaders() {
+    await Promise.all([this.#openReader("core"), this.#openReader("transcript")]);
+  }
+
+  async #openReader(lane: "core" | "transcript") {
+    if (lane === "core" ? this.#reader : this.#transcriptReader) return;
+    const reader = new Worker(this.#workerUrl);
+    if (lane === "core") this.#reader = reader;
+    else this.#transcriptReader = reader;
+    reader.on("message", (response: WorkbenchDatabaseResponse) => this.#settle(response));
+    reader.on("error", error => this.#fail(error));
+    reader.on("exit", code => {
+      if ((lane === "core" ? this.#reader : this.#transcriptReader) === reader
+        && this.#state !== "closed" && this.#state !== "failed") {
+        this.#fail(new Error(`Workbench database ${lane} reader exited unexpectedly with code ${code}`));
+      }
+    });
+    const response = await this.#request({ type: "initializeReader", databasePath: this.#databasePath }, reader);
+    if (response.type !== "ready") throw new WorkbenchDatabaseFailure(`Unexpected database reader startup response: ${response.type}`);
+  }
+
+  async #closeReaders() {
+    await Promise.all([this.#closeReader("core"), this.#closeReader("transcript")]);
+  }
+
+  async #closeReader(lane: "core" | "transcript") {
+    const reader = lane === "core" ? this.#reader : this.#transcriptReader;
+    if (!reader) return;
+    if (lane === "core") this.#reader = null;
+    else this.#transcriptReader = null;
+    try {
+      const response = await this.#request({ type: "close" }, reader);
+      if (response.type !== "closed") throw new WorkbenchDatabaseFailure(`Unexpected database reader close response: ${response.type}`);
+    } finally {
+      await reader.terminate();
+    }
+  }
+
+  async #request(request: WorkbenchDatabaseRequestPayload, target?: Worker): Promise<WorkbenchDatabaseResponse> {
+    const precedingThreadStateWrite = this.#threadStateWrite;
+    if (this.#suspension && request.type !== "suspend" && request.type !== "resume"
+      && request.type !== "close" && request.type !== "initializeReader") {
       await this.#suspension.admission;
     }
+    if (request.type.startsWith("readThreadState")) await precedingThreadStateWrite;
     if (this.#state === "failed") return Promise.reject(this.#failure);
     if (this.#state === "closed") return Promise.reject(new WorkbenchDatabaseFailure("Workbench database is closed"));
+    const lane = getWorkbenchDatabaseReadLane(request);
     const id = this.#nextRequestId++;
-    return new Promise((resolve, reject) => {
+    const response = new Promise<WorkbenchDatabaseResponse>((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
-      this.#worker.postMessage({ ...request, id } satisfies WorkbenchDatabaseRequest);
+      (target ?? (lane === "core" ? this.#reader ?? this.#worker
+        : lane === "transcript" ? this.#transcriptReader ?? this.#worker : this.#worker))
+        .postMessage({ ...request, id } satisfies WorkbenchDatabaseRequest);
     });
+    if (request.type === "commitThreadState" || request.type === "writeThreadStateProject"
+      || request.type === "writeThreadStateGlobal") {
+      this.#threadStateWrite = response.then(() => undefined, () => undefined);
+    }
+    return await response;
   }
 
   #settle(response: WorkbenchDatabaseResponse) {
@@ -856,6 +923,12 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     this.#preparation?.abort(this.#failure);
     this.#suspension?.release();
     this.#suspension = null;
+    const reader = this.#reader;
+    const transcriptReader = this.#transcriptReader;
+    this.#reader = null;
+    this.#transcriptReader = null;
+    if (reader) void reader.terminate();
+    if (transcriptReader) void transcriptReader.terminate();
     for (const pending of this.#pending.values()) pending.reject(this.#failure);
     this.#pending.clear();
   }

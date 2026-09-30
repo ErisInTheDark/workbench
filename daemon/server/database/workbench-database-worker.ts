@@ -6,7 +6,7 @@ import path from "node:path";
 
 import Database from "better-sqlite3";
 
-import type { WorkbenchDatabaseInventory, WorkbenchDatabaseRequest, WorkbenchDatabaseResponse } from "./workbench-database-protocol.ts";
+import { isWorkbenchDatabaseReadRequest, type WorkbenchDatabaseInventory, type WorkbenchDatabaseRequest, type WorkbenchDatabaseResponse } from "./workbench-database-protocol.ts";
 import { validateWorkbenchDatabaseReleases, workbenchDatabaseSchema, workbenchDatabaseTables } from "./workbench-database-schema.ts";
 import migrateWorkbenchDatabase, { restoreWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 import recoverWorkbenchDatabase from "workbench-shared/database/recover-workbench-database";
@@ -42,6 +42,7 @@ import type { WorkbenchProjectStartup } from "./project/workbench-project-persis
 if (!parentPort) throw new Error("Workbench database worker requires a parent port");
 
 let database: Database.Database | null = null;
+let readOnly = false;
 let projectRepository: WorkbenchProjectRepository | null = null;
 let threadLaunchRepository: WorkbenchThreadLaunchRepository | null = null;
 let transcriptRepository: WorkbenchTranscriptRepository | null = null;
@@ -56,17 +57,17 @@ let gitArcProposalDiffRepository: GitArcProposalDiffRepository | null = null;
 let migrationAcknowledgement: { id: number; acknowledge(): void } | null = null;
 let suspendedDatabase: { path: string; version: number } | null = null;
 
-function initializeRepositories() {
+function initializeRepositories(reader = false) {
   if (!database) throw new Error("Workbench database is not initialized");
-  proveReadWrite();
+  if (!reader) proveReadWrite();
   projectRepository = new WorkbenchProjectRepository(database);
   threadLaunchRepository = new WorkbenchThreadLaunchRepository(database);
-  threadLaunchRepository.recoverInterrupted();
+  if (!reader) threadLaunchRepository.recoverInterrupted();
   threadIdentityRepository = new WorkbenchThreadIdentityRepository(database);
   transcriptIdentityRepository = new WorkbenchTranscriptIdentityRepository(database);
   transcriptRepository = new WorkbenchTranscriptRepository(database, threadIdentityRepository);
   threadStateRepository = new WorkbenchThreadStateRelationalRepository(database, threadIdentityRepository);
-  searchRepository = new WorkbenchSearchRepository(database);
+  searchRepository = reader ? null : new WorkbenchSearchRepository(database);
   statsRepository = new WorkbenchStatsRepository(database);
   statsImportRepository = new WorkbenchStatsImportRepository(database);
   statsAttributionRepository = new WorkbenchStatsAttributionRepository(database);
@@ -504,6 +505,22 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
 }
 
 parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
+  if (request.type === "initializeReader") {
+    try {
+      if (database) throw new Error("Workbench database is already initialized");
+      database = new Database(request.databasePath, { readonly: true, fileMustExist: true });
+      readOnly = true;
+      initializeRepositories(true);
+      post({ id: request.id, type: "ready", inventory: inventory() });
+    } catch (error) {
+      postFatalFailure(request, error, "Workbench database reader initialization failed.");
+    }
+    return;
+  }
+  if (readOnly && request.type !== "close" && !isWorkbenchDatabaseReadRequest(request)) {
+    post({ id: request.id, type: "requestFailure", message: "Database reader is read-only." });
+    return;
+  }
   if (request.type === "suspend" || request.type === "resume") {
     try {
       if (request.type === "suspend") {
@@ -605,6 +622,7 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
     handleInitializedRequest(request);
   } catch (error) {
     if (request.type === "close") postFatalFailure(request, error, "Workbench database close failed.");
+    else if (readOnly) post({ id: request.id, type: "requestFailure", message: boundedError(error) });
     else postRequestFailure(request, error);
   }
 });

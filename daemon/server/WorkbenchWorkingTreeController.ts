@@ -3,7 +3,7 @@
  * - default WorkbenchWorkingTreeController: own project-bound reads, live claim admission and drained mutations.
  */
 import type {
-  WorkingTreeFileRequest, WorkingTreeMutation, WorkingTreeRead, WorkingTreeRepository,
+  WorkingTreeFileRequest, WorkingTreeMutation, WorkingTreeRead, WorkingTreeRepository, WorkingTreeSummary,
 } from "workbench-shared/workbench/git/working-tree-contracts";
 import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
 import GitArcRegistry, { getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./lib/workbench/git/GitArcRegistry";
@@ -12,7 +12,7 @@ import WorkbenchWorkingTreeRepository from "./lib/workbench/git/WorkbenchWorking
 import WorkbenchGitRepository from "./lib/workbench/git/WorkbenchGitRepository";
 import type { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
-type RepositoryPort = Pick<WorkbenchWorkingTreeRepository, "git" | "read" | "diff" | "preview" | "mutate">;
+type RepositoryPort = Pick<WorkbenchWorkingTreeRepository, "git" | "read" | "summary" | "diff" | "preview" | "mutate">;
 interface Options {
   resolveProject(projectId: string): Promise<{ roots: Array<{ id: string; name: string; rootPath: string }> }>;
   resolveIdentity: GitArcThreadIdentityResolver;
@@ -27,6 +27,7 @@ interface Options {
 export default class WorkbenchWorkingTreeController {
   private disposed = false;
   private readonly reads = new Map<string, Promise<WorkingTreeRead>>();
+  private readonly summaries = new Map<string, Promise<WorkingTreeSummary>>();
   private readonly completedReads = new Map<string, { data: WorkingTreeRead; expires: number }>();
   private cacheGeneration = {};
   private readonly operations = new Set<Promise<object>>();
@@ -38,6 +39,7 @@ export default class WorkbenchWorkingTreeController {
     this.disposed = true;
     await Promise.allSettled([...this.operations]);
     this.reads.clear();
+    this.summaries.clear();
     this.completedReads.clear();
     this.inspections.clear();
     this.inspecting.clear();
@@ -155,6 +157,35 @@ export default class WorkbenchWorkingTreeController {
     this.reads.set(projectId, pending);
     try { return await pending; }
     finally { if (this.reads.get(projectId) === pending) this.reads.delete(projectId); }
+  }
+
+  async summary(projectId: string): Promise<WorkingTreeSummary> {
+    if (this.disposed) throw new Error("Working tree is reloading.");
+    const existing = this.summaries.get(projectId);
+    if (existing) return await existing;
+    const pending = this.run(async () => {
+      const { roots, errors } = await this.roots(projectId);
+      const result: WorkingTreeSummary = { repositories: [], errors };
+      for (const root of roots) {
+        try {
+          const dirty = await this.options.transitions.read(root.repository.git.root, async () => {
+            const [paths, claims] = await Promise.all([
+              root.repository.summary(), this.claims(root.repository.git),
+            ]);
+            return paths.some(path => !claims.some(claim => getGitArcLiveClaimPaths(claim)
+              .some(scope => gitArcPathsOverlap(scope, path))));
+          });
+          result.repositories.push({ rootId: root.id, label: root.name, dirty });
+        } catch {
+          (this.options.warn ?? console.warn)("Working-tree summary failed for one selected-project root.");
+          result.errors.push({ rootId: root.id, message: "Unable to inspect this repository. Retry after checking Git access." });
+        }
+      }
+      return result;
+    });
+    this.summaries.set(projectId, pending);
+    try { return await pending; }
+    finally { if (this.summaries.get(projectId) === pending) this.summaries.delete(projectId); }
   }
 
   private async root(projectId: string, rootId: string) {
