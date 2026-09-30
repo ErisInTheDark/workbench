@@ -8,7 +8,8 @@ import type { WorkspaceDaemonFact } from "workbench-shared/workbench/workspace/w
 import type { WorkbenchSearchResponse, WorkbenchSearchResult } from "workbench-shared/workbench/search/workbench-search";
 import WorkbenchWorkspaceSearch from "./WorkbenchWorkspaceSearch";
 
-function fixture() {
+function fixture(canProject: () => boolean = () => true) {
+  let databaseOpen = true;
   const listeners = new Set<() => void>();
   const changed = () => { for (const listener of [...listeners]) listener(); };
   const makeSource = () => {
@@ -46,11 +47,15 @@ function fixture() {
     sources: { attached: a, all: () => [a, b], subscribe: listener => {
       listeners.add(listener); return () => { listeners.delete(listener); };
     } },
-    presentation: { read: () => presentation, subscribe: listener => {
+    presentation: { read: () => {
+      if (!databaseOpen) throw new Error("Presentation database is not ready.");
+      return presentation;
+    }, subscribe: listener => {
       const changed = () => listener(presentation.revision);
       listeners.add(changed); return () => { listeners.delete(changed); };
     } },
     warn: message => warnings.push(message),
+    canProject,
   });
   const notifications = new Set<() => void>();
   const observe = (query = "find") => owner.observe({ projectId: logicalId, query },
@@ -62,8 +67,27 @@ function fixture() {
   const hit = (id: string): WorkbenchSearchResult => ({
     kind: "thread", id, projectId, threadId: id, harnessId: "codex", title: id, detail: "",
   });
-  return { owner, a, b, changed, observe, wait, hit, warnings, presentation };
+  return { owner, a, b, changed, observe, wait, hit, warnings, presentation,
+    setDatabaseOpen(value: boolean) { databaseOpen = value; } };
 }
+
+test("late search work cannot read detached presentation and resumes with its result", async context => {
+  let canProject = true;
+  const f = fixture(() => canProject); context.after(() => f.owner.dispose());
+  const view = f.observe();
+  canProject = false;
+  f.setDatabaseOpen(false);
+  f.a.requests[0]!.resolve({ results: [f.hit("arrived-during-handoff")] });
+  await Promise.resolve();
+  assert.doesNotThrow(f.changed);
+  assert.equal(view.getSnapshot().data.results.length, 0);
+  f.setDatabaseOpen(true);
+  canProject = true;
+  f.owner.resumeProjection();
+  await f.wait(() => view.getSnapshot().data.results.length === 1);
+  assert.equal(view.getSnapshot().data.results[0]?.hit.title, "arrived-during-handoff");
+  view.release();
+});
 
 test("matching callers share work while available results publish before a slow source", async context => {
   const f = fixture(); context.after(() => f.owner.dispose());

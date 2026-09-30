@@ -39,6 +39,7 @@ function definition(profileId: string, configured: WorkbenchComposerSettings): W
 async function fixture(
   context: TestContext,
   selection: WorkbenchComposerProfileTargetSelection = { kind: "custom", settings: settings(model.id) },
+  canAdmit: () => boolean = () => true,
 ) {
   const temporary = await WorkbenchTemporaryDirectory.create("app-draft-owner-");
   const directory = temporary.path;
@@ -77,7 +78,7 @@ async function fixture(
   const createOwner = () => {
     const owner = new WorkbenchWorkspaceDrafts({
       presentation, sources: { get: id => { assert.equal(id, daemonId); return source; } },
-      origin: () => "https://app.example", warn: message => warnings.push(message),
+      origin: () => "https://app.example", warn: message => warnings.push(message), canAdmit,
     });
     owners.push(owner);
     return owner;
@@ -95,6 +96,30 @@ async function fixture(
     retained: () => retained,
   };
 }
+
+test("handoff rejects new draft admission while an accepted launch drains", async context => {
+  let canAdmit = true;
+  const f = await fixture(context, undefined, () => canAdmit);
+  const entered = Promise.withResolvers<void>();
+  const accepted = Promise.withResolvers<object>();
+  let launchId = "";
+  f.handle(async (method, params) => {
+    if (method === "models/list") return { data: [model] };
+    const request = WorkbenchThreadLaunchRequestSchema.parse(params);
+    launchId = request.launchId;
+    entered.resolve();
+    return accepted.promise;
+  });
+  const launching = f.owner.launch(f.draftId, f.draft().revision);
+  await entered.promise;
+  canAdmit = false;
+  const draining = f.owner.drain();
+  await assert.rejects(f.owner.launch(f.draftId, f.draft().revision), /reloading/u);
+  accepted.resolve({ phase: "accepted", launchId, threadId: randomUUID(), turnId: randomUUID() });
+  await launching;
+  await draining;
+  assert.equal(f.retained(), 0);
+});
 
 test("an offline original destination does not reserve or prevent saving the draft", async context => {
   const f = await fixture(context);

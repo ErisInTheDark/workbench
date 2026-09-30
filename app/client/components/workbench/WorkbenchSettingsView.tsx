@@ -134,7 +134,7 @@ export default function WorkbenchSettingsView({
   const daemonControl = <WorkbenchSettingsContextRow label="Daemon" value={daemonId ?? ""}
     options={daemons.map(item => ({ id: item.id, label: item.hostname }))}
     onSelect={id => { setChosenDaemonId(id as DaemonId); setChosenFolderKey(""); }} />;
-  return <div className="mx-auto w-full max-w-content px-5 pb-10 pt-1 text-text">
+  return <div className="mx-auto w-full max-w-content px-5 pb-10 pt-1 text-text md:max-w-[calc(var(--container-content)+13.25rem)]">
     <div className="grid gap-5 md:grid-cols-[11rem_minmax(0,1fr)] lg:gap-9">
       <aside className="scrollbar-hover-reveal hidden md:sticky md:top-20 md:block md:max-h-[calc(100dvh-6rem)] md:self-start md:overflow-y-auto">
         <div className="mb-3 flex min-w-0 items-center gap-2 px-2 py-2 text-sm text-text">

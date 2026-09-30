@@ -26,6 +26,7 @@ export default class WorkbenchWorkspaceThreads {
     sources: WorkbenchDaemonSources;
     presentation: WorkbenchPresentationController;
     warn(message: string): void;
+    canProject?(): boolean;
   }) {}
 
   start() {
@@ -97,7 +98,12 @@ export default class WorkbenchWorkspaceThreads {
     this.interests.clear();
   }
 
+  resumeProjection() {
+    this.refresh();
+  }
+
   private refresh() {
+    if (this.options.canProject?.() === false) return;
     if (this.refreshing) { this.refreshRequested = true; return; }
     this.refreshing = true;
     try {

@@ -21,6 +21,9 @@ test("an idle app socket closes on grant revocation and state mutations cannot s
   };
   const routes = new WorkbenchNetworkRoutes(network);
   const mutations: Array<string | undefined> = [];
+  const mutationEntered = Promise.withResolvers<void>();
+  const releaseMutation = Promise.withResolvers<void>();
+  let holdMutation = false;
   const sockets = new WorkbenchAppEventSocketController({
     logger: new WorkbenchProcessLogger({ color: false,
       writeOutput: line => lines.push(line), writeError: line => lines.push(line) }),
@@ -29,6 +32,10 @@ test("an idle app socket closes on grant revocation and state mutations cannot s
       readWorkspaceBrowser: async () => { throw new Error("Unexpected read."); },
       mutateBrowser: async browserStateId => {
         mutations.push(browserStateId);
+        if (holdMutation) {
+          mutationEntered.resolve();
+          await releaseMutation.promise;
+        }
         return { daemonRegistrationId: "registration", revision: 1, oldestAvailableRevision: 0,
           kind: "delta", rows: {
             composerDraftAttachments: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
@@ -75,8 +82,25 @@ test("an idle app socket closes on grant revocation and state mutations cannot s
   granted = true;
   const replacement = await connect();
   const retired = once(replacement, "close");
-  sockets.close();
+  holdMutation = true;
+  replacement.send(JSON.stringify({ id: 3, method: "app/state/mutate", params: {
+    browserStateId: null,
+    mutation: { action: "delete", identity: { kind: "globalPreference", key: "theme" } },
+  } }));
+  await mutationEntered.promise;
+  const quiescing = sockets.quiesce();
+  let drained = false;
+  void quiescing.then(() => { drained = true; });
+  await Promise.resolve();
+  assert.equal(drained, false);
+  releaseMutation.resolve();
+  await quiescing;
   await retired;
+  sockets.resume();
+  const recovered = await connect();
+  const closedAgain = once(recovered, "close");
+  sockets.close();
+  await closedAgain;
   assert.equal(listeners.size, 0);
   assert.ok(lines.some(line => line.includes("grant revoked")));
 });

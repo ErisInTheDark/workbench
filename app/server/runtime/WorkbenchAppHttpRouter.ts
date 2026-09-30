@@ -180,6 +180,14 @@ export default class WorkbenchAppHttpRouter {
     this.staticRequests.close();
   }
 
+  async quiesceSockets() {
+    await this.eventSockets?.quiesce();
+  }
+
+  resumeSockets() {
+    this.eventSockets?.resume();
+  }
+
   async admitHttp(request: IncomingMessage, response: ServerResponse) {
     if (this.admitConnection(request)) return true;
     response.setHeader("Connection", "close");

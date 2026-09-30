@@ -13,9 +13,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   access: "agent",
   children: [],
   create: (context, { get }) => {
-    const singleFile = new CodexSingleFileController(createCodexSingleFileRuntime(
-      path.resolve(context.daemonPackageRoot, "../.workbench/voice-sessions"),
-    ));
+    const singleFile = new CodexSingleFileController(createCodexSingleFileRuntime({
+      documentsDirectory: path.resolve(context.daemonPackageRoot, "../.workbench/voice-sessions"),
+    }));
     const local = get("codexConfiguration");
     const threads = get("codexThreadOperations");
     const configuration = get("codexNativeConfiguration");

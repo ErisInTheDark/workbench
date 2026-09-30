@@ -64,6 +64,7 @@ export default class WorkbenchPresentationImportController {
     sources: WorkbenchDaemonSources;
     presentation: Owner;
     logger: WorkbenchProcessLogger;
+    canAdmit?(): boolean;
   }) {}
 
   start() {
@@ -88,8 +89,18 @@ export default class WorkbenchPresentationImportController {
     this.listeners.clear();
   }
 
-  private observe() {
+  async drain() {
+    await this.running;
+  }
+
+  resumeAdmission() {
     if (this.cancellation.signal.aborted) return;
+    this.observe();
+    if (this.requested && !this.running) this.drive();
+  }
+
+  private observe() {
+    if (this.cancellation.signal.aborted || this.options.canAdmit?.() === false) return;
     const source = this.options.sources.attached;
     const daemon = source?.getSnapshot();
     if (!source || !daemon || !source.available) {
@@ -107,7 +118,7 @@ export default class WorkbenchPresentationImportController {
 
   private drive() {
     const operation = (async () => {
-      while (this.requested && !this.cancellation.signal.aborted) {
+      while (this.requested && !this.cancellation.signal.aborted && this.options.canAdmit?.() !== false) {
         const target = this.requested;
         this.requested = null;
         try {
@@ -121,7 +132,7 @@ export default class WorkbenchPresentationImportController {
     })();
     this.running = operation.finally(() => {
       this.running = null;
-      if (this.requested && !this.cancellation.signal.aborted) this.drive();
+      if (this.requested && !this.cancellation.signal.aborted && this.options.canAdmit?.() !== false) this.drive();
     });
   }
 

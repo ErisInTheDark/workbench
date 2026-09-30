@@ -42,6 +42,7 @@ export default class WorkbenchWorkspaceSearch {
     sources: Pick<WorkbenchDaemonSources, "subscribe"> & { all(): Source[]; readonly attached: Source | null };
     presentation: Pick<WorkbenchPresentationController, "read" | "subscribe">;
     warn(message: string): void;
+    canProject?(): boolean;
   }) {
     this.stop = [
       options.sources.subscribe(() => this.refresh()),
@@ -77,6 +78,10 @@ export default class WorkbenchWorkspaceSearch {
     for (const interest of this.interests) this.retire(interest);
   }
 
+  resumeProjection() {
+    this.refresh();
+  }
+
   private retire(interest: Interest) {
     this.interests.delete(interest);
     for (const job of interest.jobs.values()) {
@@ -87,7 +92,7 @@ export default class WorkbenchWorkspaceSearch {
   }
 
   private refresh() {
-    if (this.disposed) return;
+    if (this.disposed || this.options.canProject?.() === false) return;
     this.dirty = true;
     if (this.refreshing) return;
     this.refreshing = true;

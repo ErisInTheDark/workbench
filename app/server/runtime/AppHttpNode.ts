@@ -33,13 +33,20 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       supportsAppWebSockets: context.supportsAppWebSockets === true,
     });
     return {
+      beginHandoff: () => ({
+        waitForIdle: () => router.quiesceSockets(),
+        expire: () => undefined,
+        detach: () => undefined,
+        resume: () => router.resumeSockets(),
+        commit: () => router.close(),
+      }),
       dispose: () => router.close(),
       registrations: { http: router },
       start: async () => await router.start(),
     };
   },
   description: "Reload app routes, static SPA serving, and browser diagnostic admission.",
-  lifecycle: "atomic",
+  lifecycle: "handoff",
   provides: ["http"],
   requires: ["logger", "state", "presentation", "network", "sources", "workspace", "workspaceThreads", "workspaceDrafts", "presentationImport"],
   safeAll: false,

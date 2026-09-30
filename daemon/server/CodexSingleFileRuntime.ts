@@ -3,6 +3,7 @@
  * - default createCodexSingleFileRuntime: isolated native transport and owned scratch documents.
  */
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
+import { mkdir } from "node:fs/promises";
 import { z } from "zod";
 import CodexSingleFileDocuments from "./CodexSingleFileDocuments";
 import CodexAppServer, { type CodexAppServerOptions } from "./CodexAppServer";
@@ -14,11 +15,16 @@ const reply = z.object({
 });
 const configReply = z.object({ config: z.object({ mcp_servers: z.record(z.string(), z.unknown()).optional() }).passthrough() });
 
-export default function createCodexSingleFileRuntime(
-  directory: string,
-  createServer: (options: CodexAppServerOptions) => Pick<CodexAppServer, "send" | "stopAsync"> = options => new CodexAppServer(options),
-): CodexSingleFileOptions {
-  const documents = new CodexSingleFileDocuments(directory);
+export default function createCodexSingleFileRuntime({
+  documentsDirectory,
+  transformerDirectory = WorkbenchTemporaryDirectory.resolve("voice-transformer"),
+  createServer = options => new CodexAppServer(options),
+}: {
+  documentsDirectory: string;
+  transformerDirectory?: string;
+  createServer?: (options: CodexAppServerOptions) => Pick<CodexAppServer, "send" | "stopAsync">;
+}): CodexSingleFileOptions {
+  const documents = new CodexSingleFileDocuments(documentsDirectory);
   return {
     createDocument: text => documents.create(text),
     createTransport(onMessage, onFailure): SingleFileTransport {
@@ -34,7 +40,7 @@ export default function createCodexSingleFileRuntime(
         onFailure(error);
       };
       const server = createServer({
-        projectRoot: WorkbenchTemporaryDirectory.resolve("voice-transformer"),
+        projectRoot: transformerDirectory,
         args: [
           ...[
             "skills.include_instructions=false", "include_apps_instructions=false",
@@ -56,6 +62,9 @@ export default function createCodexSingleFileRuntime(
         },
       });
       const request: SingleFileTransport["request"] = async request => {
+        if (closed) throw new Error("Voice transport is disposed.");
+        if (failure) throw failure;
+        await mkdir(transformerDirectory, { recursive: true });
         if (closed) throw new Error("Voice transport is disposed.");
         if (failure) throw failure;
         if (request.method === "thread/start") {

@@ -55,9 +55,11 @@ type Json = z.infer<ReturnType<typeof z.json>>;
 export default class WorkbenchAppEventSocketController {
   private readonly server = new WebSocketServer({ noServer: true, maxPayload: MAX_INBOUND_FRAME_BYTES });
   private readonly connections = new Map<WebSocket, () => void>();
+  private readonly pendingRequests = new Set<Promise<void>>();
   private readonly traffic = new Map<string, { count: number; bytes: number }>();
   private trafficTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private suspended = false;
 
   constructor(private readonly options: {
     logger: WorkbenchProcessLogger;
@@ -78,7 +80,7 @@ export default class WorkbenchAppEventSocketController {
 
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer) {
     const url = new URL(request.url ?? "/", "http://workbench.local");
-    if (this.closed || url.pathname !== WORKBENCH_APP_NETWORK_SOCKET_PATH || !this.options.routes.admitSocket(request)) {
+    if (this.closed || this.suspended || url.pathname !== WORKBENCH_APP_NETWORK_SOCKET_PATH || !this.options.routes.admitSocket(request)) {
       this.options.logger.error("app", "WS network upgrade rejected: route, origin or network grant unavailable.");
       socket.destroy();
       return;
@@ -87,7 +89,7 @@ export default class WorkbenchAppEventSocketController {
   }
 
   private accept(connection: WebSocket, request: IncomingMessage, url: URL) {
-    if (this.closed) { connection.close(1012, "App routes reloading"); return; }
+    if (this.closed || this.suspended) { connection.close(1012, "App routes reloading"); return; }
     let released = false;
     let stateOwner: string | null | undefined;
     const send = (frame: Frame | { id: number | null; result?: Json | object; error?: { code: number; message: string; data?: Json } }) => {
@@ -178,6 +180,7 @@ export default class WorkbenchAppEventSocketController {
     connection.on("error", error => this.options.logger.error("app",
       `WS network connection failed: ${boundedSocketError(error)}`));
     connection.on("message", bytes => {
+      if (this.suspended || released) return;
       let value: unknown;
       const raw = bytes.toString();
       const receivedBytes = Buffer.byteLength(raw);
@@ -200,7 +203,7 @@ export default class WorkbenchAppEventSocketController {
         send({ id: input.id, error: { code: -32000, message: "App request exceeds its size limit." } });
         return;
       }
-      void (async () => {
+      const operation = (async () => {
         if (!this.options.routes.admitSocket(request)) throw new Error("App network grant was revoked.");
         if (input.method === "workspace/thread/action") {
           if (!workspace) throw new Error("Workspace actions are unavailable.");
@@ -279,6 +282,8 @@ export default class WorkbenchAppEventSocketController {
         send({ id: input.id, error: { code, message,
           ...(data?.success ? { data: data.data } : {}) } });
       });
+      this.pendingRequests.add(operation);
+      void operation.then(() => { this.pendingRequests.delete(operation); });
     });
     if (this.options.presentationImport) sendImport(this.options.presentationImport.snapshot());
   }
@@ -311,14 +316,30 @@ export default class WorkbenchAppEventSocketController {
   close() {
     if (this.closed) return;
     this.closed = true;
+    this.suspended = true;
     if (this.trafficTimer !== null) clearTimeout(this.trafficTimer);
     this.trafficTimer = null;
     this.flushTraffic();
     this.options.logger.line("app", `WS network routes reloading; retiring ${this.connections.size} connections`);
+    this.retireConnections();
+    this.server.close();
+  }
+
+  async quiesce() {
+    if (this.closed) return;
+    this.suspended = true;
+    this.retireConnections();
+    await Promise.all(this.pendingRequests);
+  }
+
+  resume() {
+    if (!this.closed) this.suspended = false;
+  }
+
+  private retireConnections() {
     for (const [connection, release] of this.connections) {
       release();
       connection.terminate();
     }
-    this.server.close();
   }
 }

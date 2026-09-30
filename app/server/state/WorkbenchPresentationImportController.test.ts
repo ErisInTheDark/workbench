@@ -49,6 +49,60 @@ function importSource(
     get retained() { return retained; }, get released() { return released; } };
 }
 
+test("presentation handoff drains the current import and resumes a newer source afterward", async () => {
+  const daemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const resumed = Promise.withResolvers<void>();
+  let generation = 1;
+  let admitted = true;
+  let reads = 0;
+  const source = importSource(() => ({ daemonId, generation, ready: true }), async <TResponse>(method: string) => {
+    if (method === "project/locations/read") {
+      reads++;
+      if (reads === 1) { entered.resolve(); await release.promise; }
+      else resumed.resolve();
+      return { data: [] } as TResponse;
+    }
+    if (method === "thread/presentation/manifest/read") return { sources: [], nextCursor: null } as TResponse;
+    throw new Error(`Unexpected import request ${method}`);
+  });
+  const snapshot: PresentationSnapshot = {
+    revision: 0, daemons: [], projects: [], locations: [], defaults: [], drafts: [],
+    folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const presentation = {
+    mutate: () => snapshot, read: () => snapshot,
+    readImportReceipts: () => ({ present: [] }),
+  } as unknown as WorkbenchPresentationController;
+  const owner = new WorkbenchPresentationImportController({
+    sources: source.sources, presentation, canAdmit: () => admitted,
+    logger: new WorkbenchProcessLogger({ color: false, writeOutput: () => {}, writeError: () => {} }),
+  });
+  try {
+    owner.start();
+    await entered.promise;
+    admitted = false;
+    const draining = owner.drain();
+    let drained = false;
+    void draining.then(() => { drained = true; });
+    await Promise.resolve();
+    assert.equal(drained, false);
+    release.resolve();
+    await draining;
+    generation = 2;
+    source.notify();
+    assert.equal(reads, 1);
+    admitted = true;
+    owner.resumeAdmission();
+    await resumed.promise;
+    assert.equal(reads, 2);
+  } finally {
+    release.resolve();
+    await owner.close();
+  }
+});
+
 test("one app import survives tab-like refresh signals and an unreadable image cannot hide the next draft", async () => {
   const daemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
   const projectId = ProjectIdSchema.parse("b597a4b6-7af9-41f1-83ea-a53aed6f3b0a");

@@ -9,6 +9,32 @@ import { decodeVoiceDocument } from "workbench-shared/workbench/voice/voice-docu
 
 beforeEach(context => { if ("mock" in context) context.mock.method(console, "info", () => {}); });
 
+test("a recoverable preparation failure can retry on the same owned transport", async () => {
+  let attempts = 0;
+  let transports = 0;
+  const controller = new CodexSingleFileController({
+    createDocument: async () => { throw new Error("Unexpected document creation."); },
+    createTransport() {
+      transports++;
+      return {
+        async request() {
+          attempts++;
+          if (attempts === 1) throw new Error("Temporary working directory unavailable.");
+          return {};
+        },
+        respond() {},
+        async dispose() {},
+      };
+    },
+  });
+  try {
+    await assert.rejects(controller.prepare(), /working directory/u);
+    await controller.prepare();
+    assert.equal(attempts, 2);
+    assert.equal(transports, 1);
+  } finally { await controller.dispose(); }
+});
+
 async function harness(voice = false) {
   let observe!: (message: unknown) => Promise<void>;
   const requests: Parameters<SingleFileTransport["request"]>[0][] = [];

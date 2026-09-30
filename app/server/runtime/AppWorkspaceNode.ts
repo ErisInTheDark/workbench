@@ -16,18 +16,45 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   access: "operator",
   children: [AppHttpNode],
   create: (context, build) => {
+    let admitting = true;
+    const canAdmit = () => admitting;
     const presentation = build.get("presentation");
     const warn = (message: string) => build.get("logger").error("app", message);
     const sources = new WorkbenchDaemonSources({ network: build.get("network"), warn });
-    const workspace = new WorkbenchWorkspaceController({ sources, presentation, warn });
-    const workspaceThreads = new WorkbenchWorkspaceThreads({ sources, presentation, warn });
+    const workspace = new WorkbenchWorkspaceController({ sources, presentation, warn, canProject: canAdmit });
+    const workspaceThreads = new WorkbenchWorkspaceThreads({ sources, presentation, warn, canProject: canAdmit });
     const workspaceDrafts = new WorkbenchWorkspaceDrafts({
-      sources, presentation, warn, origin: () => context.appPort.current?.()?.appOrigin ?? null,
+      sources, presentation, warn, canAdmit, origin: () => context.appPort.current?.()?.appOrigin ?? null,
     });
     const presentationImport = new WorkbenchPresentationImportController({
-      sources, presentation, logger: build.get("logger"),
+      sources, presentation, logger: build.get("logger"), canAdmit,
     });
+    const dispose = async () => {
+      const importing = presentationImport.close();
+      const launching = workspaceDrafts.dispose();
+      workspaceThreads.dispose();
+      workspace.dispose();
+      // Retire transport before draining accepted work. Uncertain launches retain
+      // their durable launch ID for the replacement owner to reconcile.
+      sources.dispose();
+      await Promise.all([importing, launching]);
+    };
     return {
+      beginHandoff: () => ({
+        waitForIdle: async () => {
+          admitting = false;
+          await Promise.all([presentationImport.drain(), workspaceDrafts.drain()]);
+        },
+        expire: () => undefined,
+        detach: () => undefined,
+        resume: () => {
+          admitting = true;
+          workspace.resumeProjection();
+          workspaceThreads.resumeProjection();
+          presentationImport.resumeAdmission();
+        },
+        commit: dispose,
+      }),
       registrations: { sources, workspace, workspaceThreads, workspaceDrafts, presentationImport },
       start: () => {
         workspace.start();
@@ -35,20 +62,11 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
         presentationImport.start();
         sources.start();
       },
-      dispose: async () => {
-        const importing = presentationImport.close();
-        const launching = workspaceDrafts.dispose();
-        workspaceThreads.dispose();
-        workspace.dispose();
-        // Retire transport before draining accepted work. Uncertain launches retain
-        // their durable launch ID for the replacement owner to reconcile.
-        sources.dispose();
-        await Promise.all([importing, launching]);
-      },
+      dispose,
     };
   },
   description: "Reload app-owned daemon connections, workspace queries and semantic operations.",
-  lifecycle: "atomic",
+  lifecycle: "handoff",
   provides: ["sources", "workspace", "workspaceThreads", "workspaceDrafts", "presentationImport"],
   requires: ["network", "presentation", "logger"],
   safeAll: false,

@@ -79,7 +79,7 @@ class Socket extends EventTarget {
   }
 }
 
-async function fixture(context: TestContext) {
+async function fixture(context: TestContext, canProject: () => boolean = () => true) {
   const temporary = await WorkbenchTemporaryDirectory.create("workspace-owners-");
   const directory = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(directory, "presentation.sqlite3") });
@@ -110,8 +110,8 @@ async function fixture(context: TestContext) {
       },
     }),
   });
-  const workspace = new WorkbenchWorkspaceController({ sources, presentation, warn: message => warnings.push(message) });
-  const threads = new WorkbenchWorkspaceThreads({ sources, presentation, warn: message => warnings.push(message) });
+  const workspace = new WorkbenchWorkspaceController({ sources, presentation, warn: message => warnings.push(message), canProject });
+  const threads = new WorkbenchWorkspaceThreads({ sources, presentation, warn: message => warnings.push(message), canProject });
   context.after(async () => {
     threads.dispose(); workspace.dispose(); sources.dispose(); presentation.close();
     await repository.close();
@@ -127,6 +127,29 @@ async function fixture(context: TestContext) {
       return socket;
     } };
 }
+
+test("paused project projections survive a closed database and catch up after rollback", async context => {
+  let canProject = true;
+  const owners = await fixture(context, () => canProject);
+  const socket = await owners.open(a);
+  const query = await socket.query("catalogue");
+  socket.push(query, { kind: "catalogue", phase: "current", failure: null,
+    catalogue: { data: catalogue.data.map(item => item.project), rootPath: "C:/" }, locations: catalogue });
+  const release = owners.workspace.retain({ summaries: true });
+  assert.equal(owners.workspace.getSnapshot().projects[0]?.locations[0]?.name, "local-project");
+  canProject = false;
+  await owners.repository.close();
+  release();
+  const renamed = { data: catalogue.data.map(item => ({
+    ...item, project: { ...item.project, name: "renamed-project" },
+  })) };
+  socket.push(query, { kind: "catalogue", phase: "current", failure: null,
+    catalogue: { data: renamed.data.map(item => item.project), rootPath: "C:/" }, locations: renamed }, 2);
+  await owners.repository.resume();
+  canProject = true;
+  owners.workspace.resumeProjection();
+  assert.equal(owners.workspace.getSnapshot().projects[0]?.locations[0]?.name, "renamed-project");
+});
 
 test("available catalogue facts register and render without waiting for a second daemon", async context => {
   const owners = await fixture(context);

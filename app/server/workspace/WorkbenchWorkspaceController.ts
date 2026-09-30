@@ -46,6 +46,7 @@ export default class WorkbenchWorkspaceController {
     sources: WorkbenchDaemonSources;
     presentation: WorkbenchPresentationController;
     warn(message: string): void;
+    canProject?(): boolean;
   }) {
     this.search = new WorkbenchWorkspaceSearch(options);
   }
@@ -63,6 +64,10 @@ export default class WorkbenchWorkspaceController {
   getSnapshot = () => this.snapshot;
   getBindings = () => this.bindings;
   getProjectGroups = () => this.groups;
+  resumeProjection() {
+    this.search.resumeProjection();
+    this.refresh();
+  }
 
   select(daemonIds: readonly DaemonId[]): WorkspaceProjects {
     const all = this.snapshot;
@@ -114,6 +119,7 @@ export default class WorkbenchWorkspaceController {
   }
 
   private refresh() {
+    if (this.options.canProject?.() === false) return;
     if (this.updating) { this.updateRequested = true; return; }
     this.updating = true;
     try {

@@ -226,6 +226,8 @@ test("reloads the database with a fresh repository constructor and no process re
   const constructors: Array<typeof WorkbenchAppStateRepository> = [];
   const compilerModes: boolean[] = [];
   const databaseEvents: string[] = [];
+  const replacementStart = Promise.withResolvers<void>();
+  const resumeReplacement = Promise.withResolvers<void>();
   let reloadLine = "";
   let resolveReload!: () => void;
   let rejectReload!: (error: Error) => void;
@@ -276,9 +278,13 @@ test("reloads the database with a fresh repository constructor and no process re
         databaseEvents.push(`close:${generation}`);
         return close();
       };
-      repository.start = () => {
+      repository.start = async () => {
         databaseEvents.push(`start:${generation}`);
-        return start();
+        if (generation === 2) {
+          replacementStart.resolve();
+          await resumeReplacement.promise;
+        }
+        return await start();
       };
       return repository;
     },
@@ -357,6 +363,11 @@ test("reloads the database with a fresh repository constructor and no process re
     const browserStateId = randomUUID();
     const initial = await observeWorkspace(appSocket, 3, { kind: "appState", browserStateId });
     assert.ok(initial.kind === "appState" && initial.data);
+    const projectsObserved = nextSocketFrame(appSocket, frame => frame.id === 7);
+    appSocket.send(JSON.stringify({ id: 7, method: "workspace/observe", params: {
+      subscriptionId: randomUUID(), generation: 1, query: { kind: "projects" },
+    } }));
+    assert.equal((await projectsObserved).error, undefined);
     const state = initial.data;
     const stateNotice = nextSocketFrame(appSocket, frame => {
       if (frame.kind !== "workspace") return false;
@@ -389,8 +400,11 @@ test("reloads the database with a fresh repository constructor and no process re
     const appClosed = once(appSocket, "close");
     await target.handleRequest(request, response as unknown as import("node:http").ServerResponse);
     assert.equal(response.statusCode, 202);
-    await reloaded;
+    await replacementStart.promise;
+    appSocket.terminate();
     await appClosed;
+    resumeReplacement.resolve();
+    await reloaded;
 
     assert.equal(constructors.length, 2);
     assert.deepEqual(compilerModes, [false, false]);
@@ -414,6 +428,7 @@ test("reloads the database with a fresh repository constructor and no process re
     replacementAppSocket.send(JSON.stringify({ id: 6, method: "app/settings/update", params: { reactDevelopmentMode: false } }));
     assert.equal((await restoreResponse).error, undefined);
   } finally {
+    resumeReplacement.resolve();
     if (started) await target.close();
     appSocket?.terminate();
     replacementAppSocket?.terminate();

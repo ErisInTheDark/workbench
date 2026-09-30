@@ -115,10 +115,17 @@ export default class CodexSingleFileController implements WorkbenchProviderSingl
   }
   prepare() {
     if (this.disposed) return Promise.reject(new Error("Single-file editor is disposed."));
-    return this.ready ??= this.transport.request({
+    if (this.ready) return this.ready;
+    const attempt = this.transport.request({
       method: "initialize",
       params: { clientInfo: { name: "workbench-voice", title: "Workbench voice", version: "1" }, capabilities: { experimentalApi: true, requestAttestation: false } },
     }).then(() => undefined);
+    this.ready = attempt;
+    // The caller still receives the rejection; only the retry guard is cleared.
+    void attempt.catch(() => {
+      if (this.ready === attempt) this.ready = null;
+    });
+    return attempt;
   }
   async start(start: SingleFileStart) {
     if (this.starting || this.session) throw new Error("Single-file editor is busy.");

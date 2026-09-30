@@ -28,10 +28,12 @@ export default class WorkbenchWorkspaceDrafts {
     sources: { get(id: DaemonId): Pick<WorkbenchDaemonSource, "available" | "daemon" | "retain"> | null | undefined };
     origin(): string | null;
     warn(message: string): void;
+    canAdmit?(): boolean;
   }) {}
 
   launch(draftId: string, expectedRevision: number, options: WorkbenchSendThreadMessageOptions = {}) {
     if (this.closed) return Promise.reject(new Error("Draft launch service is closing."));
+    if (this.options.canAdmit?.() === false) return Promise.reject(new Error("Draft launch service is reloading."));
     const existing = this.launches.get(draftId);
     if (existing) return existing;
     const operation = this.performLaunch(draftId, expectedRevision, options);
@@ -49,6 +51,10 @@ export default class WorkbenchWorkspaceDrafts {
   async dispose() {
     this.closed = true;
     // An accepted operation belongs to this service, not the tab which submitted it.
+    await Promise.allSettled(this.launches.values());
+  }
+
+  async drain() {
     await Promise.allSettled(this.launches.values());
   }
 
