@@ -112,6 +112,22 @@ test("context injected by acceptance prefixes the prompt and early steers follow
   await task;
 });
 
+test("image prompts and steers reach Claude as content blocks behind acceptance context", async () => {
+  const image = { type: "image" as const, source: { type: "base64" as const, media_type: "image/png" as const, data: "AAAA" } };
+  const { turn, push, queue } = fixture(accepted => {
+    accepted.inject("<wb:thread-status value=\"working\" />");
+    accepted.steer(steer(), [image]);
+  });
+  const { task } = await turn.start([{ type: "text", text: "look" }, image]);
+  assert.deepEqual(queue.pushed.map(message => message.message.content), [
+    [{ type: "text", text: "<wb:thread-status value=\"working\" />\n\nlook" }, image],
+    [image],
+  ]);
+  push(ack(steerId));
+  push(result());
+  await task;
+});
+
 test("a failed query settles failed and still publishes idle", async context => {
   context.mock.method(console, "error", () => undefined);
   const { turn, push, log } = fixture();

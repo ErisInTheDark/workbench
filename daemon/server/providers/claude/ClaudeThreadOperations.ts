@@ -24,7 +24,7 @@ import {
   isWorkbenchQuestionnaireResponsePart,
   WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
-import { toWorkbenchThreadUserInput, type WorkbenchUserInput } from "workbench-shared/workbench/provider/provider-input";
+import { toWorkbenchThreadUserInput } from "workbench-shared/workbench/provider/provider-input";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
@@ -36,6 +36,7 @@ import type { WorkbenchToolAdmissionOptions } from "../../WorkbenchToolAdmission
 import { claudeEnvironment, claudeExecutable } from "./claude-process-options";
 import ClaudeConfigView from "./ClaudeConfigView";
 import ClaudeLiveTurn, { ClaudePromptQueue } from "./ClaudeLiveTurn";
+import { claudePromptContent, prefixClaudePrompt } from "./claude-prompt-content";
 
 function spawnTrackedClaude(
   options: ClaudeSpawnOptions, onExit: (exit: Promise<void>) => void,
@@ -49,15 +50,6 @@ function spawnTrackedClaude(
     child.once("close", () => resolve());
   }));
   return child;
-}
-
-function promptText(parts: readonly WorkbenchUserInput[]) {
-  return parts.map(part => {
-    if (part.type === "text") return part.text;
-    if (part.type === "skill") return `/${part.name}`;
-    if (part.type === "mention") return `@${part.path}`;
-    throw new Error(`Claude provider does not yet support ${part.type} input.`);
-  }).join("\n");
 }
 
 export interface ClaudeThreadOperationsOptions {
@@ -211,7 +203,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       await runtime.whenSettled();
       runtime = this.live.get(identity.threadId);
     }
-    const text = promptText(input.input);
+    const content = await claudePromptContent(input.input);
     if (runtime && input.intent !== "newTurn") {
       if ("expectedTurnId" in input && input.expectedTurnId && input.expectedTurnId !== runtime.turnId) {
         throw new Error("Claude steer targeted a different turn.");
@@ -222,7 +214,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
         input: toWorkbenchThreadUserInput(input.input), status: "pending", attemptedAt: Date.now(), resolvedAt: null,
         requestId: null, canonicalItemId: null, clientUserMessageId: input.clientMessageId,
         dispatchSequence: null, error: null,
-      }, text);
+      }, content);
       return { kind: "steered" as const, turnId: runtime.turnId };
     }
     if (runtime) throw new Error("Claude turn is already active.");
@@ -250,8 +242,8 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       || hasQuestionnaireResponse;
     const managedPrompt = workingStatusInPrompt
       ? `${instructions}\n\n${WORKBENCH_THREAD_WORKING_STATUS_MESSAGE}` : instructions;
-    const sdkText = workingStatusInPrompt
-      ? `${WORKBENCH_THREAD_WORKING_STATUS_MESSAGE}\n\n${text}` : text;
+    const sdkContent = workingStatusInPrompt
+      ? prefixClaudePrompt(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE, content) : content;
     const executable = this.options.resolveExecutable?.() ?? claudeExecutable();
     const usage = (await this.options.transcript.readContextUsage(identity.threadId))?.tokenUsage ?? null;
     const turnId = await this.options.transcript.startTurn({
@@ -316,7 +308,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     });
     this.live.set(identity.threadId, live);
     this.scopes.set(scope, live);
-    const started = await live.start(sdkText);
+    const started = await live.start(sdkContent);
     this.pending.add(started.task);
     void started.task.then(
       () => { this.pending.delete(started.task); },

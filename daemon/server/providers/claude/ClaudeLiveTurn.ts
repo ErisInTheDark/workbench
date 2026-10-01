@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ClaudePromptQueue: streaming SDK input that stays open for steers until the turn closes.
- * - claudePrompt: build one SDK user message with an optional delivery uuid.
+ * - claudePrompt: build one SDK user message from text or content blocks with an optional delivery uuid.
  * - ClaudeLiveTurnOptions: collaborators one live turn needs.
  * - default ClaudeLiveTurn: own one Claude query from start to its single settlement, including steer delivery and context usage.
  */
@@ -16,6 +16,7 @@ import type {
 } from "workbench-shared/workbench/provider/provider-observation";
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 import { claudeTokenBreakdown } from "./ClaudeTranscriptAdapter";
+import { prefixClaudePrompt, type ClaudePromptContent } from "./claude-prompt-content";
 
 type Breakdown = ThreadTokenUsage["total"];
 type Settlement = "completed" | "failed" | "interrupted";
@@ -45,9 +46,11 @@ export class ClaudePromptQueue implements AsyncIterable<SDKUserMessage> {
   }
 }
 
-export function claudePrompt(text: string, options: { synthetic?: boolean; uuid?: string } = {}): SDKUserMessage {
+export function claudePrompt(
+  content: ClaudePromptContent, options: { synthetic?: boolean; uuid?: string } = {},
+): SDKUserMessage {
   return {
-    type: "user", message: { role: "user", content: text },
+    type: "user", message: { role: "user", content },
     parent_tool_use_id: null, uuid: (options.uuid ?? randomUUID()) as SDKUserMessage["uuid"] & string,
     ...(options.synthetic ? { isSynthetic: true } : {}),
   };
@@ -134,7 +137,7 @@ export default class ClaudeLiveTurn {
    * acceptance injects meanwhile, such as a working-status notice, prefixes the prompt; steers follow it.
    * The returned task settles exactly once.
    */
-  async start(text: string) {
+  async start(content: ClaudePromptContent) {
     let warning: string | null = null;
     try {
       await this.options.observe({
@@ -153,7 +156,8 @@ export default class ClaudeLiveTurn {
     }
     const deferred = this.beforePrompt;
     this.beforePrompt = null;
-    this.options.queue.push(claudePrompt([...deferred.context, text].join("\n\n")));
+    this.options.queue.push(claudePrompt(deferred.context.length
+      ? prefixClaudePrompt(deferred.context.join("\n\n"), content) : content));
     for (const steer of deferred.steers) this.options.queue.push(steer);
     this.task = this.run();
     return { task: this.task, warning };
@@ -170,9 +174,9 @@ export default class ClaudeLiveTurn {
   }
 
   /** Queue a steer; it is recorded only when Claude acknowledges folding it into the conversation. */
-  steer(entry: WorkbenchSteerHistoryEntry, text: string) {
+  steer(entry: WorkbenchSteerHistoryEntry, content: ClaudePromptContent) {
     if (!entry.itemId) throw new Error("Claude steer has no item identity.");
-    const message = claudePrompt(text, { uuid: entry.itemId });
+    const message = claudePrompt(content, { uuid: entry.itemId });
     if (this.beforePrompt) this.beforePrompt.steers.push(message);
     else this.options.queue.push(message);
     this.undelivered.set(entry.itemId, entry);
