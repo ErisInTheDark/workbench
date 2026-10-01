@@ -18,7 +18,7 @@ import type { WorkbenchDaemonTranscriptEvent } from "./WorkbenchDaemonSource";
 import type WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
 import { z } from "zod";
-import { WorkspaceCommandSchema, WorkspaceThreadMutationSchema, WorkspaceThreadActionSchema, workspaceCommandRoutes, type WorkspaceThreadMutation } from "workbench-shared/workbench/workspace/workspace-commands";
+import { WorkspaceCommandSchema, WorkspaceThreadMutationSchema, WorkspaceThreadActionSchema, workspaceCommandRoutes, type WorkspaceThreadActionResult, type WorkspaceThreadMutation } from "workbench-shared/workbench/workspace/workspace-commands";
 import { VoiceStartSchema, type VoiceSessionEvent } from "workbench-shared/workbench/voice/voice-session-contract";
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 import { randomUUID } from "node:crypto";
@@ -223,7 +223,7 @@ export default class WorkbenchWorkspaceRequestController {
     }, this.cancellation.signal);
   }
 
-  async threadAction(input: z.infer<typeof WorkspaceThreadActionSchema>) {
+  async threadAction(input: z.infer<typeof WorkspaceThreadActionSchema>): Promise<WorkspaceThreadActionResult> {
     const { threadId, intent } = WorkspaceThreadActionSchema.parse(input);
     return this.options.threads.withThread(threadId, async (source, owner) => {
       const projectId = owner.location.projectId;
@@ -236,15 +236,16 @@ export default class WorkbenchWorkspaceRequestController {
         });
         return { accepted: true };
       }
-      if (intent.kind === "priority") return source.request<Json>(
-        "workbench/thread-state/priority/set", {
-          projectId, priority: intent.priority,
-          sourceKey: getThreadDisplayThreadKey(identity.harness, identity.threadId),
-        });
+      const mutate = async (method: string, params: object) =>
+        WorkbenchThreadStateMutationResultSchema.parse(await source.request<Json>(method, params));
+      if (intent.kind === "priority") return mutate("workbench/thread-state/priority/set", {
+        projectId, priority: intent.priority,
+        sourceKey: getThreadDisplayThreadKey(identity.harness, identity.threadId),
+      });
       if (intent.kind === "snoozeUntil") return this.options.threads.withThread(intent.targetThreadId,
         (targetSource, target) => {
           if (source !== targetSource) throw new Error("Dependent snooze requires threads on the same daemon.");
-          return source.request<Json>("workbench/thread-state/snooze/until", {
+          return mutate("workbench/thread-state/snooze/until", {
             projectId, identity, target: { projectId: target.location.projectId,
               identity: { harness: target.identity.harness, threadId: target.identity.threadId } },
           });
@@ -255,7 +256,7 @@ export default class WorkbenchWorkspaceRequestController {
             : intent.kind === "status" ? { method: "workbench/thread-state/status/set", status: intent.status }
               : { method: intent.kind === "restore" ? "workbench/thread-state/restore" : "workbench/thread-state/settle" };
       const { method, ...params } = mutation;
-      return source.request<Json>(method, { ...params, projectId, identity });
+      return mutate(method, { ...params, projectId, identity });
     }, this.cancellation.signal);
   }
 

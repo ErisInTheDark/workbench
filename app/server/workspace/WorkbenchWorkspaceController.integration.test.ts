@@ -17,6 +17,7 @@ import {
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { DaemonIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { createWorkbenchProjectThreadSummary } from "workbench-shared/workbench/thread/thread-state";
+import { WorkspaceThreadActionResultSchema } from "workbench-shared/workbench/workspace/workspace-commands";
 import WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import WorkbenchDaemonSources from "./WorkbenchDaemonSources";
 import WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
@@ -402,7 +403,7 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   const dispatch = await daemonA.wait(request => request.method === "workbench/thread-state/pin/set");
   assert.deepEqual(dispatch.params, { projectId, identity: { threadId, harness: "codex" }, pinned: true });
   dispatch.socket.send(JSON.stringify({ id: dispatch.id, result: { accepted: true, revision: 1 } }));
-  assert.deepEqual(await mutation, { accepted: true, revision: 1 });
+  assert.deepEqual(WorkspaceThreadActionResultSchema.parse(await mutation), { accepted: true, revision: 1 });
   assert.equal(daemonB.requests.some(request => request.method === dispatch.method), false);
 
   const stop = second.rpc.requestRaw({ method: "workspace/thread/action",
@@ -413,7 +414,7 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   });
   assert.equal(daemonB.requests.some(request => request.method === "thread/stop"), false);
   stopRequest.socket.send(JSON.stringify({ id: stopRequest.id, result: { ok: true } }));
-  assert.deepEqual(await stop, { accepted: true });
+  assert.deepEqual(WorkspaceThreadActionResultSchema.parse(await stop), { accepted: true });
 
   const content = "file contents\n".repeat(100_000);
   const save = second.workspace.request("project/file/save", {

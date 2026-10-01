@@ -6,6 +6,7 @@
  * - WORKSPACE_COMMAND_NOT_SENT/WORKSPACE_COMMAND_UNCERTAIN: distinguish dispatch outcomes.
  * - WorkspaceThreadMutation/WorkspaceThreadMutationSchema: admitted thread state operations.
  * - WorkspaceThreadActionSchema: identity-addressed user actions.
+ * - WorkspaceThreadActionResult/WorkspaceThreadActionResultSchema: app result for thread actions.
  * - WorkspaceDraftLaunchSchema: saved-draft launch intent.
  * - WorkspaceLayoutRequest/WorkspaceLayoutRequestSchema: app-owned layout edits.
  * - WorkspaceHomeLayoutIntent/WorkspaceHomeLayoutIntentSchema: home row or project-folder move intent.
@@ -185,6 +186,13 @@ export const WorkspaceThreadActionSchema = z.object({
     }).strict(),
   ]),
 }).strict();
+
+export const WorkspaceThreadActionResultSchema = z.object({
+  accepted: z.boolean(),
+  // Daemon thread-state mutations report their revision; provider stop has none.
+  revision: z.number().int().nonnegative().optional(),
+}).strict();
+export type WorkspaceThreadActionResult = z.infer<typeof WorkspaceThreadActionResultSchema>;
 
 export const WorkspaceSearchResponseSchema = z.object({
   results: z.array(z.object({

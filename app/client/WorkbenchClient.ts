@@ -26,6 +26,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-state";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema } from "workbench-shared/workbench/project/project-state";
 import type { WorkspaceObservation, WorkspaceProjectReference } from "workbench-shared/workbench/workspace/workspace-observation";
+import { WorkspaceThreadActionResultSchema } from "workbench-shared/workbench/workspace/workspace-commands";
 import { preferredLogicalLaunchLocation } from "workbench-shared/workbench/project/workbench-project-projection";
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
@@ -695,11 +696,11 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
 
   async function threadAction(threadId: Parameters<WorkbenchControls["threadAction"]>[0],
     intent: Parameters<WorkbenchControls["threadAction"]>[1]) {
-    const result = WorkbenchThreadStateMutationResultSchema.safeParse(await workspace.rpc.requestRaw({
+    const result = WorkspaceThreadActionResultSchema.safeParse(await workspace.rpc.requestRaw({
       method: "workspace/thread/action", params: { threadId, intent },
     }));
     if (!result.success) {
-      reportClientSchemaError("Rejected workspace thread action", result.error);
+      reportClientSchemaError(`Rejected workspace thread action (${intent.kind})`, result.error);
       throw new Error("The app returned invalid action data.");
     }
     return result.data.accepted;
