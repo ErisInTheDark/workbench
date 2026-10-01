@@ -18,6 +18,7 @@ import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/id
 export interface WorkbenchSubagentFeatureContext {
   identities: WorkbenchThreadIdentityController;
   provider: WorkbenchSubagentControllerOptions["provider"];
+  liveApprovals: NonNullable<WorkbenchSubagentControllerOptions["liveApprovals"]>;
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
   profileStore: WorkbenchComposerProfileStore;
   resolveProjectFromCwd(cwd: string | null | undefined, options?: { endpointName?: string }): Promise<AgentEndpointProjectResolution>;
@@ -37,6 +38,7 @@ export default class WorkbenchSubagentFeature {
     this.store = new WorkbenchSubagentStore(context.persistence);
     this.controller = new WorkbenchSubagentController({
       provider: context.provider,
+      liveApprovals: context.liveApprovals,
       identities: context.identities,
       publicThreadId: async (threadId, projectId) => {
         const identity = await context.identities.resolve({ threadId, projectId });

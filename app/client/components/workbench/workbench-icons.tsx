@@ -53,6 +53,7 @@
  * - GitArcClaimIcon/GitArcCleanClaimIcon/GitArcDirtyClaimIcon/GitArcPlannedClaimIcon: live and planned claim glyphs.
  * - GitArcUnclaimedIcon/GitArcConflictIcon/GitArcWaitIcon: unclaimed, conflicting and waiting claim glyphs.
  * - GitGraphIcon: sidebar Git section graph glyph.
+ * - ShieldQuestionIcon/ShieldCheckIcon/ShieldCogCornerIcon/ShieldMinusIcon: tool approval requested, approved, auto-approved and denied glyphs.
  */
 import OutlinedIcon, { type IconProps } from "./OutlinedIcon";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -60,6 +61,31 @@ import type { GitArcCommandAction } from "../../workbench/thread/command-matcher
 
 export type { IconProps } from "./OutlinedIcon";
 export { default as LoaderIcon } from "./LoaderIcon";
+
+const SHIELD_PATH = "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z";
+
+export function ShieldQuestionIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d={SHIELD_PATH} /><path d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3" /><path d="M12 17h.01" /></OutlinedIcon>;
+}
+
+export function ShieldCheckIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d={SHIELD_PATH} /><path d="m9 12 2 2 4-4" /></OutlinedIcon>;
+}
+
+export function ShieldCogCornerIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M11 22c-3.806-1.45-7-3.966-7-9V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1v4" />
+    <path d="M14.923 16.547 14 16.164" /><path d="m14.923 18.843-.923.383" />
+    <path d="M16.547 14.923 16.164 14" /><path d="m16.547 20.467-.383.924" />
+    <path d="m18.843 14.923.383-.923" /><path d="m19.225 21.391-.382-.924" />
+    <path d="m20.467 16.547.923-.383" /><path d="m20.467 18.843.923.383" />
+    <circle cx="17.695" cy="17.695" r="3" />
+  </OutlinedIcon>;
+}
+
+export function ShieldMinusIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d={SHIELD_PATH} /><path d="M9 12h6" /></OutlinedIcon>;
+}
 
 export function GitGraphIcon(props: IconProps) {
   return <OutlinedIcon {...props}>

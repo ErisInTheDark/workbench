@@ -120,6 +120,7 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     respond: input => this.interaction(owner => owner.respond(input), "respond"),
     supplement: input => this.interaction(owner => owner.supplement(input), "supplement"),
     record: entry => this.interaction(owner => owner.record(entry), "record"),
+    deliverApproval: input => this.interaction(async owner => await owner.deliverApproval?.(input) ?? false, "deliverApproval"),
   };
 
   readonly account: NonNullable<WorkbenchProvider["account"]> = {

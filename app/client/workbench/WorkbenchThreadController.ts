@@ -8,6 +8,7 @@
  */
 import type { ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchReadThreadOptions, WorkbenchSubagentSummary, WorkbenchControls } from "workbench-shared/types";
 import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
+import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcFailureException, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
@@ -35,6 +36,8 @@ export interface ThreadControllerSnapshot {
   entry: ThreadEntry | null;
   gitArcProposals: Record<string, ThreadGitArcProposalObservation>;
   pendingQuestionnaire: WorkbenchPendingUserInputRequest | null;
+  /** Recorded per-tool-item approval outcomes for the loaded history. */
+  approvalEntries: readonly WorkbenchApprovalOutcomeEntry[];
   rateLimits: RateLimitSnapshot | null;
   subagents: WorkbenchSubagentSummary[];
   transcript: ThreadTranscriptProjectionState;
@@ -54,7 +57,7 @@ export interface ThreadControllerPorts {
   read: (options: WorkbenchReadThreadOptions, beforeCommit: () => Promise<void>, selectionBound: boolean, recover?: () => Promise<void>) => Promise<ThreadPayload | null>;
   reconcile?: (options: WorkbenchReadThreadOptions) => Promise<void>;
   releaseHistoricalTurns: (turnIds: readonly string[]) => ThreadPayload | null;
-  readNative: () => Pick<ThreadControllerSnapshot, "document" | "pendingQuestionnaire" | "rateLimits">;
+  readNative: () => Pick<ThreadControllerSnapshot, "approvalEntries" | "document" | "pendingQuestionnaire" | "rateLimits">;
   subscribeNative: (listener: () => void) => () => void;
   subscribeGitArcProposalRefresh?: (listener: () => void) => () => void;
   createTranscript: (publish: (state: ThreadTranscriptProjectionState) => void) => {
@@ -88,7 +91,7 @@ export default class WorkbenchThreadController {
   private readonly historyRetention: ThreadHistoryRetentionController;
   private snapshot: ThreadControllerSnapshot = {
     status: "loading", error: null, document: null, entry: null,
-    gitArcProposals: {}, pendingQuestionnaire: null, rateLimits: null, subagents: [], relatedDocuments: {}, transcript: { status: "idle" },
+    gitArcProposals: {}, pendingQuestionnaire: null, approvalEntries: [], rateLimits: null, subagents: [], relatedDocuments: {}, transcript: { status: "idle" },
   };
 
   constructor(readonly projectId: string, readonly target: ThreadControllerTarget, private readonly ports: ThreadControllerPorts) {

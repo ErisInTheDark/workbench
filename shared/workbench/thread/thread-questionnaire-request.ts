@@ -97,15 +97,19 @@ export function buildWorkbenchQuestionnaireRequest(input: {
 
 export function buildWorkbenchApprovalRequest(input: {
   actionLabel: string;
+  allowSession?: boolean;
   approval?: WorkbenchUserInputApprovalContext;
   details: Array<string | null>;
   id: string;
   prompt: string;
+  /** Extra accepting choices, offered between the allow options and Decline. */
+  rememberOptions?: readonly WorkbenchUserInputOption[];
+  summary?: string;
   title: string;
 }): WorkbenchUserInputRequest {
   return {
     id: input.id,
-    approval: input.approval,
+    ...(input.approval ? { approval: input.approval } : {}),
     questions: [{
       allowOther: false,
       header: "Approval",
@@ -116,10 +120,11 @@ export function buildWorkbenchApprovalRequest(input: {
           description: `Approve this ${input.actionLabel} just for the current action.`,
           label: WORKBENCH_APPROVAL_ALLOW_ONCE_LABEL,
         },
-        {
+        ...(input.allowSession ?? true ? [{
           description: `Approve this ${input.actionLabel} for the rest of the session.`,
           label: WORKBENCH_APPROVAL_ALLOW_SESSION_LABEL,
-        },
+        }] : []),
+        ...input.rememberOptions ?? [],
         {
           description: `Do not approve this ${input.actionLabel}.`,
           label: WORKBENCH_APPROVAL_DECLINE_LABEL,
@@ -128,7 +133,7 @@ export function buildWorkbenchApprovalRequest(input: {
       question: [input.prompt, ...input.details.filter((value): value is string => Boolean(value?.trim()))].join("\n\n"),
     }],
     submitLabel: QUESTIONNAIRE_SUBMIT_LABEL,
-    summary: "",
+    summary: input.summary ?? "",
     title: input.title,
   };
 }

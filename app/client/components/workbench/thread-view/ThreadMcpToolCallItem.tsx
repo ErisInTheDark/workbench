@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadMcpToolCallItem: render user-controlled MCP details with summary metadata, results, and errors.
+ * - default ThreadMcpToolCallItem: render user-controlled MCP details with summary metadata, approval glyph, results, and errors.
  */
 "use client";
 
@@ -19,7 +19,8 @@ import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadToolCallDetails from "./ThreadToolCallDetails";
 import { formatMcpToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 import { humanizeThreadLabel } from "./thread-view-formatters";
-import { ThreadCommandSummary } from "./thread-view-primitives";
+import { ThreadApprovalGlyph, ThreadCommandSummary } from "./thread-view-primitives";
+import type { ThreadItemApprovalState } from "../../../workbench/thread/thread-item-approvals";
 
 type McpToolCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
@@ -41,12 +42,14 @@ function ThreadMetaLine ({
 }
 
 export default function ThreadMcpToolCallItem ({
+  approval = null,
   details,
   item,
   projectFilePaths,
   projectId,
   route,
 }: {
+  approval?: ThreadItemApprovalState | null;
   details?: ReactNode;
   item: McpToolCallItem;
   projectFilePaths?: readonly string[];
@@ -86,9 +89,10 @@ export default function ThreadMcpToolCallItem ({
       summary={(
         <>
           {outcomeDisplay ? (
-            <ThreadCommandSummary display={outcomeDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
+            <ThreadCommandSummary approval={approval} display={outcomeDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
           ) : (
             <span className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-[0.45rem]">
+              {approval ? <ThreadApprovalGlyph state={approval} /> : null}
               <ThreadSummaryText text="MCP" />
               <code className={INLINE_CODE_CLASS}>{item.server}</code>
               <ThreadSummaryText text="/" />

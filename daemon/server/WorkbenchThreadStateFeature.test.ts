@@ -109,6 +109,7 @@ function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThrea
         injectAgentContext: async () => { assert.fail("Unexpected passive context"); },
         reconcileSqliteTranscriptWindow: async () => { throw new Error("Unexpected native recovery"); },
         canDeliverQuestionnaire: () => false,
+        deliverApproval: () => false,
         ensureInitialized: async () => {},
         handleServerRequest: request => options.harnesses.request(harness, request),
       },

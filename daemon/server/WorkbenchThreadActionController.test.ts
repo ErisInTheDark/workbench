@@ -38,6 +38,7 @@ function fixture(providerWarning?: string) {
     configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
   };
   const owners: WorkbenchThreadActionOwners = {
+    approvals: { list: () => [] },
     reconciliation: { reconcile: unused },
     transcripts: { readPage: unused, history: unused },
     providers: { get: key => { assert.equal(key, "codex"); return provider; } },

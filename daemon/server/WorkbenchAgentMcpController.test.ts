@@ -30,7 +30,7 @@ for (const name of ["task_get", "shell"]) {
       sourceId: "child", parentId: "parent", tool: name, arguments: {}, startedAt: 1 } as WorkbenchToolTranscriptReference;
     const tools: WorkbenchProviderTools = {
       caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: "C:/workspace" }),
-      describe: async () => ({ experimental: {}, shellDescription: "test" }),
+      describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
       patchClaims: async () => "",
       shell: async () => {
         order.push("execute");
@@ -74,7 +74,7 @@ for (const phase of ["start", "finish", "operation"] as const) {
     const unused = async (): Promise<never> => { throw new Error("unexpected tool"); };
     const tools: WorkbenchProviderTools = {
       caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: "C:/workspace" }),
-      describe: async () => ({ experimental: {}, shellDescription: "test" }),
+      describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
       patchClaims: unused, shell: unused,
       transcript: {
         start: async () => { if (phase === "start") throw new Error("capture failed"); return reference; },
@@ -283,7 +283,7 @@ test("the explicit provider owns MCP metadata and supplies WB command identity",
     tools: provider => {
       assert.equal(provider, "another-provider");
       return {
-        describe: async () => ({ experimental: {}, shellDescription: "sandboxed execution" }),
+        describe: async () => ({ experimental: {}, shellDescription: "sandboxed execution", shellEscalation: false }),
         caller: async metadata => {
           assert.deepEqual(metadata, { session: "provider-owned" });
           return { cwd: "/trusted", harness: provider, threadId: WorkbenchThreadIdSchema.parse("wb-caller") };
@@ -413,7 +413,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.match(ripgrep.description ?? "", /without shell quoting.*no matches/u);
     const shell = inventory.tools.find(({ name }) => name === "shell");
     assert.ok(shell);
-    assert.deepEqual(Object.keys(shell.inputSchema.properties ?? {}).sort(), ["command", "login", "outside_sandbox", "timeout_ms", "workdir"]);
+    assert.deepEqual(Object.keys(shell.inputSchema.properties ?? {}).sort(), ["command", "login", "timeout_ms", "workdir"]);
     assert.deepEqual(Object.keys(shell.outputSchema?.properties ?? {}).sort(), ["cwd", "exitCode", "shell", "stderr", "stdout"]);
     assert.match(shell.description ?? "", /never escalates.*direct shell_command/u);
 

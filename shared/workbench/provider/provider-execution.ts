@@ -12,7 +12,7 @@
 import { z } from "zod";
 import type { JsonValue } from "../thread/workbench-thread-items.ts";
 import type { WorkbenchThreadId, WorkbenchTurnId, WorkbenchItemId } from "../identity.ts";
-import type { WorkbenchShellInput, WorkbenchShellResult } from "../commands/workbench-shell-command.ts";
+import type { WorkbenchEscalatingShellInput, WorkbenchShellResult } from "../commands/workbench-shell-command.ts";
 
 const jsonValue: z.ZodType<JsonValue> = z.lazy(() => z.union([
   z.null(), z.boolean(), z.number(), z.string(), z.array(jsonValue), z.record(z.string(), jsonValue),
@@ -45,6 +45,9 @@ export interface WorkbenchToolTranscript {
 
 export interface ProviderToolRequestContext {
   clientScope: string;
+  /** Transcript item and turn already admitted for this tool call, when the provider records one. */
+  itemId?: WorkbenchItemId;
+  turnId?: WorkbenchTurnId;
 }
 
 export interface WorkbenchProviderCaller {
@@ -80,7 +83,9 @@ export interface WorkbenchProviderTools {
   describe(): Promise<{
     experimental: Record<string, Record<string, JsonValue>>;
     shellDescription: string;
+    /** Expose outside-sandbox escalation through Workbench approval on the shell tool. */
+    shellEscalation: boolean;
   }>;
   caller(metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchProviderCaller>;
-  shell(input: WorkbenchShellInput, metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchShellResult>;
+  shell(input: WorkbenchEscalatingShellInput, metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchShellResult>;
 }

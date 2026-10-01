@@ -171,7 +171,7 @@ class FakeWebSocket {
       queueMicrotask(() => this.respond(request.id, { ok: true, route: "live" }));
     } else if (request.method === "thread/stop" || request.method === "thread/compact" || request.method === "thread/goal/remove") {
       queueMicrotask(() => this.respond(request.id, { ok: true }));
-    } else if (request.method === "thread/browse/read" || request.method === "thread/questionnaires/read" || request.method === "thread/steers/read") {
+    } else if (request.method === "thread/browse/read" || request.method === "thread/questionnaires/read" || request.method === "thread/steers/read" || request.method === "thread/approvals/read") {
       queueMicrotask(() => this.respond(request.id, { data: [] }));
     } else if (isContinueRequest(request)) {
       queueMicrotask(() => this.respond(request.id, { kind: "steered", turnId: "turn" }));

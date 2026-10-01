@@ -36,6 +36,7 @@ import databaseReleases from "workbench-shared/workbench/database/schema/release
 import WorkbenchExternalStorageMigration from "./WorkbenchExternalStorageMigration.ts";
 import WorkbenchTranscriptAssetStore from "./transcript/WorkbenchTranscriptAssetStore.ts";
 import WorkbenchLegacyDiffArtifactStore from "./git/WorkbenchLegacyDiffArtifactStore.ts";
+import WorkbenchApprovalOutcomeRepository from "./transcript/WorkbenchApprovalOutcomeRepository.ts";
 import WorkbenchThreadGitSelectionStore from "./git/WorkbenchThreadGitSelectionStore.ts";
 import type { WorkbenchProjectStartup } from "./project/workbench-project-persistence.ts";
 
@@ -259,6 +260,17 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   if (request.type === "readLegacyDiffArtifact") {
     if (!database) throw new Error("Workbench database is not initialized");
     post({ id: request.id, type: "legacyDiffArtifact", diff: new WorkbenchLegacyDiffArtifactStore(database).read(request.input) });
+    return;
+  }
+  if (request.type === "recordApprovalOutcome" || request.type === "readApprovalOutcomes") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    const repository = new WorkbenchApprovalOutcomeRepository(database);
+    if (request.type === "recordApprovalOutcome") {
+      repository.record(request.entry);
+      post({ id: request.id, type: "mutationResult", result: { changes: 1 } });
+    } else {
+      post({ id: request.id, type: "approvalOutcomes", entries: repository.read(request.threadId, request.turnIds) });
+    }
     return;
   }
   if (request.type === "writeTranscriptAsset" || request.type === "readTranscriptAsset") {

@@ -56,6 +56,8 @@ export default class CodexToolsController implements WorkbenchProviderTools {
     return {
       experimental: { [WORKBENCH_SHELL_SANDBOX_CAPABILITY]: {} },
       shellDescription: WORKBENCH_SHELL_TOOL_DESCRIPTION,
+      // Codex escalates through its own native approval request, never through this tool.
+      shellEscalation: false,
     };
   }
 

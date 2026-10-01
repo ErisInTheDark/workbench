@@ -219,6 +219,8 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
 }
 
 type CommandContext = {
+  /** Items that requested approval keep their own summary line, so the approval glyph stays visible. */
+  approvalItemIds?: { has(itemId: string): boolean };
   knownSkills?: WorkbenchSkillSummary[];
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
@@ -232,6 +234,7 @@ export function isBrowseCommandItem({ item, ...context }: CommandContext & { ite
 
 export type CommandSequenceRenderSegment =
   | { items: CommandSequenceItem[]; kind: "commands" }
+  | { items: [CommandSequenceItem]; kind: "approval" }
   | { action: NonNullable<ReturnType<typeof getGitArcMatcherAction>>; item: CommandItem; kind: "gitArc" }
   | { item: CommandItem; kind: "message" }
   | { item: CommandItem; kind: "subagent" }
@@ -250,6 +253,9 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
     waits = [];
   };
   for (const item of items) {
+    if (context.approvalItemIds?.has(item.id)) {
+      flushCommands(); flushWaits(); segments.push({ kind: "approval", items: [item] }); continue;
+    }
     if (item.type === "mcpToolCall") {
       flushWaits();
       if (item.status !== "completed" || item.error) { flushCommands(); segments.push({ kind: "commands", items: [item] }); }
@@ -314,6 +320,7 @@ export function getWorkedBlockRows(block: ThreadRenderableBlock, context: Comman
     return [{ block, eligible: true }];
   }
   return segments.flatMap<{ block: ThreadRenderableBlock; eligible: boolean }>(segment => {
+    if (segment.kind === "approval") return [{ block: { kind: "commandSequence" as const, items: segment.items }, eligible: true }];
     if (segment.kind === "commands") {
       return segment.items.length > 1 && segment.items.every(item => isBrowseCommandItem({ item, ...context }))
         ? segment.items.map(item => ({ block: { kind: "commandSequence" as const, items: [item] }, eligible: true }))

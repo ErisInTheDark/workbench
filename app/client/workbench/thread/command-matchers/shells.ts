@@ -15,7 +15,7 @@ import type {
 
 const SHELL_WRAPPERS = [
   {
-    pattern: /^(?:"([^"]*(?:powershell|pwsh)(?:\.exe)?)"|([^\s"]*(?:powershell|pwsh)(?:\.exe)?))\s+-(?:Command|c)\s+([\s\S]+)$/i,
+    pattern: /^(?:"([^"]*(?:powershell|pwsh)(?:\.exe)?)"|([^\s"]*(?:powershell|pwsh)(?:\.exe)?))\s+(?:-(?:NoProfile|NoLogo|NonInteractive)\s+)*-(?:Command|c)\s+([\s\S]+)$/i,
     shell: (launcher: string) => /pwsh/i.test(launcher) ? "pwsh" : "powershell" as CommandShell,
   },
   {

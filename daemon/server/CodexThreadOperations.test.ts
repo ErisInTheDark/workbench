@@ -46,6 +46,7 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
       requestedThreadId === native.nativeThreadId
       && requestKey === options.nativeQuestionnaireRequestKey
     ),
+    deliverApproval: () => false,
   };
   const demands: WorkbenchThreadReconcile[] = [];
   const operations = new CodexThreadOperations({

@@ -92,7 +92,7 @@ test("observations carry a complete entry without admitting a different thread f
   }).success, false);
 });
 
-test("sidebar completion and pinned eligibility exclude working threads and approval requests", () => {
+test("sidebar completion and pinned eligibility exclude working threads", () => {
   const question = {
     itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44", requestKey: "request", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"),
     request: { id: "request", title: "Choose", summary: "", submitLabel: "Submit", questions: [] },
@@ -107,20 +107,11 @@ test("sidebar completion and pinned eligibility exclude working threads and appr
   assert.equal(isWorkbenchSidebarThreadCompletionAvailable({
     ...entry, lifecycle: { kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, settled: false },
   }), false);
-  const approval = { ...entry, pendingQuestionnaire: {
-    ...question, request: { ...question.request, questions: [{
-      id: "decision", header: "approval", question: "Allow?", allowOther: false, isSecret: false,
-      options: [{ label: "Allow once", description: "" }, { label: "Decline", description: "" }],
-    }] },
-  } };
-  assert.equal(isWorkbenchSidebarThreadCompletionAvailable(approval), false);
-  for (const [source, expected] of [[entry, true], [approval, false]] as const) {
-    const pin = createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], [source], 1).pinnedThreads[0]!;
-    assert.equal(pin.entryKind === "thread" && pin.canCompleteQuestionnaire, expected);
-    assert.equal(isWorkbenchSidebarThreadCompletionAvailable(pin), expected);
-    const { canCompleteQuestionnaire: _eligibility, ...legacy } = pin as Extract<typeof pin, { entryKind: "thread" }>;
-    assert.equal(isWorkbenchSidebarThreadCompletionAvailable(WorkbenchPinnedThreadSummaryEntrySchema.parse(legacy)), false);
-  }
+  const pin = createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], [entry], 1).pinnedThreads[0]!;
+  assert.equal(pin.entryKind === "thread" && pin.canCompleteQuestionnaire, true);
+  assert.equal(isWorkbenchSidebarThreadCompletionAvailable(pin), true);
+  const { canCompleteQuestionnaire: _eligibility, ...legacy } = pin as Extract<typeof pin, { entryKind: "thread" }>;
+  assert.equal(isWorkbenchSidebarThreadCompletionAvailable(WorkbenchPinnedThreadSummaryEntrySchema.parse(legacy)), false);
   const completed = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "userCompleted" });
   assert.deepEqual(reduceWorkbenchThreadLifecycle(completed, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }), completed);
 });

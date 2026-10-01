@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_SHELL_SANDBOX_CAPABILITY/WORKBENCH_SHELL_TOOL_DESCRIPTION: advertise the MCP-only sandbox metadata and behavior contract.
- * - prepareWorkbenchShellExecution: translate shared shell input into one admitted host-shell command.
+ * - prepareWorkbenchShellExecution: translate escalating shell input into one admitted host-shell command.
  * - CodexShellControllerOptions: inject Codex execution and host environment.
  * - default CodexShellController: run host-shell commands through the Codex thread's exact sandbox state.
  */
@@ -11,6 +11,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import {
+  WorkbenchEscalatingShellInputSchema,
   WorkbenchShellInputSchema,
   type WorkbenchShell,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
@@ -159,7 +160,6 @@ export default class CodexShellController {
     caller: { nativeThreadId: string; workbenchThreadId: string },
   ) {
     const request = WorkbenchShellInputSchema.parse(input);
-    if (request.outside_sandbox) throw new Error("Codex Workbench shell cannot request outside-sandbox execution; use Codex's direct approval tool.");
     const sandboxState = readSandboxState(meta);
     const sandboxCwd = fileURLToPath(sandboxState.sandboxCwd);
     const commandCwd = request.workdir ? path.resolve(sandboxCwd, request.workdir) : sandboxCwd;
@@ -233,7 +233,7 @@ export function prepareWorkbenchShellExecution(
   platform: NodeJS.Platform = process.platform,
   environment: NodeJS.ProcessEnv = process.env,
 ) {
-  const request = WorkbenchShellInputSchema.parse(input);
+  const request = WorkbenchEscalatingShellInputSchema.parse(input);
   const commandCwd = request.workdir ? path.resolve(cwd, request.workdir) : cwd;
   const shell = hostShellCommand(request.command, request.login ?? true, platform, environment);
   return {
@@ -241,6 +241,7 @@ export function prepareWorkbenchShellExecution(
     cwd: commandCwd,
     shell: shell.shell,
     outsideSandbox: request.outside_sandbox === true,
+    ...(request.justification === undefined ? {} : { justification: request.justification }),
     ...(request.timeout_ms === undefined ? {} : { timeoutMs: request.timeout_ms }),
   };
 }

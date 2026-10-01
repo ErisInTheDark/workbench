@@ -7,7 +7,10 @@ import type http from "node:http";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
-import { ProviderToolMetadataSchema, ProviderToolResultSchema, type WorkbenchToolTranscriptReference, type WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+import {
+  ProviderToolMetadataSchema, ProviderToolResultSchema,
+  type ProviderToolRequestContext, type WorkbenchToolTranscriptReference, type WorkbenchProviderTools,
+} from "workbench-shared/workbench/provider/provider-execution";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CancelledNotificationSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
@@ -23,8 +26,10 @@ import type { WorkbenchInstructionTool } from "./lib/workbench/instructions/inst
 import {
   getWorkbenchShellAggregatedOutput,
   WORKBENCH_SHELL_MCP_TOOL_NAME,
+  WorkbenchEscalatingShellInputSchema,
   WorkbenchShellInputSchema,
   WorkbenchShellResultSchema,
+  type WorkbenchEscalatingShellInput,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
 import { logError } from "./process-helpers";
 import {
@@ -250,6 +255,7 @@ export default class WorkbenchAgentMcpController {
     });
     const names = new Set<string>();
     names.add(WORKBENCH_SHELL_MCP_TOOL_NAME);
+    const shellInputSchema = description.shellEscalation ? WorkbenchEscalatingShellInputSchema : WorkbenchShellInputSchema;
     server.registerTool(WORKBENCH_SHELL_MCP_TOOL_NAME, {
       annotations: {
         destructiveHint: true,
@@ -258,10 +264,10 @@ export default class WorkbenchAgentMcpController {
         readOnlyHint: false,
       },
       description: description.shellDescription,
-      inputSchema: WorkbenchShellInputSchema,
+      inputSchema: shellInputSchema,
       outputSchema: WorkbenchShellResultSchema,
     }, async (input, extra) => await this.callShell(
-      input as object,
+      shellInputSchema.parse(input),
       extra._meta,
       clientScope,
       extra.requestId,
@@ -323,7 +329,7 @@ export default class WorkbenchAgentMcpController {
   }
 
   private async callShell(
-    input: object,
+    input: WorkbenchEscalatingShellInput,
     meta: Record<string, unknown> | undefined,
     clientScope: string,
     requestId: WorkbenchAgentMcpRequestId,
@@ -332,18 +338,21 @@ export default class WorkbenchAgentMcpController {
     sendProgress?: (progress: number) => Promise<void>,
   ) {
     return this.observeTool("shell", input, meta, clientScope, signal, tools,
-      () => this.executeShell(input, meta, clientScope, requestId, signal, tools, sendProgress));
+      reference => this.executeShell(input, meta, {
+        clientScope, ...(reference ? { itemId: reference.itemId, turnId: reference.turnId } : {}),
+      }, requestId, signal, tools, sendProgress));
   }
 
   private async executeShell(
-    input: object,
+    input: WorkbenchEscalatingShellInput,
     meta: Record<string, unknown> | undefined,
-    clientScope: string,
+    context: ProviderToolRequestContext,
     requestId: WorkbenchAgentMcpRequestId,
     signal: AbortSignal,
     tools: WorkbenchProviderTools,
     sendProgress?: (progress: number) => Promise<void>,
   ) {
+    const { clientScope } = context;
     let stopProgress: (() => void) | null = null;
     let unregister: (() => void) | null = null;
     try {
@@ -360,7 +369,7 @@ export default class WorkbenchAgentMcpController {
         "wb shell",
         signal,
         async () => {
-          return await tools.shell(WorkbenchShellInputSchema.parse(input), ProviderToolMetadataSchema.parse(meta ?? {}), signal, { clientScope });
+          return await tools.shell(input, ProviderToolMetadataSchema.parse(meta ?? {}), signal, context);
         },
         (value) => value.exitCode === 0,
       );
@@ -409,7 +418,7 @@ export default class WorkbenchAgentMcpController {
 
   private async observeTool(
     tool: string, input: object, meta: Record<string, unknown> | undefined, clientScope: string, signal: AbortSignal,
-    tools: WorkbenchProviderTools, execute: () => Promise<CallToolResult>,
+    tools: WorkbenchProviderTools, execute: (reference: WorkbenchToolTranscriptReference | null) => Promise<CallToolResult>,
   ): Promise<CallToolResult> {
     let reference: WorkbenchToolTranscriptReference | null = null;
     try {
@@ -420,7 +429,7 @@ export default class WorkbenchAgentMcpController {
       this.lifecycleLogError("workbench-mcp", sanitizeError(error));
       return { content: [{ type: "text", text: "Tool was not executed because transcript admission failed." }], isError: true };
     }
-    const result = await execute();
+    const result = await execute(reference);
     if (!reference) return result;
     try {
       await tools.transcript!.finish(reference, ProviderToolResultSchema.parse(result));

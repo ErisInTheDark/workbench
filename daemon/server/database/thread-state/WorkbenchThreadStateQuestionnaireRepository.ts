@@ -9,6 +9,7 @@ import {
   WorkbenchDurableQuestionnaireSchema, WorkbenchQuestionnaireHistoryEntrySchema,
   type WorkbenchDurableQuestionnaire, type WorkbenchQuestionnaireHistoryEntryState,
 } from "workbench-shared/workbench/thread/thread-state";
+import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
 
 export interface WorkbenchThreadQuestionnaires {
   pending: WorkbenchDurableQuestionnaire | null;
@@ -89,6 +90,8 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
         request, requestKey: row.request_key, turnId: row.turn_id, itemId: row.item_id,
       };
       if (row.state === "pending") {
+        // Approvals are live-only; rows left by older builds can never be delivered, so the next replace drops them.
+        if (isWorkbenchApprovalRequest(request)) continue;
         if (result.pending) throw new Error("Thread has multiple pending questionnaires.");
         result.pending = WorkbenchDurableQuestionnaireSchema.parse(common);
       } else {

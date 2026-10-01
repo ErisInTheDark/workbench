@@ -12,6 +12,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-actions";
 import { ThreadReferenceSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadLaunchLocation } from "workbench-shared/workbench/thread/thread-launch";
+import type WorkbenchApprovalController from "./WorkbenchApprovalController";
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
@@ -21,6 +22,7 @@ import type WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import type WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 
 export interface WorkbenchThreadActionOwners {
+  approvals: Pick<WorkbenchApprovalController, "list">;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   transcripts: Pick<WorkbenchTranscriptReader, "readPage" | "history">;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
@@ -78,7 +80,7 @@ export default class WorkbenchThreadActionController {
         key => this.owners.providers.get(key).interactions?.pending() ?? [],
       ))).flat();
       const data = [...this.owners.state.listPendingQuestionnaires()];
-      for (const request of providerPending) {
+      for (const request of [...this.owners.approvals.list(), ...providerPending]) {
         if (!data.some(candidate =>
           candidate.harness === request.harness
           && candidate.threadId === request.threadId
@@ -96,6 +98,9 @@ export default class WorkbenchThreadActionController {
     },
     "thread/browse/read": async input => {
       return { data: (await this.owners.transcripts.history(input.threadId)).browseResultEntries };
+    },
+    "thread/approvals/read": async input => {
+      return { data: (await this.owners.transcripts.history(input.threadId)).approvalEntries };
     },
     "thread/create": input => this.create(input),
     "thread/message/submit": input => this.message(input),

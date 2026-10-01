@@ -83,7 +83,7 @@ async function createThreadReadHarness(
     return { thread: metadata, questionnaireEntries: [], steerEntries: [], browseResultEntries: [] };
   };
   sqliteReader.history = async () => ({
-    turns: [], turnHistory: [], questionnaireEntries: [], steerEntries: [], browseResultEntries: [],
+    turns: [], turnHistory: [], questionnaireEntries: [], steerEntries: [], browseResultEntries: [], approvalEntries: [],
     entryScope: { mode: "turns", turnIds: [] },
   });
   let bridge!: CodexStdioBridge;

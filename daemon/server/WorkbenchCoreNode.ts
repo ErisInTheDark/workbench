@@ -52,6 +52,7 @@ import WorkbenchSearchController from "./WorkbenchSearchController";
 import WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import WorkbenchClaimRenameController from "./stats/WorkbenchClaimRenameController";
 import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
+import WorkbenchApprovalController from "./WorkbenchApprovalController";
 import WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
@@ -211,6 +212,8 @@ function createWorkbenchCoreFeature(
   const subagents = new WorkbenchSubagentFeature({
     identities: threadIdentity,
     provider,
+    // Read lazily: the approval owner is built after subagents but within this same node.
+    liveApprovals: () => approvals.list(),
     onRelationshipCommitted: (record) => requireThreadState().installSubagentRelationship(record),
     resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     profileStore,
@@ -267,7 +270,23 @@ function createWorkbenchCoreFeature(
       console.error("[questionnaire]", message.slice(0, 500));
     },
   });
+  const approvals = new WorkbenchApprovalController({
+    broadcast: (harness, notification) => context.broadcastProviderNotification(harness, notification),
+    collectAnswerContext: async (harness, threadId, signal) => {
+      const key = installedProviderKeys.find(candidate => candidate === harness);
+      if (key) await agentContext.collect({ harness: key, threadId }, "answer", signal);
+    },
+    commandApprovals,
+    deliver: async (harness, input) => await provider(harness).interactions?.deliverApproval(input) ?? false,
+    logError: message => { console.error("[approval]", message.slice(0, 500)); },
+    observeLifecycle: async (harness, threadId, event) => {
+      await threadState.controller.observeLifecycle(harness, threadId, event);
+    },
+    recordOutcome: entry => database.recordApprovalOutcome(entry),
+    resolveProject: async threadId => (await threadIdentity.resolve({ threadId }))?.projectId ?? null,
+  });
   const questionnaireResponses = new WorkbenchQuestionnaireResponseController({
+    approvals,
     harnesses,
     providers,
     resolveLatestTurn: async ({ projectId, threadId }) => {
@@ -287,6 +306,7 @@ function createWorkbenchCoreFeature(
     readContext: threadId => database.readTranscriptContext!(threadId),
     readMaterializedTurns: (threadId, turnIds) => transcript.readMaterializedTurnIds(threadId, turnIds),
     readContextUsage: threadId => transcript.readContextUsage(threadId),
+    readApprovalOutcomes: (threadId, turnIds) => database.readApprovalOutcomes(threadId, turnIds),
     readMetadata: async (thread, provenance) => {
       const entry = await threadState.controller.getCanonicalThreadEntry(
         ProjectIdSchema.parse(thread.project_id), WorkbenchThreadIdSchema.parse(thread.id),
@@ -314,6 +334,7 @@ function createWorkbenchCoreFeature(
     warn: message => logThreadStateWarning(message),
   });
   const threadActions = new WorkbenchThreadActionController({
+    approvals,
     reconciliation: transcriptReconciliation,
     transcripts: transcriptReader,
     providers, projects: projectCatalog, identities: threadIdentity,
@@ -393,6 +414,7 @@ function createWorkbenchCoreFeature(
   });
   const registrations: Pick<DaemonRuntimeObjects, typeof WORKBENCH_CORE_FEATURE_KEYS[number]> = {
     agentContext,
+    approvals,
     voiceSettings,
     browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions, transcriptReader, transcriptReconciliation,
     providerObservations: {
@@ -440,6 +462,7 @@ function createWorkbenchCoreFeature(
       await stats.dispose();
       reportPhase("questionnaire disposal");
       await questionnaires.dispose();
+      approvals.dispose();
       reportPhase("thread-state disposal");
       await threadState.dispose();
       reportPhase("composer profile disposal");
@@ -540,6 +563,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/WorkbenchThreadStateStore.ts",
     "daemon/server/WorkbenchQuestionnaireController.ts",
     "daemon/server/WorkbenchQuestionnaireResponseController.ts",
+    "daemon/server/WorkbenchApprovalController.ts",
+    "daemon/server/WorkbenchLocalApprovalTransport.ts",
+    "daemon/server/lib/workbench/approval-presentation.ts",
+    "shared/workbench/provider/provider-approval.ts",
     "daemon/server/BrowseSessionCleanupSupervisor.ts",
     "daemon/server/lib/thread-bootstrap.ts",
     "daemon/server/lib/workbench-library.ts",

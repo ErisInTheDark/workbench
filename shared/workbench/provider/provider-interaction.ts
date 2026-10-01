@@ -5,6 +5,7 @@
  */
 import type { WorkbenchUserInputResponse, WorkbenchPendingUserInputRequest } from "../../types.ts";
 import type { WorkbenchQuestionnaireHistoryEntryState } from "../thread/thread-state.ts";
+import type { WorkbenchApprovalDecision } from "./provider-approval.ts";
 import type { WorkbenchUserInput } from "./provider-input.ts";
 
 export interface WorkbenchProviderInteractionResponse { warning?: string }
@@ -29,4 +30,6 @@ export interface WorkbenchProviderInteractions {
     activatedSkillPaths: string[];
   }): Promise<void>;
   record(entry: WorkbenchQuestionnaireHistoryEntryState): Promise<WorkbenchProviderInteractionResponse>;
+  /** Carry one Workbench approval decision to its live native request; false when the request is gone. Providers that never raise approvals omit it. */
+  deliverApproval?(input: { threadId: string; requestKey: string; decision: WorkbenchApprovalDecision }): Promise<boolean>;
 }

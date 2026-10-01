@@ -4,6 +4,7 @@
  * - default WorkbenchTranscriptReader: own canonical pages, history projection and stored recovery facts.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
+import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchTranscriptReadRequest, WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
@@ -22,6 +23,8 @@ export interface WorkbenchTranscriptReaderOptions {
   readContext(threadId: string): Promise<WorkbenchTranscriptContextSnapshot | null>;
   readMaterializedTurns(threadId: string, turnIds: readonly string[]): Promise<string[]>;
   readContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
+  /** Per-tool-item approval outcomes for the loaded turns; hosts without approvals omit it. */
+  readApprovalOutcomes?(threadId: string, turnIds: readonly string[]): Promise<WorkbenchApprovalOutcomeEntry[]>;
   readMetadata(thread: WorkbenchTranscriptSnapshot["thread"], provenance: string | null): Promise<{
     entry: WorkbenchThreadSidebarEntry | null;
     harness: WorkbenchHarness;
@@ -57,7 +60,7 @@ export default class WorkbenchTranscriptReader {
       ? await this.readSnapshot({ threadId: catalog.thread.id, turnIds: [selected.id], turnLimit: 1 })
       : catalog;
     if (!snapshot) throw new Error("The requested canonical SQLite turn is not materialised.");
-    const { turns, turnHistory, ...entries } = this.content(snapshot);
+    const { turns, turnHistory, ...entries } = await this.withApprovals(snapshot.thread.id, this.content(snapshot));
     const { entry, harness } = await this.options.readMetadata(snapshot.thread, catalog.turns.at(-1)?.harness_id ?? null);
     const saved = entry?.entryKind === "draft" ? null : entry;
     const settings = saved?.profile?.settings;
@@ -95,7 +98,12 @@ export default class WorkbenchTranscriptReader {
   async history(threadId: string) {
     const snapshot = await this.options.readContext(threadId);
     if (!snapshot) throw new Error("Canonical SQLite transcript history is unavailable.");
-    return this.content(snapshot);
+    return await this.withApprovals(threadId, this.content(snapshot));
+  }
+
+  private async withApprovals<Content extends ReturnType<WorkbenchTranscriptReader["content"]>>(threadId: string, content: Content) {
+    const approvalEntries = await this.options.readApprovalOutcomes?.(threadId, content.entryScope.turnIds) ?? [];
+    return { ...content, approvalEntries };
   }
 
   content(snapshot: WorkbenchTranscriptContextSnapshot) {

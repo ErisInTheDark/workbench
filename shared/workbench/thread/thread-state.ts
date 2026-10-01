@@ -35,7 +35,7 @@
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback.
  * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: thread-owned status, provider-event fencing, and direct-child status projection.
- * - isWorkbenchSidebarThreadCompletionAvailable: sidebar-only manual completion, including durable questionnaires without granting subagent or approval authority.
+ * - isWorkbenchSidebarThreadCompletionAvailable: sidebar-only manual completion, including durable questionnaires without granting subagent authority.
  * - hasWorkbenchThreadDraftContent/countDraftPromptTokens/createDraftTitle: durable draft content, materialization, and title rules.
  */
 
@@ -48,7 +48,6 @@ import type { WorkbenchComposerProfileTargetSelection, WorkbenchComposerSettings
 import { areDeeplyEqual } from "../deep-equality.ts";
 import { gitArcPathsOverlap } from "../git/git-arc-paths.ts";
 import { ThreadDisplayLayoutSchema } from "./thread-display-layout.ts";
-import { isWorkbenchApprovalRequest } from "./thread-user-input-requests.ts";
 import { WorkbenchThreadTitleHistoryEntrySchema } from "./thread-title-history.ts";
 import {
   projectWorkbenchThreadDisplaySection,
@@ -772,7 +771,6 @@ export function isWorkbenchSidebarThreadCompletionAvailable(entry: WorkbenchThre
   if (entry.lifecycle.kind === "stopped") return true;
   if (entry.lifecycle.kind !== "needsAttention") return false;
   if ("canCompleteQuestionnaire" in entry) return entry.lifecycle.reason !== "pendingInput" || entry.canCompleteQuestionnaire;
-  if (entry.pendingQuestionnaire && isWorkbenchApprovalRequest(entry.pendingQuestionnaire.request)) return false;
   return entry.lifecycle.reason !== "pendingInput" || Boolean(entry.pendingQuestionnaire);
 }
 

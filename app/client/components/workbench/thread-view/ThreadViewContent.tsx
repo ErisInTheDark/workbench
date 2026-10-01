@@ -33,6 +33,7 @@ import {
 import resolveThreadComposerProfileSlot from "../../../workbench/thread/thread-composer-profile-slot";
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { ThreadMessageNotSentError } from "../../../workbench/thread/thread-message-submission";
+import { deriveThreadItemApprovals, ThreadItemApprovalsContext } from "../../../workbench/thread/thread-item-approvals";
 import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadLifecycle, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import {
   filterSubagentsByParentThreadId,
@@ -454,6 +455,11 @@ export default memo(function ThreadViewContent ({
     ? activeThreadController.state.pendingQuestionnaire
     : null;
   const activePendingUserInputRequest = activeHarnessUserInputRequest;
+  const activeApprovalEntries = activeThreadController.state.approvalEntries;
+  const activeItemApprovals = useMemo(
+    () => deriveThreadItemApprovals(activeThread ? activeApprovalEntries : [], activePendingUserInputRequest),
+    [activeApprovalEntries, activePendingUserInputRequest, activeThread],
+  );
   const isDraftThreadView = Boolean(activeThread?.isDraft);
   const currentTurn = activeThread?.turns.at(-1) ?? null;
   const activityTurn = useMemo(() => {
@@ -1143,6 +1149,7 @@ export default memo(function ThreadViewContent ({
                       {activeTranscriptSource.message}
                     </div>
                   ) : null}
+                  <ThreadItemApprovalsContext.Provider value={activeItemApprovals}>
                   <ThreadTranscriptProjection
                     canLoadPreviousTurn={canLoadPreviousTurn}
                     hiddenReasoningStep={null}
@@ -1162,6 +1169,7 @@ export default memo(function ThreadViewContent ({
                     subagents={subagents}
                     workspaceRoots={workspaceFileLinkRoots}
                   />
+                  </ThreadItemApprovalsContext.Provider>
                 </>
               ) : (
                 transcriptSourceMessage ? (
@@ -1173,6 +1181,7 @@ export default memo(function ThreadViewContent ({
                 )
               )
             ) : (
+              <ThreadItemApprovalsContext.Provider value={activeItemApprovals}>
               <ThreadTranscript
                 browseResultEntries={activeThreadBrowseResultEntries}
                 canLoadPreviousTurn={canLoadPreviousTurn}
@@ -1204,6 +1213,7 @@ export default memo(function ThreadViewContent ({
                 visibleHistoryEntries={visibleHistoryEntries}
                 workspaceRoots={workspaceFileLinkRoots}
               />
+              </ThreadItemApprovalsContext.Provider>
             )
           ) : (
             <div className="border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] py-4">

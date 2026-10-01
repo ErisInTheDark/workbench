@@ -57,7 +57,7 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
   admissionWarning?: string;
   admissionKind?: "started" | "steered";
   missingTurnIdentity?: boolean;
-  approval?: boolean;
+  liveApprovalKey?: string;
   deliverable?: boolean;
   harness?: "codex" | "copilot" | "opencode";
   latestTurnId?: typeof latestTurnId | null;
@@ -80,26 +80,6 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
         if (pendingRequestKey !== input.requestKey) return null;
         const pendingQuestionnaire = {
           ...questionnaire,
-          ...(options.approval ? {
-            request: {
-              ...questionnaire.request,
-              approval: {
-                command: {
-                  command: "git status",
-                  commandActions: [],
-                  cwd: "C:/project",
-                },
-              },
-              questions: [{
-                ...questionnaire.request.questions[0]!,
-                id: "decision",
-                options: [
-                  { description: "run", label: "Allow once" },
-                  { description: "stop", label: "Decline" },
-                ],
-              }],
-            },
-          } : {}),
           requestKey: pendingRequestKey!,
           turnId: options.pendingTurnId === undefined ? questionnaire.turnId : options.pendingTurnId,
         };
@@ -159,6 +139,10 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
     },
   };
   const controller = new WorkbenchQuestionnaireResponseController({
+    approvals: {
+      owns: (_thread, key) => key === options.liveApprovalKey,
+      respond: async input => { observe("approval", input); return { ok: true }; },
+    },
     providers: { get: () => provider },
     harnesses: {
       resolveThreadIdentity: async () => ({
@@ -219,6 +203,7 @@ test("admitted native turns settle questionnaire history under SQLite canonical 
     repository.replace(thread.threadId, { pending, history: [] });
     const unused = async (): Promise<never> => { throw new Error("Unexpected operation."); };
     const controller = new WorkbenchQuestionnaireResponseController({
+      approvals: { owns: () => false, respond: unused },
       providers: { get: () => ({
         configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
         threads: {
@@ -389,32 +374,22 @@ test("provider questionnaire with pending lifecycle but no live waiter admits a 
   assert.equal(harness.requests.some(({ method }) => method === "respond"), false);
 });
 
-test("approval responses retain their active owner and detached approvals remain pending", async () => {
+test("live approvals answer through their owner and never touch durable questionnaire state", async () => {
   const live = createHarness({
     kind: "needsAttention",
     reason: "pendingInput",
     requestKey: questionnaire.requestKey,
     settled: false,
     turnId,
-  }, { approval: true });
+  }, { liveApprovalKey: questionnaire.requestKey });
 
   const result = await live.controller.respond(request());
   assert.equal(result.route, "live");
+  assert.deepEqual(live.events, ["supplement", "approval"]);
   const steer = live.requests.find(({ method }) => method === "supplement");
   assert.equal((steer?.params as { turnId?: string } | undefined)?.turnId, turnId);
-  const recorded = live.requests.find(({ method }) => method === "record");
-  assert.equal((recorded?.params as { turnId?: string } | undefined)?.turnId, turnId);
-  assert.equal((recorded?.params as { insertAfterItemId?: string | null } | undefined)?.insertAfterItemId, questionnaire.itemId);
-
-  const detached = createHarness({
-    agent: { agentStatus: "blocked", turnId },
-    kind: "needsAttention",
-    reason: "agentBlocked",
-    settled: false,
-  }, { approval: true });
-  await assert.rejects(detached.controller.respond(request()), /Approval requests cannot be submitted/u);
-  assert.equal(detached.settled(), false);
-  assert.equal(detached.requests.some(({ method }) => method === "submit"), false);
+  assert.equal(live.settled(), false);
+  assert.equal(live.requests.some(({ method }) => method === "record" || method === "submit"), false);
 });
 
 test("failed detached admission leaves durable settlement untouched", async () => {

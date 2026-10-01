@@ -73,7 +73,7 @@ function fixture() {
       }
       return native;
     },
-    readNative: () => ({ document: native, pendingQuestionnaire: null, rateLimits: null }),
+    readNative: () => ({ document: native, pendingQuestionnaire: null, approvalEntries: [], rateLimits: null }),
     subscribeNative: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     readGitArcProposal: ({ proposalId }) => new Promise<GitCheckpointProposal>((resolve, reject) => {
       proposalReads.push({ proposalId, reject, resolve });
@@ -365,7 +365,7 @@ for (const outcome of ["empty", "rejected"] as const) {
     }, {
       ...f.ports,
       getChild: () => child,
-      readNative: () => ({ document: childDocument, pendingQuestionnaire: null, rateLimits: null }),
+      readNative: () => ({ document: childDocument, pendingQuestionnaire: null, approvalEntries: [], rateLimits: null }),
       read: async () => {
         reads++;
         if (available) return childDocument = { ...f.document, id: fixtureIdentityValues.WorkbenchThreadId.child };
@@ -666,7 +666,7 @@ test("family views coalesce child hydration and release only their own demand", 
       return timer;
     },
     cancelRefresh: timer => { timers.delete(timer); },
-    readNative: () => ({ document, pendingQuestionnaire: null, rateLimits: null }),
+    readNative: () => ({ document, pendingQuestionnaire: null, approvalEntries: [], rateLimits: null }),
     subscribeNative: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     read: async (_options, admit) => {
       reads++;

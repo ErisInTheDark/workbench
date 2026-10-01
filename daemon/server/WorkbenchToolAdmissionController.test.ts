@@ -2,8 +2,9 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
-import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchAdmittedExecution } from "workbench-shared/workbench/provider/provider-execution";
+import { parseApprovalCommand } from "./lib/workbench/command-approval-prefix";
 import WorkbenchToolAdmissionController, { type WorkbenchToolAdmissionOptions } from "./WorkbenchToolAdmissionController";
 
 function fixture(overrides: Partial<WorkbenchToolAdmissionOptions> = {}) {
@@ -34,10 +35,9 @@ test("explicit escalation approves the immutable exact command once without gran
   const input = { command: ["write", "original"], outsideSandbox: true };
   const f = fixture({ approve: async request => {
     approvals++;
-    assert.deepEqual(request.command, ["write", "original"]);
+    assert.equal(request.subject.command, "write original");
     input.command[1] = "changed";
-    request.command[1] = "also changed";
-    return true;
+    return { kind: "allowOnce" };
   } });
   await f.controller.execute(input, new AbortController().signal);
   assert.deepEqual(f.calls[0]?.command, ["write", "original"]);
@@ -47,12 +47,30 @@ test("explicit escalation approves the immutable exact command once without gran
   assert.equal(approvals, 1);
 });
 
+test("escalation offers saved-rule matching the wrapped script, its justification, and its tool item", async () => {
+  const itemId = WorkbenchItemIdSchema.parse("22345678-1234-4123-8123-123456789012");
+  const turnId = WorkbenchTurnIdSchema.parse("32345678-1234-4123-8123-123456789012");
+  for (const launcher of [["pwsh", "-NoProfile", "-Command"], ["/bin/zsh", "-lc"]]) {
+    let seen: Parameters<WorkbenchToolAdmissionOptions["approve"]>[0] | null = null;
+    const f = fixture({ approve: async request => { seen = request; return { kind: "allowOnce" }; } });
+    await f.controller.execute({
+      command: [...launcher, "git fetch --tags origin"], outsideSandbox: true, justification: " needs network ", itemId, turnId,
+    }, new AbortController().signal);
+    assert.deepEqual(parseApprovalCommand(seen!.subject.command), ["git", "fetch", "--tags", "origin"]);
+    assert.equal(seen!.subject.justification, "needs network");
+    assert.equal(seen!.itemId, itemId);
+    assert.equal(seen!.turnId, turnId);
+  }
+});
+
 test("decline and cancellation during approval never dispatch", async () => {
-  const declined = fixture({ approve: async () => false });
+  const declined = fixture({ approve: async () => ({ kind: "decline" }) });
   await assert.rejects(declined.controller.execute({ command: ["write"], outsideSandbox: true }, new AbortController().signal), /declined/);
-  assert.equal(declined.calls.length, 0);
+  const refused = fixture({ approve: async () => ({ kind: "decline", feedback: "resubmit with confirmation" }) });
+  await assert.rejects(refused.controller.execute({ command: ["write"], outsideSandbox: true }, new AbortController().signal), /resubmit with confirmation/);
+  assert.equal(declined.calls.length + refused.calls.length, 0);
   const abort = new AbortController();
-  const cancelled = fixture({ approve: async () => { abort.abort(new Error("cancelled")); return true; } });
+  const cancelled = fixture({ approve: async () => { abort.abort(new Error("cancelled")); return { kind: "allowOnce" }; } });
   await assert.rejects(cancelled.controller.execute({ command: ["write"], outsideSandbox: true }, abort.signal), /cancelled/);
   assert.equal(cancelled.calls.length, 0);
 });

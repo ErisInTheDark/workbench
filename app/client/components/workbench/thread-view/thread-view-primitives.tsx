@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - ThreadTextBlock: render wrapped plain thread text with optional monospace styling.
- * - ThreadCommandSummary: render the compact command summary label used in thread turns.
+ * - ThreadApprovalGlyph: shield marking a tool's approval request or outcome.
+ * - ThreadCommandSummary: render the compact command summary label used in thread turns, led by any approval glyph.
  */
 "use client";
 
@@ -12,8 +13,9 @@ import type {
   ThreadCommandSummaryDisplay,
 } from "../../../workbench/thread/thread-command-matchers";
 
+import type { ThreadItemApprovalState } from "../../../workbench/thread/thread-item-approvals";
 import ProjectFilePath from "../ProjectFilePath";
-import { ArrowRightIcon } from "../workbench-icons";
+import { ArrowRightIcon, ShieldCheckIcon, ShieldCogCornerIcon, ShieldMinusIcon, ShieldQuestionIcon } from "../workbench-icons";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadSummaryText from "./ThreadSummaryText";
 
@@ -206,11 +208,29 @@ function ThreadCommandStageParts ({
   );
 }
 
+const APPROVAL_GLYPHS: Record<ThreadItemApprovalState, { Icon: typeof ShieldCheckIcon; label: string }> = {
+  pending: { Icon: ShieldQuestionIcon, label: "Requesting approval" },
+  approved: { Icon: ShieldCheckIcon, label: "Approved" },
+  autoApproved: { Icon: ShieldCogCornerIcon, label: "Approved automatically by a saved preference" },
+  denied: { Icon: ShieldMinusIcon, label: "Denied" },
+};
+
+export function ThreadApprovalGlyph ({ state }: { state: ThreadItemApprovalState }) {
+  const { Icon, label } = APPROVAL_GLYPHS[state];
+  return (
+    <span className="inline-flex shrink-0 items-center text-fg/muted" role="img" aria-label={label} title={label}>
+      <Icon size={16} />
+    </span>
+  );
+}
+
 export function ThreadCommandSummary ({
+  approval = null,
   display,
   projectFilePaths,
   projectId,
 }: {
+  approval?: ThreadItemApprovalState | null;
   display: ThreadCommandSummaryDisplay;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -219,6 +239,7 @@ export function ThreadCommandSummary ({
 
   return (
     <span className="inline-flex max-w-[calc(100%-0.6rem)] min-w-0 flex-wrap items-center gap-x-[0.45rem] gap-y-[0.3rem] align-bottom">
+      {approval ? <ThreadApprovalGlyph state={approval} /> : null}
       {display.showShell && display.shell ? (
         <span className="shrink-0 font-mono text-[0.78em] leading-[1.6] text-fg/muted">
           {display.shell}:

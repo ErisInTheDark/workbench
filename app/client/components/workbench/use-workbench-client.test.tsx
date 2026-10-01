@@ -80,7 +80,7 @@ const client = {
       }),
       releaseHistoricalTurns: () => null,
       controls: {} as NonNullable<WorkbenchClientController["controls"]>,
-      readNative: () => ({ document: null, pendingQuestionnaire: null, rateLimits: null }),
+      readNative: () => ({ document: null, pendingQuestionnaire: null, approvalEntries: [], rateLimits: null }),
       subscribeNative: () => () => {},
       read: async () => null,
       createTranscript: () => { throw new Error("Unexpected transcript during static rendering."); },

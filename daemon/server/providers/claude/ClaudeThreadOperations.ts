@@ -31,6 +31,8 @@ import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
 import type WorkbenchProjectCatalogController from "../../WorkbenchProjectCatalogController";
 import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature";
 import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireController";
+import type WorkbenchApprovalController from "../../WorkbenchApprovalController";
+import WorkbenchLocalApprovalTransport from "../../WorkbenchLocalApprovalTransport";
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 import type { WorkbenchToolAdmissionOptions } from "../../WorkbenchToolAdmissionController";
 import { claudeEnvironment, claudeExecutable } from "./claude-process-options";
@@ -62,6 +64,7 @@ export interface ClaudeThreadOperationsOptions {
   identities: WorkbenchThreadIdentityController;
   projects: WorkbenchProjectCatalogController;
   questionnaires: WorkbenchQuestionnaireController;
+  approvals: WorkbenchApprovalController;
   reader: WorkbenchTranscriptReader;
   state: WorkbenchThreadStateFeature;
   transcript: ClaudeTranscriptAdapter;
@@ -80,8 +83,11 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
   private readonly live = new Map<WorkbenchThreadId, ClaudeLiveTurn>();
   private readonly scopes = new Map<string, ClaudeLiveTurn>();
   private readonly pending = new Set<Promise<void>>();
+  private readonly approvals: WorkbenchLocalApprovalTransport;
 
-  constructor(private readonly options: ClaudeThreadOperationsOptions) {}
+  constructor(private readonly options: ClaudeThreadOperationsOptions) {
+    this.approvals = new WorkbenchLocalApprovalTransport("claude", () => options.approvals);
+  }
 
   hasPendingWork() { return this.pending.size > 0 || this.live.size > 0; }
 
@@ -152,6 +158,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       await this.options.transcript.recordQuestionnaire(entry);
       return {};
     },
+    deliverApproval: async input => this.approvals.deliver(input),
   };
 
   async create(input: Parameters<WorkbenchProviderThreads["create"]>[0]) {
@@ -348,8 +355,8 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     request: Parameters<WorkbenchToolAdmissionOptions["approve"]>[0],
     signal: AbortSignal,
   ) {
-    return this.options.questionnaires.requestShellApproval({
-      callerThreadId: request.caller.threadId, cwd: request.cwd, command: request.command,
+    return this.approvals.request({
+      threadId: request.caller.threadId, turnId: request.turnId, itemId: request.itemId, subject: request.subject,
     }, signal);
   }
 

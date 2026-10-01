@@ -23,6 +23,7 @@ import type { Turn } from "./workbench-thread-turn.ts";
 import { WorkbenchThreadCreationProfileSchema } from "./thread-profile.ts";
 import { WorkbenchMessageContextSchema, WorkbenchUserInputSchema } from "../provider/provider-input.ts";
 import { WorkbenchProviderGoalSchema, WorkbenchProviderGoalUpdateSchema } from "../provider/provider-goal.ts";
+import { WORKBENCH_APPROVAL_OUTCOMES, type WorkbenchApprovalOutcomeEntry } from "../provider/provider-approval.ts";
 import { WorkbenchDurableQuestionnaireSchema, WorkbenchQuestionnaireHistoryEntrySchema } from "./thread-state.ts";
 
 const threadId = z.string().trim().min(1);
@@ -113,15 +114,22 @@ export interface WorkbenchThreadPageResult {
   questionnaireEntries: WorkbenchQuestionnaireHistoryEntry[];
   steerEntries: WorkbenchSteerHistoryEntry[];
   browseResultEntries: WorkbenchBrowseResultEntry[];
+  /** Absent from daemons that predate per-item approval outcomes. */
+  approvalEntries?: WorkbenchApprovalOutcomeEntry[];
   entryScope?: WorkbenchThreadContextEntryScope;
   recovery?: WorkbenchThreadReconciliationTarget | null;
 }
+const approvalOutcome = z.object({
+  threadId, turnId: z.string().min(1), itemId: z.string().min(1),
+  outcome: z.enum(WORKBENCH_APPROVAL_OUTCOMES), resolvedAt: z.number(),
+});
 const pageEnvelope = z.object({
   thread: WorkbenchThreadPayloadSchema,
   nextCursor: z.string().nullable(),
   questionnaireEntries: z.array(z.object({ threadId, turnId: z.string() }).passthrough()),
   steerEntries: z.array(z.object({ threadId, turnId: z.string() }).passthrough()),
   browseResultEntries: z.array(z.object({ threadId, turnId: z.string() }).passthrough()),
+  approvalEntries: z.array(approvalOutcome).optional(),
   recovery: WorkbenchThreadReconciliationTargetSchema.nullable().default(null),
 }).passthrough();
 export const WorkbenchThreadPageResultSchema = z.custom<WorkbenchThreadPageResult>(
@@ -160,6 +168,7 @@ export const workbenchThreadActions = {
   "thread/questionnaires/read": { params: WorkbenchThreadTargetSchema, result: z.object({ data: z.array(questionnaireHistory) }) },
   "thread/steers/read": { params: WorkbenchThreadTargetSchema, result: z.object({ data: z.array(steerHistory) }) },
   "thread/browse/read": { params: WorkbenchThreadTargetSchema, result: z.object({ data: z.array(browseHistory) }) },
+  "thread/approvals/read": { params: WorkbenchThreadTargetSchema, result: z.object({ data: z.array(approvalOutcome) }) },
   "thread/create": { params: WorkbenchThreadCreateSchema, result: WorkbenchThreadPayloadSchema },
   "thread/metadata/read": { params: WorkbenchThreadTargetSchema, result: WorkbenchThreadPayloadSchema },
   "thread/page/read": { params: WorkbenchThreadPageSchema, result: WorkbenchThreadPageResultSchema },

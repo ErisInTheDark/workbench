@@ -10,8 +10,10 @@ import ThreadCommandDetailRows from "./ThreadCommandDetailRows";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadCommandDetails from "./ThreadCommandDetails";
 import { ThreadCommandSummary } from "./thread-view-primitives";
+import type { ThreadItemApprovalState } from "../../../workbench/thread/thread-item-approvals";
 
-export default function ThreadCommandDisplay({ command, display, summaryDisplay = display, detailRows = display.detailRows ?? [], meta, children, projectFilePaths, projectId, browse = false, output, previewHeight }: {
+export default function ThreadCommandDisplay({ approval = null, command, display, summaryDisplay = display, detailRows = display.detailRows ?? [], meta, children, projectFilePaths, projectId, browse = false, output, previewHeight }: {
+  approval?: ThreadItemApprovalState | null;
   command: string;
   display: CommandDisplay;
   summaryDisplay?: ThreadCommandSummaryDisplay;
@@ -26,7 +28,7 @@ export default function ThreadCommandDisplay({ command, display, summaryDisplay 
 }) {
   return (
     <ThreadDisclosure className="py-2" contentClassName="mt-2 space-y-2 pl-6"
-      summary={<><ThreadCommandSummary display={summaryDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />{meta}</>}
+      summary={<><ThreadCommandSummary approval={approval} display={summaryDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />{meta}</>}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted">
       {display.cwdDisplay && !display.hideCommandCwd ? (
         <p className="m-0 text-[0.78em] leading-[1.6] text-fg/muted">

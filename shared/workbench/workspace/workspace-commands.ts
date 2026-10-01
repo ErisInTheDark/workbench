@@ -40,6 +40,7 @@ export const workspaceCommandRoutes = {
   "thread/questionnaires/read": "thread",
   "thread/steers/read": "thread",
   "thread/browse/read": "thread",
+  "thread/approvals/read": "thread",
   "thread/metadata/read": "thread",
   "thread/page/read": "thread",
   "thread/reconcile": "thread",

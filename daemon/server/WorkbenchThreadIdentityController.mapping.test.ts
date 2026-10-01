@@ -324,6 +324,7 @@ test("cold native thread lookup admits exact metadata before public request rout
       injectAgentContext: async () => { assert.fail("Unexpected passive context"); },
       reconcileSqliteTranscriptWindow: async () => { throw new Error("Unexpected native recovery"); },
       canDeliverQuestionnaire: () => false,
+      deliverApproval: () => false,
       ensureInitialized: async () => {},
       handleServerRequest: request,
     },

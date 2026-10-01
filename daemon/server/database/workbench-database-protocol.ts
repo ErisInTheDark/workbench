@@ -72,6 +72,7 @@ import type {
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 import type { TranscriptAssetContent, TranscriptAssetRead, TranscriptAssetWrite } from "./transcript/WorkbenchTranscriptAssetStore.ts";
 import type { LegacyDiffArtifactReference } from "./git/WorkbenchLegacyDiffArtifactStore.ts";
+import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
 import type { ThreadGitSelectionCommand, ThreadGitSelectionResult } from "./git/WorkbenchThreadGitSelectionStore.ts";
 
 export type WorkbenchDatabaseControllerState = "starting" | "ready" | "suspended" | "failed" | "closed";
@@ -88,6 +89,8 @@ export interface WorkbenchDatabaseMutationResult {
 export type WorkbenchDatabaseRequestPayload =
   | { type: "threadGitSelection"; command: ThreadGitSelectionCommand }
   | { type: "readLegacyDiffArtifact"; input: LegacyDiffArtifactReference }
+  | { type: "recordApprovalOutcome"; entry: WorkbenchApprovalOutcomeEntry }
+  | { type: "readApprovalOutcomes"; threadId: string; turnIds?: readonly string[] }
   | { type: "writeTranscriptAsset"; input: TranscriptAssetWrite }
   | { type: "readTranscriptAsset"; input: TranscriptAssetRead }
   | { type: "initialize"; databasePath: string; acknowledgeMigration?: boolean; projects?: WorkbenchProjectPreparation }
@@ -165,7 +168,7 @@ export type WorkbenchDatabaseRequestPayload =
 export type WorkbenchDatabaseRequest = WorkbenchDatabaseRequestPayload & { id: number };
 
 const CORE_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>([
-  "getInventory", "query", "readLegacyDiffArtifact",
+  "getInventory", "query", "readLegacyDiffArtifact", "readApprovalOutcomes",
   "readRetainedProjectCatalog", "readProjectAliases", "resolveProjectIdentity", "readThreadLaunch",
   "resolveThreadIdentity", "resolveNativeThreadIdentity", "listThreadIdentities", "resolveTurnIdentity",
   "resolveTranscriptItemIdentity", "readThreadStateNavigationSummary", "readThreadStateProject",
@@ -194,6 +197,7 @@ export function isWorkbenchDatabaseReadRequest(request: WorkbenchDatabaseRequest
 export type WorkbenchDatabaseResponse =
   | { id: number; type: "threadGitSelection"; result: ThreadGitSelectionResult }
   | { id: number; type: "legacyDiffArtifact"; diff: string | null }
+  | { id: number; type: "approvalOutcomes"; entries: WorkbenchApprovalOutcomeEntry[] }
   | { id: number; type: "transcriptAssetWritten"; asset: Omit<TranscriptAssetContent, "bytes"> }
   | { id: number; type: "transcriptAssetContent"; asset: TranscriptAssetContent | null }
   | { id: number; type: "ready"; inventory: WorkbenchDatabaseInventory; projects?: WorkbenchProjectStartup }

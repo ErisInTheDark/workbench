@@ -10,7 +10,7 @@
  */
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
@@ -82,6 +82,7 @@ import {
   truncateThreadText,
 } from "./thread-view-formatters";
 import { ThreadCommandSummary } from "./thread-view-primitives";
+import { ThreadItemApprovalsContext, useThreadItemApproval } from "../../../workbench/thread/thread-item-approvals";
 import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
@@ -1034,6 +1035,7 @@ function ThreadCommandExecutionDetails ({
     () => getThreadCommandOutcomeDisplay(commandDisplay, commandOutcome),
     [commandDisplay, commandOutcome],
   );
+  const approval = useThreadItemApproval(item.id);
   const messageCommand = parseWorkbenchMessageCommand(commandDisplay.unwrappedCommand, item.commandActions);
   const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand, item.commandActions);
   const resolvedSubagentTargets = subagentCommand
@@ -1291,6 +1293,7 @@ function ThreadCommandExecutionDetails ({
 
   return (
     <ThreadCommandDisplay
+      approval={approval}
       command={item.command}
       display={commandDisplay}
       summaryDisplay={outcomeCommandDisplay}
@@ -1334,6 +1337,10 @@ function ThreadCommandExecutionDetails ({
   );
 }
 
+function ThreadApprovalAwareMcpToolCallItem (props: Omit<Parameters<typeof ThreadMcpToolCallItem>[0], "approval">) {
+  return <ThreadMcpToolCallItem {...props} approval={useThreadItemApproval(props.item.id)} />;
+}
+
 function ThreadRegularCommandItem ({
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   inlineMentionSources,
@@ -1371,7 +1378,7 @@ function ThreadRegularCommandItem ({
       tool: item.tool,
     });
     return (
-      <ThreadMcpToolCallItem
+      <ThreadApprovalAwareMcpToolCallItem
         item={item}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
@@ -1584,12 +1591,14 @@ function ThreadCommandSequence ({
       ? { ...activeCommand, aggregatedOutput: presentedOutput }
       : item)
     : canonicalItems, [activeCommand, canonicalItems, presentedOutput]);
+  const approvals = useContext(ThreadItemApprovalsContext);
   const renderSegments = useMemo(() => buildCommandSequenceRenderSegments({
+    approvalItemIds: approvals,
     items,
     knownSkills,
     projectRootPath,
     workspaceRoots,
-  }), [items, knownSkills, projectRootPath, workspaceRoots]);
+  }), [approvals, items, knownSkills, projectRootPath, workspaceRoots]);
   const hasStandaloneCommandSegment = renderSegments.some((segment) => segment.kind !== "commands");
 
   if (!hasStandaloneCommandSegment) {
@@ -1941,7 +1950,7 @@ function ThreadRenderableBlockViewComponent ({
         )
         : [];
       return (
-        <ThreadMcpToolCallItem
+        <ThreadApprovalAwareMcpToolCallItem
           details={browseDetails.length ? (
             <ThreadCommandDetailRows rows={browseDetails} projectFilePaths={projectFilePaths} projectId={projectId} />
           ) : undefined}

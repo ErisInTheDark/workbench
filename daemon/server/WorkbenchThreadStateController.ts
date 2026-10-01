@@ -28,7 +28,6 @@ import {
   type WorkbenchPresentationManifestPage,
 } from "workbench-shared/workbench/thread/thread-presentation-export";
 import { mergeQuestionnaireHistoryEntries } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
-import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import { WORKBENCH_THREAD_WORKING_STATUS_MESSAGE } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { currentThreadTitleName, recordThreadTitle } from "workbench-shared/workbench/thread/thread-title-history";
 import {
@@ -912,7 +911,7 @@ export default class WorkbenchThreadStateController {
       : mutation?.kind === "clear" && existing.pendingQuestionnaire?.requestKey === mutation.requestKey
         ? null
         : existing.pendingQuestionnaire ?? null;
-    return held && !isWorkbenchApprovalRequest(held.request) ? held : null;
+    return held;
   }
 
   private waitOnQuestionnaire(

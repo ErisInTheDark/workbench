@@ -108,7 +108,7 @@ async function renderDetails(
     getChild: () => { throw new Error("Unexpected child."); },
     releaseHistoricalTurns: () => null,
     controls: {} as NonNullable<WorkbenchClientController["controls"]>,
-    readNative: () => ({ document: null, pendingQuestionnaire: request, rateLimits: null }),
+    readNative: () => ({ document: null, pendingQuestionnaire: request, approvalEntries: [], rateLimits: null }),
     subscribeNative: client.mounted!.threadRuntime.subscribe,
     read: async () => { throw new Error("Tooltip rendering must not load the transcript."); },
     createTranscript: () => { throw new Error("Tooltip rendering must not subscribe to SQLite."); },

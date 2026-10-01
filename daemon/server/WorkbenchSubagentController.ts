@@ -44,6 +44,8 @@ type WorkbenchSubagentControllerStore = Pick<
 
 export interface WorkbenchSubagentControllerOptions {
   provider(harness: WorkbenchHarness): Pick<WorkbenchProvider, "threads" | "interactions">;
+  /** Live Workbench-owned approvals; a child waiting on one needs interaction, not completion. */
+  liveApprovals?: () => readonly WorkbenchPendingUserInputRequest[];
   publicThreadId: (threadId: WorkbenchThreadId | ThreadReference, projectId: ProjectId) => Promise<WorkbenchThreadId>;
   identities: Pick<WorkbenchThreadIdentityController, "resolve" | "knownThread">;
   onRelationshipCommitted(record: WorkbenchSubagentRelationship): Promise<void>;
@@ -92,6 +94,7 @@ function delay(ms: number, signal: AbortSignal) {
 
 export default class WorkbenchSubagentController {
   private readonly provider: WorkbenchSubagentControllerOptions["provider"];
+  private readonly liveApprovals: WorkbenchSubagentControllerOptions["liveApprovals"];
   private readonly publicThreadId: NonNullable<WorkbenchSubagentControllerOptions["publicThreadId"]>;
   private readonly identities: WorkbenchSubagentControllerOptions["identities"];
   private createQueue: Promise<void> = Promise.resolve();
@@ -107,6 +110,7 @@ export default class WorkbenchSubagentController {
 
   constructor({
     provider,
+    liveApprovals,
     publicThreadId,
     identities,
     onRelationshipCommitted,
@@ -116,6 +120,7 @@ export default class WorkbenchSubagentController {
     threadState,
   }: WorkbenchSubagentControllerOptions) {
     this.provider = provider;
+    this.liveApprovals = liveApprovals;
     this.publicThreadId = publicThreadId;
     this.identities = identities;
     this.onRelationshipCommitted = onRelationshipCommitted;
@@ -369,7 +374,8 @@ export default class WorkbenchSubagentController {
   }
 
   private async pendingQuestionnaires(harness: WorkbenchHarness) {
-    return await this.provider(harness).interactions?.pending({ background: true }) ?? [];
+    const approvals = (this.liveApprovals?.() ?? []).filter(entry => entry.harness === harness);
+    return [...approvals, ...await this.provider(harness).interactions?.pending({ background: true }) ?? []];
   }
 
   private async pendingQuestionnaire(record: WorkbenchSubagentRelationship) {

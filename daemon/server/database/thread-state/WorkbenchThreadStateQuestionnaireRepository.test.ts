@@ -78,6 +78,24 @@ test("questionnaires preserve empty versus missing answers and source anchors wi
   }
 });
 
+test("stale pending approvals are never served while answered approval history stays", () => {
+  const { database, threadId, value, repository } = fixture();
+  try {
+    const approval = {
+      id: "approval", title: "Approve", summary: "", submitLabel: "submit",
+      questions: [{
+        id: "decision", header: "Approval", question: "Run?", allowOther: false, isSecret: false,
+        options: [{ label: "Allow once", description: "" }, { label: "Decline", description: "" }],
+      }],
+    };
+    const answered = { ...value.history[0]!, request: approval, response: { answers: { decision: { answers: ["Allow once"] } } } };
+    repository.replace(threadId, { pending: { ...value.pending!, request: approval }, history: [answered] });
+    assert.deepEqual(repository.read(threadId), { pending: null, history: [answered] });
+  } finally {
+    database.close();
+  }
+});
+
 test("failed questionnaire replacement preserves the prior source and surrounding transactions own rollback", () => {
   const { database, threadId, value, repository } = fixture();
   try {

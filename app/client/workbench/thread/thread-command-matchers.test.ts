@@ -526,6 +526,15 @@ test("PowerShell ripgrep summaries preserve lowercase count flags as non-consumi
   assert.deepEqual(pathOperands(display.summaryParts), ["app/client/components/workbench.tsx"]);
 });
 
+test("PowerShell launcher switches before -Command do not change the unwrapped command", () => {
+  const display = (command: string) => getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
+  const plain = display("pwsh -Command 'rg -n -c needle app/client/components/workbench.tsx'");
+  const switched = display("pwsh -NoProfile -NonInteractive -Command 'rg -n -c needle app/client/components/workbench.tsx'");
+  assert.equal(switched.unwrappedCommand, plain.unwrappedCommand);
+  assert.equal(switched.shell, "pwsh");
+  assert.equal(switched.claimedBy, plain.claimedBy);
+});
+
 test("typed ripgrep summaries exactly match the shell ripgrep presentation", () => {
   const cases = [
     {

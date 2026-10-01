@@ -57,7 +57,10 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
     return await this.options.resolveCaller(nativeThreadId, signal);
   }
 
-  async shell(input: object, metadata: Parameters<WorkbenchProviderTools["caller"]>[0], signal: AbortSignal) {
+  async shell(
+    input: object, metadata: Parameters<WorkbenchProviderTools["caller"]>[0], signal: AbortSignal,
+    context?: Parameters<WorkbenchProviderTools["shell"]>[3],
+  ) {
     const caller = await this.caller(metadata, signal);
     const prepared = prepareWorkbenchShellExecution(input, caller.cwd);
     const admission = new WorkbenchToolAdmissionController({
@@ -70,7 +73,11 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
       approve: this.options.approve,
       execute: this.options.execute,
     });
-    const result = await admission.execute(prepared, signal);
+    const result = await admission.execute({
+      ...prepared,
+      ...(context?.itemId ? { itemId: context.itemId } : {}),
+      ...(context?.turnId ? { turnId: context.turnId } : {}),
+    }, signal);
     return { ...result, cwd: prepared.cwd, shell: prepared.shell };
   }
 
@@ -78,6 +85,7 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
     return {
       experimental: {},
       shellDescription: "Run a shell command in the managed Workbench sandbox, or request Workbench approval for one outside-sandbox command.",
+      shellEscalation: true,
     };
   }
 

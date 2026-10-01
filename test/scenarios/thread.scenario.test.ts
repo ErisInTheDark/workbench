@@ -822,7 +822,9 @@ test("selected providers complete the shared thread boundary journey in one clon
     if (provider !== "codex") {
       const approval = await pending("decision");
       assert.equal(approval.turnId, finalTurn);
-      assert.match(approval.request.questions[0]!.question, /outside the sandbox/u);
+      assert.ok(approval.request.approval?.command?.command.includes(`${shellProofFile}-approved`),
+        "The approval must carry the exact command for the rich command display");
+      assert.ok(approval.itemId, "The approval must name the tool item it gates");
       assert.equal((await answer(approval, "decision", "Allow once")).route, "live");
       console.log(`[${provider} live] outside-sandbox approval answered at ${new Date().toISOString()}`);
     }
@@ -834,6 +836,9 @@ test("selected providers complete the shared thread boundary journey in one clon
         && JSON.stringify(item).includes(`${shellProofFile}-approved`));
       assert.ok(approvedShell?.type === "mcpToolCall", "Approved shell call must appear in the canonical transcript");
       assert.equal(approvedShell.status, "completed", JSON.stringify(approvedShell).slice(0, 1500));
+      const outcomes = (await runtime.daemon.threads.history.approvals({ threadId })).data;
+      assert.deepEqual(outcomes.filter(entry => entry.itemId === approvedShell.id).map(entry => entry.outcome), ["approved"],
+        "The approval outcome must be recorded on the shell call it gated");
     }
     assert.ok(JSON.stringify(finalItems).includes(finalProof));
     assert.ok(JSON.stringify(finalItems).includes(prefixProof));

@@ -61,6 +61,7 @@ import { externalStorageImportSchemaHistory } from "../lib/workbench/database/sc
 import { transcriptAssetContentSchemaHistory } from "../lib/workbench/database/schema/transcript-asset-content-schema.ts";
 import { legacyDiffArtifactSchemaHistory } from "../lib/workbench/database/schema/legacy-diff-artifact-schema.ts";
 import { threadGitSelectionSchemaHistory } from "../lib/workbench/database/schema/thread-git-selection-schema.ts";
+import { itemApprovalSchemaHistory } from "../lib/workbench/database/schema/thread-approval-schema.ts";
 
 export { projectTables } from "workbench-shared/workbench/database/schema/project-schema";
 export type { ProjectSchemaRows } from "workbench-shared/workbench/database/schema/project-schema";
@@ -121,6 +122,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       transcriptAssetContentSchemaHistory,
       legacyDiffArtifactSchemaHistory,
       threadGitSelectionSchemaHistory,
+      itemApprovalSchemaHistory,
     ],
   });
 }

@@ -7,7 +7,7 @@ import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 
-import type { ThreadPayload, WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchSubagentRelationship, WorkbenchUserInputRequest } from "workbench-shared/types";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { AgentEndpointProjectResolution } from "./lib/workbench/project/agent-endpoint-project";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
@@ -129,7 +129,9 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
     await subagentStore.replace(callerThreadId, reservationId, { ...record, directSubagentIndex: reservation.directSubagentIndex });
   }
   const client = new FakeProvider(cwd);
+  let liveApprovals: WorkbenchPendingUserInputRequest[] = [];
   const controller = new WorkbenchSubagentController({
+    liveApprovals: () => liveApprovals,
     identities: database.identities.threads,
     publicThreadId: async (threadId, projectId) => {
       const identity = await database.identities.threads.resolve({ threadId, projectId });
@@ -165,4 +167,16 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
   assert.equal(client.questionnaireListCalls, 2);
   assert.equal(client.threadReadCalls, 4);
   assert.deepEqual(client.contentReads, [questionnaireThreadId, inactiveThreadId]);
+
+  // Workbench owns live approvals outside the provider list; a child blocked on one still needs interaction.
+  liveApprovals = [{
+    harness: "codex", itemId: "item-2", request: { ...questionnaire, id: "approval-1" },
+    requestKey: "approval-key", threadId: questionnaireThreadId, turnId: `${questionnaireThreadId}-turn`,
+  }];
+  const approvalResult = await controller.handleRequest({
+    id: 3,
+    method: "workbench/subagent/wait",
+    params: { ...params, waitId: "wait-3" },
+  });
+  assert.match(String((approvalResult.result as { output?: string } | undefined)?.output), /^Subagent Momo \(questionnaire-child\) needs interaction\./u);
 });

@@ -35,7 +35,7 @@ import type WorkbenchTranscriptReconciliationController from "./WorkbenchTranscr
 import type { WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
 
 export interface CodexThreadOperationOwners {
-  bridge: Pick<CodexStdioBridge, "canDeliverQuestionnaire" | "ensureInitialized" | "handleServerRequest" | "reconcileSqliteTranscriptWindow" | "injectAgentContext">;
+  bridge: Pick<CodexStdioBridge, "canDeliverQuestionnaire" | "deliverApproval" | "ensureInitialized" | "handleServerRequest" | "reconcileSqliteTranscriptWindow" | "injectAgentContext">;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   identities: NativeTranscriptIdentityOwners;
   resolveProject(cwd: string): Promise<{ id: ProjectId; rootPath: string }>;
@@ -135,6 +135,9 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     record: async entry => this.interactionResult(await this.mapped({
       method: "questionnaire/history/record", params: entry,
     })),
+    deliverApproval: async input => this.owners.bridge.deliverApproval(
+      await this.nativeThreadId(input.threadId), input.requestKey, input.decision,
+    ),
   };
 
   readonly history: WorkbenchProviderThreads["history"] = {

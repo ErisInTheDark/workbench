@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - WorkbenchQuestionnaireResponseStatePort: atomic durable questionnaire settlement boundary.
- * - WorkbenchQuestionnaireResponseControllerOptions: questionnaire waiter, harness, and durable-state ports.
- * - default WorkbenchQuestionnaireResponseController: route one answer through live delivery or managed continuation.
+ * - WorkbenchQuestionnaireResponseControllerOptions: approval owner, questionnaire waiter, harness, and durable-state ports.
+ * - default WorkbenchQuestionnaireResponseController: route one answer to its live approval, live delivery, or managed continuation.
  */
 import type {
   WorkbenchQuestionnaireRespondRequest,
@@ -14,11 +14,10 @@ import {
   WorkbenchThreadIdSchema,
   type WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
-import {
-  getWorkbenchLifecycleTurnId,
-  type WorkbenchDurableQuestionnaire,
-  type WorkbenchQuestionnaireHistoryEntryState,
-  type WorkbenchThreadLifecycle,
+import type {
+  WorkbenchDurableQuestionnaire,
+  WorkbenchQuestionnaireHistoryEntryState,
+  WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
 import {
   createWorkbenchQuestionnaireResponseInput,
@@ -26,8 +25,8 @@ import {
 import {
   isWorkbenchMcpQuestionnaireRequestKey,
 } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
-import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import type { WorkbenchHarness, WorkbenchUserInputResponse } from "workbench-shared/types";
+import type WorkbenchApprovalController from "./WorkbenchApprovalController";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
@@ -57,6 +56,7 @@ export interface WorkbenchQuestionnaireResponseStatePort {
 }
 
 export interface WorkbenchQuestionnaireResponseControllerOptions {
+  approvals: Pick<WorkbenchApprovalController, "owns" | "respond">;
   harnesses: Pick<WorkbenchHarnessController, "resolveThreadIdentity">;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   resolveLatestTurn(input: {
@@ -98,6 +98,11 @@ export default class WorkbenchQuestionnaireResponseController {
 
     const projectId = ProjectIdSchema.parse(input.projectId);
     const threadId = WorkbenchThreadIdSchema.parse(input.threadId);
+    if (this.options.approvals.owns(threadId, input.requestKey)) {
+      await this.sendSupplementalInput(input, input.turnId ?? null);
+      await this.options.approvals.respond({ threadId, requestKey: input.requestKey, response: input.response });
+      return { ok: true, route: "live" };
+    }
     const interactions = this.interactions(input.harness);
     const resolved = await this.options.state.resolvePendingQuestionnaire<QuestionnaireDelivery>({
       harness: input.harness,
@@ -106,24 +111,22 @@ export default class WorkbenchQuestionnaireResponseController {
       resolvedAt: Date.now(),
       response: input.response,
       threadId,
-    }, async ({ lifecycle, questionnaire }) => {
-      const approval = isWorkbenchApprovalRequest(questionnaire.request);
+    }, async ({ lifecycle }) => {
       const pendingInput = lifecycle.kind === "needsAttention"
         && lifecycle.reason === "pendingInput"
         && lifecycle.requestKey === input.requestKey;
-      const liveLifecycle = pendingInput || (!approval && (
-        lifecycle.kind === "completed"
-        || (lifecycle.kind === "needsAttention" && lifecycle.reason === "agentBlocked")
-      ));
+      const liveLifecycle = pendingInput
+        || lifecycle.kind === "completed"
+        || (lifecycle.kind === "needsAttention" && lifecycle.reason === "agentBlocked");
       const live = liveLifecycle && await interactions.canDeliver(threadId, input.requestKey);
       const settle = <TDelivery>(delivery: TDelivery, acceptedTurnId: WorkbenchTurnId) => ({
         delivery,
-        insertAfterItemId: approval ? input.insertAfterItemId ?? questionnaire.itemId : null,
-        insertAfterItemIndex: approval ? input.insertAfterItemIndex ?? null : null,
+        insertAfterItemId: null,
+        insertAfterItemIndex: null,
         turnId: acceptedTurnId,
       });
       if (live && workbenchMcp) {
-        const acceptedTurnId = await this.resolveLiveTurn(projectId, threadId, questionnaire, lifecycle, approval);
+        const acceptedTurnId = await this.resolveLiveTurn(projectId, threadId);
         await this.sendSupplementalInput(input, acceptedTurnId);
         const delivered = await interactions.deliver({
           requestKey: input.requestKey,
@@ -134,14 +137,11 @@ export default class WorkbenchQuestionnaireResponseController {
         return settle({ route: "live" as const }, acceptedTurnId);
       }
       if (live) {
-        const acceptedTurnId = await this.resolveLiveTurn(projectId, threadId, questionnaire, lifecycle, approval);
+        const acceptedTurnId = await this.resolveLiveTurn(projectId, threadId);
         await this.sendSupplementalInput(input, acceptedTurnId);
         const response = await this.sendProviderResponse(input, acceptedTurnId);
         const warning = response.warning;
         return settle({ route: "live" as const, ...(warning ? { warning } : {}) }, acceptedTurnId);
-      }
-      if (approval) {
-        throw new Error("Approval requests cannot be submitted after their owning turn ends.");
       }
       const accepted = await this.admitContinuation(input);
       return settle({ route: "admitted" as const, ...(accepted.warning ? { warning: accepted.warning } : {}) }, accepted.turnId);
@@ -202,15 +202,7 @@ export default class WorkbenchQuestionnaireResponseController {
   private async resolveLiveTurn(
     projectId: ReturnType<typeof ProjectIdSchema.parse>,
     threadId: ReturnType<typeof WorkbenchThreadIdSchema.parse>,
-    questionnaire: WorkbenchDurableQuestionnaire,
-    lifecycle: WorkbenchThreadLifecycle,
-    approval: boolean,
   ) {
-    if (approval) {
-      const turnId = questionnaire.turnId ?? getWorkbenchLifecycleTurnId(lifecycle);
-      if (!turnId) throw new Error("The approval request has no active owning turn.");
-      return turnId;
-    }
     const turnId = await this.options.resolveLatestTurn({ projectId, threadId });
     if (!turnId) throw new Error("The questionnaire thread has no history point for its response.");
     return turnId;

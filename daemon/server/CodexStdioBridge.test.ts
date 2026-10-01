@@ -28,6 +28,8 @@ import { installWorkbenchDatabaseSchema } from "./database/workbench-database-sc
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
 import WorkbenchTranscriptAssetStore from "./database/transcript/WorkbenchTranscriptAssetStore";
 import CodexStoredTranscriptAdapter from "./CodexStoredTranscriptAdapter";
+import type { CodexApprovalPort } from "./CodexApprovalAdapter";
+import type { WorkbenchApprovalOpenResult } from "./WorkbenchApprovalController";
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import type { CodexThreadWindowStore } from "./CodexThreadWindowLoader";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
@@ -154,94 +156,92 @@ async function rejectWorkbenchRequest(request: JsonRpcRequest) {
   return { id: request.id ?? null, error: { code: -32000, message: "Workbench request is not expected in this test." } };
 }
 
-test("command approvals save before accepting and require contextual confirmation for a saved match", async () => {
+test("codex approvals are transport only: adapt to the Workbench owner and carry its decisions upstream", async context => {
+  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("[codex-approval] Approval could not be shown; declining:"));
+  context.after(() => assert.equal(diagnostics.length, 1));
   const sent: JsonRpcRequest[] = [];
   const notifications: JsonRpcNotification[] = [];
-  const prefix = ["pnpm", "run", "typecheck"];
-  const rule = { id: "6ec53578-a9ef-44df-8f4b-bb62f2d8ae4a", projectId: fixtureIdentityValues.ProjectId.project, workdir: "c:/repo", prefix };
-  let saved = false;
-  let rejectSave = true;
-  const bridge = new CodexStdioBridge({
-    appServer: { send(message: JsonRpcRequest) {
-      sent.push(message);
-      if (message.method === "thread/read" || message.method === "thread/turns/list") {
-        queueMicrotask(() => void bridge.handleUpstreamMessage({
-          id: message.id,
-          result: message.method === "thread/read" ? { thread: bridgeThread() } : { data: bridgeThread().turns },
-        }));
-      }
-      if (message.id === "first" && (message as { result?: { decision: string } }).result?.decision === "accept") assert.equal(saved, true);
-    } } as unknown as CodexAppServer,
+  const opened: Array<Parameters<CodexApprovalPort["open"]>[0]> = [];
+  const closed: string[] = [];
+  let openResult: () => Promise<WorkbenchApprovalOpenResult> = async () => ({ kind: "shown" });
+  const options: ConstructorParameters<typeof CodexStdioBridge>[0] = {
+    appServer: { send(message: JsonRpcRequest) { sent.push(message); } } as unknown as CodexAppServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification: notification => { notifications.push(notification); },
-    resolveProjectFromCwd: async cwd => ({
-      cwd, project: { id: rule.projectId, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
-      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
-    }),
-    commandApprovals: {
-      match: async (projectId, workdir, argv) => {
-        assert.equal(projectId, rule.projectId);
-        assert.equal(workdir.toLowerCase(), "c:/repo");
-        assert.deepEqual(argv.slice(0, 3), prefix);
-        return saved ? rule : null;
-      },
-      save: async (projectId, workdir, selected) => {
-        assert.equal(projectId, rule.projectId);
-        assert.equal(workdir.toLowerCase(), "c:/repo");
-        assert.deepEqual(selected, prefix);
-        if (rejectSave) throw new Error("permission store unavailable");
-        saved = true;
-        return rule;
-      },
+    resolveProjectFromCwd: async () => { throw new Error("Approvals must not resolve projects in the bridge."); },
+    approvals: {
+      open: async input => { opened.push(input); return openResult(); },
+      close: requestKey => { closed.push(requestKey); },
     },
-  });
-  const request = (id: string, reason: string, command = String.raw`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'pnpm run typecheck'`) => bridge.handleUpstreamMessage({
+  };
+  let bridge = new CodexStdioBridge(options);
+  const decisionOf = (id: string) => (sent.find(message => message.id === id) as { result?: { decision?: unknown } } | undefined)?.result?.decision;
+  const command = (id: string, extra: object = {}) => bridge.handleUpstreamMessage({
     id, method: "item/commandExecution/requestApproval",
-    params: { kind: "command", threadId: "thread", turnId: "turn", itemId: id, startedAtMs: 1,
-      command, cwd: "C:/repo", reason },
+    params: { kind: "command", threadId: "thread", turnId: "turn", itemId: `item-${id}`, startedAtMs: 1,
+      command: "pnpm run typecheck", cwd: "C:/repo", reason: "Run tests.", ...extra },
   });
   try {
-    await request("first", "Run tests.");
+    await command("first", { proposedExecpolicyAmendment: ["pnpm", "run"] });
     await bridge.waitForIdle();
-    const requested = notifications.find(event => event.method === "questionnaire/requested")?.params as {
-      request: import("workbench-shared/types").WorkbenchUserInputRequest;
-    };
-    const always = requested.request.questions[0]!.options.find(option => option.label.includes("Always allow"));
-    assert.ok(always, "script prefix must be offered beside ordinary decisions");
-    assert.deepEqual(requested.request.approval?.command?.justification, "Run tests.");
-    const answer = () => bridge.handleBridgeRequest({
-      id: "answer", method: "questionnaire/respond",
-      params: { threadId: "thread", requestKey: "first", response: { answers: { decision: { answers: [always.label] } } } },
+    assert.deepEqual(opened[0], {
+      threadId: "thread", turnId: "turn", itemId: "item-first", requestKey: "first",
+      subject: {
+        kind: "command", command: "pnpm run typecheck", cwd: "C:/repo", commandActions: [], justification: "Run tests.",
+        networkTarget: null, rememberable: true, suggestedPrefixes: [["pnpm", "run"]],
+      },
     });
-    assert.ok((await answer())?.error);
-    assert.equal(sent.some(message => message.id === "first"), false);
-    rejectSave = false;
-    assert.equal((await answer())?.error, undefined);
-    assert.equal((sent.find(message => message.id === "first") as { result?: { decision: string } })?.result?.decision, "accept");
-    await request("missing-confirmation", "Run tests again.");
+    assert.equal(notifications.some(event => event.method === "questionnaire/requested"), false, "the owner, not the bridge, shows approvals");
+    assert.equal(bridge.deliverApproval(fixtureIdentitySchemas.NativeThreadIdSchema.parse("other"), "first", { kind: "allowOnce" }), false);
+    assert.equal(bridge.deliverApproval(fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"), "first", { kind: "allowSession" }), true);
+    assert.equal(decisionOf("first"), "acceptForSession");
+    assert.equal(bridge.deliverApproval(fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"), "first", { kind: "allowOnce" }), false);
+
+    await command("network", { networkApprovalContext: { protocol: "https", host: "example.com" } });
     await bridge.waitForIdle();
-    const injection = sent.find(message => message.method === "thread/inject_items");
-    assert.ok(injection);
-    assert.equal(sent.some(message => message.id === "missing-confirmation"), false);
-    const items = (injection.params as { items: Array<{ output: string }> }).items;
-    assert.ok(items[0]!.output.includes(JSON.stringify(prefix)));
-    await bridge.handleUpstreamMessage({ id: injection.id, result: {} });
-    assert.equal((sent.find(message => message.id === "missing-confirmation") as { result?: { decision: string } })?.result?.decision, "decline");
-    await request("confirmed", "I confirm this command contains no additional shell code.");
+    const network = opened.at(-1)!.subject;
+    assert.ok(network.kind === "command" && !network.rememberable && network.networkTarget === "https://example.com");
+
+    await bridge.handleUpstreamMessage({ id: "patch", method: "item/fileChange/requestApproval",
+      params: { threadId: "thread", turnId: "turn", itemId: "file", reason: "Write config.", grantRoot: null } });
     await bridge.waitForIdle();
-    assert.equal((sent.find(message => message.id === "confirmed") as { result?: { decision: string } })?.result?.decision, "accept");
-    assert.equal(notifications.filter(event => event.method === "questionnaire/requested").length, 1);
-    await request("bundled", "I confirm this command contains no additional shell code.", "pnpm run test; whoami");
+    assert.deepEqual(opened.at(-1)!.subject, { kind: "fileChange", reason: "Write config.", grantRoot: null });
+    bridge.deliverApproval(fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"), "patch", { kind: "decline" });
+    assert.equal(decisionOf("patch"), "decline");
+
+    openResult = async () => ({ kind: "decided", decision: { kind: "allowOnce" } });
+    await command("saved");
     await bridge.waitForIdle();
-    assert.equal(sent.some(message => message.id === "bundled"), false);
-    assert.equal(notifications.filter(event => event.method === "questionnaire/requested").length, 2);
-    await request("cancelled-feedback", "Run again.");
+    assert.equal(decisionOf("saved"), "accept");
+
+    openResult = async () => { throw new Error("thread identity unavailable"); };
+    await command("invisible");
     await bridge.waitForIdle();
-    const cancelledInjection = sent.filter(message => message.method === "thread/inject_items").at(-1)!;
-    assert.notEqual(cancelledInjection.id, injection.id);
-    await bridge.handleUpstreamMessage({ method: "serverRequest/resolved", params: { threadId: "thread", requestId: "cancelled-feedback" } });
-    await bridge.handleUpstreamMessage({ id: cancelledInjection.id, result: {} });
-    assert.equal(sent.some(message => message.id === "cancelled-feedback"), false);
+    assert.equal(decisionOf("invisible"), "decline", "an approval nobody can see fails closed");
+
+    openResult = async () => ({ kind: "shown" });
+    await command("resolved");
+    await bridge.waitForIdle();
+    await bridge.handleUpstreamMessage({ method: "serverRequest/resolved", params: { threadId: "thread", requestId: "resolved" } });
+    assert.deepEqual(closed, ["resolved"]);
+    assert.equal(bridge.deliverApproval(fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"), "resolved", { kind: "allowOnce" }), false);
+
+    await command("handoff");
+    await bridge.waitForIdle();
+    const initialState = await bridge.detachForReload();
+    await bridge.retireAfterHandoff();
+    const reopenedBefore = opened.length;
+    bridge = new CodexStdioBridge({ ...options, initialState });
+    bridge.resumePendingApprovals();
+    await bridge.waitForIdle();
+    assert.deepEqual(opened.slice(reopenedBefore).map(input => input.requestKey), ["network", "handoff"]);
+    assert.equal(bridge.deliverApproval(fixtureIdentitySchemas.NativeThreadIdSchema.parse("thread"), "handoff", { kind: "allowOnce" }), true);
+    assert.equal(decisionOf("handoff"), "accept");
+
+    const restartState = await bridge.detachForReload({ restartingAppServer: true });
+    await bridge.retireAfterHandoff();
+    bridge = new CodexStdioBridge({ ...options, initialState: restartState, restartingAppServer: true });
+    assert.ok(closed.includes("network"), "a restarted app-server forgets its approvals, so the owner must too");
   } finally { await bridge.disposeImmediately(); }
 });
 
@@ -255,7 +255,8 @@ for (const outcome of ["reload", "failed", "resolved-before-delivery"] as const)
         sent.push(message);
         if (message.method !== "thread/read" && message.method !== "thread/turns/list") return;
         if (message.method === "thread/read") reads += 1;
-        const resolveBeforeDelivery = reads === 2 && message.method === "thread/read" && outcome === "resolved-before-delivery";
+        // The owner decides synchronously now, so the first thread read belongs to feedback delivery.
+        const resolveBeforeDelivery = reads === 1 && message.method === "thread/read" && outcome === "resolved-before-delivery";
         queueMicrotask(() => void (async () => {
           if (resolveBeforeDelivery) await bridge.handleUpstreamMessage({
             method: "serverRequest/resolved", params: { threadId: "thread", requestId: "approval" },
@@ -270,10 +271,9 @@ for (const outcome of ["reload", "failed", "resolved-before-delivery"] as const)
         cwd, project: { id: testProjectIds.project, kind: "git", root: cwd, rootPath: cwd, roots: [] },
         root: { id: "root", name: "repo", root: cwd, rootPath: cwd },
       }),
-      commandApprovals: {
-        match: async () => ({ id: "6ec53578-a9ef-44df-8f4b-bb62f2d8ae4a", projectId: testProjectIds.project,
-          workdir: "c:/repo", prefix: ["pnpm", "test"] }),
-        save: async () => { throw new Error("No user selected a new rule."); },
+      approvals: {
+        open: async () => ({ kind: "decided", decision: { kind: "decline", feedback: "Confirm the saved [\"pnpm\",\"test\"] prefix." } }),
+        close: () => undefined,
       },
     };
     let bridge = new CodexStdioBridge(options);
@@ -304,6 +304,7 @@ for (const outcome of ["reload", "failed", "resolved-before-delivery"] as const)
       const state = await bridge.detachForReload();
       assert.equal(state.pendingResponses.size, 0);
       assert.equal(state.pendingUserInputRequests.size, 0);
+      assert.equal(state.pendingApprovals?.size ?? 0, 0);
       assert.equal(diagnostics.length, outcome === "failed" ? 1 : 0);
     } finally { await bridge.disposeImmediately(); }
   });
@@ -654,7 +655,7 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
     const sql = await recordingFixture(root);
     await fs.writeFile(path.join(root, "target.txt"), "new\n");
     const upstreamMessages: JsonRpcRequest[] = [];
-    const notifications: Array<{ method?: string; params?: unknown }> = [];
+    const opened: string[] = [];
     const pendingUserInputRequests = new Map();
     const metadata = { ...bridgeThread(), cwd: root, turns: [],
       status: bridgeThread().status as import("workbench-shared/codex/generated/app-server/v2/Thread").Thread["status"],
@@ -683,7 +684,8 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
         pendingResponses: new Map(), pendingUserInputRequests,
         requestIdAllocator: { next: 100 }, upstreamInitialized: true,
       },
-      onNotification(notification) { notifications.push(notification); },
+      onNotification() {},
+      approvals: { open: async input => { opened.push(input.requestKey); return { kind: "shown" }; }, close: () => undefined },
       resolveProjectFromCwd: async () => ({
         cwd: root,
         project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root, rootPath: root, roots: [{ id: "root", name: "repo", root, rootPath: root }] },
@@ -752,8 +754,9 @@ for (const settlement of ["accepted", "failed", "resolved", "cancelled", "reload
           startedAtMs: 2, threadId: "thread", turnId: "turn",
         },
       });
+      await bridge.waitForIdle();
       assert.equal(upstreamMessages.length, before);
-      assert.equal(notifications.at(-1)?.method, "questionnaire/requested");
+      assert.deepEqual(opened, ["11"], "a real permission request goes to the user; automatic recovery never does");
     } finally {
       await bridge.dispose();
       await temporary.dispose();
@@ -976,15 +979,17 @@ test("app-server restart detachment drops process-bound state", async () => {
   }
 });
 
-test("server request resolution detaches ordinary questionnaires but resolves approvals", async () => {
+test("server request resolution detaches ordinary questionnaires but closes approvals with their owner", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-request-resolution-");
   const root = temporary.path;
   const notifications: JsonRpcNotification[] = [];
+  const closed: string[] = [];
   const bridge = new CodexStdioBridge({
     appServer: { send() {} } as unknown as CodexAppServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
     onNotification(notification) { notifications.push(notification); },
     resolveProjectFromCwd: async () => null,
+    approvals: { open: async () => ({ kind: "shown" }), close: requestKey => { closed.push(requestKey); } },
   });
   try {
     await bridge.handleUpstreamMessage({
@@ -1028,11 +1033,8 @@ test("server request resolution detaches ordinary questionnaires but resolves ap
       method: "serverRequest/resolved",
       params: { requestId: "approval", threadId: "thread" },
     });
-    assert.deepEqual(questionnaireNotifications(), [
-      "questionnaire/requested",
-      "questionnaire/requested",
-      "questionnaire/resolved",
-    ]);
+    assert.deepEqual(questionnaireNotifications(), ["questionnaire/requested"]);
+    assert.deepEqual(closed, ["approval"]);
   } finally {
     await bridge.disposeImmediately();
     await temporary.dispose();

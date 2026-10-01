@@ -57,12 +57,20 @@ export default class ClaudeToolsController implements WorkbenchProviderTools {
       approve: (request, approveSignal) => this.options.threads.requestShellApproval(request, approveSignal),
       execute: this.execute,
     });
-    const result = await admission.execute(prepared, signal);
+    const result = await admission.execute({
+      ...prepared,
+      ...(context?.itemId ? { itemId: context.itemId } : {}),
+      ...(context?.turnId ? { turnId: context.turnId } : {}),
+    }, signal);
     return { ...result, cwd: prepared.cwd, shell: prepared.shell };
   }
 
   async describe() {
-    return { experimental: {}, shellDescription: "Run a shell command in the managed Workbench sandbox, or request Workbench approval for one outside-sandbox command." };
+    return {
+      experimental: {},
+      shellDescription: "Run a shell command in the managed Workbench sandbox, or request Workbench approval for one outside-sandbox command.",
+      shellEscalation: true,
+    };
   }
 
   async patchClaims(): Promise<string> {

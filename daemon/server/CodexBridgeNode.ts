@@ -1,11 +1,12 @@
 /*
  * Exports:
  * - baselineActiveCodexTranscripts: restore demanded active windows after database replacement.
- * - default CodexBridgeNode: own reloadable Codex bridge code and questionnaire routing while preserving the parent app-server process.
+ * - default CodexBridgeNode: own reloadable Codex bridge code, questionnaire routing, and approval transport while preserving the parent app-server process.
  */
 import CodexStdioBridge from "./CodexStdioBridge";
 import CodexProviderObservations from "./CodexProviderObservations";
 import CodexQuestionnaireAdapter from "./CodexQuestionnaireAdapter";
+import CodexApprovalAdapter from "./CodexApprovalAdapter";
 import CodexProvider from "./CodexProvider";
 import CodexToolsNode from "./CodexToolsNode";
 import CodexThreadOperations from "./CodexThreadOperations";
@@ -184,7 +185,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         return { ...requests, resumeRequest, startRequest };
     };
     bridge = new CodexStdioBridge({
-      commandApprovals: build.get("commandApprovals"),
+      approvals: new CodexApprovalAdapter(() => build.get("approvals"), threadIdentity, build.get("transcriptIdentity")),
       prepareInputContext: async (nativeThreadId, trigger, inject, signal) => {
         const threadId = threadIdentity.workbenchIdForNative(threadIdentity.knownNativeBinding("codex", nativeThreadId));
         await build.get("agentContext").collect({ harness: "codex", threadId }, trigger, signal, async (_target, text) => {
@@ -326,6 +327,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       afterCommit: () => {
         parent.attachBridge(bridge);
         bridge.resumePendingToolContexts();
+        bridge.resumePendingApprovals();
         void bridge.settleRestartedResponses().catch(error => reportRecoveryFailure(null, error));
         health.start({ armed: true });
         const signal = generation.signal;
@@ -385,7 +387,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge", "codexThreadOperations", "codexNativeConfiguration"],
-  requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "commandApprovals", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptReader", "transcriptReconciliation", "codexRecovery", "providerObservations", "agentContext"],
+  requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "approvals", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptReader", "transcriptReconciliation", "codexRecovery", "providerObservations", "agentContext"],
   safeAll: true,
   scope: "server:codex",
   sources: [
@@ -395,6 +397,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/WorkbenchCodexMcpGenerationController.ts",
     "daemon/server/codex-sandbox-policy.ts",
     "daemon/server/CodexStdioBridge.ts",
+    "daemon/server/CodexApprovalAdapter.ts",
     "daemon/server/CodexProviderObservations.ts",
     "daemon/server/CodexProviderIdentity.ts",
     "daemon/server/CodexPublicIdentity.ts",

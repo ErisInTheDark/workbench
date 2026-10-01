@@ -82,6 +82,10 @@ export default class WorkbenchTranscriptIdentityRepository {
       this.prepare("UPDATE workbench_thread_questionnaires SET insert_after_item_id = ? WHERE insert_after_item_id = ?")
         .run(target.id, source.id);
     }
+    if (this.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'workbench_item_approvals'").get()) {
+      // A target that already holds a decision keeps it; the source row then cascades away.
+      this.prepare("UPDATE OR IGNORE workbench_item_approvals SET item_id = ? WHERE item_id = ?").run(target.id, source.id);
+    }
     this.prepare("DELETE FROM workbench_transcript_item_identities WHERE id = ?").run(source.id);
     return this.read(target);
   }

@@ -10,7 +10,6 @@ import { normalizeThreadTitle } from "./lib/thread-bootstrap";
 import type { ThreadPayload, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship, WorkbenchThreadCreationProfile } from "workbench-shared/types";
 import type { GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "./lib/workbench/git/WorkbenchGitCheckpointController";
 import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, WorkbenchGitArcLifecycleStateSchema, type WorkbenchDurableQuestionnaire, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
-import { isWorkbenchApprovalRequest } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import { currentThreadTitleName } from "workbench-shared/workbench/thread/thread-title-history";
 import type { HarnessKind, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
@@ -264,8 +263,7 @@ export default class WorkbenchThreadStateFeature {
       if (observedTurnId !== undefined && current.entry.lifecycle.kind === "working"
         && getWorkbenchLifecycleTurnId(current.entry.lifecycle) !== observedTurnId) return false;
       return current.questionnaire.requestKey === questionnaire.requestKey
-        && current.questionnaire.itemId === questionnaire.itemId
-        && !isWorkbenchApprovalRequest(current.questionnaire.request);
+        && current.questionnaire.itemId === questionnaire.itemId;
     };
     if (!await isCurrent()) return false;
     try {

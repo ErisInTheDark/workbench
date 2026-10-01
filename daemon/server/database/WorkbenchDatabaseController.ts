@@ -9,6 +9,7 @@ import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/id
 import type { LegacyDiffArtifactReference } from "./git/WorkbenchLegacyDiffArtifactStore";
 import type { ThreadGitSelectionCommand } from "./git/WorkbenchThreadGitSelectionStore";
 import type { TranscriptAssetRead, TranscriptAssetWrite } from "./transcript/WorkbenchTranscriptAssetStore";
+import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
 
 import type {
     WorkbenchDatabaseMutation,
@@ -270,6 +271,19 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     const response = await this.#request({ type: "readLegacyDiffArtifact", input });
     if (response.type !== "legacyDiffArtifact") throw new WorkbenchDatabaseFailure(`Unexpected legacy diff response: ${response.type}`);
     return response.diff;
+  }
+
+  async recordApprovalOutcome(entry: WorkbenchApprovalOutcomeEntry) {
+    await this.start();
+    const response = await this.#request({ type: "recordApprovalOutcome", entry });
+    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected approval outcome write response: ${response.type}`);
+  }
+
+  async readApprovalOutcomes(threadId: string, turnIds?: readonly string[]) {
+    await this.start();
+    const response = await this.#request({ type: "readApprovalOutcomes", threadId, ...(turnIds ? { turnIds } : {}) });
+    if (response.type !== "approvalOutcomes") throw new WorkbenchDatabaseFailure(`Unexpected approval outcome response: ${response.type}`);
+    return response.entries;
   }
 
   async executeThreadGitSelection(command: ThreadGitSelectionCommand) {

@@ -17,6 +17,7 @@ import type { WorkbenchClientNotification } from "workbench-shared/workbench/Wor
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "workbench-shared/workbench/daemon-reload";
 import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchControls } from "workbench-shared/types";
+import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
 import type { ThreadActiveFlag } from "workbench-shared/workbench/thread/workbench-thread-turn";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -99,6 +100,7 @@ function readLocalWorkbenchOrigin() {
 function isApprovalUserInputRequest(request: WorkbenchUserInputRequest) {
   return request.approval !== undefined || isWorkbenchApprovalRequest(request);
 }
+const EMPTY_APPROVAL_ENTRIES: readonly WorkbenchApprovalOutcomeEntry[] = [];
 const THREAD_HISTORY_PENDING_STATUS_MESSAGE = "Started the thread. Its saved history is still becoming available, so the live view will refresh automatically.";
 
 
@@ -114,6 +116,7 @@ export interface WorkbenchThreadState {
   projectRoots: WorkbenchProjectRoot[];
   questionnaireHistoryByThreadId: Map<string, WorkbenchQuestionnaireHistoryEntry[]>;
   browseResultEntriesByThreadId: Map<string, WorkbenchBrowseResultEntry[]>;
+  approvalEntriesByThreadId: Map<string, WorkbenchApprovalOutcomeEntry[]>;
   steerHistoryByThreadId: Map<string, WorkbenchSteerHistoryEntry[]>;
   subagents: WorkbenchSubagentSummary[];
   threads: ThreadSummary[];
@@ -282,6 +285,7 @@ function createInitialThreadState(): WorkbenchThreadState {
     projectRoots: [],
     questionnaireHistoryByThreadId: new Map(),
     browseResultEntriesByThreadId: new Map(),
+    approvalEntriesByThreadId: new Map(),
     steerHistoryByThreadId: new Map(),
     subagents: [],
     threads: [],
@@ -713,6 +717,7 @@ function WorkbenchThreadClient(
           return {
             document,
             pendingQuestionnaire: state.pendingUserInputRequestsByThreadId.get(threadId) ?? null,
+            approvalEntries: state.approvalEntriesByThreadId.get(threadId) ?? EMPTY_APPROVAL_ENTRIES,
             rateLimits: account.getRateLimits(document?.harness ?? (target.kind === "draft" ? defaultProviderKey : target.harness ?? defaultProviderKey)),
           };
         },
@@ -985,7 +990,7 @@ function WorkbenchThreadClient(
     questionnaireHistoryWarningKeys.clear();
     steerHistoryReadGenerationByKey.clear();
     steerHistoryWarningKeys.clear();
-    for (const map of [state.questionnaireHistoryByThreadId, state.steerHistoryByThreadId, state.browseResultEntriesByThreadId, state.pendingUserInputRequestsByThreadId]) {
+    for (const map of [state.questionnaireHistoryByThreadId, state.steerHistoryByThreadId, state.browseResultEntriesByThreadId, state.approvalEntriesByThreadId, state.pendingUserInputRequestsByThreadId]) {
       for (const threadId of map.keys()) if (!retainedThreadIds.has(threadId)) map.delete(threadId);
     }
     questionnaireListSyncPromisesByHarness.clear();
@@ -2551,7 +2556,32 @@ function WorkbenchThreadClient(
     const browseChanged = setBrowseResultEntries(threadId, browseResultEntries);
     const questionnaireChanged = setQuestionnaireHistoryEntries(threadId, questionnaireEntries);
     const steerChanged = setSteerHistoryEntries(threadId, steerEntries);
+    if (response.approvalEntries) mergeApprovalEntries(threadId, response.approvalEntries, false);
     return browseChanged || questionnaireChanged || steerChanged;
+  }
+
+  /** Outcomes are keyed by stable item identity, so scoped page reads add to what other pages already loaded. */
+  function mergeApprovalEntries(threadId: string, entries: readonly WorkbenchApprovalOutcomeEntry[], replace: boolean) {
+    const byItem = new Map((replace ? [] : state.approvalEntriesByThreadId.get(threadId) ?? []).map(entry => [entry.itemId, entry]));
+    for (const entry of entries) if (entry.threadId === threadId) byItem.set(entry.itemId, entry);
+    const next = [...byItem.values()];
+    const existing = state.approvalEntriesByThreadId.get(threadId) ?? [];
+    if (areDeeplyEqual(existing, next)) return false;
+    if (next.length) state.approvalEntriesByThreadId.set(threadId, next);
+    else state.approvalEntriesByThreadId.delete(threadId);
+    emit();
+    return true;
+  }
+
+  async function readApprovalEntries(threadId: string) {
+    const projectGeneration = projectContextGeneration;
+    try {
+      const response = await daemon.threads.history.approvals({ threadId });
+      if (projectGeneration === projectContextGeneration) mergeApprovalEntries(threadId, response.data, true);
+    } catch (error) {
+      if (projectGeneration !== projectContextGeneration) return;
+      emitStatusMessage(`Unable to refresh tool approval outcomes: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`);
+    }
   }
 
   async function readCompletedQuestionnaireHistory(threadId: string, options: { refreshProjection?: boolean } = {}) {
@@ -2652,6 +2682,7 @@ function WorkbenchThreadClient(
       readBrowseResultEntries(threadId, { refreshProjection: false }),
       readCompletedQuestionnaireHistory(threadId, { refreshProjection: false }),
       readCompletedSteerHistory(threadId, { refreshProjection: false }),
+      readApprovalEntries(threadId),
     ]);
     if (projectGeneration === projectContextGeneration) {
       refreshFinalVisibleThreadForOverlay(threadId);
@@ -4385,6 +4416,8 @@ function WorkbenchThreadClient(
       }
       if (doesNotificationTargetKnownThread(notification, harness)) {
         void readCompletedQuestionnaireHistoryForHarness(notification.params.threadId, harness);
+        // A resolved approval may have recorded an outcome on its tool item.
+        void readApprovalEntries(notification.params.threadId);
       }
       return;
     }
