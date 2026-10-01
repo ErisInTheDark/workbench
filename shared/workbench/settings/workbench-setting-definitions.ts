@@ -3,21 +3,17 @@
  * - WorkbenchTheme: available themes.
  * - WorkbenchEditorFontFamily: editor font choices.
  * - WorkbenchFileOpenBehavior: file opening policy.
- * - WorkbenchSelectedProjectPinPlacement: selected-project pin location.
  * - WorkbenchSettingKey: configurable setting identities.
  * - WorkbenchGlobalSettings: global preference values.
  * - WorkbenchSettingDefinition: setting control metadata.
  * - WORKBENCH_SETTING_DEFINITIONS: shared settings controls and search metadata.
  */
-import type { WorkbenchSelectedProjectPinPlacementValue } from "../../state/workbench-client-state.ts";
-
 export type WorkbenchTheme = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamily = "sans" | "serif" | "mono";
 export type WorkbenchFileOpenBehavior = "workbench" | "workbench-or-vscode" | "vscode";
-export type WorkbenchSelectedProjectPinPlacement = WorkbenchSelectedProjectPinPlacementValue;
 export type WorkbenchSettingKey =
   | "theme" | "editorFontFamily" | "editorSpellCheck" | "composerSpellCheck"
-  | "editorFontSize" | "fileOpenBehavior" | "selectedProjectPinPlacement"
+  | "editorFontSize" | "fileOpenBehavior"
   | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails";
 
 export interface WorkbenchGlobalSettings {
@@ -26,7 +22,6 @@ export interface WorkbenchGlobalSettings {
   editorFontSize: number;
   editorSpellCheck: boolean;
   fileOpenBehavior: WorkbenchFileOpenBehavior;
-  selectedProjectPinPlacement: WorkbenchSelectedProjectPinPlacement;
   showUnopenableFiles: boolean;
   theme: WorkbenchTheme;
   threadCodeBlockWrap: boolean;
@@ -59,13 +54,6 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
       { description: "Open supported markdown files in Workbench and ignore unsupported files.", label: "Workbench only", value: "workbench" },
       { description: "Open markdown in Workbench and use VS Code for files Workbench cannot open.", label: "Workbench, then VS Code", value: "workbench-or-vscode" },
       { description: "Always ask the local server to open file links in VS Code.", label: "VS Code", value: "vscode" },
-    ],
-  },
-  selectedProjectPinPlacement: {
-    columns: "two", description: "Choose where pinned threads from the selected project appear.", key: "selectedProjectPinPlacement", label: "Selected-project pin placement", type: "select",
-    options: [
-      { description: "Keep them in the global pinned threads list.", label: "Pinned threads", value: "pinned-section" },
-      { description: "A pinned section at the top of the project's threads.", label: "Threads", value: "threads-section" },
     ],
   },
   showUnopenableFiles: { description: "Controls whether the project sidebar shows files Workbench cannot open directly.", key: "showUnopenableFiles", label: "Show unsupported files", type: "boolean" },

@@ -63,7 +63,6 @@ import type { ProviderKey as WorkbenchHarnessValue } from "../workbench/provider
 export type WorkbenchThemeValue = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamilyValue = "mono" | "sans" | "serif";
 export type WorkbenchFileOpenBehaviorValue = "vscode" | "workbench" | "workbench-or-vscode";
-export type WorkbenchSelectedProjectPinPlacementValue = "pinned-section" | "threads-section";
 export type WorkbenchTranscriptModeValue = "compare" | "json" | "sqlite";
 
 export type WorkbenchGlobalPreference =
@@ -90,7 +89,6 @@ export type WorkbenchGlobalPreference =
   | { key: "appPort" | "editorFontSize" | "projectTimeGroupCount"; value: number }
   | { key: "fileOpenBehavior"; value: WorkbenchFileOpenBehaviorValue }
   | { key: "harness"; value: WorkbenchHarnessValue }
-  | { key: "selectedProjectPinPlacement"; value: WorkbenchSelectedProjectPinPlacementValue }
   | { key: "theme"; value: WorkbenchThemeValue }
   | { key: "transcriptProjectionMode"; value: WorkbenchTranscriptModeValue };
 
@@ -99,7 +97,6 @@ export type WorkbenchProjectPreference =
   | { enabled: boolean; key: "editorFontFamily"; value: WorkbenchEditorFontFamilyValue }
   | { enabled: boolean; key: "editorFontSize"; value: number }
   | { enabled: boolean; key: "fileOpenBehavior"; value: WorkbenchFileOpenBehaviorValue }
-  | { enabled: boolean; key: "selectedProjectPinPlacement"; value: WorkbenchSelectedProjectPinPlacementValue }
   | { enabled: boolean; key: "theme"; value: WorkbenchThemeValue };
 
 export type WorkbenchSidebarPreference =
@@ -213,7 +210,6 @@ const GlobalPreferenceSchema = z.union([
   z.object({ key: z.enum(["appPort", "editorFontSize", "projectTimeGroupCount"]), value: z.number() }),
   z.object({ key: z.literal("fileOpenBehavior"), value: z.enum(["vscode", "workbench", "workbench-or-vscode"]) }),
   z.object({ key: z.literal("harness"), value: ProviderKeySchema }),
-  z.object({ key: z.literal("selectedProjectPinPlacement"), value: z.enum(["pinned-section", "threads-section"]) }),
   z.object({ key: z.literal("theme"), value: z.enum(["default", "magical-girl", "winter"]) }),
   z.object({ key: z.literal("transcriptProjectionMode"), value: z.enum(["compare", "json", "sqlite"]) }),
 ]);
@@ -224,8 +220,6 @@ const ProjectPreferenceSchema = z.union([
   z.object({ enabled: z.boolean(), key: z.literal("editorFontFamily"), value: z.enum(["mono", "sans", "serif"]) }),
   z.object({ enabled: z.boolean(), key: z.literal("editorFontSize"), value: z.number() }),
   z.object({ enabled: z.boolean(), key: z.literal("fileOpenBehavior"), value: z.enum(["vscode", "workbench", "workbench-or-vscode"]) }),
-  z.object({ enabled: z.boolean(), key: z.literal("selectedProjectPinPlacement"),
-    value: z.enum(["pinned-section", "threads-section"]) }),
   z.object({ enabled: z.boolean(), key: z.literal("theme"), value: z.enum(["default", "magical-girl", "winter"]) }),
 ]);
 const SidebarPreferenceSchema = z.union([
@@ -281,16 +275,16 @@ export const WorkbenchClientStateIdentitySchema = z.discriminatedUnion("kind", [
     "reactDevelopmentMode", "reloadNecessaryOpen", "showUnopenableFiles", "sidebarCollapsed",
     "threadCodeBlockWrap", "threadCodeDetails", "threadLiveActivityOpen", "voiceInputEnabled",
     "editorFontFamily", "appPort", "editorFontSize", "projectTimeGroupCount", "fileOpenBehavior",
-    "harness", "selectedProjectPinPlacement", "theme", "transcriptProjectionMode",
+    "harness", "theme", "transcriptProjectionMode",
   ]) }),
   z.object({ kind: z.literal("logicalProjectPreference"), logicalProjectId: LogicalProjectIdSchema,
     key: z.enum(["composerSpellCheck", "editorSpellCheck", "showUnopenableFiles", "threadCodeBlockWrap",
       "threadCodeDetails", "editorFontFamily", "editorFontSize", "fileOpenBehavior",
-      "selectedProjectPinPlacement", "theme"]) }),
+      "theme"]) }),
   z.object({ kind: z.literal("projectPreference"), ...projectAddress,
     key: z.enum(["composerSpellCheck", "editorSpellCheck", "showUnopenableFiles", "threadCodeBlockWrap",
       "threadCodeDetails", "editorFontFamily", "editorFontSize", "fileOpenBehavior",
-      "selectedProjectPinPlacement", "theme"]) }),
+      "theme"]) }),
   z.object({ kind: z.literal("sidebarPreference"), ...projectAddress,
     key: z.enum(["projectTimeGroupCount", "settledThreadItemLimit", "browseSessionsOpen", "explorerOpen",
       "pinnedStatusCountsExpanded", "pinnedThreadsOpen", "projectStatusCountsExpanded", "projectsOpen",

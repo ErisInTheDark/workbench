@@ -5,5 +5,5 @@
 - Convert old data at the owning boundary when old and new shapes can coexist.
 - Use one focused transactional conversion when the shapes cannot coexist.
 - Do not add a general migration framework for one conversion.
-- Remove an obsolete schema path when no live or import owner uses it.
+- Remove obsolete schema paths when no live or import owner uses them; defer only at the user's explicit request.
 - Do not keep dead compatibility code as a speculative fallback.

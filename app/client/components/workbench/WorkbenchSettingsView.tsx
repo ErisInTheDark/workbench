@@ -33,7 +33,6 @@ const pages: { id: Page; label: string; sections: { id: string; label: string }[
   ] },
   { id: "projects", label: "Projects & folders", sections: [
     { id: "settings-files", label: "Files" },
-    { id: "settings-sidebar", label: "Sidebar" },
     { id: "settings-discovery", label: "Discovery" },
   ] },
   { id: "agents", label: "Agents", sections: [
@@ -188,10 +187,6 @@ export default function WorkbenchSettingsView({
         {page === "projects" ? <>
           <Group id="settings-files" title="Files">
             <WorkbenchSettingsPreferences keys={["fileOpenBehavior", "showUnopenableFiles"]}
-              logicalProjectId={logicalProject?.id ?? null} onError={onError} />
-          </Group>
-          <Group id="settings-sidebar" title="Sidebar">
-            <WorkbenchSettingsPreferences keys={["selectedProjectPinPlacement"]}
               logicalProjectId={logicalProject?.id ?? null} onError={onError} />
           </Group>
           <Group id="settings-discovery" title="Discovery">

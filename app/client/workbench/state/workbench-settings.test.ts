@@ -74,27 +74,6 @@ test("each focused setting intent writes one app-state identity", async () => {
   assert.equal(controller.getSnapshot().records.length, 4);
 });
 
-test("selected-project pin placement defaults safely and resolves project overrides", async () => {
-  const controller = new WorkbenchClientStateController({ mode: "memory" });
-  assert.equal(readGlobalWorkbenchSettings().selectedProjectPinPlacement, "pinned-section");
-  assert.equal(readGlobalWorkbenchSettings([{
-    kind: "globalPreference",
-    preference: { key: "selectedProjectPinPlacement", value: "haunted" },
-  } as never]).selectedProjectPinPlacement, "pinned-section");
-
-  await writeGlobalWorkbenchSetting(controller, "selectedProjectPinPlacement", "threads-section");
-  const globalSettings = readGlobalWorkbenchSettings(controller.getSnapshot().records);
-  let projectSettings = readProjectWorkbenchSettings("memory", "alpha", controller.getSnapshot().records);
-  assert.equal(resolveWorkbenchSettings(globalSettings, projectSettings).selectedProjectPinPlacement, "threads-section");
-
-  await writeProjectWorkbenchSetting(controller, "alpha", "selectedProjectPinPlacement", {
-    enabled: true,
-    value: "pinned-section",
-  });
-  projectSettings = readProjectWorkbenchSettings("memory", "alpha", controller.getSnapshot().records);
-  assert.equal(resolveWorkbenchSettings(globalSettings, projectSettings).selectedProjectPinPlacement, "pinned-section");
-});
-
 test("sidebar preferences project scalar and collection records without crossing projects", async () => {
   const controller = new WorkbenchClientStateController({ mode: "memory" });
   const alpha = {

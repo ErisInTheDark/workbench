@@ -392,54 +392,44 @@ test("checked scalar families reject value columns that do not match their key",
   database.close();
 });
 
-test("selected-project pin placement persists as text at global and project scopes", async (context) => {
+test("obsolete pin placement is removed across scopes without losing other preferences", async (context) => {
   const databasePath = await temporaryDatabase(context);
+  const old = new Database(databasePath);
+  applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 18 });
+  old.prepare("INSERT INTO daemon_registrations(id,kind,created_at,revision) VALUES ('retained','local',0,1)").run();
+  old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('selectedProjectPinPlacement','threads-section',0,1)").run();
+  old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('theme','winter',0,1)").run();
+  old.prepare("INSERT INTO project_preferences(daemon_registration_id,project_id,key,enabled,text_value,deleted,revision) VALUES ('retained','folder','selectedProjectPinPlacement',1,'pinned-section',0,1)").run();
+  old.prepare("INSERT INTO project_preferences(daemon_registration_id,project_id,key,enabled,text_value,deleted,revision) VALUES ('retained','folder','theme',1,'default',0,1)").run();
+  old.prepare("INSERT INTO logical_project_preferences(logical_project_id,key,enabled,text_value,deleted,revision) VALUES ('112f7e1e-81b6-4c30-bdc0-f83475981001','selectedProjectPinPlacement',1,'threads-section',0,1)").run();
+  old.prepare("INSERT INTO logical_project_preferences(logical_project_id,key,enabled,text_value,deleted,revision) VALUES ('112f7e1e-81b6-4c30-bdc0-f83475981001','theme',1,'magical-girl',0,1)").run();
+  old.close();
+
   const repository = new WorkbenchAppStateRepository({ databasePath });
-  const daemonRegistrationId = await repository.start();
-  assert.throws(() => repository.executeTransaction([
-    insertRow(appStateTables.globalPreferences, {
-      boolean_value: 1,
-      deleted: 0,
-      integer_value: null,
-      key: "selectedProjectPinPlacement",
-      revision: 1,
-      text_value: null,
-    }),
-  ]), /CHECK constraint failed/u);
-
-  repository.commit((revision) => [
-    insertRow(appStateTables.globalPreferences, {
-      boolean_value: null,
-      deleted: 0,
-      integer_value: null,
-      key: "selectedProjectPinPlacement",
-      revision,
-      text_value: "threads-section",
-    }),
-    insertRow(appStateTables.projectPreferences, {
-      boolean_value: null,
-      daemon_registration_id: daemonRegistrationId,
-      deleted: 0,
-      enabled: 1,
-      integer_value: null,
-      key: "selectedProjectPinPlacement",
-      project_id: "project",
-      revision,
-      text_value: "pinned-section",
-    }),
-  ]);
-
-  assert.equal(repository.query(selectRows(appStateTables.globalPreferences, {
-    where: { key: "selectedProjectPinPlacement" },
-  }))[0]?.text_value, "threads-section");
-  assert.equal(repository.query(selectRows(appStateTables.projectPreferences, {
-    where: {
-      daemon_registration_id: daemonRegistrationId,
-      key: "selectedProjectPinPlacement",
-      project_id: "project",
-    },
-  }))[0]?.text_value, "pinned-section");
+  await repository.start();
   await repository.close();
+
+  const upgraded = new Database(databasePath);
+  try {
+    for (const [table, expectedTheme] of [
+      ["global_preferences", "winter"],
+      ["project_preferences", "default"],
+      ["logical_project_preferences", "magical-girl"],
+    ]) {
+      assert.deepEqual(upgraded.prepare(`SELECT key,text_value,revision FROM ${table}`).all(), [
+        { key: "theme", text_value: expectedTheme, revision: 1 },
+      ]);
+    }
+    assert.throws(() => upgraded.prepare(
+      "INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('selectedProjectPinPlacement','threads-section',0,2)",
+    ).run(), /CHECK constraint failed/u);
+    assert.throws(() => upgraded.prepare(
+      "INSERT INTO project_preferences(daemon_registration_id,project_id,key,enabled,text_value,deleted,revision) VALUES ('retained','folder','selectedProjectPinPlacement',1,'threads-section',0,2)",
+    ).run(), /CHECK constraint failed/u);
+    assert.throws(() => upgraded.prepare(
+      "INSERT INTO logical_project_preferences(logical_project_id,key,enabled,text_value,deleted,revision) VALUES ('112f7e1e-81b6-4c30-bdc0-f83475981001','selectedProjectPinPlacement',1,'threads-section',0,2)",
+    ).run(), /CHECK constraint failed/u);
+  } finally { upgraded.close(); }
 });
 
 test("backup creates a complete independent app-state database", async (context) => {
