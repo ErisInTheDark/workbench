@@ -2546,6 +2546,62 @@ test("accepted intent survives provider discovery lag and remains visible after 
   await controller.dispose();
 });
 
+test("a reconciliation snapshot cannot replace a lifecycle transition made while it was in flight", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-reconcile-fence-");
+  const inactive: WorkbenchThreadSidebarEntry[] = [{
+    activityAt: 1, entryKind: "thread",
+    identity: { harness: "codex", threadId: fixtureThreadIds["provider"] },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+    metadata: { archived: false, pinned: false, snoozed: false }, orderAt: 1, title: "New thread",
+  }];
+  let hold: { taken: () => void; released: Promise<void> } | null = null;
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    now: () => 42,
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      const snapshot = inactive;
+      if (hold) {
+        hold.taken();
+        await hold.released;
+      }
+      await acceptProviderSnapshot("codex", snapshot, { complete: true });
+      return [];
+    },
+    storageRoot: temporary.path,
+  });
+  const lifecycle = async () => {
+    const entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries
+      .find(candidate => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider");
+    return entry && entry.entryKind !== "draft" ? entry.lifecycle : undefined;
+  };
+  const reconcileHeld = async (during: () => Promise<unknown>) => {
+    const taken = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    hold = { taken: taken.resolve, released: released.promise };
+    await controller.refresh(fixtureProjectIds["project"]);
+    await taken.promise;
+    await during();
+    hold = null;
+    released.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
+  await controller.readProject(fixtureProjectIds["project"]);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await controller.acceptProviderIntent(fixtureProjectIds["project"], "codex", fixtureThreadIds["provider"], fixtureTurnIds["old-turn"]);
+  await controller.observeLifecycle("codex", fixtureThreadIds["provider"], { kind: "turnCompleted", status: "completed", turnId: fixtureTurnIds["old-turn"] });
+
+  await reconcileHeld(() => controller.acceptProviderIntent(
+    fixtureProjectIds["project"], "codex", fixtureThreadIds["provider"], fixtureTurnIds["next-turn"]));
+  assert.deepEqual(await lifecycle(), {
+    agent: { agentStatus: "working", turnId: "next-turn" }, kind: "working", reason: "acceptedIntent", settled: false,
+  }, "the turn accepted mid-reconciliation must stay working");
+
+  await reconcileHeld(async () => undefined);
+  assert.deepEqual(await lifecycle(), { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    "an unchanged working entry is still repaired from the inactive provider");
+  await controller.dispose();
+});
+
 test("accepted intent replaces only a neutral headless provider title with the first message", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-accepted-title-");
   const root = temporary.path;

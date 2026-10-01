@@ -30,7 +30,7 @@ import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadToolCallDetails from "./ThreadToolCallDetails";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
-import { getOpenCodeToolDisplay, isOpenCodeFileOperation, getThreadCommandOutcomeDisplay } from "../../../workbench/thread/thread-command-matchers";
+import { getNativeToolDisplay, isOpenCodeFileOperation, getThreadCommandOutcomeDisplay } from "../../../workbench/thread/thread-command-matchers";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
@@ -422,7 +422,7 @@ function ThreadGenericDynamicToolCallItem ({
   projectId?: string | null;
 }) {
   const metaParts = buildMetaParts(item);
-  const display = getOpenCodeToolDisplay(item, { knownSkills });
+  const display = getNativeToolDisplay(item, { knownSkills });
   const outcome = item.success === false ? "failed" : item.status;
   const outcomeDisplay = display ? getThreadCommandOutcomeDisplay(display, outcome) : null;
   const state = useWorkbenchClientStateSnapshot();

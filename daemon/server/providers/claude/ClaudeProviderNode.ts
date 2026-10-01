@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ClaudeProviderNode: expose native Claude sessions, managed tools, and model choices.
+ * - default ClaudeProviderNode: expose native Claude sessions, managed tools, model choices, and plan limits.
  */
 import ReloadableNode from "../../ReloadableNode";
 import type { DaemonProcessContext } from "../../daemon-process-context";
@@ -27,6 +27,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       registrations: {
         claudeProvider: {
           threads, tools, interactions: threads.interactions, context: threads.context,
+          account: { limits: { read: () => configuration.accountLimits() } },
           configuration: {
             modelContext: { read: async () => [] },
             models: { read: () => configuration.models() },

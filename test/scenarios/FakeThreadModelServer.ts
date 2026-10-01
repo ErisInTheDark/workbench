@@ -59,6 +59,8 @@ export default class FakeThreadModelServer {
   get lastFailure() { return this.failure; }
 
   private recordFailure(error: unknown) {
+    // Providers retry some rejected requests silently; report each rejection when it happens.
+    console.error(`[fake model] rejected request: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
     this.failure ??= error instanceof Error ? error : new Error("Fake model request failed.");
   }
 

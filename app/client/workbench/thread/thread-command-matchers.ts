@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - getOpenCodeToolDisplay/getOpenCodeFileChanges/isOpenCodeFileOperation: classify and present native OpenCode evidence.
+ * - getNativeToolDisplay: select the provider-owned summary for a native tool call by its namespace.
+ * - getOpenCodeFileChanges/isOpenCodeFileOperation: classify native OpenCode file evidence.
  * - CommandMatcher: builder namespace for command-summary matchers, results, and summary parts.
  * - ThreadCommandSummaryDisplay: shared summary-display shape for single-command and grouped command labels.
  * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills.
@@ -23,9 +24,11 @@
  * - ThreadCommandExecutionOutcome: semantic completed, ongoing, timeout, failure, or decline state for command summaries.
  */
 
-export { getOpenCodeToolDisplay, getOpenCodeFileChanges, isOpenCodeFileOperation } from "./command-matchers/opencode";
+export { getOpenCodeFileChanges, isOpenCodeFileOperation } from "./command-matchers/opencode";
 
-import type { CommandAction, CommandExecutionStatus } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { CommandAction, CommandExecutionStatus, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { getClaudeToolDisplay } from "./command-matchers/claude";
+import { getOpenCodeToolDisplay } from "./command-matchers/opencode";
 import {
     BROWSE_COMMAND_MATCHERS,
     isBrowseCommandMatcherClaim,
@@ -305,6 +308,16 @@ export type {
 };
 
 export type ThreadCommandExecutionOutcome = "completed" | "declined" | "failed" | "inProgress" | "timedOut";
+
+type NativeToolItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
+const nativeToolDisplays: Record<string, (item: NativeToolItem, context?: Parameters<typeof getOpenCodeToolDisplay>[1]) => ThreadCommandSummaryDisplay | null> = {
+    opencode: getOpenCodeToolDisplay,
+    claude: getClaudeToolDisplay,
+};
+
+export function getNativeToolDisplay(item: NativeToolItem, context?: Parameters<typeof getOpenCodeToolDisplay>[1]) {
+    return item.namespace ? nativeToolDisplays[item.namespace]?.(item, context) ?? null : null;
+}
 
 type MatchedCommandDisplay = NonNullable<ReturnType<typeof runThreadCommandMatchers>>;
 

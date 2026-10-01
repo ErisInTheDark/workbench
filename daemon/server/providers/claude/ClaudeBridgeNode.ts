@@ -1,7 +1,8 @@
 /*
  * Exports:
- * - default ClaudeBridgeNode: own reloadable Claude session runtime and canonical transcript adapter.
+ * - default ClaudeBridgeNode: own reloadable Claude session runtime, config views, lifecycle publication, and canonical transcript adapter.
  */
+import path from "node:path";
 import ReloadableNode from "../../ReloadableNode";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
@@ -13,6 +14,7 @@ import {
 import ClaudeProviderNode from "./ClaudeProviderNode";
 import ClaudeThreadOperations from "./ClaudeThreadOperations";
 import ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
+import ClaudeConfigView from "./ClaudeConfigView";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
@@ -25,8 +27,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       items: build.get("transcriptIdentity"),
       transcript: build.get("transcript"),
     });
+    const viewsRoot = path.join(context.dataRootPath, "claude-config-views");
     const threads = new ClaudeThreadOperations({
       daemonOrigin: context.localDaemonOrigin,
+      viewsRoot,
+      observe: facts => build.get("providerObservations").observe("claude", facts),
+      broadcast: notification => context.broadcastProviderNotification("claude", notification),
       identities: build.get("threadIdentity"),
       projects: build.get("projectCatalog"),
       questionnaires: build.get("questionnaires"),
@@ -57,7 +63,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     return {
       registrations: { claudeThreadOperations: threads, claudeTranscriptAdapter: transcript },
       hasPendingWork: () => threads.hasPendingWork(),
-      start: () => undefined,
+      start: () => ClaudeConfigView.sweep(viewsRoot),
       dispose: async () => {
         lifetime.abort(new Error("Claude provider bridge disposed."));
         await threads.settle();
@@ -69,13 +75,15 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   provides: ["claudeThreadOperations", "claudeTranscriptAdapter"],
   requires: [
     "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity", "database",
-    "threadState", "transcript", "transcriptReader",
+    "threadState", "transcript", "transcriptReader", "providerObservations",
   ],
   safeAll: true,
   scope: "server:claude",
   sources: [
     "daemon/server/providers/claude/ClaudeBridgeNode.ts",
     "daemon/server/providers/claude/ClaudeThreadOperations.ts",
+    "daemon/server/providers/claude/ClaudeLiveTurn.ts",
+    "daemon/server/providers/claude/ClaudeConfigView.ts",
     "daemon/server/providers/claude/claude-process-options.ts",
     "daemon/server/providers/claude/ClaudeTranscriptAdapter.ts",
     "daemon/server/lib/workbench/instructions/instruction-tool-reference.ts",

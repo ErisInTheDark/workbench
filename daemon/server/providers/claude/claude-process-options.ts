@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - claudeExecutable: resolve the installed Claude Code executable.
- * - claudeEnvironment: isolate fake-model traffic without changing normal Claude credentials.
+ * - claudeEnvironment: disable account connectors, apply an optional config view, and isolate fake-model traffic.
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -19,13 +19,16 @@ export function claudeExecutable() {
   throw new Error("Claude Code executable was not found on PATH.");
 }
 
-export function claudeEnvironment(endpoint?: string): NodeJS.ProcessEnv {
+export function claudeEnvironment(endpoint?: string, view?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...view,
     CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
     CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1",
     CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
+    // Workbench owns tool exposure; claude.ai account connectors would otherwise auto-load.
+    ENABLE_CLAUDEAI_MCP_SERVERS: "false",
   };
   if (!endpoint) return env;
   for (const key of [

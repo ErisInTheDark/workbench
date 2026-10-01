@@ -22,11 +22,20 @@ function fixture({
   let reads = 0;
   const owner = new ClaudeThreadOperations({
     daemonOrigin: "http://127.0.0.1:1",
+    viewsRoot: null,
     signal: new AbortController().signal,
     resolveExecutable: () => "fake-claude",
+    observe: async () => undefined,
+    broadcast: () => undefined,
     createQuery: () => {
       if (failNative) throw new Error("native start failed");
-      return {} as never;
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "result", subtype: "success", is_error: false, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage: {} };
+        },
+        close: () => undefined,
+        interrupt: async () => undefined,
+      } as never;
     },
     buildInstructions: async () => "instructions",
     state: { controller: {
@@ -41,6 +50,8 @@ function fixture({
     transcript: {
       startTurn: async () => turnId,
       settleTurn: async () => undefined,
+      readContextUsage: async () => null,
+      recordContextUsage: async () => undefined,
     },
   } as never);
   Object.assign(owner, {
@@ -49,7 +60,6 @@ function fixture({
       bindings: [{ harness: "claude", nativeLocation: "C:/repo", nativeThreadId: "native-session" }],
     }),
     read: async () => ({ turns: reads++ === 0 ? [] : [{ id: turnId, status: "inProgress" }] }),
-    consume: async () => undefined,
   });
   return owner;
 }

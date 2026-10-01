@@ -586,7 +586,7 @@ export default class WorkbenchThreadStateController {
       // Raw provider reads cannot classify Workbench parent-child ownership.
       if (existing?.entryKind === "subagent" && providerEntry.entryKind === "thread") return existing;
       const previousEntries = new Map(state.entries);
-      const changed = this.installProviderSnapshot(state, providerEntry.identity.harness, [providerEntry], { complete: false });
+      const changed = this.installProviderSnapshot(state, providerEntry.identity.harness, [providerEntry], { complete: false }, previousEntries);
       if (changed) await this.persist(projectId, state, [key], { previousEntries });
       const entry = state.entries.get(key);
       return entry?.entryKind === "draft" ? null : entry ?? null;
@@ -1606,6 +1606,8 @@ export default class WorkbenchThreadStateController {
     const abort = new AbortController();
     state.abort?.abort();
     state.abort = abort;
+    // Provider snapshots describe this moment; lifecycle transitions made while they are read are newer.
+    const startEntries = new Map(state.entries);
     const reconcilePromise = (async () => {
       try {
         let retentionFailure: string | null = null;
@@ -1637,7 +1639,7 @@ export default class WorkbenchThreadStateController {
         const failures = await this.options.reconcileProject(projectId, abort.signal, async (harness, entries, options) => {
           if (!this.active || generation !== state.generation) return;
           const previousEntries = new Map(state.entries);
-          if (this.installProviderSnapshot(state, harness, entries, options)) {
+          if (this.installProviderSnapshot(state, harness, entries, options, startEntries)) {
             await this.persist(projectId, state, this.changedEntryKeys(previousEntries, state), { previousEntries });
           }
           if (!this.active || generation !== state.generation) return;
@@ -1688,7 +1690,16 @@ export default class WorkbenchThreadStateController {
     harness: WorkbenchHarnessId,
     entries: WorkbenchObservedThreadEntry[],
     { complete }: { complete: boolean },
+    startEntries: ReadonlyMap<string, WorkbenchThreadStateEntry>,
   ) {
+    /** A snapshot older than the entry's latest lifecycle transition cannot replace that transition. */
+    const providerLifecycle = (key: string, providerEntry: Parameters<typeof reconcileProviderLifecycle>[0],
+      existing: Parameters<typeof reconcileProviderLifecycle>[1]) => {
+      const started = startEntries.get(key);
+      return existing && started && started.entryKind !== "draft" && !areDeeplyEqual(started.lifecycle, existing.lifecycle)
+        ? existing.lifecycle
+        : reconcileProviderLifecycle(providerEntry, existing);
+    };
     let changed = false;
     const install = (key: string, entry: WorkbenchThreadStateEntry, workbenchTitle?: string) => {
       const existing = state.entries.get(key);
@@ -1726,7 +1737,7 @@ export default class WorkbenchThreadStateController {
         }
         : parsed.data;
       if (providerEntry.entryKind === "subagent") {
-        const lifecycle = reconcileProviderLifecycle(providerEntry, existing);
+        const lifecycle = providerLifecycle(key, providerEntry, existing);
         install(key, parseWorkbenchThreadStateEntry(existing ? {
           ...providerEntry,
           gitHistoryCleanedAt: existing.gitHistoryCleanedAt,
@@ -1745,7 +1756,7 @@ export default class WorkbenchThreadStateController {
       const metadata = existing?.entryKind === "thread" && existing.metadata.archived
         ? { archived: true as const, pinned: false as const, snoozed: false as const }
         : { archived: false as const, pinned: existing?.entryKind === "thread" ? existing.metadata.pinned : providerEntry.metadata.pinned, snoozed: existing?.entryKind === "thread" ? existing.metadata.snoozed : providerEntry.metadata.snoozed };
-      const lifecycle = reconcileProviderLifecycle(providerEntry, existing);
+      const lifecycle = providerLifecycle(key, providerEntry, existing);
       install(key, parseWorkbenchThreadStateEntry(existing ? {
         ...providerEntry,
         gitHistoryCleanedAt: existing.gitHistoryCleanedAt,

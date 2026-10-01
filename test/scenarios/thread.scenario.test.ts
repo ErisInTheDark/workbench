@@ -13,7 +13,7 @@ import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseRow } from "..
 import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-database-schema";
 import ThreadTranscriptProjectionController, { type ThreadTranscriptProjectionState } from "../../app/client/workbench/transcript/ThreadTranscriptProjectionController";
 import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
-import type { ThreadPayload } from "../../shared/types";
+import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "../../shared/types";
 import type { Turn } from "../../shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "../../shared/types";
 import { WORKBENCH_THREAD_WORKING_STATUS_MESSAGE } from "../../shared/workbench/thread/thread-recovery-message";
@@ -40,6 +40,7 @@ type ProviderScenario = {
   verifyBinding?: (database: Database.Database, projectId: string, id: string) => void;
   verifyCapabilities?: () => Promise<void>;
   verifySnoozedTurnSettled?: (turnId: string) => Promise<void>;
+  verifySteerDelivery?: (threadId: string, proof: string, releasedAt: number) => Promise<void>;
   verifyNativeDeletion?: (id: string) => Promise<void>;
   verifyLegacyFiles?: () => Promise<void>;
 };
@@ -486,6 +487,24 @@ test("selected providers complete the shared thread boundary journey in one clon
         assert.ok((await runtime.daemon.models.list("claude")).data.some(entry =>
           /^claude-(?:sonnet|opus|haiku)-\d/u.test(entry.id)),
         "Claude catalogue must expose a native versioned model alongside legacy alias profile support");
+        await runtime.daemon.account.limits("claude");
+      },
+      verifySteerDelivery: async (id, proof, releasedAt) => {
+        const delivered = await runtime.waitForFact<WorkbenchSteerHistoryEntry | undefined>(
+          async () => (await runtime.daemon.threads.history.steers({ threadId: id })).data
+            .find(entry => entry.status === "sent" && JSON.stringify(entry.input).includes(proof)),
+          Boolean, scenarioSignal);
+        assert.ok(delivered?.resolvedAt && delivered.resolvedAt >= releasedAt,
+          "A Claude steer must stay pending until Claude folds it in after the held tool");
+      },
+      verifySnoozedTurnSettled: async turnId => {
+        await runtime.waitForFact(async () => {
+          const terminal = runtime.events.find(event => event.method === "turn/completed"
+            && (event.params?.turn as Turn | undefined)?.id === turnId)?.params?.turn as Turn | undefined;
+          if (!terminal) return false;
+          assert.equal(terminal.status, "interrupted", "Claude must publish the snoozed turn's settlement");
+          return true;
+        }, Boolean, scenarioSignal);
       },
       verifyNativeDeletion: async id => {
         const root = path.join(runtime.root, "claude", "projects");
@@ -524,7 +543,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     threadId = await runtime.launchDraft(project.id, selection,
       providerRegistry[provider].initialPrompt ?? journey.active(prefixProof, activeProof));
     const { thread } = await runtime.daemon.threads.page({ threadId, cursor: null });
-    console.log(`[${provider} live] WB thread and native session created`);
+    console.log(`[${provider} live] WB thread and native session created at ${new Date().toISOString()}`);
     assert.equal(thread.harness, provider);
     assert.match(threadId, /^[0-9a-f-]{36}$/iu);
     assert.equal(path.resolve(thread.cwd), runtime.project);
@@ -544,7 +563,9 @@ test("selected providers complete the shared thread boundary journey in one clon
       });
       assert.deepEqual(result, { kind: "steered", turnId: id });
       assert.ok(journeyGate);
+      const releasedAt = Date.now();
       await journeyGate.release(activeProof);
+      await providerRegistry[provider].verifySteerDelivery?.(threadId!, steerProof, releasedAt);
       return id;
     };
     if (provider !== "codex") await subscribe();
@@ -677,6 +698,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     const priorCompactions = new Set(beforeCompact.turns.flatMap(turn => turn.items)
       .filter(item => item.type === "contextCompaction").map(item => item.id));
     if (fakeModel) fakeModel.enqueue([{ text: `Summary ${prefixProof}` }]);
+    console.log(`[${provider} live] requesting compaction`);
     await runtime.daemon.threads.compact({ threadId });
     await waitForFact(durable, value => {
       assert.ok(value.turns.slice(0, -1).every(turn => turn.status !== "inProgress"),
@@ -691,16 +713,20 @@ test("selected providers complete the shared thread boundary journey in one clon
       "Compaction must not invent a user message",
     );
 
+    console.log(`[${provider} live] compaction recorded at ${new Date().toISOString()}`);
     const finalProof = passphrase();
     if (fakeModel) fakeModel.enqueue(journey.fake.final(prefixProof, finalProof, title));
     const finalTurn = await submit(journey.final(prefixProof, finalProof));
+    console.log(`[${provider} live] final turn admitted at ${new Date().toISOString()}`);
     if (provider !== "codex") {
       const approval = await pending("decision");
       assert.equal(approval.turnId, finalTurn);
       assert.match(approval.request.questions[0]!.question, /outside the sandbox/u);
       assert.equal((await answer(approval, "decision", "Allow once")).route, "live");
+      console.log(`[${provider} live] outside-sandbox approval answered at ${new Date().toISOString()}`);
     }
     durableProjection = { success: true, data: await waitTurn(finalTurn) };
+    console.log(`[${provider} live] final turn completed`);
     const finalItems = durableProjection.data.turns.find(turn => turn.id === finalTurn)?.items ?? [];
     if (provider !== "codex") {
       const approvedShell = finalItems.find(item => item.type === "mcpToolCall"

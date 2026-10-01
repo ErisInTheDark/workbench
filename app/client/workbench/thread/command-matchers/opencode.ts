@@ -6,6 +6,7 @@
  */
 import type { ThreadItem, FileUpdateChange } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { createEmptyCommandSummaryStats, summarizeDisplayParts } from "./helpers";
+import { nativePathToolSummary, type NativePathToolKind } from "./native-tools";
 import type { ThreadCommandDisplayPart, ThreadCommandSummaryDisplay, ThreadCommandDetailRow } from "./types";
 import { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute } from "./workbench-mcp";
 import type { WorkbenchCommandPresentationContext } from "./workbench-command-rendering";
@@ -22,12 +23,8 @@ interface NativeFileChange {
 const record = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 
-const pathTools: Record<string, { done: string; ongoing: string; stat?: "readFiles" | "searchedFiles" | "listedFiles" }> = {
-  read: { done: "Read", ongoing: "Reading", stat: "readFiles" },
-  grep: { done: "Searched", ongoing: "Searching", stat: "searchedFiles" },
-  glob: { done: "Listed", ongoing: "Listing", stat: "listedFiles" },
-  edit: { done: "Edited", ongoing: "Editing" },
-  write: { done: "Wrote", ongoing: "Writing" },
+const pathTools: Record<string, NativePathToolKind> = {
+  read: "read", grep: "search", glob: "list", edit: "edit", write: "write",
 };
 
 function summary(tool: string, args: Record<string, unknown>): ThreadCommandSummaryDisplay | null {
@@ -47,21 +44,14 @@ function summary(tool: string, args: Record<string, unknown>): ThreadCommandSumm
       summaryParts, ongoingSummaryParts, summaryText: summarizeDisplayParts(summaryParts),
       ongoingSummaryText: summarizeDisplayParts(ongoingSummaryParts) };
   }
-  const definition = pathTools[tool];
+  const kind = pathTools[tool];
   const path = typeof args.path === "string" && args.path.trim() ? args.path : null;
   const pattern = typeof args.pattern === "string" ? args.pattern : null;
-  if (!definition || (!path && tool !== "glob" && tool !== "grep") || ((tool === "glob" || tool === "grep") && !pattern)) return null;
-  const target: ThreadCommandDisplayPart[] = [];
-  if (pattern) target.push({ type: "pattern", pattern, syntax: tool === "grep" ? "regex" : "literal" }, { type: "text", text: " in " });
-  target.push({ type: "path", path: path ?? "." });
-  const summaryParts: ThreadCommandDisplayPart[] = [{ type: "text", text: `${definition.done} ` }, ...target];
-  const ongoingSummaryParts: ThreadCommandDisplayPart[] = [{ type: "text", text: `${definition.ongoing} ` }, ...target];
-  const stats = createEmptyCommandSummaryStats();
-  if (definition.stat) stats[definition.stat] = 1;
-  else stats.otherCommands = 1;
-  return { claimedBy: `opencode.${tool}`, omitFromDisplay: false, shell: null, showShell: false,
-    summaryKind: "matched", summaryStats: stats, summaryParts, ongoingSummaryParts,
-    summaryText: summarizeDisplayParts(summaryParts), ongoingSummaryText: summarizeDisplayParts(ongoingSummaryParts) };
+  if (!kind || (!path && tool !== "glob" && tool !== "grep") || ((tool === "glob" || tool === "grep") && !pattern)) return null;
+  return nativePathToolSummary({
+    claimedBy: `opencode.${tool}`, kind, path,
+    pattern: pattern ? { text: pattern, syntax: tool === "grep" ? "regex" : "literal" } : null,
+  });
 }
 
 export function getOpenCodeToolDisplay(

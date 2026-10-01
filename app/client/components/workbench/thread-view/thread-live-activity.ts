@@ -15,7 +15,7 @@ import { isPendingInitialOptimisticInputItem } from "../../../workbench/thread/T
 import {
   getThreadCommandDisplay, getThreadCommandBlockDisplay, getThreadCommandExecutionOutcome,
   getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem, getWorkbenchCommandRouteSummaryDisplay,
-  getOpenCodeToolDisplay,
+  getNativeToolDisplay,
   type ThreadCommandSummaryDisplay,
   type ThreadCommandExecutionOutcome,
 } from "../../../workbench/thread/thread-command-matchers";
@@ -121,7 +121,7 @@ export function getThreadTerminalEntries(items: readonly ThreadItem[], context: 
       command: formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool }),
       output: context.includeOutput === false ? "" : formatToolCallOutput({ content: item.contentItems }),
       status: item.success === false ? "failed" : item.status, streamsOutput: false,
-      display: item.status === "inProgress" && item.success !== false ? getOpenCodeToolDisplay(item, context) : null,
+      display: item.status === "inProgress" && item.success !== false ? getNativeToolDisplay(item, context) : null,
     }];
     return [];
   }).map(entry => ({ ...entry, expiresAt: entry.status === "inProgress" ? null : expiresAt(entry.id) }));

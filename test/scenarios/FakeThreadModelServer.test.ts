@@ -5,7 +5,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import FakeThreadModelServer from "./FakeThreadModelServer";
 
-test("fake Codex model emits a tool call and requires its result before advancing", async () => {
+function captureRejections(context: test.TestContext) {
+  const reported: string[] = [];
+  context.mock.method(console, "error", (line: string) => { reported.push(line); });
+  return reported;
+}
+
+test("fake Codex model emits a tool call and requires its result before advancing", async context => {
+  const reported = captureRejections(context);
   const server = await FakeThreadModelServer.start();
   try {
     server.enqueue([
@@ -29,13 +36,15 @@ test("fake Codex model emits a tool call and requires its result before advancin
     const missing = await request([]);
     assert.equal(missing.status, 409);
     assert.match(server.lastFailure?.message ?? "", /tool result was not observed/u);
+    assert.ok(reported.some(line => /tool result was not observed/u.test(line)), "silently retried rejections must be reported");
     const next = await request([{ type: "function_call_output", call_id: call.item.call_id, output: "title" }]);
     assert.equal(next.status, 200);
     assert.match(await next.text(), /after/u);
   } finally { await server.close(); }
 });
 
-test("fake OpenCode model uses chat tool chunks and rejects unexpected requests", async () => {
+test("fake OpenCode model uses chat tool chunks and rejects unexpected requests", async context => {
+  const reported = captureRejections(context);
   const server = await FakeThreadModelServer.start();
   try {
     server.enqueue([{ tool: { nameSuffix: "wb_shell", arguments: { command: "echo proof" } } }]);
@@ -49,6 +58,7 @@ test("fake OpenCode model uses chat tool chunks and rejects unexpected requests"
     assert.match(stream, /tool_calls/u);
     assert.match(stream, /wb_shell/u);
     assert.equal((await request()).status, 409);
+    assert.equal(reported.length, 1);
   } finally { await server.close(); }
 });
 
@@ -118,7 +128,8 @@ test("fake Codex code-mode call waits for its custom tool result", async () => {
   } finally { await server.close(); }
 });
 
-test("fake Claude Messages stream requires the matching tool result before advancing", async () => {
+test("fake Claude Messages stream requires the matching tool result before advancing", async context => {
+  const reported = captureRejections(context);
   const server = await FakeThreadModelServer.start();
   try {
     server.enqueue([
@@ -144,6 +155,7 @@ test("fake Claude Messages stream requires the matching tool result before advan
       && event.delta?.type === "input_json_delta"
       && JSON.parse(event.delta.partial_json).command === "echo proof"));
     assert.equal((await request([{ role: "user", content: "no result" }])).status, 409);
+    assert.equal(reported.length, 1);
     const next = await request([{
       role: "user", content: [{
         type: "tool_result", tool_use_id: start.content_block.id, content: "proof",

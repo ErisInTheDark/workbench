@@ -1,8 +1,11 @@
 /*
  * Exports:
- * - default ClaudeTranscriptAdapter: admit Claude session, turn, item, steer, and compaction facts to canonical history.
+ * - claudeTokenBreakdown: convert one Claude usage record into Workbench token accounting.
+ * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, steer, usage, and compaction facts to canonical history.
  */
-import type { SDKAssistantMessage, SDKCompactBoundaryMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  SDKAssistantMessage, SDKCompactBoundaryMessage, SDKPartialAssistantMessage, SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import {
   NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, WorkbenchItemIdSchema,
   WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
@@ -11,11 +14,13 @@ import {
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { WorkbenchQuestionnaireHistoryEntryState } from "workbench-shared/workbench/thread/thread-state";
+import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
 import { ProviderToolMetadataSchema } from "workbench-shared/workbench/provider/provider-execution";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "../../WorkbenchTranscriptIdentityController";
 import type { DaemonTranscriptRegistration } from "../../daemon-runtime-objects";
+import type { WorkbenchTranscriptItemLifecycle } from "../../database/transcript/workbench-transcript-types";
 
 interface TurnScope {
   threadId: WorkbenchThreadId;
@@ -28,14 +33,48 @@ interface TurnScope {
   turnIndex: number;
 }
 
+type StreamedKind = "text" | "thinking";
+interface StreamedBlock { kind: StreamedKind; itemId: string; reference: string; text: string }
+interface TurnStream {
+  threadId: WorkbenchThreadId;
+  messageId: string | null;
+  open: Map<number, StreamedBlock>;
+  streamedMessageIds: Set<string>;
+}
+
+type ClaudeUsage = SDKAssistantMessage["message"]["usage"];
+
+export function claudeTokenBreakdown(usage: Pick<ClaudeUsage,
+  "input_tokens" | "output_tokens" | "cache_creation_input_tokens" | "cache_read_input_tokens">) {
+  const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+  const cacheRead = usage.cache_read_input_tokens ?? 0;
+  const inputTokens = usage.input_tokens + cacheWrite + cacheRead;
+  return {
+    cacheWriteInputTokens: cacheWrite,
+    cachedInputTokens: cacheRead,
+    inputTokens,
+    outputTokens: usage.output_tokens,
+    // Claude counts thinking inside output tokens.
+    reasoningOutputTokens: 0,
+    totalTokens: inputTokens + usage.output_tokens,
+  };
+}
+
+function blockItem(kind: StreamedKind, text: string): ThreadItem {
+  return kind === "text"
+    ? { type: "agentMessage", id: "pending", text, phase: null, memoryCitation: null, delivery: null, questions: null }
+    : { type: "reasoning", id: "pending", summary: [], content: [text] };
+}
+
 export default class ClaudeTranscriptAdapter {
   private readonly turns = new Map<WorkbenchTurnId, TurnScope>();
+  private readonly streams = new Map<WorkbenchTurnId, TurnStream>();
   private readonly nativeTools = new Map<string, { turnId: WorkbenchTurnId; itemId: string; tool: string; arguments: object }>();
 
   constructor(private readonly owners: {
     threads: Pick<WorkbenchThreadIdentityController, "observe" | "observeTurn">;
     items: Pick<WorkbenchTranscriptIdentityController, "admit">;
-    transcript: Pick<DaemonTranscriptRegistration, "record" | "acceptLiveUpdate">;
+    transcript: Pick<DaemonTranscriptRegistration, "record" | "acceptLiveUpdate" | "readContextUsage">;
   }) {}
 
   async create(sessionId: string, cwd: string, project: { id: string; rootPath: string; launchId?: string }) {
@@ -93,6 +132,7 @@ export default class ClaudeTranscriptAdapter {
   async recordItem(
     threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, reference: string, item: ThreadItem,
     observedAt = Date.now(), source: "provider" | "workbench" = "provider",
+    lifecycle: WorkbenchTranscriptItemLifecycle = "completed",
   ) {
     const [identity] = await this.owners.items.admit([{
       threadId, sources: [{ turnId, kind: "stable", reference }],
@@ -100,27 +140,59 @@ export default class ClaudeTranscriptAdapter {
     const itemId = identity!.itemId;
     await this.owners.transcript.record([{
       kind: "item", threadId, turnId, publicItemId: itemId,
-      item: { ...item, id: itemId }, lifecycle: "completed", observedAt,
+      item: { ...item, id: itemId }, lifecycle, observedAt,
     }], { source });
     return itemId;
   }
 
+  /** Stream text and thinking blocks; their completed form is recorded from the same buffer. */
+  async recordStreamEvent(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, message: SDKPartialAssistantMessage) {
+    if (message.parent_tool_use_id) return;
+    const stream = this.streams.get(turnId)
+      ?? { threadId, messageId: null, open: new Map(), streamedMessageIds: new Set<string>() };
+    this.streams.set(turnId, stream);
+    const event = message.event;
+    if (event.type === "message_start") {
+      stream.messageId = event.message.id;
+      return;
+    }
+    if (!stream.messageId) return;
+    if (event.type === "content_block_start") {
+      const block = event.content_block;
+      if (block.type !== "text" && block.type !== "thinking") return;
+      const kind: StreamedKind = block.type;
+      const text = block.type === "text" ? block.text : block.thinking;
+      const reference = `assistant:${stream.messageId}:${event.index}`;
+      stream.streamedMessageIds.add(stream.messageId);
+      const itemId = await this.recordItem(threadId, turnId, reference, blockItem(kind, text), Date.now(), "provider", "streaming");
+      stream.open.set(event.index, { kind, itemId, reference, text });
+    } else if (event.type === "content_block_delta") {
+      const block = stream.open.get(event.index);
+      const text = event.delta.type === "text_delta" ? event.delta.text
+        : event.delta.type === "thinking_delta" ? event.delta.thinking : "";
+      if (!block || !text) return;
+      block.text += text;
+      this.owners.transcript.acceptLiveUpdate?.({
+        kind: "text", threadId, turnId, itemId: block.itemId,
+        field: block.kind === "text" ? "agentMessageText" : "reasoningContent",
+        index: block.kind === "text" ? null : 0, text, append: true,
+      });
+    } else if (event.type === "content_block_stop") {
+      const block = stream.open.get(event.index);
+      if (!block) return;
+      stream.open.delete(event.index);
+      await this.recordItem(threadId, turnId, block.reference, blockItem(block.kind, block.text));
+    }
+  }
+
   async recordAssistant(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, message: SDKAssistantMessage) {
     if (message.parent_tool_use_id) return;
+    const streamed = this.streams.get(turnId)?.streamedMessageIds.has(message.message.id) ?? false;
     for (const [index, block] of message.message.content.entries()) {
-      if (block.type === "text") {
-        const itemId = await this.recordItem(threadId, turnId, `assistant:${message.uuid}:text:${index}`, {
-          type: "agentMessage", id: message.uuid, text: block.text, phase: null,
-          memoryCitation: null, delivery: null, questions: null,
-        });
-        this.owners.transcript.acceptLiveUpdate?.({
-          kind: "text", threadId, turnId, itemId, field: "agentMessageText",
-          index: null, text: block.text, append: true,
-        });
-      } else if (block.type === "thinking") {
-        await this.recordItem(threadId, turnId, `assistant:${message.uuid}:thinking:${index}`, {
-          type: "reasoning", id: message.uuid, summary: [], content: [block.thinking],
-        });
+      if (block.type === "text" && !streamed) {
+        await this.recordItem(threadId, turnId, `assistant:${message.uuid}:text:${index}`, blockItem("text", block.text));
+      } else if (block.type === "thinking" && !streamed) {
+        await this.recordItem(threadId, turnId, `assistant:${message.uuid}:thinking:${index}`, blockItem("thinking", block.thinking));
       } else if (block.type === "tool_use" && !block.name.startsWith("mcp__wb__")) {
         const itemId = await this.recordItem(threadId, turnId, `tool:${block.id}`, {
           type: "dynamicToolCall", id: block.id, namespace: "claude", tool: block.name,
@@ -157,11 +229,27 @@ export default class ClaudeTranscriptAdapter {
     await this.recordItem(threadId, turnId, `compact:${message.uuid}`, {
       type: "contextCompaction", id: message.uuid,
     });
+    await this.recordContextUsage(threadId, null);
+  }
+
+  readContextUsage(threadId: WorkbenchThreadId) {
+    return this.owners.transcript.readContextUsage(threadId);
+  }
+
+  async recordContextUsage(threadId: WorkbenchThreadId, tokenUsage: ThreadTokenUsage | null) {
+    await this.owners.transcript.record([{
+      kind: "threadContextUsage", threadId, snapshot: { tokenUsage }, initialise: false,
+    }], { source: "provider" });
   }
 
   async settleTurn(turnId: WorkbenchTurnId, state: "completed" | "failed" | "interrupted") {
     const scope = this.turns.get(turnId);
     if (!scope) throw new Error("Claude turn has no admitted transcript scope.");
+    // Blocks cut off by interruption or failure keep the text that streamed.
+    for (const block of this.streams.get(turnId)?.open.values() ?? []) {
+      await this.recordItem(scope.threadId, turnId, block.reference, blockItem(block.kind, block.text));
+    }
+    this.streams.delete(turnId);
     const endedAt = Date.now();
     await this.owners.transcript.record([{
       kind: "turn", ...scope, harnessId: "claude", state, endedAt,
