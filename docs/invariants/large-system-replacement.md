@@ -1,3 +1,4 @@
+- User owns classification of system size — agents often overestimate.
 - Build a replacement beside the working system.
 - Keep the working system authoritative while the replacement is unproven.
 - After that boundary, feed both systems from the fact owner: provider observations or Workbench mutations.
