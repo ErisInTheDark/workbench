@@ -3,43 +3,44 @@
  * - ClaudeThreadOperationsOptions: bind SDK sessions to Workbench identity, state, lifecycle publication, claim policy, and managed MCP.
  * - default ClaudeThreadOperations: admit Claude turns and steers, gate native edits by claims, register live turns, and own native session operations.
  */
-import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
 import {
-  deleteSession, getSessionInfo, listSessions, query, renameSession,
-  type Query, type SpawnOptions as ClaudeSpawnOptions,
+    deleteSession, getSessionInfo, listSessions, query, renameSession,
+    type SpawnOptions as ClaudeSpawnOptions,
+    type Query,
 } from "@anthropic-ai/claude-agent-sdk";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
-  NativeThreadIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchItemIdSchema,
-  WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
-  type WorkbenchThreadId,
+    NativeThreadIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchItemIdSchema,
+    WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+    type WorkbenchThreadId,
 } from "workbench-shared/workbench/identity";
-import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provider/provider-thread";
-import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
 import type { WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
-import type {
-  WorkbenchProviderObservation, WorkbenchTranscriptNotification,
-} from "workbench-shared/workbench/provider/provider-observation";
-import {
-  isWorkbenchQuestionnaireResponsePart,
-  WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
-} from "workbench-shared/workbench/thread/thread-recovery-message";
 import { toWorkbenchThreadUserInput } from "workbench-shared/workbench/provider/provider-input";
+import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
+import type {
+    WorkbenchProviderObservation, WorkbenchTranscriptNotification,
+} from "workbench-shared/workbench/provider/provider-observation";
+import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provider/provider-thread";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
-import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
-import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
-import type WorkbenchProjectCatalogController from "../../WorkbenchProjectCatalogController";
-import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature";
-import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireController";
+import {
+    isWorkbenchQuestionnaireResponsePart,
+    WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
+} from "workbench-shared/workbench/thread/thread-recovery-message";
 import type WorkbenchApprovalController from "../../WorkbenchApprovalController";
 import WorkbenchLocalApprovalTransport from "../../WorkbenchLocalApprovalTransport";
-import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
+import type WorkbenchProjectCatalogController from "../../WorkbenchProjectCatalogController";
+import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireController";
+import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
+import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature";
 import type { WorkbenchToolAdmissionOptions } from "../../WorkbenchToolAdmissionController";
+import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
+import { createClaudeFileClaimHooks } from "./claude-file-claim-hook";
 import { claudeEnvironment, claudeExecutable } from "./claude-process-options";
+import { claudePromptContent, prefixClaudePrompt } from "./claude-prompt-content";
 import ClaudeConfigView from "./ClaudeConfigView";
 import ClaudeLiveTurn, { ClaudePromptQueue } from "./ClaudeLiveTurn";
-import { claudePromptContent, prefixClaudePrompt } from "./claude-prompt-content";
-import { createClaudeFileClaimHooks } from "./claude-file-claim-hook";
+import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 
 function spawnTrackedClaude(
   options: ClaudeSpawnOptions, onExit: (exit: Promise<void>) => void,
@@ -283,8 +284,14 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
           settingSources: [],
           skills: [],
           systemPrompt: { type: "custom", prompt: managedPrompt, snapshot: false },
-          tools: ["Read", "Glob", "Grep", "Edit", "Write"],
-          disallowedTools: ["Bash", "NotebookEdit", "Agent", "Task", "Skill", "AskUserQuestion"],
+          tools: ["Read", "Grep", "Edit", "Write"],
+          disallowedTools: [
+            "Bash", // wb shell (via codex)
+            "Glob", // wb rg (via codex)
+            "NotebookEdit", "Agent", "Task",
+            "Skill", // wb skill
+            "AskUserQuestion", // wb request_user_input
+          ],
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
           // Hooks still run under bypassPermissions; they gate native edits with the shared claim policy.
