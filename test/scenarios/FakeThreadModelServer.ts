@@ -1,18 +1,26 @@
 /*
  * Exports:
  * - FakeThreadAction: one test-authored model response and optional tool request.
+ * - FakeThreadWire: model wire selected by the request route.
  * - default FakeThreadModelServer: own a disposable loopback model endpoint for provider scenarios.
  */
 import { randomUUID } from "node:crypto";
+import { EventEmitter, once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 export type FakeThreadAction = {
   text?: string;
+  /** Visible reasoning streamed before any text or tool. */
+  reasoning?: string;
+  /** Keep the response open after its reasoning until the client disconnects. */
+  hold?: boolean;
   tool?: { nameSuffix: string; arguments: Record<string, unknown> }
     | { nameSuffix: string; input: string };
 };
 
-type ProviderWire = "codex" | "opencode" | "claude";
+/** Responses, chat completions, Anthropic Messages, and Gemini streamGenerateContent respectively. */
+export type FakeThreadWire = "codex" | "opencode" | "claude" | "gemini";
+type ProviderWire = FakeThreadWire;
 type Tool = { type?: string; name?: string; namespace?: string; function?: { name?: string }; tools?: Tool[] };
 type ModelRequest = {
   input?: Array<{ type?: string; call_id?: string; tools?: Tool[] }>;
@@ -23,6 +31,8 @@ type ModelRequest = {
   }>;
   model?: string;
   stream?: boolean;
+  system?: string | Array<{ text?: string }>;
+  systemInstruction?: { parts?: Array<{ text?: string }> };
   tools?: Tool[];
 };
 type PendingResult = { callId: string; provider: ProviderWire };
@@ -53,10 +63,23 @@ export default class FakeThreadModelServer {
   private forbiddenPromptText: string | null = null;
   private requiredPromptText: string | null = null;
   private readonly nextPromptText: string[][] = [];
+  private readonly holds = new EventEmitter();
 
   private constructor(private readonly server: Server, readonly baseUrl: string) {}
 
   get lastFailure() { return this.failure; }
+
+  /** Resolve when a held response has streamed its reasoning and is waiting open. */
+  async nextHeld(signal: AbortSignal) {
+    const [wire] = await once(this.holds, "held", { signal }) as [FakeThreadWire];
+    return wire;
+  }
+
+  /** Resolve when the client disconnects from a held response before it finished. */
+  async nextCut(signal: AbortSignal) {
+    const [wire] = await once(this.holds, "cut", { signal }) as [FakeThreadWire];
+    return wire;
+  }
 
   private recordFailure(error: unknown) {
     // Providers retry some rejected requests silently; report each rejection when it happens.
@@ -118,7 +141,8 @@ export default class FakeThreadModelServer {
     const provider: ProviderWire = route === "/v1/responses" ? "codex"
       : route === "/v1/chat/completions" ? "opencode"
         : route === "/v1/messages" ? "claude"
-        : (() => { throw new Error("Unsupported fake model route."); })();
+          : route.startsWith("/v1beta/models/") && route.endsWith(":streamGenerateContent") ? "gemini"
+            : (() => { throw new Error("Unsupported fake model route."); })();
     if (request.method !== "POST") throw new Error("Fake model accepts POST only.");
     const body = await readRequest(request);
     if (this.forbiddenPromptText && JSON.stringify(body).includes(this.forbiddenPromptText)) {
@@ -126,6 +150,18 @@ export default class FakeThreadModelServer {
     }
     if (this.requiredPromptText && !JSON.stringify(body).includes(this.requiredPromptText)) {
       throw new Error("A required Workbench instruction did not reach the fake model.");
+    }
+    if (provider !== "gemini" && body.stream !== true) throw new Error("Fake model requires streaming requests.");
+    if (this.isOpenCodeTitleRequest(provider, body)) {
+      response.writeHead(200, {
+        "Cache-Control": "no-store",
+        "Content-Type": "text/event-stream; charset=utf-8",
+      });
+      if (provider === "opencode") this.openCodeResponse(response, { text: "Scenario" }, undefined, null);
+      else if (provider === "claude") this.claudeResponse(response, body.model ?? "fake-model", { text: "Scenario" }, undefined, null);
+      else this.geminiResponse(response, { text: "Scenario" });
+      response.end();
+      return;
     }
     const expected = this.nextPromptText[0];
     if (expected) {
@@ -135,19 +171,6 @@ export default class FakeThreadModelServer {
         throw new Error(`Hidden Workbench context missing from next model request: ${missing.map(text => text.slice(0, 80)).join(", ")}`);
       }
       this.nextPromptText.shift();
-    }
-    if (body.stream !== true) throw new Error("Fake model requires streaming requests.");
-    if (provider === "opencode" && !body.tools?.length
-      && body.messages?.length === 2
-      && body.messages[0]?.role === "system" && body.messages[1]?.role === "user"
-      && JSON.stringify(body.messages[0]).toLowerCase().includes("title")) {
-      response.writeHead(200, {
-        "Cache-Control": "no-store",
-        "Content-Type": "text/event-stream; charset=utf-8",
-      });
-      this.openCodeResponse(response, { text: "Scenario" }, undefined, null);
-      response.end();
-      return;
     }
     if (this.pendingResult) {
       const pending = this.pendingResult;
@@ -166,7 +189,14 @@ export default class FakeThreadModelServer {
       }
     }
     const action = this.actions[0];
-    if (!action) throw new Error("Unexpected fake model request.");
+    if (!action) {
+      const system = JSON.stringify(body.messages?.[0] ?? body.system ?? body.systemInstruction ?? "").slice(0, 160);
+      throw new Error(`Unexpected fake model request on ${provider} (tools: ${body.tools?.length ?? 0}, system: ${system}).`);
+    }
+    if (provider === "gemini" && action.tool) throw new Error("Fake Gemini wire does not script tool calls.");
+    if (action.hold && (action.reasoning === undefined || action.tool || action.text !== undefined || provider === "codex")) {
+      throw new Error("A held fake response streams reasoning only, on a chat, Anthropic, or Gemini wire.");
+    }
     const advertised = body.tools?.length ? body.tools
       : body.input?.find(item => item.type === "additional_tools")?.tools ?? body.tools ?? [];
     const tools = advertised.flatMap(tool => tool.type === "namespace"
@@ -198,10 +228,33 @@ export default class FakeThreadModelServer {
       await this.codexResponse(response, action, matches[0], callId);
     } else if (provider === "opencode") {
       this.openCodeResponse(response, action, matches[0], callId);
-    } else {
+    } else if (provider === "claude") {
       this.claudeResponse(response, body.model ?? "claude-sonnet-4-6", action, matches[0], callId);
+    } else {
+      this.geminiResponse(response, action);
+    }
+    if (action.hold) {
+      // The client owns the end of a held response; disconnecting before completion is the observed cut.
+      const closed = once(response, "close");
+      this.holds.emit("held", provider);
+      await closed;
+      this.holds.emit("cut", provider);
+      return;
     }
     response.end();
+  }
+
+  /** OpenCode generates a session title with a tool-less request on the session's own model. */
+  private isOpenCodeTitleRequest(provider: ProviderWire, body: ModelRequest) {
+    if (body.tools?.length) return false;
+    if (provider === "opencode") {
+      return body.messages?.length === 2
+        && body.messages[0]?.role === "system" && body.messages[1]?.role === "user"
+        && JSON.stringify(body.messages[0]).toLowerCase().includes("title");
+    }
+    // Claude Code shares the Anthropic route with its own models; only OpenCode's fake model is a title target.
+    if (provider === "claude") return body.model === "fake-model" && JSON.stringify(body.system ?? "").toLowerCase().includes("title");
+    return provider === "gemini" && JSON.stringify(body.systemInstruction ?? "").toLowerCase().includes("title");
   }
 
   private async codexResponse(response: ServerResponse, action: FakeThreadAction, tool: Tool | undefined, callId: string | null) {
@@ -258,6 +311,8 @@ export default class FakeThreadModelServer {
       choices: [{ index: 0, delta, finish_reason }],
     });
     response.write(chunk({ role: "assistant" }));
+    if (action.reasoning !== undefined) response.write(chunk({ reasoning_content: action.reasoning }));
+    if (action.hold) return;
     if (action.text !== undefined) response.write(chunk({ content: action.text }));
     if (action.tool && callId && tool && "arguments" in action.tool) response.write(chunk({
       tool_calls: [{
@@ -281,6 +336,13 @@ export default class FakeThreadModelServer {
       },
     });
     let index = 0;
+    if (action.reasoning !== undefined) {
+      emit({ type: "content_block_start", index, content_block: { type: "thinking", thinking: "" } });
+      emit({ type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: action.reasoning } });
+      if (action.hold) return;
+      emit({ type: "content_block_stop", index });
+      index++;
+    }
     if (action.text !== undefined) {
       emit({ type: "content_block_start", index, content_block: { type: "text", text: "" } });
       emit({ type: "content_block_delta", index, delta: { type: "text_delta", text: action.text } });
@@ -304,6 +366,16 @@ export default class FakeThreadModelServer {
       usage: { output_tokens: 1 },
     });
     emit({ type: "message_stop" });
+  }
+
+  private geminiResponse(response: ServerResponse, action: FakeThreadAction) {
+    const chunk = (parts: object[], finishReason?: string) => response.write(event({
+      candidates: [{ content: { role: "model", parts }, ...(finishReason ? { finishReason } : {}) }],
+      ...(finishReason ? { usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 } } : {}),
+    }));
+    if (action.reasoning !== undefined) chunk([{ text: action.reasoning, thought: true }]);
+    if (action.hold) return;
+    chunk(action.text !== undefined ? [{ text: action.text }] : [], "STOP");
   }
 
   async close() {

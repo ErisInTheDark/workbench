@@ -12,6 +12,7 @@ import type { ConnectionInfo } from "@opencode/client";
 import OpenCodeCompanionToolsController, { type CompanionToolClient } from "./OpenCodeCompanionToolsController";
 import OpenCodePatchStreamController from "./OpenCodePatchStreamController";
 import OpenCodeFileEvidenceController from "./OpenCodeFileEvidenceController";
+import OpenCodeSteerCutController from "./OpenCodeSteerCutController";
 import {
   openCodeWorkbenchRpc,
   OpenCodeGoQuotaSchema,
@@ -186,29 +187,49 @@ export function createOpenCodeWorkbenchPlugin(
         emit: observation => rpc.events.emit("patchPreview", observation),
         warn: message => console.warn(`[workbench-opencode-preview] ${message}`),
       });
-      const previewLifetime = new AbortController();
-      const previewEvents = (async () => {
+      const cuts = new OpenCodeSteerCutController({
+        isManagedSession,
+        warn: message => console.warn(`[workbench-opencode-steer] ${message}`),
+      });
+      const sessionLifetime = new AbortController();
+      const sessionEvents = (async () => {
         try {
-          for await (const event of context.event.subscribe({ signal: previewLifetime.signal })) {
-            if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed"
+          for await (const event of context.event.subscribe({ signal: sessionLifetime.signal })) {
+            if (event.type === "session.inbox.enqueued") {
+              if (event.data.item.type === "user" && event.data.item.delivery === "steer") {
+                await cuts.steerPending(event.data.sessionID, event.data.inboxID);
+              }
+            } else if (event.type === "session.inbox.delivery.changed") {
+              if (event.data.delivery === "steer") await cuts.steerPending(event.data.sessionID, event.data.inboxID);
+              else cuts.steerResolved(event.data.sessionID, event.data.inboxID);
+            } else if (event.type === "session.inbox.delivered" || event.type === "session.inbox.cancelled") {
+              cuts.steerResolved(event.data.sessionID, event.data.inboxID);
+            } else if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed"
               || event.type === "session.execution.interrupted") {
+              cuts.settleSession(event.data.sessionID);
               await Promise.all([patches.settleSession(event.data.sessionID), files.settleSession(event.data.sessionID)]);
             }
           }
-          if (!previewLifetime.signal.aborted) {
-            console.warn("[workbench-opencode-preview] Preview lifecycle subscription ended; previews disabled.");
+          if (!sessionLifetime.signal.aborted) {
+            console.warn("[workbench-opencode] Session event subscription ended; previews and steer cuts disabled.");
+            cuts.dispose();
             await Promise.all([patches.dispose(), files.dispose()]);
           }
         } catch {
-          if (!previewLifetime.signal.aborted) {
-            console.warn("[workbench-opencode-preview] Preview lifecycle subscription failed; previews disabled.");
+          if (!sessionLifetime.signal.aborted) {
+            console.warn("[workbench-opencode] Session event subscription failed; previews and steer cuts disabled.");
+            cuts.dispose();
             await Promise.all([patches.dispose(), files.dispose()]);
           }
         }
       })();
       const registrations = await Promise.allSettled([
         rpc,
-        context.session.hook("http.response", input => patches.httpResponse(input)),
+        // Patch observation wraps the provider body first; the steer cutter wraps that, so a cut cancels both.
+        context.session.hook("http.response", async input => {
+          await patches.httpResponse(input);
+          await cuts.httpResponse(input);
+        }),
         context.session.hook("experimental.ws.send", input => patches.websocketSend(input)),
         context.session.hook("experimental.ws.receive", input => patches.websocketReceive(input)),
         context.tool.transform(editor => tools.register(editor)),
@@ -258,8 +279,9 @@ export function createOpenCodeWorkbenchPlugin(
         context.tool.hook("execute.after", input => files.after(input)),
       ]);
       const dispose = async () => {
-        previewLifetime.abort();
-        await Promise.all([previewEvents, patches.dispose(), files.dispose()]);
+        sessionLifetime.abort();
+        cuts.dispose();
+        await Promise.all([sessionEvents, patches.dispose(), files.dispose()]);
         const closed = await Promise.allSettled([
           ...registrations.flatMap(result => result.status === "fulfilled" ? [result.value.dispose()] : []),
         ]);

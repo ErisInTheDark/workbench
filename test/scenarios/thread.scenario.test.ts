@@ -21,7 +21,7 @@ import { projectWorkbenchTranscript, type WorkbenchTranscriptProjection } from "
 import IsolatedWorkbench, {
   CLAUDE_NATIVE_INSTRUCTION_SENTINEL, WORKBENCH_INSTRUCTION_SENTINEL,
 } from "./IsolatedWorkbench";
-import FakeThreadModelServer from "./FakeThreadModelServer";
+import FakeThreadModelServer, { type FakeThreadWire } from "./FakeThreadModelServer";
 import ProviderThreadJourney, { SharedRuntimeCheckpoints } from "./ProviderThreadJourney";
 import { parseThreadTestArguments, type ThreadTestMode } from "../thread-test-arguments";
 import {
@@ -80,6 +80,95 @@ function passphrase() {
     "peach", "pencil", "rabbit", "river", "silver", "star", "tiger", "window",
   ];
   return Array.from({ length: 4 }, () => words.splice(randomInt(words.length), 1)[0]).join(" ");
+}
+
+/**
+ * Steers sent while an OpenCode model reasons must end that reasoning and land in the same turn.
+ * Fake mode proves the synthetic ending against OpenCode's real parser for each cuttable wire;
+ * paid mode proves real OpenCode Go chat models accept the chopped reasoning on the next request.
+ */
+async function verifyOpenCodeSteerCuts(input: {
+  runtime: IsolatedWorkbench;
+  projectId: string;
+  profile: WorkbenchComposerProfile;
+  fakeModel: FakeThreadModelServer | null;
+  signal: AbortSignal;
+}) {
+  const { runtime, projectId, profile, fakeModel, signal } = input;
+  let cases: Array<{ model: string; wire?: FakeThreadWire }> = [
+    { model: "workbench-fake/fake-model", wire: "opencode" },
+    { model: "workbench-fake-anthropic/fake-model", wire: "claude" },
+    { model: "workbench-fake-gemini/fake-model", wire: "gemini" },
+  ];
+  if (!fakeModel) {
+    // Paid probes use OpenCode Go chat-wire reasoning models the user's catalogue actually offers.
+    const available = (await runtime.daemon.models.list("opencode")).data
+      .filter(entry => entry.policyState !== "disabled").map(entry => entry.id);
+    const preferred = ["opencode-go/kimi-k2.6", "opencode-go/glm-5.2", "opencode-go/kimi-k2.7-code",
+      "opencode-go/glm-5.1", "opencode-go/deepseek-v4-flash", "opencode-go/qwen3.6-plus"];
+    cases = preferred.filter(id => available.includes(id)).slice(0, 2).map(model => ({ model }));
+    assert.ok(cases.length, `No preferred OpenCode Go chat reasoning model is available: ${
+      available.filter(id => id.startsWith("opencode-go/")).join(", ") || "none"}`);
+  }
+  for (const { model, wire } of cases) {
+    const steerProof = passphrase();
+    const answerProof = passphrase();
+    const steer = `Stop deliberating. Reply with exactly: ${steerProof}`;
+    const { agentPath, agentSource, harness, reasoningEffort, serviceTier, contextWindowTokens } = profile;
+    const selection: WorkbenchComposerProfileTargetSelection = {
+      kind: "custom",
+      settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens },
+    };
+    fakeModel?.enqueue([{ reasoning: `Weighing ${answerProof}`, hold: true }, { text: steerProof }]);
+    const held = fakeModel?.nextHeld(signal);
+    const threadId = await runtime.launchDraft(projectId, selection, [
+      "Before answering, reason carefully and at length about every prime number below 400,",
+      "checking each one twice. Only after that, reply with the count.",
+    ].join(" "));
+    try {
+      const { thread } = await runtime.daemon.threads.page({ threadId, cursor: null });
+      assert.equal(thread.model, model);
+      const turnId = thread.turns.at(-1)?.id;
+      assert.ok(turnId, `${model} launch must admit its first turn`);
+      const owner = new ProviderThreadJourney(runtime, "opencode", projectId, threadId, signal);
+      if (held) assert.equal(await held, wire);
+      else {
+        await owner.waitForFact(() => owner.durable(), projection => {
+          const turn = projection.turns.find(candidate => candidate.id === turnId);
+          assert.equal(turn?.status, "inProgress", `${model} finished before reasoning was observed`);
+          return Boolean(turn?.items.some(item => item.type === "reasoning"));
+        });
+      }
+      const cut = fakeModel?.nextCut(signal);
+      fakeModel?.expectNextPromptText(steerProof);
+      const steered = await runtime.daemon.threads.message({
+        threadId, clientMessageId: randomUUID(), intent: "steer", expectedTurnId: turnId,
+        input: [{ type: "text", text: steer, text_elements: [] }],
+      });
+      assert.deepEqual(steered, { kind: "steered", turnId });
+      if (cut) assert.equal(await cut, wire, "The steer must end the held reasoning response");
+      const projection = await owner.waitTurn(turnId);
+      assert.equal(projection.turns.length, 1, "A cut must continue the same Workbench turn");
+      const items = projection.turns[0]!.items;
+      const reasoningIndex = items.findIndex(item => item.type === "reasoning");
+      const steerIndex = items.findIndex(item => item.type === "userMessage"
+        && item.content.some(content => content.type === "text" && content.text.includes(steerProof)));
+      assert.ok(reasoningIndex >= 0 && steerIndex > reasoningIndex, "The steer must follow the interrupted reasoning");
+      const delivered = (await runtime.daemon.threads.history.steers({ threadId })).data
+        .find(entry => JSON.stringify(entry.input).includes(steerProof));
+      assert.equal(delivered?.status, "sent");
+      if (fakeModel) {
+        assert.ok(items.slice(steerIndex + 1).some(item => item.type === "agentMessage"
+          && JSON.stringify(item).includes(steerProof)), "The post-steer step must answer the steer");
+      } else {
+        const answeredBeforeSteer = items.slice(reasoningIndex, steerIndex).some(item => item.type === "agentMessage");
+        console.log(`[opencode paid] ${model} steer ${answeredBeforeSteer ? "waited for a boundary" : "cut reasoning"}`);
+      }
+    } finally {
+      await runtime.daemon.threads.stop({ threadId, intent: "stop" });
+      await runtime.daemon.threads.deleteProvider({ threadId });
+    }
+  }
 }
 
 async function prepareJourneyGate(runtime: IsolatedWorkbench) {
@@ -354,11 +443,23 @@ test("selected providers complete the shared thread boundary journey in one clon
         configDirectory: openCodePaths[1].trim(), database: openCodePaths[0].trim(),
       } : {
         configContent: JSON.stringify({
-          providers: { "workbench-fake": {
-            name: "Workbench fake model", package: "@opencode/ai/providers/openai-compatible",
-            settings: { baseURL: `${fakeModels.opencode!.baseUrl}/v1` },
-            models: { "fake-model": { name: "Fake model" } },
-          } },
+          providers: {
+            "workbench-fake": {
+              name: "Workbench fake model", package: "@opencode/ai/providers/openai-compatible",
+              settings: { baseURL: `${fakeModels.opencode!.baseUrl}/v1` },
+              models: { "fake-model": { name: "Fake model" } },
+            },
+            "workbench-fake-anthropic": {
+              name: "Workbench fake Anthropic model", package: "@opencode/ai/providers/anthropic",
+              settings: { baseURL: `${fakeModels.opencode!.baseUrl}/v1`, apiKey: "fake" },
+              models: { "fake-model": { name: "Fake Anthropic model" } },
+            },
+            "workbench-fake-gemini": {
+              name: "Workbench fake Gemini model", package: "@opencode/ai/providers/google",
+              settings: { baseURL: `${fakeModels.opencode!.baseUrl}/v1beta`, apiKey: "fake" },
+              models: { "fake-model": { name: "Fake Gemini model" } },
+            },
+          },
         }),
       } } : {}),
     });
@@ -779,6 +880,9 @@ test("selected providers complete the shared thread boundary journey in one clon
     const retained = await runtime.transcripts.read({ threadId, turnLimit: 20 });
     assert.ok(retained, "Deleting provider state must retain isolated WB transcript history");
     await providerRegistry[provider].verifyLegacyFiles?.();
+    if (provider === "opencode") {
+      await verifyOpenCodeSteerCuts({ runtime, projectId: project.id, profile, fakeModel, signal: scenarioSignal });
+    }
   } catch (error) {
     const failure = error instanceof Error ? error : new Error("Provider journey failed.");
     primaryFailure = failure;
@@ -831,6 +935,7 @@ test("selected providers complete the shared thread boundary journey in one clon
   };
 
   const runs: Promise<void>[] = [];
+  let failed = false;
   try {
     if (selectedSelection.codex) codexGate = await prepareCodexFixture(runtime);
     journeyGate = await prepareJourneyGate(runtime);
@@ -851,13 +956,14 @@ test("selected providers complete the shared thread boundary journey in one clon
     const failures = outcomes.filter(result => result.status === "rejected").map(result => result.reason);
     if (failures.length) throw new AggregateError(failures, "Provider journeys failed.");
   } catch (error) {
+    failed = true;
     const failure = error instanceof Error ? error : new Error("Shared provider scenario failed.");
     groupAbort.abort(failure);
     checkpoints?.fail(failure);
     await Promise.allSettled(runs);
     throw error;
   } finally {
-    try { await runtime.close(); }
+    try { await runtime.close({ preserveDiagnostics: failed }); }
     finally { await Promise.all(Object.values(fakeModels).map(model => model.close())); }
   }
 });

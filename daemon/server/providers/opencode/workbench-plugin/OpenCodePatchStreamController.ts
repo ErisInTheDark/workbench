@@ -3,10 +3,10 @@
  * - default OpenCodePatchStreamController: observe managed model transports without changing their bytes or execution lifecycle.
  */
 import { randomUUID } from "node:crypto";
-import { createParser } from "eventsource-parser";
 import type { SessionHttpResponse, SessionWebSocketReceive, SessionWebSocketSend } from "@opencode/plugin/promise/session";
 import type { OpenCodePatchObservation } from "../opencode-workbench-rpc";
 import OpenCodePatchPreview from "./open-code-patch-preview";
+import OpenCodeSseTap from "./OpenCodeSseTap";
 import OpenCodeToolStream from "./open-code-tool-stream";
 
 type Preview = Extract<OpenCodePatchObservation, { kind: "preview" }>;
@@ -36,58 +36,19 @@ export default class OpenCodePatchStreamController {
       || !input.response.headers.get("content-type")?.includes("text/event-stream")) return;
     const state = await this.begin(input.sessionID);
     if (!state) return;
-    const reader = input.response.body.getReader();
-    const decoder = new TextDecoder();
-    const parser = createParser({
-      maxBufferSize: 8 * 1024 * 1024,
-      onEvent: event => {
-        if (event.data !== "[DONE]") state.decoder.accept(JSON.parse(event.data));
+    OpenCodeSseTap.wrap(input, {
+      event: data => {
+        if (!state.disabled && !this.disposed && data !== "[DONE]") state.decoder.accept(JSON.parse(data));
       },
-      onError: error => {
-        if (error.type === "max-buffer-size-exceeded") throw new Error("Preview SSE capacity exceeded.");
+      settle: async () => {
+        if (!state.disabled && !this.disposed) await this.flush(state);
       },
-    });
-    const owner = this;
-    const body = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        try {
-          const chunk = await reader.read();
-          if (chunk.done) {
-            owner.active.delete(state);
-            reader.releaseLock();
-            controller.close();
-            return;
-          }
-          if (!state.disabled && !owner.disposed) {
-            try {
-              parser.feed(decoder.decode(chunk.value, { stream: true }));
-              await owner.flush(state);
-            } catch {
-              await owner.disable(state);
-            }
-          }
-          controller.enqueue(chunk.value);
-        } catch (error) {
-          await owner.disable(state);
-          owner.active.delete(state);
-          reader.releaseLock();
-          controller.error(error);
-        }
+      failed: () => this.disable(state),
+      closed: async reason => {
+        if (reason === "error") await this.disable(state);
+        else if (reason === "cancel" || reason === "cut") await this.withdraw(state);
+        this.active.delete(state);
       },
-      async cancel(reason) {
-        try {
-          await reader.cancel(reason);
-        } finally {
-          await owner.withdraw(state);
-          owner.active.delete(state);
-          reader.releaseLock();
-        }
-      },
-    }, { highWaterMark: 0 });
-    input.response = new Response(body, {
-      status: input.response.status,
-      statusText: input.response.statusText,
-      headers: input.response.headers,
     });
   }
 
