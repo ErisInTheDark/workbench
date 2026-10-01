@@ -14,7 +14,7 @@ import type { ReactNode } from "react";
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import { getOpenCodeFileChanges } from "../../../workbench/thread/thread-command-matchers";
+import { getNativeFileChanges } from "../../../workbench/thread/thread-command-matchers";
 import type { FileChangeAnalysis } from "workbench-shared/workbench/thread/file-change-analysis";
 import { enterMotionClassName } from "../../../tailwind/enter-motion-classes";
 import {
@@ -42,7 +42,7 @@ export function getThreadFileChangeTotals(items: readonly FileOperationItem[]) {
   return items.reduce((total, item) => {
     if (item.type === "dynamicToolCall") {
       if (item.status !== "completed" || item.success === false) return total;
-      for (const entry of getOpenCodeFileChanges(item)) {
+      for (const entry of getNativeFileChanges(item)) {
         const counts = parseFileChangeDiff(entry.change);
         total.additions += counts.additions;
         total.deletions += counts.deletions;
@@ -516,17 +516,17 @@ export default function ThreadFileChangeItem ({
 }) {
   const hasRows = items.some((item) => item.type === "dynamicToolCall" || item.changes.length || item.status !== "completed");
   if (items.length && items.every(item => item.type === "dynamicToolCall"
-    && item.status === "inProgress" && !getOpenCodeFileChanges(item).length)) return null;
+    && item.status === "inProgress" && !getNativeFileChanges(item).length)) return null;
   return (
     <div className="space-y-1.5 py-2">
       {items.map((item) => {
-        const nativeChanges = item.type === "dynamicToolCall" ? getOpenCodeFileChanges(item) : [];
+        const nativeChanges = item.type === "dynamicToolCall" ? getNativeFileChanges(item) : [];
         if (item.type === "dynamicToolCall" && item.status === "inProgress" && !nativeChanges.length) return null;
         return item.type === "dynamicToolCall" ? (
         <div className="space-y-0.5" key={item.id}>
           <ThreadFileChangeRows
             animateEntries={animateEntries}
-            changes={nativeChanges.map((entry, index) => ({
+            changes={nativeChanges.map(({ failureKind, ...entry }, index) => ({
               ...entry,
               details: index === 0 ? <NativeFileEvidence item={item} /> : undefined,
               detailsAvailable: item.status !== "inProgress" && (index === 0 || Boolean(entry.change.diff)),
@@ -535,6 +535,7 @@ export default function ThreadFileChangeItem ({
               presentationLabel: entry.presentationLabel ?? getFileChangeLifecycleLabel(entry.change, {
                 status: item.status === "failed" || item.success === false ? "failed"
                   : item.status === "inProgress" ? "inProgress" : "completed",
+                workbenchFailureKind: failureKind,
               }),
             }))}
             projectFilePaths={projectFilePaths} projectId={projectId}

@@ -30,7 +30,7 @@ import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadToolCallDetails from "./ThreadToolCallDetails";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
-import { getNativeToolDisplay, isOpenCodeFileOperation, getThreadCommandOutcomeDisplay } from "../../../workbench/thread/thread-command-matchers";
+import { getNativeToolDisplay, isNativeFileOperation, getThreadCommandOutcomeDisplay } from "../../../workbench/thread/thread-command-matchers";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
 import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
@@ -491,7 +491,7 @@ export default function ThreadDynamicToolCallItem ({
     return <ThreadQuestionnaireToolCallItem answeredAt={answeredAt} inlineMentionSources={inlineMentionSources} item={item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
 
-  if (isOpenCodeFileOperation(item)) {
+  if (isNativeFileOperation(item)) {
     return <ThreadFileChangeItem items={[item]} projectFilePaths={projectFilePaths} projectId={projectId}
       projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }

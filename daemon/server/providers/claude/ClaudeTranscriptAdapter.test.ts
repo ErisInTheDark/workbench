@@ -1,4 +1,4 @@
-/* No production exports. Tests protect Claude streamed text admission: live deltas once, one durable body, and no echo. */
+/* No production exports. Tests protect Claude streamed text admission (live deltas once, one durable body, no echo) and native file-tool evidence. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
@@ -7,7 +7,9 @@ import ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
 const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");
 
-type Recorded = { kind: string; publicItemId?: string; lifecycle?: string; item?: { type: string; text?: string; content?: string[] } };
+type Recorded = { kind: string; publicItemId?: string; lifecycle?: string; item?: {
+  type: string; text?: string; content?: string[]; status?: string; metadata?: unknown;
+} };
 
 function fixture() {
   const records: Recorded[] = [];
@@ -61,6 +63,47 @@ test("an unstreamed reply records its text without a live append", async () => {
   await adapter.recordAssistant(threadId, turnId, assistant([{ type: "text", text: "Whole" }]));
   assert.deepEqual(live, []);
   assert.deepEqual(items().map(record => [record.lifecycle, record.item?.text]), [["completed", "Whole"]]);
+});
+
+const toolResult = (id: string, isError: boolean, toolUseResult?: object) => ({
+  type: "user", parent_tool_use_id: null,
+  message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: isError ? "denied" : "ok", is_error: isError }] },
+  ...(toolUseResult ? { tool_use_result: toolUseResult } : {}),
+}) as never;
+const fileTool = (id: string, tool: string, filePath: string) => assistant([{ type: "tool_use", id, name: tool, input: { file_path: filePath } }]);
+
+test("native Edit and Write record the effective diff Claude applied, not the call's arguments", async () => {
+  const { adapter, items } = fixture();
+  await adapter.recordAssistant(threadId, turnId, fileTool("edit", "Edit", "C:/repo/a.ts"));
+  await adapter.recordNativeToolResults(threadId, toolResult("edit", false, {
+    filePath: "C:/repo/a.ts", oldString: "b", newString: "B", originalFile: "a\nb\nc\n", replaceAll: false, userModified: false,
+    structuredPatch: [{ oldStart: 1, oldLines: 3, newStart: 1, newLines: 3, lines: [" a", "-b", "+B", " c"] }],
+  }));
+  await adapter.recordAssistant(threadId, turnId, fileTool("write", "Write", "C:/repo/new.ts"));
+  await adapter.recordNativeToolResults(threadId, toolResult("write", false, {
+    type: "create", filePath: "C:/repo/new.ts", content: "one\ntwo\n", structuredPatch: [], originalFile: null,
+  }));
+  await adapter.recordAssistant(threadId, turnId, fileTool("stray", "Edit", "C:/repo/target.ts"));
+  await adapter.recordNativeToolResults(threadId, toolResult("stray", false, {
+    filePath: "C:/repo/other.ts", structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ["-x", "+y"] }],
+  }));
+  const settled = items().filter(record => record.item?.status === "completed").map(record => record.item?.metadata);
+  assert.deepEqual(settled, [
+    { fileChange: { kind: "update", diff: "@@ -1,3 +1,3 @@\n a\n-b\n+B\n c" } },
+    { fileChange: { kind: "add", diff: "one\ntwo\n" } },
+    undefined,
+  ], "a result for a different path is never attributed to the call");
+});
+
+test("a claim denial marks only the denied call's failed result as unclaimed", async () => {
+  const { adapter, items } = fixture();
+  adapter.recordNativeToolDenial(turnId, "denied");
+  await adapter.recordAssistant(threadId, turnId, fileTool("denied", "Write", "C:/repo/a.ts"));
+  await adapter.recordAssistant(threadId, turnId, fileTool("broken", "Edit", "C:/repo/b.ts"));
+  await adapter.recordNativeToolResults(threadId, toolResult("denied", true));
+  await adapter.recordNativeToolResults(threadId, toolResult("broken", true));
+  assert.deepEqual(items().filter(record => record.item?.status === "failed").map(record => record.item?.metadata),
+    [{ workbenchFailureKind: "unclaimed" }, undefined]);
 });
 
 test("settling a turn completes a block that was cut off mid-stream with the text that arrived", async () => {

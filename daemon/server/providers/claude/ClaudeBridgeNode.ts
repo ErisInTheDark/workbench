@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ClaudeBridgeNode: own reloadable Claude session runtime, config views, lifecycle publication, and canonical transcript adapter.
+ * - default ClaudeBridgeNode: own reloadable Claude session runtime, config views, lifecycle publication, native edit claim gating, and canonical transcript adapter.
  */
 import path from "node:path";
 import ReloadableNode from "../../ReloadableNode";
@@ -40,6 +40,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       state: build.get("threadState"),
       transcript,
       signal: lifetime.signal,
+      checkFileClaims: ({ cwd, threadId, paths }) => build.get("gitArc").checkActiveClaimPaths(cwd, "claude", threadId, paths),
       buildInstructions: async input => {
         const project = await build.get("projectCatalog").resolveProjectById(input.projectId);
         const promptContext = {
@@ -74,7 +75,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   lifecycle: "atomic",
   provides: ["claudeThreadOperations", "claudeTranscriptAdapter"],
   requires: [
-    "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity", "database",
+    "gitArc", "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity", "database",
     "threadState", "transcript", "transcriptReader", "providerObservations",
   ],
   safeAll: true,
@@ -87,6 +88,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/providers/claude/ClaudeConfigView.ts",
     "daemon/server/providers/claude/claude-process-options.ts",
     "daemon/server/providers/claude/ClaudeTranscriptAdapter.ts",
+    "daemon/server/providers/claude/claude-file-claim-hook.ts",
+    "shared/workbench/provider/claude-file-change-metadata.ts",
     "daemon/server/lib/workbench/instructions/instruction-tool-reference.ts",
   ].join("\n"),
 });

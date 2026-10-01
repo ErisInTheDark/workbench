@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - getNativeToolDisplay: select the provider-owned summary for a native tool call by its namespace.
- * - getOpenCodeFileChanges/isOpenCodeFileOperation: classify native OpenCode file evidence.
+ * - getNativeFileChanges/isNativeFileOperation/NativeFileChange: classify provider-native file calls and their evidence.
  * - CommandMatcher: builder namespace for command-summary matchers, results, and summary parts.
  * - ThreadCommandSummaryDisplay: shared summary-display shape for single-command and grouped command labels.
  * - ThreadCommandDisplayPart: structured text/path part for rendering command summaries with file pills.
@@ -24,7 +24,7 @@
  * - ThreadCommandExecutionOutcome: semantic completed, ongoing, timeout, failure, or decline state for command summaries.
  */
 
-export { getOpenCodeFileChanges, isOpenCodeFileOperation } from "./command-matchers/opencode";
+export { getNativeFileChanges, isNativeFileOperation, type NativeFileChange } from "./command-matchers/native-file-changes";
 
 import type { CommandAction, CommandExecutionStatus, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getClaudeToolDisplay } from "./command-matchers/claude";

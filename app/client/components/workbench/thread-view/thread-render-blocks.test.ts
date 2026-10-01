@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
-import { buildRenderableBlocks, getWorkedBlockRows, reuseRenderableBlocks, hasSameBlockTimeline, type CommandItem } from "./thread-render-blocks";
+import { buildRenderableBlocks, getRenderableBlockItems, getWorkedBlockRows, reuseRenderableBlocks, hasSameBlockTimeline, type CommandItem } from "./thread-render-blocks";
 import { partitionWorkedRows } from "./thread-worked-run";
 
 function command(id: string, text = "pwd"): CommandItem {
@@ -36,6 +36,20 @@ test("native file attempts share file sequences without merging identities or cr
   assert.deepEqual(blocks.map(block => block.kind === "item" ? block.item.id : block.items.map(item => item.id)),
     [["first", "second"], "boundary", ["third"]]);
   assert.equal(blocks[0]?.kind, "fileChangeSequence");
+});
+
+test("adjacent Claude Edit and Write calls group into one file sequence like other providers", () => {
+  const claude = (id: string, tool: string): ThreadItem => ({
+    id, type: "dynamicToolCall", namespace: "claude", tool, arguments: { file_path: `${id}.ts` },
+    status: "completed", success: true, contentItems: null, durationMs: 1,
+  });
+  const emptyThought: ThreadItem = { id: "thought", type: "reasoning", summary: [], content: [""] };
+  const blocks = buildRenderableBlocks([
+    claude("write", "Write"), emptyThought, claude("edit", "Edit"), claude("read", "Read"), claude("later", "Edit"),
+  ]);
+  assert.deepEqual(blocks.map(block => [block.kind, getRenderableBlockItems(block).map(item => item.id)]), [
+    ["fileChangeSequence", ["write", "edit"]], ["item", ["read"]], ["fileChangeSequence", ["later"]],
+  ]);
 });
 
 test("captured children compact only their exact execute wrapper without deleting its evidence", () => {

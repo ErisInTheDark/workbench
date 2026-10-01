@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - ClaudeThreadOperationsOptions: bind SDK sessions to Workbench identity, state, lifecycle publication, and managed MCP.
- * - default ClaudeThreadOperations: admit Claude turns and steers, register live turns, and own native session operations.
+ * - ClaudeThreadOperationsOptions: bind SDK sessions to Workbench identity, state, lifecycle publication, claim policy, and managed MCP.
+ * - default ClaudeThreadOperations: admit Claude turns and steers, gate native edits by claims, register live turns, and own native session operations.
  */
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -37,6 +37,7 @@ import { claudeEnvironment, claudeExecutable } from "./claude-process-options";
 import ClaudeConfigView from "./ClaudeConfigView";
 import ClaudeLiveTurn, { ClaudePromptQueue } from "./ClaudeLiveTurn";
 import { claudePromptContent, prefixClaudePrompt } from "./claude-prompt-content";
+import { createClaudeFileClaimHooks } from "./claude-file-claim-hook";
 
 function spawnTrackedClaude(
   options: ClaudeSpawnOptions, onExit: (exit: Promise<void>) => void,
@@ -71,6 +72,8 @@ export interface ClaudeThreadOperationsOptions {
     cwd: string; projectId: string; threadId: string; model: string | null; agentPath: string | null;
     workflowIds: readonly string[]; activatedSkillPaths: readonly string[];
   }): Promise<string>;
+  /** Shared claim policy for native Edit/Write; paths are absolute. */
+  checkFileClaims(request: { cwd: string; threadId: WorkbenchThreadId; paths: string[] }): Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
 }
 
 export default class ClaudeThreadOperations implements WorkbenchProviderThreads {
@@ -277,6 +280,12 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
           disallowedTools: ["Bash", "NotebookEdit", "Agent", "Task", "Skill", "AskUserQuestion"],
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
+          // Hooks still run under bypassPermissions; they gate native edits with the shared claim policy.
+          hooks: createClaudeFileClaimHooks({
+            cwd: binding.nativeLocation,
+            check: paths => this.options.checkFileClaims({ cwd: binding.nativeLocation, threadId: identity.threadId, paths }),
+            onDenied: toolUseId => this.options.transcript.recordNativeToolDenial(turnId, toolUseId),
+          }),
           mcpServers: { wb: { type: "http", url: endpoint.href, alwaysLoad: true } },
           includePartialMessages: true,
           // Replay acknowledgements mark when a queued steer is folded into the conversation.

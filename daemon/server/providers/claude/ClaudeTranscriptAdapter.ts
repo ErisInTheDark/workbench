@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - claudeTokenBreakdown: convert one Claude usage record into Workbench token accounting.
- * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, steer, usage, and compaction facts to canonical history.
+ * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, native tool (with effective Edit/Write diffs and claim denials), steer, usage, and compaction facts to canonical history.
  */
+import path from "node:path";
 import type {
   SDKAssistantMessage, SDKCompactBoundaryMessage, SDKPartialAssistantMessage, SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -16,7 +17,8 @@ import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { WorkbenchQuestionnaireHistoryEntryState } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
-import { ProviderToolMetadataSchema } from "workbench-shared/workbench/provider/provider-execution";
+import { ProviderToolMetadataSchema, type ProviderToolMetadata } from "workbench-shared/workbench/provider/provider-execution";
+import type { ClaudeFileChangeMetadata } from "workbench-shared/workbench/provider/claude-file-change-metadata";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "../../WorkbenchTranscriptIdentityController";
 import type { DaemonTranscriptRegistration } from "../../daemon-runtime-objects";
@@ -60,6 +62,37 @@ export function claudeTokenBreakdown(usage: Pick<ClaudeUsage,
   };
 }
 
+const record = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+
+/** Render Claude's structuredPatch hunks as unified diff text; null when the shape is not a hunk list. */
+function unifiedHunks(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  const hunks: string[] = [];
+  for (const entry of value) {
+    const hunk = record(entry);
+    const numbers = [hunk?.oldStart, hunk?.oldLines, hunk?.newStart, hunk?.newLines];
+    if (!hunk || !numbers.every(Number.isSafeInteger) || !Array.isArray(hunk.lines)
+      || !hunk.lines.every(line => typeof line === "string")) return null;
+    hunks.push([`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`, ...hunk.lines].join("\n"));
+  }
+  return hunks.join("\n");
+}
+
+/** Effective change from Claude's Edit/Write result, matched to the call's own target path. */
+function claudeFileChange(tool: string, args: ProviderToolMetadata, result: unknown): ClaudeFileChangeMetadata["fileChange"] | null {
+  const output = record(result);
+  if ((tool !== "Edit" && tool !== "Write") || !output || typeof args.file_path !== "string"
+    || typeof output.filePath !== "string" || path.resolve(output.filePath) !== path.resolve(args.file_path)) return null;
+  const hunks = unifiedHunks(output.structuredPatch);
+  if (hunks === null) return null;
+  if (tool === "Edit") return output.staged === true ? null : { kind: "update", diff: hunks };
+  if (output.type === "create") {
+    return { kind: "add", diff: hunks || (typeof output.content === "string" ? output.content : "") };
+  }
+  return output.type === "update" ? { kind: "update", diff: hunks } : null;
+}
+
 function blockItem(kind: StreamedKind, text: string): ThreadItem {
   return kind === "text"
     ? { type: "agentMessage", id: "pending", text, phase: null, memoryCitation: null, delivery: null, questions: null }
@@ -69,7 +102,9 @@ function blockItem(kind: StreamedKind, text: string): ThreadItem {
 export default class ClaudeTranscriptAdapter {
   private readonly turns = new Map<WorkbenchTurnId, TurnScope>();
   private readonly streams = new Map<WorkbenchTurnId, TurnStream>();
-  private readonly nativeTools = new Map<string, { turnId: WorkbenchTurnId; itemId: string; tool: string; arguments: object }>();
+  private readonly nativeTools = new Map<string, { turnId: WorkbenchTurnId; itemId: string; tool: string; arguments: ProviderToolMetadata }>();
+  /** Claim denials arrive from the in-process hook, independently of when the tool_use message is consumed. */
+  private readonly nativeToolDenials = new Map<string, WorkbenchTurnId>();
 
   constructor(private readonly owners: {
     threads: Pick<WorkbenchThreadIdentityController, "observe" | "observeTurn">;
@@ -207,6 +242,11 @@ export default class ClaudeTranscriptAdapter {
     }
   }
 
+  /** Mark a native file call Workbench denied for missing claims; its errored result carries the marker. */
+  recordNativeToolDenial(turnId: WorkbenchTurnId, toolUseId: string) {
+    this.nativeToolDenials.set(toolUseId, turnId);
+  }
+
   async recordNativeToolResults(threadId: WorkbenchThreadId, message: SDKUserMessage) {
     if (!Array.isArray(message.message.content)) return;
     for (const block of message.message.content) {
@@ -215,11 +255,18 @@ export default class ClaudeTranscriptAdapter {
       if (!pending) continue;
       const text = typeof block.content === "string" ? block.content
         : Array.isArray(block.content) ? block.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n") : "";
+      const denied = this.nativeToolDenials.delete(block.tool_use_id);
+      const fileChange = block.is_error ? null : claudeFileChange(pending.tool, pending.arguments, message.tool_use_result);
+      const metadata: ClaudeFileChangeMetadata = {
+        ...(fileChange ? { fileChange } : {}),
+        ...(denied && block.is_error ? { workbenchFailureKind: "unclaimed" as const } : {}),
+      };
       await this.recordItem(threadId, pending.turnId, `tool:${block.tool_use_id}`, {
         type: "dynamicToolCall", id: pending.itemId, namespace: "claude", tool: pending.tool,
         arguments: pending.arguments, status: block.is_error ? "failed" : "completed",
         contentItems: text ? [{ type: "inputText", text }] : null,
         success: !block.is_error, durationMs: null,
+        ...(Object.keys(metadata).length ? { metadata: { ...metadata } } : {}),
       });
       this.nativeTools.delete(block.tool_use_id);
     }
@@ -258,6 +305,9 @@ export default class ClaudeTranscriptAdapter {
     this.turns.delete(turnId);
     for (const [toolId, tool] of this.nativeTools) {
       if (tool.turnId === turnId) this.nativeTools.delete(toolId);
+    }
+    for (const [toolId, deniedTurnId] of this.nativeToolDenials) {
+      if (deniedTurnId === turnId) this.nativeToolDenials.delete(toolId);
     }
   }
 

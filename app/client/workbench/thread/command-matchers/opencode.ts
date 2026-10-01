@@ -10,16 +10,9 @@ import { nativePathToolSummary, type NativePathToolKind } from "./native-tools";
 import type { ThreadCommandDisplayPart, ThreadCommandSummaryDisplay, ThreadCommandDetailRow } from "./types";
 import { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute } from "./workbench-mcp";
 import type { WorkbenchCommandPresentationContext } from "./workbench-command-rendering";
+import type { NativeFileChange } from "./native-file-changes";
 
 type NativeItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
-interface NativeFileChange {
-  change: FileUpdateChange;
-  sourceItemId: string;
-  sourceChangeIndex: number;
-  danger: boolean;
-  summaryTotals?: { additions: number; deletions: number };
-  presentationLabel?: string;
-}
 const record = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 

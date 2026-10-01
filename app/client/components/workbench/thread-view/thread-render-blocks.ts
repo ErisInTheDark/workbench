@@ -25,7 +25,7 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import {
   getThreadCommandDisplay, getThreadCommandExecutionOutcome, getGitArcMatcherAction,
   getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem,
-  isOpenCodeFileOperation, getOpenCodeFileChanges,
+  isNativeFileOperation, getNativeFileChanges,
   isBrowseCommandMatcherClaim, isThreadContextMatcherClaim,
   isWorkbenchTaskStatusMatcherClaim, isWorkbenchTaskTitleSetMatcherClaim,
   parseWorkbenchMessageCommand, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand, parseWorkbenchThreadRecallCommand,
@@ -196,8 +196,8 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
       continue;
     }
     if (item.type === "dynamicToolCall" && hidden.dynamicToolCallIds?.has(item.id)) { flush(); continue; }
-    if (item.type === "fileChange" || isOpenCodeFileOperation(item)) {
-      if (item.type === "dynamicToolCall" && item.status === "inProgress" && !getOpenCodeFileChanges(item).length) continue;
+    if (item.type === "fileChange" || isNativeFileOperation(item)) {
+      if (item.type === "dynamicToolCall" && item.status === "inProgress" && !getNativeFileChanges(item).length) continue;
       if (pending?.kind !== "fileChangeSequence") { flush(); pending = { kind: "fileChangeSequence", items: [] }; }
       pending.items.push(item);
       continue;

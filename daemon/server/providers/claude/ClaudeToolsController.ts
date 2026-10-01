@@ -66,6 +66,6 @@ export default class ClaudeToolsController implements WorkbenchProviderTools {
   }
 
   async patchClaims(): Promise<string> {
-    throw new Error("Claude native file editing is disabled; use the managed Workbench shell.");
+    throw new Error("Claude native Edit/Write claims are checked in-process by the Claude session hook, not the shared patch hook.");
   }
 }
