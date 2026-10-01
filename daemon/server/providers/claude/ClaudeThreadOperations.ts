@@ -5,8 +5,6 @@
  */
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import path from "node:path";
 import {
   deleteSession, getSessionInfo, listSessions, query, renameSession,
   type Query, type SDKMessage, type SDKUserMessage, type SpawnOptions as ClaudeSpawnOptions,
@@ -32,46 +30,7 @@ import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature"
 import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireController";
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 import type { WorkbenchToolAdmissionOptions } from "../../WorkbenchToolAdmissionController";
-
-function claudeExecutable() {
-  const candidates = process.platform === "win32" ? ["claude.exe", "claude.cmd"] : ["claude"];
-  const explicit = process.env.CLAUDE_CODE_EXECUTABLE;
-  if (explicit && path.isAbsolute(explicit) && existsSync(explicit)) return explicit;
-  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
-    for (const candidate of candidates) {
-      const resolved = path.join(directory, candidate);
-      if (existsSync(resolved)) return resolved;
-    }
-  }
-  throw new Error("Claude Code executable was not found on PATH.");
-}
-
-function claudeEnvironment(endpoint?: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
-    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
-    CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1",
-    CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
-  };
-  if (!endpoint) return env;
-  for (const key of [
-    "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
-    "ANTHROPIC_VERTEX_PROJECT_ID", "AWS_PROFILE", "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS",
-  ]) delete env[key];
-  return {
-    ...env,
-    ANTHROPIC_BASE_URL: endpoint,
-    ANTHROPIC_AUTH_TOKEN: "workbench-fake",
-    ANTHROPIC_API_KEY: "workbench-fake",
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-    DISABLE_TELEMETRY: "1",
-    HTTP_PROXY: "http://127.0.0.1:1",
-    HTTPS_PROXY: "http://127.0.0.1:1",
-    NO_PROXY: "127.0.0.1,localhost",
-  };
-}
+import { claudeEnvironment, claudeExecutable } from "./claude-process-options";
 
 function spawnTrackedClaude(
   options: ClaudeSpawnOptions, onExit: (exit: Promise<void>) => void,
@@ -345,8 +304,8 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
           settingSources: [],
           skills: [],
           systemPrompt: { type: "custom", prompt: managedPrompt, snapshot: false },
-          tools: ["Read", "Glob", "Grep"],
-          disallowedTools: ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "Task", "Skill", "AskUserQuestion"],
+          tools: ["Read", "Glob", "Grep", "Edit", "Write"],
+          disallowedTools: ["Bash", "NotebookEdit", "Agent", "Task", "Skill", "AskUserQuestion"],
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
           mcpServers: { wb: { type: "http", url: endpoint.href, alwaysLoad: true } },

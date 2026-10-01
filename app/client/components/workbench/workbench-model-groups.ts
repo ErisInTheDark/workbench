@@ -58,7 +58,11 @@ export function groupWorkbenchModels({
     const models = (catalogues[harness] ?? []).filter(model => model.policyState !== "disabled");
     if (harness !== "opencode") {
       const entries = models.map(model => ({ harness, model }));
-      entries.forEach(entry => available.set(modelKey(harness, entry.model.id), entry));
+      entries.forEach(entry => {
+        for (const id of [entry.model.id, ...(entry.model.aliases ?? [])]) {
+          available.set(modelKey(harness, id), entry);
+        }
+      });
       providers.push({
         id: `provider:${harness}`, kind: "provider",
         label: harness === "claude" ? "Claude" : harness === "codex" ? "Codex" : harness,
@@ -70,7 +74,11 @@ export function groupWorkbenchModels({
     if (!byProvider.size) byProvider.set("opencode", []);
     for (const providerId of [...byProvider.keys()].sort((a, b) => a.localeCompare(b))) {
       const entries = byProvider.get(providerId)!.map(model => ({ harness, model }));
-      entries.forEach(entry => available.set(modelKey(harness, entry.model.id), entry));
+      entries.forEach(entry => {
+        for (const id of [entry.model.id, ...(entry.model.aliases ?? [])]) {
+          available.set(modelKey(harness, id), entry);
+        }
+      });
       providers.push({
         id: `provider:opencode:${providerId}`, kind: "provider",
         label: openCodeLabel(providerId), harness, providerId, models: entries,
@@ -78,15 +86,20 @@ export function groupWorkbenchModels({
     }
   }
   const favouriteKeys = new Set(favourites.map(item => modelKey(item.harness, item.modelId)));
-  const favouriteModels = [...favouriteKeys].flatMap(key => available.get(key) ?? []);
+  const favouriteModels = [...new Map([...favouriteKeys].flatMap(key => {
+    const entry = available.get(key);
+    return entry ? [[modelKey(entry.harness, entry.model.id), entry] as const] : [];
+  })).values()];
+  const favouriteModelKeys = new Set(favouriteModels.map(entry => modelKey(entry.harness, entry.model.id)));
   favouriteModels.sort((a, b) => order === "drag"
     ? (a.model.lastUsedAt ?? 0) - (b.model.lastUsedAt ?? 0)
       || a.model.displayName.localeCompare(b.model.displayName)
     : a.model.displayName.localeCompare(b.model.displayName));
-  const recentModels = [...available.values()]
+  const recentModels = [...new Map([...available.values()]
+    .map(entry => [modelKey(entry.harness, entry.model.id), entry] as const)).values()]
     .filter(entry => entry.model.lastUsedAt !== null && entry.model.lastUsedAt !== undefined
       && entry.model.lastUsedAt >= now - WEEK_MS && entry.model.lastUsedAt <= now
-      && !favouriteKeys.has(modelKey(entry.harness, entry.model.id)))
+      && !favouriteModelKeys.has(modelKey(entry.harness, entry.model.id)))
     .sort((a, b) => (order === "drag"
       ? (a.model.lastUsedAt ?? 0) - (b.model.lastUsedAt ?? 0)
       : (b.model.lastUsedAt ?? 0) - (a.model.lastUsedAt ?? 0))

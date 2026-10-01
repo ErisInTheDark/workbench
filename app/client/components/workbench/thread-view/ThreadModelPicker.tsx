@@ -7,6 +7,7 @@
 import { JSX, useRef, useState } from "react";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
+import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import { ClockIcon, HarnessIcon, StarIcon } from "../workbench-icons";
 import WorkbenchIconButton from "../WorkbenchIconButton";
@@ -112,8 +113,10 @@ export default function ThreadModelPicker ({
 	const renderModelCard = (entry: WorkbenchGroupedModel, special: boolean) => {
 		const { harness, model } = entry;
 		const featureList = buildFeatureList(model);
-		const isSelected = selectedHarness === harness && selectedModelId === model.id;
-		const favourite = favouriteKeys.has(`${harness}\0${model.id}`);
+		const isSelected = selectedHarness === harness && selectedModelId !== null
+			&& matchesWorkbenchModelOption(model, selectedModelId);
+		const favourite = [model.id, ...(model.aliases ?? [])]
+			.some(id => favouriteKeys.has(`${harness}\0${id}`));
 
 		return (
 			<WorkbenchOptionCard

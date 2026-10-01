@@ -483,7 +483,9 @@ test("selected providers complete the shared thread boundary journey in one clon
           && item.tool === "rg" && item.status === "completed"), "Claude must complete WB search");
       },
       verifyCapabilities: async () => {
-        assert.ok((await runtime.daemon.models.list("claude")).data.some(entry => entry.id === profile.model));
+        assert.ok((await runtime.daemon.models.list("claude")).data.some(entry =>
+          /^claude-(?:sonnet|opus|haiku)-\d/u.test(entry.id)),
+        "Claude catalogue must expose a native versioned model alongside legacy alias profile support");
       },
       verifyNativeDeletion: async id => {
         const root = path.join(runtime.root, "claude", "projects");

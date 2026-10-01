@@ -8,6 +8,7 @@ import type { WorkbenchHarness, WorkbenchSendThreadMessageOptions } from "workbe
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { areWorkbenchAgentPathsEqual } from "workbench-shared/workbench/agent-paths";
 import { resolveLinkedProfileSelection } from "workbench-shared/workbench/thread/thread-profile";
+import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import { WorkbenchThreadLaunchRequestSchema, type WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
 import type WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
@@ -91,7 +92,7 @@ export default class WorkbenchWorkspaceDrafts {
         const settings = profile.settings;
         if (!settings.model.trim()) throw new Error("The draft has no selected model yet.");
         const models = (await daemon.models.list(settings.harness)).data.filter(model => model.policyState !== "disabled");
-        if (!models.some(model => model.id === settings.model)) {
+        if (!models.some(model => matchesWorkbenchModelOption(model, settings.model))) {
           throw new Error("The destination daemon does not support this draft's model.");
         }
         if (settings.agentPath) {

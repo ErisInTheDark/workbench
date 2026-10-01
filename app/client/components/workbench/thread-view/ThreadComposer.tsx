@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 
 import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
@@ -275,7 +276,8 @@ export default function ThreadComposer ({
                     ? ""
                     : "";
   const selectedModel = thread.model;
-  const selectedModelOption = availableModels.find((model) => model.id === selectedModel) ?? null;
+  const selectedModelOption = selectedModel
+    ? availableModels.find((model) => matchesWorkbenchModelOption(model, selectedModel)) ?? null : null;
   const defaultModelOption = availableModels.find((model) => model.isDefault) ?? null;
   const modelOptionForControls = selectedModel ? selectedModelOption : defaultModelOption;
   const modelButtonLabel = activeHarness === "opencode" && !availableModels.length

@@ -1,11 +1,13 @@
 /*
  * Exports:
  * - WorkbenchModelOptionSchema/WorkbenchModelOption: provider-neutral model display and interaction capabilities.
+ * - matchesWorkbenchModelOption: match a canonical model or provider-reported selection alias.
  */
 import { z } from "zod";
 
 export const WorkbenchModelOptionSchema = z.object({
   id: z.string(),
+  aliases: z.array(z.string()).default([]),
   displayName: z.string(),
   description: z.string(),
   hidden: z.boolean(),
@@ -25,3 +27,7 @@ export const WorkbenchModelOptionSchema = z.object({
   lastUsedAt: z.number().int().nonnegative().nullable().default(null),
 });
 export type WorkbenchModelOption = z.input<typeof WorkbenchModelOptionSchema>;
+
+export function matchesWorkbenchModelOption(model: WorkbenchModelOption, id: string): boolean {
+  return model.id === id || (model.aliases?.includes(id) ?? false);
+}

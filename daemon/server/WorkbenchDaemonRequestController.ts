@@ -331,7 +331,13 @@ export default class WorkbenchDaemonRequestController {
             } catch {
               console.warn("Unable to read model usage while listing models.");
             }
-            result = { data: models.map(model => ({ ...model, lastUsedAt: used.get(model.id) ?? null })) };
+            result = { data: models.map(model => ({
+              ...model,
+              lastUsedAt: [model.id, ...(model.aliases ?? [])].reduce<number | null>((latest, id) => {
+                const time = used.get(id);
+                return time === undefined ? latest : Math.max(latest ?? time, time);
+              }, null),
+            })) };
           } else if (request.method === "models/context/read") {
             result = { data: await provider.configuration.modelContext.read() };
           } else {

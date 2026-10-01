@@ -10,6 +10,7 @@ import { useId, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerSettings } from "workbench-shared/types";
 import { getWorkbenchAgentPathLabel } from "workbench-shared/workbench/agent-paths";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
 import { groupWorkbenchModels, type WorkbenchGroupedModel } from "../workbench-model-groups";
 import ChevronIcon from "../ChevronIcon";
@@ -76,8 +77,11 @@ export default function ThreadProfileEditor ({
     if (!canSaveFavourites) return;
     setFavouriteError("");
     try {
-      if (favouriteKeys.has(`${harness}\0${model.id}`)) {
-        await clientStateController.delete({ kind: "modelPreference", harness, modelId: model.id });
+      const savedIds = [model.id, ...(model.aliases ?? [])]
+        .filter(id => favouriteKeys.has(`${harness}\0${id}`));
+      if (savedIds.length) {
+        await Promise.all(savedIds.map(modelId =>
+          clientStateController.delete({ kind: "modelPreference", harness, modelId })));
       } else {
         await clientStateController.put({ kind: "modelPreference", harness, modelId: model.id, favourite: true });
       }
@@ -87,7 +91,7 @@ export default function ThreadProfileEditor ({
     }
   };
   const visibleModels = state.modelsByHarness[settings.harness] ?? [];
-  const model = visibleModels.find((entry) => entry.id === settings.model);
+  const model = visibleModels.find((entry) => matchesWorkbenchModelOption(entry, settings.model));
   const modelError = state.modelsErrorByHarness[settings.harness] ?? "";
   const modelsLoading = Boolean(state.modelsLoadingByHarness[settings.harness])
     || !state.modelsByHarness[settings.harness] && !modelError;

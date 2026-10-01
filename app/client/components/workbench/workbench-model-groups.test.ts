@@ -55,6 +55,21 @@ test("empty favourites and recent do not occupy navigation sections", () => {
   assert.deepEqual(groups.map(group => group.id), ["provider:codex"]);
 });
 
+test("alias favourites resolve to one canonical model without duplicating recent or provider choices", () => {
+  const now = 10 * 24 * 60 * 60 * 1000;
+  const groups = groupWorkbenchModels({
+    catalogues: { claude: [{
+      ...model("claude-sonnet-4-6"), aliases: ["sonnet"], lastUsedAt: now,
+    }] },
+    favourites: [{ harness: "claude", modelId: "sonnet" }],
+    allowedHarnesses: ["claude"], now,
+  });
+  assert.deepEqual(groups.map(group => group.kind), ["favourites", "provider"]);
+  assert.deepEqual(groups.map(group => group.models.map(entry => entry.model.id)), [
+    ["claude-sonnet-4-6"], ["claude-sonnet-4-6"],
+  ]);
+});
+
 test("drag order puts newest special models lowest and sorts provider models by name", () => {
   const now = 10 * 24 * 60 * 60 * 1000;
   const groups = groupWorkbenchModels({

@@ -285,6 +285,33 @@ test("launch validation follows the resolved definition's model", async context 
   assert.equal(f.requests.some(request => request.method === "thread/launch"), false);
 });
 
+test("draft admission accepts a provider-reported alias but not an unrelated model", async context => {
+  const f = await fixture(context, { kind: "custom", settings: settings("sonnet", "claude") });
+  const native = { ...model, id: "claude-sonnet-4-6", aliases: ["sonnet"] };
+  f.handle(async (method, params) => {
+    if (method === "models/list") return { data: [native] };
+    assert.equal(method, "thread/launch");
+    const request = WorkbenchThreadLaunchRequestSchema.parse(params);
+    assert.equal(request.profile.settings.model, "sonnet");
+    return { phase: "accepted", launchId: request.launchId, threadId: randomUUID(), turnId: randomUUID() };
+  });
+  assert.equal((await f.owner.launch(f.draftId, f.draft().revision)).harness, "claude");
+
+  const missing = await fixture(context, { kind: "custom", settings: settings("opus", "claude") });
+  missing.handle(async method => {
+    assert.equal(method, "models/list");
+    return { data: [native] };
+  });
+  await assert.rejects(missing.owner.launch(missing.draftId, missing.draft().revision), /does not support/u);
+
+  const disabled = await fixture(context, { kind: "custom", settings: settings("sonnet", "claude") });
+  disabled.handle(async method => {
+    assert.equal(method, "models/list");
+    return { data: [{ ...native, policyState: "disabled" }] };
+  });
+  await assert.rejects(disabled.owner.launch(disabled.draftId, disabled.draft().revision), /does not support/u);
+});
+
 test("a Custom draft cannot launch before its provider reports a model", async context => {
   const f = await fixture(context, { kind: "custom", settings: settings("", "opencode") });
   f.handle(async method => {

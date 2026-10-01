@@ -76,6 +76,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   sources: [
     "daemon/server/providers/claude/ClaudeBridgeNode.ts",
     "daemon/server/providers/claude/ClaudeThreadOperations.ts",
+    "daemon/server/providers/claude/claude-process-options.ts",
     "daemon/server/providers/claude/ClaudeTranscriptAdapter.ts",
     "daemon/server/lib/workbench/instructions/instruction-tool-reference.ts",
   ].join("\n"),

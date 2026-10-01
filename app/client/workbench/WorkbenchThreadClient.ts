@@ -9,6 +9,7 @@
 import type WorkbenchWorkspaceClient from "./app/WorkbenchWorkspaceClient";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { defaultProviderKey, installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import { WORKBENCH_THREAD_HISTORY_PENDING } from "workbench-shared/workbench/provider/provider-thread";
 import ThreadObservationController, { getThreadObservationKey } from "./thread/ThreadObservationController";
 import WorkbenchThreadController, { type ThreadControllerTarget } from "./WorkbenchThreadController";
@@ -2430,7 +2431,7 @@ function WorkbenchThreadClient(
       return null;
     }
 
-    const selectedModel = account.getModels(harness).find((model) => model.id === modelId) ?? null;
+    const selectedModel = account.getModels(harness).find((model) => matchesWorkbenchModelOption(model, modelId)) ?? null;
     if (!selectedModel?.supportsReasoningEffort) {
       return null;
     }

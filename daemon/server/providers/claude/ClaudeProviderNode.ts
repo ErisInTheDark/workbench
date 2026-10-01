@@ -7,16 +7,7 @@ import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import CodexShellController from "../../CodexShellController";
 import ClaudeToolsController from "./ClaudeToolsController";
-
-const models = ["sonnet", "opus", "haiku"].map(id => ({
-  id, displayName: id[0]!.toUpperCase() + id.slice(1),
-  description: "Claude Code model alias", hidden: false, isDefault: id === "sonnet",
-  supportsPersonality: false, supportsReasoningEffort: false,
-  supportedReasoningEfforts: [], defaultReasoningEffort: null,
-  supportsVision: true, supportsFastMode: false,
-  inputModalities: ["text", "image"], maxContextWindowTokens: null,
-  contextWindow: null, additionalSpeedTiers: [], policyState: null, billingMultiplier: null,
-}));
+import ClaudeConfigurationController from "./ClaudeConfigurationController";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
@@ -31,19 +22,20 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       threads, transcript: get("claudeTranscriptAdapter"),
       execute: shell.executeAdmitted.bind(shell),
     });
+    const configuration = new ClaudeConfigurationController();
     return {
       registrations: {
         claudeProvider: {
           threads, tools, interactions: threads.interactions, context: threads.context,
           configuration: {
             modelContext: { read: async () => [] },
-            models: { read: async () => models },
+            models: { read: () => configuration.models() },
             guidance: { contains: async sections => sections.map(() => false) },
           },
         },
       },
       start: () => undefined,
-      dispose: () => undefined,
+      dispose: () => configuration.dispose(),
     };
   },
   description: "Reload Claude provider definition.",
@@ -54,9 +46,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   scope: "server:claude/def",
   sources: [
     "daemon/server/providers/claude/ClaudeProviderNode.ts",
+    "daemon/server/providers/claude/ClaudeConfigurationController.ts",
+    "daemon/server/providers/claude/claude-process-options.ts",
     "daemon/server/providers/claude/ClaudeToolsController.ts",
     "daemon/server/CodexShellController.ts",
     "daemon/server/WorkbenchApprovedCommandExecutor.ts",
     "shared/workbench/provider/provider-registrations.ts",
+    "shared/workbench/provider/provider-model.ts",
   ].join("\n"),
 });

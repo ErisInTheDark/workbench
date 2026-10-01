@@ -5,6 +5,7 @@
 "use client";
 
 import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
+import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import { useWorkbenchModelCatalogues } from "./use-workbench-client";
 import { useWorkbenchClientStateSnapshot } from "./workbench-client-state-context";
 import { ClockIcon, HarnessIcon, StarIcon } from "./workbench-icons";
@@ -49,7 +50,7 @@ export default function WorkbenchModelQuickPicker ({
       choices.set(id, entry);
       return {
         id,
-        checked: harness === entry.harness && modelId === entry.model.id,
+        checked: harness === entry.harness && matchesWorkbenchModelOption(entry.model, modelId),
         content: <span className="flex min-w-0 items-center gap-2">
           <HarnessIcon harness={entry.harness} size={16} className="shrink-0" />
           <span className="truncate">{entry.model.displayName}</span>

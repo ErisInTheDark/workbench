@@ -328,6 +328,24 @@ test("model catalogue includes durable accepted use without a second request", a
   ] });
 });
 
+test("model catalogue credits provider-reported alias use to its canonical model", async () => {
+  const { controller } = createController({
+    models: [
+      { id: "claude-sonnet-4-6", aliases: ["sonnet"] },
+      { id: "claude-opus-4-6", aliases: [] },
+    ] as WorkbenchModelOption[],
+    modelUsage: { read: async () => [
+      { harness: "claude", modelId: "sonnet", lastUsedAt: 10 },
+      { harness: "claude", modelId: "unreported", lastUsedAt: 20 },
+    ] },
+  });
+  const response = await controller.handle({ id: 1, method: "models/list", params: { provider: "claude" } });
+  assert.deepEqual(response.result, { data: [
+    { id: "claude-sonnet-4-6", aliases: ["sonnet"], lastUsedAt: 10 },
+    { id: "claude-opus-4-6", aliases: [], lastUsedAt: null },
+  ] });
+});
+
 test("model catalogue remains usable if accepted-use storage fails", async context => {
   const warnings: string[] = [];
   context.mock.method(console, "warn", (message: string) => { warnings.push(message); });
