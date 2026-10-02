@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_GIT_COMMANDS: typed commit-selection and commit definitions shared by CLI and MCP. Keywords: workbench, git, commands, commit.
+ * - WORKBENCH_GIT_COMMANDS: typed commit-selection and commit definitions shared by CLI and MCP, plus CLI-only history amend.
  */
 import { z } from "zod";
 
@@ -74,4 +74,69 @@ const commit = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_GIT_COMMANDS = [selectionCommand("add"), selectionCommand("unstage"), commit] as const;
+const amend = defineWorkbenchAgentCommand({
+  description: "Rewrite unpushed linear commits: fold selected files or a new message into one commit, or change author, committer, dates and co-authors across many.",
+  helpGroups: ["git"],
+  hideFromMcp: true,
+  words: ["git", "amend"],
+  usage: "wb git amend [--commit <commit>]... [--range <base>..<tip>]... [--worktree <absolute-path>] [--selected] [--title <title> [--description <description>]] [--author \"Name <email>\"] [--author-date <date>] [--committer \"Name <email>\"] [--committer-date <date>] [--co-author \"Name <email>\"]... [--no-co-authors]",
+  inputSchema: z.object({
+    author: requiredText.optional(),
+    authorDate: requiredText.optional(),
+    clearCoAuthors: z.boolean().default(false),
+    coAuthors: z.array(requiredText).default([]),
+    commits: z.array(requiredText).default([]),
+    committer: requiredText.optional(),
+    committerDate: requiredText.optional(),
+    description: z.string().default(""),
+    includeSelection: z.boolean().default(false),
+    ranges: z.array(requiredText).default([]),
+    targetWorktree: requiredText.optional(),
+    title: requiredText.optional(),
+  }).strict().refine((input) => input.title || !input.description.trim(), {
+    message: "--description requires --title.",
+  }),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, {
+      boolean: ["--no-co-authors", "--selected"],
+      leadingDashValues: ["--description", "--title"],
+      repeatable: ["--co-author", "--commit", "--range"],
+      values: ["--author", "--author-date", "--committer", "--committer-date", "--description", "--title", "--worktree"],
+    });
+    return {
+      author: flags.optional("--author") ?? undefined,
+      authorDate: flags.optional("--author-date") ?? undefined,
+      clearCoAuthors: flags.has("--no-co-authors"),
+      coAuthors: flags.values.get("--co-author") ?? [],
+      commits: flags.values.get("--commit") ?? [],
+      committer: flags.optional("--committer") ?? undefined,
+      committerDate: flags.optional("--committer-date") ?? undefined,
+      description: flags.optional("--description") ?? "",
+      includeSelection: flags.has("--selected"),
+      ranges: flags.values.get("--range") ?? [],
+      targetWorktree: flags.optional("--worktree") ?? undefined,
+      title: flags.optional("--title") ?? undefined,
+    };
+  },
+  buildRequest(input, { callerThreadId, cwd }) {
+    const description = input.description.trim();
+    return postWorkbenchAgentCommand("/api/git", {
+      action: "amend",
+      ...(input.author ? { author: input.author } : {}),
+      ...(input.authorDate ? { authorDate: input.authorDate } : {}),
+      clearCoAuthors: input.clearCoAuthors,
+      coAuthors: input.coAuthors,
+      commits: input.commits,
+      ...(input.committer ? { committer: input.committer } : {}),
+      ...(input.committerDate ? { committerDate: input.committerDate } : {}),
+      cwd,
+      includeSelection: input.includeSelection,
+      ...(input.title ? { message: description ? `${input.title}\n\n${description}` : input.title } : {}),
+      ranges: input.ranges,
+      ...(input.targetWorktree ? { targetWorktree: input.targetWorktree } : {}),
+      threadId: requireCallerThreadId(callerThreadId),
+    });
+  },
+});
+
+export const WORKBENCH_GIT_COMMANDS = [selectionCommand("add"), selectionCommand("unstage"), commit, amend] as const;

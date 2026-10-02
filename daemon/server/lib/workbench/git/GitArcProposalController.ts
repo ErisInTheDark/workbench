@@ -974,7 +974,7 @@ export default class GitArcProposalController {
         ],
         expectedHead: proposal.metadata.status === "proposed" ? proposal.metadata.liveBaseCommit ?? undefined : undefined,
         message,
-        messageOnly: true,
+        metadataOnly: true,
         paths: [],
         target,
         targetTree: proposal.tree,

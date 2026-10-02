@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import test from "node:test";
 
+import type { WorkbenchThreadGitAmendRequest } from "./lib/workbench/git/WorkbenchThreadGit";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
@@ -20,6 +21,7 @@ test("preserves thread Git selection and commit responses behind the daemon boun
     identities: threadGitIdentities(),
     createThreadGit: async () => ({
       add: async () => ({ changedPaths: ["src/one.ts"], selectedPaths: ["src/one.ts"] }),
+      amend: async () => { throw new Error("Unexpected amend"); },
       commit: async () => ({ commit: "a".repeat(40), committedPaths: ["src/one.ts"], selectedPaths: ["src/one.ts"] }),
       repoRoot: "C:/Git/Project",
       unstage: async () => ({ changedPaths: ["src/one.ts"], selectedPaths: [] }),
@@ -45,6 +47,44 @@ test("preserves thread Git selection and commit responses behind the daemon boun
   assert.match(JSON.stringify(await invalid.json()), /managed Workbench thread id is required/u);
 });
 
+test("amend requests forward identity rewrites and reject contradictory co-author changes", async () => {
+  const requests: WorkbenchThreadGitAmendRequest[] = [];
+  const feature = new WorkbenchThreadGitFeature({
+    identities: threadGitIdentities(),
+    createThreadGit: async () => ({
+      add: async () => ({ changedPaths: [], selectedPaths: [] }),
+      amend: async (request) => {
+        requests.push(request);
+        return {
+          amendedCommit: "b".repeat(40),
+          amendedCommits: [{ commit: "b".repeat(40), original: "1".repeat(40) }, { commit: "c".repeat(40), original: "2".repeat(40) }],
+          commit: "c".repeat(40), committedPaths: [], rewrittenCommitCount: 2, selectedPaths: [],
+        };
+      },
+      commit: async () => { throw new Error("Unexpected commit"); },
+      repoRoot: "C:/Git/Project",
+      unstage: async () => ({ changedPaths: [], selectedPaths: [] }),
+    }),
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project" }),
+    transitions: new WorkbenchThreadTransitionCoordinator(),
+  });
+  const base = { action: "amend", cwd: "C:/Git/Project", threadId: "thread-one" };
+
+  const amended = await feature.executeRequest({ ...base, author: "Ada <ada@example.com>", ranges: ["main..HEAD"] });
+  assert.equal(amended.status, 200);
+  const text = await amended.text();
+  assert.match(text, new RegExp(`Amended ${"1".repeat(40)} as ${"b".repeat(40)}\\nAmended ${"2".repeat(40)} as ${"c".repeat(40)}`, "u"));
+  assert.doesNotMatch(text, /Committed files/u);
+  assert.deepEqual(requests, [{
+    author: "Ada <ada@example.com>", authorDate: undefined, coAuthors: undefined, commits: [], committer: undefined,
+    committerDate: undefined, includeSelection: false, message: undefined, ranges: ["main..HEAD"],
+  }]);
+
+  const contradictory = await feature.executeRequest({ ...base, clearCoAuthors: true, coAuthors: ["Bo <bo@example.com>"] });
+  assert.equal(contradictory.status, 400);
+  assert.equal(requests.length, 1);
+});
+
 test("serializes sibling thread Git operations per worktree while unrelated worktrees proceed", async () => {
   const transitions = new WorkbenchThreadTransitionCoordinator();
   const events: string[] = [];
@@ -56,6 +96,7 @@ test("serializes sibling thread Git operations per worktree while unrelated work
     identities: threadGitIdentities(),
     createThreadGit: async ({ targetWorktree, threadId }) => ({
       add: async () => ({ changedPaths: [], selectedPaths: [] }),
+      amend: async () => { throw new Error("Unexpected amend"); },
       commit: async () => {
         events.push(`${threadId}:start`);
         if (threadId === "wb:thread-one") {

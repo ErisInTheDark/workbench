@@ -1,4 +1,4 @@
-/* No production exports. Tests protect linear amendments, unchanged trees, conflict rollback, scoped snapshots and commit remapping. */
+/* No production exports. Tests protect linear amendments, multi-commit identity rewrites, unchanged trees, conflict rollback, scoped snapshots and commit remapping. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -112,7 +112,7 @@ async function checkMessageAmend({ repositoryOwner, root, target }: Awaited<Retu
 
   const result = await new WorkbenchGitHistoryRewriter(repositoryOwner).amend({
     message: "replacement message",
-    messageOnly: true,
+    metadataOnly: true,
     paths: [],
     target,
   });
@@ -128,6 +128,51 @@ async function checkMessageAmend({ repositoryOwner, root, target }: Awaited<Retu
   assert.ok(remappedPlan);
   assert.equal(await repositoryOwner.readBlob(`${remappedPlan.checkpointCommit}:selected.txt`), "unstaged and unrelated\n");
   assert.equal(await repositoryOwner.readBlob(`${remappedPlan.checkpointCommit}:later.txt`), await repositoryOwner.readBlob("HEAD:later.txt"));
+}
+
+async function checkIdentityAmend({ repositoryOwner, root }: Awaited<ReturnType<typeof repository>>) {
+  const [base, middle, head] = (await git(root, ["rev-list", "--reverse", "HEAD"])).trim().split(/\r?\n/u) as [string, string, string];
+  const before = await repositoryOwner.readCommits([base, middle, head]);
+  const worktreeBefore = await git(root, ["diff", "--binary"]);
+  const indexBefore = await git(root, ["diff", "--cached", "--binary"]);
+  const author = await repositoryOwner.normalizeCommitActor("author", { date: "2001-02-03T04:05:06+13:00", email: "ada@example.com", name: "Ada" });
+  const rewriter = new WorkbenchGitHistoryRewriter(repositoryOwner);
+
+  const offChain = (await git(root, ["commit-tree", `${head}^{tree}`, "-p", head, "-m", "off chain"])).trim();
+  await assert.rejects(rewriter.amend({
+    identity: { authorName: "Ada" }, identityTargets: [offChain], metadataOnly: true, paths: [], target: base,
+  }), /not on the current branch history/u);
+  await assert.rejects(repositoryOwner.normalizeCommitActor("author", { date: "not a date" }), /date/u);
+  assert.equal(await repositoryOwner.currentHead(), head);
+
+  const result = await rewriter.amend({
+    coAuthors: ["Bo <bo@example.com>"],
+    identity: { authorDate: author.date, authorEmail: author.email, authorName: author.name },
+    identityTargets: [head],
+    metadataOnly: true,
+    paths: [],
+    target: base,
+  });
+
+  assert.deepEqual(result.amendedCommits.map(({ original }) => original), [base, head]);
+  const rewritten = (await git(root, ["rev-list", "--reverse", "HEAD"])).trim().split(/\r?\n/u);
+  const after = await repositoryOwner.readCommits(rewritten);
+  const [newBase, newMiddle, newHead] = rewritten.map((commit) => after.commits.get(commit)!);
+  for (const [index, commit] of [newBase, newHead].entries()) {
+    const original = before.commits.get(index === 0 ? base : head)!;
+    assert.equal(commit!.authorName, "Ada");
+    assert.equal(commit!.authorEmail, "ada@example.com");
+    assert.equal(commit!.authorDate, "981126306 +1300");
+    assert.equal(commit!.tree, original.tree);
+    assert.equal(commit!.message, `${original.message.trimEnd()}\n\nCo-authored-by: Bo <bo@example.com>\n`);
+  }
+  const originalMiddle = before.commits.get(middle)!;
+  assert.deepEqual(
+    { ...newMiddle!, parents: [] },
+    { ...originalMiddle, parents: [] },
+  );
+  assert.equal(await git(root, ["diff", "--binary"]), worktreeBefore);
+  assert.equal(await git(root, ["diff", "--cached", "--binary"]), indexBefore);
 }
 
 historyTest("a descendant conflict leaves branch, worktree, index, refs, and selection unchanged", async (context) => {
@@ -352,6 +397,7 @@ historyTest("linear amendments preserve state through lock retry, content and me
     fixture.target = await checkContentAmend(fixture);
   });
   await context.test("message-only amendments preserve trees, worktree, index and scoped snapshots", () => checkMessageAmend(fixture));
+  await context.test("identity amendments retouch only selected commits across one rewrite", () => checkIdentityAmend(fixture));
 });
 
 historyTest("root amendments preserve parentless proposal history and accepted receipts", async (context) => {

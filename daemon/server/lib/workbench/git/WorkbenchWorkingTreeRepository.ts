@@ -200,7 +200,7 @@ export default class WorkbenchWorkingTreeRepository {
     if (request.mode === "amend") {
       const amended = await new WorkbenchGitHistoryRewriter(this.git).amend({
         target: request.targetCommit!, expectedHead: snapshot.head!, targetTree: tree,
-        message, messageOnly: paths.length === 0, paths,
+        message, metadataOnly: paths.length === 0, paths,
         mutatePlan: async () => {
           if (paths.length) await verify();
           else await verifyClaims();

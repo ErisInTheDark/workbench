@@ -291,6 +291,7 @@ test("thread Git resolves public and native callers to the same existing selecti
         repoRoot: "C:/repo",
         add: async () => ({ changedPaths: [], selectedPaths: [] }),
         unstage: async () => ({ changedPaths: [], selectedPaths: [] }),
+        amend: async () => { throw new Error("Unexpected amend"); },
         commit: async () => { throw new Error("Unexpected commit"); },
       };
     },

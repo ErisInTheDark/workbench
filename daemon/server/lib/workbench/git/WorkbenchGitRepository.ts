@@ -4,6 +4,7 @@
  * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitResolvedCommitRef/GitWorktreeMergeResult/GitWorktreeSnapshot: typed history, object, merge, snapshot and publication facts.
  * - GitCommitIdentity/GitCommitBatch/GitBlobBatch: parsed metadata and per-object batch results.
  * - GIT_STATE_GENERATION_REF: per-worktree mutation generation ref.
+ * Notable members: normalizeCommitActor lets Git canonicalise actor dates; listFirstParentRange expands `base..tip`.
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -633,6 +634,32 @@ export default class WorkbenchGitRepository {
     return (await this.runWithInput([
       "commit-tree", tree, "--no-gpg-sign", ...parents.flatMap((candidate) => ["-p", candidate]), "-F", "-",
     ], message, env)).trim();
+  }
+
+  /** Lets Git validate and canonicalise supplied actor fields; unsupplied fields are omitted from the result. */
+  async normalizeCommitActor(kind: "author" | "committer", actor: { date?: string; email?: string; name?: string }) {
+    const prefix = kind === "author" ? "GIT_AUTHOR" : "GIT_COMMITTER";
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      [`${prefix}_EMAIL`]: actor.email ?? "workbench@localhost",
+      [`${prefix}_NAME`]: actor.name ?? "workbench",
+    };
+    if (actor.date === undefined) delete env[`${prefix}_DATE`];
+    else env[`${prefix}_DATE`] = actor.date;
+    const output = await this.run(["var", `${prefix}_IDENT`], env);
+    const parsed = parseCommitActor(output.trim(), kind);
+    return {
+      ...(actor.date === undefined ? {} : { date: parsed.date }),
+      ...(actor.email === undefined ? {} : { email: parsed.email }),
+      ...(actor.name === undefined ? {} : { name: parsed.name }),
+    };
+  }
+
+  /** First-parent commits in a Git revision range such as `base..tip`, oldest first. */
+  async listFirstParentRange(range: string) {
+    if (!range.includes("..") || range.startsWith("-")) throw new Error(`Invalid commit range: ${range}`);
+    return (await this.run(["rev-list", "--reverse", "--first-parent", range, "--"]))
+      .split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
   }
 
   async mergeTree(base: string, left: string, right: string) {

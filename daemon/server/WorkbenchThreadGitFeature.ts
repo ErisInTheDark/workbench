@@ -1,23 +1,28 @@
 /*
  * Exports:
  * - WorkbenchThreadGitFeatureOptions: project resolution, thread Git construction and stable transition ports.
- * - default WorkbenchThreadGitFeature: own validated thread-scoped add, unstage, commit and amend requests.
+ * - default WorkbenchThreadGitFeature: own validated thread-scoped add, unstage, commit and history amend requests.
  */
 import type http from "node:http";
 import { ThreadReferenceSchema, type WorkbenchThreadId, type ProjectId } from "workbench-shared/workbench/identity";
 import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 
 import WorkbenchThreadGit from "./lib/workbench/git/WorkbenchThreadGit";
-import type { WorkbenchThreadGitCommitResult, WorkbenchThreadGitSelectionResult } from "./lib/workbench/git/WorkbenchThreadGit";
+import type {
+  WorkbenchThreadGitAmendRequest,
+  WorkbenchThreadGitCommitResult,
+  WorkbenchThreadGitSelectionResult,
+} from "./lib/workbench/git/WorkbenchThreadGit";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
-type ThreadGitAction = "add" | "commit" | "unstage";
+type ThreadGitAction = "add" | "amend" | "commit" | "unstage";
 
 interface ThreadGitPort {
   add(paths: string[]): Promise<WorkbenchThreadGitSelectionResult>;
+  amend(request: WorkbenchThreadGitAmendRequest): Promise<WorkbenchThreadGitCommitResult>;
   commit(message: string, amendTarget?: string): Promise<WorkbenchThreadGitCommitResult>;
   repoRoot: string;
   unstage(paths: string[]): Promise<WorkbenchThreadGitSelectionResult>;
@@ -32,11 +37,48 @@ export interface WorkbenchThreadGitFeatureOptions {
 }
 
 function readAction(value: unknown): ThreadGitAction | null {
-  return value === "add" || value === "commit" || value === "unstage" ? value : null;
+  return value === "add" || value === "amend" || value === "commit" || value === "unstage" ? value : null;
 }
 
 function readString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readOptionalString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readAmendRequest(body: Record<string, unknown>): WorkbenchThreadGitAmendRequest {
+  const coAuthors = readPaths(body.coAuthors);
+  if (body.clearCoAuthors === true && coAuthors.length) throw new Error("Co-authors cannot be both replaced and cleared.");
+  return {
+    author: readOptionalString(body.author),
+    authorDate: readOptionalString(body.authorDate),
+    coAuthors: body.clearCoAuthors === true ? null : coAuthors.length ? coAuthors : undefined,
+    commits: readPaths(body.commits),
+    committer: readOptionalString(body.committer),
+    committerDate: readOptionalString(body.committerDate),
+    includeSelection: body.includeSelection === true,
+    message: readOptionalString(body.message),
+    ranges: readPaths(body.ranges),
+  };
+}
+
+function rewriteResponse(result: WorkbenchThreadGitCommitResult, amended: ReadonlyArray<{ commit: string; original: string }>) {
+  return new Response([
+    ...(result.amendedCommit ? [
+      ...amended.map(({ commit, original }) => `Amended ${original} as ${commit}`),
+      `Rewritten HEAD ${result.commit} (${result.rewrittenCommitCount} commits)`,
+    ] : [`Committed ${result.commit}`]),
+    ...(result.committedPaths.length || !result.amendedCommit ? [
+      `Committed files (${result.committedPaths.length}):`,
+      ...result.committedPaths.map((filePath) => `  ${filePath}`),
+    ] : []),
+    ...(result.warnings?.map((warning) => `Warning: ${warning}`) ?? []),
+    "",
+  ].join("\n"), {
+    headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+  });
 }
 
 function readPaths(value: unknown) {
@@ -112,18 +154,11 @@ export default class WorkbenchThreadGitFeature {
         if (action === "commit") {
           const amendTarget = readString(body.amendTarget) || undefined;
           const result = await threadGit.commit(readString(body.message), amendTarget);
-          return new Response([
-            ...(result.amendedCommit ? [
-              `Amended ${amendTarget} as ${result.amendedCommit}`,
-              `Rewritten HEAD ${result.commit} (${result.rewrittenCommitCount} commits)`,
-            ] : [`Committed ${result.commit}`]),
-            `Committed files (${result.committedPaths.length}):`,
-            ...result.committedPaths.map((filePath) => `  ${filePath}`),
-            ...(result.warnings?.map((warning) => `Warning: ${warning}`) ?? []),
-            "",
-          ].join("\n"), {
-            headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
-          });
+          return rewriteResponse(result, result.amendedCommit && amendTarget ? [{ commit: result.amendedCommit, original: amendTarget }] : []);
+        }
+        if (action === "amend") {
+          const result = await threadGit.amend(readAmendRequest(body));
+          return rewriteResponse(result, result.amendedCommits ?? []);
         }
 
         const paths = readPaths(body.paths);

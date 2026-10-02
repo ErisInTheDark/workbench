@@ -2,6 +2,7 @@
  * Exports:
  * - WorkbenchThreadGitSelectionResult: selected paths after add or unstage.
  * - WorkbenchThreadGitCommitResult: committed paths and history rewrite metadata.
+ * - WorkbenchThreadGitAmendRequest: raw amend targets, message, selection and identity rewrites.
  * - default WorkbenchThreadGit: execute Git against database-owned thread selections.
  */
 import { execFile } from "node:child_process";
@@ -13,7 +14,7 @@ import { isPathWithinRoot, normalizeRelativePath } from "../../project";
 import { readRegisteredGitWorktrees } from "../../git";
 import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
-import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
+import WorkbenchGitHistoryRewriter, { type WorkbenchGitIdentityOverride } from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 const execFileAsync = promisify(execFile);
@@ -31,8 +32,24 @@ export interface WorkbenchThreadGitSelectionResult {
   selectedPaths: string[];
 }
 
+export interface WorkbenchThreadGitAmendRequest {
+  /** `Name <email>` values. */
+  author?: string;
+  authorDate?: string;
+  /** Replaces Co-authored-by trailers; `null` strips them. */
+  coAuthors?: string[] | null;
+  commits: string[];
+  committer?: string;
+  committerDate?: string;
+  includeSelection: boolean;
+  message?: string;
+  /** Git `base..tip` ranges expanded along the first-parent chain. */
+  ranges: string[];
+}
+
 export interface WorkbenchThreadGitCommitResult {
   amendedCommit?: string;
+  amendedCommits?: Array<{ commit: string; original: string }>;
   commit: string;
   committedPaths: string[];
   rewrittenCommitCount?: number;
@@ -70,6 +87,12 @@ async function resolveRepoRoot(cwd: string) {
   const repoRoot = (await runGit(cwd, ["rev-parse", "--show-toplevel"])).trim();
   if (!repoRoot) throw new Error("Unable to find Git repository root.");
   return path.resolve(repoRoot);
+}
+
+function parsePerson(value: string, label: string) {
+  const match = /^\s*([^<>]*?)\s*<([^<>]+)>\s*$/u.exec(value);
+  if (!match?.[1]) throw new Error(`${label} must look like "Name <email>": ${value}`);
+  return { email: match[2]!.trim(), name: match[1] };
 }
 
 function pathsEqual(left: string, right: string) {
@@ -156,27 +179,63 @@ export default class WorkbenchThreadGit {
     return { changedPaths: result.changedPaths, selectedPaths: result.selectedPaths };
   }
 
-  async commit(message: string, amendTarget?: string): Promise<WorkbenchThreadGitCommitResult> {
-    const normalizedMessage = message.trim();
-    if (!normalizedMessage) throw new Error("A commit message is required.");
+  /**
+   * Rewrites unpushed first-parent history. Message and selected files need exactly one target commit;
+   * identity and co-author changes apply to every selected commit.
+   */
+  async amend(request: WorkbenchThreadGitAmendRequest): Promise<WorkbenchThreadGitCommitResult> {
+    const repository = new WorkbenchGitRepository(this.repoRoot);
+    const targets: string[] = [];
+    for (const commit of request.commits) targets.push(await repository.resolveCommit(commit));
+    for (const range of request.ranges) {
+      const commits = await repository.listFirstParentRange(range);
+      if (!commits.length) throw new Error(`Commit range ${range} selects no commits.`);
+      targets.push(...commits);
+    }
+    if (!targets.length) targets.push(await repository.currentHead());
+    const [target, ...identityTargets] = Array.from(new Set(targets));
+    if ((request.message !== undefined || request.includeSelection) && identityTargets.length) {
+      throw new Error("Message and selected-file amendments need exactly one target commit.");
+    }
+    const identity = await this.readIdentityOverride(repository, request);
+    const coAuthors = request.coAuthors === undefined || request.coAuthors === null
+      ? request.coAuthors
+      : request.coAuthors.map((coAuthor) => {
+        const { email, name } = parsePerson(coAuthor, "Co-author");
+        return `${name} <${email}>`;
+      });
+    if (request.message !== undefined && !request.message.trim()) throw new Error("A commit message cannot be empty.");
+    if (!request.includeSelection && request.message === undefined && !Object.keys(identity).length && coAuthors === undefined) {
+      throw new Error("Nothing to amend: supply selected files, a message, identity changes or co-authors.");
+    }
+
+    const rewriter = new WorkbenchGitHistoryRewriter(repository);
+    const options = { coAuthors, identity, identityTargets, message: request.message, target: target! };
+    if (!request.includeSelection) {
+      return { ...await rewriter.amend({ ...options, metadataOnly: true, paths: [] }), selectedPaths: [] };
+    }
     const batch = await this.selectionStore.executeThreadGitSelection({ kind: "claim", scope: this.scope });
     if (batch.kind !== "claimed") throw new Error("Unexpected Git selection claim result.");
     const { batchId, selectedPaths } = batch;
-
-    if (amendTarget) {
-      try {
-        const result = await new WorkbenchGitHistoryRewriter(new WorkbenchGitRepository(this.repoRoot)).amend({
-          message: normalizedMessage,
-          paths: selectedPaths,
-          target: amendTarget,
-        });
-        await this.settleBatch(batchId, "committed");
-        return { ...result, selectedPaths };
-      } catch (error) {
-        await this.settleBatch(batchId, "failed");
-        throw error;
-      }
+    try {
+      const result = await rewriter.amend({ ...options, paths: selectedPaths });
+      await this.settleBatch(batchId, "committed");
+      return { ...result, selectedPaths };
+    } catch (error) {
+      await this.settleBatch(batchId, "failed");
+      throw error;
     }
+  }
+
+  async commit(message: string, amendTarget?: string): Promise<WorkbenchThreadGitCommitResult> {
+    const normalizedMessage = message.trim();
+    if (!normalizedMessage) throw new Error("A commit message is required.");
+    if (amendTarget) {
+      return await this.amend({ commits: [amendTarget], includeSelection: true, message: normalizedMessage, ranges: [] });
+    }
+    const batch = await this.selectionStore.executeThreadGitSelection({ kind: "claim", scope: this.scope });
+    if (batch.kind !== "claimed") throw new Error("Unexpected Git selection claim result.");
+    const { batchId, selectedPaths } = batch;
 
     let temporaryDirectory: WorkbenchTemporaryDirectory | undefined;
     try {
@@ -220,6 +279,23 @@ export default class WorkbenchThreadGit {
     } finally {
       await temporaryDirectory?.dispose();
     }
+  }
+
+  private async readIdentityOverride(repository: WorkbenchGitRepository, request: WorkbenchThreadGitAmendRequest) {
+    const identity: WorkbenchGitIdentityOverride = {};
+    for (const kind of ["author", "committer"] as const) {
+      const person = kind === "author" ? request.author : request.committer;
+      const date = kind === "author" ? request.authorDate : request.committerDate;
+      if (person === undefined && date === undefined) continue;
+      const actor = await repository.normalizeCommitActor(kind, {
+        ...(person === undefined ? {} : parsePerson(person, kind === "author" ? "Author" : "Committer")),
+        ...(date === undefined ? {} : { date }),
+      });
+      if (actor.name !== undefined) identity[`${kind}Name`] = actor.name;
+      if (actor.email !== undefined) identity[`${kind}Email`] = actor.email;
+      if (actor.date !== undefined) identity[`${kind}Date`] = actor.date;
+    }
+    return identity;
   }
 
   private normalizeRequestedPaths(requestedPaths: string[]) {
