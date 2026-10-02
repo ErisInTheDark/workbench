@@ -27,7 +27,7 @@ for (const failFirst of [false, true]) {
     type Node = ReloadableNode<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>;
     const bridge: Node = ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
       access: "agent", children: [], description: "Native readiness fixture", lifecycle: "atomic",
-      provides: ["codexBridge"], requires: [], safeAll: true, scope: "server:codex", sources: "",
+      provides: ["codexBridge"], requires: [], safeAll: true, scope: "server:codex",
       create: () => ({
         registrations: {
           codexBridge: { ensureInitialized: async () => { replacementReady(); } } as unknown as DaemonRuntimeObjects["codexBridge"],
@@ -37,7 +37,7 @@ for (const failFirst of [false, true]) {
     });
     const harness: Node = ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
       access: "cli", children: [bridge], description: "Native process fixture", lifecycle: "atomic",
-      provides: [], requires: [], safeAll: false, scope: "harness:codex", sources: "",
+      provides: [], requires: [], safeAll: false, scope: "harness:codex",
       create: () => {
         generation++;
         if (failFirst && generation === 2) throw new Error("native launch failed");

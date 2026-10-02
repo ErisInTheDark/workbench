@@ -86,5 +86,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: ["turnRecovery", "threadIdentity"],
   safeAll: true,
   scope: "server:codex/recovery",
-  sources: "daemon/server/CodexRecoveryNode.ts\ndaemon/server/CodexRecoveryController.ts\ndaemon/server/codex-turn-recovery.ts",
 });

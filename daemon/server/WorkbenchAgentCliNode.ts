@@ -36,11 +36,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: [],
   safeAll: true,
   scope: "server:cli",
-  sources: [
-    "wb",
-    "daemon/server/WorkbenchAgentCliEnvironment.ts",
-    "daemon/server/WorkbenchAgentCliNode.ts",
-    "daemon/server/lib/workbench/cli/workbench-agent-cli.sh",
-    "daemon/server/lib/workbench/cli/resolve-workbench-daemon-origin.mts",
-  ].join("\n"),
+  // Installed shims run the shell script and origin resolver outside the daemon.
+  entries: [path.join(__dirname, "lib", "workbench", "cli", "resolve-workbench-daemon-origin.mts")],
+  assets: ["/wb", "/package/wb", "/daemon/server/lib/workbench/cli/workbench-agent-cli.sh"].join("\n"),
 });

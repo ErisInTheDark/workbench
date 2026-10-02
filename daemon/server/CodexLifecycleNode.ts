@@ -46,9 +46,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   safeAll: false,
   destructive: true,
   scope: "server:codex/lifecycle",
-  sources: [
-    "daemon/server/CodexLifecycleNode.ts",
-    "daemon/server/CodexLifecycleController.ts",
-    "daemon/server/CodexRecoverySupervisor.ts",
-  ].join("\n"),
 });

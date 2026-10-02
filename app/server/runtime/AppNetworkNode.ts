@@ -78,12 +78,4 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   requires: ["database", "logger"],
   safeAll: false,
   scope: "client:network",
-  sources: [
-    "app/server/runtime/AppNetworkNode.ts", "app/server/network/**",
-    "shared/http/workbench-network.ts", "shared/http/workbench-service.ts",
-    "shared/process/WorkbenchServiceClient.ts", "shared/process/workbench-service-endpoint.ts",
-    "daemon/host/WorkbenchServiceLauncher.ts", "daemon/host/WorkbenchServiceStartup.ts",
-    "daemon/host/WindowsServiceStartup.ts", "daemon/host/LinuxServiceStartup.ts",
-    "shared/http/workbench-daemon-endpoint.ts", "shared/process/workbench-daemon-endpoint.ts",
-  ].join("\n"),
 });

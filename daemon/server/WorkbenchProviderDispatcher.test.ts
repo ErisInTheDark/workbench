@@ -69,7 +69,7 @@ function fixture() {
     ReloadableNode.define<object, Objects, never>()({
       access: "agent", children: [], description: "Provider fixture", lifecycle: "atomic",
       provides: ["codexProvider", "openCodeProvider"], requires: [], safeAll: true,
-      scope: "server:codex/def", sources: "",
+      scope: "server:codex/def",
       create: () => {
         const current = ++generation;
         const currentRead = read;
@@ -104,7 +104,7 @@ function fixture() {
     ReloadableNode.define<object, Objects, never>()({
       access: "agent", children: [], description: "Provider consumer", lifecycle: "atomic",
       provides: ["providers"], requires: [], safeAll: true,
-      scope: "server:consumer", sources: "",
+      scope: "server:consumer",
       create: (_context, { run }) => ({
         registrations: { providers: new WorkbenchProviderDispatcher(run) },
         start() {}, dispose() {},

@@ -119,11 +119,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: ["openCodeService", "openCodeModelCatalog", "openCodeThreadOperations", "codexExecutor", "codexThreadOperations"],
   safeAll: true,
   scope: "server:opencode/def",
-  sources: [
-    "daemon/server/providers/opencode/OpenCodeProvider.ts",
-    "daemon/server/providers/opencode/OpenCodeToolsController.ts",
-    "daemon/server/CodexShellController.ts",
-    "daemon/server/WorkbenchApprovedCommandExecutor.ts",
-    "shared/workbench/provider/provider-registrations.ts",
-  ].join("\n"),
 });

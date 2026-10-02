@@ -35,10 +35,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: ["codexThreadOperations", "codexExecutor"],
   safeAll: true,
   scope: "server:codex/tools",
-  sources: [
-    "daemon/server/CodexToolsNode.ts",
-    "daemon/server/CodexToolsController.ts",
-    "daemon/server/CodexShellController.ts",
-    "daemon/server/WorkbenchApprovedCommandExecutor.ts",
-  ].join("\n"),
 });

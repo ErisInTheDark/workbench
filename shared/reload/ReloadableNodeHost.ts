@@ -51,7 +51,8 @@ export interface ReloadableNodeHostOptions {
   onSwap?: (nodeIds: readonly string[]) => Promise<void> | void;
   processScope?: {
     descriptor: DaemonReloadScopeDescriptor;
-    sources: string;
+    /** Non-module process inputs and entries above the process module; imports are discovered. */
+    assets: string;
   };
   requiredRegistrations?: readonly PropertyKey[];
   requiredScopes?: readonly DaemonReloadScope[];
@@ -229,7 +230,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       ...this.processScope.descriptor,
       paths: this.processSourcePaths,
       boundaryPatterns: [
-        ...this.processScope.sources.split(/\r?\n/u).filter(Boolean),
+        ...this.processScope.assets.split(/\r?\n/u).filter(Boolean),
         ...this.sourceExclusions.map(source => `!${source}`),
       ],
     });
@@ -248,7 +249,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     this.processSourceMatcher = this.processScope
       ? createGitignoreMatcher([
         ...this.processSourcePaths,
-        this.processScope.sources,
+        this.processScope.assets,
         ...this.sourceExclusions.map(source => `!${source}`),
       ].join("\n"))
       : null;
@@ -676,7 +677,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         ...(node.scope === this.topologyScope ? graph.sourceMetadata?.topologyPaths ?? [] : []),
       ])].filter(source => !this.excludedSources.matches(source)).sort();
       const sourcePatterns = [
-        ...`${node.sources}\n${node.boundarySources}`.split(/\r?\n/u).filter(Boolean),
+        ...node.assets.split(/\r?\n/u).filter(Boolean),
         ...this.sourceExclusions.map(source => `!${source}`),
       ];
       return {

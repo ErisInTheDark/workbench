@@ -51,9 +51,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   safeAll: false,
   destructive: true,
   scope: "harness:codex",
-  sources: [
-    "daemon/server/CodexAppServerNode.ts",
-    "daemon/server/CodexAppServerRuntime.ts",
-    "daemon/server/CodexAppServer.ts",
-  ].join("\n"),
 });

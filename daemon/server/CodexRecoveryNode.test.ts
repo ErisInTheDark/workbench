@@ -32,7 +32,7 @@ test("queued native recovery survives replacement as captured context, never as 
     ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
       access: "agent", children: [native], description: "Shared recovery dependencies", lifecycle: "atomic",
       provides: ["turnRecovery", "threadIdentity", "codexBridge"], requires: [], safeAll: true,
-      scope: "server:test-recovery-parent", sources: "",
+      scope: "server:test-recovery-parent",
       create: () => ({
         registrations: {
           turnRecovery: coordinator,

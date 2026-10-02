@@ -105,12 +105,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: [],
   safeAll: true,
   scope: "server:turns",
-  sources: [
-    "daemon/server/WorkbenchTurnLifecycleNode.ts",
-    "shared/reload/ReloadSourceWatcher.ts",
-    "daemon/server/WorkbenchTurnRecoveryController.ts",
-    "daemon/server/WorkbenchToolRevisionController.ts",
-    "daemon/server/WorkbenchTurnRecovery*.test.ts",
-    "daemon/server/WorkbenchToolRevisionController.test.ts",
-  ].join("\n"),
 });

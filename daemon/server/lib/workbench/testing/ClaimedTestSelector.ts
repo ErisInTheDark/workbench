@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - TestReloadNode: source ownership and child boundaries used for test selection.
+ * - TestReloadNode: declared entries/assets and child boundaries used for test selection.
  * - ClaimedTestSelection: selected files, affected scopes and outside-node sources.
  * - default ClaimedTestSelector: select companions from claims and current reload/import graphs.
  */
@@ -8,12 +8,12 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { createGitignoreMatcher } from "workbench-shared/source-pattern-matcher";
 import ProjectTestCatalog from "../../../../../test/ProjectTestCatalog";
-import ProjectImportGraph from "./ProjectImportGraph";
+import ProjectImportGraph from "../ProjectImportGraph";
 
 export interface TestReloadNode {
   scope: string;
-  sources: string;
-  boundarySources?: string;
+  entries?: readonly string[];
+  assets?: string;
   children: readonly TestReloadNode[];
 }
 
@@ -60,11 +60,12 @@ export default class ClaimedTestSelector {
     const owned = new Map<string, Set<string>>();
     const matchers = new Map<string, ReturnType<typeof createGitignoreMatcher>>();
     for (const node of nodes.values()) {
-      const matcher = createGitignoreMatcher(`${node.sources}\n${node.boundarySources ?? ""}`);
+      const matcher = createGitignoreMatcher(node.assets ?? "");
       matchers.set(node.scope, matcher);
       const files = this.catalog.sources.filter(file => matcher.matches(path.relative(this.catalog.root, file)));
       const module = this.modules.get(node.scope);
       if (module) files.push(module);
+      files.push(...node.entries ?? []);
       const stops = new Set([...nodeFiles].filter(file => file !== module));
       owned.set(node.scope, this.graph.closure(files, "imports", stops));
     }

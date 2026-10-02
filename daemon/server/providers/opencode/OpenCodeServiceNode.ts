@@ -2,6 +2,7 @@
  * Exports:
  * - default OpenCodeServiceNode: own the reloadable client for the user's shared OpenCode service.
  */
+import path from "node:path";
 import ReloadableNode from "../../ReloadableNode";
 import OpenCodeBridgeNode from "./OpenCodeBridgeNode";
 import OpenCodeServiceController from "./OpenCodeServiceController";
@@ -21,25 +22,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     };
   },
   description: "Reconnect Workbench to the user's shared OpenCode service.",
+  // OpenCode loads the Workbench plugin in its own process.
+  entries: [path.join(__dirname, "workbench-plugin", "index.ts")],
   lifecycle: "atomic",
   provides: ["openCodeService"],
   requires: [],
   safeAll: false,
   destructive: true,
   scope: "harness:opencode",
-  sources: [
-    "daemon/server/providers/opencode/OpenCodeServiceNode.ts",
-    "daemon/server/providers/opencode/OpenCodeServiceController.ts",
-    "daemon/server/providers/opencode/workbench-plugin/index.ts",
-    "daemon/server/providers/opencode/workbench-plugin/OpenCodeCompanionToolsController.ts",
-    "daemon/server/providers/opencode/workbench-plugin/OpenCodePatchStreamController.ts",
-    "daemon/server/providers/opencode/workbench-plugin/OpenCodeFileEvidenceController.ts",
-    "daemon/server/providers/opencode/workbench-plugin/OpenCodeSteerCutController.ts",
-    "daemon/server/providers/opencode/workbench-plugin/OpenCodeSseTap.ts",
-    "daemon/server/providers/opencode/workbench-plugin/open-code-stream-cut.ts",
-    "daemon/server/lib/workbench/git/git-content-diff.ts",
-    "daemon/server/providers/opencode/workbench-plugin/open-code-tool-stream.ts",
-    "daemon/server/providers/opencode/workbench-plugin/open-code-patch-preview.ts",
-    "daemon/server/providers/opencode/opencode-workbench-rpc.ts",
-  ].join("\n"),
 });

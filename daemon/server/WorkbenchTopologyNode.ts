@@ -17,5 +17,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: [],
   safeAll: true,
   scope: "server:topology",
-  sources: "",
 });

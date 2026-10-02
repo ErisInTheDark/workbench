@@ -75,17 +75,4 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   requires: [],
   safeAll: false,
   scope: "client:database",
-  sources: [
-    "app/server/runtime/AppDatabaseNode.ts",
-    "app/server/state/WorkbenchAppStateRepository.ts",
-    "app/server/state/WorkbenchPresentationRepository.ts",
-    "shared/state/workbench-presentation-schema.ts",
-    "shared/state/workbench-presentation-releases.ts",
-    "shared/state/workbench-app-state-schema.ts",
-    "shared/state/workbench-app-state-releases.ts",
-    "shared/state/workbench-network-state-schema.ts",
-    "shared/database/**",
-    "shared/workbench-data-root.ts",
-    "shared/workbench/project/project-aliases.ts",
-  ].join("\n"),
 });

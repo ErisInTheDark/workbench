@@ -39,9 +39,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: [],
   safeAll: true,
   scope: "server:commands/exec",
-  sources: [
-    "daemon/server/CodexExecServerNode.ts",
-    "daemon/server/CodexExecServer.ts",
-    "daemon/server/codex-exec-protocol.ts",
-  ].join("\n"),
 });

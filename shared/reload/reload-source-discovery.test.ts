@@ -13,13 +13,29 @@ function moduleAt(relative: string, children: NodeModule[] = [], exports: object
   return { filename: path.resolve(repoRoot, relative), children, exports } as NodeModule;
 }
 
-function node(scope: string, children: ReloadableNode<object, object, never>[] = []) {
+function node(scope: string, children: ReloadableNode<object, object, never>[] = [], entries: string[] = []) {
   return ReloadableNode.define<object, object, never>()({
-    scope, children, access: "agent", description: scope, lifecycle: "atomic",
-    provides: [] as const, requires: [] as const, safeAll: true, sources: "",
+    scope, children, entries, access: "agent", description: scope, lifecycle: "atomic",
+    provides: [] as const, requires: [] as const, safeAll: true,
     create: () => ({ registrations: {}, start() {}, dispose() {} }),
   });
 }
+
+test("out-of-process entries contribute their resolved import closure to the declaring node", () => {
+  const worker = path.join(repoRoot, "daemon/worker.mjs");
+  const owner = node("server:owner", [], [worker]);
+  const ownerModule = moduleAt("daemon/owner.ts", [], { default: owner });
+  const root = moduleAt("daemon/root.ts", [ownerModule]);
+  const graph = defineReloadableNodeGraph([owner]);
+  const result = discoverReloadGraphSources(graph, root, {
+    repoRoot, modules: [ownerModule],
+    resolveEntryImports: entries => [...entries, path.join(repoRoot, "daemon/worker-schema.ts"), path.join(repoRoot, "daemon/worker.test.ts")],
+  });
+  assert.deepEqual(result.sourceMetadata?.pathsByScope.get("server:owner"), [
+    "daemon/owner.ts", "daemon/worker-schema.ts", "daemon/worker.mjs",
+  ]);
+  assert.throws(() => discoverReloadGraphSources(graph, root, { repoRoot, modules: [ownerModule] }), /cannot resolve entry imports/u);
+});
 
 test("shared imports belong to their consumer without absorbing a child node", () => {
   const child = node("client:child");

@@ -14,10 +14,8 @@ export default ReloadableNode.define<ServiceProcessContext, ServiceRuntimeObject
   scope: "host:network", access: "operator", lifecycle: "handoff", safeAll: false,
   description: "Reload the shared network identity, grants and discovery owner.",
   requires: ["database"], provides: ["network"], children: [ServiceHttpNode],
-  sources: [
-    "daemon/host/runtime/ServiceNetworkNode.ts", "daemon/host/network/**", "shared/network/**",
-    "shared/http/workbench-network.ts", "shared/http/workbench-daemon-discovery.ts",
-  ].join("\n"),
+  // The native network process runs the prebuilt binary; Go sources only matter once rebuilt into bin.
+  assets: "shared/network/native/bin/**",
   create(context, build) {
     const database = build.get("database");
     const create = () => new WorkbenchNetworkController({

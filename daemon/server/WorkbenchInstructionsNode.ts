@@ -31,7 +31,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: ["database"],
   safeAll: false,
   scope: "server:instructions",
-  sources: [
+  assets: [
     "instructions/**/*.md",
     "instructions/**/*.md.tombstone",
   ].join("\n"),

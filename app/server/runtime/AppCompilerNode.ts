@@ -11,7 +11,6 @@ import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 
 export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never>()({
   access: "operator",
-  boundarySources: "app/client/browser-entry.tsx\napp/client/tailwind.css",
   children: [],
   create: (context, build) => {
     const logger = build.get("logger");
@@ -61,11 +60,4 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   requires: ["logger", "state"],
   safeAll: false,
   scope: "client:compiler",
-  sources: [
-    "app/server/runtime/AppCompilerNode.ts",
-    "app/server/WorkbenchFrontendCompiler.ts",
-    "app/server/WorkbenchFrontendWatcher.ts",
-    "shared/frontend-generation.ts",
-    "static/**",
-  ].join("\n"),
 });

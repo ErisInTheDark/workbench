@@ -21,5 +21,4 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   requires: [],
   safeAll: false,
   scope: "client:topology",
-  sources: "app/server/runtime/*Node.ts\napp/server/runtime/app-root-node.ts\napp/server/runtime/app-runtime-objects.ts\napp/server/runtime/app-process-context.ts",
 });

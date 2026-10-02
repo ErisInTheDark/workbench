@@ -71,14 +71,4 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   requires: ["network", "presentation", "logger"],
   safeAll: false,
   scope: "client:workspace",
-  sources: [
-    "app/server/runtime/AppWorkspaceNode.ts", "app/server/workspace/**",
-    "app/server/state/WorkbenchPresentationImportController.ts",
-    "app/server/state/workbench-presentation-layout.ts",
-    "shared/workbench/workspace/**", "shared/workbench/WorkbenchRpcSocketClient.ts",
-    "shared/workbench/WorkbenchSocketClient.ts", "shared/workbench/daemon/**",
-    "shared/workbench/project/workbench-project-projection.ts",
-    "shared/workbench/provider/provider-observation.ts",
-    "shared/workbench/provider/provider-model.ts",
-  ].join("\n"),
 });

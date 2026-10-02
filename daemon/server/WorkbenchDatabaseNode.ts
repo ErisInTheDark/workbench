@@ -7,14 +7,13 @@ import { dirname, join } from "node:path";
 import { ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 
 import type { DaemonProcessContext } from "./daemon-process-context";
-import type {
-  DaemonDatabaseRegistration,
-  DaemonProviderNotification,
-  DaemonRuntimeObjects,
-  DaemonTranscriptRegistration,
-} from "./daemon-runtime-objects";
-import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
-import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
+import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
+import WorkbenchCommandApprovalController from "./WorkbenchCommandApprovalController";
+import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
+import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
+import WorkbenchTranscriptController from "./database/transcript/WorkbenchTranscriptController";
+import WorkbenchTranscriptCaptureGapController from "./database/transcript/WorkbenchTranscriptCaptureGapController";
 import CodexConfigurationNode from "./CodexConfigurationNode";
 import CodexRecoveryNode from "./CodexRecoveryNode";
 import ReloadableNode from "./ReloadableNode";
@@ -29,56 +28,9 @@ import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
 import WorkbenchInstructionsNode from "./WorkbenchInstructionsNode";
 import WorkbenchCodexInstructionNode from "./WorkbenchCodexInstructionNode";
 
-type DatabaseControllerConstructor = new (
-  options: import("./database/WorkbenchDatabaseController").WorkbenchDatabaseControllerOptions,
-) => DaemonDatabaseRegistration & Pick<
-  import("./database/WorkbenchDatabaseController").default, "suspend" | "resume" | "abortPreparation" | "retireSuspendedAdmission" | "settleTranscript"
->;
-
 interface DatabaseReloadState {
   checkpointPath: string | null;
   releaseCandidate?(): Promise<void>;
-}
-
-type ThreadIdentityControllerConstructor = new (
-  database: DaemonDatabaseRegistration,
-) => WorkbenchThreadIdentityController;
-
-type TranscriptIdentityControllerConstructor = new (
-  database: DaemonDatabaseRegistration,
-) => WorkbenchTranscriptIdentityController;
-
-type CaptureGapController = import("./database/transcript/WorkbenchTranscriptCaptureGapController").default;
-
-type TranscriptControllerConstructor = new (
-  database: DaemonDatabaseRegistration,
-  captureGaps: CaptureGapController,
-) => DaemonTranscriptRegistration;
-
-type CaptureGapControllerConstructor = new (
-  options: import("./database/transcript/WorkbenchTranscriptCaptureGapController").WorkbenchTranscriptCaptureGapControllerOptions,
-) => CaptureGapController;
-
-function loadDatabaseControllers() {
-  const CommandApprovalController = (
-    require("./WorkbenchCommandApprovalController") as { default: typeof import("./WorkbenchCommandApprovalController").default }
-  ).default;
-  const TranscriptIdentityController = (
-    require("./WorkbenchTranscriptIdentityController") as { default: TranscriptIdentityControllerConstructor }
-  ).default;
-  const ThreadIdentityController = (
-    require("./WorkbenchThreadIdentityController") as { default: ThreadIdentityControllerConstructor }
-  ).default;
-  const DatabaseController = (
-    require("./database/WorkbenchDatabaseController") as { default: DatabaseControllerConstructor }
-  ).default;
-  const TranscriptController = (
-    require("./database/transcript/WorkbenchTranscriptController") as { default: TranscriptControllerConstructor }
-  ).default;
-  const CaptureGapController = (
-    require("./database/transcript/WorkbenchTranscriptCaptureGapController") as { default: CaptureGapControllerConstructor }
-  ).default;
-  return { CommandApprovalController, CaptureGapController, DatabaseController, ThreadIdentityController, TranscriptIdentityController, TranscriptController };
 }
 
 export default ReloadableNode.define<
@@ -87,40 +39,19 @@ export default ReloadableNode.define<
   DaemonProviderNotification
 >()({
   access: "agent",
-  boundarySources: [
-    "daemon/server/lib/workbench/database/schema/**",
-    "shared/workbench/database/schema/**",
-    "shared/workbench/search/**",
-    "shared/workbench/settings/**",
-    "shared/workbench-data-root.ts",
-    "daemon/server/database/**",
-    "shared/database/**",
-    "daemon/server/lib/project.ts",
-    "daemon/server/lib/git.ts",
-    "daemon/server/lib/workbench/project/project-identity.ts",
-    "daemon/server/workbench-thread-state-record.ts",
-  ].join("\n"),
   children: [CodexConfigurationNode, CodexRecoveryNode, WorkbenchInstructionsNode, WorkbenchCodexInstructionNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
   create: (context, build) => {
-    const {
-      CommandApprovalController,
-      CaptureGapController,
-      DatabaseController,
-      ThreadIdentityController,
-      TranscriptIdentityController,
-      TranscriptController,
-    } = loadDatabaseControllers();
     const databasePath = join(context.dataRootPath, "daemon", "workbench.sqlite3");
     const handoffState = build.handoffState as DatabaseReloadState | undefined;
-    const database = new DatabaseController({
+    const database = new WorkbenchDatabaseController({
       databasePath,
       beforeMigration: handoffState ? (backupPath) => { handoffState.checkpointPath = backupPath; } : undefined,
     });
     if (handoffState) handoffState.releaseCandidate = () => database.abortPreparation();
-    const threadIdentity = new ThreadIdentityController(database);
-    const commandApprovals = new CommandApprovalController(database);
-    const transcriptIdentity = new TranscriptIdentityController(database);
-    const captureGaps = new CaptureGapController({
+    const threadIdentity = new WorkbenchThreadIdentityController(database);
+    const commandApprovals = new WorkbenchCommandApprovalController(database);
+    const transcriptIdentity = new WorkbenchTranscriptIdentityController(database);
+    const captureGaps = new WorkbenchTranscriptCaptureGapController({
       database,
       resolveReference: async (reference) => {
         const thread = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(reference.threadId) });
@@ -131,7 +62,7 @@ export default ReloadableNode.define<
         return { threadId: thread.threadId, turnId: turn?.turnId ?? null };
       },
     });
-    const transcript = new TranscriptController(database, captureGaps);
+    const transcript = new WorkbenchTranscriptController(database, captureGaps);
     let shutdownPromise: Promise<void> | null = null;
     let committed = build.mode !== "replacement";
     const shutdown = () => {
@@ -192,26 +123,10 @@ export default ReloadableNode.define<
     };
   },
   description: "Reload the mandatory SQLite worker and every direct database dependant.",
+  entries: [join(__dirname, "database", "workbench-database-worker-bootstrap.mjs")],
   lifecycle: "handoff",
   provides: ["database", "commandApprovals", "threadIdentity", "transcriptIdentity", "transcript"],
   requires: [],
   safeAll: true,
   scope: "server:database",
-  sources: [
-    "daemon/server/WorkbenchDatabaseNode.ts",
-    "daemon/server/WorkbenchCommandApprovalController.ts",
-    "daemon/server/lib/workbench/command-approval-prefix.ts",
-    "daemon/server/lib/workbench/package-script-prefixes.ts",
-    "daemon/server/WorkbenchThreadIdentityController.ts",
-    "daemon/server/WorkbenchTranscriptIdentityController.ts",
-    "shared/workbench/thread/workbench-thread-items.ts",
-    "shared/workbench/thread/workbench-thread-turn.ts",
-    "shared/workbench/thread/thread-item-normalization.ts",
-    "shared/workbench/thread/thread-runtime-state.ts",
-    "shared/workbench/thread/thread-command-output.ts",
-    "shared/workbench/thread/retained-transcript-identity.ts",
-    "shared/workbench/provider/provider-observation.ts",
-    "daemon/server/lib/workbench/database/schema/composer-profile-schema.ts",
-    "shared/workbench/database/schema/releases.ts",
-  ].join("\n"),
 });

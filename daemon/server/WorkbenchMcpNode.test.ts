@@ -128,7 +128,7 @@ for (const outcome of ["replacement", "retiring success", "rollback", "admitted 
     } as DaemonProcessContext;
     const parent = (replacement: boolean) => ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
       access: "agent", children: [WorkbenchMcpNode], description: "MCP parent",
-      lifecycle: "atomic", safeAll: true, scope: "server:parent", sources: "parent.ts", requires: [],
+      lifecycle: "atomic", safeAll: true, scope: "server:parent", requires: [],
       provides: [...WorkbenchMcpNode.requires, ...(replacement ? ["modules" as const] : [])],
       create: (_context, build) => {
         const registrations = Object.fromEntries(WorkbenchMcpNode.requires.map((key) => [key, {}]));
@@ -181,7 +181,7 @@ test("candidate activation failure leaves the live MCP executor and freshness in
   let bumps = 0;
   const failedChild = ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
     access: "agent", children: [], description: "activation failure",
-    lifecycle: "atomic", safeAll: true, scope: "server:failure", sources: "failure.ts",
+    lifecycle: "atomic", safeAll: true, scope: "server:failure",
     requires: [], provides: [],
     create: (_context, build) => ({
       registrations: {},
@@ -194,7 +194,7 @@ test("candidate activation failure leaves the live MCP executor and freshness in
   });
   const parent = ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
     access: "agent", children: [WorkbenchMcpNode, failedChild], description: "MCP parent",
-    lifecycle: "atomic", safeAll: true, scope: "server:parent", sources: "parent.ts",
+    lifecycle: "atomic", safeAll: true, scope: "server:parent",
     requires: [], provides: [...WorkbenchMcpNode.requires],
     create: (_context, build) => {
       const registrations = Object.fromEntries(WorkbenchMcpNode.requires.map((key) => [key, {}]));

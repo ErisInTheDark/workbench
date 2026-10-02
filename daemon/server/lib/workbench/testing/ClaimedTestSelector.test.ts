@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import ProjectTestCatalog from "../../../../../test/ProjectTestCatalog";
-import ProjectImportGraph from "./ProjectImportGraph";
+import ProjectImportGraph from "../ProjectImportGraph";
 import ClaimedTestSelector from "./ClaimedTestSelector";
 
 test("selects affected consumers and reload boundaries without unrelated dependencies", async () => {
@@ -24,7 +24,8 @@ test("selects affected consumers and reload boundaries without unrelated depende
       "outer-consumer.ts": 'import "./consumer"; import "./unchanged";',
       "unchanged.ts": "export const value = 3",
       "unrelated.ts": "export const value = 4",
-      "worker.ts": "export const value = 5",
+      "worker.ts": 'import "./worker-input";',
+      "worker-input.ts": "export const value = 5",
       "cross-owner.ts": "export const value = 6",
     };
     const names = Object.keys(contents);
@@ -33,12 +34,13 @@ test("selects affected consumers and reload boundaries without unrelated depende
     await Promise.all(tests.map(name => writeFile(file(name), "")));
     await writeFile(file("cross-owner.test.ts"), 'import "./input";');
     const catalog = await ProjectTestCatalog.read(root);
-    const child = { scope: "child", sources: "Child.ts", children: [] };
-    const parent = { scope: "parent", sources: "Parent.ts", boundarySources: "worker.ts", children: [child] };
+    const child = { scope: "child", children: [] };
+    const parent = { scope: "parent", entries: [file("worker.ts")], children: [child] };
     const selector = new ClaimedTestSelector(catalog, new ProjectImportGraph(root, catalog.files), [parent],
       new Map([["parent", file("Parent.ts")], ["child", file("Child.ts")]]));
     assert.deepEqual(selector.select(["input.ts"]).files, ["Child.test.ts", "Parent.test.ts", "input.test.ts", "cross-owner.test.ts"].map(file).sort());
     assert.deepEqual(selector.select(["worker.ts"]).files, ["Child.test.ts", "Parent.test.ts", "worker.test.ts"].map(file).sort());
+    assert.deepEqual(selector.select(["worker-input.ts"]).files, ["Child.test.ts", "Parent.test.ts", "worker-input.test.ts", "worker.test.ts"].map(file).sort());
     assert.deepEqual(selector.select(["outside.ts"]).files, ["consumer.test.ts", "outer-consumer.test.ts", "outside.test.ts"].map(file));
     assert.deepEqual(selector.select(["Child.ts"]).scopes, ["child"]);
     assert.deepEqual(selector.select(["outside.test.ts"]).files, [file("outside.test.ts")]);

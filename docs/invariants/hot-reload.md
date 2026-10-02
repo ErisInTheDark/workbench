@@ -1,1 +1,2 @@
 - Prefer putting product behaviour in the reload graph. Keep non-reloadable process shells limited to bootstrapping, stable ingress, reload/restart control, and shutdown.
+- Reload ownership comes from imports. Nodes declare only `entries` (code run outside the process module graph: workers, child processes, plugins) and `assets` (non-module runtime inputs); never list imported modules.

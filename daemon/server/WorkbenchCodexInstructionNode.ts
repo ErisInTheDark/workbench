@@ -32,11 +32,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: ["database"],
   safeAll: true,
   scope: "server:codex/instructions",
-  sources: [
-    "daemon/server/WorkbenchCodexInstructionNode.ts",
-    "daemon/server/WorkbenchCodexInstructionAdapter.ts",
-    "daemon/server/workbench-codex-mcp-config.ts",
-    "daemon/server/workbench-prompt-context.ts",
-    "daemon/server/lib/workbench/instructions/**",
-  ].join("\n"),
 });

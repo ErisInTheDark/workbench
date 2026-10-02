@@ -4,7 +4,7 @@
  */
 import type { ReloadableNodeGraph } from "./ReloadableNode.ts";
 import type { ReloadableNodeModuleLoader } from "./ReloadableNodeHost.ts";
-import { discoverReloadGraphSources } from "./reload-source-discovery.ts";
+import { discoverReloadGraphSources, type ReloadEntryImportResolver } from "./reload-source-discovery.ts";
 
 function collectCacheSubtree(loader: NodeRequire, moduleId: string, visited = new Set<string>()) {
   if (visited.has(moduleId)) return visited;
@@ -20,7 +20,7 @@ function collectCacheSubtree(loader: NodeRequire, moduleId: string, visited = ne
 export function createReloadableNodeModuleLoader<TContext, TObjects extends object, TNotification>(
   loader: NodeRequire,
   rootSpecifier: string,
-  sourceOptions?: { repoRoot: string; processModule?: NodeModule },
+  sourceOptions?: { repoRoot: string; processModule?: NodeModule; resolveEntryImports?: ReloadEntryImportResolver },
 ): ReloadableNodeModuleLoader<TContext, TObjects, TNotification> {
   const load = () => {
     const graph = (loader(rootSpecifier) as { default: ReloadableNodeGraph<TContext, TObjects, TNotification> }).default;

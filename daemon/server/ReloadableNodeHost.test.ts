@@ -34,7 +34,7 @@ function node(options: {
     requires: options.requires ?? [],
     safeAll: true,
     scope: options.scope,
-    sources: `${options.scope}.ts`,
+    assets: `${options.scope}.ts`,
   });
 }
 
@@ -769,7 +769,10 @@ test("failed topology startup restores the previous graph and registrations", as
 });
 
 test("path projection includes node-owned sources and the stable process kernel", () => {
-  const graph = defineReloadableNodeGraph([node({ scope: "server:a" })]);
+  const graph = {
+    ...defineReloadableNodeGraph([node({ scope: "server:a" })]),
+    sourceMetadata: { pathsByScope: new Map(), topologyPaths: [], processPaths: ["daemon/server/index.ts"] },
+  };
   const host = new ReloadableNodeHost(null, loader(graph, graph));
   assert.deepEqual(host.getReloadScopesForPaths(["server:a.ts"]), ["server:a"]);
   assert.deepEqual(host.getReloadScopesForPaths(["daemon/server/index.ts"]), ["server:process"]);

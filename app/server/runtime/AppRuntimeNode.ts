@@ -63,12 +63,4 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   requires: [],
   safeAll: false,
   scope: "client:runtime",
-  sources: [
-    "app/server/runtime/AppRuntimeNode.ts",
-    "app/server/runtime/WorkbenchAppReloadController.ts",
-    "app/server/runtime/WorkbenchAppReloadDirtController.ts",
-    "shared/reload/ReloadDirtController.ts",
-    "shared/reload/ReloadSourceWatcher.ts",
-    "shared/reload/ReloadDirtSnapshotRepository.ts",
-  ].join("\n"),
 });

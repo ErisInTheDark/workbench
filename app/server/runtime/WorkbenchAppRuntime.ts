@@ -153,7 +153,7 @@ export default class WorkbenchAppRuntime {
           safeAll: false,
           scope: "client:process",
         },
-        sources: [
+        assets: [
           "app/package.json",
           "app/tsconfig.json",
           "app/server/index.ts",

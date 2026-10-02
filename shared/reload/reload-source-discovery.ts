@@ -1,15 +1,24 @@
 /*
  * Exports:
+ * - ReloadEntryImportResolver: static import closure for modules run outside the process module graph.
  * - discoverReloadGraphSources: attach repository-local import ownership to a graph generation.
  */
 import path from "node:path";
 import type ReloadableNode from "./ReloadableNode";
 import type { ReloadableNodeGraph } from "./ReloadableNode";
 
+/** Returns absolute paths of every local module reachable from the given absolute entry paths, including the entries. */
+export type ReloadEntryImportResolver = (entries: readonly string[]) => Iterable<string>;
+
 export function discoverReloadGraphSources<TContext, TObjects extends object, TNotification>(
   graph: ReloadableNodeGraph<TContext, TObjects, TNotification>,
   rootModule: NodeModule,
-  options: { repoRoot: string; modules: readonly NodeModule[]; processModule?: NodeModule },
+  options: {
+    repoRoot: string;
+    modules: readonly NodeModule[];
+    processModule?: NodeModule;
+    resolveEntryImports?: ReloadEntryImportResolver;
+  },
 ) {
   const workspacePath = (filename: string) => {
     const relative = path.relative(options.repoRoot, path.resolve(filename));
@@ -54,6 +63,18 @@ export function discoverReloadGraphSources<TContext, TObjects extends object, TN
     pathsByScope.set(scope, walk(loaded, boundaries));
     const source = workspacePath(loaded.filename);
     if (source) topologyPaths.add(source);
+  }
+  for (const [scope, node] of nodes) {
+    if (!node.entries.length) continue;
+    if (!options.resolveEntryImports) {
+      throw new Error(`Reloadable node ${scope} declares entries, but this graph loader cannot resolve entry imports.`);
+    }
+    const paths = pathsByScope.get(scope) ?? [];
+    for (const filename of options.resolveEntryImports(node.entries)) {
+      const source = workspacePath(filename);
+      if (source) paths.push(source);
+    }
+    pathsByScope.set(scope, paths);
   }
   for (const observation of graph.sourceObservations ?? []) {
     const source = workspacePath(observation.path);

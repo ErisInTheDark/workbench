@@ -35,10 +35,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: ["database"],
   safeAll: true,
   scope: "server:codex/configuration",
-  sources: [
-    "daemon/server/CodexConfigurationNode.ts",
-    "daemon/server/CodexModelCatalog.ts",
-    "daemon/server/lib/codex/codex-home.ts",
-    "daemon/server/lib/codex/CodexGlobalGuidance.ts",
-  ].join("\n"),
 });

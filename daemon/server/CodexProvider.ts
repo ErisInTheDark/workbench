@@ -66,11 +66,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: ["codexConfiguration", "codexSandboxNetwork", "codexThreadOperations", "codexNativeConfiguration", "codexTools", "codexRecovery"],
   safeAll: true,
   scope: "server:codex/def",
-  sources: [
-    "daemon/server/CodexProvider.ts",
-    "daemon/server/CodexSingleFileController.ts",
-    "daemon/server/CodexSingleFileRuntime.ts",
-    "daemon/server/CodexSingleFileDocuments.ts",
-    "shared/workbench/provider/provider-single-file.ts",
-  ].join("\n"),
 });

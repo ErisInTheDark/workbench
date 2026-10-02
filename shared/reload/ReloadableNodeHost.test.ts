@@ -31,7 +31,7 @@ test("unrelated topology drift rejects a narrow reload without replacing running
       requires: (keyof Objects)[] = [],
     ) => ReloadableNode.define<object, Objects, never>()({
       scope, provides, requires, children, access: "agent", lifecycle: "atomic",
-      safeAll: true, sources: "", description: scope,
+      safeAll: true, description: scope,
       create: () => ({
         registrations, start() { started.push(scope); }, dispose() { disposed.push(scope); },
       }),
@@ -72,7 +72,7 @@ test("idleness includes admitted requests, queued reloads and node-owned backgro
   const graph = () => defineReloadableNodeGraph([
     ReloadableNode.define<object, { value: number }, never>()({
       access: "agent", children: [], requires: [], provides: ["value"], scope: "server:value",
-      lifecycle: "atomic", safeAll: true, sources: "", description: "fixture",
+      lifecycle: "atomic", safeAll: true, description: "fixture",
       create: () => ({ registrations: { value: 1 }, start() {}, dispose() {}, hasPendingWork: () => background }),
     }),
   ]);
@@ -113,7 +113,6 @@ void ReloadableNode.define<object, Objects, never>()({
   requires: ["value"],
   safeAll: true,
   scope: "server:type-boundary",
-  sources: "",
 });
 
 function fixture(prefix: "server" | "client") {
@@ -129,7 +128,7 @@ function fixture(prefix: "server" | "client") {
       lifecycle: "atomic" | "handoff" = "atomic",
     ) => ReloadableNode.define<object, Objects, never>()({
       scope: `${prefix}:${name}`, access: "agent", children: [], requires: [], provides,
-      lifecycle, safeAll: true, sources: "", description: name, create,
+      lifecycle, safeAll: true, description: name, create,
     });
     return defineReloadableNodeGraph([
       node("consumer", ["consumer"], (_context, build) => ({
@@ -256,7 +255,7 @@ test("source ownership is published with its successful graph and restored after
     ...defineReloadableNodeGraph([
       ReloadableNode.define<object, SourceObjects, never>()({
         scope: "client:owner", access: "operator", description: "owner", lifecycle: "atomic",
-        provides: ["readSources"], requires: [], children: [], safeAll: false, sources: "",
+        provides: ["readSources"], requires: [], children: [], safeAll: false,
         create: (_context, build) => ({
           registrations: { readSources: () => build.getSourceState() },
           start: async () => {
@@ -274,7 +273,7 @@ test("source ownership is published with its successful graph and restored after
       }),
       ReloadableNode.define<object, SourceObjects, never>()({
         scope: "client:sibling", access: "operator", description: "sibling", lifecycle: "atomic",
-        provides: [], requires: [], children: [], safeAll: false, sources: "",
+        provides: [], requires: [], children: [], safeAll: false,
         create: () => ({ registrations: {}, start() {}, dispose() {} }),
       }),
     ]),
@@ -288,7 +287,7 @@ test("source ownership is published with its successful graph and restored after
     topologyScope: "client:topology",
     processScope: {
       descriptor: { scope: "client:process", access: "operator", description: "process", safeAll: false, destructive: true },
-      sources: "shared/reload/**",
+      assets: "shared/reload/**",
     },
   });
   const read = () => host.run("readSources", readSources => readSources());

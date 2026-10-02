@@ -92,10 +92,6 @@ export default ReloadableNode.define<ServiceProcessContext, ServiceRuntimeObject
   scope: "host:http", access: "operator", lifecycle: "atomic", safeAll: false,
   description: "Reload host control, identity and daemon forwarding.",
   requires: ["network"], provides: ["http"], children: [],
-  sources: [
-    "daemon/host/runtime/ServiceHttpNode.ts", "shared/http/HttpReverseProxy.ts",
-    "shared/http/workbench-service.ts",
-  ].join("\n"),
   create(context, build) {
     const http = new ServiceHttp(context, build.get("network"));
     return { registrations: { http }, start: () => {}, dispose: () => http.close() };

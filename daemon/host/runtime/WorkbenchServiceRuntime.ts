@@ -32,7 +32,7 @@ export default class WorkbenchServiceRuntime {
           scope: "host:process", description: "Replace the independently supervised host and daemon crash unit.",
           access: "operator", destructive: true, safeAll: false,
         },
-        sources: [
+        assets: [
           "daemon/host/launch-node.mjs", "daemon/host/native/**", "daemon/host/package.json",
         ].join("\n"),
       },

@@ -20,12 +20,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload native recognition, voice model selection and transformer sessions.",
   provides: ["voice"],
   requires: ["voiceSettings"],
-  sources: [
-    "daemon/server/WorkbenchVoiceNode.ts",
-    "daemon/server/lib/workbench/instructions/instruction-context-filter.ts",
-    "daemon/server/voice/**",
-    "shared/workbench/voice/**",
-  ].join("\n"),
   create(context, { get, run }) {
     const settings = get("voiceSettings");
     const providers = new WorkbenchProviderDispatcher(run);

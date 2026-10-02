@@ -30,9 +30,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   safeAll: false,
   destructive: true,
   scope: "harness:claude",
-  sources: [
-    "daemon/server/providers/claude/ClaudeSessionNode.ts",
-    "daemon/server/providers/claude/ClaudeSessionHost.ts",
-    "daemon/server/providers/claude/ClaudeConfigView.ts",
-  ].join("\n"),
 });

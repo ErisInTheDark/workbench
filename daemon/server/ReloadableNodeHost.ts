@@ -16,22 +16,6 @@ export interface ReloadableNodeHostOptions extends Omit<
   "processScope" | "topologyScope"
 > {}
 
-const PROCESS_SOURCES = [
-  "daemon/server/index.ts",
-  "daemon/server/WorkbenchDaemonListener.ts",
-  "shared/process/WorkbenchProcessLease.ts",
-  "shared/process/workbench-daemon-endpoint.ts",
-  "shared/http/workbench-daemon-endpoint.ts",
-  "daemon/server/ReloadableNodeHost.ts",
-  "daemon/server/reloadable-node-loader.ts",
-  "daemon/server/daemon-process-context.ts",
-  "daemon/server/WorkbenchDaemonControlIngress.ts",
-  "shared/workbench/daemon-health.ts",
-  "shared/workbench/daemon-reload.ts",
-  "shared/reload/**",
-  "shared/source-pattern-matcher.ts",
-].join("\n");
-
 export default class ReloadableNodeHost<TContext, TFeatures extends object, TNotification>
   extends SharedReloadableNodeHost<TContext, TFeatures, TNotification> {
   constructor(
@@ -49,7 +33,8 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
           safeAll: false,
           scope: "server:process",
         },
-        sources: PROCESS_SOURCES,
+        // The process module's import walk owns every process source.
+        assets: "",
       },
       topologyScope: "server:topology",
     });

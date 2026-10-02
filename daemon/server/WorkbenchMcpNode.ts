@@ -116,13 +116,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: REQUIRED_REGISTRATIONS,
   safeAll: true,
   scope: "server:mcp",
-  sources: [
-    "daemon/server/WorkbenchMcpNode.ts",
-    "daemon/server/WorkbenchAgentMcpController.ts",
-    "daemon/server/WorkbenchDaemonHttpRouter.ts",
-    "daemon/server/WorkbenchTranscriptAssetController.ts",
-    "shared/workbench/commands/workbench-shell-command.ts",
-    "shared/http/loopback-connection.ts",
-    "daemon/server/workbench-agent-mcp-request-registry.ts",
-  ].join("\n"),
 });

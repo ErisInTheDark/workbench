@@ -23,12 +23,6 @@ export default ReloadableNode.define<ServiceProcessContext, ServiceRuntimeObject
   scope: "host:database", access: "operator", lifecycle: "handoff", safeAll: false,
   description: "Reload service persistence and its dependant network and HTTP owners.",
   requires: [], provides: ["database", "dirt", "reload"], children: [ServiceNetworkNode],
-  sources: [
-    "daemon/host/runtime/ServiceDatabaseNode.ts", "daemon/host/runtime/WorkbenchServiceReloadController.ts",
-    "daemon/host/WorkbenchServiceRepository.ts", "daemon/host/WorkbenchNetworkImport.ts",
-    "shared/state/workbench-service-*.ts", "shared/state/workbench-network-state-schema.ts", "shared/database/**",
-    "shared/reload/ReloadDirtController.ts", "shared/reload/ReloadSourceWatcher.ts", "shared/reload/ReloadDirtSnapshotRepository.ts",
-  ].join("\n"),
   create(context, build) {
     const state = build.handoffState as Handoff | undefined;
     const database = new WorkbenchServiceRepository({ databasePath: path.join(context.dataRoot, "service", "service.sqlite3") });

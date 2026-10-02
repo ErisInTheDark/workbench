@@ -2,6 +2,7 @@
  * Exports:
  * - default WorkbenchBrowseNode: own warm Browse execution and Browse transcript recording while preserving browser sessions across code replacement.
  */
+import path from "node:path";
 import WorkbenchBrowseRuntime from "./lib/workbench/browse/WorkbenchBrowseRuntime";
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchBrowseRequestHandler from "./lib/workbench/browse/WorkbenchBrowseRequestHandler";
@@ -194,10 +195,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: ["database", "daemonRequests", "harnesses", "projectCatalog", "threadIdentity", "transcript"],
   safeAll: true,
   scope: "server:browse",
-  sources: [
-    "daemon/server/WorkbenchBrowseNode.ts",
-    "daemon/server/WorkbenchBrowseController.ts",
-    "daemon/server/WorkbenchBrowseResultController.ts",
-    "daemon/server/lib/workbench/browse/**",
-  ].join("\n"),
+  // Browse CLI and daemon run as child processes.
+  entries: ["run-browse-cli.mjs", "run-browse-daemon.mjs"].map(name => path.join(__dirname, "lib", "workbench", "browse", name)),
 });

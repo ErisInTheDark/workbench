@@ -62,9 +62,6 @@ export async function baselineActiveCodexTranscripts(
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
-  boundarySources: [
-    "daemon/server/codex-transcript-*.ts",
-  ].join("\n"),
   children: [CodexProvider, CodexToolsNode, OpenCodeProvider, ClaudeProviderNode],
   create: (context, build) => {
     const parent = build.get("codexAppServer");
@@ -390,25 +387,4 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "approvals", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptReader", "transcriptReconciliation", "codexRecovery", "providerObservations", "agentContext"],
   safeAll: true,
   scope: "server:codex",
-  sources: [
-    "daemon/server/CodexBridgeNode.ts",
-    "daemon/server/CodexThreadOperations.ts",
-    "daemon/server/CodexConfigurationController.ts",
-    "daemon/server/WorkbenchCodexMcpGenerationController.ts",
-    "daemon/server/codex-sandbox-policy.ts",
-    "daemon/server/CodexStdioBridge.ts",
-    "daemon/server/CodexApprovalAdapter.ts",
-    "daemon/server/CodexProviderObservations.ts",
-    "daemon/server/CodexProviderIdentity.ts",
-    "daemon/server/CodexPublicIdentity.ts",
-    "daemon/server/thread-identity-transcript-mapping.ts",
-    "daemon/server/CodexFileChangeController.ts",
-    "daemon/server/CodexThreadWindowLoader.ts",
-    "daemon/server/CodexStoredTranscriptAdapter.ts",
-    "daemon/server/CodexThreadPageReadController.ts",
-    "shared/workbench/thread/workbench-thread-page.ts",
-    "daemon/server/workbench-agent-mcp-request-registry.ts",
-    "daemon/server/CodexBridgeTransitionController.ts",
-    "daemon/server/CodexHealthMonitor.ts",
-  ].join("\n"),
 });

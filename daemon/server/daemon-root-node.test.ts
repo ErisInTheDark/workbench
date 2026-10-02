@@ -39,7 +39,7 @@ function readReloadNodeSourceState() {
     topologyScope: "server:topology",
     processScope: {
       descriptor: { scope: "server:process", access: "operator", description: "Process", destructive: true, safeAll: false },
-      sources: "",
+      assets: "",
     },
   }).getSourceState();
 }
@@ -178,6 +178,13 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
   assert.deepEqual(owners("wb"), ["server:cli"]);
   assert.deepEqual(owners("daemon/server/WorkbenchAgentCliEnvironment.ts"), ["server:cli"]);
   assert.deepEqual(owners("daemon/server/lib/workbench/cli/workbench-agent-cli.sh"), ["server:cli"]);
+  assert.deepEqual(owners("daemon/server/lib/workbench/cli/resolve-workbench-daemon-origin.mts"), ["server:cli"]);
+  assert.deepEqual(owners("instructions/wb/mechanics/git.md"), ["server:instructions"]);
+  // Out-of-process entries own their static import closure.
+  assert.deepEqual(owners("daemon/server/database/workbench-database-worker.ts"), ["server:database"]);
+  assert.deepEqual(owners("daemon/server/lib/workbench/browse/run-browse-daemon.mjs"), ["server:browse"]);
+  assert.deepEqual(owners("daemon/server/providers/opencode/workbench-plugin/OpenCodeSseTap.ts"), ["harness:opencode"]);
+  assert.deepEqual(owners("daemon/server/database/WorkbenchDatabaseController.ts"), ["server:database"]);
   assert.deepEqual(owners("daemon/server/WorkbenchCodexInstructionAdapter.ts"), ["server:codex/instructions"]);
   assert.deepEqual(
     owners("daemon/server/database/transcript/WorkbenchTranscriptRepository.ts"),
@@ -188,7 +195,7 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
   assert.deepEqual(owners("daemon/server/database/stats/WorkbenchClaimStatsRepository.ts"), ["server:database"]);
   assert.deepEqual(owners("daemon/server/WorkbenchClaimStatsController.ts"), ["server:commands"]);
   assert.deepEqual(owners("shared/workbench/stats/workbench-stats-contract.ts"), [
-    "server:codex/instructions", "server:commands", "server:core", "server:mcp", "server:websocket",
+    "server:codex/instructions", "server:commands", "server:core", "server:database", "server:mcp", "server:websocket",
   ]);
   assert.deepEqual(
     owners("daemon/server/lib/workbench/database/schema/codex-sandbox-network-schema.ts"),

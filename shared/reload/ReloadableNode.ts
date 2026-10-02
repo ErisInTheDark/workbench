@@ -4,7 +4,8 @@
  * - ReloadableNodeLease/ReloadableNodeRuntimeDrainPending: generation fencing and bounded drain diagnostics.
  * - ReloadableNodeHandoff: reversible resource transfer, separate from expirable old-work waits.
  * - ReloadableNodeInstance/ReloadableNodeBuild: lifecycle, direct-parent construction and leased operation contracts.
- * - ReloadableNodeOptions/default ReloadableNode: parent-owned node definition with inferred direct-parent access.
+ * - ReloadableNodeOptions/default ReloadableNode: parent-owned node definition with inferred direct-parent access;
+ *   source ownership comes from imports plus declared out-of-process entries and non-module assets.
  * - ReloadableNodeGraph/defineReloadableNodeGraph: direct-root graph definition loaded by the stable host.
  * - ReloadableNodeSourceObservation/ReloadableNodeSourceMetadata: scoped observations and discovered generation sources.
  */
@@ -75,19 +76,21 @@ export interface ReloadableNodeOptions<
 > {
   access: ReloadableNodeAccess;
   destructive?: boolean;
-  boundarySources?: string;
+  /** Gitignore patterns for non-module runtime inputs (markdown, scripts, binaries, static assets). */
+  assets?: string;
   children: readonly ReloadableNode<TContext, TObjects, TNotification>[];
   create(
     context: TContext,
     build: ReloadableNodeBuild<TObjects, TRequires[number]>,
   ): ReloadableNodeInstance<TObjects, TNotification>;
   description: string;
+  /** Absolute paths of modules run outside this process's module graph (workers, child processes, plugins). */
+  entries?: readonly string[];
   lifecycle: ReloadableNodeLifecycle;
   provides: readonly (keyof TObjects)[];
   requires: TRequires;
   safeAll: boolean;
   scope: WorkbenchReloadScope;
-  sources: string;
 }
 
 export default class ReloadableNode<TContext, TObjects extends object, TNotification> {
@@ -100,31 +103,31 @@ export default class ReloadableNode<TContext, TObjects extends object, TNotifica
   }
 
   readonly access: ReloadableNodeAccess;
+  readonly assets: string;
   readonly destructive: boolean;
-  readonly boundarySources: string;
   readonly children: readonly ReloadableNode<TContext, TObjects, TNotification>[];
   readonly create: ReloadableNodeOptions<TContext, TObjects, TNotification>["create"];
   readonly description: string;
+  readonly entries: readonly string[];
   readonly lifecycle: ReloadableNodeLifecycle;
   readonly provides: readonly (keyof TObjects)[];
   readonly requires: readonly (keyof TObjects)[];
   readonly safeAll: boolean;
   readonly scope: WorkbenchReloadScope;
-  readonly sources: string;
 
   private constructor(options: ReloadableNodeOptions<TContext, TObjects, TNotification>) {
     this.access = options.access;
+    this.assets = options.assets ?? "";
     this.destructive = options.destructive ?? false;
-    this.boundarySources = options.boundarySources ?? "";
     this.children = Object.freeze([...options.children]);
     this.create = options.create;
     this.description = options.description;
+    this.entries = Object.freeze([...options.entries ?? []]);
     this.lifecycle = options.lifecycle;
     this.provides = Object.freeze([...options.provides]);
     this.requires = Object.freeze([...options.requires]);
     this.safeAll = options.safeAll;
     this.scope = options.scope;
-    this.sources = options.sources;
   }
 }
 
