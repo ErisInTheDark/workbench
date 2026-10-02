@@ -3,7 +3,7 @@
  * - ClaudePromptQueue: streaming SDK input that stays open for steers until the turn closes.
  * - claudePrompt: build one SDK user message from text or content blocks with an optional delivery uuid.
  * - ClaudeLiveTurnOptions: collaborators one live turn needs.
- * - default ClaudeLiveTurn: own one Claude query from start to its single settlement, including steer and context delivery, context usage, and billing usage.
+ * - default ClaudeLiveTurn: own one Claude query from start to its single settlement, including steer and context delivery and context usage; it signals when billing usage changed.
  */
 import type { Query, SDKMessage, SDKResultMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
@@ -73,12 +73,11 @@ function addBreakdowns(left: Breakdown, right: Breakdown): Breakdown {
 }
 
 /** The main model carries the conversation context; helper models only add side calls. */
-function mainModel(result: SDKResultMessage) {
-  const models = Object.entries(result.modelUsage ?? {});
-  const [model, usage] = models.sort(([, left], [, right]) =>
+function mainContextWindow(result: SDKResultMessage) {
+  const [usage] = Object.values(result.modelUsage ?? {}).sort((left, right) =>
     (right.inputTokens + right.cacheReadInputTokens + right.cacheCreationInputTokens)
-    - (left.inputTokens + left.cacheReadInputTokens + left.cacheCreationInputTokens))[0] ?? [null, null];
-  return { model, mixed: models.length > 1, contextWindow: usage && usage.contextWindow > 0 ? usage.contextWindow : null };
+    - (left.inputTokens + left.cacheReadInputTokens + left.cacheCreationInputTokens));
+  return usage && usage.contextWindow > 0 ? usage.contextWindow : null;
 }
 
 export interface ClaudeLiveTurnOptions {
@@ -96,7 +95,9 @@ export interface ClaudeLiveTurnOptions {
   contextWindow: number | null;
   transcript: Pick<ClaudeTranscriptAdapter,
     "recordStreamEvent" | "recordAssistant" | "recordNativeToolResults" | "recordCompaction"
-    | "recordContextUsage" | "recordTurnUsage" | "recordSteer" | "settleTurn">;
+    | "recordContextUsage" | "recordSteer" | "settleTurn">;
+  /** Claude's session log gained billed calls; billing usage is derived from that log, not from this turn. */
+  usageChanged(): void;
   observe(facts: WorkbenchProviderObservation): Promise<unknown>;
   broadcast(notification: WorkbenchTranscriptNotification): void;
   readTurn(): Promise<Turn | null>;
@@ -245,12 +246,9 @@ export default class ClaudeLiveTurn {
       } else if (message.type === "result") {
         for (const uuid of message.user_message_uuids ?? []) await this.deliver(uuid);
         this.total = addBreakdowns(this.total, claudeTokenBreakdown(message.usage));
-        const main = mainModel(message);
-        this.contextWindow = this.options.contextWindow ?? main.contextWindow ?? this.contextWindow;
+        this.contextWindow = this.options.contextWindow ?? mainContextWindow(message) ?? this.contextWindow;
         await this.recordUsage();
-        await transcript.recordTurnUsage(this.threadId, this.turnId, {
-          model: main.model, mixedModels: main.mixed, cumulative: this.total, observedAt: Date.now(),
-        });
+        this.options.usageChanged();
         // Steers Claude has not consumed yet run as follow-up results inside this Workbench turn. Other queued
         // context, such as a late working-status notice, does not earn another model turn.
         if (!this.stopped && this.undelivered.size > 0) continue;
@@ -304,6 +302,8 @@ export default class ClaudeLiveTurn {
     }
     this.undelivered.clear();
     await this.options.transcript.settleTurn(this.turnId, status);
+    // Interrupted and failed turns never reach a result but may still have billed calls.
+    this.options.usageChanged();
     await this.options.observe({
       projectId: this.options.projectId, activity: null, displayLabel: null,
       lifecycle: { threadId: this.threadId, event: { kind: "turnCompleted", turnId: this.turnId, status } },

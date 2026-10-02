@@ -1,5 +1,5 @@
 /*
- * No production exports. Protect durable-first identity admission through WB providers.
+ * No production exports. Protect durable-first identity admission and usage backfill selection through WB providers.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -29,6 +29,7 @@ test("durable-only identity resolution never probes the provider while default r
           },
         },
       }) as never,
+      hydratesUsage: async () => false,
     },
   });
   const lookup = {
@@ -42,4 +43,20 @@ test("durable-only identity resolution never probes the provider while default r
   assert.equal(providerReads, 1);
   assert.equal((await controller.resolveThreadIdentity(lookup))?.threadId, identity.threadId);
   assert.equal(providerReads, 1);
+});
+
+test("usage backfill lists hydrating providers and leaves out a provider that fails to open", async (t) => {
+  const warnings = t.mock.method(console, "warn", () => undefined);
+  const controller = new WorkbenchHarnessController({
+    identities: {} as never,
+    providers: {
+      get: () => { throw new Error("Listing must not run provider operations"); },
+      hydratesUsage: async (key) => {
+        if (key === "opencode") throw new Error("bridge failed to start");
+        return key === "claude";
+      },
+    },
+  });
+  assert.deepEqual(await controller.listUsageHydrationHarnesses(), ["claude"]);
+  assert.equal(warnings.mock.callCount(), 1);
 });

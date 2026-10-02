@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchProviderDispatcher: obtain reload-safe installed provider handles.
+ * - default WorkbenchProviderDispatcher: obtain reload-safe installed provider handles and probe their optional capabilities.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
@@ -12,5 +12,9 @@ export default class WorkbenchProviderDispatcher {
 
   get(key: WorkbenchProviderKey): WorkbenchProvider {
     return new WorkbenchProviderHandle(key, this.run);
+  }
+
+  hydratesUsage(key: WorkbenchProviderKey) {
+    return new WorkbenchProviderHandle(key, this.run).hydratesUsage();
   }
 }

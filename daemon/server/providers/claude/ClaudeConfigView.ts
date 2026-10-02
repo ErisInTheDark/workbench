@@ -2,7 +2,8 @@
  * Exports:
  * - ClaudeConfigViewSource: the daemon environment and home directory a view mirrors.
  * - default ClaudeConfigView: own one per-process Claude config root that links the user's real data,
- *   hides the account email from Claude's prompt context, and keeps credentials in the real store.
+ *   hides the account email from Claude's prompt context, and keeps credentials in the real store;
+ *   `dataRoot` names that real data root.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -74,13 +75,18 @@ export default class ClaudeConfigView {
     readonly env: NodeJS.ProcessEnv,
   ) {}
 
+  /** The user's real Claude data root, where native session history lives. */
+  static dataRoot(source: ClaudeConfigViewSource = { env: process.env, home: os.homedir() }) {
+    return source.env.CLAUDE_CONFIG_DIR || path.join(source.home, ".claude");
+  }
+
   static async create(
     viewsRoot: string,
     source: ClaudeConfigViewSource = { env: process.env, home: os.homedir() },
     now = Date.now(),
   ) {
     const configured = source.env.CLAUDE_CONFIG_DIR || null;
-    const realRoot = configured ?? path.join(source.home, ".claude");
+    const realRoot = ClaudeConfigView.dataRoot(source);
     // Native session history must land in the real root even on a fresh installation.
     await fs.mkdir(path.join(realRoot, "projects"), { recursive: true });
     const root = path.join(viewsRoot, `${process.pid}-${randomUUID()}`);

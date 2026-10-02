@@ -36,7 +36,7 @@ export interface WorkbenchStatsImportControllerOptions {
   };
   harnesses: {
     hydrateUsage(candidate: WorkbenchStatsUsageImportCandidate): Promise<{ state: "completed" | "unavailable" }>;
-    listUsageHydrationHarnesses(): WorkbenchHarness[];
+    listUsageHydrationHarnesses(): Promise<WorkbenchHarness[]>;
   };
   createRunId?: () => string;
   now?: () => number;
@@ -102,7 +102,8 @@ export default class WorkbenchStatsImportController {
 
   private async begin() {
     const runId = (this.options.createRunId ?? randomUUID)();
-    const harnesses = this.options.harnesses.listUsageHydrationHarnesses();
+    const harnesses = await this.options.harnesses.listUsageHydrationHarnesses();
+    if (!this.active) return this.progress;
     const progress = await this.write(() => this.options.database.beginStatsImport(runId, harnesses, this.now()));
     if (!this.active) return this.progress;
     this.install(progress, "running");

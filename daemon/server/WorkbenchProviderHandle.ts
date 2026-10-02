@@ -123,6 +123,18 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     deliverApproval: input => this.interaction(async owner => await owner.deliverApproval?.(input) ?? false, "deliverApproval"),
   };
 
+  readonly usage: NonNullable<WorkbenchProvider["usage"]> = {
+    hydrate: nativeThreadId => this.run(providerRegistrations[this.key], provider => {
+      if (!provider.usage) throw new Error(`Provider ${this.key} does not hydrate usage.`);
+      return provider.usage.hydrate(nativeThreadId);
+    }, `${this.key}: usage.hydrate`),
+  };
+
+  /** Whether the current definition can hydrate usage; definitions can change across reloads. */
+  hydratesUsage() {
+    return this.run(providerRegistrations[this.key], provider => Boolean(provider.usage), `${this.key}: usage`);
+  }
+
   readonly account: NonNullable<WorkbenchProvider["account"]> = {
     limits: {
       read: () => this.run(providerRegistrations[this.key], provider => {

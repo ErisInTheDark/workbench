@@ -335,7 +335,7 @@ test("cold native thread lookup admits exact metadata before public request rout
     providers: { get: () => ({
       threads: operations,
       configuration: { models: { read: unused }, modelContext: { read: unused }, guidance: { contains: unused } },
-    }) },
+    }), hydratesUsage: unused },
   });
   try {
     const request = { method: "thread/read", params: { threadId: "unobserved", includeTurns: false } };
@@ -656,7 +656,10 @@ test("socket reload preserves canonical publications without resolving their ide
   };
   const harnesses = new WorkbenchHarnessController({
     identities: owners.threads,
-    providers: { get: () => { throw new Error("Canonical publications must not call the provider"); } },
+    providers: {
+      get: () => { throw new Error("Canonical publications must not call the provider"); },
+      hydratesUsage: () => { throw new Error("Canonical publications must not call the provider"); },
+    },
   });
   const create = (initialState?: ReturnType<WorkbenchWebSocketRequestController["detachForReload"]>) => (
     new WorkbenchWebSocketRequestController({

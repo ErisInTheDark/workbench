@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ClaudeProviderNode: expose native Claude sessions, managed tools, Browse screenshot delivery, model choices with context bounds, and plan limits.
+ * - default ClaudeProviderNode: expose native Claude sessions, managed tools, Browse screenshot delivery, model choices with context bounds, plan limits, and session-log usage hydration.
  */
 import ReloadableNode from "../../ReloadableNode";
 import type { DaemonProcessContext } from "../../daemon-process-context";
@@ -27,6 +27,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       registrations: {
         claudeProvider: {
           threads, tools, interactions: threads.interactions, context: threads.context, browse: threads.browse,
+          usage: threads.usage,
           account: { limits: { read: () => configuration.accountLimits() } },
           configuration: {
             modelContext: { read: () => configuration.modelContext() },

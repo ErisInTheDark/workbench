@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchHarnessController: resolve shared identities through installed providers.
+ * - default WorkbenchHarnessController: resolve shared identities and hydrate stats usage through installed providers.
  * - WorkbenchHarnessControllerOptions: shared identity and provider operation owners.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -13,7 +13,7 @@ import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import { defaultProviderKey, installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
 export interface WorkbenchHarnessControllerOptions {
-  providers: Pick<WorkbenchProviderDispatcher, "get">;
+  providers: Pick<WorkbenchProviderDispatcher, "get" | "hydratesUsage">;
   identities: WorkbenchThreadIdentityController;
 }
 
@@ -30,12 +30,22 @@ export default class WorkbenchHarnessController {
     return [...installedProviderKeys];
   }
 
-  listUsageHydrationHarnesses(): WorkbenchHarness[] {
-    return [];
+  /** Providers whose current definition can backfill usage; a provider that fails to open sits this run out. */
+  async listUsageHydrationHarnesses(): Promise<WorkbenchHarness[]> {
+    const probes = await Promise.allSettled(installedProviderKeys.map(key => this.providers.hydratesUsage(key)));
+    return installedProviderKeys.filter((key, index) => {
+      const probe = probes[index]!;
+      if (probe.status === "fulfilled") return probe.value;
+      console.warn(`[stats] ${key} usage hydration is unavailable for this import run:`,
+        probe.reason instanceof Error ? probe.reason.message.slice(0, 300) : "unknown failure");
+      return false;
+    });
   }
 
   async hydrateUsage(candidate: WorkbenchStatsUsageImportCandidate): Promise<WorkbenchStatsHydrationResult> {
-    throw new Error(`Usage hydration is unavailable for ${candidate.harness} threads.`);
+    const usage = this.provider(candidate.harness).usage;
+    if (!usage) throw new Error(`Usage hydration is unavailable for ${candidate.harness} threads.`);
+    return await usage.hydrate(candidate.threadId);
   }
 
   resolveHarness(value: unknown) {

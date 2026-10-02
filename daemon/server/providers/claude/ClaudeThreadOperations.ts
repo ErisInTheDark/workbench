@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ClaudeThreadOperationsOptions: bind SDK sessions to Workbench identity, state, lifecycle publication, claim policy, and managed MCP.
- * - default ClaudeThreadOperations: admit Claude turns and steers, gate native edits by claims, register live turns, deliver Browse screenshots, and own native session operations.
+ * - default ClaudeThreadOperations: admit Claude turns and steers, gate native edits by claims, register live turns, deliver Browse screenshots, hydrate billing usage from session logs, and own native session operations.
  */
 import {
     deleteSession, getSessionInfo, listSessions, query, renameSession,
@@ -43,6 +43,7 @@ import { createAgentScreenshotSteerText } from "workbench-shared/workbench/threa
 import ClaudeConfigView from "./ClaudeConfigView";
 import ClaudeLiveTurn, { ClaudePromptQueue } from "./ClaudeLiveTurn";
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
+import ClaudeUsageHydrator from "./ClaudeUsageHydrator";
 
 function spawnTrackedClaude(
   options: ClaudeSpawnOptions, onExit: (exit: Promise<void>) => void,
@@ -80,6 +81,8 @@ export interface ClaudeThreadOperationsOptions {
   }): Promise<string>;
   /** Shared claim policy for native Edit/Write; paths are absolute. */
   checkFileClaims(request: { cwd: string; threadId: WorkbenchThreadId; paths: string[] }): Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
+  /** Claude's real data root holding native session logs; defaults to the daemon user's root. */
+  claudeDataRoot?: string;
 }
 
 export default class ClaudeThreadOperations implements WorkbenchProviderThreads {
@@ -87,16 +90,52 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
   private readonly scopes = new Map<string, ClaudeLiveTurn>();
   private readonly pending = new Set<Promise<void>>();
   private readonly approvals: WorkbenchLocalApprovalTransport;
+  private readonly usageHydrator: ClaudeUsageHydrator;
 
   constructor(private readonly options: ClaudeThreadOperationsOptions) {
     this.approvals = new WorkbenchLocalApprovalTransport("claude", () => options.approvals);
+    this.usageHydrator = new ClaudeUsageHydrator({
+      dataRoot: options.claudeDataRoot ?? ClaudeConfigView.dataRoot(),
+      signal: options.signal,
+      readThread: async threadId => {
+        const identity = await this.identity(threadId);
+        const binding = identity.bindings.find(value => value.harness === "claude");
+        if (!binding) throw new Error("Claude thread has no native session identity.");
+        const { turns } = await this.read(identity.threadId);
+        return {
+          threadId: identity.threadId, sessionId: binding.nativeThreadId,
+          turns: turns.map(turn => ({ id: WorkbenchTurnIdSchema.parse(turn.id), startedAt: turn.startedAt })),
+        };
+      },
+      record: (threadId, usage, observedAt) => this.options.transcript.recordTurnUsage(threadId, usage.turnId, {
+        model: usage.model, mixedModels: usage.mixedModels, cumulative: usage.cumulative, observedAt,
+      }),
+      warn: message => { console.warn(message.slice(0, 500)); },
+    });
   }
 
-  hasPendingWork() { return this.pending.size > 0 || this.live.size > 0; }
+  hasPendingWork() { return this.pending.size > 0 || this.live.size > 0 || this.usageHydrator.hasPendingWork(); }
 
   async settle() {
     await Promise.all([...this.live.values()].map(runtime => this.interrupt(runtime.threadId, runtime.turnId)));
     await Promise.all(this.pending);
+    await this.usageHydrator.settle();
+  }
+
+  /** Billing usage comes from Claude's own session log, which survives reloads, interrupts, and compaction. */
+  readonly usage = {
+    hydrate: async (threadId: string) => {
+      const identity = await this.identity(threadId);
+      return { state: await this.usageHydrator.hydrate(identity.threadId) };
+    },
+  };
+
+  private refreshUsage(threadId: WorkbenchThreadId) {
+    void this.usageHydrator.hydrate(threadId).catch((error: unknown) => {
+      if (this.options.signal.aborted) return;
+      console.warn("[claude] session usage hydration failed",
+        error instanceof Error ? error.message.slice(0, 300) : "unknown failure");
+    });
   }
 
   resolveScope(scope: string) {
@@ -275,6 +314,8 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       ? prefixClaudePrompt(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE, content) : content;
     const executable = this.options.resolveExecutable?.() ?? claudeExecutable();
     const usage = (await this.options.transcript.readContextUsage(identity.threadId))?.tokenUsage ?? null;
+    // Earlier turns a reload killed never settled their usage; the log still has their calls.
+    if (nativeHistoryExists) this.refreshUsage(identity.threadId);
     const turnId = await this.options.transcript.startTurn({
       threadId: identity.threadId, sessionId: binding.nativeThreadId, cwd: binding.nativeLocation,
       clientMessageId: input.clientMessageId, content: toWorkbenchThreadUserInput(input.input),
@@ -336,6 +377,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       projectId: ProjectIdSchema.parse(identity.projectId),
       threadId: identity.threadId, turnId, workingStatusInPrompt, usage, contextWindow,
       transcript: this.options.transcript,
+      usageChanged: () => this.refreshUsage(identity.threadId),
       observe: this.options.observe,
       broadcast: this.options.broadcast,
       readTurn: async () => (await this.read(identity.threadId)).turns.find(turn => turn.id === turnId) ?? null,

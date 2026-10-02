@@ -15,6 +15,7 @@ import type { WorkbenchProviderSandboxNetwork } from "workbench-shared/workbench
 import type { WorkbenchProviderRecovery } from "workbench-shared/workbench/provider/provider-recovery";
 import type { WorkbenchProviderSingleFile } from "workbench-shared/workbench/provider/provider-single-file";
 import type { WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
+import type { WorkbenchStatsHydrationResult } from "workbench-shared/workbench/stats/workbench-stats-contract";
 
 export default interface WorkbenchProvider {
   readonly context?: WorkbenchProviderContext;
@@ -26,6 +27,8 @@ export default interface WorkbenchProvider {
   readonly browse?: WorkbenchProviderBrowse;
   readonly recovery?: WorkbenchProviderRecovery;
   readonly account?: { limits: { read(): Promise<WorkbenchAccountLimits> } };
+  /** Re-derive a native thread's billing usage from provider-owned history, for stats backfill. */
+  readonly usage?: { hydrate(nativeThreadId: string): Promise<WorkbenchStatsHydrationResult> };
   readonly configuration: {
     readonly sandboxNetwork?: WorkbenchProviderSandboxNetwork;
     readonly modelContext: {

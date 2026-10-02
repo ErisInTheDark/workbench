@@ -93,7 +93,7 @@ const claims = {
 
 const harnesses = {
   hydrateUsage: async () => ({ state: "unavailable" as const }),
-  listUsageHydrationHarnesses: () => [],
+  listUsageHydrationHarnesses: async () => [],
 };
 
 /** The first snapshot whose claims are no longer pending, then stop observing. */
@@ -183,6 +183,8 @@ test("controller startup begins the resumable import in the background", async (
     harnesses,
   });
   controller.start();
+  // Begin follows the asynchronous provider capability probe.
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(starts, 1);
   await controller.dispose();
 });

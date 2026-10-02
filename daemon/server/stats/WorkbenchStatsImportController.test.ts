@@ -64,7 +64,7 @@ function lifecycleFixture() {
       settleStatsUsageImport: async () => { writes.push("settle usage"); return progress("running"); },
       readStatsImportProgress: async () => progress("complete"),
     },
-    harnesses: { hydrateUsage: async () => ({ state: "completed" }), listUsageHydrationHarnesses: () => ["codex"] },
+    harnesses: { hydrateUsage: async () => ({ state: "completed" }), listUsageHydrationHarnesses: async () => ["codex"] },
     reportFailure: (error) => { failures.push(error); },
     yieldToEventLoop: async () => undefined,
   };
@@ -221,7 +221,7 @@ test("importer alternates claim and usage work while isolating item failures", a
         order.push("usage");
         throw new Error("broken");
       },
-      listUsageHydrationHarnesses: () => ["codex"],
+      listUsageHydrationHarnesses: async () => ["codex"],
     },
     yieldToEventLoop: async () => undefined,
   });
@@ -261,11 +261,13 @@ test("importer coalesces concurrent starts into one background run", async () =>
     },
     harnesses: {
       hydrateUsage: async () => { throw new Error("Unexpected hydration."); },
-      listUsageHydrationHarnesses: () => ["codex"],
+      listUsageHydrationHarnesses: async () => ["codex"],
     },
   });
   const first = controller.start();
   const second = controller.start();
+  // Begin follows the asynchronous provider capability probe.
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(beginCalls, 1);
   releaseBegin();
   await Promise.all([first, second]);

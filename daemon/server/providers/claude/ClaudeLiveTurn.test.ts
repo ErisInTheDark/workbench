@@ -57,7 +57,7 @@ function fixture(
   const log: string[] = [];
   const steers: WorkbenchSteerHistoryEntry[] = [];
   const queue = new RecordingQueue();
-  const billing: Array<{ model: string | null; mixedModels: boolean; total: number; output: number }> = [];
+  const usageSignals: string[] = [];
   const liveUsage: Array<{ input: number | null; window: number | null }> = [];
   const turn: ClaudeLiveTurn = new ClaudeLiveTurn({
     query: query as never, queue, scope: "scope", cwd: "C:/repo",
@@ -68,15 +68,11 @@ function fixture(
       recordNativeToolResults: async () => undefined,
       recordCompaction: async () => undefined,
       recordContextUsage: async () => undefined,
-      recordTurnUsage: async (_thread: string, _turn: string, recorded: {
-        model: string | null; mixedModels: boolean; cumulative: { totalTokens: number; outputTokens: number };
-      }) => {
-        billing.push({ model: recorded.model, mixedModels: recorded.mixedModels,
-          total: recorded.cumulative.totalTokens, output: recorded.cumulative.outputTokens });
-      },
       recordSteer: async (entry: WorkbenchSteerHistoryEntry) => { steers.push(entry); },
       settleTurn: async (_turnId: string, status: string) => { log.push(`settle:${status}`); },
     } as never,
+    // The latest log entry shows whether the signal followed settlement.
+    usageChanged: () => { usageSignals.push(log.at(-1) ?? "start"); },
     observe: async facts => {
       if (facts.activity) log.push(`activity:${facts.activity.kind}`);
       if (!facts.lifecycle) return;
@@ -102,7 +98,7 @@ function fixture(
     stderr: () => "",
     release: async () => { log.push("release"); },
   });
-  return { turn, push, log, steers, queue, billing, liveUsage };
+  return { turn, push, log, steers, queue, usageSignals, liveUsage };
 }
 
 const steer = (): WorkbenchSteerHistoryEntry => ({
@@ -122,17 +118,21 @@ test("a completed turn is accepted before its prompt and releases its process be
   ]);
 });
 
-test("each result records thread-cumulative billing usage under the turn's main model", async () => {
-  const previous = { cacheWriteInputTokens: 0, cachedInputTokens: 0, inputTokens: 100, outputTokens: 20, reasoningOutputTokens: 0, totalTokens: 120 };
-  const { turn, push, billing } = fixture(undefined, { last: previous, total: previous, modelContextWindow: null });
-  const modelUsage = (input: number) => ({ inputTokens: input, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, contextWindow: 200_000 });
+test("billing usage is re-derived after each result and again once the turn settles", async () => {
+  const { turn, push, usageSignals } = fixture();
   const { task } = await turn.start("hi");
-  push(result({
-    usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 0 },
-    modelUsage: { "claude-haiku-4-5-20251001": modelUsage(50), "claude-opus-5-5": modelUsage(900) },
-  }));
+  push(result());
   await task;
-  assert.deepEqual(billing, [{ model: "claude-opus-5-5", mixedModels: true, total: 120 + 1_015, output: 25 }]);
+  assert.deepEqual(usageSignals, ["turn/started", "settle:completed"]);
+});
+
+test("a turn that dies before any result still re-derives billing usage after settling", async context => {
+  context.mock.method(console, "error", () => undefined);
+  const { turn, push, usageSignals } = fixture();
+  const { task } = await turn.start("hi");
+  push(new Error("native crash"));
+  await task;
+  assert.deepEqual(usageSignals, ["settle:failed"]);
 });
 
 test("context usage reaches clients live under the selected window, which Claude's reported window cannot replace", async () => {
