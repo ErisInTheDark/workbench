@@ -91,6 +91,58 @@ func TestRemountRestoresALeasedCommitWithoutTheRemote(t *testing.T) {
 	}
 }
 
+func TestPrefetchFetchesOneSubtreeInOneBatch(t *testing.T) {
+	runner := requireGit(t)
+	source := newSourceRepo(t, runner)
+	top, shallow, deep, other := source.blob("top\n"), source.blob("shallow\n"), source.blob("deep\n"), source.blob("other\n")
+	deepTree := source.tree(treeSpec{mode: "100644", name: "c.txt", oid: deep})
+	subTree := source.tree(
+		treeSpec{mode: "100644", name: "b.txt", oid: shallow},
+		treeSpec{mode: "040000", name: "deep", oid: deepTree},
+	)
+	otherTree := source.tree(treeSpec{mode: "100644", name: "d.txt", oid: other})
+	root := source.tree(
+		treeSpec{mode: "100644", name: "a.txt", oid: top},
+		treeSpec{mode: "040000", name: "other", oid: otherTree},
+		treeSpec{mode: "040000", name: "sub", oid: subTree},
+	)
+	source.setRef("refs/heads/main", source.commit(root, 1_700_000_000))
+	source.git(nil, "-C", source.dir, "symbolic-ref", "HEAD", "refs/heads/main")
+	fixture := newServiceFixture(t, runner, t.TempDir())
+	ctx := context.Background()
+	warmed, err := fixture.service.warm(ctx, source.url(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := parseKey(warmed.Key)
+	repo := fixture.service.repos[key].repo
+	fetches := 0
+	repo.blobs = newBlobFetcher(func(ctx context.Context, oids []string) error {
+		fetches++
+		return repo.fetchBlobs(ctx, oids)
+	})
+
+	if err := fixture.service.prefetch(ctx, key, warmed.Commit, "sub"); err != nil {
+		t.Fatal(err)
+	}
+	if fetches != 1 {
+		t.Fatalf("prefetch ran %d fetches, want one batch for the whole subtree", fetches)
+	}
+	for name, oid := range map[string]string{"sub/b.txt": shallow, "sub/deep/c.txt": deep} {
+		if _, _, present, err := repo.reader.info(oid); err != nil || !present {
+			t.Fatalf("%s should be present after prefetch (%v)", name, err)
+		}
+	}
+	for name, oid := range map[string]string{"a.txt": top, "other/d.txt": other} {
+		if _, _, present, err := repo.reader.info(oid); err != nil || present {
+			t.Fatalf("%s outside the subtree should stay lazy (present=%v, %v)", name, present, err)
+		}
+	}
+	if err := fixture.service.prefetch(ctx, key, warmed.Commit, "missing"); !errors.Is(err, errNotFound) {
+		t.Fatalf("prefetching an absent path = %v, want not found", err)
+	}
+}
+
 func TestEvictUnmountsAndDeletesOnlyThatRepository(t *testing.T) {
 	runner := requireGit(t)
 	kept, evicted := newSourceRepo(t, runner), newSourceRepo(t, runner)

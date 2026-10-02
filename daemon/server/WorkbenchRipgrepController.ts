@@ -1,18 +1,20 @@
 /*
  * Exports:
- * - default WorkbenchRipgrepController: own wb rg requests; parse rg-style args, enumerate gitignore-aware candidates, and run one cancellable search worker.
+ * - default WorkbenchRipgrepController: own wb rg requests; parse rg-style args, hydrate lazy roots, enumerate gitignore-aware candidates, and run one cancellable search worker.
  */
 import { Worker } from "node:worker_threads";
 
 import { WorkbenchRipgrepExecutionRequestSchema } from "./lib/workbench/commands/ripgrep-command-definition";
 import { parseRipgrepArguments, RIPGREP_HELP_TEXT } from "./lib/workbench/ripgrep/ripgrep-arguments";
-import { collectRipgrepCandidates } from "./lib/workbench/ripgrep/ripgrep-candidates";
+import { collectRipgrepCandidates, type RipgrepHydrate } from "./lib/workbench/ripgrep/ripgrep-candidates";
 import { formatRipgrepTypeList } from "./lib/workbench/ripgrep/ripgrep-file-types";
 import type { RipgrepSearchInput, RipgrepSearchResult } from "./lib/workbench/ripgrep/ripgrep-search";
 import { logError } from "./process-helpers";
 
 interface WorkbenchRipgrepControllerOptions {
   workerUrl?: URL;
+  /** Bulk-fetches lazily loaded roots, such as virtual repository mounts, before they are walked. */
+  hydrate?: RipgrepHydrate;
   logError?(message: string): void;
   /** Observes worker startup; lets tests cancel while the worker is live. */
   onWorkerOnline?(): void;
@@ -46,7 +48,7 @@ export default class WorkbenchRipgrepController {
     if (query.mode === "type-list") return new Response(formatRipgrepTypeList());
 
     try {
-      const candidates = await collectRipgrepCandidates(query, request.data.cwd, signal);
+      const candidates = await collectRipgrepCandidates(query, request.data.cwd, signal, this.options.hydrate);
       if (!candidates.searchedRoots) return rejected(candidates.warnings.join("\n"));
       const result = await this.search({ query, files: candidates.files }, signal);
       if (result.kind === "invalid") return rejected(result.message);

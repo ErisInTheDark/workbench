@@ -38,6 +38,8 @@ interface WorkbenchAgentDirectPort {
   /** Warms a virtual repository; the owner rejects calls from catalogues listed before the runtime disappeared. */
   executeRepoWarm?: (body: object, signal: AbortSignal) => Promise<Response>;
   virtualReposAvailable?: () => boolean;
+  /** Bulk-fetches a virtual repository subtree before wb rg walks it; other paths are ignored. */
+  hydrateRepoPath?: (absolutePath: string, signal: AbortSignal) => Promise<void>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
   getReloadScopeCatalog?: () => readonly DaemonReloadScopeDescriptor[];
   readReloadDirtSnapshot?: () => WorkbenchReloadDirtSnapshot;
@@ -160,7 +162,7 @@ export default class WorkbenchAgentCommandController {
     this.liveProviderTests = direct.workbenchProjectRoot
       ? new WorkbenchAgentCommandLiveTestController(direct.workbenchProjectRoot)
       : null;
-    this.ripgrep = ripgrep ?? new WorkbenchRipgrepController();
+    this.ripgrep = ripgrep ?? new WorkbenchRipgrepController({ hydrate: direct.hydrateRepoPath });
   }
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {

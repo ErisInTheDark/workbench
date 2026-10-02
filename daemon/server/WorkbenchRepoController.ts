@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchRepoSidecar/WorkbenchRepoControllerOptions: injectable sidecar and clock ports.
  * - REPO_LEASE_MS: how long one explicit warm keeps a commit mounted.
- * - default WorkbenchRepoController: own virtual repository availability, 24-hour leases, sidecar lifetime and expiry.
+ * - default WorkbenchRepoController: own virtual repository availability, 24-hour leases, sidecar lifetime, expiry and batched subtree hydration.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -150,6 +150,25 @@ export default class WorkbenchRepoController {
     } finally {
       signal.removeEventListener("abort", forward);
       this.inflight.delete(abort);
+    }
+  }
+
+  /**
+   * Fetches a mounted subtree's content in one batch for a caller about to read all of it, such as a search.
+   * Paths outside leased mounts are ignored without starting the sidecar; failures reject for the caller to report.
+   */
+  async hydrate(absolutePath: string, signal: AbortSignal): Promise<void> {
+    if (!this.accepting || !this.isAvailable()) return;
+    await this.load();
+    const target = path.resolve(absolutePath);
+    for (const lease of this.leases.values()) {
+      const relative = path.relative(path.resolve(lease.path), target);
+      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+      const sidecar = await this.ensureSidecar();
+      await sidecar.request("prefetch", {
+        key: lease.key, commit: lease.commit, path: relative.split(path.sep).join("/"),
+      }, signal);
+      return;
     }
   }
 

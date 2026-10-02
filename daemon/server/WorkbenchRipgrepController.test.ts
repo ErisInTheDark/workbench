@@ -1,4 +1,4 @@
-/* No production exports. Tests protect gitignore enforcement, rg-compatible output, result guards, rejections, and worker cancellation. */
+/* No production exports. Tests protect gitignore enforcement, lazy-root hydration, rg-compatible output, result guards, rejections, and worker cancellation. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -113,6 +113,22 @@ test("rejects unsupported flags, stdin, invalid regex and missing paths", async 
       assert.equal(response.status, 400, args.join(" "));
       assert.match(response.text, expected);
     }
+  });
+});
+
+test("hydrates each existing root first, and a failed hydrate still searches with a warning", async () => {
+  await withRepository({ "src/a.ts": "needle\n" }, async (root) => {
+    const hydrated: string[] = [];
+    const controller = new WorkbenchRipgrepController({
+      hydrate: async (absolutePath) => {
+        hydrated.push(path.relative(root, absolutePath));
+        throw new Error("remote unreachable");
+      },
+    });
+    const result = await search(controller, root, ["-l", "needle", "src", "missing"]);
+    assert.equal(result.status, 200);
+    assert.equal(result.text, "src/a.ts\nwb rg: src: repository prefetch failed: remote unreachable\nwb rg: missing: path not found\n");
+    assert.deepEqual(hydrated, ["src"], "missing roots are never hydrated");
   });
 });
 

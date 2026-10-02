@@ -109,6 +109,20 @@ func (service *repoService) dispatch(ctx context.Context, action string, payload
 		return struct {
 			Path string `json:"path"`
 		}{path}, err
+	case "prefetch":
+		var request struct {
+			Key    string `json:"key"`
+			Commit string `json:"commit"`
+			Path   string `json:"path"`
+		}
+		if err := decodeStrict(payload, &request); err != nil {
+			return nil, err
+		}
+		key, err := parseKey(request.Key)
+		if err != nil {
+			return nil, err
+		}
+		return struct{}{}, service.prefetch(ctx, key, request.Commit, request.Path)
 	case "evict":
 		var request struct {
 			Key string `json:"key"`

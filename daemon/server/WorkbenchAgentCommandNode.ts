@@ -148,6 +148,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executeFileRemoval: async (body, signal) => await fileRemoval.execute(body, signal),
       executeRepoWarm: async (body, signal) => await repo.warm(body, signal),
       virtualReposAvailable: () => repo.isAvailable(),
+      hydrateRepoPath: async (absolutePath, signal) => await repo.hydrate(absolutePath, signal),
       executeSkillRequest: async (body, signal) => {
         const request = WorkbenchSkillExecutionRequestSchema.parse(body);
         const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);

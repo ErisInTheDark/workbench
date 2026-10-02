@@ -2,7 +2,8 @@
  * Exports:
  * - RipgrepCandidate: one searchable file with its cwd-relative display path and absolute path.
  * - RipgrepCandidates: sorted candidate files, searched-root count, and per-root warnings.
- * - collectRipgrepCandidates: enumerate files for a query; gitignore applies even to explicit paths unless --no-ignore.
+ * - RipgrepHydrate: optional bulk fetch for lazily loaded roots, such as virtual repository mounts.
+ * - collectRipgrepCandidates: enumerate files for a query after hydrating each root; gitignore applies even to explicit paths unless --no-ignore.
  */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -101,7 +102,16 @@ async function walkDirectory(root: string, options: {
   return files;
 }
 
-export async function collectRipgrepCandidates(query: RipgrepQuery, cwd: string, signal: AbortSignal): Promise<RipgrepCandidates> {
+/** Fetches lazily loaded content under one existing root in bulk before it is walked and read. */
+export type RipgrepHydrate = (absolutePath: string, signal: AbortSignal) => Promise<void>;
+
+function errorMessage(error: unknown) {
+  return (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 300);
+}
+
+export async function collectRipgrepCandidates(
+  query: RipgrepQuery, cwd: string, signal: AbortSignal, hydrate?: RipgrepHydrate,
+): Promise<RipgrepCandidates> {
   const roots = query.paths.length ? query.paths : ["."];
   const passesFilters = createRipgrepPathFilter(query);
   const files = new Map<string, RipgrepCandidate>();
@@ -119,6 +129,15 @@ export async function collectRipgrepCandidates(query: RipgrepQuery, cwd: string,
       continue;
     }
     searchedRoots += 1;
+    if (hydrate) {
+      try {
+        await hydrate(absoluteRoot, signal);
+      } catch (error) {
+        if (signal.aborted) throw signal.reason;
+        // The walk below still loads content lazily, only slower.
+        warnings.push(`wb rg: ${root}: repository prefetch failed: ${errorMessage(error)}`);
+      }
+    }
     const isDirectory = stats.isDirectory();
     const directory = isDirectory ? absoluteRoot : path.dirname(absoluteRoot);
     let relatives = query.noIgnore

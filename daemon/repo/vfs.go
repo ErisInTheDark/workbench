@@ -266,6 +266,44 @@ func (snap *snapshot) resolve(ctx context.Context, displayPath string) (node, er
 	return current, nil
 }
 
+// subtreeBlobs lists every file and symlink blob at or under displayPath from
+// tree objects alone, so nothing is fetched; gitlinks contribute nothing.
+func (snap *snapshot) subtreeBlobs(ctx context.Context, displayPath string) ([]string, error) {
+	start, err := snap.resolve(ctx, displayPath)
+	if err != nil {
+		return nil, err
+	}
+	if start.kind != nodeDirectory {
+		return []string{start.oid}, nil
+	}
+	var oids []string
+	pending := []string{start.tree}
+	for len(pending) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		tree := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if tree == "" {
+			continue
+		}
+		listing, err := snap.listing(tree)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range listing.entries {
+			switch entry.mode {
+			case "40000":
+				pending = append(pending, entry.oid)
+			case "160000":
+			default:
+				oids = append(oids, entry.oid)
+			}
+		}
+	}
+	return oids, nil
+}
+
 func (snap *snapshot) read(ctx context.Context, item node) ([]byte, error) {
 	if item.kind == nodeDirectory {
 		return nil, errNotDir

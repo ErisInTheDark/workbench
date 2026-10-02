@@ -31,6 +31,7 @@ type mountSlot struct {
 	ready chan struct{}
 	key   repositoryKey
 	path  string
+	snap  *snapshot
 	fs    mountedFS
 	err   error
 }
@@ -186,6 +187,7 @@ func (service *repoService) ensureMount(ctx context.Context, key repositoryKey, 
 	}
 	snap, err := newSnapshot(repo, commit, service.windows)
 	if err == nil {
+		slot.snap = snap
 		slot.fs, err = service.mount(snap, slot.path)
 	}
 	slot.err = err
@@ -196,6 +198,31 @@ func (service *repoService) ensureMount(ctx context.Context, key repositoryKey, 
 	}
 	close(slot.ready)
 	return slot.path, err
+}
+
+// prefetch fetches every absent blob at or under one mounted display path in a
+// single batch, for callers about to read the whole subtree (such as a search).
+func (service *repoService) prefetch(ctx context.Context, key repositoryKey, commit string, displayPath string) error {
+	service.mu.Lock()
+	slot := service.mounts[string(key)+"@"+commit]
+	service.mu.Unlock()
+	if slot == nil {
+		return errors.New("repository is not mounted; warm it again")
+	}
+	if err := waitReady(ctx, slot.ready); err != nil {
+		return err
+	}
+	if slot.err != nil {
+		return slot.err
+	}
+	oids, err := slot.snap.subtreeBlobs(ctx, displayPath)
+	if err != nil {
+		return err
+	}
+	if len(oids) == 0 {
+		return nil
+	}
+	return slot.snap.repo.ensureBlobs(ctx, oids)
 }
 
 func (service *repoService) unmount(key repositoryKey, commit string) error {

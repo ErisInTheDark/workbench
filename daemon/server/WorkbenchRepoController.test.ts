@@ -1,4 +1,4 @@
-/* Exports: none. Tests cover virtual repository leases, expiry, restart reconciliation, availability and handoff. */
+/* Exports: none. Tests cover virtual repository leases, expiry, restart reconciliation, availability, hydration and handoff. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -102,6 +102,29 @@ test("only explicit warms renew a lease, and each commit expires on its own", as
   assert.equal((await repo.readLeases()).leases.length, 0);
   assert.deepEqual(sidecar.actions().slice(-2), ["unmount", "evict"], "the last lease evicts the repository");
   assert.equal(repo.timer, null);
+});
+
+test("hydrate prefetches the leased subtree a path names and ignores paths outside mounts", async () => {
+  const repo = await fixture();
+  await repo.controller.refreshAvailability();
+  const { text: mount } = await warm(repo.controller);
+  const signal = new AbortController().signal;
+  await repo.controller.hydrate(path.join(mount, "packages", "core"), signal);
+  await repo.controller.hydrate(mount, signal);
+  await repo.controller.hydrate(`${mount}-sibling`, signal);
+  await repo.controller.hydrate(path.resolve("/elsewhere/project"), signal);
+  const prefetches = repo.sidecars[0]!.requests.filter(({ action }) => action === "prefetch").map(({ payload }) => payload);
+  assert.deepEqual(prefetches, [
+    { key: "github.com/team/project", commit: COMMIT_A, path: "packages/core" },
+    { key: "github.com/team/project", commit: COMMIT_A, path: "" },
+  ]);
+});
+
+test("hydrate never starts a sidecar for paths outside leased mounts", async () => {
+  const repo = await fixture();
+  await repo.controller.refreshAvailability();
+  await repo.controller.hydrate(path.resolve("/elsewhere/project"), new AbortController().signal);
+  assert.equal(repo.sidecars.length, 0);
 });
 
 test("restart drops expired leases, sweeps their cache and remounts live ones", async () => {
