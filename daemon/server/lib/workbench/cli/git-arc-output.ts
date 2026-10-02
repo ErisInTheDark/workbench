@@ -167,7 +167,10 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
     text: lines.join("\n"),
     structuredContent: {
       kind: "success", version: 1, receipt, status: {},
-      changes: action === "compare" ? GitCheckpointFileChangeSchema.array().parse(payload.changes ?? []) : [],
+      // Compare cards show counts only; transcripts must not retain whole-file diff text.
+      changes: action === "compare"
+        ? GitCheckpointFileChangeSchema.array().parse(payload.changes ?? []).map(change => ({ ...change, diff: "" }))
+        : [],
       diff: action === "diff" ? string(payload, "diff") : null,
     },
   };

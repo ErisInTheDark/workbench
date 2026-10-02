@@ -482,7 +482,9 @@ test("reads objects and preserves exact changes across literal, binary, and larg
     { additions: 2, deletions: 1, kind: "update", path: "selected.txt" },
   ]);
   assert(changes.every(({ diff }) => diff.startsWith("diff --git ")));
-  assert.match(changes.find(({ path: filePath }) => filePath === "binary.bin")?.diff ?? "", /GIT binary patch/u);
+  const binaryDiff = changes.find(({ path: filePath }) => filePath === "binary.bin")?.diff ?? "";
+  assert.match(binaryDiff, /^Binary files .* differ$/mu);
+  assert.doesNotMatch(binaryDiff, /GIT binary patch|literal \d/u);
   assert.match(changes.find(({ path: filePath }) => filePath === "literal[1].txt")?.diff ?? "", /literal addition/u);
   const diffReads = commands.mock.calls.filter(({ arguments: [args] }) => args[0] === "diff").length;
   commands.mock.restore();

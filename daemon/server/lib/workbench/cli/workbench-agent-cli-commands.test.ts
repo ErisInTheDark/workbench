@@ -1504,7 +1504,7 @@ test("compare keeps CLI text and MCP file facts from the same response", () => {
     text: JSON.stringify({ checkpointCommit: "a".repeat(40), scopePaths: ["a.ts"], changes: [change] }),
   });
   assert.match(output.stdout, /A\t\+1\t-0\ta\.ts/u);
-  assert.deepEqual(output.structuredContent?.kind === "success" ? output.structuredContent.changes : null, [change]);
+  assert.deepEqual(output.structuredContent?.kind === "success" ? output.structuredContent.changes : null, [{ ...change, diff: "" }]);
 });
 
 test("stash commands are argument-free whole-arc operations with conflict guidance", async () => {

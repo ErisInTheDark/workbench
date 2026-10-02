@@ -60,7 +60,7 @@ test("omits oversized files only from paged diff output", () => {
 });
 
 test("omits binary patches from paged and direct diff output while reporting their paths", () => {
-  const binaryPatch = "diff --git a/image.png b/image.png\nGIT binary patch\nliteral 3\nabc";
+  const binaryPatch = "diff --git a/image.png b/image.png\nBinary files a/image.png and b/image.png differ\n";
   const units = [unit("image.png", binaryPatch), unit("source.ts", "text diff")];
   const paged = createGitArcDiffPage(units, { maxCharacters: 100, paginate: true });
   const direct = createGitArcDiffPage(units, { maxCharacters: 100, paginate: false });

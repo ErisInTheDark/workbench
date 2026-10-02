@@ -2,10 +2,11 @@
  * Exports:
  * - UnifiedDiffLine: parsed unified-diff line with type and optional line numbers. Keywords: diff, unified, hunk, line.
  * - UnifiedDiffHunk: tolerant hunk rows plus numbered ranges and completeness evidence. Keywords: diff, unified, hunk.
- * - ParsedUnifiedDiff: parsed unified-diff payload with headers, hunks, and change counts. Keywords: diff, unified, counts.
+ * - ParsedUnifiedDiff: parsed unified-diff payload with headers, hunks, change counts, and binary marker. Keywords: diff, unified, counts.
  * - ParsedUnifiedDiffFileChange: parsed per-file change from a multi-file unified diff. Keywords: diff, unified, file change.
  * - UnifiedDiffDisplayLine: one diff line split into its raw marker and display text. Keywords: diff, line, prefix, display.
  * - splitUnifiedDiffLine: classify a diff line and separate its raw marker from display text. Keywords: diff, parse, prefix.
+ * - isBinaryGitDiff: detect Git binary file diffs, with or without a legacy base85 patch payload. Keywords: diff, binary.
  * - parseUnifiedDiff: parse unified diff text into headers, hunk rows, and addition/deletion counts. Keywords: diff, parse, unified.
  * - parseUnifiedDiffFileChanges: split multi-file unified diff text into file-change entries. Keywords: diff, parse, files.
  */
@@ -29,6 +30,7 @@ export interface UnifiedDiffHunk {
 
 export interface ParsedUnifiedDiff {
   additions: number;
+  binary: boolean;
   deletions: number;
   headers: string[];
   hunks: UnifiedDiffHunk[];
@@ -65,11 +67,30 @@ export function splitUnifiedDiffLine(line: string): UnifiedDiffDisplayLine {
   return { prefix: "", text: line, type: "note" };
 }
 
+function isBinaryGitHeader(line: string) {
+  return line === "GIT binary patch" || /^Binary files .* differ$/u.test(line);
+}
+
+export function isBinaryGitDiff(diff: string) {
+  const text = String(diff ?? "");
+  // Scan headers only; hunk text cannot mark a file binary.
+  for (let start = 0; start < text.length;) {
+    const end = text.indexOf("\n", start);
+    const line = text.slice(start, end < 0 ? text.length : end).replace(/\r$/u, "");
+    if (line === "@@" || line.startsWith("@@ ")) return false;
+    if (isBinaryGitHeader(line)) return true;
+    if (end < 0) break;
+    start = end + 1;
+  }
+  return false;
+}
+
 export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
   const normalizedDiff = String(diff ?? "").replace(/\r\n/g, "\n");
   if (!normalizedDiff.trim()) {
     return {
       additions: 0,
+      binary: false,
       deletions: 0,
       headers: [],
       hunks: [],
@@ -81,6 +102,7 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
     : normalizedDiff.split("\n");
   const parsed: ParsedUnifiedDiff = {
     additions: 0,
+    binary: false,
     deletions: 0,
     headers: [],
     hunks: [],
@@ -110,6 +132,11 @@ export function parseUnifiedDiff(diff: string): ParsedUnifiedDiff {
 
     if (!currentHunk) {
       parsed.headers.push(line);
+      if (isBinaryGitHeader(line)) {
+        // Git binary content is never line-shaped; any following base85 payload is not diff text.
+        parsed.binary = true;
+        break;
+      }
       continue;
     }
 

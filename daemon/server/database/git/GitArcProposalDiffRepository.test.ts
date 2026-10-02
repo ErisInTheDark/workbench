@@ -53,6 +53,21 @@ test("byte eviction retains recently read entries and oversized replacement remo
   } finally { database.close(); }
 });
 
+test("legacy binary patch payloads read as a miss and leave storage", () => {
+  const database = new Database(":memory:");
+  try {
+    installWorkbenchDatabaseSchema(database);
+    const repository = new GitArcProposalDiffRepository(database);
+    const entry = value("one");
+    repository.write({ ...entry, changes: [
+      entry.changes[0]!,
+      { ...entry.changes[1]!, additions: 0, diff: "diff --git a/a.ts b/a.ts\nGIT binary patch\nliteral 3\nabc\n" },
+    ] }, 10_000);
+    assert.equal(repository.read(entry), null);
+    assert.equal((database.prepare("SELECT COUNT(*) AS count FROM workbench_git_arc_proposal_diffs").get() as { count: number }).count, 0);
+  } finally { database.close(); }
+});
+
 test("storage upgrade discards reproducible old cache entries without replaying JSON", () => {
   const database = new Database(":memory:");
   try {

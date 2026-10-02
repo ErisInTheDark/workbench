@@ -794,7 +794,8 @@ export default class WorkbenchGitRepository {
     let output: string;
     try {
       output = await this.run([
-        "diff", "--raw", "--numstat", "--binary", "-z", "--no-renames", from, to,
+        // Plain --patch: binary files get Git's header-only stub, never a base85 payload.
+        "diff", "--raw", "--numstat", "--patch", "-z", "--no-renames", from, to,
         "--", ...scopes.map((scope) => this.literalPathspec(scope)),
       ], process.env, signal);
     } catch (error) {
@@ -820,7 +821,7 @@ export default class WorkbenchGitRepository {
     return await Promise.all(changedPaths.map(async (filePath): Promise<GitCheckpointFileChange> => {
       const pathspec = this.literalPathspec(filePath);
       const inspected = await this.run([
-        "diff", "--raw", "--numstat", "--binary", "--no-renames", from, to, "--", pathspec,
+        "diff", "--raw", "--numstat", "--patch", "--no-renames", from, to, "--", pathspec,
       ], process.env, signal);
       const patchOffset = inspected.indexOf("diff --git ");
       if (patchOffset < 0) throw new Error(`Git did not return a patch for changed path ${filePath}.`);

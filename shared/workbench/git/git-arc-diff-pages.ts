@@ -4,6 +4,7 @@
  * - GitArcDiffPageUnit/GitArcDiffPage: whole-file paging inputs and one text-only rendered page result with omitted binary paths. Keywords: git, diff, file, page.
  * - createGitArcDiffPage: exclude binary patches and pack text diff units into one deterministic bounded page. Keywords: git, diff, pagination, packing.
  */
+import { isBinaryGitDiff } from "../thread/unified-diff.ts";
 import type { GitCheckpointFileChange } from "./checkpoint-contracts.ts";
 
 export const GIT_ARC_DIFF_PAGE_CHARACTER_LIMIT = 15_000;
@@ -60,7 +61,7 @@ export function createGitArcDiffPage(
   const binary: IndexedUnit[] = [];
   const text: IndexedUnit[] = [];
   for (const unit of indexed) {
-    (/^GIT binary patch$/mu.test(unit.change.diff) ? binary : text).push(unit);
+    (isBinaryGitDiff(unit.change.diff) ? binary : text).push(unit);
   }
   const binaryDiffPaths = binary.map(({ change }) => change.path);
   if (!options.paginate) {

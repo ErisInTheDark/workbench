@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default ThreadFileChangeItem: render adjacent native and canonical file operations with shared lifecycle rows.
- * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes.
+ * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes, marking binary diffs without previews.
  * - ThreadFileChangePreviewList: render non-disclosure file-change previews with established row presentation.
  * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts.
  * - ThreadFileChangeListChange: reusable file-change row input.
@@ -215,6 +215,7 @@ function parseWholeFileTextDiff (diffText: string, lineType: "addition" | "delet
 
   return {
     additions: isAddition ? changedLines.length : 0,
+    binary: false,
     deletions: isAddition ? 0 : changedLines.length,
     headers: [],
     hunks: changedLines.length ? [{
@@ -238,7 +239,8 @@ function parseWholeFileTextDiff (diffText: string, lineType: "addition" | "delet
 
 function parseFileChangeDiff (change: FileUpdateChange) {
   const parsedDiff = parseUnifiedDiff(change.diff);
-  if (parsedDiff.hunks.length || !change.diff.trim()) {
+  // Binary diffs carry no lines; never reinterpret their headers or payload as whole-file text.
+  if (parsedDiff.binary || parsedDiff.hunks.length || !change.diff.trim()) {
     return parsedDiff;
   }
 
@@ -283,7 +285,9 @@ function ThreadFileChangeDetails ({
           <ProjectFilePath className="max-w-full align-baseline" disambiguationPaths={projectFilePaths} path={parsedChange.movePathDisplay} projectId={projectId} />
         </p>
       ) : null}
-      {parsedChange.change.diff.trim() ? (
+      {parsedChange.diff.binary ? (
+        <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">Binary file. No diff preview.</p>
+      ) : parsedChange.change.diff.trim() ? (
         <ThreadCodeDisplay diff={parsedChange.diff} preview variant="diff" />
       ) : (
         <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No diff captured.</p>
@@ -315,11 +319,15 @@ function ThreadFileChangeSummary ({
         <ThreadSummaryText text={parsedChange.presentationLabel ?? presentation.completedLabel} />
       </span>
       <ProjectFilePath className="max-w-full shrink min-w-0 align-baseline text-[0.82em]" disambiguationPaths={projectFilePaths} path={parsedChange.displayPath} projectId={projectId} />
-      <ThreadFileChangeTotals
-        additions={parsedChange.summaryTotals.additions}
-        animateChanges
-        deletions={parsedChange.summaryTotals.deletions}
-      />
+      {parsedChange.diff.binary ? (
+        <span className="font-mono text-[0.78em] leading-[1.6] text-fg/muted">Binary</span>
+      ) : (
+        <ThreadFileChangeTotals
+          additions={parsedChange.summaryTotals.additions}
+          animateChanges
+          deletions={parsedChange.summaryTotals.deletions}
+        />
+      )}
     </span>
   );
 }

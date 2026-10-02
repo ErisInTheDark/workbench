@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcProposalDiffRepository: own validated immutable proposal diff cache rows and atomic byte eviction.
+ * - default GitArcProposalDiffRepository: own validated immutable proposal diff cache rows, legacy binary payload purging, and atomic byte eviction.
  */
 import type Database from "better-sqlite3";
 import { z } from "zod";
@@ -69,6 +69,11 @@ export default class GitArcProposalDiffRepository {
             ? { type: change.kind, move_path: change.move_path }
             : { type: change.kind },
         })));
+        // Earlier builds stored whole base85 binary patches; rebuild them as header-only binary diffs.
+        if (changes.some(change => /^GIT binary patch$/mu.test(change.diff))) {
+          this.run(deleteRows(gitArcProposalDiffTables.gitArcProposalDiffs, { cache_key: identity.key }));
+          return { kind: "miss" as const };
+        }
         this.run(updateRows(
           gitArcProposalDiffTables.gitArcProposalDiffs,
           { last_accessed_at: this.now() },
