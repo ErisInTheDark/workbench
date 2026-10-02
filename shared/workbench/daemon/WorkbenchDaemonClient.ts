@@ -17,6 +17,7 @@ import { WorkingTreeReadSchema, WorkingTreeSummarySchema, WorkingTreeDiffSchema,
 import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provider-settings";
 import { CommandApprovalSnapshotSchema } from "../settings/command-approvals";
 import { ProjectDiscoverySettingsReadSchema, ProjectDiscoverySettingsResultSchema } from "../project/project-discovery-settings";
+import { ProjectCreateResultSchema, ProjectFolderListSchema } from "../project/project-creation";
 import { WorkbenchProjectLocationsPayloadSchema } from "../project/project-location";
 import { WorkbenchThreadLaunchStateSchema } from "../thread/thread-launch";
 import {
@@ -101,6 +102,8 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "command-approvals/patch": return CommandApprovalSnapshotSchema;
     case "project/discovery-settings/read": return ProjectDiscoverySettingsReadSchema;
     case "project/discovery-settings/update": return ProjectDiscoverySettingsResultSchema;
+    case "project/folders/list": return ProjectFolderListSchema;
+    case "project/create": return ProjectCreateResultSchema;
     case "project/catalog/read": return WorkbenchProjectsPayloadSchema;
     case "project/file-index/read": return WorkbenchProjectFileIndexResponseSchema;
     case "project/tree/refresh": return z.object({ accepted: z.literal(true) });
@@ -308,6 +311,11 @@ class WorkbenchDaemonClient {
   readonly projectDiscoverySettings = {
     read: () => this.request("project/discovery-settings/read", {}),
     update: (params: WorkbenchDaemonParams<"project/discovery-settings/update">) => this.request("project/discovery-settings/update", params),
+  };
+
+  readonly projectCreation = {
+    listFolders: (params: WorkbenchDaemonParams<"project/folders/list">) => this.request("project/folders/list", params),
+    create: (params: WorkbenchDaemonParams<"project/create">) => this.request("project/create", params),
   };
 
   readonly nativeFiles = {

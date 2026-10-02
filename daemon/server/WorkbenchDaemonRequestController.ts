@@ -20,6 +20,7 @@ import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/pr
 import type WorkbenchModelUsageStore from "./WorkbenchModelUsageStore";
 import { CommandApprovalPatchSchema, CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
+import { ProjectCreateRequestSchema, ProjectFolderListRequestSchema } from "workbench-shared/workbench/project/project-creation";
 import { WorkbenchProjectFileIndexRequestSchema } from "workbench-shared/workbench/project/project-file-index";
 import ProjectTreeFileIndex from "workbench-shared/workbench/project/ProjectTreeFileIndex";
 import { WorkbenchProjectStateRequestSchema } from "workbench-shared/workbench/project/project-state";
@@ -58,6 +59,7 @@ import type WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeControlle
 import { WorkingTreeReadRequestSchema, WorkingTreeFileRequestSchema, WorkingTreeMutationSchema } from "workbench-shared/workbench/git/working-tree-contracts";
 import type WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
+import type WorkbenchProjectCreationController from "./WorkbenchProjectCreationController";
 import type WorkbenchProjectFileController from "./WorkbenchProjectFileController";
 import type WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
 import type WorkbenchSearchController from "./WorkbenchSearchController";
@@ -86,6 +88,7 @@ const METHODS = new Set([
   "sandbox-network/read", "sandbox-network/update",
   "command-approvals/read", "command-approvals/remove", "command-approvals/patch",
   "project/discovery-settings/read", "project/discovery-settings/update",
+  "project/folders/list", "project/create",
   ...Object.keys(WORKBENCH_GIT_ARC_ACTION_BY_METHOD),
   "local-capabilities/read", "local-capabilities/update",
   "native/file/link-roots", "native/file/open", "native/file/reveal",
@@ -234,6 +237,7 @@ export default class WorkbenchDaemonRequestController {
     modelUsage: Pick<WorkbenchModelUsageStore, "read">;
     profileTargets: Pick<WorkbenchThreadStateController, "readComposerProfileTarget" | "setComposerProfileTarget">;
     projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "readLocations" | "resolveProjectById" | "readDiscoverySettings" | "updateDiscoverySettings">;
+    projectCreation?: Pick<WorkbenchProjectCreationController, "listFolders" | "create">;
     projectSnapshot: Pick<WorkbenchProjectSnapshotController, "readProjectSnapshot" | "handleRequest">;
     search: Pick<WorkbenchSearchController, "search">;
     stats: Pick<WorkbenchStatsController, "observeAccountLimits" | "refreshRateLimits" | "startImport">;
@@ -288,6 +292,20 @@ export default class WorkbenchDaemonRequestController {
           const parsed = ProjectDiscoverySettingsUpdateSchema.safeParse(params);
           if (!parsed.success) throw new InvalidParamsError("Invalid project discovery settings.");
           result = await this.owners.projects.updateDiscoverySettings(parsed.data.paths);
+          break;
+        }
+        case "project/folders/list": {
+          if (!this.owners.projectCreation) throw new Error("Project creation is unavailable.");
+          const parsed = ProjectFolderListRequestSchema.safeParse(params);
+          if (!parsed.success) throw new InvalidParamsError("Invalid folder listing request.");
+          result = await this.owners.projectCreation.listFolders(parsed.data.path);
+          break;
+        }
+        case "project/create": {
+          if (!this.owners.projectCreation) throw new Error("Project creation is unavailable.");
+          const parsed = ProjectCreateRequestSchema.safeParse(params);
+          if (!parsed.success) throw new InvalidParamsError("Invalid project creation request.");
+          result = await this.owners.projectCreation.create(parsed.data);
           break;
         }
         case "git/working-tree/read": {

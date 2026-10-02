@@ -45,6 +45,7 @@ import {
     createMosaicRoute,
     createPinnedThreadRoute,
     createProjectRoute,
+    createNewProjectRoute,
     createSettingsRoute,
     createStatsRoute,
     createThreadRoute,
@@ -192,6 +193,7 @@ import WorkbenchProjectLocationLabel from "./workbench/WorkbenchProjectLocationL
 import WorkbenchProjectLocationMenu from "./workbench/WorkbenchProjectLocationMenu";
 import WorkbenchSearchDialog from "./workbench/WorkbenchSearchDialog";
 import WorkbenchSettingsView from "./workbench/WorkbenchSettingsView";
+import { workbenchRouteViews } from "./workbench/route-views/workbench-route-views";
 import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPreferencesProvider";
 import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
 import WorkbenchTabIcon, { type WorkbenchTabIconState } from "./workbench/WorkbenchTabIcon";
@@ -1511,6 +1513,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const showMosaicView = route.view === "mosaic" && !mobileMosaicFallbackTarget;
   const showThreadView = route.view === "thread" || mobileMosaicFallbackTarget?.kind === "thread";
   const showFileView = route.view === "file" || mobileMosaicFallbackTarget?.kind === "file";
+  // New full-page views belong in workbenchRouteViews, not new show* booleans; settings/stats/git should migrate there.
+  const routeView = workbenchRouteViews[route.view] ?? null;
+  const newProjectRoute = useMemo(() => withProjectSelection(createNewProjectRoute(), route.selectedProjectIds),
+    [route.selectedProjectIds]);
   const showSettingsView = route.view === "settings";
   const selectedSettingsProject = selectionProjectIds.length === 1
     ? displayedLogicalProjects?.find(project => project.id === selectionProjectIds[0]) ?? null
@@ -1585,8 +1591,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const effectiveThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetRootId(effectiveThreadTarget) : route.threadId;
   const effectiveSelectedThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetSelectedId(effectiveThreadTarget) : effectiveThreadId;
   const effectiveFilePath = mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.filePath : route.filePath;
-  const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView && !showGitView;
-  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView && !showGitView;
+  const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView && !showGitView && !routeView;
+  const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView && !showGitView && !routeView;
   if (currentThread) {
     retainedThreadRef.current = currentThread;
   }
@@ -1854,6 +1860,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         ? "settings"
         : showStatsView
           ? `stats:${route.projectId ?? "global"}`
+        : routeView
+          ? `route:${route.view}`
         : "";
   const shouldRunRelativeTimeClock = showThreadView && Boolean(threadShellSource);
   useEffect(() => {
@@ -2500,6 +2508,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     ].filter(Boolean).join(" ") || null}
                     logicalLoading={workbenchClient.mounted?.presentationClient?.snapshot().phase === "loading"}
                     onProjectLinkClick={selectProjectFromLink}
+                    createProjectHref={projectHref(newProjectRoute)}
+                    onCreateProject={event => {
+                      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                      event.preventDefault();
+                      navigateToRoute(newProjectRoute);
+                    }}
                     projects={explorer.projects}
                   />
                   <section className="shrink-0 pb-3">
@@ -2662,7 +2676,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               ref={mainPaneRef}
               className={`scrollbar-hover-reveal flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden md:w-auto${showGitView
                 ? " min-h-0 overflow-hidden px-5 pb-0 md:h-screen md:px-6"
-                : showSettingsView || showStatsView
+                : showSettingsView || showStatsView || routeView
                 ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-y-auto md:px-6"
                 : isDirectThreadSurface
                 ? " overflow-hidden px-0 pb-0 md:h-screen md:min-h-0 md:overflow-hidden"
@@ -2722,9 +2736,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
                           {isThreadShellTitleLoading ? (
                             <span className="block h-4 w-48 max-w-[60vw] rounded-full workbench-skeleton" aria-hidden="true" />
-                          ) : showGitView ? "Working tree" : showSettingsView ? `Settings / ${settingsPageTitle}` : showStatsView ? "Usage" : "Select a file"}
+                          ) : routeView ? routeView.title : showGitView ? "Working tree" : showSettingsView ? `Settings / ${settingsPageTitle}` : showStatsView ? "Usage" : "Select a file"}
                         </p>
-                        <p id="status-line" ref={statusLineRef} hidden={showSettingsView || showStatsView} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
+                        <p id="status-line" ref={statusLineRef} hidden={showSettingsView || showStatsView || Boolean(routeView)} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
                           {showGitView ? <WorkbenchGitRepositoryControl /> : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
                         </p>
                       </>
@@ -2758,7 +2772,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         onChange={updateEditorFontSize}
                       />
                     </div>
-                    <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView || showSettingsView || showGitView || showStatsView}>
+                    <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView || showSettingsView || showGitView || showStatsView || Boolean(routeView)}>
                       <WorkbenchIconButton
                         id="save-file"
                         ref={saveFileButtonRef}
@@ -2924,8 +2938,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     } : null}
                     onError={setSelectionError}
                     onGitRootsSaved={async daemonId => {
-                      await workbenchClient.mounted?.workspace.daemon({ kind: "installation", daemonId }).projects.catalog();
-                      await workbenchClient.mounted?.presentationClient?.refresh();
+                      await workbenchClient.mounted?.refreshInstallationProjects(daemonId);
                     }}
                     onPageChange={setSettingsPageTitle}
                     selectionPending={dynamicSelectionPending
@@ -2945,6 +2958,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     <WorkbenchWorkingTreeView />
                     </WorkbenchDaemonAssetOriginContext.Provider>
                   </WorkbenchDaemonClientContext.Provider>
+                ) : null}
+                {routeView && !shouldRenderMainLayout ? (
+                  <routeView.Component key={route.view} route={route} navigateToRoute={navigateToRoute} />
                 ) : null}
                 {showStatsView && !shouldRenderMainLayout ? (
                   <WorkbenchStatsView

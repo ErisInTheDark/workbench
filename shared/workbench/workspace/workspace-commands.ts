@@ -79,6 +79,8 @@ export const workspaceCommandRoutes = {
   "command-approvals/patch": "installation",
   "project/discovery-settings/read": "installation",
   "project/discovery-settings/update": "installation",
+  "project/folders/list": "installation",
+  "project/create": "installation",
   "local-capabilities/read": "installation",
   "local-capabilities/update": "installation",
   "native/file/link-roots": "folder",

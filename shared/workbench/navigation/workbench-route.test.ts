@@ -1,11 +1,22 @@
 /*
  * Exports: none.
- * Tests: draft folder changes survive new-to-saved promotion without accepting another route intent.
+ * Tests: draft folder changes survive new-to-saved promotion without accepting another route intent; the new project view survives href round trips.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, DaemonIdSchema } from "../identity";
-import { createHomeRoute, createLogicalThreadRoute, isSameDraftRouteIntent } from "./workbench-route";
+import {
+  createHomeRoute, createLogicalThreadRoute, createNewProjectRoute, createWorkbenchHref, isSameDraftRouteIntent,
+  isSameWorkbenchRoute, parseWorkbenchRouteFromPath, withProjectSelection,
+} from "./workbench-route";
+
+test("new project view round-trips through its href with and without a project selection", () => {
+  for (const route of [createNewProjectRoute(), withProjectSelection(createNewProjectRoute(), ["alpha", "beta"])]) {
+    const parsed = parseWorkbenchRouteFromPath(createWorkbenchHref(route));
+    assert.equal(parsed.view, "new-project");
+    assert.equal(isSameWorkbenchRoute(parsed, route), true);
+  }
+});
 
 test("folder choice remains current through draft promotion, not unrelated navigation", () => {
   const project = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");

@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import type { WorkbenchLocalCapabilitySettings, WorkbenchProjectOption } from "workbench-shared/types";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { DaemonId, LogicalProjectId } from "workbench-shared/workbench/identity";
@@ -13,6 +13,7 @@ import CommandApprovalSettings from "./CommandApprovalSettings";
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import VoiceSettings from "./voice/VoiceSettings";
 import { ProjectIcon } from "./workbench-icons";
+import WorkbenchFormSection from "./WorkbenchFormSection";
 import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
 import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
 import WorkbenchProjectDiscoverySettings from "./WorkbenchProjectDiscoverySettings";
@@ -48,12 +49,6 @@ const pages: { id: Page; label: string; sections: { id: string; label: string }[
 ];
 const defaultCapabilities: WorkbenchLocalCapabilitySettings = { browseRawCommandsEnabled: false };
 
-function Group({ id, title, children }: { id: string; title: string; children: ReactNode }) {
-  return <section id={id} className="scroll-mt-24 space-y-1">
-    <h2 className="m-0 pb-1 pt-6 text-base font-semibold text-text">{title}</h2>
-    {children}
-  </section>;
-}
 
 function BrowseCapability({ daemon }: { daemon: WorkbenchDaemonClient }) {
   const [settings, setSettings] = useState(defaultCapabilities);
@@ -170,36 +165,36 @@ export default function WorkbenchSettingsView({
           </nav>
         </div>
         {page === "general" ? <>
-          <Group id="settings-appearance" title="Appearance">
+          <WorkbenchFormSection id="settings-appearance" title="Appearance">
             <WorkbenchSettingsPreferences keys={["theme", "editorFontSize"]} logicalProjectId={logicalProject?.id ?? null} onError={onError} />
-          </Group>
-          <Group id="settings-editing" title="Editing">
+          </WorkbenchFormSection>
+          <WorkbenchFormSection id="settings-editing" title="Editing">
             <WorkbenchSettingsPreferences keys={["editorFontFamily", "editorSpellCheck", "composerSpellCheck"]}
               logicalProjectId={logicalProject?.id ?? null} onError={onError} />
-          </Group>
-          <Group id="settings-threads" title="Threads">
+          </WorkbenchFormSection>
+          <WorkbenchFormSection id="settings-threads" title="Threads">
             <WorkbenchSettingsPreferences keys={["threadCodeBlockWrap", "threadCodeDetails"]}
               logicalProjectId={logicalProject?.id ?? null} onError={onError} />
-          </Group>
-          <Group id="settings-voice" title="Voice"><VoiceSettings /></Group>
-          <Group id="settings-runtime" title="Runtime"><WorkbenchReactDevelopmentModeSetting /></Group>
+          </WorkbenchFormSection>
+          <WorkbenchFormSection id="settings-voice" title="Voice"><VoiceSettings /></WorkbenchFormSection>
+          <WorkbenchFormSection id="settings-runtime" title="Runtime"><WorkbenchReactDevelopmentModeSetting /></WorkbenchFormSection>
         </> : null}
         {page === "projects" ? <>
-          <Group id="settings-files" title="Files">
+          <WorkbenchFormSection id="settings-files" title="Files">
             <WorkbenchSettingsPreferences keys={["fileOpenBehavior", "showUnopenableFiles"]}
               logicalProjectId={logicalProject?.id ?? null} onError={onError} />
-          </Group>
-          <Group id="settings-discovery" title="Discovery">
+          </WorkbenchFormSection>
+          <WorkbenchFormSection id="settings-discovery" title="Discovery">
             <div className="space-y-3 py-3">
               {daemonControl}
               {daemon ? <WorkbenchOperationsContext.Provider value={daemon}>
                 <WorkbenchProjectDiscoverySettings key={daemonId} onSaved={() => onGitRootsSaved(daemonId!)} />
               </WorkbenchOperationsContext.Provider> : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
             </div>
-          </Group>
+          </WorkbenchFormSection>
         </> : null}
         {page === "agents" ? <>
-          <Group id="settings-agent-network" title="Network access">
+          <WorkbenchFormSection id="settings-agent-network" title="Network access">
             {daemonControl}
             {logicalProject && daemonFolders.length > 1 ? <WorkbenchSettingsContextRow label="Folder"
               value={folder ? `${folder.target.daemonId}/${folder.target.projectId}` : ""}
@@ -214,17 +209,17 @@ export default function WorkbenchSettingsView({
                 scope={logicalProject ? "project" : "global"} />
             </WorkbenchOperationsContext.Provider> : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
             {logicalProject && !folder ? <p role="status" className="text-sm text-fg/muted">No folder is available on this daemon.</p> : null}
-          </Group>
-          <Group id="settings-capabilities" title="Capabilities">
+          </WorkbenchFormSection>
+          <WorkbenchFormSection id="settings-capabilities" title="Capabilities">
             {daemon ? <BrowseCapability key={daemonId} daemon={daemon} /> : null}
-          </Group>
-          {logicalProject ? <Group id="settings-permissions" title="Permissions">
+          </WorkbenchFormSection>
+          {logicalProject ? <WorkbenchFormSection id="settings-permissions" title="Permissions">
             {daemon && folder ? <WorkbenchOperationsContext.Provider value={daemon}>
               <CommandApprovalSettings key={`${daemonId}/${folder.target.projectId}`}
                 projectId={folder.target.projectId} folders={daemonFolders} />
             </WorkbenchOperationsContext.Provider>
               : <p role="status" className="text-sm text-fg/muted">Choose an available folder to edit permissions.</p>}
-          </Group> : null}
+          </WorkbenchFormSection> : null}
         </> : null}
         {page === "network" ? <WorkbenchNetworkSettings /> : null}
       </div>

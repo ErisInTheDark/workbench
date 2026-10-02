@@ -163,6 +163,7 @@ function createClient(store: WorkbenchThreadSidebarStore | null, ownerLocation?:
       draftContextFor: () => null,
       draftLocationFor: () => null,
       selectBrowseLocation: async () => undefined,
+      refreshInstallationProjects: async () => { throw new Error("Unused by this test."); },
       navigation: {} as NonNullable<WorkbenchClientController["mounted"]>["navigation"],
       projectNavigator: new WorkbenchProjectNavigation([], [], [], () => source),
       routeIntents: {} as NonNullable<WorkbenchClientController["mounted"]>["routeIntents"],

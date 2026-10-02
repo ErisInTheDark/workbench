@@ -3,7 +3,7 @@
  * - WORKBENCH_ROUTE_MARKER: route marker for workbench URLs.
  * - WORKBENCH_FOLDER_MARKER: marker segment for the sidebar folder selection slot.
  * - WorkbenchRouteView/WorkbenchRoute/WorkbenchRouteParseResult: normalized route contracts.
- * - createHomeRoute/createProjectSelectionRoute/createToggledProjectSelectionRoute/withProjectSelection/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
+ * - createHomeRoute/createProjectSelectionRoute/createToggledProjectSelectionRoute/withProjectSelection/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createNewProjectRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
  * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute/createLogicalMosaicRoute: internal project, target and UUID routes.
  * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse URL state without changing history.
@@ -30,7 +30,7 @@ const LEGACY_THREAD_SEARCH_PARAM = "thread";
 const RouteThreadReferenceSchema = z.string().brand<"ThreadReference">();
 const RouteProjectIdSchema = z.string().brand<"ProjectId">();
 
-export type WorkbenchRouteView = "home" | "project" | "file" | "thread" | "settings" | "stats" | "git" | "mosaic" | "invalid";
+export type WorkbenchRouteView = "home" | "project" | "file" | "thread" | "settings" | "stats" | "git" | "mosaic" | "new-project" | "invalid";
 
 export interface WorkbenchRoute {
   error: string;
@@ -317,6 +317,10 @@ export function createSettingsRoute(projectId: string): WorkbenchRoute {
   };
 }
 
+export function createNewProjectRoute(): WorkbenchRoute {
+  return { ...createSettingsRoute(""), view: "new-project" };
+}
+
 export function createStatsRoute(projectId: string | null = null): WorkbenchRoute {
   return { ...createProjectRoute(projectId ?? ""), selectedProjectIds: projectId ? [projectId] : null, view: "stats" };
 }
@@ -510,6 +514,11 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
         ? createInvalidWorkbenchRoute(`Unexpected stats route value: ${value}`, projectId)
         : createStatsRoute(projectId);
     }
+    if (mode === "new-project") {
+      return valueSegments.value.length
+        ? createInvalidWorkbenchRoute(`Unexpected new project route value: ${value}`, projectId)
+        : withProjectSelection(createNewProjectRoute(), projectId ? [projectId] : null);
+    }
     return createInvalidWorkbenchRoute(`Unknown workbench route mode: ${mode}`, projectId);
   }
 
@@ -643,6 +652,7 @@ export function createWorkbenchHref(route: WorkbenchRoute): string {
     return `${markedPath}/thread/${encodeRouteSegment(target.threadId)}`;
   }
   if (route.view === "settings") return `${markedPath}/settings`;
+  if (route.view === "new-project") return `${markedPath}/new-project`;
   if (route.view === "git") return `${markedPath}/git`;
   if (route.view === "stats") {
     return `${markedPath}/stats`;

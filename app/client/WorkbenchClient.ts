@@ -38,6 +38,7 @@ import WorkbenchNetworkClient from "./workbench/app/WorkbenchNetworkClient";
 import WorkbenchPresentationClient from "./workbench/state/WorkbenchPresentationClient";
 import type WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController";
 import type { ClientDraftIdentity } from "./workbench/state/draft-persistence";
+import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import FileDraftStore from "./workbench/state/FileDraftStore";
 import LifecycleScope from "./workbench/state/LifecycleScope";
 import { DEFAULT_EDITOR_FONT_SIZE } from "./workbench/state/workbench-settings";
@@ -96,6 +97,8 @@ export interface MountedWorkbenchClient {
   projectFileIndexStore: WorkbenchProjectFileIndexStore;
   projectSourceErrors: { getSnapshot(): string; subscribe(listener: () => void): () => void };
   selectBrowseLocation(logicalProjectId: string, location: ProjectLocationReference): Promise<void>;
+  /** Re-read one daemon's project catalogue, then the app presentation that maps its folders to logical projects. */
+  refreshInstallationProjects(daemonId: DaemonId): Promise<PresentationSnapshot>;
   controls: MountedControls;
   dispose(): void;
   threadRuntime: WorkbenchThreadRuntimeStore;
@@ -567,7 +570,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     selectRowsForRoute(route);
     if (route.view === "home" || route.view === "project" && route.selectedProjectIds?.length !== 1
       || route.view === "settings"
-      || route.view === "stats") {
+      || route.view === "stats"
+      || route.view === "new-project") {
       selectFolder(browseFolder);
       draftLocation = null;
       activePath = "";
@@ -906,6 +910,10 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     selectBrowseLocation: async (logicalProjectId, location) => {
       if (logicalFor(location)?.id !== logicalProjectId) throw new Error("The folder does not belong to this project.");
       selectFolder(location);
+    },
+    refreshInstallationProjects: async daemonId => {
+      await workspace.daemon({ kind: "installation", daemonId }).projects.catalog();
+      return await presentation.refresh();
     },
     dispose: () => {
       disposed = true;

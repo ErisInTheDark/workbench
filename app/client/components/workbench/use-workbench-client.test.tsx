@@ -93,6 +93,7 @@ const client = {
     draftContextFor: () => null,
     draftLocationFor: () => null,
     selectBrowseLocation: async () => undefined,
+    refreshInstallationProjects: async () => { throw new Error("Unused by this test."); },
     navigation: {} as NonNullable<WorkbenchClientController["mounted"]>["navigation"],
     projectNavigator: new WorkbenchProjectNavigation([], []),
     routeIntents: {} as NonNullable<WorkbenchClientController["mounted"]>["routeIntents"],

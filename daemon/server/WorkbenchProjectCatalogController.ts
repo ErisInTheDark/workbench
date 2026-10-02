@@ -86,6 +86,11 @@ function normalizeWatchPath(filename: string | Buffer | null) {
     .replace(/^\/+|\/+$/gu, "");
 }
 
+function comparablePath(value: string) {
+  const normalized = normalizeRelativePath(value).replace(/\/+$/u, "");
+  return process.platform === "win32" ? normalized.toLocaleLowerCase() : normalized;
+}
+
 function hasIgnoredSegment(relativePath: string, ignoredSegments: ReadonlySet<string>) {
   return relativePath.split("/").some((segment) => ignoredSegments.has(segment));
 }
@@ -524,6 +529,18 @@ export default class WorkbenchProjectCatalogController {
 
   async readDiscoverySettings() {
     return { paths: [...await this.readConfiguredRoots()] };
+  }
+
+  /** Rediscover after an external project creation and return the catalogue project rooted at that path, if found. */
+  async discoverCreatedProject(canonicalRootPath: string): Promise<ProjectId | null> {
+    this.assertActive();
+    this.invalidate();
+    // A scan superseded by a newer invalidation returns the previous catalogue
+    // and leaves it hard-stale; only a current publication can contain the project.
+    let catalog = await this.refreshCatalog();
+    while (this.hardStale) catalog = await this.refreshCatalog();
+    const key = comparablePath(canonicalRootPath);
+    return catalog.data.find(project => comparablePath(project.rootPath) === key)?.id ?? null;
   }
 
   async updateDiscoverySettings(paths: readonly string[]): Promise<ProjectDiscoverySettingsResult> {

@@ -8,6 +8,7 @@
  * - isLinkedGitWorktree: distinguish shared worktree metadata from independent Git directories.
  * - readRegisteredGitWorktrees: list concrete worktrees registered by one repository.
  * - readGitProjectMetadata: read local origin identity and worktree classification without network access.
+ * - initGitRepository: create an empty Git repository in an existing folder.
  */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -63,6 +64,10 @@ async function runGit(rootDir: string, args: string[], signal?: AbortSignal) {
     windowsHide: true,
     signal,
   });
+}
+
+export async function initGitRepository(rootDir: string) {
+  await runGit(rootDir, ["init"]);
 }
 
 export async function resolveGitDirectory(rootDir: string): Promise<string | null> {

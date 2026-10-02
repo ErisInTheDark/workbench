@@ -152,6 +152,8 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "project/discovery-settings/read": { params: object; result: import("../project/project-discovery-settings").ProjectDiscoverySettingsUpdate };
   "project/discovery-settings/update": { params: import("../project/project-discovery-settings").ProjectDiscoverySettingsUpdate; result: import("../project/project-discovery-settings").ProjectDiscoverySettingsResult };
   "project/locations/read": { params: object; result: import("../project/project-location").WorkbenchProjectLocationsPayload };
+  "project/folders/list": { params: import("../project/project-creation").ProjectFolderListRequest; result: import("../project/project-creation").ProjectFolderList };
+  "project/create": { params: import("../project/project-creation").ProjectCreateRequest; result: import("../project/project-creation").ProjectCreateResult };
   "thread/launch": { params: import("../thread/thread-launch").WorkbenchThreadLaunchRequest; result: import("../thread/thread-launch").WorkbenchThreadLaunchState };
   "thread/launch/read": { params: { launchId: string }; result: { state: import("../thread/thread-launch").WorkbenchThreadLaunchState | null } };
   "thread/presentation/export": {

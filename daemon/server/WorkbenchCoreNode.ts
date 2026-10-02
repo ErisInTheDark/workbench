@@ -36,6 +36,7 @@ import WorkbenchAgentContextController from "./WorkbenchAgentContextController";
 import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCoreFeature";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
+import WorkbenchProjectCreationController from "./WorkbenchProjectCreationController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchHarnessController from "./WorkbenchHarnessController";
@@ -381,6 +382,7 @@ function createWorkbenchCoreFeature(
       setComposerProfileTarget: async (slot, selection) => await threadState.controller.setComposerProfileTarget(slot, selection),
     },
     projects: projectCatalog,
+    projectCreation: new WorkbenchProjectCreationController({ catalog: projectCatalog }),
     projectSnapshot,
     questionnaireResponses,
     search,

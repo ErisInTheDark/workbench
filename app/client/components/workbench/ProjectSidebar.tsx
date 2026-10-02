@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ProjectSidebar: render selected project groups, reveal controls, and status summaries.
+ * - default ProjectSidebar: render selected project groups, reveal controls, status summaries, and the new project action.
  */
 "use client";
 
@@ -11,7 +11,10 @@ import {
   groupProjectSelection, nextProjectSelectionTier, type DisplaySidebarProject,
 } from "./project-sidebar-groups";
 import { useWorkbenchProjectThreadSummaries } from "./use-workbench-client";
+import { workbenchNewEntryButtonClassName } from "./workbench-class-names";
+import { NewEntryIcon } from "./workbench-explorer";
 import { EllipsisIcon, ProjectIcon } from "./workbench-icons";
+import WorkbenchIconButton from "./WorkbenchIconButton";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
@@ -30,6 +33,8 @@ export default function ProjectSidebar ({
   logicalSummaries,
   logicalError,
   logicalLoading,
+  createProjectHref,
+  onCreateProject,
   onProjectLinkClick,
   projects,
 }: {
@@ -43,6 +48,8 @@ export default function ProjectSidebar ({
   logicalSummaries?: Readonly<Record<string, WorkbenchLogicalProjectSummary>>;
   logicalError?: string | null;
   logicalLoading?: boolean;
+  createProjectHref?: string;
+  onCreateProject (event: MouseEvent<HTMLAnchorElement>): void;
   onProjectLinkClick (event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
   projects: readonly WorkbenchProjectOption[];
 }) {
@@ -97,8 +104,25 @@ export default function ProjectSidebar ({
   return (
     <section className="shrink-0 pb-3">
       <WorkbenchSidebarSectionDisclosure
-        actions={preferences.projectsOpen ? null
-          : <WorkbenchThreadStatusCountsButton counts={otherCounts} label="unselected project" scope="project" />}
+        actions={(
+          <div className="flex items-center gap-1">
+            {preferences.projectsOpen ? null
+              : <WorkbenchThreadStatusCountsButton counts={otherCounts} label="unselected project" scope="project" />}
+            <WorkbenchIconButton
+              as="a"
+              href={createProjectHref}
+              label="New project"
+              title="New project"
+              display="hover-border"
+              size="small"
+              className={workbenchNewEntryButtonClassName}
+              onClick={onCreateProject}
+            >
+              <NewEntryIcon size={16} />
+              <span className="sr-only">New project</span>
+            </WorkbenchIconButton>
+          </div>
+        )}
         icon={ProjectIcon}
         preferenceKey="projectsOpen"
         onOpenChange={(open) => {
