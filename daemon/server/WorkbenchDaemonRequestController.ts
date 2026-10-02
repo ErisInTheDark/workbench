@@ -42,6 +42,7 @@ import {
     parseGitArcFailureEnvelope,
 } from "workbench-shared/workbench/git/git-arc-failures";
 import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotInputSchema } from "workbench-shared/workbench/thread/thread-state";
+import { isSelectableContextWindow } from "workbench-shared/workbench/thread/thread-profile";
 import {
     WorkbenchThreadIdentityResolutionSchema,
     WorkbenchThreadIdentityResolveRequestSchema,
@@ -586,7 +587,7 @@ export default class WorkbenchDaemonRequestController {
     if (!this.owners.providers) throw new Error("Model context capabilities are unavailable.");
     const capability = (await this.owners.providers.get(key).configuration.modelContext.read()).find((entry) => entry.model === settings.model);
     if (!capability) throw new InvalidParamsError("This model has no configurable context capability.");
-    if (cap < capability.defaultTokens || cap > capability.maximumTokens || (cap - capability.defaultTokens) % 1000 !== 0) {
+    if (!isSelectableContextWindow(capability, cap)) {
       throw new InvalidParamsError("Context window must be within the model bounds in 1K steps.");
     }
   }

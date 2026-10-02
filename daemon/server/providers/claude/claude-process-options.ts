@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - claudeExecutable: resolve the installed Claude Code executable.
- * - claudeEnvironment: disable account connectors, apply an optional config view, and isolate fake-model traffic.
+ * - claudeEnvironment: disable account connectors, apply an optional config view and selected context window, and isolate fake-model traffic.
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -19,10 +19,14 @@ export function claudeExecutable() {
   throw new Error("Claude Code executable was not found on PATH.");
 }
 
-export function claudeEnvironment(endpoint?: string, view?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function claudeEnvironment(
+  endpoint?: string, view?: NodeJS.ProcessEnv, contextWindowTokens: number | null = null,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...view,
+    // Claude Code's window cap; it outranks the model's native window and drives auto-compaction.
+    ...(contextWindowTokens !== null ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(contextWindowTokens) } : {}),
     CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
     CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1",

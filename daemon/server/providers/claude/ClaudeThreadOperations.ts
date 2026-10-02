@@ -255,6 +255,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : null;
     const model = settings?.model ?? null;
+    const contextWindow = settings?.contextWindowTokens ?? null;
     const instructions = await this.options.buildInstructions({
       cwd: binding.nativeLocation, projectId: identity.projectId, threadId: identity.threadId,
       model, agentPath: settings?.agentPath ?? null,
@@ -297,7 +298,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
           pathToClaudeCodeExecutable: executable,
           ...(nativeHistoryExists ? { resume: binding.nativeThreadId } : { sessionId: binding.nativeThreadId }),
           ...(model ? { model } : {}),
-          env: claudeEnvironment(fakeEndpoint, view?.env),
+          env: claudeEnvironment(fakeEndpoint, view?.env, contextWindow),
           settingSources: [],
           skills: [],
           systemPrompt: { type: "custom", prompt: managedPrompt, snapshot: false },
@@ -333,7 +334,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const live: ClaudeLiveTurn = new ClaudeLiveTurn({
       query: sdkQuery, queue, scope, cwd: binding.nativeLocation,
       projectId: ProjectIdSchema.parse(identity.projectId),
-      threadId: identity.threadId, turnId, workingStatusInPrompt, usage,
+      threadId: identity.threadId, turnId, workingStatusInPrompt, usage, contextWindow,
       transcript: this.options.transcript,
       observe: this.options.observe,
       broadcast: this.options.broadcast,
@@ -442,7 +443,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
         options: {
           cwd: binding.nativeLocation, resume: binding.nativeThreadId,
           pathToClaudeCodeExecutable: this.options.resolveExecutable?.() ?? claudeExecutable(),
-          env: claudeEnvironment(fakeEndpoint, view?.env),
+          env: claudeEnvironment(fakeEndpoint, view?.env, settings?.contextWindowTokens ?? null),
           settingSources: [],
           skills: [],
           systemPrompt: { type: "custom", prompt: instructions, snapshot: false },

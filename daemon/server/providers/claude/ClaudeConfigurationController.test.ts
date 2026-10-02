@@ -1,21 +1,64 @@
-/* No production exports. Tests protect native Claude model discovery, plan usage mapping, and query disposal. */
+/* No production exports. Tests protect native Claude model discovery, context window bounds, plan usage mapping, and query disposal. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ModelInfo, Query } from "@anthropic-ai/claude-agent-sdk";
 import ClaudeConfigurationController, { claudeAccountLimits } from "./ClaudeConfigurationController";
 
-function fixture(rows: ModelInfo[] | Error) {
+type WindowProbe = (model: string, standard: boolean) => number | Error;
+
+/** Catalogue queries list `rows`; window probes launch with a model and answer through `window`. */
+function fixture(rows: ModelInfo[] | Error, window: WindowProbe = (_model, standard) => standard ? 200_000 : 1_000_000) {
   let closed = 0;
-  const query = {
+  const probes: string[] = [];
+  const warnings: string[] = [];
+  const owner = new ClaudeConfigurationController(({ options }) => ({
     supportedModels: async () => {
       if (rows instanceof Error) throw rows;
       return rows;
     },
-    close: () => { closed++; },
-  } as Query;
-  const owner = new ClaudeConfigurationController(() => query, () => "fake-claude");
-  return { owner, closed: () => closed };
+    getContextUsage: async () => {
+      const standard = options?.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT === "1";
+      probes.push(`${options?.model}:${standard ? "standard" : "native"}`);
+      const tokens = window(options?.model ?? "", standard);
+      if (tokens instanceof Error) throw tokens;
+      return { rawMaxTokens: tokens };
+    },
+    close: () => { if (!options?.model) closed++; },
+  }) as unknown as Query, () => "fake-claude", message => { warnings.push(message); });
+  return { owner, closed: () => closed, probes, warnings };
 }
+
+test("Claude models default to their native window, floored at the window Claude uses without 1M context", async () => {
+  const { owner, probes } = fixture([
+    { value: "claude-opus-5-5", displayName: "Opus 5.5", description: "deep" },
+    { value: "claude-sonnet-4-6", displayName: "Sonnet 4.6", description: "balanced" },
+  ], (model, standard) => model === "claude-opus-5-5" && !standard ? 1_000_000 : 200_000);
+  const models = await owner.models();
+  assert.deepEqual(models.map(model => [model.id, model.contextWindow, model.maxContextWindowTokens]), [
+    ["claude-opus-5-5", { defaultTokens: 1_000_000, minimumTokens: 200_000, maximumTokens: 1_000_000 }, 1_000_000],
+    ["claude-sonnet-4-6", null, 200_000],
+  ]);
+  assert.deepEqual(await owner.modelContext(), [
+    { model: "claude-opus-5-5", defaultTokens: 1_000_000, minimumTokens: 200_000, maximumTokens: 1_000_000 },
+    { model: "claude-sonnet-4-6", defaultTokens: 200_000, minimumTokens: 200_000, maximumTokens: 200_000 },
+  ]);
+  assert.equal(probes.length, 4, "window bounds are probed once per provider lifetime");
+});
+
+test("a failed window probe keeps the model choice without a window and retries on the next read", async () => {
+  let failing = true;
+  const { owner, warnings } = fixture(
+    [{ value: "claude-opus-5-5", displayName: "Opus 5.5", description: "deep" }],
+    (_model, standard) => failing ? new Error("probe crashed") : standard ? 200_000 : 1_000_000,
+  );
+  const [unprobed] = await owner.models();
+  assert.equal(unprobed?.id, "claude-opus-5-5");
+  assert.equal(unprobed?.contextWindow, null);
+  assert.equal(warnings.length, 1);
+  failing = false;
+  const [probed] = await owner.models();
+  assert.equal(probed?.contextWindow?.defaultTokens, 1_000_000);
+});
 
 test("Claude model choices use canonical versioned IDs and native capabilities", async () => {
   const { owner, closed } = fixture([

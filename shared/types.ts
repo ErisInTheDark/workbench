@@ -791,6 +791,8 @@ export interface WorkbenchComposerSettings {
 export interface WorkbenchModelContextCapability {
   model: string;
   defaultTokens: number;
+  /** Smallest selectable window; absent means the default is also the floor. */
+  minimumTokens?: number;
   maximumTokens: number;
 }
 

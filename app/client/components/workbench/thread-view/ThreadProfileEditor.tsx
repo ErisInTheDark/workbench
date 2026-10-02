@@ -11,7 +11,7 @@ import type { WorkbenchComposerProfileSlot, WorkbenchComposerSettings } from "wo
 import { getWorkbenchAgentPathLabel } from "workbench-shared/workbench/agent-paths";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
-import { copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
+import { contextWindowFloor, copyComposerSettings } from "workbench-shared/workbench/thread/thread-profile";
 import { groupWorkbenchModels, type WorkbenchGroupedModel } from "../workbench-model-groups";
 import ChevronIcon from "../ChevronIcon";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
@@ -203,7 +203,7 @@ export default function ThreadProfileEditor ({
           ><ZapIcon size={16} /></WorkbenchIconButton> : null}
           {capability ? <div className="grid grid-cols-subgrid col-span-3 min-w-0 items-center gap-3 px-4 py-0.5 text-sm">
             <span className="text-fg/muted">Context</span>
-            <WorkbenchPressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:context`} label="Context window" min={capability.defaultTokens} max={capability.maximumTokens} step={1000} value={settings.contextWindowTokens ?? capability.defaultTokens} format={formatProfileContext} colour={profileContextColour} onChange={(contextWindowTokens) => update({ contextWindowTokens })} />
+            <WorkbenchPressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:context`} label="Context window" min={contextWindowFloor(capability)} max={capability.maximumTokens} step={1000} value={settings.contextWindowTokens ?? capability.defaultTokens} format={formatProfileContext} colour={profileContextColour} onChange={(contextWindowTokens) => update({ contextWindowTokens })} />
           </div> : null}
         </div> : null}
         {block("agent", "Agent definition", state.agents.find((entry) => entry.path === settings.agentPath)?.name ?? getWorkbenchAgentPathLabel(settings.agentPath) ?? "Default agent", <ThreadAgentPicker

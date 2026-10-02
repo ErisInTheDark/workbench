@@ -20,7 +20,9 @@ export const WorkbenchModelOptionSchema = z.object({
   supportsFastMode: z.boolean(),
   inputModalities: z.array(z.string()),
   maxContextWindowTokens: z.number().nullable(),
-  contextWindow: z.object({ defaultTokens: z.number(), maximumTokens: z.number() }).nullable().optional(),
+  contextWindow: z.object({
+    defaultTokens: z.number(), minimumTokens: z.number().optional(), maximumTokens: z.number(),
+  }).nullable().optional(),
   additionalSpeedTiers: z.array(z.string()),
   policyState: z.string().nullable(),
   billingMultiplier: z.number().nullable(),

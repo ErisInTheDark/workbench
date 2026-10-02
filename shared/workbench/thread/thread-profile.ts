@@ -4,6 +4,8 @@
  * - resolveLinkedProfileSelection: resolve a stored profile link against current definitions, falling back to saved Custom settings.
  * - WorkbenchThreadCreationProfileSchema: validate creation sources before provider forwarding.
  * - contextCompactionThreshold: reserve fixed or proportional context headroom.
+ * - contextWindowFloor: smallest selectable window of a model context capability.
+ * - isSelectableContextWindow: check a window against capability bounds in 1K steps from the floor.
  * - WorkbenchModelContextCapabilitySchema: validated configurable model bounds.
  */
 import { z } from "zod";
@@ -49,8 +51,20 @@ export function contextCompactionThreshold(cap: number) {
   return Math.floor(cap - Math.max(50_000, cap * 0.1));
 }
 
+type ContextBounds = Pick<WorkbenchModelContextCapability, "defaultTokens" | "minimumTokens" | "maximumTokens">;
+
+export function contextWindowFloor(capability: Omit<ContextBounds, "maximumTokens">) {
+  return capability.minimumTokens ?? capability.defaultTokens;
+}
+
+export function isSelectableContextWindow(capability: ContextBounds, tokens: number) {
+  const floor = contextWindowFloor(capability);
+  return tokens >= floor && tokens <= capability.maximumTokens && (tokens - floor) % 1000 === 0;
+}
+
 export const WorkbenchModelContextCapabilitySchema = z.object({
   model: z.string().min(1),
   defaultTokens: z.number().int().min(51_000),
+  minimumTokens: z.number().int().min(51_000).optional(),
   maximumTokens: z.number().int().positive(),
-}).refine(value => value.maximumTokens >= value.defaultTokens) satisfies z.ZodType<WorkbenchModelContextCapability>;
+}).refine(value => value.maximumTokens >= value.defaultTokens && value.defaultTokens >= contextWindowFloor(value)) satisfies z.ZodType<WorkbenchModelContextCapability>;

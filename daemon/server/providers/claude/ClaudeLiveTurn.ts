@@ -92,6 +92,8 @@ export interface ClaudeLiveTurnOptions {
   turnId: WorkbenchTurnId;
   workingStatusInPrompt: boolean;
   usage: ThreadTokenUsage | null;
+  /** The window Workbench launched Claude with; it outranks windows Claude reports. Null keeps the reported window. */
+  contextWindow: number | null;
   transcript: Pick<ClaudeTranscriptAdapter,
     "recordStreamEvent" | "recordAssistant" | "recordNativeToolResults" | "recordCompaction"
     | "recordContextUsage" | "recordTurnUsage" | "recordSteer" | "settleTurn">;
@@ -129,7 +131,7 @@ export default class ClaudeLiveTurn {
     this.workingStatusInPrompt = options.workingStatusInPrompt;
     this.total = options.usage?.total ?? EMPTY;
     this.last = options.usage?.last ?? null;
-    this.contextWindow = options.usage?.modelContextWindow ?? null;
+    this.contextWindow = options.contextWindow ?? options.usage?.modelContextWindow ?? null;
   }
 
   /**
@@ -244,7 +246,7 @@ export default class ClaudeLiveTurn {
         for (const uuid of message.user_message_uuids ?? []) await this.deliver(uuid);
         this.total = addBreakdowns(this.total, claudeTokenBreakdown(message.usage));
         const main = mainModel(message);
-        this.contextWindow = main.contextWindow ?? this.contextWindow;
+        this.contextWindow = this.options.contextWindow ?? main.contextWindow ?? this.contextWindow;
         await this.recordUsage();
         await transcript.recordTurnUsage(this.threadId, this.turnId, {
           model: main.model, mixedModels: main.mixed, cumulative: this.total, observedAt: Date.now(),
@@ -267,10 +269,13 @@ export default class ClaudeLiveTurn {
     });
   }
 
+  /** Persist for later reads and publish live; clients only learn current usage from the notification. */
   private async recordUsage() {
     if (!this.last) return;
-    await this.options.transcript.recordContextUsage(this.threadId, {
-      last: this.last, total: this.total, modelContextWindow: this.contextWindow,
+    const tokenUsage = { last: this.last, total: this.total, modelContextWindow: this.contextWindow };
+    await this.options.transcript.recordContextUsage(this.threadId, tokenUsage);
+    this.options.broadcast({
+      method: "thread/tokenUsage/updated", params: { threadId: this.threadId, turnId: this.turnId, tokenUsage },
     });
   }
 

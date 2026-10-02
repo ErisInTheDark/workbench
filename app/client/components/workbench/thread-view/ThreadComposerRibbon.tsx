@@ -5,6 +5,7 @@
 "use client";
 
 import { useRef, type ReactNode } from "react";
+import { contextWindowFloor } from "workbench-shared/workbench/thread/thread-profile";
 import { ZapIcon } from "../workbench-icons";
 import WorkbenchPressDragSlider from "../WorkbenchPressDragSlider";
 import { formatProfileContext, profileContextColour, profileEffortColour } from "./ThreadProfileEditor";
@@ -41,7 +42,7 @@ export default function ThreadComposerRibbon({
   onFastModeToggle: () => void;
   onReasoningEffortChange: (effort: string) => void;
   supportedReasoningEfforts: string[];
-  context: { value: number; defaultTokens: number; maximumTokens: number } | null;
+  context: { value: number; defaultTokens: number; minimumTokens?: number; maximumTokens: number } | null;
   onContextChange: (tokens: number) => void;
   profileControl?: ReactNode;
   selectedProfileLabel?: string | null;
@@ -60,7 +61,7 @@ export default function ThreadComposerRibbon({
       {modelControl}
       {context ? <>
         <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-        <WorkbenchPressDragSlider key={`${modelId}:context`} label="Context window" min={context.defaultTokens} max={context.maximumTokens} step={1000} value={context.value} format={formatProfileContext} colour={profileContextColour} onChange={onContextChange} />
+        <WorkbenchPressDragSlider key={`${modelId}:context`} label="Context window" min={contextWindowFloor(context)} max={context.maximumTokens} step={1000} value={context.value} format={formatProfileContext} colour={profileContextColour} onChange={onContextChange} />
       </> : null}
       {showsReasoningEffortControl && supportedReasoningEfforts.length ? (
         <>

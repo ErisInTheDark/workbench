@@ -25,7 +25,19 @@ class RecordingQueue extends ClaudePromptQueue {
   }
 }
 
-function fixture(onAccepted?: (turn: ClaudeLiveTurn, log: string[]) => void, usage: ConstructorParameters<typeof ClaudeLiveTurn>[0]["usage"] = null) {
+const assistant = (inputTokens: number) => ({
+  type: "assistant", parent_tool_use_id: null,
+  message: { role: "assistant", content: [], usage: { input_tokens: inputTokens, output_tokens: 1 } },
+});
+const contextWindowUsage = (contextWindow: number) => ({
+  "claude-opus-5-5": { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, contextWindow },
+});
+
+function fixture(
+  onAccepted?: (turn: ClaudeLiveTurn, log: string[]) => void,
+  usage: ConstructorParameters<typeof ClaudeLiveTurn>[0]["usage"] = null,
+  contextWindow: number | null = null,
+) {
   const pending: (object | Error)[] = [];
   let wake: (() => void) | null = null;
   let closed = false;
@@ -46,9 +58,10 @@ function fixture(onAccepted?: (turn: ClaudeLiveTurn, log: string[]) => void, usa
   const steers: WorkbenchSteerHistoryEntry[] = [];
   const queue = new RecordingQueue();
   const billing: Array<{ model: string | null; mixedModels: boolean; total: number; output: number }> = [];
+  const liveUsage: Array<{ input: number | null; window: number | null }> = [];
   const turn: ClaudeLiveTurn = new ClaudeLiveTurn({
     query: query as never, queue, scope: "scope", cwd: "C:/repo",
-    projectId, threadId, turnId, workingStatusInPrompt: false, usage,
+    projectId, threadId, turnId, workingStatusInPrompt: false, usage, contextWindow,
     transcript: {
       recordStreamEvent: async () => undefined,
       recordAssistant: async () => undefined,
@@ -76,6 +89,11 @@ function fixture(onAccepted?: (turn: ClaudeLiveTurn, log: string[]) => void, usa
       }
     },
     broadcast: notification => {
+      if (notification.method === "thread/tokenUsage/updated") {
+        const { tokenUsage } = notification.params;
+        liveUsage.push({ input: tokenUsage.last.inputTokens, window: tokenUsage.modelContextWindow });
+        return;
+      }
       log.push(notification.method === "thread/status/changed"
         ? `status:${notification.params.status.type}` : notification.method);
     },
@@ -84,7 +102,7 @@ function fixture(onAccepted?: (turn: ClaudeLiveTurn, log: string[]) => void, usa
     stderr: () => "",
     release: async () => { log.push("release"); },
   });
-  return { turn, push, log, steers, queue, billing };
+  return { turn, push, log, steers, queue, billing, liveUsage };
 }
 
 const steer = (): WorkbenchSteerHistoryEntry => ({
@@ -115,6 +133,26 @@ test("each result records thread-cumulative billing usage under the turn's main 
   }));
   await task;
   assert.deepEqual(billing, [{ model: "claude-opus-5-5", mixedModels: true, total: 120 + 1_015, output: 25 }]);
+});
+
+test("context usage reaches clients live under the selected window, which Claude's reported window cannot replace", async () => {
+  const { turn, push, liveUsage } = fixture(undefined, null, 300_000);
+  const { task } = await turn.start("hi");
+  push(assistant(40_000));
+  await tick();
+  assert.deepEqual(liveUsage, [{ input: 40_000, window: 300_000 }], "the first model round must already know the window");
+  push(result({ modelUsage: contextWindowUsage(1_000_000) }));
+  await task;
+  assert.deepEqual(liveUsage.map(entry => entry.window), [300_000, 300_000]);
+});
+
+test("without a selected window, live usage learns the window Claude reports", async () => {
+  const { turn, push, liveUsage } = fixture();
+  const { task } = await turn.start("hi");
+  push(assistant(40_000));
+  push(result({ modelUsage: contextWindowUsage(1_000_000) }));
+  await task;
+  assert.deepEqual(liveUsage.map(entry => entry.window), [null, 1_000_000]);
 });
 
 test("injected screenshots reach Claude as images after the prompt and are refused once the turn closes", async () => {
