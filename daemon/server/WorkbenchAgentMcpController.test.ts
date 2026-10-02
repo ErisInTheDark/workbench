@@ -12,7 +12,6 @@ import type { WorkbenchAgentCommandRequest } from "./lib/workbench/commands/work
 import WorkbenchAgentMcpController, { type WorkbenchAgentMcpControllerOptions } from "./WorkbenchAgentMcpController";
 import CodexToolsController from "./CodexToolsController";
 import CodexShellController from "./CodexShellController";
-import CodexCommandExecController from "./CodexCommandExecController";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { NativeThreadId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
@@ -121,7 +120,6 @@ function codexController(options: Omit<WorkbenchAgentMcpControllerOptions, "tool
 }) {
   const tools = new CodexToolsController({
     resolvePatchCaller: async () => { throw new Error("unexpected patch"); },
-    commandExec: new CodexCommandExecController({ requestCodex: options.requestCodex }),
     readCallerThread: async nativeId => {
       const response = await options.requestCodex({
         id: 0, method: "thread/read", params: { includeTurns: false, threadId: nativeId },

@@ -3,9 +3,8 @@
  * - default CodexToolsController: interpret Codex MCP metadata and execute tools inside its native sandbox.
  */
 import { NativeThreadIdSchema, type NativeThreadId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import type { ProviderToolMetadata, WorkbenchProviderTools, WorkbenchReadOnlyExecution } from "workbench-shared/workbench/provider/provider-execution";
+import type { ProviderToolMetadata, WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
 import CodexShellController, { WORKBENCH_SHELL_SANDBOX_CAPABILITY, WORKBENCH_SHELL_TOOL_DESCRIPTION } from "./CodexShellController";
-import type CodexCommandExecController from "./CodexCommandExecController";
 import { allowCodexApplyPatch, denyCodexApplyPatch, parseCodexApplyPatchClaimHook } from "./lib/workbench/codex-apply-patch-claim-hook";
 import {
   createWorkbenchFileChangeFailureSystemMessage, WORKBENCH_UNCLAIMED_FILE_CHANGE_REASON_PREFIX,
@@ -18,7 +17,6 @@ export default class CodexToolsController implements WorkbenchProviderTools {
     readCallerThread(nativeThreadId: NativeThreadId): Promise<{ id: WorkbenchThreadId; cwd: string }>;
     resolvePatchCaller(threadId: string, cwd: string): Promise<{ threadId: WorkbenchThreadId; nativeThreadId: NativeThreadId }>;
     shell: Pick<CodexShellController, "execute"> & Partial<Pick<CodexShellController, "executeAdmitted">>;
-    commandExec: Pick<CodexCommandExecController, "execute">;
   }) {
     this.execute = options.shell.executeAdmitted?.bind(options.shell);
   }
@@ -44,12 +42,6 @@ export default class CodexToolsController implements WorkbenchProviderTools {
       signal.throwIfAborted();
       return JSON.stringify(denyCodexApplyPatch(`apply_patch claim check failed. ${error instanceof Error ? error.message : String(error)}`));
     }
-  }
-
-  executeReadOnly(request: WorkbenchReadOnlyExecution, signal: AbortSignal) {
-    return this.options.commandExec.execute({
-      ...request, disableTimeout: true, sandboxPolicy: { type: "dangerFullAccess" },
-    }, signal);
   }
 
   async describe() {

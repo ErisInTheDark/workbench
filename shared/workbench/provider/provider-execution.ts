@@ -3,7 +3,6 @@
  * - ProviderToolMetadataSchema/ProviderToolMetadata: uninterpreted JSON metadata delivered to the selected provider.
  * - WorkbenchProviderCaller: validated WB identity and authoritative working directory.
  * - ProviderToolRequestContext/WorkbenchProviderTools: server-read MCP scope and provider-owned sandbox execution.
- * - WorkbenchReadOnlyExecution: validated read-only command invocation.
  * - WorkbenchAdmittedExecution: daemon-owned caller and resolved one-command permissions.
  * - WorkbenchPatchClaimCheck: shared claim policy called with validated WB ownership.
  * - ProviderToolResultSchema/ProviderToolResult: complete JSON-safe MCP result evidence.
@@ -54,12 +53,6 @@ export interface WorkbenchProviderCaller {
   harness: string;
   threadId: WorkbenchThreadId;
   cwd: string;
-}
-
-export interface WorkbenchReadOnlyExecution {
-  command: string[];
-  cwd: string;
-  env?: Record<string, string | null>;
 }
 
 export interface WorkbenchAdmittedExecution {

@@ -379,7 +379,6 @@ before(async () => {
       }),
       readCallerThread: async () => { throw new Error("Unexpected shell caller lookup"); },
       shell: { execute: async () => { throw new Error("Unexpected shell"); } },
-      commandExec: { execute: async () => { throw new Error("Unexpected execution"); } },
     }).patchClaims(input, async ({ paths }) => {
       if (paths.some((filePath) => filePath.endsWith("unavailable.ts"))) throw new Error("claim registry unavailable");
       const uncoveredPaths = paths.filter((filePath) => filePath.endsWith("unclaimed.ts"));

@@ -27,7 +27,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   access: "agent",
   children: [WorkbenchMcpNode],
   create: (context, build) => {
-    const codexTools = build.get("codexTools");
     const gitArc = build.get("gitArc");
     const harnesses = build.get("harnesses");
     const providers = new WorkbenchProviderDispatcher(build.run);
@@ -164,9 +163,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         return { threadId: identity.threadId, nativeThreadId: binding.nativeThreadId, harness: WorkbenchHarnessSchema.parse(binding.harness) };
       },
       readReloadDirtSnapshot: () => reloadDirt.getSnapshot(),
-      executeReadOnly: async (request, signal) => {
-        return codexTools.executeReadOnly(request, signal);
-      },
       requestManagedThread: async (request) => request.method?.startsWith("workbench/thread/")
         ? await threadState.handleManagedThreadRequest(request)
         : request.method === "workbench/message" || request.method === "workbench/subagent/message"
@@ -188,7 +184,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["codexTools", "database", "gitArc", "harnesses", "messages", "projectCatalog", "questionnaires", "reloadDirt", "stats", "subagents", "threadGit", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["database", "gitArc", "harnesses", "messages", "projectCatalog", "questionnaires", "reloadDirt", "stats", "subagents", "threadGit", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
   safeAll: true,
   scope: "server:commands",
   sources: [
@@ -202,6 +198,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/WorkbenchTranscriptCommandController*.ts",
     "daemon/server/transcript-command-markdown.ts",
     "daemon/server/lib/workbench/commands/**",
+    "daemon/server/lib/workbench/ripgrep/**",
     "daemon/server/lib/workbench/cli/git-arc-output.ts",
     "daemon/server/lib/workbench/cli/workbench-agent-cli-commands.ts",
     "daemon/server/lib/workbench/cli/workbench-agent-cli-responses.ts",

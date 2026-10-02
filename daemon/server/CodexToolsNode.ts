@@ -8,7 +8,6 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import CodexProvider from "./CodexProvider";
 import CodexToolsController from "./CodexToolsController";
 import CodexShellController from "./CodexShellController";
-import CodexCommandExecController from "./CodexCommandExecController";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 
@@ -17,14 +16,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   children: [CodexProvider, WorkbenchAgentCommandNode],
   create: (_context, { get }) => {
     const threads = get("codexThreadOperations");
-    const commandExec = new CodexCommandExecController({
-      requestCodex: async request => ({
-        id: request.id ?? null,
-        result: await threads.requestNative(request.method!, (request.params ?? {}) as object),
-      }),
-    });
     const tools = new CodexToolsController({
-      commandExec,
       resolvePatchCaller: (threadId, cwd) => threads.resolvePatchCaller(threadId, cwd),
       readCallerThread: async nativeThreadId => {
         const thread = await threads.read(nativeThreadId);
@@ -48,6 +40,5 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/CodexToolsController.ts",
     "daemon/server/CodexShellController.ts",
     "daemon/server/WorkbenchApprovedCommandExecutor.ts",
-    "daemon/server/CodexCommandExecController.ts",
   ].join("\n"),
 });

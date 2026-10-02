@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchRipgrepExecutionRequestSchema: validate the trusted-cwd ripgrep execution boundary. Keywords: ripgrep, search, command, cwd.
- * - WORKBENCH_RIPGREP_COMMANDS: expose ripgrep through the shared wb CLI and typed MCP registry.
+ * - WorkbenchRipgrepExecutionRequestSchema: validate the trusted-cwd wb rg request boundary.
+ * - WORKBENCH_RIPGREP_COMMANDS: expose the rg-compatible search through the shared wb CLI and typed MCP registry.
  */
 import { z } from "zod";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
@@ -10,7 +10,7 @@ import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments"
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
 const ripgrepArguments = z.array(z.string().max(65_536)).min(1).max(256).describe(
-  "Native ripgrep arguments. Pass each argument as one array item. No matches return successful empty output. --pre and --hostname-bin are unavailable because this tool is read-only.",
+  "rg-style arguments, one per array item; regex is JavaScript syntax. Gitignored files are skipped even under explicit paths unless --no-ignore. Output stops at --max-results (default 500, 0 = unlimited); files over --max-filesize (default 4M) are skipped. --help lists supported flags. No matches return successful empty output.",
 );
 
 export const WorkbenchRipgrepExecutionRequestSchema = z.object({
@@ -20,7 +20,7 @@ export const WorkbenchRipgrepExecutionRequestSchema = z.object({
 }).strict();
 
 const ripgrep = defineWorkbenchAgentCommand({
-  description: "Search with native ripgrep arguments without shell quoting; no matches are successful empty output.",
+  description: "Search project files with rg-style arguments without shell quoting; gitignored files are skipped by default and no matches are successful empty output.",
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["rg"],
   mcpCodeModeEligible: true,

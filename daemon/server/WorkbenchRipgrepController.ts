@@ -1,51 +1,84 @@
 /*
  * Exports:
- * - default WorkbenchRipgrepController: own safe ripgrep arguments and exit semantics above provider execution.
+ * - default WorkbenchRipgrepController: own wb rg requests; parse rg-style args, enumerate gitignore-aware candidates, and run one cancellable search worker.
  */
+import { Worker } from "node:worker_threads";
+
 import { WorkbenchRipgrepExecutionRequestSchema } from "./lib/workbench/commands/ripgrep-command-definition";
-import type { WorkbenchShellResult } from "workbench-shared/workbench/commands/workbench-shell-command";
-import type { WorkbenchReadOnlyExecution } from "workbench-shared/workbench/provider/provider-execution";
+import { parseRipgrepArguments, RIPGREP_HELP_TEXT } from "./lib/workbench/ripgrep/ripgrep-arguments";
+import { collectRipgrepCandidates } from "./lib/workbench/ripgrep/ripgrep-candidates";
+import { formatRipgrepTypeList } from "./lib/workbench/ripgrep/ripgrep-file-types";
+import type { RipgrepSearchInput, RipgrepSearchResult } from "./lib/workbench/ripgrep/ripgrep-search";
+import { logError } from "./process-helpers";
 
 interface WorkbenchRipgrepControllerOptions {
-  execute(request: WorkbenchReadOnlyExecution, signal: AbortSignal): Promise<Pick<WorkbenchShellResult, "exitCode" | "stdout" | "stderr">>;
+  workerUrl?: URL;
+  logError?(message: string): void;
+  /** Observes worker startup; lets tests cancel while the worker is live. */
+  onWorkerOnline?(): void;
 }
 
-function combinedOutput(stdout: string, stderr: string) {
-  if (!stdout) return stderr;
-  if (!stderr) return stdout;
-  return `${stdout}${stdout.endsWith("\n") ? "" : "\n"}${stderr}`;
+function rejected(message: string) {
+  return new Response(`${message.trimEnd()}\n`, { status: 400 });
 }
 
-function forbiddenProcessArgument(argument: string) {
-  return argument === "--pre"
-    || argument.startsWith("--pre=")
-    || argument === "--hostname-bin"
-    || argument.startsWith("--hostname-bin=");
+function errorMessage(error: unknown) {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 500);
 }
 
 export default class WorkbenchRipgrepController {
-  constructor(private readonly options: WorkbenchRipgrepControllerOptions) {}
+  private readonly workerUrl: URL;
+  private readonly logError: (message: string) => void;
 
-  async execute(input: object, signal: AbortSignal) {
+  constructor(private readonly options: WorkbenchRipgrepControllerOptions = {}) {
+    this.workerUrl = options.workerUrl ?? new URL("./lib/workbench/ripgrep/ripgrep-worker-bootstrap.mjs", import.meta.url);
+    this.logError = options.logError ?? (message => logError("wb-rg", message));
+  }
+
+  async execute(input: object, signal: AbortSignal): Promise<Response> {
     const request = WorkbenchRipgrepExecutionRequestSchema.safeParse(input);
-    if (!request.success) return new Response("A valid ripgrep request is required.\n", { status: 400 });
-    if (request.data.args.some(forbiddenProcessArgument)) {
-      return new Response("Ripgrep process-launching arguments are unavailable in the read-only Workbench search tool.\n", { status: 400 });
-    }
-    if (signal.aborted) throw signal.reason;
+    if (!request.success) return rejected("A valid wb rg request is required.");
+    signal.throwIfAborted();
+    const parsed = parseRipgrepArguments(request.data.args);
+    if (parsed.kind === "rejected") return rejected(parsed.message);
+    const { query } = parsed;
+    if (query.mode === "help") return new Response(RIPGREP_HELP_TEXT);
+    if (query.mode === "type-list") return new Response(formatRipgrepTypeList());
 
     try {
-      const result = await this.options.execute({
-        command: ["rg", "--no-config", "--heading", ...request.data.args],
-        cwd: request.data.cwd,
-        env: { RIPGREP_CONFIG_PATH: null },
-      }, signal);
-      const output = combinedOutput(result.stdout, result.stderr);
-      if (result.exitCode === 0 || result.exitCode === 1) return new Response(output);
-      return new Response(output || `Ripgrep exited with code ${result.exitCode}.\n`, { status: 400 });
+      const candidates = await collectRipgrepCandidates(query, request.data.cwd, signal);
+      if (!candidates.searchedRoots) return rejected(candidates.warnings.join("\n"));
+      const result = await this.search({ query, files: candidates.files }, signal);
+      if (result.kind === "invalid") return rejected(result.message);
+      if (result.kind === "failed") throw new Error(result.message);
+      const warnings = candidates.warnings.length ? `${candidates.warnings.join("\n")}\n` : "";
+      return new Response(`${result.output}${warnings}`);
     } catch (error) {
       if (signal.aborted) throw signal.reason;
-      return new Response(`Ripgrep could not run: ${error instanceof Error ? error.message : String(error)}\n`, { status: 400 });
+      const message = errorMessage(error);
+      this.logError(`search failed: ${message}`);
+      return rejected(`wb rg could not search: ${message}`);
     }
+  }
+
+  private search(input: RipgrepSearchInput, signal: AbortSignal) {
+    return new Promise<RipgrepSearchResult>((resolve, reject) => {
+      signal.throwIfAborted();
+      const worker = new Worker(this.workerUrl, { workerData: input });
+      let settled = false;
+      const settle = (finish: () => void) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        worker.terminate().catch((error: unknown) => this.logError(`worker termination failed: ${errorMessage(error)}`));
+        finish();
+      };
+      const onAbort = () => settle(() => reject(signal.reason));
+      signal.addEventListener("abort", onAbort, { once: true });
+      worker.once("online", () => this.options.onWorkerOnline?.());
+      worker.once("message", (result: RipgrepSearchResult) => settle(() => resolve(result)));
+      worker.once("error", error => settle(() => reject(error)));
+      worker.once("exit", code => settle(() => reject(new Error(`search worker exited early with code ${code}`))));
+    });
   }
 }
