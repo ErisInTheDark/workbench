@@ -28,8 +28,20 @@ function globPatternToRegExpSource(pattern: string) {
     const character = pattern[index];
     const nextCharacter = pattern[index + 1];
     if (character === "*" && nextCharacter === "*") {
-      source += ".*";
-      index += 1;
+      const atSegmentStart = index === 0 || pattern[index - 1] === "/";
+      const following = pattern[index + 2];
+      if (atSegmentStart && following === "/") {
+        // "**/" spans zero or more whole directories, as in gitignore.
+        source += "(?:.*/)?";
+        index += 2;
+      } else if (atSegmentStart && following === undefined) {
+        source += ".*";
+        index += 1;
+      } else {
+        // Inside a name, gitignore treats "**" like "*".
+        source += "[^/]*";
+        index += 1;
+      }
       continue;
     }
     if (character === "*") {

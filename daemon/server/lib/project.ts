@@ -27,7 +27,7 @@ import { localProjectKey, remoteProjectKey, workspaceProjectKey } from "./workbe
 import { projectLocationKey } from "./workbench/project/project-location-discovery";
 import { ProjectIdentityKeySchema, type ProjectIdentityKey } from "workbench-shared/workbench/identity";
 import type { ProjectSnapshot, TreeNode, WorkbenchAgentDefinition, WorkbenchAgentOption, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchSkillDefinition, WorkbenchSkillSummary } from "workbench-shared/types";
-import { createGitignoreMatcher } from "./workbench/gitignore-matcher";
+import { createGitignoreMatcher } from "workbench-shared/source-pattern-matcher";
 import {
   ensureWorkbenchLibrary,
   listWorkbenchLibraryAgents,
