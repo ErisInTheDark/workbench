@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - ClaudePromptQueue: streaming SDK input that stays open for steers until the turn closes.
  * - claudePrompt: build one SDK user message from text or content blocks with an optional delivery uuid.
- * - ClaudeLiveTurnOptions: collaborators one live turn needs.
- * - default ClaudeLiveTurn: own one Claude query from start to its single settlement, including steer and context delivery and context usage; it signals when billing usage changed.
+ * - ClaudeLiveTurnSnapshot: plain turn state a reloading bridge hands to its replacement.
+ * - ClaudeLiveTurnCollaborators: bridge-generation collaborators one live turn needs.
+ * - ClaudeLiveTurnOptions: identity, launch usage, and collaborators for a new turn.
+ * - default ClaudeLiveTurn: drive one Claude session from start to its single settlement, including steer and context delivery and context usage; it pauses and restores across bridge reloads and signals when billing usage changed.
  */
-import type { Query, SDKMessage, SDKResultMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { SDKResultMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
 import type { ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
@@ -17,34 +18,10 @@ import type {
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 import { claudeTokenBreakdown } from "./ClaudeTranscriptAdapter";
 import { prefixClaudePrompt, type ClaudePromptContent } from "./claude-prompt-content";
+import type { ClaudeSession } from "./ClaudeSessionHost";
 
 type Breakdown = ThreadTokenUsage["total"];
 type Settlement = "completed" | "failed" | "interrupted";
-
-export class ClaudePromptQueue implements AsyncIterable<SDKUserMessage> {
-  private readonly values: SDKUserMessage[] = [];
-  private wake: (() => void) | null = null;
-  private closed = false;
-
-  push(value: SDKUserMessage) {
-    if (this.closed) throw new Error("Claude prompt queue has closed.");
-    this.values.push(value);
-    this.wake?.();
-  }
-
-  close() {
-    this.closed = true;
-    this.wake?.();
-  }
-
-  async *[Symbol.asyncIterator]() {
-    while (!this.closed || this.values.length) {
-      if (this.values.length) yield this.values.shift()!;
-      else await new Promise<void>(resolve => { this.wake = resolve; });
-      this.wake = null;
-    }
-  }
-}
 
 export function claudePrompt(
   content: ClaudePromptContent, options: { synthetic?: boolean; uuid?: string } = {},
@@ -80,9 +57,7 @@ function mainContextWindow(result: SDKResultMessage) {
   return usage && usage.contextWindow > 0 ? usage.contextWindow : null;
 }
 
-export interface ClaudeLiveTurnOptions {
-  query: Query;
-  queue: ClaudePromptQueue;
+interface ClaudeLiveTurnIdentity {
   scope: string;
   cwd: string;
   /** Lifecycle observations name their project so they apply even before thread state loads it. */
@@ -90,9 +65,18 @@ export interface ClaudeLiveTurnOptions {
   threadId: WorkbenchThreadId;
   turnId: WorkbenchTurnId;
   workingStatusInPrompt: boolean;
-  usage: ThreadTokenUsage | null;
-  /** The window Workbench launched Claude with; it outranks windows Claude reports. Null keeps the reported window. */
+}
+
+export interface ClaudeLiveTurnSnapshot extends ClaudeLiveTurnIdentity {
+  launchedContextWindow: number | null;
+  undelivered: WorkbenchSteerHistoryEntry[];
+  total: Breakdown;
+  last: Breakdown | null;
   contextWindow: number | null;
+}
+
+export interface ClaudeLiveTurnCollaborators {
+  session: ClaudeSession;
   transcript: Pick<ClaudeTranscriptAdapter,
     "recordStreamEvent" | "recordAssistant" | "recordNativeToolResults" | "recordCompaction"
     | "recordContextUsage" | "recordSteer" | "settleTurn">;
@@ -101,13 +85,26 @@ export interface ClaudeLiveTurnOptions {
   observe(facts: WorkbenchProviderObservation): Promise<unknown>;
   broadcast(notification: WorkbenchTranscriptNotification): void;
   readTurn(): Promise<Turn | null>;
-  processExit(): Promise<void>;
-  stderr(): string;
-  /** Release process-scoped resources and detach from the live registry before settlement is published. */
+  /** Detach from the live registry after the process is released and before settlement is published. */
   release(): Promise<void>;
 }
 
+export interface ClaudeLiveTurnOptions extends ClaudeLiveTurnIdentity, ClaudeLiveTurnCollaborators {
+  usage: ThreadTokenUsage | null;
+  /** The window Workbench launched Claude with; it outranks windows Claude reports. Null keeps the reported window. */
+  contextWindow: number | null;
+}
+
 export default class ClaudeLiveTurn {
+  /** Rebuild a paused turn from its snapshot over the same live session; call continue() to resume reading. */
+  static restore(snapshot: ClaudeLiveTurnSnapshot, collaborators: ClaudeLiveTurnCollaborators) {
+    return new ClaudeLiveTurn({
+      scope: snapshot.scope, cwd: snapshot.cwd, projectId: snapshot.projectId, threadId: snapshot.threadId,
+      turnId: snapshot.turnId, workingStatusInPrompt: snapshot.workingStatusInPrompt,
+      ...collaborators, usage: null, contextWindow: snapshot.launchedContextWindow,
+    }, snapshot);
+  }
+
   readonly scope: string;
   readonly cwd: string;
   readonly threadId: WorkbenchThreadId;
@@ -120,19 +117,53 @@ export default class ClaudeLiveTurn {
   private settled = false;
   private closing: Promise<void> | null = null;
   private task: Promise<void> = Promise.resolve();
+  /** True while run() reads the session; false before start, after a pause, and after settlement. */
+  private running = false;
+  private pausing = new AbortController();
   private total: Breakdown;
   private last: Breakdown | null;
   private contextWindow: number | null;
 
-  constructor(private readonly options: ClaudeLiveTurnOptions) {
+  constructor(private readonly options: ClaudeLiveTurnOptions, restored?: ClaudeLiveTurnSnapshot) {
     this.scope = options.scope;
     this.cwd = options.cwd;
     this.threadId = options.threadId;
     this.turnId = options.turnId;
     this.workingStatusInPrompt = options.workingStatusInPrompt;
-    this.total = options.usage?.total ?? EMPTY;
-    this.last = options.usage?.last ?? null;
-    this.contextWindow = options.contextWindow ?? options.usage?.modelContextWindow ?? null;
+    this.total = restored?.total ?? options.usage?.total ?? EMPTY;
+    this.last = restored ? restored.last : options.usage?.last ?? null;
+    this.contextWindow = options.contextWindow
+      ?? (restored ? restored.contextWindow : options.usage?.modelContextWindow ?? null);
+    if (restored) {
+      this.beforePrompt = null;
+      for (const entry of restored.undelivered) this.undelivered.set(entry.itemId!, entry);
+    }
+  }
+
+  /** Plain state for the next bridge generation; null once settlement has begun. */
+  snapshot(): ClaudeLiveTurnSnapshot | null {
+    if (this.settled || this.closing) return null;
+    return {
+      scope: this.scope, cwd: this.cwd, projectId: this.options.projectId, threadId: this.threadId,
+      turnId: this.turnId, workingStatusInPrompt: this.workingStatusInPrompt,
+      launchedContextWindow: this.options.contextWindow,
+      undelivered: [...this.undelivered.values()],
+      total: this.total, last: this.last, contextWindow: this.contextWindow,
+    };
+  }
+
+  /** Stop reading at a message boundary, leaving unread output buffered in the session. */
+  async pause() {
+    this.pausing.abort();
+    await this.task.catch(() => undefined);
+  }
+
+  /** Resume reading after pause() or restore(); a settled or closing turn has nothing to resume. */
+  continue() {
+    if (this.settled || this.closing || this.running) return this.task;
+    this.pausing = new AbortController();
+    this.task = this.run();
+    return this.task;
   }
 
   /**
@@ -160,11 +191,10 @@ export default class ClaudeLiveTurn {
     }
     const deferred = this.beforePrompt;
     this.beforePrompt = null;
-    this.options.queue.push(claudePrompt(deferred.context.length
+    this.options.session.push(claudePrompt(deferred.context.length
       ? prefixClaudePrompt(deferred.context.join("\n\n"), content) : content));
-    for (const steer of deferred.steers) this.options.queue.push(steer);
-    this.task = this.run();
-    return { task: this.task, warning };
+    for (const steer of deferred.steers) this.options.session.push(steer);
+    return { task: this.continue(), warning };
   }
 
   /** False once the query is closing; later messages belong to a new turn. */
@@ -182,13 +212,13 @@ export default class ClaudeLiveTurn {
     if (!entry.itemId) throw new Error("Claude steer has no item identity.");
     const message = claudePrompt(content, { uuid: entry.itemId });
     if (this.beforePrompt) this.beforePrompt.steers.push(message);
-    else this.options.queue.push(message);
+    else this.options.session.push(message);
     this.undelivered.set(entry.itemId, entry);
   }
 
   inject(text: string) {
     if (this.beforePrompt) this.beforePrompt.context.push(text);
-    else this.options.queue.push(claudePrompt(text, { synthetic: true }));
+    else this.options.session.push(claudePrompt(text, { synthetic: true }));
   }
 
   /** Inject non-text context, such as a screenshot, as its own synthetic message; it follows the prompt if accepted early. */
@@ -196,40 +226,47 @@ export default class ClaudeLiveTurn {
     if (!this.acceptingInput) throw new Error("Claude turn is closing and cannot accept more context.");
     const message = claudePrompt(content, { synthetic: true });
     if (this.beforePrompt) this.beforePrompt.steers.push(message);
-    else this.options.queue.push(message);
+    else this.options.session.push(message);
   }
 
   async interrupt() {
     this.stopped = true;
     try {
-      await this.options.query.interrupt();
+      await this.options.session.interrupt();
     } finally {
-      this.options.queue.close();
-      this.options.query.close();
+      const closing = this.close();
       await this.task;
+      await closing;
       await this.finish("interrupted");
     }
   }
 
   private async run() {
-    let status: Exclude<Settlement, "interrupted"> = "failed";
+    this.running = true;
+    let status: Exclude<Settlement, "interrupted"> | "paused" = "failed";
     try {
       status = await this.consume();
     } catch (error) {
       if (!this.stopped) {
         console.error("[claude] query failed",
           error instanceof Error ? error.message.slice(0, 500) : "unknown failure",
-          this.options.stderr().slice(-1000));
+          this.options.session.stderr().slice(-1000));
       }
     } finally {
-      await this.close();
+      this.running = false;
     }
+    if (status === "paused") return;
+    await this.close();
     if (!this.stopped) await this.finish(status);
   }
 
-  private async consume(): Promise<Exclude<Settlement, "interrupted">> {
+  private async consume(): Promise<Exclude<Settlement, "interrupted"> | "paused"> {
     const { transcript } = this.options;
-    for await (const message of this.options.query as AsyncIterable<SDKMessage>) {
+    for (;;) {
+      const read = await this.options.session.read(this.pausing.signal);
+      if (read.kind === "paused") return "paused";
+      if (read.kind === "end") return "failed";
+      const { message } = read;
       if (message.type === "stream_event") {
         await transcript.recordStreamEvent(this.threadId, this.turnId, message);
       } else if (message.type === "assistant") {
@@ -255,7 +292,6 @@ export default class ClaudeLiveTurn {
         return message.subtype === "success" && !message.is_error ? "completed" : "failed";
       }
     }
-    return "failed";
   }
 
   private async deliver(uuid: string) {
@@ -279,9 +315,7 @@ export default class ClaudeLiveTurn {
 
   private close() {
     this.closing ??= (async () => {
-      this.options.queue.close();
-      this.options.query.close();
-      await this.options.processExit();
+      await this.options.session.close();
       await this.options.release();
     })();
     return this.closing;

@@ -13,6 +13,7 @@ import {
 } from "./lib/workbench/reload-source-observer";
 import WorkbenchAgentCliNode from "./WorkbenchAgentCliNode";
 import OpenCodeServiceNode from "./providers/opencode/OpenCodeServiceNode";
+import ClaudeSessionNode from "./providers/claude/ClaudeSessionNode";
 
 const generation = beginReloadSourceGeneration();
 const graph = (() => {
@@ -24,6 +25,7 @@ const graph = (() => {
       require("./CodexLifecycleNode").default,
       require("./CodexExecServerNode").default,
       OpenCodeServiceNode,
+      ClaudeSessionNode,
     ]);
     const repoRoot = path.resolve(__dirname, "../..");
     const observations = completeReloadSourceGeneration(generation)

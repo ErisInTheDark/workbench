@@ -1,19 +1,18 @@
 /*
  * Exports:
- * - ClaudeThreadOperationsOptions: bind SDK sessions to Workbench identity, state, lifecycle publication, claim policy, and managed MCP.
- * - default ClaudeThreadOperations: admit Claude turns and steers, gate native edits by claims, register live turns, deliver Browse screenshots, hydrate billing usage from session logs, and own native session operations.
+ * - ClaudeTurnHandoff: one paused live turn's turn and transcript state for the next bridge generation.
+ * - ClaudeThreadOperationsOptions: bind host-owned Claude sessions to Workbench identity, state, lifecycle publication, and managed MCP.
+ * - default ClaudeThreadOperations: admit Claude turns and steers, launch them on the harness session host, pause and restore live turns across bridge reloads, deliver Browse screenshots, hydrate billing usage from session logs, and own native session operations.
  */
 import {
     deleteSession, getSessionInfo, listSessions, query, renameSession,
-    type SpawnOptions as ClaudeSpawnOptions,
     type Query,
 } from "@anthropic-ai/claude-agent-sdk";
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
     NativeThreadIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchItemIdSchema,
     WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
-    type WorkbenchThreadId,
+    type WorkbenchThreadId, type WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
 import type { WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
 import { toWorkbenchThreadUserInput } from "workbench-shared/workbench/provider/provider-input";
@@ -41,30 +40,25 @@ import { claudeImageBlock, claudePromptContent, prefixClaudePrompt } from "./cla
 import type { WorkbenchProviderBrowse } from "workbench-shared/workbench/provider/provider-browse";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 import ClaudeConfigView from "./ClaudeConfigView";
-import ClaudeLiveTurn, { ClaudePromptQueue } from "./ClaudeLiveTurn";
+import ClaudeLiveTurn, { type ClaudeLiveTurnSnapshot } from "./ClaudeLiveTurn";
+import type ClaudeSessionHost from "./ClaudeSessionHost";
+import { ENDED_CLAUDE_SESSION, spawnTrackedClaude } from "./ClaudeSessionHost";
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
+import type { ClaudeTranscriptTurnState } from "./ClaudeTranscriptAdapter";
 import ClaudeUsageHydrator from "./ClaudeUsageHydrator";
 
-function spawnTrackedClaude(
-  options: ClaudeSpawnOptions, onExit: (exit: Promise<void>) => void,
-) {
-  const child = spawn(options.command, options.args, {
-    cwd: options.cwd, env: options.env, signal: options.signal,
-    stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
-  });
-  onExit(new Promise<void>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", () => resolve());
-  }));
-  return child;
+export interface ClaudeTurnHandoff {
+  turn: ClaudeLiveTurnSnapshot;
+  transcript: ClaudeTranscriptTurnState;
 }
 
 export interface ClaudeThreadOperationsOptions {
   daemonOrigin: string;
+  /** Harness-owned live processes; they outlive this bridge generation. */
+  sessions: ClaudeSessionHost;
+  /** Request-scoped compaction query factory; live turns launch through `sessions`. */
   createQuery?: typeof query;
   resolveExecutable?: () => string;
-  /** Root for per-process sanitized Claude config views; null runs Claude against the daemon's config. */
-  viewsRoot: string | null;
   identities: WorkbenchThreadIdentityController;
   projects: WorkbenchProjectCatalogController;
   questionnaires: WorkbenchQuestionnaireController;
@@ -79,8 +73,6 @@ export interface ClaudeThreadOperationsOptions {
     cwd: string; projectId: string; threadId: string; model: string | null; agentPath: string | null;
     workflowIds: readonly string[]; activatedSkillPaths: readonly string[];
   }): Promise<string>;
-  /** Shared claim policy for native Edit/Write; paths are absolute. */
-  checkFileClaims(request: { cwd: string; threadId: WorkbenchThreadId; paths: string[] }): Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
   /** Claude's real data root holding native session logs; defaults to the daemon user's root. */
   claudeDataRoot?: string;
 }
@@ -116,10 +108,77 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
 
   hasPendingWork() { return this.pending.size > 0 || this.live.size > 0 || this.usageHydrator.hasPendingWork(); }
 
-  async settle() {
+  /** Harness restart or daemon shutdown: interrupt every live turn and publish its settlement. */
+  async interruptAll() {
     await Promise.all([...this.live.values()].map(runtime => this.interrupt(runtime.threadId, runtime.turnId)));
     await Promise.all(this.pending);
+  }
+
+  /** Stop live turns at a message boundary; their processes keep running for the next bridge generation. */
+  async pause(): Promise<ClaudeTurnHandoff[]> {
+    const turns = [...this.live.values()];
+    await Promise.all(turns.map(turn => turn.pause()));
+    return turns.flatMap(turn => {
+      const snapshot = turn.snapshot();
+      const transcript = snapshot && this.options.transcript.captureTurn(snapshot.turnId);
+      if (snapshot && !transcript) console.error("[claude] paused turn has no transcript scope", snapshot.turnId);
+      return snapshot && transcript ? [{ turn: snapshot, transcript }] : [];
+    });
+  }
+
+  /** Rollback after pause(): this generation keeps reading its own turns. */
+  resume() {
+    for (const turn of this.live.values()) this.track(turn.continue());
+  }
+
+  /** Continue turns a previous bridge generation paused, over the sessions the harness kept alive. */
+  adopt(handoffs: readonly ClaudeTurnHandoff[]) {
+    for (const { turn: snapshot, transcript } of handoffs) {
+      this.options.transcript.restoreTurn(transcript);
+      const session = this.options.sessions.get(snapshot.scope);
+      if (!session) console.error("[claude] live turn lost its process across reload", snapshot.turnId);
+      const live = ClaudeLiveTurn.restore(snapshot, {
+        session: session ?? ENDED_CLAUDE_SESSION,
+        ...this.collaborators(snapshot.threadId, snapshot.turnId, snapshot.scope),
+      });
+      this.live.set(snapshot.threadId, live);
+      this.scopes.set(snapshot.scope, live);
+      this.track(live.continue());
+    }
+  }
+
+  /** Bridge retirement: release this generation without interrupting turns the harness still owns. */
+  async dispose() {
+    await this.pause();
+    await Promise.all(this.pending);
     await this.usageHydrator.settle();
+  }
+
+  private collaborators(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, scope: string) {
+    return {
+      transcript: this.options.transcript,
+      usageChanged: () => this.refreshUsage(threadId),
+      observe: this.options.observe,
+      broadcast: this.options.broadcast,
+      readTurn: async () => (await this.read(threadId)).turns.find(turn => turn.id === turnId) ?? null,
+      release: async () => {
+        if (this.live.get(threadId)?.turnId === turnId) this.live.delete(threadId);
+        if (this.scopes.get(scope)?.turnId === turnId) this.scopes.delete(scope);
+      },
+    };
+  }
+
+  private track(task: Promise<void>) {
+    if (this.pending.has(task)) return;
+    this.pending.add(task);
+    void task.then(
+      () => { this.pending.delete(task); },
+      error => {
+        this.pending.delete(task);
+        console.error("[claude] transcript settlement failed",
+          error instanceof Error ? error.message.slice(0, 500) : "unknown failure");
+      },
+    );
   }
 
   /** Billing usage comes from Claude's own session log, which survives reloads, interrupts, and compaction. */
@@ -320,26 +379,22 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       threadId: identity.threadId, sessionId: binding.nativeThreadId, cwd: binding.nativeLocation,
       clientMessageId: input.clientMessageId, content: toWorkbenchThreadUserInput(input.input),
     });
-    const queue = new ClaudePromptQueue();
     const scope = randomUUID();
     const endpoint = new URL("/daemon/mcp", this.options.daemonOrigin);
     endpoint.searchParams.set("provider", "claude");
     endpoint.searchParams.set("client", scope);
     const fakeEndpoint = process.env.WORKBENCH_CLAUDE_FAKE_ENDPOINT;
-    let view: ClaudeConfigView | null = null;
-    let stderr = "";
-    let processExit: Promise<void> | null = null;
-    let sdkQuery: Query;
+    const { sessions } = this.options;
+    let session: Awaited<ReturnType<ClaudeSessionHost["launch"]>>;
     try {
-      view = this.options.viewsRoot ? await ClaudeConfigView.create(this.options.viewsRoot) : null;
-      sdkQuery = (this.options.createQuery ?? query)({
-        prompt: queue,
-        options: {
+      session = await sessions.launch({
+        scope, captureStderr: Boolean(fakeEndpoint),
+        options: viewEnv => ({
           cwd: binding.nativeLocation,
           pathToClaudeCodeExecutable: executable,
           ...(nativeHistoryExists ? { resume: binding.nativeThreadId } : { sessionId: binding.nativeThreadId }),
           ...(model ? { model } : {}),
-          env: claudeEnvironment(fakeEndpoint, view?.env, contextWindow),
+          env: claudeEnvironment(fakeEndpoint, viewEnv, contextWindow),
           settingSources: [],
           skills: [],
           systemPrompt: { type: "custom", prompt: managedPrompt, snapshot: false },
@@ -354,53 +409,39 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
           // Hooks still run under bypassPermissions; they gate native edits with the shared claim policy.
+          // They outlive this bridge generation, so collaborators are reached through the host.
           hooks: createClaudeFileClaimHooks({
             cwd: binding.nativeLocation,
-            check: paths => this.options.checkFileClaims({ cwd: binding.nativeLocation, threadId: identity.threadId, paths }),
-            onDenied: toolUseId => this.options.transcript.recordNativeToolDenial(turnId, toolUseId),
+            check: paths => sessions.call(handlers => handlers.checkFileClaims({
+              cwd: binding.nativeLocation, threadId: identity.threadId, paths,
+            })),
+            onDenied: toolUseId => {
+              void sessions.call(async handlers => handlers.recordNativeToolDenial(turnId, toolUseId)).catch((error: unknown) => {
+                console.warn("[claude] native tool denial was not recorded",
+                  error instanceof Error ? error.message.slice(0, 300) : "unknown failure");
+              });
+            },
           }),
           mcpServers: { wb: { type: "http", url: endpoint.href, alwaysLoad: true } },
           includePartialMessages: true,
           // Replay acknowledgements mark when a queued steer is folded into the conversation.
           extraArgs: { "replay-user-messages": null },
-          spawnClaudeCodeProcess: options => spawnTrackedClaude(options, exit => { processExit = exit; }),
-          ...(fakeEndpoint ? { stderr: (data: string) => { stderr = (stderr + data).slice(-2000); } } : {}),
-        },
+        }),
       });
     } catch (error) {
-      await view?.dispose();
       await this.options.transcript.settleTurn(turnId, "failed");
       throw error;
     }
-    const live: ClaudeLiveTurn = new ClaudeLiveTurn({
-      query: sdkQuery, queue, scope, cwd: binding.nativeLocation,
+    const live = new ClaudeLiveTurn({
+      session, scope, cwd: binding.nativeLocation,
       projectId: ProjectIdSchema.parse(identity.projectId),
       threadId: identity.threadId, turnId, workingStatusInPrompt, usage, contextWindow,
-      transcript: this.options.transcript,
-      usageChanged: () => this.refreshUsage(identity.threadId),
-      observe: this.options.observe,
-      broadcast: this.options.broadcast,
-      readTurn: async () => (await this.read(identity.threadId)).turns.find(turn => turn.id === turnId) ?? null,
-      processExit: () => processExit ?? Promise.resolve(),
-      stderr: () => stderr,
-      release: async () => {
-        if (this.live.get(identity.threadId) === live) this.live.delete(identity.threadId);
-        this.scopes.delete(scope);
-        await view?.dispose();
-      },
+      ...this.collaborators(identity.threadId, turnId, scope),
     });
     this.live.set(identity.threadId, live);
     this.scopes.set(scope, live);
     const started = await live.start(sdkContent);
-    this.pending.add(started.task);
-    void started.task.then(
-      () => { this.pending.delete(started.task); },
-      error => {
-        this.pending.delete(started.task);
-        console.error("[claude] transcript settlement failed",
-          error instanceof Error ? error.message.slice(0, 500) : "unknown failure");
-      },
-    );
+    this.track(started.task);
     const turn = (await this.read(identity.threadId)).turns.find(value => value.id === turnId);
     if (!turn) throw new Error("Claude turn admission did not materialise a turn.");
     const warnings = started.warning ? [started.warning] : [];
@@ -475,7 +516,8 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     });
     if (!instructions.trim()) throw new Error("Claude managed instructions are unavailable for compaction.");
     const fakeEndpoint = process.env.WORKBENCH_CLAUDE_FAKE_ENDPOINT;
-    const view = this.options.viewsRoot ? await ClaudeConfigView.create(this.options.viewsRoot) : null;
+    const { viewsRoot } = this.options.sessions;
+    const view = viewsRoot ? await ClaudeConfigView.create(viewsRoot) : null;
     let processExit: Promise<void> | null = null;
     let sdkQuery: Query | null = null;
     let compacted = false;

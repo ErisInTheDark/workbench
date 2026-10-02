@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import ClaudeSessionHost from "./ClaudeSessionHost";
 import ClaudeThreadOperations from "./ClaudeThreadOperations";
 
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
@@ -20,13 +21,8 @@ function fixture({
   usage: string[];
 }) {
   let reads = 0;
-  const owner = new ClaudeThreadOperations({
-    daemonOrigin: "http://127.0.0.1:1",
+  const sessions = new ClaudeSessionHost({
     viewsRoot: null,
-    signal: new AbortController().signal,
-    resolveExecutable: () => "fake-claude",
-    observe: async () => undefined,
-    broadcast: () => undefined,
     createQuery: () => {
       if (failNative) throw new Error("native start failed");
       return {
@@ -37,6 +33,14 @@ function fixture({
         interrupt: async () => undefined,
       } as never;
     },
+  });
+  const owner = new ClaudeThreadOperations({
+    daemonOrigin: "http://127.0.0.1:1",
+    sessions,
+    signal: new AbortController().signal,
+    resolveExecutable: () => "fake-claude",
+    observe: async () => undefined,
+    broadcast: () => undefined,
     buildInstructions: async () => "instructions",
     state: { controller: {
       getCanonicalThreadEntry: async () => ({

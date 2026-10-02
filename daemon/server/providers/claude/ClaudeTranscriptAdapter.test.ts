@@ -123,6 +123,28 @@ test("a claim denial marks only the denied call's failed result as unclaimed", a
     [{ workbenchFailureKind: "unclaimed" }, undefined]);
 });
 
+test("a turn captured by one bridge generation settles its stream and native tool through the next", async () => {
+  const previous = fixture();
+  await previous.adapter.startTurn({ threadId, sessionId: "session", cwd: "C:/repo", clientMessageId: turnId, content: [] });
+  await previous.adapter.recordAssistant(threadId, turnId, fileTool("write", "Write", "C:/repo/a.ts"));
+  await previous.adapter.recordStreamEvent(threadId, turnId, stream({ type: "message_start", message: { id: "msg_2" } }));
+  await previous.adapter.recordStreamEvent(threadId, turnId, stream({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }));
+  await previous.adapter.recordStreamEvent(threadId, turnId, stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "par" } }));
+  const state = previous.adapter.captureTurn(turnId);
+  assert.ok(state);
+  const next = fixture();
+  next.adapter.recordNativeToolDenial(turnId, "write");
+  next.adapter.restoreTurn(state);
+  await next.adapter.recordStreamEvent(threadId, turnId, stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "tial" } }));
+  await next.adapter.recordNativeToolResults(threadId, toolResult("write", true));
+  await next.adapter.settleTurn(turnId, "interrupted");
+  assert.deepEqual(next.items().map(record => [record.item?.type, record.item?.status ?? record.item?.text, record.item?.metadata]), [
+    ["dynamicToolCall", "failed", { workbenchFailureKind: "unclaimed" }],
+    ["agentMessage", "partial", undefined],
+  ]);
+  assert.equal(next.records.at(-1)?.kind, "turn");
+});
+
 test("settling a turn completes a block that was cut off mid-stream with the text that arrived", async () => {
   const { adapter, items } = fixture();
   await adapter.startTurn({ threadId, sessionId: "session", cwd: "C:/repo", clientMessageId: turnId, content: [] });

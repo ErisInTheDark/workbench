@@ -85,6 +85,8 @@ test("the root knows only direct roots and parents declare every dependant", () 
   assert.deepEqual(nodes.get("server:instructions")!.requires, ["database"]);
   assert.equal(nodes.get("server:websocket")!.requires.includes("stats"), true);
   assert.deepEqual([...parents.get("harness:codex")!], ["server:codex/lifecycle"]);
+  assert.equal(parents.has("harness:claude"), false);
+  assert.equal(parents.get("server:claude")!.has("harness:claude"), true);
   assert.equal(nodes.get("server:turns")!.lifecycle, "handoff");
   assert.deepEqual({
     lifecycle: nodes.get("server:database")!.lifecycle,
@@ -199,12 +201,18 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
 test("server branch and topology closures never acquire harness roots", () => {
   const { dependantClosure, descriptors } = readReloadNodeSourceState();
   const catalog = new Map(descriptors.map((descriptor) => [descriptor.scope, descriptor]));
-  for (const scope of ["server:turns", "server:database", "server:core", "server:topology", "server:instructions", "server:codex/instructions"] as const) {
+  for (const scope of [
+    "server:turns", "server:database", "server:core", "server:topology", "server:instructions", "server:codex/instructions",
+    "server:claude", "server:claude/def",
+  ] as const) {
     const closure = dependantClosure([scope]);
     assert.equal(closure.includes("harness:codex"), false, `${scope} must preserve the Codex harness root`);
+    assert.equal(closure.includes("harness:claude"), false, `${scope} must preserve live Claude sessions`);
     assert.equal(closure.includes("server:process"), false, `${scope} must not become a process restart`);
   }
   assert.equal(catalog.get("harness:codex")!.destructive, true);
+  assert.equal(catalog.get("harness:claude")!.destructive, true);
+  assert.equal(catalog.get("harness:claude")!.safeAll, false);
   assert.equal(catalog.get("server:process")!.destructive, true);
   assert.deepEqual(
     dependantClosure(["server:process"]),

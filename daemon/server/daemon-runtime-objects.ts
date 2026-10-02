@@ -217,6 +217,7 @@ export interface DaemonRuntimeObjects {
   };
   openCodeThreadOperations: import("./providers/opencode/OpenCodeThreadOperations").default;
   openCodeProvider: WorkbenchProvider;
+  claudeSessions: import("./providers/claude/ClaudeSessionHost").default;
   claudeThreadOperations: import("./providers/claude/ClaudeThreadOperations").default;
   claudeTranscriptAdapter: import("./providers/claude/ClaudeTranscriptAdapter").default;
   claudeProvider: WorkbenchProvider;

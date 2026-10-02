@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - claudeTokenBreakdown: convert one Claude usage record into Workbench token accounting.
+ * - ClaudeTranscriptTurnState: plain in-flight transcript state of one live turn, handed across bridge reloads.
  * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, native tool (with effective Edit/Write diffs and claim denials), steer, screenshot steer, context and billing usage, and compaction facts to canonical history.
  */
 import path from "node:path";
@@ -47,6 +48,15 @@ interface TurnStream {
   messageId: string | null;
   open: Map<number, StreamedBlock>;
   streamedMessageIds: Set<string>;
+}
+
+type NativeToolCall = { turnId: WorkbenchTurnId; itemId: string; tool: string; arguments: ProviderToolMetadata };
+
+export interface ClaudeTranscriptTurnState {
+  scope: TurnScope;
+  stream: { threadId: WorkbenchThreadId; messageId: string | null; open: [number, StreamedBlock][]; streamedMessageIds: string[] } | null;
+  nativeTools: [string, NativeToolCall][];
+  denials: string[];
 }
 
 type ClaudeUsage = SDKAssistantMessage["message"]["usage"];
@@ -107,7 +117,7 @@ function blockItem(kind: StreamedKind, text: string): ThreadItem {
 export default class ClaudeTranscriptAdapter {
   private readonly turns = new Map<WorkbenchTurnId, TurnScope>();
   private readonly streams = new Map<WorkbenchTurnId, TurnStream>();
-  private readonly nativeTools = new Map<string, { turnId: WorkbenchTurnId; itemId: string; tool: string; arguments: ProviderToolMetadata }>();
+  private readonly nativeTools = new Map<string, NativeToolCall>();
   /** Claim denials arrive from the in-process hook, independently of when the tool_use message is consumed. */
   private readonly nativeToolDenials = new Map<string, WorkbenchTurnId>();
 
@@ -117,6 +127,38 @@ export default class ClaudeTranscriptAdapter {
     transcript: Pick<DaemonTranscriptRegistration, "record" | "acceptLiveUpdate" | "readContextUsage">;
     assets?: Pick<WorkbenchDatabaseController, "writeTranscriptAsset">;
   }) {}
+
+  /** Copy one paused turn's in-flight state for the next bridge generation; null when it has no admitted scope. */
+  captureTurn(turnId: WorkbenchTurnId): ClaudeTranscriptTurnState | null {
+    const scope = this.turns.get(turnId);
+    if (!scope) return null;
+    const stream = this.streams.get(turnId);
+    return {
+      scope: { ...scope },
+      stream: stream ? {
+        threadId: stream.threadId, messageId: stream.messageId,
+        open: [...stream.open].map(([index, block]) => [index, { ...block }]),
+        streamedMessageIds: [...stream.streamedMessageIds],
+      } : null,
+      nativeTools: [...this.nativeTools].filter(([, call]) => call.turnId === turnId).map(([id, call]) => [id, { ...call }]),
+      denials: [...this.nativeToolDenials].filter(([, owner]) => owner === turnId).map(([id]) => id),
+    };
+  }
+
+  /** Continue a turn captured by a previous generation; denials recorded here meanwhile are kept. */
+  restoreTurn(state: ClaudeTranscriptTurnState) {
+    const { turnId } = state.scope;
+    this.turns.set(turnId, { ...state.scope });
+    if (state.stream) {
+      this.streams.set(turnId, {
+        threadId: state.stream.threadId, messageId: state.stream.messageId,
+        open: new Map(state.stream.open.map(([index, block]) => [index, { ...block }])),
+        streamedMessageIds: new Set(state.stream.streamedMessageIds),
+      });
+    }
+    for (const [id, call] of state.nativeTools) this.nativeTools.set(id, { ...call });
+    for (const id of state.denials) this.nativeToolDenials.set(id, turnId);
+  }
 
   async create(sessionId: string, cwd: string, project: { id: string; rootPath: string; launchId?: string }) {
     const now = Date.now();

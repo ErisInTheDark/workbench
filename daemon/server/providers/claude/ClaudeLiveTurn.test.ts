@@ -1,10 +1,11 @@
-/* No production exports. Tests protect Claude live-turn admission order, settlement, lifecycle publication, and steer delivery. */
+/* No production exports. Tests protect Claude live-turn admission order, settlement, lifecycle publication, steer delivery, and reload restoration. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
-import ClaudeLiveTurn, { ClaudePromptQueue } from "./ClaudeLiveTurn";
+import ClaudeLiveTurn, { type ClaudeLiveTurnCollaborators } from "./ClaudeLiveTurn";
+import { ClaudeProcessSession, ClaudePromptQueue } from "./ClaudeSessionHost";
 
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
 const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");
@@ -59,9 +60,12 @@ function fixture(
   const queue = new RecordingQueue();
   const usageSignals: string[] = [];
   const liveUsage: Array<{ input: number | null; window: number | null }> = [];
-  const turn: ClaudeLiveTurn = new ClaudeLiveTurn({
-    query: query as never, queue, scope: "scope", cwd: "C:/repo",
-    projectId, threadId, turnId, workingStatusInPrompt: false, usage, contextWindow,
+  const session = new ClaudeProcessSession("scope", query as never, queue, {
+    exit: async () => undefined, stderr: () => "", release: async () => undefined,
+  });
+  let turn!: ClaudeLiveTurn;
+  const collaborators: ClaudeLiveTurnCollaborators = {
+    session,
     transcript: {
       recordStreamEvent: async () => undefined,
       recordAssistant: async () => undefined,
@@ -94,11 +98,13 @@ function fixture(
         ? `status:${notification.params.status.type}` : notification.method);
     },
     readTurn: async () => ({ id: turnId, status: "inProgress" }) as never,
-    processExit: async () => undefined,
-    stderr: () => "",
     release: async () => { log.push("release"); },
+  };
+  turn = new ClaudeLiveTurn({
+    scope: "scope", cwd: "C:/repo", projectId, threadId, turnId, workingStatusInPrompt: false, usage, contextWindow,
+    ...collaborators,
   });
-  return { turn, push, log, steers, queue, usageSignals, liveUsage };
+  return { turn, push, log, steers, queue, usageSignals, liveUsage, collaborators };
 }
 
 const steer = (): WorkbenchSteerHistoryEntry => ({
@@ -254,6 +260,28 @@ test("late queued context that is not a steer does not hold the turn open for an
   push(result({ queued_turn_count: 1 }));
   await task;
   assert.deepEqual(log.filter(entry => entry.startsWith("settle")), ["settle:completed"]);
+});
+
+test("a bridge reload pauses the turn without settling it and its restored successor finishes from buffered output", async () => {
+  const { turn, push, log, steers, liveUsage, collaborators } = fixture(undefined, null, 300_000);
+  await turn.start("hi");
+  turn.steer(steer(), "change course");
+  push(assistant(40_000));
+  await tick();
+  await turn.pause();
+  push(ack(steerId));
+  await tick();
+  assert.deepEqual(steers, [], "a paused turn must leave output for its successor");
+  const snapshot = turn.snapshot();
+  assert.ok(snapshot);
+  const restored = ClaudeLiveTurn.restore(snapshot, collaborators);
+  const task = restored.continue();
+  push(result());
+  await task;
+  assert.deepEqual(steers.map(entry => entry.status), ["sent"]);
+  assert.deepEqual(log.filter(entry => entry.startsWith("settle")), ["settle:completed"]);
+  assert.deepEqual(log.filter(entry => entry === "release"), ["release"]);
+  assert.deepEqual(liveUsage.map(entry => entry.window), [300_000, 300_000]);
 });
 
 test("a steer consumed without an ack is still delivered from the result's consumed list", async () => {
