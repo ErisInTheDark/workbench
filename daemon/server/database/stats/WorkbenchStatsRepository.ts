@@ -1,23 +1,21 @@
 /*
  * Exports:
  * - WorkbenchRateLimitObservation: typed durable rate-limit input.
- * - default WorkbenchStatsRepository: own live claim/rate writes and bounded SQLite aggregates.
+ * - default WorkbenchStatsRepository: own live claim/rate writes, claimed-root discovery, and bounded SQLite aggregates.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import {
   EMPTY_WORKBENCH_STATS_IMPORT_PROGRESS,
+  statsPeriodShape,
+  statsRangeShape,
+  type WorkbenchStatsReadRequest,
   type WorkbenchStatsResponse,
 } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import {
-  legacyStatsResponse,
-  type WorkbenchStatsDetailedReadRequest,
-  type WorkbenchStatsDetailedResponse,
-} from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import { API_PRICING_CATALOG_DATE } from "../../stats/api-pricing.ts";
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../../stats/git-claim-observation.ts";
 import WorkbenchUsageStatsRepository from "./WorkbenchUsageStatsRepository.ts";
-import WorkbenchClaimStatsRepository from "./WorkbenchClaimStatsRepository.ts";
+import WorkbenchClaimStatsRepository, { type WorkbenchClaimedRoot } from "./WorkbenchClaimStatsRepository.ts";
 import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
 
 interface RateWindowObservation {
@@ -118,15 +116,20 @@ export default class WorkbenchStatsRepository {
     })();
   }
 
-  read(request: WorkbenchStatsDetailedReadRequest, now = Date.now(), renames: readonly WorkbenchGitClaimRename[] = []): WorkbenchStatsResponse {
-    return legacyStatsResponse(this.readDetailed(request, now, renames));
+  claimedRoots(projectIds: readonly string[] | null, range: WorkbenchStatsReadRequest["range"] | "all", now = Date.now()): WorkbenchClaimedRoot[] {
+    const startedAt = range === "all" ? 0 : statsRangeShape(range, now).startedAt;
+    return new WorkbenchClaimStatsRepository(this.database).claimedRoots(this.resolveProjects(projectIds), startedAt, now);
   }
 
-  readDetailed(request: WorkbenchStatsDetailedReadRequest, now = Date.now(), renames: readonly WorkbenchGitClaimRename[] = []): WorkbenchStatsDetailedResponse {
-    if (request.projectId !== null) request = { ...request, projectId: new WorkbenchProjectRepository(this.database).resolveStoredReference(request.projectId) };
+  read(request: WorkbenchStatsReadRequest, now = Date.now(), renames: readonly WorkbenchGitClaimRename[] = []): WorkbenchStatsResponse {
+    request = { ...request, projectIds: this.resolveProjects(request.projectIds) };
     const usage = new WorkbenchUsageStatsRepository(this.database).read(request, now);
-    const claimHotspots = new WorkbenchClaimStatsRepository(this.database).hotspots(request.projectId, usage.startedAt, now, renames);
-    const rateBucketMs = Math.max(1, Math.ceil((now - usage.startedAt + 1) / (MAX_RATE_LIMIT_SAMPLES - 1)));
+    const period = statsPeriodShape(request.range, request.period ?? null, now);
+    const claimHotspots = new WorkbenchClaimStatsRepository(this.database)
+      .hotspots(usage.projectIds, period.startedAt, Math.min(now, period.endedAt - 1), renames);
+    // Plan limits are account-wide and current, so they always span the whole range.
+    const limitsStartedAt = statsRangeShape(request.range, now).startedAt;
+    const rateBucketMs = Math.max(1, Math.ceil((now - limitsStartedAt + 1) / (MAX_RATE_LIMIT_SAMPLES - 1)));
 
     const rateRows = this.database.prepare(`
       WITH candidates AS (
@@ -154,8 +157,8 @@ export default class WorkbenchStatsRepository {
       LEFT JOIN account_rate_limit_windows w ON w.sample_id = s.id
       ORDER BY s.observed_at, s.id
     `).all(
-      usage.startedAt, now, usage.startedAt, usage.startedAt,
-      usage.startedAt, usage.startedAt, rateBucketMs, MAX_RATE_LIMIT_SAMPLES,
+      limitsStartedAt, now, limitsStartedAt, limitsStartedAt,
+      limitsStartedAt, limitsStartedAt, rateBucketMs, MAX_RATE_LIMIT_SAMPLES,
     ) as Array<{
       duration_minutes: number | null; harness_id: WorkbenchHarness; id: number; limit_id: string;
       limit_name: string | null; observed_at: number; resets_at: number | null;
@@ -188,10 +191,14 @@ export default class WorkbenchStatsRepository {
       generatedAt: now,
       historyImport: EMPTY_WORKBENCH_STATS_IMPORT_PROGRESS,
       pricingCatalogDate: API_PRICING_CATALOG_DATE,
-      projectId: request.projectId,
       rateLimits: [...rateSeries.values()],
-      range: request.range,
-      version: 2,
+      version: 3,
     };
+  }
+
+  private resolveProjects(projectIds: readonly string[] | null) {
+    if (projectIds === null) return null;
+    const projects = new WorkbenchProjectRepository(this.database);
+    return [...new Set(projectIds.map((projectId) => projects.resolveStoredReference(projectId)))];
   }
 }

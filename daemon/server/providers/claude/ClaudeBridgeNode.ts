@@ -26,6 +26,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       threads: build.get("threadIdentity"),
       items: build.get("transcriptIdentity"),
       transcript: build.get("transcript"),
+      assets: build.get("database"),
     });
     const viewsRoot = path.join(context.dataRootPath, "claude-config-views");
     const threads = new ClaudeThreadOperations({

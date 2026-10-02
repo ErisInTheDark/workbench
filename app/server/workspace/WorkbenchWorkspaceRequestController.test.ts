@@ -1,4 +1,4 @@
-/* No production exports. Protect independent app queries, coalescing and caller disposal. */
+/* No production exports. Protect independent app queries, coalescing, daemon stats relay and caller disposal. */
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import fs from "node:fs/promises";
@@ -7,6 +7,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
 import type { WorkspaceObservation } from "workbench-shared/workbench/workspace/workspace-observation";
+import { DaemonIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchPresentationRepository from "../state/WorkbenchPresentationRepository";
 import WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 import WorkbenchDaemonSources from "./WorkbenchDaemonSources";
@@ -25,7 +26,8 @@ function state(revision: number): WorkbenchClientStateResponse {
     } };
 }
 
-async function fixture(context: TestContext) {
+/** `daemons` replaces daemon lookup for the request owner only, standing in for connected sources. */
+async function fixture(context: TestContext, daemons?: { get(daemonId: string): object | undefined }) {
   const temporary = await WorkbenchTemporaryDirectory.create("workspace-request-owner-");
   const directory = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(directory, "presentation.sqlite3") });
@@ -44,7 +46,8 @@ async function fixture(context: TestContext) {
   const listeners = new Set<() => void>();
   let read: () => Promise<WorkbenchClientStateResponse> = async () => state(0);
   const owner = new WorkbenchWorkspaceRequestController({
-    workspace, sources, threads, presentation,
+    workspace, threads, presentation,
+    sources: daemons ? Object.assign(Object.create(sources) as typeof sources, daemons) : sources,
     network: { read: () => ({ kind: "network", phase: "pending", failure: null, data: null }), subscribe: () => () => {} },
     runtime: { read: () => null, subscribe: () => () => {} },
     appState: { read: () => read(), subscribe: (_id, listener) => {
@@ -158,6 +161,37 @@ test("a failed app-state refresh retains usable facts and only a new invalidatio
   assert.equal(f.warnings.length, 1);
   f.changed();
   await f.wait(value => value.kind === "appState" && value.data?.revision === 3);
+});
+
+test("stats observations relay each daemon revision, including claim freshness, and release with the interest", async context => {
+  let snapshot: { phase: "pending" | "current"; failure: null; value: object | null } = { phase: "pending", failure: null, value: null };
+  let notify = () => {};
+  const observed: object[] = [];
+  let released = 0;
+  const daemonId = DaemonIdSchema.parse(randomUUID());
+  const source = {
+    id: daemonId,
+    observe: (query: object, listener: () => void) => {
+      observed.push(query);
+      notify = listener;
+      return { getSnapshot: () => snapshot, release: () => { released += 1; } };
+    },
+  };
+  const f = await fixture(context, { get: (id) => id === daemonId ? source : undefined });
+  const subscriptionId = randomUUID();
+  const request = { model: null, period: null, projectIds: null, provider: null, range: "7d" as const, tokenTypes: ["input" as const, "output" as const] };
+  const initial = f.owner.observe({ subscriptionId, generation: 1, query: { kind: "stats", daemonId, request } });
+  assert.ok(initial.kind === "stats" && initial.phase === "pending");
+  assert.deepEqual(observed, [{ kind: "stats", request }]);
+  const data = { generatedAt: 7 };
+  for (const claimsPhase of ["pending", "current"] as const) {
+    snapshot = { phase: "current", failure: null, value: { kind: "stats", claimsPhase, data } };
+    notify();
+    const relayed = await f.wait(value => value.kind === "stats" && value.claimsPhase === claimsPhase);
+    assert.ok(relayed.kind === "stats" && relayed.data === data && relayed.phase === "current");
+  }
+  f.owner.release({ subscriptionId, generation: 1 });
+  assert.equal(released, 1);
 });
 
 test("closing a caller stops invalidations and fences its pending state read", async context => {

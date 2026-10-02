@@ -328,7 +328,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(THREAD_GIT_BASE_FIXTURE, 3),
   ], nested: false }],
   ["GitClaimRenameReader.test.ts", { fixtures: [
-    demand(THREAD_GIT_BASE_FIXTURE, process.platform === "win32" ? 3 : 4),
+    demand(THREAD_GIT_BASE_FIXTURE, process.platform === "win32" ? 4 : 5),
   ], nested: false }],
   ["GitClaimHistoryReader.test.ts", { fixtures: [
     demand(THREAD_GIT_BASE_FIXTURE, 2),

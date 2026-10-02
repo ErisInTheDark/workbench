@@ -45,11 +45,9 @@ import { workbenchThreadActions } from "../thread/thread-actions.ts";
 import { WorkbenchModelOptionSchema } from "../provider/provider-model.ts";
 import { WorkbenchAccountLimitsSchema } from "../provider/provider-account.ts";
 import { WorkbenchSearchResponseSchema } from "../search/workbench-search.ts";
-import { WorkbenchStatsDetailedResponseSchema } from "../stats/workbench-stats-detail-contract.ts";
 import {
   WORKBENCH_STATS_IMPORT_UPDATED_METHOD,
   WorkbenchStatsImportProgressSchema,
-  WorkbenchStatsResponseSchema,
   type WorkbenchStatsImportProgress,
 } from "../stats/workbench-stats-contract.ts";
 
@@ -122,10 +120,6 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "project/file/reset":
     case "project/file/save": return fileWriteSchema;
     case "search/query": return WorkbenchSearchResponseSchema;
-    case "stats/read": return WorkbenchStatsResponseSchema;
-    case "stats/read/detailed":
-    case "stats/read/efficiency":
-    case "stats/read/efficiency/v2": return WorkbenchStatsDetailedResponseSchema;
     case "stats/import/start": return WorkbenchStatsImportProgressSchema;
     case "stats/rate-limits/refresh": return z.object({ ok: z.literal(true) }).strict();
     case "local-capabilities/read":
@@ -331,10 +325,6 @@ class WorkbenchDaemonClient {
   };
 
   readonly stats = {
-    read: (params: WorkbenchDaemonParams<"stats/read">) => this.request("stats/read", params),
-    detailed: (params: WorkbenchDaemonParams<"stats/read/detailed">) => this.request("stats/read/detailed", params),
-    efficiency: (params: WorkbenchDaemonParams<"stats/read/efficiency">) => this.request("stats/read/efficiency", params),
-    efficiencyV2: (params: WorkbenchDaemonParams<"stats/read/efficiency/v2">) => this.request("stats/read/efficiency/v2", params),
     startImport: () => this.request("stats/import/start", {}),
     refreshRateLimits: () => this.request("stats/rate-limits/refresh", {}),
   };

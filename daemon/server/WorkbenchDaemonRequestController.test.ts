@@ -8,7 +8,8 @@ import { applyComposerProfileMutation, normalizeComposerProfileMutation } from "
 import type { WorkbenchComposerProfile, WorkbenchModelOption } from "workbench-shared/types";
 import { installWorkbenchDatabaseSchema } from "./database/workbench-database-schema.ts";
 import WorkbenchThreadIdentityRepository from "./database/thread-identity/WorkbenchThreadIdentityRepository.ts";
-import { WorkbenchStatsResponseSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { WorkbenchAccountLimitsSchema } from "workbench-shared/workbench/provider/provider-account";
 import { NativeThreadIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchThreadStateController from "./WorkbenchThreadStateController.ts";
 import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore.ts";
@@ -107,7 +108,6 @@ function createController(options: {
   providers?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["providers"];
   threadIdentity?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["threadIdentity"];
   profileTargets?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["profileTargets"];
-  readDetailed?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["stats"]["readDetailed"];
   questionnaireResponses?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["questionnaireResponses"];
   commandApprovals?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["commandApprovals"];
   projectSnapshot?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["projectSnapshot"];
@@ -122,7 +122,7 @@ function createController(options: {
   const targetReads: object[] = [];
   const targetWrites: object[] = [];
   const searchRequests: object[] = [];
-  const statsRequests: object[] = [];
+  const observedLimits: Array<{ harness: string; limitId: string | null }> = [];
   let statsRefreshes = 0;
   const unused = async (): Promise<never> => { throw new Error("Unexpected provider operation."); };
   const readNetwork = async (projectId: string | null) => {
@@ -223,51 +223,7 @@ function createController(options: {
       },
     },
     stats: {
-      readDetailed: async (request) => {
-        statsRequests.push(request);
-        if (options.readDetailed) return options.readDetailed(request);
-        throw new Error("Detailed database read failed");
-      },
-      read: async (request) => {
-        statsRequests.push(request);
-        return ({
-          bucketUnit: "day",
-          claimHotspots: [],
-          cost: {
-            basis: {
-              defaultModelTokens: 0,
-              exactModelTokens: 0,
-              projectInferredModelTokens: 0,
-              threadInferredModelTokens: 0,
-            },
-            buckets: [],
-            totalUsd: 0,
-          },
-          failures: [],
-          generatedAt: 1,
-          historyImport: {
-            claims: { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 },
-            percent: 100, recentFailures: [], revision: 0, state: "idle",
-            unsupportedClaimCheckpoints: 0,
-            usage: { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 },
-            version: 2,
-          },
-          models: [],
-          pricingCatalogDate: "2026-09-05",
-          projectId: request.projectId ?? null,
-          rateLimits: [],
-          range: request.range,
-          startedAt: 0,
-          summary: { cacheHitPercent: 0, threadCount: 0, turnCount: 0 },
-          tokens: {
-            buckets: [],
-            totals: { all: 0, cachedInput: 0, cacheWriteInput: 0, input: 0, output: 0, uncachedInput: 0 },
-          },
-          topThreads: [],
-          usageFilters: { models: [], providers: [] },
-          version: 2,
-        });
-      },
+      observeAccountLimits: (harness, limits) => { observedLimits.push({ harness, limitId: limits.rateLimits.limitId }); },
       refreshRateLimits: async () => { statsRefreshes += 1; },
       startImport: async () => ({
         claims: { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 },
@@ -288,7 +244,7 @@ function createController(options: {
     gitArcRequests,
     networkWrites,
     searchRequests,
-    statsRequests,
+    observedLimits,
     statsRefreshes: () => statsRefreshes,
     targetReads,
     targetWrites,
@@ -569,81 +525,34 @@ test("search query dispatch preserves empty text and validates project ids", asy
   assert.equal(searchRequests.length, 1);
 });
 
-test("stats dispatch validates project scope and keeps rate refresh account-wide", async () => {
-  const { controller, statsRefreshes, statsRequests } = createController({ rejectProjectId: "missing" });
-  const global = await controller.handle({
-    id: 1,
-    method: "stats/read",
-    params: { projectId: null, range: "7d" },
-  });
-  assert.equal((global.result as { projectId: string | null }).projectId, null);
-  const project = await controller.handle({
-    id: 2,
-    method: "stats/read",
-    params: { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "30d" },
-  });
-  assert.equal((project.result as { projectId: string | null }).projectId, "project");
-  const rejected = await controller.handle({
-    id: 3,
-    method: "stats/read",
-    params: { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("missing"), range: "7d" },
-  });
-  assert.equal(rejected.error?.code, -32602);
-  assert.deepEqual(statsRequests, [
-    { model: null, projectId: null, provider: null, range: "7d" },
-    { model: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), provider: null, range: "30d" },
-  ]);
-  assert.deepEqual(
-    (await controller.handle({ id: 4, method: "stats/rate-limits/refresh", params: {} })).result,
-    { ok: true },
-  );
+test("stats commands refresh limits while reads arrive only through observations", async () => {
+  const { controller, statsRefreshes } = createController();
+  assert.deepEqual((await controller.handle({ id: 3, method: "stats/rate-limits/refresh", params: {} })).result, { ok: true });
   assert.equal(statsRefreshes(), 1);
-});
-
-test("detailed stats validate selection and project before invoking the owner, preserving read failures", async () => {
-  for (const method of ["stats/read/detailed", "stats/read/efficiency", "stats/read/efficiency/v2"]) {
-    const { controller, statsRequests } = createController({ rejectProjectId: "missing" });
-    for (const params of [
-      { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("missing"), range: "7d", tokenTypes: ["output"] },
-      { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "7d", tokenTypes: ["all"] },
-    ]) {
-      const response = await controller.handle({ id: 1, method, params });
-      assert.equal(response.error?.code, -32602);
-    }
-    assert.deepEqual(statsRequests, []);
-    const response = await controller.handle({
-      id: 2, method,
-      params: { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "90d", tokenTypes: [] },
-    });
-    assert.ok(response.error);
-    assert.deepEqual(statsRequests, [{ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), range: "90d", tokenTypes: [], model: null, provider: null }]);
+  for (const legacy of ["stats/read", "stats/read/scoped", "stats/read/detailed", "stats/read/efficiency", "stats/read/efficiency/v2"]) {
+    assert.equal(controller.accepts(legacy), false);
   }
 });
 
-test("cache efficiency uses the detailed owner while older routes keep their exact wire shapes", async () => {
-  const legacy = WorkbenchStatsResponseSchema.parse({
-    bucketUnit: "day", claimHotspots: [], cost: { buckets: [], pricedTokens: 0, totalUsd: 0, unpricedTokens: 0 },
-    failures: [], generatedAt: 1, pricingCatalogDate: "2026-09-05", projectId: null, rateLimits: [],
-    range: "7d", recordingStartedAt: null, startedAt: 0,
-    tokens: { buckets: [], totals: { all: 0, cachedInput: 0, input: 0, output: 0 } },
+test("account limit reads also record rate-limit history for statistics", async () => {
+  const limits = WorkbenchAccountLimitsSchema.parse({
+    rateLimits: {
+      limitId: "claude", limitName: null, credits: null, planType: null,
+      primary: { resetsAt: 1_800_000_000, usedPercent: 25, windowDurationMins: 300 }, secondary: null,
+    },
+    rateLimitsByLimitId: null,
   });
-  const detailed = { ...legacy, cost: { ...legacy.cost, buckets: [], byTokenType: { input: 0, cache: 0, output: 0 } } };
-  const enriched = { ...detailed, cacheEfficiency: {
-    totals: { inputTokens: 1_000, cachedInputTokens: 940, cacheHitPercent: 94 }, buckets: [],
-    worstThreads: [{ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), threadId: "thread", title: "Thread",
-      inputTokens: 1_000, cachedInputTokens: 940, cacheHitPercent: 94 }],
-  } };
-  const current = { ...enriched, cacheEfficiency: { ...enriched.cacheEfficiency,
-    worstThreads: enriched.cacheEfficiency.worstThreads.map((thread) => ({ ...thread, cacheWriteInputTokens: 10 })),
-  } };
-  const { controller, statsRequests } = createController({ readDetailed: async () => current });
-  const params = { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), provider: "codex", model: "gpt-5.4", range: "7d", tokenTypes: ["output"] };
-  assert.equal(controller.accepts("stats/read/efficiency"), true);
-  assert.deepEqual((await controller.handle({ id: 1, method: "stats/read/efficiency", params })).result, enriched);
-  assert.deepEqual((await controller.handle({ id: 2, method: "stats/read/detailed", params })).result, detailed);
-  assert.equal(controller.accepts("stats/read/efficiency/v2"), true);
-  assert.deepEqual((await controller.handle({ id: 3, method: "stats/read/efficiency/v2", params })).result, current);
-  assert.deepEqual(statsRequests, [params, params, params]);
+  const unused = async (): Promise<never> => { throw new Error("Unexpected provider operation"); };
+  const { controller, observedLimits } = createController({
+    providers: { get: () => ({
+      threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
+      configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
+      account: { limits: { read: async () => limits } },
+    }) },
+  });
+  const response = await controller.handle({ id: 1, method: "account/limits/read", params: { provider: "claude" } });
+  assert.deepEqual(response.result, limits);
+  assert.deepEqual(observedLimits, [{ harness: "claude", limitId: "claude" }]);
 });
 
 test("sandbox network requests validate project ownership and preserve explicit override intent", async () => {
@@ -708,9 +617,9 @@ test("sandbox network requests validate project ownership and preserve explicit 
   ]);
 });
 
-test("project-scoped network, search, and stats requests use the resolved owner rather than the supplied alias", async () => {
+test("project-scoped network and search requests use the resolved owner rather than the supplied alias", async () => {
   const canonicalProjectId = testProjectIds.project;
-  const { controller, networkWrites, searchRequests, statsRequests } = createController({ canonicalProjectId });
+  const { controller, networkWrites, searchRequests } = createController({ canonicalProjectId });
   const projectId = "old-request";
   const network = await controller.handle({
     id: 1, method: "sandbox-network/update", params: { provider: "codex", projectId, enabled: true, scope: "project" },
@@ -718,9 +627,7 @@ test("project-scoped network, search, and stats requests use the resolved owner 
   assert.equal(network.error, undefined);
   assert.deepEqual(networkWrites, [{ projectId: canonicalProjectId, enabled: true, scope: "project" }]);
   await controller.handle({ id: 2, method: "search/query", params: { projectId, query: "" } });
-  await controller.handle({ id: 3, method: "stats/read", params: { projectId, range: "7d" } });
   assert.deepEqual(searchRequests, [{ projectId: canonicalProjectId, query: "" }]);
-  assert.deepEqual(statsRequests, [{ projectId: canonicalProjectId, range: "7d", model: null, provider: null }]);
 });
 
 test("file-index reads stay qualified to the requested project without changing observation", async () => {

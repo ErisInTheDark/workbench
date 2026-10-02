@@ -25,7 +25,7 @@ import {
   WORKBENCH_DATABASE_TABLE_NAMES,
 } from "./workbench-database-schema";
 import { insertRow, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
-import { WorkbenchStatsDetailedResponseSchema, legacyStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
+import { WorkbenchStatsResponseSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 import { TranscriptQuerySchema } from "./transcript/transcript-query-contract";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -500,21 +500,19 @@ async function checkClaimStats(controller: WorkbenchDatabaseController) {
       roots: [{ paths: ["src"], rootId: "root" }],
       threadId: "thread",
     });
-    const result = await controller.readStats({ projectId: fixtureIdentityValues.ProjectId.project, range: "7d" }, now);
+    const result = WorkbenchStatsResponseSchema.parse(await controller.readStats({ projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d" }, now));
     assert.equal(result.claimHotspots[0]?.path, "src");
     assert.equal(result.claimHotspots[0]?.threadCount, 1);
-    const detailed = WorkbenchStatsDetailedResponseSchema.parse(await controller.readStatsDetailed({
-      projectId: fixtureIdentityValues.ProjectId.project, range: "7d", tokenTypes: [],
-    }, now));
-    assert.deepEqual(legacyStatsResponse(detailed), result);
+    assert.deepEqual(await controller.readStatsClaimedRoots([fixtureIdentityValues.ProjectId.project], "7d", now), [
+      { projectId: fixtureIdentityValues.ProjectId.project, rootId: "root", earliestClaimedDay: Date.UTC(2026, 8, 4) },
+    ]);
     const claims = await controller.readClaimStats({
       projectId: fixtureIdentityValues.ProjectId["project"], range: "7d", file: { rootId: "root", path: "src" }, page: 1,
     }, now);
     assert.equal(claims.kind, "threads");
     if (claims.kind === "threads") assert.deepEqual(claims.rows.map(({ threadId }) => threadId), ["thread"]);
     const renames = [{ projectId: fixtureIdentityValues.ProjectId.project, rootId: "root", from: "src", to: "renamed" }];
-    assert.equal((await controller.readStats({ projectId: fixtureIdentityValues.ProjectId["project"], range: "7d" }, now, renames)).claimHotspots[0]?.path, "renamed");
-    assert.equal((await controller.readStatsDetailed({ projectId: fixtureIdentityValues.ProjectId["project"], range: "7d" }, now, renames)).claimHotspots[0]?.path, "renamed");
+    assert.equal((await controller.readStats({ projectIds: [fixtureIdentityValues.ProjectId["project"]], range: "7d" }, now, renames)).claimHotspots[0]?.path, "renamed");
     const renamed = await controller.readClaimStats({
       projectId: fixtureIdentityValues.ProjectId["project"], range: "7d", file: { rootId: "root", path: "renamed" }, page: 1,
     }, now, renames);

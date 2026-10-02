@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - ClaudeContentBlock/ClaudePromptContent: SDK user-message content; text-only prompts stay plain strings.
+ * - claudeImageBlock: convert a base64 data URL or http(s) URL into a Claude image block.
  * - claudePromptContent: translate submitted Workbench input into Claude prompt content, including images.
  * - prefixClaudePrompt: put Workbench context ahead of prompt content without disturbing attached images.
  */
@@ -29,7 +30,7 @@ function unsupportedImage(kind: string) {
   return new Error(`Claude cannot read ${kind} images; supported images are PNG, JPEG, GIF, and WebP.`);
 }
 
-function urlImage(url: string): ClaudeImageBlock {
+export function claudeImageBlock(url: string): ClaudeImageBlock {
   const data = /^data:([^;,]+);base64,(.*)$/u.exec(url);
   if (data) {
     const mediaType = MEDIA_TYPES[data[1]!.toLowerCase()];
@@ -59,7 +60,7 @@ export async function claudePromptContent(parts: readonly WorkbenchUserInput[]):
     if (part.type === "text") text(part.text);
     else if (part.type === "skill") text(`/${part.name}`);
     else if (part.type === "mention") text(`@${part.path}`);
-    else if (part.type === "image") blocks.push(urlImage(part.url));
+    else if (part.type === "image") blocks.push(claudeImageBlock(part.url));
     else if (part.type === "localImage") blocks.push(await localImage(part.path));
     else throw new Error(`Claude provider does not support ${part.type} input.`);
   }

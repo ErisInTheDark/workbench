@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ClaudeThreadOperationsOptions: bind SDK sessions to Workbench identity, state, lifecycle publication, claim policy, and managed MCP.
- * - default ClaudeThreadOperations: admit Claude turns and steers, gate native edits by claims, register live turns, and own native session operations.
+ * - default ClaudeThreadOperations: admit Claude turns and steers, gate native edits by claims, register live turns, deliver Browse screenshots, and own native session operations.
  */
 import {
     deleteSession, getSessionInfo, listSessions, query, renameSession,
@@ -37,7 +37,9 @@ import type { WorkbenchToolAdmissionOptions } from "../../WorkbenchToolAdmission
 import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
 import { createClaudeFileClaimHooks } from "./claude-file-claim-hook";
 import { claudeEnvironment, claudeExecutable } from "./claude-process-options";
-import { claudePromptContent, prefixClaudePrompt } from "./claude-prompt-content";
+import { claudeImageBlock, claudePromptContent, prefixClaudePrompt } from "./claude-prompt-content";
+import type { WorkbenchProviderBrowse } from "workbench-shared/workbench/provider/provider-browse";
+import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 import ClaudeConfigView from "./ClaudeConfigView";
 import ClaudeLiveTurn, { ClaudePromptQueue } from "./ClaudeLiveTurn";
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
@@ -120,6 +122,21 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
         if (entry?.entryKind === "thread" && entry.lifecycle.kind === "working") return "admitted";
       }
       return "unsupported";
+    },
+  };
+
+  /** Screenshots reach the model as an image in the thread's live turn. */
+  readonly browse: WorkbenchProviderBrowse = {
+    screenshot: async input => {
+      const identity = await this.identity(input.threadId);
+      const runtime = this.live.get(identity.threadId);
+      if (!runtime) throw new Error("Claude screenshot delivery needs an active turn on this thread.");
+      runtime.injectContent([
+        { type: "text", text: createAgentScreenshotSteerText() },
+        claudeImageBlock(input.imageUrl),
+      ]);
+      await this.options.transcript.recordScreenshotSteer(identity.threadId, runtime.turnId, input.imageUrl);
+      return { kind: "injected", acceptedAt: Date.now(), turnId: runtime.turnId };
     },
   };
 

@@ -20,8 +20,7 @@ import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-
 import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
 import type { WorkbenchThreadLaunchLocation, WorkbenchThreadLaunchRequest, WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
 import type { WorkbenchClaimStatsRequest } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
-import type { WorkbenchStatsImportProgress, WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import type { WorkbenchStatsDetailedReadRequest } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
+import type { WorkbenchStatsImportProgress, WorkbenchStatsRange, WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
 import type { WorkbenchSubagentReservation } from "../workbench-subagent-record";
 import type { WorkbenchStoredThreadTitleHistory } from "../WorkbenchThreadStateStore";
@@ -729,11 +728,11 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     return response.progress;
   }
 
-  async readStatsDetailed(request: WorkbenchStatsDetailedReadRequest, now?: number, renames: readonly WorkbenchGitClaimRename[] = []) {
+  async readStatsClaimedRoots(projectIds: readonly string[] | null, range: WorkbenchStatsRange | "all", now?: number) {
     await this.start();
-    const response = await this.#request({ type: "readStatsDetailed", request, renames, ...(now === undefined ? {} : { now }) });
-    if (response.type !== "statsDetailedResult") throw new WorkbenchDatabaseFailure(`Unexpected detailed stats response: ${response.type}`);
-    return response.result;
+    const response = await this.#request({ type: "readStatsClaimedRoots", projectIds, range, ...(now === undefined ? {} : { now }) });
+    if (response.type !== "statsClaimedRoots") throw new WorkbenchDatabaseFailure(`Unexpected claimed roots response: ${response.type}`);
+    return response.roots;
   }
 
   async readClaimStats(request: WorkbenchClaimStatsRequest, now?: number, renames: readonly WorkbenchGitClaimRename[] = []) {

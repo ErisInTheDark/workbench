@@ -155,16 +155,6 @@ test("Browse screenshots stay passive and records retain native storage referenc
   assert.equal(params.threadId, "native-thread");
   assert.equal(params.expectedTurnId, "native-turn");
   assert.ok(params.toolOutput.output.some(part => part.type === "input_image" && part.image_url === imageUrl));
-  const entry = {
-    threadId: fixture.threadId, turnId: fixture.turnId, entryKey: "browse-entry", commandItemId: null,
-    action: "snapshot", actionIndex: 0, assetUrl: "/retained-asset", detailKind: "result" as const,
-    detailLabel: null, detailText: "snapshot", durationMs: 1, recordedAt: 123, session: "research", state: "completed" as const,
-  };
-  await fixture.operations.browse.record(entry);
-  assert.deepEqual(requests.map(request => request.method), [
-    "workbench/thread/inject-tool-context", "browse/result/record",
-  ]);
-  assert.deepEqual(requests[1].params, { ...entry, threadId: "native-thread", turnId: "native-turn" });
 });
 
 test("agent messages retain tool authority and WB attribution at the native admission edge", async () => {

@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
@@ -11,7 +12,7 @@ type Recorded = { kind: string; publicItemId?: string; lifecycle?: string; item?
   type: string; text?: string; content?: string[]; status?: string; metadata?: unknown;
 } };
 
-function fixture() {
+function fixture(assets?: object) {
   const records: Recorded[] = [];
   const live: { itemId: string; text: string; append: boolean }[] = [];
   const adapter = new ClaudeTranscriptAdapter({
@@ -31,11 +32,27 @@ function fixture() {
       acceptLiveUpdate: (update: { itemId: string; text: string; append: boolean }) => { live.push(update); },
       readContextUsage: async () => null,
     },
+    ...(assets ? { assets } : {}),
   } as never);
   const items = () => records.filter(record => record.kind === "item"
     && record.item?.type !== "userMessage");
-  return { adapter, items, live };
+  return { adapter, items, live, records };
 }
+
+test("a delivered screenshot records as the marked image steer with its bytes stored as an asset", async () => {
+  const writes: { threadId: string; mimeType: string }[] = [];
+  const { adapter, records } = fixture({
+    writeTranscriptAsset: async (input: { threadId: string; mimeType: string }) => {
+      writes.push({ threadId: input.threadId, mimeType: input.mimeType });
+      return { assetUrl: `/api/transcript-assets/${threadId}/${"a".repeat(64)}.png`, byteLength: 3, digest: "a".repeat(64), mimeType: "image/png" };
+    },
+  });
+  await adapter.recordScreenshotSteer(threadId, turnId, "data:image/png;base64,AAAA");
+  const item = records.find(record => record.kind === "item")?.item as unknown as Parameters<typeof isAgentScreenshotSteerUserMessage>[0];
+  assert.ok(item && isAgentScreenshotSteerUserMessage(item));
+  assert.deepEqual(writes, [{ threadId, mimeType: "image/png" }]);
+  assert.equal(JSON.stringify(item).includes("base64"), false, "screenshot bytes belong in asset storage, not the transcript row");
+});
 
 const stream = (event: object) => ({ type: "stream_event", parent_tool_use_id: null, event }) as never;
 const assistant = (content: object[]) => ({

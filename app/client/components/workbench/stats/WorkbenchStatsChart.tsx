@@ -3,7 +3,7 @@
  * - default WorkbenchStatsChart: render one focusable, inspectable nullable multi-series graph.
  */
 "use client";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { chartMaximum, chartPointerIndex, chartSegments as segments, chartX as xAt, chartY as yAt } from "./stats-chart-geometry";
 
 interface ChartSeries {
@@ -16,21 +16,29 @@ interface ChartSeries {
 }
 
 export default function WorkbenchStatsChart ({
+  appearance = "points",
   buckets,
   formatValue,
   series,
   title,
   scale = "shared",
   fixedMaximum,
+  minimum = 0,
 }: {
+  /** "area" draws the soft filled trend used behind headline figures, marking only the inspected sample. */
+  appearance?: "area" | "points";
   buckets: readonly number[];
   formatValue: (value: number) => string;
   series: readonly ChartSeries[];
   title: string;
   scale?: "shared" | "independent";
   fixedMaximum?: number;
+  /** Value drawn on the baseline, so a narrow band such as 80% to 100% fills the height. */
+  minimum?: number;
 }) {
   const svg = useRef<SVGSVGElement>(null);
+  // Each gradient resolves currentColor where it is defined, so every chart needs its own.
+  const fade = `stats-chart-${useId().replace(/[^\w-]/gu, "")}`;
   const [selection, setSelectedIndex] = useState<number | null>(null);
   const selectedIndex = selection ?? Math.max(0, buckets.length - 1);
   const maximum = fixedMaximum ?? chartMaximum(series.flatMap(({ values }) => values));
@@ -88,9 +96,9 @@ export default function WorkbenchStatsChart ({
         tabIndex={0}
       >
         <svg ref={svg} aria-hidden="true" className="h-40 w-full overflow-visible" viewBox="0 0 100 38" preserveAspectRatio="none">
-          {[4, 19, 34].map((y) => (
+          {appearance === "points" ? [4, 19, 34].map((y) => (
             <line key={y} className="stroke-fg/muted-grid" strokeWidth="1" vectorEffect="non-scaling-stroke" x1="0" x2="100" y1={y} y2={y} />
-          ))}
+          )) : null}
           {selectedAt !== null ? (
             <line
               className="stroke-fg/40"
@@ -103,35 +111,50 @@ export default function WorkbenchStatsChart ({
               y2="35"
             />
           ) : null}
-          {availableSeries.map(({ colour, colourClassName, label, values, maximum: seriesMaximum }) => (
-            <g className={`${colourClassName} font-bold`} style={{ color: colour }} key={label}>
-              {segments(values, fixedMaximum ?? (scale === "independent" ? seriesMaximum : maximum)).map((pathPoints, segmentIndex) => (
-                <polyline
-                  fill="none"
-                  key={segmentIndex}
-                  points={pathPoints}
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="1.25"
-                  vectorEffect="non-scaling-stroke"
-                />
-              ))}
-              {values.map((value, index) => value === null ? null : (
-                <line
-                  x1={xAt(index, values.length)}
-                  x2={xAt(index, values.length)}
-                  y1={yAt(value, fixedMaximum ?? (scale === "independent" ? seriesMaximum : maximum))}
-                  y2={yAt(value, fixedMaximum ?? (scale === "independent" ? seriesMaximum : maximum))}
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeWidth={index === selectedIndex ? "6" : "3"}
-                  vectorEffect="non-scaling-stroke"
-                  key={index}
-                />
-              ))}
-            </g>
-          ))}
+          {availableSeries.map(({ colour, colourClassName, label, values, maximum: seriesMaximum }, seriesIndex) => {
+            const top = fixedMaximum ?? (scale === "independent" ? seriesMaximum : maximum);
+            const gradient = `${fade}-${seriesIndex}`;
+            return (
+              <g className={`${colourClassName} font-bold`} style={{ color: colour }} key={label}>
+                {appearance === "area" ? (
+                  <defs>
+                    <linearGradient id={gradient} x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0" stopColor="currentColor" stopOpacity="0.28" />
+                      <stop offset="1" stopColor="currentColor" stopOpacity="0" />
+                    </linearGradient>
+                  </defs>
+                ) : null}
+                {segments(values, top, minimum).map(({ area, line }, segmentIndex) => (
+                  <g key={segmentIndex}>
+                    {appearance === "area" ? <polygon fill={`url(#${gradient})`} points={area} /> : null}
+                    <polyline
+                      fill="none"
+                      points={line}
+                      stroke="currentColor"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeOpacity={appearance === "area" ? 0.8 : 1}
+                      strokeWidth="1.25"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </g>
+                ))}
+                {values.map((value, index) => value === null || (appearance === "area" && index !== selectedIndex) ? null : (
+                  <line
+                    x1={xAt(index, values.length)}
+                    x2={xAt(index, values.length)}
+                    y1={yAt(value, top, minimum)}
+                    y2={yAt(value, top, minimum)}
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeWidth={index === selectedIndex ? "6" : "3"}
+                    vectorEffect="non-scaling-stroke"
+                    key={index}
+                  />
+                ))}
+              </g>
+            );
+          })}
         </svg>
       </div>
       <div className="grid min-h-14 grid-cols-2 content-start gap-x-4 gap-y-1 text-[0.7rem] tabular-nums text-fg/muted">

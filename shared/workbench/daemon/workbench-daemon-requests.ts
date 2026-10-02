@@ -52,11 +52,7 @@ import type {
   WorkbenchSearchRequest,
   WorkbenchSearchResponse,
 } from "../search/workbench-search.ts";
-import type {
-  WorkbenchStatsImportProgress,
-  WorkbenchStatsReadRequest,
-  WorkbenchStatsResponse,
-} from "../stats/workbench-stats-contract.ts";
+import type { WorkbenchStatsImportProgress } from "../stats/workbench-stats-contract.ts";
 import type {
   WorkbenchThreadIdentityResolution,
   WorkbenchThreadIdentityResolveRequest,
@@ -207,19 +203,6 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "questionnaire/respond": { params: WorkbenchQuestionnaireRespondRequest; result: WorkbenchQuestionnaireRespondResult };
   "stats/import/start": { params: object; result: WorkbenchStatsImportProgress };
   "stats/rate-limits/refresh": { params: object; result: { ok: true } };
-  "stats/read": { params: WorkbenchStatsReadRequest; result: WorkbenchStatsResponse };
-  "stats/read/detailed": {
-    params: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedReadRequest;
-    result: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedResponse;
-  };
-  "stats/read/efficiency": {
-    params: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedReadRequest;
-    result: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedResponse;
-  };
-  "stats/read/efficiency/v2": {
-    params: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedReadRequest;
-    result: import("../stats/workbench-stats-detail-contract.ts").WorkbenchStatsDetailedResponse;
-  };
   "skills/read": { params: { projectId: string | null; provider: string }; result: WorkbenchSkillCatalogResponse };
   "thread/identity/resolve": { params: WorkbenchThreadIdentityResolveRequest; result: { data: WorkbenchThreadIdentityResolution | null } };
 }

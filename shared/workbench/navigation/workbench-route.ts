@@ -107,6 +107,7 @@ export function createToggledProjectSelectionRoute(
   const nextIds = orderedProjectIds.filter(id => next.has(id));
   const ownerProjectId = route.logical?.threadOwnerProjectId || route.threadOwnerProjectId
     || (!route.logical?.location && route.selectedProjectIds?.length === 1 ? route.selectedProjectIds[0] : "");
+  if (route.view === "stats") return withProjectSelection(createStatsRoute(null), nextIds);
   return route.view === "thread" && !(projectId === ownerProjectId && selectedProjectIds.includes(projectId))
     ? withProjectSelection(route, nextIds)
     : createProjectSelectionRoute(nextIds);

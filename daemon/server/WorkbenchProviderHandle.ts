@@ -158,10 +158,6 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
   };
 
   readonly browse: NonNullable<WorkbenchProvider["browse"]> = {
-    record: entry => this.run(providerRegistrations[this.key], provider => {
-      if (!provider.browse) throw new Error(`Provider ${this.key} does not support Browse results.`);
-      return provider.browse.record(entry);
-    }, `${this.key}: browse.record`),
     screenshot: input => this.run(providerRegistrations[this.key], provider => {
       if (!provider.browse) throw new Error(`Provider ${this.key} does not support screenshot delivery.`);
       return provider.browse.screenshot(input);

@@ -3,7 +3,7 @@
  * - ClaudePromptQueue: streaming SDK input that stays open for steers until the turn closes.
  * - claudePrompt: build one SDK user message from text or content blocks with an optional delivery uuid.
  * - ClaudeLiveTurnOptions: collaborators one live turn needs.
- * - default ClaudeLiveTurn: own one Claude query from start to its single settlement, including steer delivery and context usage.
+ * - default ClaudeLiveTurn: own one Claude query from start to its single settlement, including steer and context delivery, context usage, and billing usage.
  */
 import type { Query, SDKMessage, SDKResultMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
@@ -73,11 +73,12 @@ function addBreakdowns(left: Breakdown, right: Breakdown): Breakdown {
 }
 
 /** The main model carries the conversation context; helper models only add side calls. */
-function mainContextWindow(result: SDKResultMessage) {
-  const main = Object.values(result.modelUsage ?? {}).sort((left, right) =>
+function mainModel(result: SDKResultMessage) {
+  const models = Object.entries(result.modelUsage ?? {});
+  const [model, usage] = models.sort(([, left], [, right]) =>
     (right.inputTokens + right.cacheReadInputTokens + right.cacheCreationInputTokens)
-    - (left.inputTokens + left.cacheReadInputTokens + left.cacheCreationInputTokens))[0];
-  return main && main.contextWindow > 0 ? main.contextWindow : null;
+    - (left.inputTokens + left.cacheReadInputTokens + left.cacheCreationInputTokens))[0] ?? [null, null];
+  return { model, mixed: models.length > 1, contextWindow: usage && usage.contextWindow > 0 ? usage.contextWindow : null };
 }
 
 export interface ClaudeLiveTurnOptions {
@@ -93,7 +94,7 @@ export interface ClaudeLiveTurnOptions {
   usage: ThreadTokenUsage | null;
   transcript: Pick<ClaudeTranscriptAdapter,
     "recordStreamEvent" | "recordAssistant" | "recordNativeToolResults" | "recordCompaction"
-    | "recordContextUsage" | "recordSteer" | "settleTurn">;
+    | "recordContextUsage" | "recordTurnUsage" | "recordSteer" | "settleTurn">;
   observe(facts: WorkbenchProviderObservation): Promise<unknown>;
   broadcast(notification: WorkbenchTranscriptNotification): void;
   readTurn(): Promise<Turn | null>;
@@ -187,6 +188,14 @@ export default class ClaudeLiveTurn {
     else this.options.queue.push(claudePrompt(text, { synthetic: true }));
   }
 
+  /** Inject non-text context, such as a screenshot, as its own synthetic message; it follows the prompt if accepted early. */
+  injectContent(content: ClaudePromptContent) {
+    if (!this.acceptingInput) throw new Error("Claude turn is closing and cannot accept more context.");
+    const message = claudePrompt(content, { synthetic: true });
+    if (this.beforePrompt) this.beforePrompt.steers.push(message);
+    else this.options.queue.push(message);
+  }
+
   async interrupt() {
     this.stopped = true;
     try {
@@ -234,8 +243,12 @@ export default class ClaudeLiveTurn {
       } else if (message.type === "result") {
         for (const uuid of message.user_message_uuids ?? []) await this.deliver(uuid);
         this.total = addBreakdowns(this.total, claudeTokenBreakdown(message.usage));
-        this.contextWindow = mainContextWindow(message) ?? this.contextWindow;
+        const main = mainModel(message);
+        this.contextWindow = main.contextWindow ?? this.contextWindow;
         await this.recordUsage();
+        await transcript.recordTurnUsage(this.threadId, this.turnId, {
+          model: main.model, mixedModels: main.mixed, cumulative: this.total, observedAt: Date.now(),
+        });
         // Steers Claude has not consumed yet run as follow-up results inside this Workbench turn. Other queued
         // context, such as a late working-status notice, does not earn another model turn.
         if (!this.stopped && this.undelivered.size > 0) continue;

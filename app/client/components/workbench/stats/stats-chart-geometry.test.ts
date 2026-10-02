@@ -30,3 +30,9 @@ test("independent scales align each peak, shared scales preserve magnitude, and 
   assert.ok(Number.isFinite(chartY(0, chartMaximum([0, null]))));
   assert.equal(chartX(0, 1), 50);
 });
+
+test("a floored scale spans the floor to the maximum, and even a flat band stays finite", () => {
+  assert.equal(chartY(80, 100, 80), chartY(0, 100), "the floor sits on the baseline");
+  assert.equal(chartY(100, 100, 80), chartY(100, 100), "the maximum still reaches the top");
+  assert.ok(Number.isFinite(chartY(100, 100, 100)));
+});

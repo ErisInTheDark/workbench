@@ -1,19 +1,21 @@
 /*
  * Exports:
  * - WorkbenchStatsControllerOptions: database, harness, rename, and warning ports.
- * - default WorkbenchStatsController: own imports, capture, rename-aware reads, refresh, failures, and disposal.
+ * - default WorkbenchStatsController: own imports, capture, streamed rename-aware stats observations, account-limit history, refresh, failures, and disposal.
  */
 import type { WorkbenchAccountLimits, WorkbenchRateLimitSnapshot, WorkbenchRateLimitWindow } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 import type WorkbenchProviderDispatcher from "../WorkbenchProviderDispatcher";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type { WorkbenchHarness } from "workbench-shared/types";
-import type { WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchStatsRange, WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchRateLimitObservation } from "../database/stats/WorkbenchStatsRepository.ts";
+import type { WorkbenchClaimedRoot } from "../database/stats/WorkbenchClaimStatsRepository.ts";
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "./git-claim-observation.ts";
 import WorkbenchStatsImportController, { type WorkbenchStatsImportControllerOptions } from "./WorkbenchStatsImportController.ts";
 import type WorkbenchClaimRenameController from "./WorkbenchClaimRenameController.ts";
 import type { WorkbenchClaimRenameRead } from "./WorkbenchClaimRenameController.ts";
+import WorkbenchStatsObservation, { type WorkbenchStatsInvalidation, type WorkbenchStatsObservationState } from "./WorkbenchStatsObservation.ts";
 import type { WorkbenchClaimStatsRequest, WorkbenchClaimStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 
 export interface WorkbenchStatsControllerOptions {
@@ -25,8 +27,8 @@ export interface WorkbenchStatsControllerOptions {
     claimStatsClaimImport: WorkbenchStatsImportControllerOptions["database"]["claimStatsClaimImport"];
     claimStatsUsageImport: WorkbenchStatsImportControllerOptions["database"]["claimStatsUsageImport"];
     readStatsImportProgress: import("./WorkbenchStatsImportController").WorkbenchStatsImportControllerOptions["database"]["readStatsImportProgress"];
-    readStats(request: WorkbenchStatsReadRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[]): Promise<import("workbench-shared/workbench/stats/workbench-stats-contract").WorkbenchStatsResponse>;
-    readStatsDetailed(request: import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedReadRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[]): Promise<import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedResponse>;
+    readStats(request: WorkbenchStatsReadRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[]): Promise<WorkbenchStatsResponse>;
+    readStatsClaimedRoots(projectIds: readonly string[] | null, range: WorkbenchStatsRange | "all", now?: number): Promise<WorkbenchClaimedRoot[]>;
     readClaimStats(request: WorkbenchClaimStatsRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[]): Promise<WorkbenchClaimStatsResponse>;
     recordStatsClaimSnapshot(snapshot: WorkbenchGitClaimSnapshot): Promise<void>;
     recordStatsRateLimits(observation: WorkbenchRateLimitObservation): Promise<void>;
@@ -82,6 +84,8 @@ export default class WorkbenchStatsController {
   private failures: Array<{ harness: string | null; message: string; source: "capture" | "refresh" }> = [];
   private queue: Promise<void> = Promise.resolve();
   private readonly importer: WorkbenchStatsImportController;
+  private readonly observations = new Set<WorkbenchStatsObservation>();
+  private readonly stopImportInvalidation: () => void;
 
   constructor(private readonly options: WorkbenchStatsControllerOptions) {
     this.importer = new WorkbenchStatsImportController({
@@ -95,6 +99,13 @@ export default class WorkbenchStatsController {
           "capture",
         );
       },
+    });
+    // Imported usage refreshes cheaply as it lands; claim history is re-walked once the import settles.
+    let importState = this.importer.getProgress().state;
+    this.stopImportInvalidation = this.importer.subscribe((progress) => {
+      const settled = importState === "running" && progress.state !== "running";
+      importState = progress.state;
+      this.invalidate(settled ? "claims" : "usage");
     });
   }
 
@@ -110,7 +121,7 @@ export default class WorkbenchStatsController {
   }
 
   observeClaimSnapshot(snapshot: WorkbenchGitClaimSnapshot) {
-    this.enqueue(snapshot.harness, "claim snapshot", () => this.options.database.recordStatsClaimSnapshot(snapshot));
+    this.enqueue(snapshot.harness, "claim snapshot", () => this.options.database.recordStatsClaimSnapshot(snapshot), "claims");
   }
 
   observeProviderNotification(harness: WorkbenchHarness, observation: WorkbenchProviderObservation) {
@@ -119,13 +130,17 @@ export default class WorkbenchStatsController {
     });
   }
 
+  /** Providers without limit notifications (such as Claude) report limits only when read. */
+  observeAccountLimits(harness: WorkbenchHarness, limits: WorkbenchAccountLimits) {
+    const snapshots = responseRateSnapshots(limits);
+    if (snapshots.length) this.recordRateLimits({ harness, observedAt: Date.now(), snapshots });
+  }
+
   async refreshRateLimits() {
     const harnesses = installedProviderKeys;
     const results = await Promise.allSettled(harnesses.map(async (harness) => {
       const account = this.options.providers.get(harness).account;
-      if (!account) return;
-      const snapshots = responseRateSnapshots(await account.limits.read());
-      if (snapshots.length) this.recordRateLimits({ harness, observedAt: Date.now(), snapshots });
+      if (account) this.observeAccountLimits(harness, await account.limits.read());
     }));
     results.forEach((result, index) => {
       if (result.status === "fulfilled") return;
@@ -135,34 +150,57 @@ export default class WorkbenchStatsController {
     await this.queue;
   }
 
-  async read(request: WorkbenchStatsReadRequest) {
-    await this.queue;
-    const history = await this.readRenames(request.projectId);
+  /**
+   * Stream one scope's statistics. Reads never wait for queued capture writes; those writes
+   * invalidate the observation when they land, so it re-reads and publishes again.
+   */
+  observe(request: WorkbenchStatsReadRequest, publish: (state: WorkbenchStatsObservationState) => void) {
+    if (!this.active) throw new Error("Stats controller is disposed.");
+    const observation = new WorkbenchStatsObservation(request, {
+      read: (scope, history) => this.readSnapshot(scope, history),
+      readRenames: (scope) => this.readRenames(scope.projectIds, scope.range),
+      warn: (message) => this.options.log?.(message),
+    }, publish);
+    this.observations.add(observation);
+    observation.start();
+    return {
+      invalidate: (kind: WorkbenchStatsInvalidation) => observation.invalidate(kind),
+      release: () => {
+        observation.release();
+        this.observations.delete(observation);
+      },
+    };
+  }
+
+  private async readSnapshot(request: WorkbenchStatsReadRequest, history: WorkbenchClaimRenameRead) {
     const result = await this.options.database.readStats(request, undefined, history.renames);
     return await this.withStatus(result, history);
   }
 
+  private invalidate(kind: WorkbenchStatsInvalidation) {
+    for (const observation of this.observations) observation.invalidate(kind);
+  }
+
   async readClaims(request: WorkbenchClaimStatsRequest) {
     await this.queue;
-    const history = await this.readRenames(request.projectId);
+    const history = await this.readRenames([request.projectId], request.range);
     if (history.failures.length) throw new Error("Committed rename history is unavailable for this claim report.");
     return await this.options.database.readClaimStats(request, undefined, history.renames);
   }
 
-  async readDetailed(request: import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedReadRequest) {
-    await this.queue;
-    const history = await this.readRenames(request.projectId);
-    return await this.withStatus(await this.options.database.readStatsDetailed(request, undefined, history.renames), history);
-  }
-
-  private async readRenames(projectId: string | null): Promise<WorkbenchClaimRenameRead> {
+  /** Only roots with claims in the window need history, and only after their earliest claim. */
+  private async readRenames(projectIds: readonly string[] | null, range: WorkbenchStatsRange | "all"): Promise<WorkbenchClaimRenameRead> {
     if (!this.active) throw new Error("Stats controller is disposed.");
+    if (!this.options.renames) return { renames: [], failures: [] };
     let history: WorkbenchClaimRenameRead;
     try {
-      history = await this.options.renames?.read(projectId) ?? { renames: [], failures: [] };
+      const claimed = await this.options.database.readStatsClaimedRoots(projectIds, range);
+      history = await this.options.renames.read(claimed.map(({ projectId, rootId, earliestClaimedDay }) => ({
+        projectId, rootId, since: earliestClaimedDay,
+      })));
     } catch (error) {
       if (!this.active) throw error;
-      history = { renames: [], failures: [{ projectId: projectId ?? "", rootId: "", message: "Committed rename history discovery is unavailable." }] };
+      history = { renames: [], failures: [{ projectId: "", rootId: "", message: "Committed rename history discovery is unavailable." }] };
     }
     for (const failure of history.failures) {
       this.options.log?.(`Workbench claim rename failure: ${failure.message.replace(/[\r\n]/gu, " ").slice(0, 500)}`);
@@ -170,7 +208,7 @@ export default class WorkbenchStatsController {
     return history;
   }
 
-  private async withStatus<T extends import("workbench-shared/workbench/stats/workbench-stats-contract").WorkbenchStatsResponse>(result: T, history: WorkbenchClaimRenameRead) {
+  private async withStatus(result: WorkbenchStatsResponse, history: WorkbenchClaimRenameRead): Promise<WorkbenchStatsResponse> {
     const currentProgress = this.importer.getProgress();
     const historyImport = await this.options.database.readStatsImportProgress(
       currentProgress.state,
@@ -190,6 +228,9 @@ export default class WorkbenchStatsController {
 
   async dispose() {
     this.active = false;
+    this.stopImportInvalidation();
+    for (const observation of this.observations) observation.release();
+    this.observations.clear();
     await Promise.all([this.importer.dispose(), this.options.renames?.dispose()]);
     await this.queue;
   }
@@ -201,12 +242,12 @@ export default class WorkbenchStatsController {
   }
 
   private recordRateLimits(observation: WorkbenchRateLimitObservation) {
-    this.enqueue(observation.harness, "rate limits", () => this.options.database.recordStatsRateLimits(observation));
+    this.enqueue(observation.harness, "rate limits", () => this.options.database.recordStatsRateLimits(observation), "usage");
   }
 
-  private enqueue(harness: string | null, label: string, operation: () => Promise<void>) {
+  private enqueue(harness: string | null, label: string, operation: () => Promise<void>, changes: WorkbenchStatsInvalidation) {
     if (!this.active) return;
-    this.queue = this.queue.then(operation).catch((error) => {
+    this.queue = this.queue.then(operation).then(() => this.invalidate(changes)).catch((error) => {
       this.reportFailure(harness, `${label} capture failed: ${error instanceof Error ? error.message : String(error)}`, "capture");
     });
   }
@@ -215,5 +256,6 @@ export default class WorkbenchStatsController {
     const bounded = message.replaceAll(/[\r\n]+/gu, " ").slice(0, 500);
     this.failures = [...this.failures, { harness, message: bounded, source }].slice(-20);
     this.options.log?.(`Workbench stats ${source} failure${harness ? ` for ${harness}` : ""}: ${bounded}`);
+    this.invalidate("usage");
   }
 }

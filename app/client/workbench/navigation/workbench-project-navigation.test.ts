@@ -82,6 +82,22 @@ test("thread links inherit selection while an explicit project toggle changes it
   assert.equal(navigation.href(toggled, current, "exact"), "/one/+/two/@/thread/one/@/t1");
 });
 
+test("statistics keep a logical multi-project selection and stay on statistics when the selection changes", () => {
+  const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const navigation = new WorkbenchProjectNavigation([], [], [
+    { id: first, matchKey: "remote://github.com/team/one", label: "one", locations: [] },
+    { id: second, matchKey: "remote://github.com/team/two", label: "two", locations: [] },
+  ]);
+  const stats = navigation.readRoute("/one/+/two/@/stats");
+  assert.equal(stats.view, "stats");
+  assert.deepEqual(stats.selectedProjectIds, [first, second]);
+  assert.equal(navigation.href(stats), "/one/+/two/@/stats");
+  const narrowed = createToggledProjectSelectionRoute(stats, [first, second], second, [first, second]);
+  assert.equal(navigation.href(narrowed), "/one/@/stats");
+  assert.equal(navigation.href(withProjectSelection(createStatsRoute(null), null)), "/@/stats");
+});
+
 test("longer remote addresses resolve to one project and canonicalise to its shortest slug", () => {
   const id = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
   const navigation = new WorkbenchProjectNavigation([], [], [{

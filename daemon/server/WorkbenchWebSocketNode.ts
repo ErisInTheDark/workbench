@@ -30,6 +30,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         identities: threadIdentity,
         threads: threadState,
         projects: build.get("projectSnapshot"),
+        stats: build.get("stats"),
       },
     });
     controller.suspend();

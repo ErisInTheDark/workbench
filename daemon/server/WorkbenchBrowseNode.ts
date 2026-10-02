@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchBrowseNode: own warm Browse execution while preserving browser sessions across code replacement.
+ * - default WorkbenchBrowseNode: own warm Browse execution and Browse transcript recording while preserving browser sessions across code replacement.
  */
 import WorkbenchBrowseRuntime from "./lib/workbench/browse/WorkbenchBrowseRuntime";
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -14,6 +14,7 @@ import type { DaemonBrowseExecution, DaemonProviderNotification, DaemonRuntimeOb
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchBrowseController, { type WorkbenchBrowseIdentityPort } from "./WorkbenchBrowseController";
 import WorkbenchBrowseResultController from "./WorkbenchBrowseResultController";
+import WorkbenchBrowseTranscriptRecorder from "./lib/workbench/browse/WorkbenchBrowseTranscriptRecorder";
 import type { WorkbenchBrowseResultCallbacks } from "./WorkbenchBrowseResultController";
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
@@ -130,6 +131,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         return thread.threadId;
       },
     };
+    // Workbench owns Browse transcript entries for every provider; providers only deliver screenshots to their model.
+    const recorder = new WorkbenchBrowseTranscriptRecorder({
+      assets: build.get("database"),
+      transcript: build.get("transcript"),
+      notify: (harness, notification) => context.broadcastProviderNotification(harness, notification),
+    });
     const callbacks: WorkbenchBrowseResultCallbacks = {
       logError: message => logError("browse-results", message),
       listHarnesses: () => installedProviderKeys,
@@ -137,7 +144,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         thread: await provider(harness).threads.readLatest(await identity.publicThreadId(threadId)),
       }),
       recordResult: async (entry, harness) => {
-        await provider(harness).browse.record({ ...entry, threadId: await identity.publicThreadId(entry.threadId) });
+        await recorder.record({ ...entry, threadId: await identity.publicThreadId(entry.threadId) }, harness);
       },
       screenshot: async (harness, input) => {
         return provider(harness).browse.screenshot({ ...input, threadId: await identity.publicThreadId(input.threadId) });
@@ -184,7 +191,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload daemon-owned Browse execution without restarting browser sessions.",
   lifecycle: "handoff",
   provides: ["browseExecution"],
-  requires: ["database", "daemonRequests", "harnesses", "projectCatalog", "threadIdentity"],
+  requires: ["database", "daemonRequests", "harnesses", "projectCatalog", "threadIdentity", "transcript"],
   safeAll: true,
   scope: "server:browse",
   sources: [

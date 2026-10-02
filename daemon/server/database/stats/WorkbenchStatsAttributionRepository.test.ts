@@ -54,7 +54,7 @@ test("model attribution prefers a nearby exact turn and never overwrites it", ()
   }
 });
 
-test("model attribution falls through thread, project, and provider SQLite evidence", () => {
+test("model attribution falls through thread and project evidence, then forgets unknown models", () => {
   const database = databaseWithUsage();
   try {
     database.prepare("UPDATE thread_turn_usage SET model = NULL, context_observed_at = NULL").run();
@@ -86,7 +86,7 @@ test("model attribution falls through thread, project, and provider SQLite evide
 
     database.prepare("DELETE FROM workbench_project_thread_profiles").run();
     repository.repair(12);
-    assert.deepEqual(attribution(), { model: "gpt-5.6-sol", source: "provider" });
+    assert.equal(attribution(), undefined);
 
     database.prepare("UPDATE thread_turn_usage SET model = 'exact-model' WHERE turn_id = 'missing'").run();
     repository.repair(13);

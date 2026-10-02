@@ -8,13 +8,15 @@ import {
   type DaemonWorkspaceObserve, type DaemonWorkspaceObservation,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { hasUnarchivedSidebarWork, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import type WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
 import type { WorkbenchReloadDirtSnapshot } from "workbench-shared/reload/workbench-reload";
+import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
+import type { WorkbenchStatsInvalidation } from "./stats/WorkbenchStatsObservation";
 
 type Payload = {
   [Kind in DaemonWorkspaceObservation["kind"]]: Omit<
@@ -32,6 +34,7 @@ interface Observation<Client extends object> {
   work: Promise<void> | null;
   identityRead: Promise<void> | null;
   stopTree: (() => void) | null;
+  stats: { invalidate(kind: WorkbenchStatsInvalidation): void; release(): void } | null;
 }
 
 function failure(error: unknown) {
@@ -51,6 +54,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     threads: Pick<WorkbenchThreadStateController,
       "peekProject" | "readProject" | "peekProjectSummary" | "getProjectThreadSummary" | "subscribeProjects" | "readWorkspaceThread">;
     projects: Pick<WorkbenchProjectSnapshotController, "observe" | "getCurrentUpdate">;
+    stats?: Pick<WorkbenchStatsController, "observe">;
     publish(client: Client, observation: DaemonWorkspaceObservation): void;
     warn(message: string): void;
     cooperate?: () => Promise<void>;
@@ -84,7 +88,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     const initial = { ...this.initial(request), revision: initialRevision };
     const observation: Observation<Client> = {
       client, connectionId, request, value: initial, cancellation: new AbortController(),
-      dirty: new Set(), work: null, identityRead: null, stopTree: null,
+      dirty: new Set(), work: null, identityRead: null, stopTree: null, stats: null,
     };
     this.observations.set(key, observation);
     switch (request.query.kind) {
@@ -104,6 +108,13 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       case "projectPlacement":
       case "projectThreads":
         this.selectProjects(observation);
+        break;
+      case "stats":
+        if (!this.owners.stats) {
+          this.update(observation, { kind: "stats", phase: "unavailable", failure: "Statistics are unavailable.", claimsPhase: "unavailable", data: null });
+          break;
+        }
+        observation.stats = this.owners.stats.observe(request.query.request, state => this.update(observation, { kind: "stats", ...state }));
         break;
     }
     return observation.value;
@@ -166,6 +177,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         ...envelope, kind: "threadIdentity", phase: "pending", failure: null, identity: null,
       };
       case "thread": return { ...envelope, kind: "thread", phase: "pending", failure: null, data: null };
+      case "stats": return { ...envelope, kind: "stats", phase: "pending", failure: null, claimsPhase: "pending", data: null };
     }
   }
 
@@ -245,6 +257,17 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
 
   private projectChanged(projectId: ProjectId) {
     for (const observation of this.observations.values()) {
+      const query = observation.request.query;
+      // Thread activity in scope may carry new token usage; claims change through their own capture.
+      if (query.kind === "stats") {
+        const scope = query.request.projectIds;
+        const inScope = !scope || scope.some(id => {
+          const parsed = ProjectIdSchema.safeParse(id);
+          return parsed.success && this.canonicalProject(parsed.data) === projectId;
+        });
+        if (inScope) observation.stats?.invalidate("usage");
+        continue;
+      }
       if (observation.request.query.kind === "thread"
         && this.canonicalProject(observation.request.query.projectId) === projectId) {
         this.readThread(observation);
@@ -453,6 +476,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
   private retire(observation: Observation<Client>) {
     observation.cancellation.abort();
     observation.stopTree?.();
+    observation.stats?.release();
     observation.dirty.clear();
     this.observations.delete(this.key(observation.connectionId, observation.request.subscriptionId));
   }

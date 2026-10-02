@@ -3,15 +3,10 @@
  * - default WorkbenchStatsAttributionRepository: cache canonical SQLite model attribution for usage missing turn context.
  */
 import type Database from "better-sqlite3";
-import type { WorkbenchHarness } from "workbench-shared/types";
 
-import {
-  API_PRICING_POLICY_VERSION,
-  defaultApiPricingModel,
-} from "../../stats/api-pricing.ts";
+import { API_PRICING_POLICY_VERSION } from "../../stats/api-pricing.ts";
 
 interface MissingUsageRow {
-  harness_id: WorkbenchHarness;
   nearest_model: string | null;
   project_model: string | null;
   thread_model: string | null;
@@ -25,7 +20,6 @@ export default class WorkbenchStatsAttributionRepository {
     const rows = this.database.prepare(`
       SELECT
         u.turn_id,
-        t.harness_id,
         (
           SELECT known.model
           FROM thread_turn_usage known
@@ -54,11 +48,16 @@ export default class WorkbenchStatsAttributionRepository {
         policy_version = excluded.policy_version,
         updated_at = excluded.updated_at
     `);
+    // Unknown models stay unattributed: a guessed model would invent a price.
+    const forget = this.database.prepare("DELETE FROM thread_usage_model_attributions WHERE turn_id = ?");
     this.database.transaction(() => {
       for (const row of rows) {
-        const model = row.nearest_model || row.thread_model || row.project_model || defaultApiPricingModel(row.harness_id);
-        const source = row.nearest_model || row.thread_model ? "thread" : row.project_model ? "project" : "provider";
-        upsert.run(row.turn_id, model, source, API_PRICING_POLICY_VERSION, now);
+        const model = row.nearest_model || row.thread_model || row.project_model;
+        if (!model) {
+          forget.run(row.turn_id);
+          continue;
+        }
+        upsert.run(row.turn_id, model, row.nearest_model || row.thread_model ? "thread" : "project", API_PRICING_POLICY_VERSION, now);
       }
       this.database.prepare(`
         DELETE FROM thread_usage_model_attributions

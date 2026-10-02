@@ -25,7 +25,7 @@ class RecordingQueue extends ClaudePromptQueue {
   }
 }
 
-function fixture(onAccepted?: (turn: ClaudeLiveTurn, log: string[]) => void) {
+function fixture(onAccepted?: (turn: ClaudeLiveTurn, log: string[]) => void, usage: ConstructorParameters<typeof ClaudeLiveTurn>[0]["usage"] = null) {
   const pending: (object | Error)[] = [];
   let wake: (() => void) | null = null;
   let closed = false;
@@ -45,15 +45,22 @@ function fixture(onAccepted?: (turn: ClaudeLiveTurn, log: string[]) => void) {
   const log: string[] = [];
   const steers: WorkbenchSteerHistoryEntry[] = [];
   const queue = new RecordingQueue();
+  const billing: Array<{ model: string | null; mixedModels: boolean; total: number; output: number }> = [];
   const turn: ClaudeLiveTurn = new ClaudeLiveTurn({
     query: query as never, queue, scope: "scope", cwd: "C:/repo",
-    projectId, threadId, turnId, workingStatusInPrompt: false, usage: null,
+    projectId, threadId, turnId, workingStatusInPrompt: false, usage,
     transcript: {
       recordStreamEvent: async () => undefined,
       recordAssistant: async () => undefined,
       recordNativeToolResults: async () => undefined,
       recordCompaction: async () => undefined,
       recordContextUsage: async () => undefined,
+      recordTurnUsage: async (_thread: string, _turn: string, recorded: {
+        model: string | null; mixedModels: boolean; cumulative: { totalTokens: number; outputTokens: number };
+      }) => {
+        billing.push({ model: recorded.model, mixedModels: recorded.mixedModels,
+          total: recorded.cumulative.totalTokens, output: recorded.cumulative.outputTokens });
+      },
       recordSteer: async (entry: WorkbenchSteerHistoryEntry) => { steers.push(entry); },
       settleTurn: async (_turnId: string, status: string) => { log.push(`settle:${status}`); },
     } as never,
@@ -77,7 +84,7 @@ function fixture(onAccepted?: (turn: ClaudeLiveTurn, log: string[]) => void) {
     stderr: () => "",
     release: async () => { log.push("release"); },
   });
-  return { turn, push, log, steers, queue };
+  return { turn, push, log, steers, queue, billing };
 }
 
 const steer = (): WorkbenchSteerHistoryEntry => ({
@@ -95,6 +102,32 @@ test("a completed turn is accepted before its prompt and releases its process be
     "activity:turnStarted", "observe:acceptedIntent", "prompts:0", "status:active", "turn/started",
     "release", "settle:completed", "observe:turnCompleted:completed", "turn/completed", "status:idle",
   ]);
+});
+
+test("each result records thread-cumulative billing usage under the turn's main model", async () => {
+  const previous = { cacheWriteInputTokens: 0, cachedInputTokens: 0, inputTokens: 100, outputTokens: 20, reasoningOutputTokens: 0, totalTokens: 120 };
+  const { turn, push, billing } = fixture(undefined, { last: previous, total: previous, modelContextWindow: null });
+  const modelUsage = (input: number) => ({ inputTokens: input, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, contextWindow: 200_000 });
+  const { task } = await turn.start("hi");
+  push(result({
+    usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 0 },
+    modelUsage: { "claude-haiku-4-5-20251001": modelUsage(50), "claude-opus-5-5": modelUsage(900) },
+  }));
+  await task;
+  assert.deepEqual(billing, [{ model: "claude-opus-5-5", mixedModels: true, total: 120 + 1_015, output: 25 }]);
+});
+
+test("injected screenshots reach Claude as images after the prompt and are refused once the turn closes", async () => {
+  const image = [{ type: "image" as const, source: { type: "base64" as const, media_type: "image/png" as const, data: "AAAA" } }];
+  const { turn, push, queue } = fixture(accepted => accepted.injectContent(image));
+  const { task } = await turn.start("look at this");
+  turn.injectContent(image);
+  assert.deepEqual(queue.pushed.map(message => [message.message.content, message.isSynthetic ?? false]), [
+    ["look at this", false], [image, true], [image, true],
+  ]);
+  push(result());
+  await task;
+  assert.throws(() => turn.injectContent(image), /closing/u);
 });
 
 test("context injected by acceptance prefixes the prompt and early steers follow it", async () => {

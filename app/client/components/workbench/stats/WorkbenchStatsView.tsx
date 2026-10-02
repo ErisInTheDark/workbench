@@ -1,203 +1,228 @@
 "use client";
 
 /*
- * Keywords: stats, usage, input cache, claims, rate limits.
  * Exports:
- * - default WorkbenchStatsView: compose stats controls, import state, usage, limits, and claim traffic. Keywords: stats, usage, claims, rate limits.
+ * - default WorkbenchStatsView: own the statistics scope, range, period, filters, and observations, and compose the usage, limit, cache, and claim panels.
  */
 import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
-  useSyncExternalStore,
   type MouseEvent,
+  type ReactNode,
 } from "react";
 
 import type { WorkbenchHarness, WorkbenchProjectOption } from "workbench-shared/types";
-import { createStatsRoute } from "workbench-shared/workbench/navigation/workbench-route";
-import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
-import type {
-  WorkbenchStatsImportProgress,
-  WorkbenchStatsRange,
+import { DaemonIdSchema } from "workbench-shared/workbench/identity";
+import {
+  STATS_TOKEN_TYPES,
+  type StatsTokenType,
+  type WorkbenchStatsRange,
+  type WorkbenchStatsReadRequestSchema,
+  type WorkbenchStatsResponse,
 } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import { STATS_TOKEN_TYPES, hasStatsCategoryCosts, type StatsTokenType, type WorkbenchStatsDetailedReadRequest } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
-import WorkbenchStatsLoadController from "../../../workbench/WorkbenchStatsLoadController";
-import WorkbenchStatsClient from "../../../workbench/WorkbenchStatsClient";
-import { WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "../WorkbenchWorkspaceContext";
-import WorkbenchClaimHotspots from "./WorkbenchClaimHotspots";
+import type { WorkspaceQuery } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { z } from "zod";
+import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
+import type WorkbenchWorkspaceClient from "../../../workbench/app/WorkbenchWorkspaceClient";
+import WorkbenchModeRow from "../WorkbenchModeRow";
+import WorkbenchWorkspaceContext, { WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "../WorkbenchWorkspaceContext";
 import WorkbenchCacheEfficiency from "./WorkbenchCacheEfficiency";
-import WorkbenchCostUsage from "./WorkbenchCostUsage";
-import WorkbenchRateLimitUsage from "./WorkbenchRateLimitUsage";
-import WorkbenchStatsFilters from "./WorkbenchStatsFilters";
-import WorkbenchStatsSummary from "./WorkbenchStatsSummary";
-import WorkbenchTokenUsage from "./WorkbenchTokenUsage";
-import WorkbenchUsageDrivers from "./WorkbenchUsageDrivers";
-import WorkbenchTokenTypeControls from "./WorkbenchTokenTypeControls";
+import WorkbenchClaimHotspots from "./WorkbenchClaimHotspots";
+import WorkbenchStatsActivity, { type StatsActivityMetric } from "./WorkbenchStatsActivity";
+import WorkbenchStatsBreakdowns from "./WorkbenchStatsBreakdowns";
+import WorkbenchStatsHeadline from "./WorkbenchStatsHeadline";
+import WorkbenchStatsLimits from "./WorkbenchStatsLimits";
+import WorkbenchStatsRangePicker from "./WorkbenchStatsRangePicker";
 import WorkbenchStatsStatus from "./WorkbenchStatsStatus";
-import WorkbenchTab from "../WorkbenchTab";
+import { formatStatsBucket, providerLabel } from "./stats-formatters";
+import { statsModelHues } from "./stats-model-colours";
+import { nextStatsPeriod, type StatsPeriodSelection } from "./stats-period";
+import type { StatsProjectScope } from "./stats-project-scope";
 
-export default function WorkbenchStatsView({
-  availableProjectId,
-  onNavigate,
-  onNavigateThread,
-  projectId,
-  projectLabel,
-  projects,
-}: {
-  availableProjectId: string | null;
-  onNavigate: (event: MouseEvent<HTMLAnchorElement>, projectId: string | null) => void;
+function FilterChip({ children, onClear }: { children: ReactNode; onClear: () => void }) {
+  return (
+    <button
+      className="group inline-flex max-w-64 items-center gap-1.5 rounded-full bg-fg/7 py-0.5 pl-2.5 pr-1.5 text-[0.74rem] font-medium text-text hover:bg-fg/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+      onClick={onClear}
+      title="Remove filter"
+      type="button"
+    >
+      <span className="truncate">{children}</span>
+      <span aria-hidden="true" className="text-fg/muted group-hover:text-text">×</span>
+      <span className="sr-only">Remove filter</span>
+    </button>
+  );
+}
+
+type StatsQuery = Extract<WorkspaceQuery, { kind: "stats" }>;
+
+/** A new query starts empty, so the previous figures stay on screen, dimmed, until it publishes. */
+function useStatsObservation(workspace: WorkbenchWorkspaceClient | null, query: StatsQuery | null) {
+  const observation = useWorkspaceObservation(workspace, query);
+  const observed = observation.value?.data ?? null;
+  const [retained, setRetained] = useState<WorkbenchStatsResponse | null>(null);
+  if (observed && observed !== retained) setRetained(observed);
+  if (!query && retained) setRetained(null);
+  return {
+    claimsPending: !observed || observation.value?.claimsPhase === "pending",
+    failure: observation.failure,
+    loading: !observed,
+    stats: observed ?? retained,
+  };
+}
+
+export default function WorkbenchStatsView({ onNavigateThread, projects, scope }: {
   onNavigateThread: (event: MouseEvent<HTMLAnchorElement>, projectId: string, threadId: string) => void;
-  projectId: string | null;
-  projectLabel: string;
   projects: readonly Pick<WorkbenchProjectOption, "id" | "name" | "kind" | "roots">[];
+  /** The sidebar selection, resolved onto this daemon's projects. */
+  scope: StatsProjectScope;
 }) {
   const daemon = useContext(WorkbenchDaemonClientContext);
-  const projectHref = useWorkbenchProjectNavigation();
-  const client = useMemo(() => daemon ? new WorkbenchStatsClient(daemon) : null, [daemon]);
-  const clientRef = useRef(client);
-  clientRef.current = client;
-  const controller = useMemo(
-    () => new WorkbenchStatsLoadController((request) => {
-      if (!clientRef.current) throw new Error("Statistics are waiting for the daemon connection.");
-      return clientRef.current.read(request);
-    }),
-    [],
-  );
-  const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const workspace = useContext(WorkbenchWorkspaceContext);
+  const hasSelection = scope.projectIds.length > 0 || scope.elsewhere.length > 0;
+  // The selection resolves after project facts load, so only an explicit choice overrides the default.
+  const [chosenMode, setMode] = useState<"selected" | "all" | null>(null);
+  const mode = chosenMode ?? (hasSelection && scope.projectIds.length ? "selected" : "all");
   const [range, setRange] = useState<WorkbenchStatsRange>("7d");
+  const [period, setPeriod] = useState<StatsPeriodSelection | null>(null);
+  const [focusedProject, setFocusedProject] = useState<string | null>(null);
   const [provider, setProvider] = useState<WorkbenchHarness | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [tokenTypes, setTokenTypes] = useState<StatsTokenType[]>([...STATS_TOKEN_TYPES]);
+  const [metric, setMetric] = useState<StatsActivityMetric>("cost");
   const [actionError, setActionError] = useState("");
-  const [importProgress, setImportProgress] = useState<WorkbenchStatsImportProgress | null>(null);
-  const request = useMemo<WorkbenchStatsDetailedReadRequest>(
-    () => ({ model, projectId, provider, range, tokenTypes }),
-    [model, projectId, provider, range, tokenTypes],
-  );
-  const projectNamesById = useMemo(
-    () => new Map(projects.map((project) => [project.id, project.name])),
-    [projects],
-  );
+  // The selection array is rebuilt every render; its joined key is the stable identity.
+  const selectionKey = scope.projectIds.join("\0");
+  const request = useMemo<z.output<typeof WorkbenchStatsReadRequestSchema>>(() => ({
+    model, period: null, provider, range, tokenTypes,
+    projectIds: focusedProject ? [focusedProject] : mode === "all" ? null : selectionKey ? selectionKey.split("\0") : [],
+  }), [focusedProject, mode, model, provider, range, selectionKey, tokenTypes]);
+  const projectIds = request.projectIds;
+  const projectName = (projectId: string) => scope.names.get(projectId) ?? projects.find(({ id }) => id === projectId)?.name ?? projectId;
+  const daemonId = DaemonIdSchema.safeParse(scope.daemonId).data ?? null;
+  // Activity and plan limits always read the whole range; a picked period narrows everything else.
+  const overview = useStatsObservation(workspace, useMemo(
+    () => daemonId ? { kind: "stats" as const, daemonId, request } : null,
+    [daemonId, request],
+  ));
+  const narrowed = useStatsObservation(workspace, useMemo(
+    () => daemonId && period ? { kind: "stats" as const, daemonId, request: { ...request, period: { from: period.from, to: period.to } } } : null,
+    [daemonId, period, request],
+  ));
+  const detail = period ? { ...narrowed, stats: narrowed.stats ?? overview.stats } : overview;
+  const stats = overview.stats;
+  const unit = stats?.bucketUnit ?? "day";
 
-  useEffect(() => () => controller.dispose(), [controller]);
+  // A changed sidebar selection replaces any project drilled into from the old one.
+  useEffect(() => { setFocusedProject(null); }, [selectionKey]);
 
+  // Commands only nudge the daemon; their effects stream back through the observation.
   useEffect(() => {
-    if (!client) return;
-    void controller.load(request);
-  }, [client, controller, request]);
-
-  useEffect(() => {
-    if (!daemon || !client) return;
+    if (!daemon) return;
     let active = true;
-    const start = async () => {
-      try {
-        const progress = await daemon.stats.startImport();
-        if (active) {
-          setActionError("");
-          setImportProgress(progress);
-        }
-      } catch (error) {
-        if (active) setActionError(error instanceof Error ? error.message : "Unable to start history import.");
-      }
+    const report = (error: unknown, fallback: string) => {
+      if (active) setActionError(error instanceof Error ? error.message : fallback);
     };
-    const unsubscribeProgress = daemon.onStatsImportProgress((progress) => {
-      if (!active) return;
-      setImportProgress(progress);
-      void controller.refresh();
-    });
-    const unsubscribeReconnect = daemon.onReconnect(() => {
-      client.reconnected();
-      void controller.refresh();
-      void start();
-    });
+    const start = () => daemon.stats.startImport()
+      .then(() => { if (active) setActionError(""); })
+      .catch((error: unknown) => report(error, "Unable to start history import."));
+    const unsubscribeReconnect = daemon.onReconnect(() => { void start(); });
     void start();
+    void daemon.stats.refreshRateLimits().catch((error: unknown) => report(error, "Unable to refresh plan limits."));
     return () => {
       active = false;
-      unsubscribeProgress();
       unsubscribeReconnect();
     };
-  }, [client, controller, daemon]);
+  }, [daemon]);
 
-  const stats = snapshot.stats;
-  const legacy = Boolean(stats && !hasStatsCategoryCosts(stats));
-  const shownTypes = legacy ? STATS_TOKEN_TYPES : snapshot.displayedRequest?.tokenTypes ?? STATS_TOKEN_TYPES;
-  const visibleError = actionError || snapshot.error;
+  // Every model in the window, so narrowing to one model never repaints the others.
+  const modelHues = useMemo(() => statsModelHues(stats?.usageFilters.models ?? []), [stats?.usageFilters.models]);
+  const showProjects = projectIds === null || projectIds.length > 1;
+  const selectedLabel = scope.labels.length === 1 ? scope.labels[0]! : `${scope.labels.length} projects`;
+  const periodLabel = period
+    ? `${formatStatsBucket(period.from, unit)}${period.to === period.from ? "" : ` – ${formatStatsBucket(period.to, unit)}`}`
+    : null;
+  const dim = (loading: boolean) => loading && stats ? "opacity-70" : "";
+
   return (
-    <div className="mx-auto flex w-full max-w-[72rem] flex-col gap-5 py-5">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div className="space-y-2">
-          <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-fg/muted uppercase">Recent usage</p>
-          <h1 className="m-0 text-[1.65rem] font-semibold leading-tight text-text">Statistics</h1>
-        </div>
-          <div aria-label="Statistics scope" className="flex max-w-full items-end gap-4 text-[0.9rem]" role="tablist">
-            <WorkbenchTab
-              selected={projectId === null}
-              href={projectHref(createStatsRoute(null))}
-              onClick={(event) => onNavigate(event, null)}
-            >
-              Global
-            </WorkbenchTab>
-            {availableProjectId ? (
-              <WorkbenchTab
-                selected={projectId !== null}
-                href={projectHref(createStatsRoute(availableProjectId))}
-                onClick={(event) => onNavigate(event, availableProjectId)}
-              >
-                {projectLabel}
-              </WorkbenchTab>
-            ) : null}
+    <div className="mx-auto flex w-full max-w-[76rem] flex-col gap-7 pb-10 pt-1">
+      {/* Limits sit above the scope controls because they are account-wide and ignore them. */}
+      <header className="flex flex-col gap-5">
+        <WorkbenchStatsLimits now={stats?.generatedAt ?? 0} stats={stats} />
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <WorkbenchModeRow
+            ariaLabel="Projects included"
+            onChange={(value) => { setFocusedProject(null); setMode(value); }}
+            options={[
+              {
+                disabled: !scope.projectIds.length, label: `Selected · ${selectedLabel}`,
+                title: scope.labels.join(", ") || "No selected projects on this machine", value: "selected",
+              },
+              { label: "All projects", title: "Every project on this machine", value: "all" },
+            ]}
+            value={mode}
+          />
+          <WorkbenchStatsRangePicker onChange={(next) => { setRange(next); setPeriod(null); }} range={range} />
+          <div aria-label="Active filters" className="flex min-h-6 flex-wrap items-center gap-1.5" role="group">
+            {periodLabel ? <FilterChip onClear={() => setPeriod(null)}>Period: {periodLabel}</FilterChip> : null}
+            {focusedProject ? <FilterChip onClear={() => setFocusedProject(null)}>Project: {projectName(focusedProject)}</FilterChip> : null}
+            {provider ? <FilterChip onClear={() => { setProvider(null); setModel(null); }}>Provider: {providerLabel(provider)}</FilterChip> : null}
+            {model ? <FilterChip onClear={() => setModel(null)}>Model: {model}</FilterChip> : null}
           </div>
+          <WorkbenchStatsStatus
+            error={actionError || overview.failure || narrowed.failure || ""}
+            failures={stats?.failures ?? []}
+            loading={overview.loading || detail.loading}
+            progress={stats?.historyImport ?? null}
+            ready={Boolean(daemonId && workspace)}
+            retained={Boolean(stats)}
+          />
+        </div>
+        {mode === "selected" && !focusedProject && scope.elsewhere.length ? (
+          <p className="m-0 -mt-3 text-[0.74rem] text-fg/muted">
+            {scope.elsewhere.join(", ")} {scope.elsewhere.length === 1 ? "lives" : "live"} on another machine and {scope.elsewhere.length === 1 ? "is" : "are"} not counted here.
+          </p>
+        ) : null}
       </header>
 
-      <div className="flex flex-col gap-2">
-      <WorkbenchStatsFilters
-        model={model}
-        models={stats?.usageFilters.models ?? []}
-        onModelChange={setModel}
-        onProviderChange={(nextProvider) => {
-          setProvider(nextProvider);
-          setModel(null);
-        }}
-        onRangeChange={setRange}
-        provider={provider}
-        providers={stats?.usageFilters.providers ?? []}
-        range={range}
-      />
-
-      <WorkbenchTokenTypeControls selected={tokenTypes} onChange={setTokenTypes} disabled={!stats || legacy} />
-      <WorkbenchStatsStatus
-        ready={Boolean(daemon)} loading={snapshot.loading} retained={Boolean(stats)}
-        error={visibleError} progress={importProgress ?? stats?.historyImport ?? null}
-        failures={stats?.failures ?? []} legacy={legacy}
-      />
+      <div aria-busy={detail.loading} className={`transition-opacity ${dim(detail.loading)}`}>
+        <WorkbenchStatsHeadline stats={detail.stats} />
       </div>
-      <div aria-busy={snapshot.loading} className="flex flex-col gap-6">
-          <WorkbenchStatsSummary stats={stats} />
-          <section aria-label="Token and cost usage" className="grid gap-6 lg:grid-cols-2">
-            <WorkbenchTokenUsage stats={stats} selected={shownTypes} />
-            <WorkbenchCostUsage stats={stats} selected={shownTypes} />
-          </section>
-          <WorkbenchCacheEfficiency
-            global={projectId === null}
-            onNavigateThread={onNavigateThread}
-            projectNamesById={projectNamesById}
-            stats={stats}
-          />
-          <WorkbenchUsageDrivers
-            global={projectId === null}
-            onNavigateThread={onNavigateThread}
-            projectNamesById={projectNamesById}
-            stats={stats}
-          />
-          <WorkbenchRateLimitUsage stats={stats} />
-          <WorkbenchClaimHotspots
-            global={projectId === null}
-            projectNamesById={projectNamesById}
-            stats={stats}
-            projects={projects}
-          />
+      <div aria-busy={overview.loading} className={`pt-3 transition-opacity ${dim(overview.loading)}`}>
+        <WorkbenchStatsActivity
+          metric={metric}
+          onMetricChange={setMetric}
+          onPeriodPick={(startedAt, extend) => setPeriod((current) => nextStatsPeriod(current, startedAt, extend))}
+          onTokenTypesChange={setTokenTypes}
+          period={period}
+          stats={stats}
+          tokenTypes={tokenTypes}
+        />
+      </div>
+      <div aria-busy={detail.loading} className={`flex flex-col gap-10 pt-3 transition-opacity ${dim(detail.loading)}`}>
+        <WorkbenchStatsBreakdowns
+          metric={metric}
+          model={model}
+          modelHues={modelHues}
+          onModelChange={(nextProvider, nextModel) => { setProvider(nextModel ? nextProvider : provider); setModel(nextModel); }}
+          onNavigateThread={onNavigateThread}
+          onProviderChange={(nextProvider) => { setProvider(nextProvider); setModel(null); }}
+          {...(showProjects ? { onSelectProject: setFocusedProject } : {})}
+          projectName={projectName}
+          provider={provider}
+          showProjects={showProjects}
+          stats={detail.stats}
+        />
+        <WorkbenchCacheEfficiency onNavigateThread={onNavigateThread} projectName={projectName} showProjects={showProjects} stats={detail.stats} />
+        <WorkbenchClaimHotspots
+          pending={detail.claimsPending}
+          projectName={projectName}
+          projects={projects}
+          showProjects={showProjects}
+          stats={detail.stats}
+        />
       </div>
     </div>
   );

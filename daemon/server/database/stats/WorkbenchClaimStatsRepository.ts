@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchClaimStatsRepository: read shared UI hotspots and cwd-scoped CLI claim analysis.
+ * - WorkbenchClaimedRoot: one root with claims in a window and its earliest claimed day.
+ * - default WorkbenchClaimStatsRepository: read claimed roots, shared UI hotspots, and cwd-scoped CLI claim analysis.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -41,12 +42,21 @@ const CLAIM_IDENTITIES = `
     LEFT JOIN native n
       ON n.native_thread_id = c.thread_id AND n.harness_id = c.harness_id AND n.project_id = c.project_id
     WHERE c.claimed_day BETWEEN @startedAt AND @endedAt
-      AND (@projectId IS NULL OR c.project_id = @projectId)
+      AND (@projects IS NULL OR c.project_id IN (SELECT value FROM json_each(@projects)))
   ), claims AS (
     SELECT *, COALESCE(managed_id, thread_id) identity_id,
       COALESCE(managed_id, harness_id || char(0) || thread_id) claimant_key FROM resolved
   )
 `;
+
+export interface WorkbenchClaimedRoot {
+  projectId: string;
+  rootId: string;
+  earliestClaimedDay: number;
+}
+
+const projectsParam = (projectIds: readonly string[] | null) => projectIds === null ? null : JSON.stringify(projectIds);
+const claimDay = (now: number) => Math.floor(now / 86_400_000) * 86_400_000;
 
 export default class WorkbenchClaimStatsRepository {
   private readonly identities: WorkbenchThreadIdentityRepository;
@@ -55,24 +65,69 @@ export default class WorkbenchClaimStatsRepository {
     this.identities = new WorkbenchThreadIdentityRepository(database);
   }
 
-  hotspots(projectId: string | null, startedAt: number, now: number, renames: readonly WorkbenchGitClaimRename[] = []) {
-    const rows = this.database.prepare(`${CLAIM_IDENTITIES}
+  /** Renames only matter after a claim, so callers walk history only for these roots and days. */
+  claimedRoots(projectIds: readonly string[] | null, startedAt: number, now: number): WorkbenchClaimedRoot[] {
+    const rows = this.database.prepare(`
+      SELECT project_id, root_id, MIN(claimed_day) earliest
+      FROM git_claim_thread_file_days
+      WHERE claimed_day BETWEEN @startedAt AND @endedAt
+        AND (@projects IS NULL OR project_id IN (SELECT value FROM json_each(@projects)))
+      GROUP BY project_id, root_id
+      ORDER BY project_id, root_id
+    `).all({ startedAt, endedAt: claimDay(now), projects: projectsParam(projectIds) }) as Array<{
+      project_id: string; root_id: string; earliest: number;
+    }>;
+    return rows.map((row) => ({ projectId: row.project_id, rootId: row.root_id, earliestClaimedDay: row.earliest }));
+  }
+
+  /** The most contended files, each with its claiming threads ranked by lifetime token use. */
+  hotspots(projectIds: readonly string[] | null, startedAt: number, now: number, renames: readonly WorkbenchGitClaimRename[] = []) {
+    const params = { projects: projectsParam(projectIds), startedAt, endedAt: claimDay(now), renames: JSON.stringify(renames) };
+    const files = `${CLAIM_IDENTITIES}, top AS MATERIALIZED (
       SELECT project_id, root_id, claimed_path, COUNT(DISTINCT claimant_key) thread_count
       FROM claims GROUP BY project_id, root_id, claimed_path
       ORDER BY thread_count DESC, claimed_path, project_id, root_id LIMIT 20
-    `).all({ projectId, startedAt, endedAt: Math.floor(now / 86_400_000) * 86_400_000, renames: JSON.stringify(renames) }) as Array<{
+    )`;
+    const rows = this.database.prepare(`${files} SELECT * FROM top`).all(params) as Array<{
       project_id: string; root_id: string; claimed_path: string; thread_count: number;
     }>;
+    const claimants = this.database.prepare(`${files}, claimants AS (
+        SELECT c.project_id, c.root_id, c.claimed_path, MAX(c.managed_id) managed_id, MIN(c.harness_id) harness_id
+        FROM claims c JOIN top t ON t.project_id = c.project_id AND t.root_id = c.root_id AND t.claimed_path = c.claimed_path
+        GROUP BY c.project_id, c.root_id, c.claimed_path, c.claimant_key
+      )
+      SELECT c.project_id, c.root_id, c.claimed_path, c.harness_id harness, w.id thread_id,
+        COALESCE(NULLIF(s.title, ''), NULLIF(w.title, '')) title,
+        COALESCE((
+          SELECT MAX(u.cumulative_total_tokens) FROM thread_turns tt JOIN thread_turn_usage u ON u.turn_id = tt.id
+          WHERE tt.thread_id = c.managed_id
+        ), 0) tokens
+      FROM claimants c
+      LEFT JOIN workbench_threads w ON w.id = c.managed_id
+      LEFT JOIN workbench_thread_states s ON s.thread_id = w.id
+    `).all(params) as Array<{
+      project_id: string; root_id: string; claimed_path: string; harness: WorkbenchHarness;
+      thread_id: string | null; title: string | null; tokens: number;
+    }>;
+    const fileKey = (projectId: string, rootId: string, path: string) => `${projectId}\0${rootId}\0${path}`;
+    const threads = new Map<string, Array<{ harness: WorkbenchHarness; threadId: string | null; title: string | null; tokens: number }>>();
+    for (const row of claimants) {
+      const key = fileKey(row.project_id, row.root_id, row.claimed_path);
+      threads.set(key, [...threads.get(key) ?? [], { harness: row.harness, threadId: row.thread_id, title: row.title, tokens: row.tokens }]);
+    }
     return rows.map((row) => ({
       projectId: row.project_id, rootId: row.root_id, path: row.claimed_path, threadCount: row.thread_count,
+      threads: (threads.get(fileKey(row.project_id, row.root_id, row.claimed_path)) ?? [])
+        .sort((left, right) => right.tokens - left.tokens || (left.title ?? "").localeCompare(right.title ?? ""))
+        .slice(0, 12),
     }));
   }
 
   read(request: WorkbenchClaimStatsRequest, now = Date.now(), renames: readonly WorkbenchGitClaimRename[] = []): WorkbenchClaimStatsResponse {
     const params = {
-      projectId: request.projectId,
+      projects: projectsParam([request.projectId]),
       startedAt: request.range === "all" ? 0 : statsRangeShape(request.range, now).startedAt,
-      endedAt: Math.floor(now / 86_400_000) * 86_400_000,
+      endedAt: claimDay(now),
       renames: JSON.stringify(renames),
     };
     const pageSize = WORKBENCH_CLAIM_STATS_PAGE_SIZE;

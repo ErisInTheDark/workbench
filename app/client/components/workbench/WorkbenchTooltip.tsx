@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTooltip: clone a trigger without wrapper DOM and own delayed exclusive portal tooltip lifecycle.
+ * - default WorkbenchTooltip: clone a trigger without wrapper DOM and own delayed exclusive portal tooltip lifecycle, opening right of or above it.
  */
 "use client";
 
@@ -24,6 +24,7 @@ import {
   getWorkbenchTooltipPosition,
   isWorkbenchTooltipPointerSupported,
   isPointWithinWorkbenchTooltipArea,
+  type WorkbenchTooltipPlacement,
 } from "./workbench-tooltip-geometry";
 
 const DEFAULT_DELAY_MS = 500;
@@ -76,6 +77,7 @@ export default function WorkbenchTooltip({
   enabled = true,
   hoverDistancePx = DEFAULT_HOVER_DISTANCE_PX,
   interactive = false,
+  placement = "right",
 }: {
   children: ReactElement<WorkbenchTooltipTriggerProps>;
   content: ReactNode;
@@ -83,6 +85,7 @@ export default function WorkbenchTooltip({
   enabled?: boolean;
   hoverDistancePx?: number;
   interactive?: boolean;
+  placement?: WorkbenchTooltipPlacement;
 }) {
   const ownerRef = useRef(Symbol("workbench-tooltip"));
   const triggerRef = useRef<HTMLElement>(null);
@@ -118,12 +121,12 @@ export default function WorkbenchTooltip({
     const viewportHeight = window.visualViewport?.height ?? document.documentElement.clientHeight ?? window.innerHeight;
     const viewportWidth = window.visualViewport?.width ?? document.documentElement.clientWidth ?? window.innerWidth;
     setPosition({
-      ...getWorkbenchTooltipPosition({ tooltipHeight: 0, triggerRect, viewportHeight, viewportWidth }),
+      ...getWorkbenchTooltipPosition({ placement, tooltipHeight: 0, triggerRect, viewportHeight, viewportWidth }),
       ready: false,
     });
     setTrackingPointer(true);
     setVisible(true);
-  }, [clearShowTimer, enabled, hide]);
+  }, [clearShowTimer, enabled, hide, placement]);
 
   const beginShowing = useCallback(() => {
     if (!enabled) return;
@@ -189,9 +192,12 @@ export default function WorkbenchTooltip({
     const updatePosition = () => {
       const viewportHeight = window.visualViewport?.height ?? document.documentElement.clientHeight ?? window.innerHeight;
       const viewportWidth = window.visualViewport?.width ?? document.documentElement.clientWidth ?? window.innerWidth;
+      const measured = tooltip.getBoundingClientRect();
       setPosition({
         ...getWorkbenchTooltipPosition({
-          tooltipHeight: tooltip.getBoundingClientRect().height,
+          placement,
+          tooltipHeight: measured.height,
+          tooltipWidth: measured.width,
           triggerRect: trigger.getBoundingClientRect(),
           viewportHeight,
           viewportWidth,
@@ -214,7 +220,7 @@ export default function WorkbenchTooltip({
       window.visualViewport?.removeEventListener("resize", updatePosition);
       window.visualViewport?.removeEventListener("scroll", updatePosition);
     };
-  }, [visible]);
+  }, [placement, visible]);
 
   const childProps = children.props;
   const childRef = childProps.ref;

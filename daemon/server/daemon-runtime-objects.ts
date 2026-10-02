@@ -139,7 +139,7 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   readThreadLaunch: import("./database/WorkbenchDatabaseController").default["readThreadLaunch"];
   advanceThreadLaunch: import("./database/WorkbenchDatabaseController").default["advanceThreadLaunch"];
   readStats(request: WorkbenchStatsReadRequest): Promise<WorkbenchStatsResponse>;
-  readStatsDetailed(request: import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedReadRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-detail-contract").WorkbenchStatsDetailedResponse>;
+  readStatsClaimedRoots: import("./database/WorkbenchDatabaseController").default["readStatsClaimedRoots"];
   readClaimStats(request: import("workbench-shared/workbench/stats/workbench-stats-claims-contract").WorkbenchClaimStatsRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-claims-contract").WorkbenchClaimStatsResponse>;
   beginStatsImport(runId: string, harnesses: WorkbenchHarness[], now: number): Promise<WorkbenchStatsImportProgress>;
   addStatsClaimDiscoveries(runId: string, discoveries: WorkbenchGitClaimImportDiscovery[], now: number): Promise<WorkbenchStatsImportProgress>;

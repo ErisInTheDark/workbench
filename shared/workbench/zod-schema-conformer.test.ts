@@ -38,6 +38,19 @@ test("conformance preserves valid siblings and valid array entries", () => {
   ]);
 });
 
+test("array entries beyond the default keep fallback-free repairs and drop only what cannot be repaired", () => {
+  const schema = z.object({ rows: z.array(z.object({ id: z.string(), meta: z.object({ n: z.number() }).strict() }).strict()) }).strict();
+  const conformed = conformToZodSchema(schema, {
+    rows: [
+      { id: "a", meta: { n: 1 }, added: true },
+      { id: "b", meta: { n: 2, nestedAdded: true } },
+      { id: 3, meta: { n: 3 } },
+    ],
+  }, { rows: [] });
+  assert.deepEqual(conformed.data.rows, [{ id: "a", meta: { n: 1 } }, { id: "b", meta: { n: 2 } }]);
+  assert.ok(conformed.repairedPaths.some((path) => path.join(".") === "rows.2"), "the unrepairable entry is reported as dropped");
+});
+
 test("conformance selects a default union branch and still runs transforms", () => {
   const schema = z.discriminatedUnion("kind", [
     z.object({ count: z.number().int(), kind: z.literal("thread"), title: z.string() }).strict(),

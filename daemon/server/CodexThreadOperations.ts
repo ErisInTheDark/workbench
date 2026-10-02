@@ -150,9 +150,6 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
   };
 
   readonly browse: WorkbenchProviderBrowse = {
-    record: async entry => {
-      await this.mapped({ method: "browse/result/record", params: entry });
-    },
     screenshot: async input => {
       const result = WorkbenchToolContextResponseSchema.parse(await this.mapped({
         method: WORKBENCH_TOOL_CONTEXT_METHOD,

@@ -55,10 +55,11 @@ test("rename projection merges before counting and pagination without rewriting 
       assert.equal(threads.kind, "threads");
       if (threads.kind === "threads") assert.deepEqual(threads.rows.map(({ threadId }) => threadId).sort(), ["one", "two"]);
     }
-    assert.deepEqual(repository.hotspots(projectId, now - 7 * day, now, renames)[0], {
-      projectId, rootId: "root", path: "current", threadCount: 2,
-    });
-    assert.equal(repository.hotspots(testProjectIds.otherProject, now - 7 * day, now, renames)[0]?.path, "old");
+    const { threads: claimants, ...current } = repository.hotspots([projectId], now - 7 * day, now, renames)[0]!;
+    assert.deepEqual(current, { projectId, rootId: "root", path: "current", threadCount: 2 });
+    // Renamed claims merge their claimants as well as their counts.
+    assert.equal(claimants.length, 2);
+    assert.equal(repository.hotspots([testProjectIds.otherProject], now - 7 * day, now, renames)[0]?.path, "old");
     assert.equal(repository.hotspots(null, now - 7 * day, now, renames)[0]?.threadCount, 2);
     assert.equal(repository.read({ ...request, range: "all", file: { rootId: "root", path: "current" } }, now, renames).rows.length, 3);
     assert.equal(repository.read(request, now).pages, 2);
@@ -80,7 +81,7 @@ test("one Workbench claimant counts once across native providers and pending met
       writer.recordClaimSnapshot({ projectId: fixtureIdentityValues.ProjectId.project, threadId, harness, observedAt: now, roots: [{ rootId: "root", paths: ["file"] }] });
     }
     const repository = new WorkbenchClaimStatsRepository(db);
-    assert.equal(repository.hotspots(fixtureIdentityValues.ProjectId.project, now - day, now)[0]?.threadCount, 1);
+    assert.equal(repository.hotspots([fixtureIdentityValues.ProjectId.project], now - day, now)[0]?.threadCount, 1);
     const result = repository.read({ projectId: fixtureIdentityValues.ProjectId["project"], range: "7d", page: 1, file: { rootId: "root", path: "file" } }, now);
     assert.equal(result.rows.length, 1);
     assert.equal(result.kind === "threads" && result.rows[0]?.threadId, identity.threadId);
@@ -116,7 +117,7 @@ test("claim identities coalesce providers and days into managed threads without 
       { threadId: managed, title: "Current title", identity: "managed" },
       { threadId: "missing", title: null, identity: "provider" },
     ].sort((a, b) => a.threadId.localeCompare(b.threadId)));
-    assert.equal(repository.hotspots(fixtureIdentityValues.ProjectId.project, now - 6 * day, now)[0]?.threadCount, 2);
+    assert.equal(repository.hotspots([fixtureIdentityValues.ProjectId.project], now - 6 * day, now)[0]?.threadCount, 2);
   } finally { db.close(); }
 });
 

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ZodSchemaConformance/conformToZodSchema: repair invalid schema nodes from a conformant default while preserving valid siblings. Keywords: zod, schema, default, repair, conformance.
+ * - ZodSchemaConformance/conformToZodSchema: repair invalid schema nodes from a conformant default while preserving valid siblings and repairable array entries.
  */
 import { z } from "zod";
 
@@ -71,6 +71,14 @@ function conformArray(
     if (elementSchema.safeParse(item).success) return [item];
     if (index < fallback.length) {
       return [conformInput(elementSchema, item, fallback[index], [...path, index], repairedPaths)];
+    }
+    // Without a default entry, the entry is its own template: only fallback-free repairs, such as
+    // dropping unrecognized keys, can apply. Anything still invalid is dropped.
+    const entryRepairs: PropertyKey[][] = [];
+    const repaired = conformInput(elementSchema, item, item, [...path, index], entryRepairs);
+    if (elementSchema.safeParse(repaired).success) {
+      for (const repairedPath of entryRepairs) addRepair(repairedPaths, repairedPath);
+      return [repaired];
     }
     addRepair(repairedPaths, [...path, index]);
     return [];

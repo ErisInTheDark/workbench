@@ -502,6 +502,10 @@ export default class WorkbenchWorkspaceRequestController {
         interest.owner = this.options.threads.observe(request.query.threadId, refresh);
         interest.stop.push(this.options.sources.subscribe(refresh));
         break;
+      case "stats":
+        // The daemon may connect after the view asks; projection attaches once the source exists.
+        interest.stop.push(this.options.sources.subscribe(refresh));
+        break;
     }
     this.refresh(interest);
     return interest.value;
@@ -543,6 +547,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "threadOwner": return { ...base, kind: "threadOwner", data: { phase: "pending", failure: null } };
       case "thread": return { ...base, kind: "thread", owner: { phase: "pending", failure: null }, data: null };
       case "projectTree": return { ...base, kind: "projectTree", sourceGeneration: 0, data: null };
+      case "stats": return { ...base, kind: "stats", claimsPhase: "pending", data: null };
       case "appState": return { ...base, kind: "appState", data: null };
     }
   }
@@ -613,6 +618,20 @@ export default class WorkbenchWorkspaceRequestController {
         this.update(interest, { kind: "projectTree", sourceGeneration: fact?.value?.generation ?? 0,
           phase: fact?.phase ?? "pending", failure: fact?.failure ?? null,
           data: fact?.value?.kind === "projectTree" ? fact.value.project : null });
+        return;
+      }
+      case "stats": {
+        if (!interest.thread) {
+          const source = this.options.sources.get(query.daemonId);
+          if (source) interest.thread = {
+            key: query.daemonId,
+            observation: source.observe({ kind: "stats", request: query.request }, () => this.refresh(interest)),
+          };
+        }
+        const fact = interest.thread?.observation.getSnapshot();
+        const value = fact?.value?.kind === "stats" ? fact.value : null;
+        this.update(interest, { kind: "stats", phase: fact?.phase ?? "pending", failure: fact?.failure ?? null,
+          claimsPhase: value?.claimsPhase ?? "pending", data: value?.data ?? null });
         return;
       }
       case "threadOwner":

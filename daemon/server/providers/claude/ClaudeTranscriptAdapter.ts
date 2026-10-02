@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - claudeTokenBreakdown: convert one Claude usage record into Workbench token accounting.
- * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, native tool (with effective Edit/Write diffs and claim denials), steer, usage, and compaction facts to canonical history.
+ * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, native tool (with effective Edit/Write diffs and claim denials), steer, screenshot steer, context and billing usage, and compaction facts to canonical history.
  */
 import path from "node:path";
 import type {
@@ -16,6 +16,11 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { WorkbenchQuestionnaireHistoryEntryState } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
+import { WORKBENCH_STATS_USAGE_DATA_VERSION } from "workbench-shared/workbench/stats/workbench-stats-usage";
+import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
+import { randomUUID } from "node:crypto";
+import externalizeCodexTranscriptInlineImages from "../../codex-transcript-image-assets";
+import type WorkbenchDatabaseController from "../../database/WorkbenchDatabaseController";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
 import { ProviderToolMetadataSchema, type ProviderToolMetadata } from "workbench-shared/workbench/provider/provider-execution";
 import type { ClaudeFileChangeMetadata } from "workbench-shared/workbench/provider/claude-file-change-metadata";
@@ -110,6 +115,7 @@ export default class ClaudeTranscriptAdapter {
     threads: Pick<WorkbenchThreadIdentityController, "observe" | "observeTurn">;
     items: Pick<WorkbenchTranscriptIdentityController, "admit">;
     transcript: Pick<DaemonTranscriptRegistration, "record" | "acceptLiveUpdate" | "readContextUsage">;
+    assets?: Pick<WorkbenchDatabaseController, "writeTranscriptAsset">;
   }) {}
 
   async create(sessionId: string, cwd: string, project: { id: string; rootPath: string; launchId?: string }) {
@@ -162,6 +168,19 @@ export default class ClaudeTranscriptAdapter {
       content: input.content,
     }, now);
     return turn.turnId;
+  }
+
+  /** A delivered screenshot shows in the transcript as the marked image steer every provider renders. */
+  async recordScreenshotSteer(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, imageUrl: string) {
+    const reference = `screenshot:${randomUUID()}`;
+    const item = (await externalizeCodexTranscriptInlineImages<ThreadItem>({
+      type: "userMessage", id: reference, clientId: null,
+      content: [
+        { type: "text", text: createAgentScreenshotSteerText(), text_elements: [] },
+        { type: "image", url: imageUrl },
+      ],
+    }, { assets: this.owners.assets, threadId })).value;
+    await this.recordItem(threadId, turnId, reference, item, Date.now(), "workbench");
   }
 
   async recordItem(
@@ -286,6 +305,19 @@ export default class ClaudeTranscriptAdapter {
   async recordContextUsage(threadId: WorkbenchThreadId, tokenUsage: ThreadTokenUsage | null) {
     await this.owners.transcript.record([{
       kind: "threadContextUsage", threadId, snapshot: { tokenUsage }, initialise: false,
+    }], { source: "provider" });
+  }
+
+  /** Record the turn's billing model and the thread's cumulative usage for statistics. */
+  async recordTurnUsage(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, usage: {
+    model: string | null; mixedModels: boolean; cumulative: ThreadTokenUsage["total"]; observedAt: number;
+  }) {
+    await this.owners.transcript.record([{
+      kind: "turnUsageContext", threadId, turnId, model: usage.model, modelChanged: usage.mixedModels,
+      observedAt: usage.observedAt, serviceTier: null,
+    }, {
+      kind: "turnTokenUsage", threadId, turnId, cumulative: usage.cumulative,
+      observedAt: usage.observedAt, usageDataVersion: WORKBENCH_STATS_USAGE_DATA_VERSION,
     }], { source: "provider" });
   }
 

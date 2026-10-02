@@ -88,9 +88,6 @@ export default class WorkbenchProjectNavigation {
       if (selected?.some(project => !project) || (route.threadOwnerProjectId && !owner)) {
         return createInvalidWorkbenchRoute("The link mixes unresolved and logical project addresses.");
       }
-      if (route.view === "stats") {
-        return createInvalidWorkbenchRoute("Project-specific statistics are unavailable here.");
-      }
       return {
         ...route,
         projectId: "",

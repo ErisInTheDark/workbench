@@ -42,6 +42,8 @@ import { WorkbenchNetworkSnapshotSchema } from "../../http/workbench-network";
 import { WorkbenchDaemonReloadDirtEnvelopeSchema } from "../daemon-reload";
 import { WorkbenchSearchRequestSchema } from "../search/workbench-search";
 import { WorkspaceSearchResponseSchema } from "./workspace-commands";
+import { WorkbenchStatsReadRequestSchema } from "../stats/workbench-stats-contract";
+import { WorkbenchStatsObservedResponseSchema } from "../stats/workbench-stats-conformance";
 
 export const WORKSPACE_OBSERVE_METHOD = "workspace/observe";
 export const WORKSPACE_RELEASE_METHOD = "workspace/release";
@@ -72,6 +74,7 @@ export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("projectTree"), projectId: ProjectIdSchema }).strict(),
   z.object({ kind: z.literal("threadIdentity"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("thread"), projectId: ProjectIdSchema, threadId: ThreadReferenceSchema }).strict(),
+  z.object({ kind: z.literal("stats"), request: WorkbenchStatsReadRequestSchema }).strict(),
 ]);
 export type DaemonWorkspaceQuery = z.infer<typeof DaemonWorkspaceQuerySchema>;
 export const DaemonWorkspaceObserveSchema = z.object({
@@ -84,6 +87,12 @@ export const WorkspaceReleaseSchema = z.object({
   subscriptionId: z.uuid(),
   generation: revision,
 }).strict();
+
+/** Usage arrives first; claim hotspots stay pending until rename history has been merged. */
+const statsObservation = {
+  claimsPhase: WorkspaceSourcePhaseSchema,
+  data: WorkbenchStatsObservedResponseSchema.nullable(),
+};
 
 const projectRows = z.object({
   projectId: ProjectIdSchema,
@@ -123,6 +132,7 @@ export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({
     ...envelope, kind: z.literal("thread"), data: WorkbenchThreadObservationSnapshotSchema.nullable(),
   }).strict(),
+  z.object({ ...envelope, kind: z.literal("stats"), ...statsObservation }).strict(),
 ]);
 export type DaemonWorkspaceObservation = z.infer<typeof DaemonWorkspaceObservationSchema>;
 
@@ -151,6 +161,7 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
     schemaVersion: revision.optional(),
   }).strict(),
   z.object({ kind: z.literal("runtime") }).strict(),
+  z.object({ kind: z.literal("stats"), daemonId: DaemonIdSchema, request: WorkbenchStatsReadRequestSchema }).strict(),
 ]);
 export type WorkspaceQuery = z.infer<typeof WorkspaceQuerySchema>;
 
@@ -293,6 +304,7 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("presentation"), data: PresentationSnapshotSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("appState"), data: appState.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("runtime"), data: runtime.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("stats"), ...statsObservation }).strict(),
 ]);
 export type WorkspaceObservation = z.infer<typeof WorkspaceObservationSchema>;
 

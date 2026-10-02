@@ -8,7 +8,6 @@ import { captureTestOutput } from "../../../test/capture-test-output.mts";
 
 import { GitArcFailureException } from "../git/git-arc-failures.ts";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./WorkbenchDaemonClient.ts";
-import { WorkbenchStatsResponseSchema } from "../stats/workbench-stats-contract.ts";
 
 test("working-tree summary validates remote status without exposing rejected paths", async context => {
   const diagnostics: string[] = [];
@@ -282,52 +281,6 @@ test("Git arc requests return exact domain results and preserve structured failu
   );
 });
 
-test("detailed stats retain category costs and reject malformed remote values with sanitised diagnostics", async (context) => {
-  const legacy = WorkbenchStatsResponseSchema.parse({
-    bucketUnit: "day", claimHotspots: [], cost: { buckets: [], pricedTokens: 0, totalUsd: 0, unpricedTokens: 0 },
-    failures: [], generatedAt: 1, pricingCatalogDate: "2026-09-05", projectId: null, rateLimits: [],
-    range: "7d", recordingStartedAt: null, startedAt: 0,
-    tokens: { buckets: [], totals: { all: 0, cachedInput: 0, input: 0, output: 0 } },
-  });
-  const detailed = { ...legacy, cost: { ...legacy.cost, buckets: [], byTokenType: { input: 0, cache: 0, output: 0 } } };
-  const valid = new WorkbenchDaemonClient({ request: async <TResponse>() => detailed as TResponse });
-  assert.deepEqual(await valid.stats.detailed({ projectId: null, range: "7d", tokenTypes: [] }), detailed);
-  const logged: string[] = [];
-  context.mock.method(console, "error", (message: string) => { logged.push(message); });
-  const malformed = new WorkbenchDaemonClient({ request: async <TResponse>() => ({
-    ...detailed, cost: { ...detailed.cost, byTokenType: { input: "private-payload-marker", cache: 0, output: 0 } },
-  }) as TResponse });
-  await assert.rejects(malformed.stats.detailed({ projectId: null, range: "7d" }), /response was invalid/);
-  assert.ok(logged.length > 0);
-  assert.ok(logged.every((message) => message.length < 1_200 && !message.includes("private-payload-marker")));
-  const cacheEfficiency = {
-    totals: { inputTokens: 1_000, cachedInputTokens: 940, cacheHitPercent: 94 }, buckets: [], worstThreads: [],
-  };
-  const enriched = { ...detailed, cacheEfficiency };
-  const cacheClient = new WorkbenchDaemonClient({ request: async <TResponse>() => enriched as TResponse });
-  assert.deepEqual(await cacheClient.stats.efficiency({ projectId: null, range: "7d" }), enriched);
-  const badCache = new WorkbenchDaemonClient({ request: async <TResponse>() => ({
-    ...enriched, cacheEfficiency: { ...cacheEfficiency, totals: { ...cacheEfficiency.totals, cacheHitPercent: "private-cache-marker" } },
-  }) as TResponse });
-  const previousLogs = logged.length;
-  await assert.rejects(badCache.stats.efficiency({ projectId: null, range: "7d" }), /response was invalid/);
-  assert.ok(logged.length > previousLogs);
-  assert.ok(logged.every((message) => message.length < 1_200 && !message.includes("private-cache-marker")));
-  const current = { ...enriched, cacheEfficiency: { ...cacheEfficiency,
-    worstThreads: [{ ...cacheEfficiency.totals, projectId: "project", threadId: "thread", title: "Thread", cacheWriteInputTokens: 10 }],
-  } };
-  const currentClient = new WorkbenchDaemonClient({ request: async <TResponse>() => current as TResponse });
-  assert.deepEqual(await currentClient.stats.efficiencyV2({ projectId: null, range: "7d" }), current);
-  const badWrites = new WorkbenchDaemonClient({ request: async <TResponse>() => ({
-    ...current, cacheEfficiency: { ...current.cacheEfficiency,
-      worstThreads: [{ ...current.cacheEfficiency.worstThreads[0], cacheWriteInputTokens: "private-write-marker" }],
-    },
-  }) as TResponse });
-  const beforeWriteLogs = logged.length;
-  await assert.rejects(badWrites.stats.efficiencyV2({ projectId: null, range: "7d" }), /response was invalid/);
-  assert.ok(logged.length > beforeWriteLogs);
-  assert.ok(logged.every((message) => message.length < 1_200 && !message.includes("private-write-marker")));
-});
 
 test("search responses require the complete discriminated result contract", async (context) => {
   const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("Rejected search/query response:"));
@@ -368,8 +321,9 @@ test("stats import progress notifications cross the typed browser boundary", () 
   notify({
     method: "workbench/stats/import/updated",
     params: {
-      completedThreads: 1, failedThreads: 0, percent: 100, processedThreads: 1,
-      recentFailures: [], revision: 2, state: "complete", totalThreads: 1, unavailableThreads: 0,
+      claims: { completed: 1, failed: 0, processed: 1, total: 1, unavailable: 0 }, percent: 100,
+      recentFailures: [], revision: 2, state: "complete", unsupportedClaimCheckpoints: 0,
+      usage: { completed: 1, failed: 0, processed: 1, total: 1, unavailable: 0 }, version: 2,
     },
   });
   assert.deepEqual(received, [2]);

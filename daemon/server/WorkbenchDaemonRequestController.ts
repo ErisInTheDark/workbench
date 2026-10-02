@@ -41,8 +41,6 @@ import {
     GitArcFailureException,
     parseGitArcFailureEnvelope,
 } from "workbench-shared/workbench/git/git-arc-failures";
-import { WorkbenchStatsReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import { cacheStatsResponse, detailedStatsResponse, WorkbenchStatsDetailedReadRequestSchema } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
 import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerProfileSlotInputSchema } from "workbench-shared/workbench/thread/thread-state";
 import {
     WorkbenchThreadIdentityResolutionSchema,
@@ -97,7 +95,7 @@ const METHODS = new Set([
   "project/file/read", "project/file/reset", "project/file/save",
   "questionnaire/respond",
   "search/query",
-  "stats/import/start", "stats/rate-limits/refresh", "stats/read", "stats/read/detailed", "stats/read/efficiency", "stats/read/efficiency/v2",
+  "stats/import/start", "stats/rate-limits/refresh",
   "skills/read",
   "thread/identity/resolve",
 ]);
@@ -237,7 +235,7 @@ export default class WorkbenchDaemonRequestController {
     projects: Pick<WorkbenchProjectCatalogController, "readCatalog" | "readLocations" | "resolveProjectById" | "readDiscoverySettings" | "updateDiscoverySettings">;
     projectSnapshot: Pick<WorkbenchProjectSnapshotController, "readProjectSnapshot" | "handleRequest">;
     search: Pick<WorkbenchSearchController, "search">;
-    stats: Pick<WorkbenchStatsController, "read" | "readDetailed" | "refreshRateLimits" | "startImport">;
+    stats: Pick<WorkbenchStatsController, "observeAccountLimits" | "refreshRateLimits" | "startImport">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
     threadIdentity: { resolve: WorkbenchHarnessController["resolveThreadIdentity"] };
     questionnaireResponses: Pick<WorkbenchQuestionnaireResponseController, "respond">;
@@ -342,7 +340,9 @@ export default class WorkbenchDaemonRequestController {
             result = { data: await provider.configuration.modelContext.read() };
           } else {
             if (!provider.account) throw new InvalidParamsError("The provider does not report account limits.");
-            result = await provider.account.limits.read();
+            const limits = await provider.account.limits.read();
+            this.owners.stats.observeAccountLimits(key, limits);
+            result = limits;
           }
           break;
         }
@@ -489,27 +489,6 @@ export default class WorkbenchDaemonRequestController {
             projectId,
             query: requiredText(params, "query"),
           });
-          break;
-        }
-        case "stats/read":
-        case "stats/read/detailed":
-        case "stats/read/efficiency":
-        case "stats/read/efficiency/v2": {
-          const parsed = (request.method === "stats/read" ? WorkbenchStatsReadRequestSchema : WorkbenchStatsDetailedReadRequestSchema).safeParse(params);
-          if (!parsed.success) throw new InvalidParamsError("Invalid stats request.");
-          if (parsed.data.projectId) {
-            try {
-              parsed.data.projectId = (await this.owners.projects.resolveProjectById(parsed.data.projectId)).id;
-            } catch (error) {
-              throw new InvalidParamsError(error instanceof Error ? error.message : "Unknown project.");
-            }
-          }
-          if (request.method === "stats/read") result = await this.owners.stats.read(parsed.data);
-          else {
-            const detailed = await this.owners.stats.readDetailed(parsed.data);
-            result = request.method === "stats/read/detailed" ? detailedStatsResponse(detailed)
-              : request.method === "stats/read/efficiency" ? cacheStatsResponse(detailed) : detailed;
-          }
           break;
         }
         case "stats/import/start":

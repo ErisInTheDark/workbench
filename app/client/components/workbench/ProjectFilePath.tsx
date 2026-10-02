@@ -34,6 +34,8 @@ type ProjectFilePathProps = ProjectFilePathDisplayOptions & {
   className?: string;
   exists?: boolean;
   interactive?: boolean;
+  /** Off when a Workbench tooltip describes the path instead; the browser's title would cover it. */
+  nativeTitle?: boolean;
   openPath?: string | null;
   path: string;
   projectId?: string | null;
@@ -77,6 +79,7 @@ export default function ProjectFilePath ({
   interactive = false,
   label,
   lineNumber,
+  nativeTitle = true,
   openPath = null,
   path,
   projectId = null,
@@ -116,6 +119,7 @@ export default function ProjectFilePath ({
     projectId,
     targetType,
   });
+  const title = nativeTitle ? display.title : undefined;
   const content = (
     <>
       {display.rootPrefix ? (
@@ -152,7 +156,7 @@ export default function ProjectFilePath ({
           event.stopPropagation();
           open();
         }}
-        title={display.title}
+        title={title}
       >
         {content}
       </button>
@@ -170,7 +174,7 @@ export default function ProjectFilePath ({
       )}
       data-project-file-missing-path={exists ? undefined : "true"}
       data-project-folder-path={exists && targetType === "directory" ? "true" : undefined}
-      title={display.title}
+      title={title}
     >
       {content}
     </span>

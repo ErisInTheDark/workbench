@@ -5,7 +5,6 @@
  * - default CodexStdioBridge: own request translation, transcript recovery, questionnaires, approval transport, and reload state around a stable app-server.
  */
 import type { CodexThreadContextReadResponse, CodexThreadPageResponse } from "workbench-shared/codex/thread-context";
-import { parseTranscriptAssetAddress } from "workbench-shared/workbench/transcript/transcript-asset-address";
 import { randomUUID } from "node:crypto";
 import type { CodexApprovalPort } from "./CodexApprovalAdapter";
 import { summarizeApprovalList } from "./lib/workbench/approval-presentation";
@@ -46,7 +45,7 @@ import type { ToolRequestUserInputResponse } from "workbench-shared/codex/genera
 import type { TurnSteerResponse } from "workbench-shared/codex/generated/app-server/v2/TurnSteerResponse";
 import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
 import type { WorkbenchThreadHydrationRequest } from "./lib/codex/thread-hydration";
-import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
+import type { WorkbenchQuestionnaireHistoryEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 import type { AgentEndpointProjectResolver } from "./lib/workbench/project/agent-endpoint-project";
 import {
   readWorkbenchFileChangeFailureMarker,
@@ -1156,11 +1155,6 @@ export default class CodexStdioBridge {
     log("codex-transcript", `capture recovery completed thread=${threadId} boundary=${recoveryBoundary} turns=${turns.length}`);
   }
 
-  async recordBrowseResultForBrowse(entry: WorkbenchBrowseResultEntry) {
-    this.assertAcceptingWork();
-    await this.recordBrowseResultEntry(entry);
-  }
-
   async steerTurnForBrowse(threadId: string, expectedTurnId: string, input: UserInput[]) {
     this.assertAcceptingWork();
     const dispatch = await this.dispatchRequest({
@@ -1310,11 +1304,6 @@ export default class CodexStdioBridge {
           return {
             id: requestId,
             result: await this.listBrowseResultEntries(message.params),
-          };
-        case "browse/result/record":
-          return {
-            id: requestId,
-            result: await this.recordBrowseResultEntry(message.params),
           };
         case "questionnaire/respond":
           return {
@@ -2731,94 +2720,6 @@ export default class CodexStdioBridge {
       logError("codex-context-usage", "Unable to restore context usage; thread content remains available.");
       return undefined;
     }
-  }
-
-  private async recordBrowseResultEntry(params: unknown) {
-    const record = asRecord(params);
-    const action = asString(record?.action);
-    const actionIndex = asNumber(record?.actionIndex);
-    const assetUrl = asString(record?.assetUrl)?.trim() || null;
-    const detailKind = asString(record?.detailKind)?.trim() || null;
-    const detailLabel = asString(record?.detailLabel)?.trim() || null;
-    const detailText = asString(record?.detailText)?.trim() || null;
-    const durationMs = asNumber(record?.durationMs);
-    const entryKey = asString(record?.entryKey);
-    const recordedAt = asNumber(record?.recordedAt);
-    const session = asString(record?.session)?.trim() || null;
-    const state = asString(record?.state)?.trim() || null;
-    const threadId = asString(record?.threadId);
-    const turnId = asString(record?.turnId);
-    if (
-      !action
-      || actionIndex === null
-      || !entryKey
-      || recordedAt === null
-      || durationMs === null
-      || !state
-      || !threadId
-      || !turnId
-    ) {
-      throw new Error("Missing browse/result/record params.");
-    }
-
-    const entry: WorkbenchBrowseResultEntry = {
-      action: action as WorkbenchBrowseResultEntry["action"],
-      actionIndex,
-      assetUrl,
-      commandItemId: asString(record?.commandItemId) ?? null,
-      detailKind: detailKind as WorkbenchBrowseResultEntry["detailKind"],
-      detailLabel,
-      detailText,
-      durationMs,
-      entryKey,
-      recordedAt,
-      session,
-      state: state as WorkbenchBrowseResultEntry["state"],
-      threadId,
-      turnId,
-    };
-    const asset = this.sqliteTranscriptEnabled
-      ? await this.readSqliteBrowseAsset(threadId, entry.assetUrl)
-      : undefined;
-    let recordingError: unknown = null;
-    await this.captureTranscript("workbench-browse-settlement", async () => {
-      try {
-        await this.persistTranscript(() => this.recordTranscript(
-          [{ kind: "browse", entry: nativeTranscriptEntry(entry), ...(asset ? { asset } : {}) }],
-          { source: "workbench" },
-        ));
-      } catch (error) {
-        if (!(error instanceof CodexTranscriptSqliteRecordingFailure)) recordingError = error;
-        throw error;
-      }
-    });
-    if (recordingError) throw recordingError;
-    this.publishNativeNotification({
-      method: "browse/result/recorded",
-      params: {
-        threadId,
-        turnId,
-      },
-    });
-    return { ok: true };
-  }
-
-  private async readSqliteBrowseAsset(threadId: string, assetUrl: string | null) {
-    if (!assetUrl) return undefined;
-
-    const address = parseTranscriptAssetAddress(assetUrl);
-    if (!address || address.surface !== "api") throw new Error("Browse asset URL is not a Workbench transcript asset.");
-    if (!this.transcriptAssets) throw new Error("Transcript image storage is not configured.");
-    const asset = await this.transcriptAssets.readTranscriptAsset({
-      threadId: address.threadId, assetName: address.assetName, ownerThreadId: threadId,
-    });
-    if (!asset) throw new Error("Browse asset was not found in its thread's SQLite storage.");
-    return {
-      byteLength: asset.byteLength,
-      digest: asset.digest,
-      mimeType: asset.mimeType,
-      storageKey: assetUrl,
-    };
   }
 
   private readQuestionnaireResponse(params: unknown) {

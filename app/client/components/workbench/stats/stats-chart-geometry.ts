@@ -1,33 +1,38 @@
 /*
- * Keywords: SVG, chart geometry, pointer, transforms, scale, gaps.
  * Exports:
- * - chartX/chartY: map sample index and value to view-box coordinates.
+ * - chartX/chartY: map sample index and value to view-box coordinates, optionally above a floor.
  * - chartMaximum: find a nonzero scale without spreading large sample arrays.
- * - chartSegments: split polylines at unavailable values.
+ * - chartSegments: split lines and their filled areas at unavailable values.
  * - chartPointerIndex: invert the SVG screen transform and select the nearest sample.
  */
 export function chartX(index: number, length: number) {
   return length === 1 ? 50 : index / Math.max(1, length - 1) * 100;
 }
 
-export function chartY(value: number, maximum: number) {
-  return 34 - value / maximum * 30;
+/** Values at `minimum` sit on the baseline; a zero-width band falls back to one unit so nothing divides by zero. */
+export function chartY(value: number, maximum: number, minimum = 0) {
+  return 34 - (value - minimum) / (maximum - minimum || 1) * 30;
 }
 
 export function chartMaximum(values: readonly (number | null)[]) {
   return values.reduce<number>((maximum, value) => Math.max(maximum, value ?? 0), 0) || 1;
 }
 
-export function chartSegments(values: readonly (number | null)[], maximum: number) {
-  const result: string[] = [];
-  let current: string[] = [];
+/** Each unbroken run of values becomes a line plus the area beneath it, down to the bottom of the view box. */
+export function chartSegments(values: readonly (number | null)[], maximum: number, minimum = 0) {
+  const result: Array<{ area: string; line: string }> = [];
+  let current: Array<{ x: number; y: number }> = [];
+  const flush = () => {
+    if (!current.length) return;
+    const line = current.map(({ x, y }) => `${x},${y}`).join(" ");
+    result.push({ line, area: `${current[0]!.x},38 ${line} ${current.at(-1)!.x},38` });
+    current = [];
+  };
   values.forEach((value, index) => {
-    if (value === null) {
-      if (current.length) result.push(current.join(" "));
-      current = [];
-    } else current.push(`${chartX(index, values.length)},${chartY(value, maximum)}`);
+    if (value === null) flush();
+    else current.push({ x: chartX(index, values.length), y: chartY(value, maximum, minimum) });
   });
-  if (current.length) result.push(current.join(" "));
+  flush();
   return result;
 }
 

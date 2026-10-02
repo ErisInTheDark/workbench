@@ -4,7 +4,6 @@
 
 import type { CodexThreadPageResponse } from "workbench-shared/codex/thread-context";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { after, before, beforeEach, test } from "node:test";
@@ -16,7 +15,7 @@ import Database from "better-sqlite3";
 import type CodexAppServer from "./CodexAppServer";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { WorkbenchBrowseResultEntry, WorkbenchQuestionnaireHistoryEntry } from "workbench-shared/types";
+import type { WorkbenchQuestionnaireHistoryEntry } from "workbench-shared/types";
 import {
   createWorkbenchFileChangeFailureSystemMessage,
   type WorkbenchFileChangeItem,
@@ -538,17 +537,6 @@ test("bridge admits public identity before structural publication and records th
     for (const pageItem of pageTurn.items) {
       assert.ok(items.itemIdForReference(pageIdentity.threadId, pageIdentity.turnId, fixtureIdentitySchemas.ItemReferenceSchema.parse(pageItem.id)));
     }
-    const bytes = Buffer.from("canonical browse asset");
-    const digest = createHash("sha256").update(bytes).digest("hex");
-    const encodedNative = Buffer.from("thread").toString("base64url");
-    await assetPorts(database).writeTranscriptAsset({ threadId: "thread", bytes, mimeType: "image/png" });
-    const verify = (bridge as unknown as {
-      readSqliteBrowseAsset(threadId: string, url: string): Promise<{ digest: string }>;
-    }).readSqliteBrowseAsset.bind(bridge);
-    for (const urlThreadId of [encodedNative, start.params.threadId]) {
-      assert.equal((await verify("thread", `/api/transcript-assets/codex/${urlThreadId}/${digest}.png`)).digest, digest);
-    }
-    await assert.rejects(verify("thread", `/api/transcript-assets/codex/unrelated/${digest}.png`), /not found/u);
   } finally {
     body.resolve();
     await bridge.disposeImmediately();
@@ -3140,140 +3128,6 @@ test("repeated provider misses report one SQLite capture failure with a bounded 
   }
 });
 
-test("Browse settlement verifies Workbench transcript assets before forwarding their SQLite observation", async () => {
-  const database = databaseFixture();
-  const fixtureIdentities = await recordingIdentities({ database, existingTurn: true });
-  const native = fixtureIdentities.threads.knownNativeBinding("codex", fixtureIdentityValues.NativeThreadId.thread);
-  const threadId = fixtureIdentities.threads.workbenchIdForNative(native);
-  const turnId = fixtureIdentities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn });
-  const [command] = await fixtureIdentities.items.admit([{
-    threadId, sources: [{ turnId, kind: "stable", reference: "command" }],
-  }]);
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-browse-asset-");
-  const root = temporary.path;
-  const observations: object[] = [];
-  const notifications: object[] = [];
-  const bytes = Buffer.from("verified browse image");
-  const digest = createHash("sha256").update(bytes).digest("hex");
-  const encodedThreadId = Buffer.from("thread", "utf8").toString("base64url");
-  const assetUrl = `/api/transcript-assets/codex/${encodedThreadId}/${digest}.png`;
-  await assetPorts(database).writeTranscriptAsset({ threadId: "thread", bytes, mimeType: "image/png" });
-
-  const bridge = new CodexStdioBridge({
-    identities: fixtureIdentities,
-    transcriptAssets: assetPorts(database),
-    appServer: { send() {} } as unknown as CodexAppServer,
-    handleWorkbenchRequest: rejectWorkbenchRequest,
-    onNotification(notification) { notifications.push(notification); },
-    recordSqliteTranscript: async (batch) => {
-      observations.push(...batch);
-    },
-    resolveProjectFromCwd: async () => ({
-      cwd: "C:/repo",
-      project: { id: fixtureIdentityValues.ProjectId.project, kind: "git", root: "C:/repo", rootPath: "C:/repo", roots: [] },
-      root: { id: "root", name: "repo", root: "C:/repo", rootPath: "C:/repo" },
-    }),
-  });
-  const entry: WorkbenchBrowseResultEntry = {
-    action: "screenshot",
-    actionIndex: 0,
-    assetUrl,
-    commandItemId: "command",
-    detailKind: "result",
-    detailLabel: "Screenshot",
-    detailText: null,
-    durationMs: 12,
-    entryKey: "browse-entry",
-    recordedAt: 100,
-    session: "research",
-    state: "completed",
-    threadId: "thread",
-    turnId: "turn",
-  };
-
-  try {
-    await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: bridgeThread([]) } });
-    await bridge.waitForIdle();
-    observations.length = 0;
-    notifications.length = 0;
-    await bridge.recordBrowseResultForBrowse(entry);
-    assert.deepEqual(observations, [{
-      kind: "browse",
-      entry: { ...entry, threadId, turnId, commandItemId: command!.itemId },
-      asset: {
-        byteLength: bytes.byteLength,
-        digest,
-        mimeType: "image/png",
-        storageKey: assetUrl,
-      },
-    }]);
-    assert.deepEqual(notifications, [{
-      method: "browse/result/recorded",
-      params: { threadId, turnId },
-    }]);
-
-    database.prepare("UPDATE transcript_asset_content SET bytes = ? WHERE digest = ?").run(Buffer.from("tampered"), digest);
-    await assert.rejects(
-      bridge.recordBrowseResultForBrowse({ ...entry, entryKey: "tampered" }),
-      /bytes do not match/u,
-    );
-    assert.equal(observations.length, 1);
-    assert.equal(notifications.length, 1);
-  } finally {
-    await bridge.disposeImmediately();
-    await temporary.dispose();
-  }
-});
-
-test("SQLite transcript failure does not block Browse settlement", async (context) => {
-  const diagnostics = captureTestOutput(context, process.stderr, text =>
-    text.startsWith("[codex-transcript] capture failed workbench-browse-settlement:") && text.includes("cause=SQLite transcript failed"));
-  context.after(() => assert.equal(diagnostics.length, 1));
-  const fixtureIdentities = await recordingIdentities({ existingTurn: true });
-  const native = fixtureIdentities.threads.knownNativeBinding("codex", fixtureIdentityValues.NativeThreadId.thread);
-  const threadId = fixtureIdentities.threads.workbenchIdForNative(native);
-  const turnId = fixtureIdentities.threads.workbenchTurnIdForNative({ ...native, nativeTurnId: fixtureIdentityValues.NativeTurnId.turn });
-  await fixtureIdentities.items.admit([{
-    threadId, sources: [{ turnId, kind: "stable", reference: "command" }],
-  }]);
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-browse-sqlite-failure-");
-  const root = temporary.path;
-  const notifications: object[] = [];
-  const bridge = new CodexStdioBridge({
-    identities: fixtureIdentities,
-    appServer: { send() {} } as unknown as CodexAppServer,
-    handleWorkbenchRequest: rejectWorkbenchRequest,
-    onNotification(notification) { notifications.push(notification); },
-    recordSqliteTranscript: async () => { throw new Error("SQLite transcript failed"); },
-    resolveProjectFromCwd: async () => null,
-  });
-  try {
-    await bridge.recordBrowseResultForBrowse({
-      action: "click",
-      actionIndex: 0,
-      assetUrl: null,
-      commandItemId: "command",
-      detailKind: "result",
-      detailLabel: "Clicked",
-      detailText: "button",
-      durationMs: 12,
-      entryKey: "browse-entry",
-      recordedAt: 100,
-      session: "research",
-      state: "completed",
-      threadId: "thread",
-      turnId: "turn",
-    });
-    assert.deepEqual(notifications, [{
-      method: "browse/result/recorded",
-      params: { threadId, turnId },
-    }]);
-  } finally {
-    await bridge.disposeImmediately();
-    await temporary.dispose();
-  }
-});
-
 test("live transcript recording and reload use only SQL and preserve image assets", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-live-transcript-");
   const root = temporary.path;
@@ -3343,11 +3197,6 @@ test("live transcript recording and reload use only SQL and preserve image asset
     type: "agentMessage",
   };
   const liveTurn = bridgeThread().turns[0]!;
-  const assetBytes = Buffer.from("live browse image");
-  const assetDigest = createHash("sha256").update(assetBytes).digest("hex");
-  const encodedThreadId = Buffer.from("thread", "utf8").toString("base64url");
-  const assetUrl = `/api/transcript-assets/codex/${encodedThreadId}/${assetDigest}.png`;
-  await assetPorts(database).writeTranscriptAsset({ threadId: "thread", bytes: assetBytes, mimeType: "image/png" });
 
   try {
     bridge = createBridge();
@@ -3464,23 +3313,6 @@ test("live transcript recording and reload use only SQL and preserve image asset
         threadId: "thread",
       },
     });
-    await bridge.recordBrowseResultForBrowse({
-      action: "screenshot",
-      actionIndex: 0,
-      assetUrl,
-      commandItemId: "command",
-      detailKind: "result",
-      detailLabel: "Screenshot",
-      detailText: null,
-      durationMs: 12,
-      entryKey: "browse-entry",
-      recordedAt: 100,
-      session: "research",
-      state: "completed",
-      threadId: "thread",
-      turnId: "turn",
-    });
-
     const reloadState = await bridge.detachForReload();
     assert.equal(reloadState.transcriptSteers?.size, 1);
     bridge = createBridge(reloadState);
@@ -3532,11 +3364,6 @@ test("live transcript recording and reload use only SQL and preserve image asset
       && observation.entry.clientUserMessageId === "interrupted"
       && observation.entry.status === "interrupted"
     )));
-    assert.ok(observations.some((observation) => (
-      observation.kind === "browse"
-      && observation.entry.entryKey === "browse-entry"
-      && observation.asset?.digest === assetDigest
-    )));
     assert.equal(sqliteBatches.some((batch) => (
       batch.length === 1 && batch[0]?.kind === "thread"
     )), true);
@@ -3566,21 +3393,15 @@ test("live transcript recording and reload use only SQL and preserve image asset
     });
     for (const [event, , original] of publications.filter(([event]) => (
       event.method === "questionnaire/requested" || event.method === "questionnaire/resolved"
-      || event.method === "browse/result/recorded" || event.method === "turn/completed"
+      || event.method === "turn/completed"
     ))) {
       assert.equal((event.params as { threadId: string }).threadId, publicThreadId);
       assert.equal((original.params as { threadId: string }).threadId, "thread");
     }
-    assert.ok(publications.some(([event]) => event.method === "browse/result/recorded"));
     assert.ok(rootForReference(snapshot, "message"));
     assert.ok(rootForReference(snapshot, "dynamic-call"));
     assert.ok(rootForReference(snapshot, "command"));
     assert.equal(snapshot.rows.threadItemInteractions.length, 1);
-    assert.equal(snapshot.rows.threadBrowseEntries.length, 1);
-    assert.deepEqual(snapshot.rows.transcriptAssets.map(({ digest }) => digest), [assetDigest]);
-    assert.deepEqual(Buffer.from((await assetPorts(database).readTranscriptAsset({
-      threadId: encodedThreadId, assetName: `${assetDigest}.png`,
-    }))!.bytes), assetBytes);
     const messageItemId = rootForReference(snapshot, "message")?.id;
     assert.ok(messageItemId);
     assert.deepEqual(

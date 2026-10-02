@@ -52,6 +52,33 @@ test("reused names and rename cycles never combine different file generations", 
   assert.deepEqual(await new GitClaimRenameReader().read(repository, await repository.currentHead(), new AbortController().signal), []);
 });
 
+test("bounded history ignores renames before the boundary and still rejects names reused after it", async (context) => {
+  const fixture = await fixtures.copy(THREAD_GIT_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  const commit = async (message: string, date: string) => {
+    await repository.run(["commit", "-m", message], { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date });
+  };
+  await repository.run(["mv", "nested/one.txt", "early.txt"]);
+  await commit("before the first claim", "2030-01-01T00:00:00Z");
+  await repository.run(["mv", "early.txt", "late.txt"]);
+  await commit("after the first claim", "2030-02-01T00:00:00Z");
+  await repository.run(["mv", "nested/two.txt", "moved-two.txt"]);
+  await commit("move two", "2030-02-02T00:00:00Z");
+  await fs.writeFile(path.join(fixture.root, "nested/two.txt"), "a new generation\n");
+  await repository.run(["add", "nested/two.txt"]);
+  await commit("reuse two", "2030-02-03T00:00:00Z");
+  const head = await repository.currentHead();
+  const reader = new GitClaimRenameReader();
+  assert.deepEqual(await reader.read(repository, head, new AbortController().signal, Date.UTC(2030, 0, 15)), [
+    { from: "early.txt", to: "late.txt" },
+  ]);
+  assert.deepEqual(await reader.read(repository, head, new AbortController().signal), [
+    { from: "early.txt", to: "late.txt" },
+    { from: "nested/one.txt", to: "late.txt" },
+  ]);
+});
+
 test("merge renames are read relative to the first parent", async (context) => {
   const fixture = await fixtures.copy(THREAD_GIT_BASE_FIXTURE);
   context.after(fixture.dispose);

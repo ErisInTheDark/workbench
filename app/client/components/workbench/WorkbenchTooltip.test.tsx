@@ -63,6 +63,16 @@ test("tooltip position centers beside its trigger and clamps to viewport gutters
   assert.equal(bottomClamped.top, 108);
 });
 
+test("top placement centres above its trigger, clamps inside the viewport, and drops below only when roomier", () => {
+  const above = { placement: "top" as const, tooltipHeight: 60, tooltipWidth: 100, viewportHeight: 500, viewportWidth: 900 };
+  assert.deepEqual(getWorkbenchTooltipPosition({ ...above, triggerRect }), { left: 150, maxHeight: 80, maxWidth: 876, top: 32 });
+  const nearEdge = { ...triggerRect, left: 850, right: 890 };
+  assert.equal(getWorkbenchTooltipPosition({ ...above, triggerRect: nearEdge }).left, 788, "the right gutter holds a tooltip near the edge");
+  const nearTop = { ...triggerRect, top: 20, bottom: 60 };
+  const below = getWorkbenchTooltipPosition({ ...above, triggerRect: nearTop });
+  assert.deepEqual([below.top, below.maxHeight], [68, 420], "too little room above opens below");
+});
+
 test("pointer proximity includes the tooltip surface only for interactive tooltips", () => {
   const tooltipRect = {
     bottom: 220,

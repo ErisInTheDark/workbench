@@ -1,113 +1,79 @@
 /*
  * Exports:
- * - default WorkbenchCacheEfficiency: present independent cache percentages and lowest-cache thread links.
+ * - default WorkbenchCacheEfficiency: input cache hit rate per period, and the large threads with the lowest hit rates.
  */
 import type { MouseEvent } from "react";
 import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
-import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import { hasStatsCategoryCosts } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
+import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
+import WorkbenchThreadHoverTooltip from "../WorkbenchThreadHoverTooltip";
 import WorkbenchStatsChart from "./WorkbenchStatsChart";
-import { compactNumber } from "./stats-formatters";
-import { STATS_TOKEN_SERIES } from "./stats-token-series";
+import WorkbenchStatsShareList from "./WorkbenchStatsShareList";
+import { compactNumber, formatPercent } from "./stats-formatters";
+import { statsThreadIdentity } from "./stats-thread-identity";
 
-const inputCategories = STATS_TOKEN_SERIES.filter(({ key }) => key !== "output");
-const cacheCategory = STATS_TOKEN_SERIES.find(({ key }) => key === "cache")!;
+/** Mirrors the daemon cut so older daemons that still send small threads read the same. */
+const MINIMUM_UNCACHED_FOR_HIT_RATE = 500_000;
 
-export default function WorkbenchCacheEfficiency({
-  global,
-  onNavigateThread,
-  projectNamesById,
-  stats,
-}: {
-  global: boolean;
+export default function WorkbenchCacheEfficiency({ onNavigateThread, projectName, showProjects, stats }: {
   onNavigateThread: (event: MouseEvent<HTMLAnchorElement>, projectId: string, threadId: string) => void;
-  projectNamesById: ReadonlyMap<string, string>;
-  stats: WorkbenchStatsResponse | null;
+  projectName: (projectId: string) => string;
+  showProjects: boolean;
+  stats: Pick<WorkbenchStatsResponse, "cacheEfficiency"> | null;
 }) {
-  const cache = stats && hasStatsCategoryCosts(stats) ? stats.cacheEfficiency : undefined;
+  const cache = stats?.cacheEfficiency;
   const projectHref = useWorkbenchProjectNavigation();
+  const misses = (cache?.worstThreads ?? [])
+    .map((thread) => ({ ...thread, uncached: thread.inputTokens - thread.cachedInputTokens }))
+    .filter(({ uncached }) => uncached >= MINIMUM_UNCACHED_FOR_HIT_RATE);
+  const hitRate = cache?.totals.cacheHitPercent ?? null;
+  const rates = cache?.buckets.map((bucket) => bucket.cacheHitPercent) ?? [];
+  // The worst period sits on the baseline; a whole-percent floor below 100 keeps a flat line visible.
+  const floor = Math.min(99, Math.floor(Math.min(...rates.filter((rate) => rate !== null))));
   return (
     <section aria-labelledby="cache-efficiency-heading" className="space-y-3 [--hue-chroma:50%]">
-      <div className="space-y-1">
-        <h2 className="m-0 text-[1rem] font-semibold text-text" id="cache-efficiency-heading">Input cache efficiency</h2>
-        <p className="m-0 text-[0.75rem] text-fg/muted">
-          Cache % is cached input as a percentage of all recorded input. Cache writes are not hits.
-          Token-category toggles do not change these percentages.
-        </p>
-      </div>
-      {!cache ? (
-        <p className="m-0 text-[0.8rem] text-fg/muted">
-          {stats ? "Independent cache statistics are unavailable from this server version." : "Waiting for cache statistics."}
-        </p>
-      ) : cache.totals.cacheHitPercent === null ? (
-        <p className="m-0 text-[0.8rem] text-fg/muted">No recorded input for these filters.</p>
+      <h2 className="m-0 text-[1rem] font-semibold text-text" id="cache-efficiency-heading">
+        Input caching
+        {hitRate !== null ? <span className="ml-2 text-[0.82rem] font-medium text-hue-300">{formatPercent(hitRate)} hit rate</span> : null}
+      </h2>
+      {!cache || hitRate === null ? (
+        <p className="m-0 text-[0.8rem] text-fg/muted">{stats ? "No recorded input for these filters." : "-"}</p>
       ) : (
         <div className="grid gap-8 lg:grid-cols-2">
-          <div className="min-w-0">
-            <WorkbenchStatsChart
-              buckets={cache.buckets.map((bucket) => bucket.startedAt)}
-              fixedMaximum={100}
-              formatValue={(value) => `${value.toFixed(1)}%`}
-              series={[{
-                colourClassName: cacheCategory.colourClassName,
-                label: "Cache %",
-                values: cache.buckets.map((bucket) => bucket.cacheHitPercent),
-              }]}
-              title="Cache % over time"
-            />
-            <p className="m-0 text-[0.7rem] text-fg/muted">
-              Fixed 0-100% scale. Gaps mean no recorded input. Overall cache % is weighted by input volume.
-            </p>
-          </div>
-          <div className="min-w-0 space-y-3">
-            <h3 className="m-0 text-[0.78rem] font-semibold text-fg/muted">Lowest cache % threads</h3>
-            <ol className="m-0 space-y-3 p-0">
-              {cache.worstThreads.map((thread) => {
-                const tokens = thread.cacheWriteInputTokens === undefined ? null : {
-                  all: thread.inputTokens,
-                  input: thread.inputTokens,
-                  cachedInput: thread.cachedInputTokens,
-                  cacheWriteInput: thread.cacheWriteInputTokens,
-                  uncachedInput: thread.inputTokens - thread.cachedInputTokens - thread.cacheWriteInputTokens,
-                  output: 0,
-                };
-                return (
-                  <li className="flex min-w-0 items-baseline justify-between gap-3" key={thread.threadId}>
+          <WorkbenchStatsChart
+            appearance="area"
+            buckets={cache.buckets.map((bucket) => bucket.startedAt)}
+            fixedMaximum={100}
+            formatValue={formatPercent}
+            minimum={Number.isFinite(floor) ? floor : 0}
+            series={[{ colourClassName: "text-hue-300", label: "Hit rate", values: rates }]}
+            title="Hit rate per period"
+          />
+          <div className="min-w-0 space-y-2">
+            <h3 className="m-0 px-2 text-[0.74rem] font-semibold text-fg/muted">Lowest hit rates · threads with 500K+ uncached input</h3>
+            <WorkbenchStatsShareList
+              // Opaque, so the red uncached track never tints the hit share.
+              barClassName="bg-[color-mix(in_srgb,var(--text)_22%,var(--bg))]"
+              empty="No large threads missed the cache."
+              rows={misses.map((thread) => ({
+                key: `${thread.projectId}:${thread.threadId}`,
+                label: (
+                  <WorkbenchThreadHoverTooltip thread={statsThreadIdentity(thread)} title={thread.title || thread.threadId}>
                     <a
-                      className="min-w-0 truncate rounded-sm text-[0.8rem] font-medium text-text hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                      className="rounded-sm hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                       href={projectHref(createThreadRoute(thread.projectId, thread.threadId))}
                       onClick={(event) => onNavigateThread(event, thread.projectId, thread.threadId)}
-                      title={thread.title || thread.threadId}
                     >
                       {thread.title || thread.threadId}
-                      {global ? (
-                        <span className="ml-2 font-normal text-fg/muted">{projectNamesById.get(thread.projectId) ?? thread.projectId}</span>
-                      ) : null}
                     </a>
-                    <span className="max-w-[65%] shrink-0 text-right text-[0.72rem] tabular-nums text-fg/muted">
-                      <span className={`font-semibold ${cacheCategory.colourClassName}`}>{thread.cacheHitPercent.toFixed(1)}%</span>
-                      {tokens ? (
-                        <span className="flex flex-wrap justify-end gap-x-2 gap-y-1 text-[0.68rem]">
-                          {inputCategories.map(({ key, label, colourClassName, Icon, count }) => (
-                            <span className={`inline-flex items-center gap-1 font-bold ${colourClassName}`} key={key}>
-                              <Icon className="shrink-0" size={12} />{label} {compactNumber(count(tokens))}
-                            </span>
-                          ))}
-                        </span>
-                      ) : null}
-                    </span>
-                  </li>
-                );
-              })}
-            </ol>
-            <p className="m-0 text-[0.7rem] text-fg/muted">
-              Lowest first within the selected filters. New or small threads can have low cache % without wasting much input.
-              {" "}Cache includes cache writes, but cache % counts reads only.
-            </p>
-            {cache.worstThreads.some((thread) => thread.cacheWriteInputTokens === undefined) ? (
-              <p className="m-0 text-[0.7rem] text-fg/muted">Category counts are unavailable from this server version.</p>
-            ) : null}
+                  </WorkbenchThreadHoverTooltip>
+                ),
+                detail: `${showProjects ? `${projectName(thread.projectId)} · ` : ""}${compactNumber(thread.uncached)} uncached`,
+                share: thread.cacheHitPercent / 100,
+                value: formatPercent(thread.cacheHitPercent),
+              }))}
+              trackClassName="bg-hue-25 [--hue-chroma:65%]"
+            />
           </div>
         </div>
       )}

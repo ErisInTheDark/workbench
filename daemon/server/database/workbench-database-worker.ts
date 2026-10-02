@@ -455,9 +455,9 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     post({ id: request.id, type: "statsResult", result: statsRepository.read(request.request, request.now, request.renames) });
     return;
   }
-  if (request.type === "readStatsDetailed") {
+  if (request.type === "readStatsClaimedRoots") {
     if (!statsRepository) throw new Error("Workbench stats repository is not initialized");
-    post({ id: request.id, type: "statsDetailedResult", result: statsRepository.readDetailed(request.request, request.now, request.renames) });
+    post({ id: request.id, type: "statsClaimedRoots", roots: statsRepository.claimedRoots(request.projectIds, request.range, request.now) });
     return;
   }
   if (request.type === "readClaimStats") {

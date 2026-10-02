@@ -4,6 +4,7 @@
  * - StatsCacheEfficiencySchema/StatsCacheEfficiency: complete-input cache aggregates, independent of billing-category selection.
  */
 import { z } from "zod";
+import { ProviderKeySchema } from "../provider/provider-key.ts";
 
 const tokens = z.number().finite().nonnegative();
 const cacheTotals = z.object({
@@ -19,6 +20,8 @@ export const StatsCacheEfficiencySchema = z.object({
     cacheWriteInputTokens: tokens.optional(),
     inputTokens: tokens.positive(),
     cacheHitPercent: z.number().finite().min(0).max(100),
+    /** The provider the thread started on, which identifies it alongside its id. */
+    harness: ProviderKeySchema.nullable().default(null),
     projectId: z.string().min(1),
     threadId: z.string().min(1),
     title: z.string().max(500),

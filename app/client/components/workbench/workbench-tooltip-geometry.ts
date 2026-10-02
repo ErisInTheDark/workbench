@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - isWorkbenchTooltipPointerSupported: identify pointer input that can intentionally activate a hover tooltip. Keywords: tooltip, pointer, mouse, touch.
- * - getWorkbenchTooltipPosition: center a right-side tooltip and clamp it inside vertical viewport gutters. Keywords: tooltip, portal, position, viewport.
+ * - WorkbenchTooltipPlacement: which side of its trigger a tooltip opens on.
+ * - getWorkbenchTooltipPosition: place a tooltip beside (right) or above its trigger, clamped inside viewport gutters.
  * - isPointWithinWorkbenchTooltipArea: test trigger and optional interactive-surface pointer proximity. Keywords: tooltip, hover, proximity, interaction.
  */
 
@@ -33,21 +34,44 @@ export function isPointWithinWorkbenchTooltipArea(
     || Boolean(interactive && tooltipRect && pointWithinExpandedRect(x, y, tooltipRect, hoverDistancePx));
 }
 
+export type WorkbenchTooltipPlacement = "right" | "top";
+
 export function getWorkbenchTooltipPosition({
   anchorGapPx = TOOLTIP_ANCHOR_GAP_PX,
+  placement = "right",
   tooltipHeight,
+  tooltipWidth = 0,
   triggerRect,
   viewportGutterPx = TOOLTIP_VIEWPORT_GUTTER_PX,
   viewportHeight,
   viewportWidth,
 }: {
   anchorGapPx?: number;
+  placement?: WorkbenchTooltipPlacement;
   tooltipHeight: number;
+  /** Only top placement centres on the measured width. */
+  tooltipWidth?: number;
   triggerRect: TooltipRect;
   viewportGutterPx?: number;
   viewportHeight: number;
   viewportWidth: number;
 }) {
+  if (placement === "top") {
+    const width = Math.max(tooltipWidth, 0);
+    const above = Math.max(0, triggerRect.top - anchorGapPx - viewportGutterPx);
+    const below = Math.max(0, viewportHeight - triggerRect.bottom - anchorGapPx - viewportGutterPx);
+    const opensAbove = tooltipHeight <= above || above >= below;
+    const maxHeight = opensAbove ? above : below;
+    const centred = triggerRect.left + (triggerRect.width - width) / 2;
+    return {
+      left: Math.max(viewportGutterPx, Math.min(centred, viewportWidth - width - viewportGutterPx)),
+      maxHeight,
+      maxWidth: Math.max(0, viewportWidth - viewportGutterPx * 2),
+      top: opensAbove
+        ? triggerRect.top - anchorGapPx - Math.min(Math.max(tooltipHeight, 0), maxHeight)
+        : triggerRect.bottom + anchorGapPx,
+    };
+  }
   const left = triggerRect.right + anchorGapPx;
   const maxHeight = Math.max(0, viewportHeight - viewportGutterPx * 2);
   const measuredHeight = Math.min(Math.max(tooltipHeight, 0), maxHeight);

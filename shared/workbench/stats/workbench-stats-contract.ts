@@ -1,21 +1,25 @@
 /*
  * Exports:
- * - WorkbenchStatsRangeSchema/WorkbenchStatsRange: bounded selectable stats windows. Keywords: stats, range, contract.
- * - WorkbenchStatsReadRequestSchema/WorkbenchStatsReadRequest: scoped and filtered stats request. Keywords: stats, request, filters.
- * - WorkbenchStatsImportProgressSchema/WorkbenchStatsImportProgress: split usage and Git history import progress. Keywords: stats, import, progress.
- * - WorkbenchStatsHydrationResultSchema/WorkbenchStatsHydrationResult: one harness hydration result. Keywords: stats, import, harness.
- * - WORKBENCH_STATS_IMPORT_UPDATED_METHOD: pushed import progress notification method. Keywords: stats, websocket, progress.
- * - WorkbenchStatsResponseSchema/WorkbenchStatsResponse: normalized token, cost, driver, limit, and claim aggregates. Keywords: stats, usage, claims.
- * - StatsResponseV2Schema: legacy wire shape shared with detailed stats.
+ * - WORKBENCH_STATS_IMPORT_UPDATED_METHOD: pushed import progress notification method.
+ * - WorkbenchStatsImportProgressSchema/WorkbenchStatsImportProgress: split usage and Git history import progress.
+ * - EMPTY_WORKBENCH_STATS_IMPORT_PROGRESS: idle progress before any import ran.
+ * - WorkbenchStatsHydrationResultSchema/WorkbenchStatsHydrationResult: one harness hydration result.
+ * - WorkbenchStatsRangeSchema/WorkbenchStatsRange: bounded selectable stats windows.
+ * - STATS_TOKEN_TYPES/StatsTokenType: independently selectable billing categories.
+ * - WorkbenchStatsReadRequestSchema/WorkbenchStatsReadRequest: project-scoped, filtered stats request.
+ * - WorkbenchStatsResponseSchema/WorkbenchStatsResponse: tokens, priced cost, breakdowns, limits, and claim traffic for one scope.
  * - statsRangeShape: shared UTC day/week window boundaries.
+ * - statsPeriodShape: a range's buckets narrowed to a selected period.
  */
 import { z } from "zod";
+import { ProviderKeySchema as harness } from "../provider/provider-key.ts";
+import { StatsCacheEfficiencySchema } from "./workbench-stats-cache-contract.ts";
 
 const finiteNonNegative = z.number().finite().nonnegative();
 const timestamp = z.number().finite().nonnegative();
 const boundedText = z.string().max(500);
 const count = z.number().int().nonnegative();
-import { ProviderKeySchema as harness } from "../provider/provider-key.ts";
+const modelName = z.string().min(1).max(200);
 const MAX_GRAPH_BUCKETS = 90;
 
 export const WORKBENCH_STATS_IMPORT_UPDATED_METHOD = "workbench/stats/import/updated";
@@ -28,70 +32,24 @@ const ImportSourceProgressSchema = z.object({
   unavailable: count,
 }).strict();
 
-const StatsImportFailureSchema = z.object({
-  harness: z.string().min(1).nullable(),
-  message: boundedText,
-  source: z.enum(["claims", "usage"]),
-  subject: z.string().min(1).max(2_000),
-}).strict();
-
-const StatsImportProgressV2Schema = z.object({
+export const WorkbenchStatsImportProgressSchema = z.object({
   claims: ImportSourceProgressSchema,
   percent: finiteNonNegative.max(100),
-  recentFailures: z.array(StatsImportFailureSchema).max(20),
+  recentFailures: z.array(z.object({
+    harness: z.string().min(1).nullable(),
+    message: boundedText,
+    source: z.enum(["claims", "usage"]),
+    subject: z.string().min(1).max(2_000),
+  }).strict()).max(20),
   revision: count,
   state: z.enum(["idle", "running", "complete"]),
   unsupportedClaimCheckpoints: count,
   usage: ImportSourceProgressSchema,
   version: z.literal(2),
 }).strict();
+export type WorkbenchStatsImportProgress = z.infer<typeof WorkbenchStatsImportProgressSchema>;
 
-const LegacyImportProgressSchema = z.object({
-  completedThreads: count,
-  failedThreads: count,
-  percent: finiteNonNegative.max(100),
-  processedThreads: count,
-  recentFailures: z.array(z.object({
-    harness: z.string().min(1),
-    message: boundedText,
-    threadId: z.string().min(1),
-  }).strict()).max(20),
-  revision: count,
-  state: z.enum(["idle", "running", "complete"]),
-  totalThreads: count,
-  unavailableThreads: count,
-}).strict();
-
-function emptyImportSource() {
-  return { completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 };
-}
-
-export const WorkbenchStatsImportProgressSchema = z.union([
-  StatsImportProgressV2Schema,
-  LegacyImportProgressSchema.transform((legacy) => ({
-    claims: emptyImportSource(),
-    percent: legacy.percent,
-    recentFailures: legacy.recentFailures.map((failure) => ({
-      harness: failure.harness,
-      message: failure.message,
-      source: "usage" as const,
-      subject: failure.threadId,
-    })),
-    revision: legacy.revision,
-    state: legacy.state,
-    unsupportedClaimCheckpoints: 0,
-    usage: {
-      completed: legacy.completedThreads,
-      failed: legacy.failedThreads,
-      processed: legacy.processedThreads,
-      total: legacy.totalThreads,
-      unavailable: legacy.unavailableThreads,
-    },
-    version: 2 as const,
-  })),
-]);
-export type WorkbenchStatsImportProgress = z.infer<typeof StatsImportProgressV2Schema>;
-
+const emptyImportSource = () => ({ completed: 0, failed: 0, processed: 0, total: 0, unavailable: 0 });
 export const EMPTY_WORKBENCH_STATS_IMPORT_PROGRESS: WorkbenchStatsImportProgress = {
   claims: emptyImportSource(),
   percent: 100,
@@ -111,11 +69,27 @@ export type WorkbenchStatsHydrationResult = z.infer<typeof WorkbenchStatsHydrati
 export const WorkbenchStatsRangeSchema = z.enum(["7d", "14d", "30d", "90d", "365d"]);
 export type WorkbenchStatsRange = z.infer<typeof WorkbenchStatsRangeSchema>;
 
+export const STATS_TOKEN_TYPES = ["input", "cacheRead", "cacheWrite", "output"] as const;
+export type StatsTokenType = typeof STATS_TOKEN_TYPES[number];
+
+/** Older browsers sent one combined "cache" category; it now means both cache reads and writes. */
+const StatsTokenTypesSchema = z.preprocess(
+  (value) => Array.isArray(value) ? [...new Set(value.flatMap((type) => type === "cache" ? ["cacheRead", "cacheWrite"] : [type]))] : value,
+  z.array(z.enum(STATS_TOKEN_TYPES)).max(STATS_TOKEN_TYPES.length),
+);
+
 export const WorkbenchStatsReadRequestSchema = z.object({
   model: z.string().trim().min(1).max(200).nullable().default(null),
-  projectId: z.string().min(1).nullable(),
+  /**
+   * Narrows every figure to the buckets starting between these two bucket starts, inclusive.
+   * Null reads the whole range.
+   */
+  period: z.object({ from: timestamp, to: timestamp }).strict().refine(({ from, to }) => from <= to).nullable().default(null),
+  /** Null reads every project on the daemon; an empty list reads nothing. */
+  projectIds: z.array(z.string().min(1)).max(500).nullable(),
   provider: harness.nullable().default(null),
   range: WorkbenchStatsRangeSchema,
+  tokenTypes: StatsTokenTypesSchema.default(() => [...STATS_TOKEN_TYPES]),
 }).strict();
 export type WorkbenchStatsReadRequest = z.input<typeof WorkbenchStatsReadRequestSchema>;
 
@@ -127,32 +101,50 @@ const TokenTotalsSchema = z.object({
   output: finiteNonNegative,
   uncachedInput: finiteNonNegative,
 }).strict();
-const TokenBucketSchema = TokenTotalsSchema.extend({ startedAt: timestamp }).strict();
-const CostBucketSchema = z.object({ startedAt: timestamp, totalUsd: finiteNonNegative }).strict();
-const CostBasisSchema = z.object({
-  defaultModelTokens: finiteNonNegative,
-  exactModelTokens: finiteNonNegative,
-  projectInferredModelTokens: finiteNonNegative,
-  threadInferredModelTokens: finiteNonNegative,
+const CategoryCostsSchema = z.object({
+  input: finiteNonNegative, cacheRead: finiteNonNegative, cacheWrite: finiteNonNegative, output: finiteNonNegative,
 }).strict();
 const RateWindowSchema = z.object({
   durationMinutes: finiteNonNegative.nullable(),
   resetsAt: timestamp.nullable(),
   usedPercent: finiteNonNegative.max(100),
 }).strict();
+/** Unpriced tokens count toward token totals but never toward any cost. */
+const UsageShareSchema = {
+  costUsd: finiteNonNegative,
+  threadCount: count,
+  tokens: finiteNonNegative,
+  unpricedTokens: finiteNonNegative,
+};
 
-export const StatsResponseV2Schema = z.object({
+export const WorkbenchStatsResponseSchema = z.object({
   bucketUnit: z.enum(["day", "week"]),
+  cacheEfficiency: StatsCacheEfficiencySchema,
   claimHotspots: z.array(z.object({
     path: z.string().min(1).max(2_000),
     projectId: z.string().min(1),
     rootId: z.string().min(1),
     threadCount: count,
+    /** Claiming threads, largest lifetime token use first. */
+    threads: z.array(z.object({
+      harness: harness.nullable().default(null),
+      /** Null for provider threads Workbench cannot open. */
+      threadId: z.string().min(1).nullable().default(null),
+      title: z.string().max(500).nullable(),
+      tokens: finiteNonNegative,
+    }).strict()).max(12).default([]),
   }).strict()).max(20),
   cost: z.object({
-    basis: CostBasisSchema,
-    buckets: z.array(CostBucketSchema).max(MAX_GRAPH_BUCKETS),
+    basis: z.object({
+      exactModelTokens: finiteNonNegative,
+      projectInferredModelTokens: finiteNonNegative,
+      threadInferredModelTokens: finiteNonNegative,
+      unpricedTokens: finiteNonNegative,
+    }).strict(),
+    buckets: z.array(z.object({ byTokenType: CategoryCostsSchema, startedAt: timestamp, totalUsd: finiteNonNegative }).strict()).max(MAX_GRAPH_BUCKETS),
+    byTokenType: CategoryCostsSchema,
     totalUsd: finiteNonNegative,
+    unpricedModels: z.array(z.object({ model: modelName.nullable(), provider: harness, tokens: finiteNonNegative }).strict()).max(50),
   }).strict(),
   failures: z.array(z.object({
     harness: z.string().min(1).nullable(),
@@ -160,18 +152,19 @@ export const StatsResponseV2Schema = z.object({
     source: z.enum(["capture", "refresh"]),
   }).strict()).max(20),
   generatedAt: timestamp,
-  historyImport: WorkbenchStatsImportProgressSchema.default(() => ({ ...EMPTY_WORKBENCH_STATS_IMPORT_PROGRESS })),
+  historyImport: WorkbenchStatsImportProgressSchema,
   models: z.array(z.object({
-    costUsd: finiteNonNegative,
-    defaultModelTokens: finiteNonNegative,
+    ...UsageShareSchema,
     inferredModelTokens: finiteNonNegative,
-    model: z.string().min(1).max(200),
+    model: modelName.nullable(),
     provider: harness,
-    threadCount: count,
-    tokens: finiteNonNegative,
   }).strict()).max(100),
+  previous: z.object({ costUsd: finiteNonNegative, threadCount: count, tokens: finiteNonNegative, turnCount: count }).strict(),
   pricingCatalogDate: z.iso.date(),
-  projectId: z.string().min(1).nullable(),
+  projectIds: z.array(z.string().min(1)).nullable(),
+  projects: z.array(z.object({ ...UsageShareSchema, projectId: z.string().min(1) }).strict()).max(100),
+  providers: z.array(z.object({ ...UsageShareSchema, provider: harness }).strict()).max(10),
+  range: WorkbenchStatsRangeSchema,
   rateLimits: z.array(z.object({
     harness,
     limitId: z.string().min(1),
@@ -180,126 +173,47 @@ export const StatsResponseV2Schema = z.object({
       observedAt: timestamp,
       primary: RateWindowSchema.nullable(),
       secondary: RateWindowSchema.nullable(),
-      tertiary: RateWindowSchema.nullable().optional(),
+      tertiary: RateWindowSchema.nullable(),
     }).strict()).max(2_000),
   }).strict()).max(100),
-  range: WorkbenchStatsRangeSchema,
   startedAt: timestamp,
   summary: z.object({
-    cacheHitPercent: finiteNonNegative.max(100),
+    buckets: z.array(z.object({ startedAt: timestamp, threadCount: count, turnCount: count }).strict()).max(MAX_GRAPH_BUCKETS).default([]),
     threadCount: count,
     turnCount: count,
   }).strict(),
   tokens: z.object({
-    buckets: z.array(TokenBucketSchema).max(MAX_GRAPH_BUCKETS),
+    buckets: z.array(TokenTotalsSchema.extend({ startedAt: timestamp }).strict()).max(MAX_GRAPH_BUCKETS),
     totals: TokenTotalsSchema,
   }).strict(),
   topThreads: z.array(z.object({
     costUsd: finiteNonNegative,
-    models: z.array(z.string().min(1).max(200)).max(20),
+    tokens: finiteNonNegative,
+    unpricedTokens: finiteNonNegative,
+    models: z.array(modelName).max(20),
+    /** Per-model split of this thread's usage, largest first. */
+    modelShares: z.array(z.object({
+      costUsd: finiteNonNegative,
+      model: modelName.nullable(),
+      provider: harness,
+      tokens: finiteNonNegative,
+      unpricedTokens: finiteNonNegative,
+    }).strict()).max(20).default([]),
+    /** The provider the thread started on, which identifies it alongside its id. */
+    harness: harness.nullable().default(null),
     projectId: z.string().min(1),
-    providers: z.array(harness).max(3),
+    providers: z.array(harness).max(10),
     sharePercent: finiteNonNegative.max(100),
     threadId: z.string().min(1),
     title: z.string().max(500),
-    tokens: finiteNonNegative,
   }).strict()).max(12),
   usageFilters: z.object({
-    models: z.array(z.string().min(1).max(200)).max(100),
-    providers: z.array(harness).max(3),
+    models: z.array(modelName).max(100),
+    providers: z.array(harness).max(10),
   }).strict(),
-  version: z.literal(2),
+  version: z.literal(3),
 }).strict();
-
-const LegacyTokenTotalsSchema = z.object({
-  all: finiteNonNegative,
-  cachedInput: finiteNonNegative,
-  input: finiteNonNegative,
-  output: finiteNonNegative,
-}).strict();
-const LegacyStatsResponseSchema = z.object({
-  bucketUnit: z.enum(["day", "week"]),
-  claimHotspots: z.array(z.object({
-    buckets: z.array(z.object({ busyMs: finiteNonNegative, startedAt: timestamp }).strict()).max(MAX_GRAPH_BUCKETS),
-    busyMs: finiteNonNegative,
-    busyPercent: finiteNonNegative.max(100),
-    claimCount: count,
-    claimedNow: z.boolean(),
-    path: z.string().min(1).max(2_000),
-    projectId: z.string().min(1),
-    rootId: z.string().min(1),
-    threadCount: count,
-  }).strict()).max(20),
-  cost: z.object({
-    buckets: z.array(CostBucketSchema).max(MAX_GRAPH_BUCKETS),
-    pricedTokens: finiteNonNegative,
-    totalUsd: finiteNonNegative,
-    unpricedTokens: finiteNonNegative,
-  }).strict(),
-  failures: StatsResponseV2Schema.shape.failures,
-  generatedAt: timestamp,
-  historyImport: WorkbenchStatsImportProgressSchema.default(() => ({ ...EMPTY_WORKBENCH_STATS_IMPORT_PROGRESS })),
-  pricingCatalogDate: z.iso.date(),
-  projectId: z.string().min(1).nullable(),
-  providerAvailability: z.array(z.object({}).passthrough()).default([]),
-  rateLimits: StatsResponseV2Schema.shape.rateLimits,
-  range: WorkbenchStatsRangeSchema,
-  recordingStartedAt: timestamp.nullable(),
-  startedAt: timestamp,
-  tokens: z.object({
-    buckets: z.array(LegacyTokenTotalsSchema.extend({ startedAt: timestamp }).strict()).max(MAX_GRAPH_BUCKETS),
-    totals: LegacyTokenTotalsSchema,
-  }).strict(),
-}).strict();
-
-function normalizeLegacyTokens(value: z.infer<typeof LegacyTokenTotalsSchema>) {
-  return {
-    ...value,
-    cacheWriteInput: 0,
-    uncachedInput: Math.max(0, value.input - value.cachedInput),
-  };
-}
-
-export const WorkbenchStatsResponseSchema = z.union([
-  StatsResponseV2Schema,
-  LegacyStatsResponseSchema.transform((legacy) => ({
-    bucketUnit: legacy.bucketUnit,
-    claimHotspots: legacy.claimHotspots.map(({ path, projectId, rootId, threadCount }) => ({
-      path, projectId, rootId, threadCount,
-    })),
-    cost: {
-      basis: {
-        defaultModelTokens: legacy.cost.unpricedTokens,
-        exactModelTokens: legacy.cost.pricedTokens,
-        projectInferredModelTokens: 0,
-        threadInferredModelTokens: 0,
-      },
-      buckets: legacy.cost.buckets,
-      totalUsd: legacy.cost.totalUsd,
-    },
-    failures: legacy.failures,
-    generatedAt: legacy.generatedAt,
-    historyImport: legacy.historyImport,
-    models: [],
-    pricingCatalogDate: legacy.pricingCatalogDate,
-    projectId: legacy.projectId,
-    rateLimits: legacy.rateLimits,
-    range: legacy.range,
-    startedAt: legacy.startedAt,
-    summary: { cacheHitPercent: 0, threadCount: 0, turnCount: 0 },
-    tokens: {
-      buckets: legacy.tokens.buckets.map((bucket) => ({
-        ...normalizeLegacyTokens(bucket),
-        startedAt: bucket.startedAt,
-      })),
-      totals: normalizeLegacyTokens(legacy.tokens.totals),
-    },
-    topThreads: [],
-    usageFilters: { models: [], providers: [] },
-    version: 2 as const,
-  })),
-]);
-export type WorkbenchStatsResponse = z.infer<typeof StatsResponseV2Schema>;
+export type WorkbenchStatsResponse = z.infer<typeof WorkbenchStatsResponseSchema>;
 
 export function statsRangeShape(range: WorkbenchStatsRange, now: number) {
   const day = 86_400_000;
@@ -310,4 +224,18 @@ export function statsRangeShape(range: WorkbenchStatsRange, now: number) {
   }
   const monday = currentDay - ((new Date(currentDay).getUTCDay() + 6) % 7) * day;
   return { bucketMs: 7 * day, bucketUnit: "week" as const, count: 53, startedAt: monday - 52 * 7 * day };
+}
+
+/**
+ * The range's buckets, narrowed to a selected period. `endedAt` is exclusive.
+ * A period that no longer overlaps the range (the window moved on) selects zero buckets.
+ */
+export function statsPeriodShape(range: WorkbenchStatsRange, period: { from: number; to: number } | null, now: number) {
+  const shape = statsRangeShape(range, now);
+  if (!period) return { ...shape, endedAt: shape.startedAt + shape.count * shape.bucketMs };
+  const first = Math.max(0, Math.ceil((period.from - shape.startedAt) / shape.bucketMs));
+  const last = Math.min(shape.count - 1, Math.floor((period.to - shape.startedAt) / shape.bucketMs));
+  const count = Math.max(0, last - first + 1);
+  const startedAt = shape.startedAt + first * shape.bucketMs;
+  return { ...shape, count, startedAt, endedAt: startedAt + count * shape.bucketMs };
 }

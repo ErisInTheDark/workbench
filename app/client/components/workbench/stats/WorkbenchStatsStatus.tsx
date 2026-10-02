@@ -1,56 +1,108 @@
-/*
- * Keywords: stats, readiness, progress, failures, layout stability.
- * Exports:
- * - default WorkbenchStatsStatus: reserve status space and disclose details without shifting statistics.
- */
-import type { WorkbenchStatsImportProgress, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+"use client";
 
-export default function WorkbenchStatsStatus({ ready, loading, retained, error, progress, failures, legacy }: {
+/*
+ * Exports:
+ * - default WorkbenchStatsStatus: an always-present inline slot for connection, loading, import progress, and issues, with a details popover.
+ */
+import { useEffect, useRef, useState } from "react";
+import type { WorkbenchStatsImportProgress, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { TriangleAlertIcon as AlertTriangleIcon } from "../workbench-icons";
+
+interface Issue { key: string; source: string; message: string }
+
+export default function WorkbenchStatsStatus({ ready, loading, retained, error, progress, failures }: {
   ready: boolean;
   loading: boolean;
   retained: boolean;
   error: string;
   progress: WorkbenchStatsImportProgress | null;
   failures: WorkbenchStatsResponse["failures"];
-  legacy: boolean;
 }) {
-  const failedImports = progress?.recentFailures ?? [];
-  const issues = failedImports.length + failures.length + (error ? 1 : 0);
-  const status = !ready ? "Connecting..."
-    : legacy ? "Detailed statistics need a server reload."
-      : loading ? retained ? "Updating - showing previous selection." : "Loading usage..."
-        : error ? "Statistics could not be refreshed." : "";
-  const hasDetails = Boolean(progress || issues || legacy);
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const issues: Issue[] = [
+    ...(error ? [{ key: "error", source: "Statistics", message: error }] : []),
+    ...(progress?.recentFailures ?? []).map((failure, index) => ({
+      key: `import:${index}`, source: `${failure.source === "claims" ? "Claim" : "Usage"} import`, message: `${failure.subject} · ${failure.message}`,
+    })),
+    ...failures.map((failure, index) => ({
+      key: `capture:${index}`, source: failure.harness ? `${failure.harness} ${failure.source}` : `Live ${failure.source}`, message: failure.message,
+    })),
+  ];
+  // The importer reports running until its final settlement; a full bar has nothing left to announce.
+  const importing = progress?.state === "running" && progress.percent < 100;
+  const status = !ready ? "Connecting…"
+    : loading ? retained ? "Updating…" : "Loading…"
+      : importing ? `Importing ${progress.percent.toFixed(0)}%` : "";
+  const busy = !ready || loading || importing;
+  const hasDetails = issues.length > 0 || Boolean(progress && progress.state !== "idle");
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+
   return (
-    <div className="relative flex h-6 min-w-0 items-center gap-3 text-[0.72rem] leading-6 text-fg/muted">
-      <p aria-live="polite" className={`m-0 min-w-0 flex-1 truncate ${error ? "text-danger" : ""}`}>{status || "\u00a0"}</p>
-      <details className="group order-first shrink-0" onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.currentTarget.open = false;
-          event.currentTarget.querySelector("summary")?.focus();
-        }
-      }}>
-        <summary className={`
-          w-fit max-w-full cursor-pointer truncate rounded-md px-1 hover:bg-surface-hover
-          ${hasDetails ? "" : "invisible"}
-          ${issues ? "text-danger" : ""}
-        `}>
-          {progress?.state === "running" ? `Importing history ${progress.percent.toFixed(0)}%` : "History details"}
-          {issues ? ` · ${issues} issues` : ""}
-        </summary>
-        <div className="absolute inset-x-0 top-full z-20 max-h-72 overflow-auto rounded-lg bg-bg p-4 shadow-float sm:max-w-xl">
-          {legacy ? <p className="m-0">This server supports legacy statistics only. Token selection and category costs become available after a server reload.</p> : null}
-          {error ? <p className="m-0 break-words text-danger">{error}</p> : null}
-          {progress ? (
-            <p className="m-0">
-              Usage {progress.usage.processed}/{progress.usage.total} · claims {progress.claims.processed}/{progress.claims.total}
-              {progress.unsupportedClaimCheckpoints ? ` · ${progress.unsupportedClaimCheckpoints} older claim checkpoints unsupported` : ""}
-            </p>
+    // Always rendered at a fixed height so status changes never move the page below.
+    <div className="relative ml-auto flex h-7 min-w-0 shrink-0 items-center gap-2 text-[0.74rem] text-fg/muted" ref={root}>
+      {busy ? <span aria-hidden="true" className="size-1.5 shrink-0 animate-pulse rounded-full bg-accent motion-reduce:animate-none" /> : null}
+      <span aria-live="polite" className="truncate empty:hidden">{status}</span>
+      {hasDetails ? (
+        <button
+          aria-expanded={open}
+          className={`
+            inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium transition-colors hover:bg-fg/6
+            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
+            ${issues.length ? "text-hue-40 [--hue-chroma:60%]" : "hover:text-text"}
+          `}
+          onClick={() => setOpen((value) => !value)}
+          onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }}
+          type="button"
+        >
+          {issues.length ? <AlertTriangleIcon size={14} /> : null}
+          {issues.length ? `${issues.length} ${issues.length === 1 ? "issue" : "issues"}` : "Import details"}
+        </button>
+      ) : null}
+      {open && hasDetails ? (
+        <div
+          className="
+            absolute right-0 top-full z-30 mt-1.5 max-h-80 w-[min(28rem,calc(100vw-2rem))] space-y-3 overflow-y-auto
+            rounded-[1.1rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] bg-overlay-glass p-3.5 text-[0.76rem] shadow-float backdrop-blur-xl
+          "
+          onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }}
+          role="dialog"
+        >
+          {progress && progress.state !== "idle" ? (
+            <div className="space-y-1">
+              <p className="m-0 font-semibold text-text">History import {progress.state === "complete" ? "complete" : `${progress.percent.toFixed(0)}%`}</p>
+              <p className="m-0 tabular-nums">
+                Usage {progress.usage.processed.toLocaleString()}/{progress.usage.total.toLocaleString()}
+                {" · "}Claims {progress.claims.processed.toLocaleString()}/{progress.claims.total.toLocaleString()}
+              </p>
+              {progress.unsupportedClaimCheckpoints ? (
+                <p className="m-0">{progress.unsupportedClaimCheckpoints.toLocaleString()} older claim checkpoints predate claim recording and are skipped</p>
+              ) : null}
+            </div>
           ) : null}
-          {failedImports.map((failure, index) => <p className="m-0 break-words text-danger" key={`import:${index}`}>{failure.source} · {failure.subject} · {failure.message}</p>)}
-          {failures.map((failure, index) => <p className="m-0 break-words text-danger" key={`capture:${index}`}>{failure.harness ? `${failure.harness} · ` : ""}{failure.message}</p>)}
+          {issues.length ? (
+            <ul className="m-0 space-y-2 p-0">
+              {issues.map((issue) => (
+                <li className="flex list-none gap-2" key={issue.key}>
+                  <AlertTriangleIcon className="mt-0.5 shrink-0 text-hue-40 [--hue-chroma:60%]" size={14} />
+                  <span className="min-w-0">
+                    <span className="block font-medium text-text first-letter:uppercase">{issue.source}</span>
+                    <span className="block break-words">{issue.message}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
-      </details>
+      ) : null}
     </div>
   );
 }

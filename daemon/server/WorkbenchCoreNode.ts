@@ -51,6 +51,8 @@ import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotContro
 import WorkbenchSearchController from "./WorkbenchSearchController";
 import WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import WorkbenchClaimRenameController from "./stats/WorkbenchClaimRenameController";
+import { reconcileCatalogClaims } from "./stats/reconcile-catalog-claims";
+import { resolveGitDirectory } from "./lib/git";
 import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import WorkbenchApprovalController from "./WorkbenchApprovalController";
 import WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
@@ -166,16 +168,13 @@ function createWorkbenchCoreFeature(
       },
     }),
     claims: {
-      reconcile: async (signal) => {
-        for (const project of projectCatalog.getCurrentSnapshot().data) {
-          if (signal.aborted) return;
-          try {
-            await gitArc.reconcileClaimSnapshots(project.rootPath);
-          } catch (error) {
-            stats.reportCaptureFailure(null, `claim reconciliation for project ${project.id}`, error);
-          }
-        }
-      },
+      reconcile: async (signal) => await reconcileCatalogClaims({
+        isCheckout: async (rootPath) => Boolean(await resolveGitDirectory(rootPath)),
+        projects: projectCatalog.getCurrentSnapshot().data,
+        reconcile: async (rootPath) => await gitArc.reconcileClaimSnapshots(rootPath),
+        reportFailure: (projectId, error) => stats.reportCaptureFailure(null, `claim reconciliation for project ${projectId}`, error),
+        signal,
+      }),
       discover: async () => {
         const catalog = await projectCatalog.readCatalog();
         const discoveries = await Promise.all(catalog.data.flatMap((project) => project.roots.map(async (root) => (

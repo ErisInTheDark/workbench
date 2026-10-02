@@ -127,6 +127,7 @@ import { resolveSelectedProjectIds } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
 import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
+import { resolveStatsProjectScope } from "./workbench/stats/stats-project-scope";
 import type DraftSessionController from "./workbench/thread-view/DraftSessionController";
 import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
 import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
@@ -459,6 +460,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     selectionProjectIds.length ? selectionProjectIds : null,
   ), [selectionProjectIds]);
   const settingsHref = projectHref(settingsRoute) ?? createWorkbenchHref(settingsRoute);
+  // Statistics keep the sidebar's project selection so the view can scope to it.
+  const statsRoute = useMemo(() => withProjectSelection(
+    createStatsRoute(null),
+    selectionProjectIds.length ? selectionProjectIds : null,
+  ), [selectionProjectIds]);
   const dynamicSelectionPending = route.selectedProjectIds === null
     && !appProjectGroups && explorer.isThreadsLoading;
   const selectedLogicalProjects = useMemo(() => selectionProjectIds.flatMap(id => {
@@ -833,6 +839,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     ? browseProjectId && browseLocation?.daemonId === workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId
       ? browseProjectId : ""
     : browseProjectId;
+  const attachedDaemonId = workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId ?? null;
+  const statsScope = useMemo(() => resolveStatsProjectScope({
+    daemonId: attachedDaemonId,
+    logicalProjects: displayedLogicalProjects,
+    projects: explorer.projects,
+    selectedProjectIds: selectionProjectIds,
+  }), [attachedDaemonId, displayedLogicalProjects, explorer.projects, selectionProjectIds]);
   const browseSessionController = useMemo(() => new WorkbenchBrowseSessionController({
     mutate: async (action, input) => {
       if (!controls) return {};
@@ -1014,7 +1027,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     navigateToRoute(settingsRoute);
   }, [navigateToRoute, settingsRoute]);
 
-  const openStatsScopeFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string | null) => {
+  const openStatsFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
     if (
       event.button !== 0
       || event.metaKey
@@ -1026,8 +1039,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
 
     event.preventDefault();
-    navigateToRoute(createStatsRoute(projectId));
-  }, [navigateToRoute]);
+    navigateToRoute(statsRoute);
+  }, [navigateToRoute, statsRoute]);
 
   const openStatsThreadFromLink = useCallback((
     event: MouseEvent<HTMLAnchorElement>,
@@ -1831,7 +1844,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const ambientCanvasVariant: WorkbenchAmbientCanvasVariant | null = resolvedSettings.theme === "magical-girl" || resolvedSettings.theme === "winter"
     ? resolvedSettings.theme
     : null;
-  const shouldShowShellHeader = !showFullBleedMainView && !showFileView && !showEmptyState && (!isMobile || mobilePane === "editor");
+  const shouldShowShellHeader = !showFullBleedMainView && !showFileView && !showEmptyState
+    && (!isMobile || mobilePane === "editor");
   const mainPaneScrollKey = showThreadView
     ? `thread:${activeThreadId}`
     : showFileView
@@ -2433,8 +2447,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     as="a"
                     label="Open statistics"
                     display="hover-border"
-                    href={projectHref(createStatsRoute(attachedProjectId))}
-                    onClick={(event) => openStatsScopeFromLink(event, attachedProjectId)}
+                    href={projectHref(statsRoute)}
+                    onClick={openStatsFromLink}
                     title="Open statistics"
                   >
                     <StatsIcon size={20} />
@@ -2648,7 +2662,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               ref={mainPaneRef}
               className={`scrollbar-hover-reveal flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden md:w-auto${showGitView
                 ? " min-h-0 overflow-hidden px-5 pb-0 md:h-screen md:px-6"
-                : showSettingsView
+                : showSettingsView || showStatsView
                 ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-y-auto md:px-6"
                 : isDirectThreadSurface
                 ? " overflow-hidden px-0 pb-0 md:h-screen md:min-h-0 md:overflow-hidden"
@@ -2708,9 +2722,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
                           {isThreadShellTitleLoading ? (
                             <span className="block h-4 w-48 max-w-[60vw] rounded-full workbench-skeleton" aria-hidden="true" />
-                          ) : showGitView ? "Working tree" : showSettingsView ? `Settings / ${settingsPageTitle}` : "Select a file"}
+                          ) : showGitView ? "Working tree" : showSettingsView ? `Settings / ${settingsPageTitle}` : showStatsView ? "Usage" : "Select a file"}
                         </p>
-                        <p id="status-line" ref={statusLineRef} hidden={showSettingsView} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
+                        <p id="status-line" ref={statusLineRef} hidden={showSettingsView || showStatsView} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
                           {showGitView ? <WorkbenchGitRepositoryControl /> : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
                         </p>
                       </>
@@ -2744,7 +2758,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         onChange={updateEditorFontSize}
                       />
                     </div>
-                    <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView || showSettingsView || showGitView}>
+                    <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView || showSettingsView || showGitView || showStatsView}>
                       <WorkbenchIconButton
                         id="save-file"
                         ref={saveFileButtonRef}
@@ -2934,12 +2948,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : null}
                 {showStatsView && !shouldRenderMainLayout ? (
                   <WorkbenchStatsView
-                    availableProjectId={attachedProjectId || null}
-                    onNavigate={openStatsScopeFromLink}
                     onNavigateThread={openStatsThreadFromLink}
-                    projectId={route.projectId || null}
-                    projectLabel={projectTabLabel}
                     projects={explorer.projects}
+                    scope={statsScope}
                   />
                 ) : null}
                 {showRouteError && !shouldRenderMainLayout ? (

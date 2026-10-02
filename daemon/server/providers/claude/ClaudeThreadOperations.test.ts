@@ -52,6 +52,7 @@ function fixture({
       settleTurn: async () => undefined,
       readContextUsage: async () => null,
       recordContextUsage: async () => undefined,
+      recordTurnUsage: async () => undefined,
     },
   } as never);
   Object.assign(owner, {

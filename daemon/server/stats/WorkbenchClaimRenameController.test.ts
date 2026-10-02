@@ -1,5 +1,5 @@
 /*
- * No exports. Protect HEAD freshness, root isolation, recovery, and cancellation.
+ * No exports. Protect claimed-root scoping, claim boundaries, HEAD freshness, root isolation, recovery, and cancellation.
  */
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -7,13 +7,15 @@ import test from "node:test";
 import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository.ts";
 import WorkbenchClaimRenameController from "./WorkbenchClaimRenameController.ts";
 
-function fixture() {
-  const root = path.resolve("rename-fixture");
+function fixture(name = "rename-fixture") {
+  const root = path.resolve(name);
   const repository = new WorkbenchGitRepository(root);
   let head = "a".repeat(40);
   repository.headOrNull = async () => head;
   return { repository, root, setHead: (value: string) => { head = value.repeat(40); } };
 }
+
+const scope = (rootId = "root", since = 0) => ({ projectId: "project", rootId, since });
 
 test("rename cache coalesces reads and invalidates on any HEAD change while isolating workspace roots", async () => {
   const { repository, root, setHead } = fixture();
@@ -33,8 +35,9 @@ test("rename cache coalesces reads and invalidates on any HEAD change while isol
       ];
     } },
   });
+  const both = [scope("root"), scope("nested")];
   try {
-    const results = await Promise.all([controller.read("project"), controller.read("project")]);
+    const results = await Promise.all([controller.read(both), controller.read(both)]);
     assert.equal(scans, 1);
     assert.deepEqual(results[0], results[1]);
     assert.deepEqual(results[0]?.renames, [
@@ -42,10 +45,39 @@ test("rename cache coalesces reads and invalidates on any HEAD change while isol
       { projectId: "project", rootId: "nested", from: "old", to: "current" },
     ]);
     setHead("b");
-    await controller.read("project");
+    await controller.read(both);
     setHead("a");
-    await controller.read("project");
+    await controller.read(both);
     assert.equal(scans, 3);
+  } finally { await controller.dispose(); }
+});
+
+test("only claimed roots are scanned, each from its own claim boundary", async () => {
+  const claimed = fixture("claimed-root");
+  const idle = fixture("idle-root");
+  const opened: string[] = [];
+  const boundaries: Array<number | null | undefined> = [];
+  const controller = new WorkbenchClaimRenameController({
+    listRoots: async () => [
+      { projectId: "project", rootId: "claimed", workspaceRoot: claimed.root },
+      { projectId: "project", rootId: "idle", workspaceRoot: idle.root },
+    ],
+    openRepository: async (cwd) => {
+      opened.push(cwd);
+      return cwd === claimed.root ? claimed.repository : idle.repository;
+    },
+    reader: { read: async (_repository, _head, _signal, since) => {
+      boundaries.push(since);
+      return [];
+    } },
+  });
+  try {
+    assert.deepEqual(await controller.read([]), { renames: [], failures: [] });
+    await controller.read([scope("claimed", 1_234)]);
+    assert.deepEqual(opened, [claimed.root]);
+    assert.deepEqual(boundaries, [1_234]);
+    await controller.read([scope("claimed", 99)]);
+    assert.deepEqual(boundaries, [1_234, 99], "a different boundary cannot reuse a narrower history");
   } finally { await controller.dispose(); }
 });
 
@@ -61,12 +93,12 @@ test("a failed scan does not poison the cache and keeps diagnostics sanitized", 
     } },
   });
   try {
-    const failed = await controller.read("project");
+    const failed = await controller.read([scope()]);
     assert.equal(failed.failures.length, 1);
     assert.deepEqual(failed.renames, []);
     assert.equal(failed.failures[0]?.message.includes("secret payload"), false);
     fail = false;
-    const recovered = await controller.read("project");
+    const recovered = await controller.read([scope()]);
     assert.equal(recovered.failures.length, 0);
     assert.equal(recovered.renames.length, 1);
   } finally { await controller.dispose(); }
@@ -88,12 +120,12 @@ test("disposal cancels an in-flight scan, rejects queued reads, and prevents fur
       });
     } },
   });
-  const first = controller.read("project");
+  const first = controller.read([scope()]);
   await ready;
   const firstRejected = assert.rejects(first);
-  const queuedRejected = assert.rejects(controller.read("project"));
+  const queuedRejected = assert.rejects(controller.read([scope()]));
   await controller.dispose();
   await Promise.all([firstRejected, queuedRejected]);
-  await assert.rejects(controller.read("project"));
+  await assert.rejects(controller.read([scope()]));
   assert.equal(scans, 1);
 });

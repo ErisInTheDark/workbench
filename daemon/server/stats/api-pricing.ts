@@ -1,15 +1,29 @@
 /*
  * Exports:
- * - API_PRICING_CATALOG_DATE/API_PRICING_POLICY_VERSION: dated estimate policy identity. Keywords: stats, pricing, catalogue.
- * - ApiPricingModelSource: estimate attribution confidence. Keywords: stats, pricing, provenance.
- * - defaultApiPricingModel: resolve the deterministic provider fallback model. Keywords: stats, pricing, fallback.
- * - estimateApiTokenCost: estimate API-equivalent token cost with explicit tier and context rates. Keywords: stats, cost, tokens.
+ * - API_PRICING_CATALOG_DATE/API_PRICING_POLICY_VERSION: dated estimate policy identity.
+ * - ApiPricingModelSource: estimate attribution confidence.
+ * - ApiCostEstimate: priced categories for one usage fact.
+ * - resolveModelPrice: route a provider model to its billing catalogue entry, or null when unpriced.
+ * - estimateApiTokenCost: estimate API-equivalent token cost, or null when the model has no catalogue price.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
+import { ANTHROPIC_PRICES } from "./pricing/anthropic-prices.ts";
+import { scaleRates, type ModelPrice, type PriceCatalogue, type TokenRates } from "./pricing/model-price.ts";
+import { OPENAI_PRICES } from "./pricing/openai-prices.ts";
+import { OPENCODE_GO_PRICES } from "./pricing/opencode-go-prices.ts";
+import { OPENCODE_ZEN_PRICES } from "./pricing/opencode-zen-prices.ts";
 
-export const API_PRICING_CATALOG_DATE = "2026-09-05";
-export const API_PRICING_POLICY_VERSION = 1;
-export type ApiPricingModelSource = "exact" | "inferred" | "default";
+export const API_PRICING_CATALOG_DATE = "2026-10-01";
+export const API_PRICING_POLICY_VERSION = 2;
+export type ApiPricingModelSource = "exact" | "inferred";
+
+export interface ApiCostEstimate {
+  byTokenType: { input: number; cacheRead: number; cacheWrite: number; output: number };
+  catalogue: string;
+  model: string;
+  source: ApiPricingModelSource;
+  totalUsd: number;
+}
 
 interface TokenCostInput {
   cacheWriteInputTokens: number;
@@ -17,91 +31,73 @@ interface TokenCostInput {
   inputTokens: number;
   model: string | null;
   modelSource?: ApiPricingModelSource;
+  occurredAt?: number;
   outputTokens: number;
-  provider?: WorkbenchHarness;
+  provider: WorkbenchHarness;
   serviceTier: string | null;
 }
 
-interface TokenRates {
-  cachedInput: number;
-  input: number;
-  output: number;
-}
+/** Namespaced ids (`provider/model`) name their billing source; bare ids bill through the harness's own API. */
+const NAMESPACE_CATALOGUES: Readonly<Record<string, PriceCatalogue>> = {
+  anthropic: ANTHROPIC_PRICES,
+  openai: OPENAI_PRICES,
+  opencode: OPENCODE_ZEN_PRICES,
+  "opencode-go": OPENCODE_GO_PRICES,
+};
+const HARNESS_CATALOGUES: Partial<Record<WorkbenchHarness, PriceCatalogue>> = {
+  claude: ANTHROPIC_PRICES,
+  codex: OPENAI_PRICES,
+};
 
-interface ModelPrice {
-  aliases: readonly RegExp[];
-  cacheWriteInputMultiplier?: number;
-  fast?: TokenRates;
-  fastLong?: TokenRates;
-  id: string;
-  longContext: boolean;
-  standard: TokenRates;
-}
-
-const rates = (input: number, cachedInput: number, output: number): TokenRates => ({ cachedInput, input, output });
-const PRICES: readonly ModelPrice[] = [
-  { aliases: [/^gpt-6(?:-astra)?(?:-\d{4}-\d{2}-\d{2})?$/u], cacheWriteInputMultiplier: 1.25, fast: rates(25, 2.5, 125), id: "gpt-6-astra", longContext: false, standard: rates(10, 1, 50) },
-  { aliases: [/^gpt-5\.6(?:-sol)?(?:-\d{4}-\d{2}-\d{2})?$/u], cacheWriteInputMultiplier: 1.25, fast: rates(8, 0.8, 40), fastLong: rates(16, 1.6, 60), id: "gpt-5.6-sol", longContext: true, standard: rates(4, 0.4, 20) },
-  { aliases: [/^gpt-5\.6-terra(?:-\d{4}-\d{2}-\d{2})?$/u], cacheWriteInputMultiplier: 1.25, fast: rates(4, 0.4, 24), fastLong: rates(8, 0.8, 36), id: "gpt-5.6-terra", longContext: true, standard: rates(2, 0.2, 12) },
-  { aliases: [/^gpt-5\.6-luna(?:-\d{4}-\d{2}-\d{2})?$/u], cacheWriteInputMultiplier: 1.25, fast: rates(0.4, 0.04, 2.4), fastLong: rates(0.8, 0.08, 3.6), id: "gpt-5.6-luna", longContext: true, standard: rates(0.2, 0.02, 1.2) },
-  { aliases: [/^gpt-5\.5(?:-\d{4}-\d{2}-\d{2})?$/u], fast: rates(12.5, 1.25, 75), id: "gpt-5.5", longContext: true, standard: rates(5, 0.5, 30) },
-  { aliases: [/^gpt-5\.4-mini(?:-\d{4}-\d{2}-\d{2})?$/u], fast: rates(1.5, 0.15, 9), id: "gpt-5.4-mini", longContext: false, standard: rates(0.75, 0.075, 4.5) },
-  { aliases: [/^gpt-5\.4(?:-\d{4}-\d{2}-\d{2})?$/u], fast: rates(5, 0.5, 30), id: "gpt-5.4", longContext: true, standard: rates(2.5, 0.25, 15) },
-  { aliases: [/^gpt-5\.3(?:-codex)?(?:-\d{4}-\d{2}-\d{2})?$/u], fast: rates(3.5, 0.35, 28), id: "gpt-5.3-codex", longContext: false, standard: rates(1.75, 0.175, 14) },
-  { aliases: [/^gpt-5\.2(?:-\d{4}-\d{2}-\d{2})?$/u], fast: rates(3.5, 0.35, 28), id: "gpt-5.2", longContext: false, standard: rates(1.75, 0.175, 14) },
-  { aliases: [/^daybreak-blue$/u], fast: rates(10, 1, 60), id: "daybreak-blue", longContext: false, standard: rates(4, 0.4, 20) },
-  { aliases: [/^daybreak-red$/u], id: "daybreak-red", longContext: false, standard: rates(12.5, 1.25, 75) },
-];
-
-export function defaultApiPricingModel(_provider: WorkbenchHarness) {
-  return "gpt-5.6-sol";
+export function resolveModelPrice(provider: WorkbenchHarness, model: string | null): { catalogue: PriceCatalogue; price: ModelPrice } | null {
+  const requested = model?.trim();
+  if (!requested) return null;
+  const slash = requested.indexOf("/");
+  const catalogue = slash > 0
+    ? NAMESPACE_CATALOGUES[requested.slice(0, slash).toLowerCase()]
+    : HARNESS_CATALOGUES[provider];
+  const price = catalogue?.find(slash > 0 ? requested.slice(slash + 1) : requested) ?? null;
+  return catalogue && price ? { catalogue, price } : null;
 }
 
 function safeTokens(value: number) {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-function matchPrice(model: string | null) {
-  return PRICES.find(({ aliases }) => aliases.some((pattern) => pattern.test(model ?? ""))) ?? null;
+function applicableRates(price: ModelPrice, inputTokens: number, serviceTier: string | null, occurredAt: number | undefined): TokenRates {
+  let selected = price.long && inputTokens > price.long.aboveInputTokens ? price.long.rates : price.standard;
+  if (price.peak && occurredAt !== undefined && price.peak.isPeak(occurredAt)) selected = price.peak.rates;
+  const fast = serviceTier === "fast" || serviceTier === "priority";
+  return fast && price.fastMultiplier
+    ? scaleRates(selected, { input: price.fastMultiplier, output: price.fastMultiplier })
+    : selected;
 }
 
-export function estimateApiTokenCost(input: TokenCostInput) {
+const usd = (tokens: number, ratePerMillion: number) => tokens * ratePerMillion / 1_000_000;
+const rounded = (value: number) => Number(value.toFixed(8));
+
+export function estimateApiTokenCost(input: TokenCostInput): ApiCostEstimate | null {
+  const resolved = resolveModelPrice(input.provider, input.model);
+  if (!resolved) return null;
   const counts = {
     cacheWrite: safeTokens(input.cacheWriteInputTokens),
     cached: safeTokens(input.cachedInputTokens),
     input: safeTokens(input.inputTokens),
     output: safeTokens(input.outputTokens),
   };
-  const totalTokens = counts.input + counts.output;
-  const provider = input.provider ?? "codex";
-  const requestedModel = input.model?.trim() || null;
-  const matched = matchPrice(requestedModel);
-  const price = matched ?? matchPrice(defaultApiPricingModel(provider))!;
-  const source: ApiPricingModelSource = matched ? input.modelSource ?? "exact" : "default";
-  const isFast = input.serviceTier === "fast" || input.serviceTier === "priority";
-  const longContext = counts.input > 272_000 && price.longContext;
-  const selectedRates = isFast
-    ? longContext && price.fastLong
-      ? price.fastLong
-      : price.fast ?? price.standard
-    : price.standard;
-  const effectiveRates = longContext && !(isFast && price.fastLong)
-    ? rates(selectedRates.input * 2, selectedRates.cachedInput * 2, selectedRates.output * 1.5)
-    : selectedRates;
+  const selected = applicableRates(resolved.price, counts.input, input.serviceTier, input.occurredAt);
   const uncachedInput = Math.max(0, counts.input - counts.cached - counts.cacheWrite);
   const byTokenType = {
-    input: Number((uncachedInput * effectiveRates.input / 1_000_000).toFixed(8)),
-    cache: Number(((counts.cached * effectiveRates.cachedInput
-      + counts.cacheWrite * effectiveRates.input * (price.cacheWriteInputMultiplier ?? 1)) / 1_000_000).toFixed(8)),
-    output: Number((counts.output * effectiveRates.output / 1_000_000).toFixed(8)),
+    input: rounded(usd(uncachedInput, selected.input)),
+    cacheRead: rounded(usd(counts.cached, selected.cachedInput)),
+    cacheWrite: rounded(usd(counts.cacheWrite, selected.cacheWrite)),
+    output: rounded(usd(counts.output, selected.output)),
   };
-  const totalUsd = byTokenType.input + byTokenType.cache + byTokenType.output;
   return {
     byTokenType,
-    model: price.id,
-    pricedTokens: totalTokens,
-    source,
-    totalUsd: Number(totalUsd.toFixed(8)),
-    unpricedTokens: 0,
+    catalogue: resolved.catalogue.name,
+    model: resolved.price.id,
+    source: input.modelSource ?? "exact",
+    totalUsd: rounded(byTokenType.input + byTokenType.cacheRead + byTokenType.cacheWrite + byTokenType.output),
   };
 }

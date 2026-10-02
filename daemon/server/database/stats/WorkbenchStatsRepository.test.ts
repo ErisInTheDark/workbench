@@ -10,7 +10,7 @@ import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts"
 import WorkbenchTranscriptRepository from "../transcript/WorkbenchTranscriptRepository.ts";
 import type { WorkbenchTranscriptAtomicObservation } from "../transcript/workbench-transcript-types.ts";
 import WorkbenchStatsRepository from "./WorkbenchStatsRepository.ts";
-import { WorkbenchStatsDetailedResponseSchema } from "workbench-shared/workbench/stats/workbench-stats-detail-contract";
+import { STATS_TOKEN_TYPES, WorkbenchStatsResponseSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
@@ -104,7 +104,7 @@ test("older usage imports cannot rewind live context or counters and rerouted mo
       kind: "turnTokenUsage", observedAt: now - 200, threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], usageDataVersion: 2,
       cumulative: { inputTokens: 1, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1 },
     }]);
-    const result = new WorkbenchStatsRepository(database).read({ projectId: fixtureIdentityValues.ProjectId.project, range: "7d" }, now);
+    const result = new WorkbenchStatsRepository(database).read({ projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d" }, now);
     assert.equal(result.tokens.totals.all, 1_300);
     assert.equal(result.cost.basis.exactModelTokens, 0);
     assert.equal(result.cost.basis.threadInferredModelTokens, 1_300);
@@ -120,7 +120,7 @@ test("token reads separate input categories and expose filters, drivers, and exa
     const now = Date.UTC(2026, 8, 4, 12);
     seedTurn(database, now - 60_000);
     const repository = new WorkbenchStatsRepository(database);
-    const result = repository.read({ projectId: fixtureIdentityValues.ProjectId.project, range: "7d" }, now);
+    const result = repository.read({ projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d" }, now);
     assert.deepEqual(result.tokens.totals, {
       all: 1_300,
       cachedInput: 200,
@@ -130,15 +130,15 @@ test("token reads separate input categories and expose filters, drivers, and exa
       uncachedInput: 700,
     });
     assert.deepEqual(result.cost.basis, {
-      defaultModelTokens: 0,
       exactModelTokens: 1_300,
       projectInferredModelTokens: 0,
       threadInferredModelTokens: 0,
+      unpricedTokens: 0,
     });
     assert.deepEqual(result.usageFilters, { models: ["gpt-5.4"], providers: ["codex"] });
     assert.equal(result.models[0]?.tokens, 1_300);
     assert.equal(result.topThreads[0]?.threadId, "thread");
-    assert.equal(repository.read({ projectId: fixtureIdentityValues.ProjectId.project, provider: "copilot", range: "7d" }, now).tokens.totals.all, 0);
+    assert.equal(repository.read({ projectIds: [fixtureIdentityValues.ProjectId.project], provider: "copilot", range: "7d" }, now).tokens.totals.all, 0);
   } finally {
     database.close();
   }
@@ -149,7 +149,7 @@ test("selected output applies to totals, pricing basis, and usage drivers", () =
   try {
     const now = Date.UTC(2026, 8, 4, 12);
     seedTurn(database, now - 60_000);
-    const request = { projectId: fixtureIdentityValues.ProjectId.project, range: "7d" as const, tokenTypes: ["output" as const] };
+    const request = { projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d" as const, tokenTypes: ["output" as const] };
     const result = new WorkbenchStatsRepository(database).read(request, now);
     assert.equal(result.tokens.totals.all, 300);
     assert.equal(result.tokens.totals.input, 0);
@@ -168,22 +168,20 @@ test("cache efficiency weighs full input, preserves empty buckets, and ignores c
     const now = Date.UTC(2026, 8, 4, 12);
     seedTurn(database, now - 60_000);
     const repository = new WorkbenchStatsRepository(database);
-    const base = { projectId: fixtureIdentityValues.ProjectId.project, range: "7d" as const };
-    const full = repository.readDetailed(base, now);
+    const base = { projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d" as const };
+    const full = repository.read(base, now);
     assert.ok("cacheEfficiency" in full && full.cacheEfficiency, "Cache facts must be returned independently of category totals");
     assert.deepEqual(full.cacheEfficiency.totals, { inputTokens: 1_000, cachedInputTokens: 200, cacheHitPercent: 20 });
     assert.deepEqual(full.cacheEfficiency.buckets.at(-1), { ...full.cacheEfficiency.totals,
       startedAt: Date.UTC(2026, 8, 4) });
     assert.ok(full.cacheEfficiency.buckets.slice(0, -1).every((bucket) => bucket.cacheHitPercent === null));
-    assert.deepEqual(full.cacheEfficiency.worstThreads, [{
-      ...full.cacheEfficiency.totals, cacheWriteInputTokens: 100,
-      projectId: fixtureIdentityValues.ProjectId.project, threadId: "thread", title: "Stats thread",
-    }]);
-    for (const tokenTypes of [[], ["cache"], ["output"], ["input"]] as const) {
-      assert.deepEqual(repository.readDetailed({ ...base, tokenTypes: [...tokenTypes] }, now).cacheEfficiency, full.cacheEfficiency);
+    // 800 uncached tokens is far too small for its hit rate to rank.
+    assert.deepEqual(full.cacheEfficiency.worstThreads, []);
+    for (const tokenTypes of [[], ["cacheRead"], ["cacheWrite"], ["output"], ["input"]] as const) {
+      assert.deepEqual(repository.read({ ...base, tokenTypes: [...tokenTypes] }, now).cacheEfficiency, full.cacheEfficiency);
     }
-    for (const filter of [{ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other") }, { provider: "copilot" as const }, { model: "other" }]) {
-      const result = repository.readDetailed({ ...base, ...filter }, now).cacheEfficiency;
+    for (const filter of [{ projectIds: [testProjectIds.other] }, { projectIds: [] }, { provider: "copilot" as const }, { model: "other" }]) {
+      const result = repository.read({ ...base, ...filter }, now).cacheEfficiency;
       assert.ok(result);
       assert.deepEqual(result.totals, { inputTokens: 0, cachedInputTokens: 0, cacheHitPercent: null });
       assert.deepEqual(result.worstThreads, []);
@@ -191,7 +189,7 @@ test("cache efficiency weighs full input, preserves empty buckets, and ignores c
   } finally { database.close(); }
 });
 
-test("cache leaderboard ranks all positive-input threads by percentage, then input volume, before limiting", () => {
+test("cache leaderboard ranks threads with 500K+ uncached input by percentage, then input volume, before limiting", () => {
   const database = createDatabase();
   try {
     const now = Date.UTC(2026, 8, 4, 12);
@@ -200,8 +198,8 @@ test("cache leaderboard ranks all positive-input threads by percentage, then inp
     let totalCached = 0;
     for (let index = 0; index < 16; index++) {
       const id = `cache-${index}`;
-      const input = index === 15 ? 0 : index === 14 ? 100 : 10_000 + index;
-      const cached = index >= 13 ? 0 : 9_000;
+      const input = index === 15 ? 0 : index === 14 ? 499_999 : 1_000_000 + index;
+      const cached = index >= 13 ? 0 : 400_000;
       totalInput += input;
       totalCached += cached;
       transcript.settle([{
@@ -217,13 +215,16 @@ test("cache leaderboard ranks all positive-input threads by percentage, then inp
         kind: "turnTokenUsage", observedAt: now, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(id), turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(id), usageDataVersion: 2,
       }]);
     }
-    const result = new WorkbenchStatsRepository(database).readDetailed({ projectId: null, range: "7d" }, now);
+    const result = new WorkbenchStatsRepository(database).read({ projectIds: null, range: "7d" }, now);
     assert.ok(result.cacheEfficiency);
     assert.equal(result.cacheEfficiency.totals.cacheHitPercent, totalCached / totalInput * 100);
     assert.equal(result.cacheEfficiency.worstThreads.length, 12);
-    assert.deepEqual(result.cacheEfficiency.worstThreads.slice(0, 3).map((row) => row.threadId), ["cache-13", "cache-14", "cache-12"]);
-    assert.ok(result.cacheEfficiency.worstThreads.every((row) => row.inputTokens > 0));
+    // cache-14 misses everything but stays below the uncached floor.
+    assert.deepEqual(result.cacheEfficiency.worstThreads.slice(0, 3).map((row) => row.threadId), ["cache-13", "cache-12", "cache-11"]);
+    assert.ok(result.cacheEfficiency.worstThreads.every((row) => row.inputTokens - row.cachedInputTokens >= 500_000));
     assert.equal(result.topThreads.some((row) => row.threadId === "cache-14"), false);
+    assert.ok([...result.topThreads, ...result.cacheEfficiency.worstThreads].every((row) => row.harness === "codex"),
+      "ranked threads name their provider so the UI can open and describe them");
   } finally { database.close(); }
 });
 
@@ -233,27 +234,28 @@ test("category selection reconciles costs, includes cache writes, and excludes n
     const now = Date.UTC(2026, 8, 4, 12);
     seedTurn(database, now - 60_000);
     const repository = new WorkbenchStatsRepository(database);
-    const base = { projectId: fixtureIdentityValues.ProjectId.project, range: "7d" as const };
+    const base = { projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d" as const };
     repository.recordClaimSnapshot({
       projectId: fixtureIdentityValues.ProjectId.project, threadId: "thread", harness: "codex", observedAt: now,
       roots: [{ rootId: "root", paths: ["src/file.ts"] }],
     });
-    const full = repository.readDetailed({ ...base, tokenTypes: ["input", "cache", "output"] }, now);
-    for (const category of ["input", "cache", "output"] as const) {
-      const result = repository.readDetailed({ ...base, tokenTypes: [category] }, now);
+    const full = repository.read(base, now);
+    for (const category of STATS_TOKEN_TYPES) {
+      const result = repository.read({ ...base, tokenTypes: [category] }, now);
       assert.equal(result.cost.totalUsd, full.cost.byTokenType[category]);
       assert.equal(result.cost.buckets.reduce((sum, bucket) => sum + bucket.totalUsd, 0), result.cost.totalUsd);
       assert.equal(result.summary.threadCount, 1);
       assert.equal(result.summary.turnCount, 1);
     }
-    const cache = repository.readDetailed({ ...base, tokenTypes: ["cache"] }, now);
-    assert.equal(cache.tokens.totals.all, 300);
-    assert.equal(cache.tokens.totals.cacheWriteInput, 100);
-    assert.equal(cache.summary.cacheHitPercent, 200 / 300 * 100);
-    const empty = repository.readDetailed({ ...base, tokenTypes: [] }, now);
+    const writes = repository.read({ ...base, tokenTypes: ["cacheWrite"] }, now);
+    assert.equal(writes.tokens.totals.all, 100);
+    assert.equal(writes.tokens.totals.cachedInput, 0, "cache reads are their own category");
+    const legacy = repository.read({ ...base, tokenTypes: ["cache"] as never }, now);
+    assert.equal(legacy.tokens.totals.all, 300, "the legacy combined category still reads both halves");
+    const empty = repository.read({ ...base, tokenTypes: [] }, now);
     assert.equal(empty.tokens.totals.all, 0);
     assert.equal(empty.cost.totalUsd, 0);
-    assert.deepEqual(empty.summary, { cacheHitPercent: 0, threadCount: 0, turnCount: 0 });
+    assert.deepEqual({ ...empty.summary, buckets: empty.summary.buckets.filter(({ turnCount }) => turnCount) }, { buckets: [], threadCount: 0, turnCount: 0 });
     assert.deepEqual(empty.topThreads, []);
     assert.deepEqual(empty.models, []);
     assert.deepEqual(empty.usageFilters, full.usageFilters);
@@ -266,10 +268,41 @@ test("category selection reconciles costs, includes cache writes, and excludes n
         outputTokens: 10_000, reasoningOutputTokens: 0, totalTokens: 310_000 },
       kind: "turnTokenUsage", observedAt: now, threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], usageDataVersion: 2,
     }]);
-    const longContext = repository.readDetailed({ ...base, tokenTypes: ["input", "cache", "output"] }, now);
-    for (const category of ["input", "cache", "output"] as const) {
-      assert.equal(repository.readDetailed({ ...base, tokenTypes: [category] }, now).cost.totalUsd, longContext.cost.byTokenType[category]);
+    const longContext = repository.read(base, now);
+    for (const category of STATS_TOKEN_TYPES) {
+      assert.equal(repository.read({ ...base, tokenTypes: [category] }, now).cost.totalUsd, longContext.cost.byTokenType[category]);
     }
+  } finally { database.close(); }
+});
+
+test("a selected period narrows usage, comparison and claims to its days while plan limits keep the whole range", () => {
+  const database = createDatabase();
+  try {
+    const day = 86_400_000;
+    const now = Date.UTC(2026, 8, 4, 12);
+    const today = Date.UTC(2026, 8, 4);
+    seedTurn(database, now - 60_000);
+    const repository = new WorkbenchStatsRepository(database);
+    repository.recordClaimSnapshot({
+      projectId: fixtureIdentityValues.ProjectId.project, threadId: "thread", harness: "codex", observedAt: now,
+      roots: [{ rootId: "root", paths: ["src/file.ts"] }],
+    });
+    repository.recordRateLimits({ harness: "codex", observedAt: today - 5 * day, snapshots: [{
+      limitId: "codex", limitName: null, primary: { durationMinutes: 300, resetsAt: null, usedPercent: 10 }, secondary: null, tertiary: null,
+    }] });
+    const base = { projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d" as const };
+    const full = repository.read(base, now);
+    const earlier = repository.read({ ...base, period: { from: today - 3 * day, to: today - day } }, now);
+    assert.equal(earlier.startedAt, today - 3 * day);
+    assert.equal(earlier.tokens.buckets.length, 3);
+    assert.equal(earlier.tokens.totals.all, 0, "today's turn is outside the period");
+    assert.deepEqual(earlier.claimHotspots, []);
+    assert.deepEqual(earlier.rateLimits, full.rateLimits, "plan limits ignore the period");
+    const latest = repository.read({ ...base, period: { from: today, to: today } }, now);
+    assert.equal(latest.tokens.totals.all, full.tokens.totals.all);
+    assert.equal(latest.claimHotspots.length, 1);
+    const stale = repository.read({ ...base, period: { from: today - 30 * day, to: today - 20 * day } }, now);
+    assert.deepEqual([stale.tokens.buckets.length, stale.tokens.totals.all], [0, 0], "a period the window moved past selects nothing");
   } finally { database.close(); }
 });
 
@@ -296,9 +329,9 @@ test("selection reranks all threads before limiting results and computes shares 
       }]);
     }
     const repository = new WorkbenchStatsRepository(database);
-    const base = { projectId: fixtureIdentityValues.ProjectId.project, range: "7d" as const };
+    const base = { projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d" as const };
     assert.equal(repository.read(base, now).topThreads.some((row) => row.threadId === "thread-13"), false);
-    const selected = repository.readDetailed({ ...base, tokenTypes: ["output"] }, now);
+    const selected = repository.read({ ...base, tokenTypes: ["output"] }, now);
     assert.equal(selected.topThreads[0]?.threadId, "thread-13");
     assert.equal(selected.topThreads[0]?.sharePercent, 500 / 513 * 100);
     assert.equal(selected.topThreads.length, 12);
@@ -307,7 +340,7 @@ test("selection reranks all threads before limiting results and computes shares 
   } finally { database.close(); }
 });
 
-test("token reads derive turn usage from cumulative thread snapshots", () => {
+test("token reads derive turn usage from cumulative thread snapshots and split each thread by model", () => {
   const database = createDatabase();
   try {
     const now = Date.UTC(2026, 8, 4, 12);
@@ -327,6 +360,9 @@ test("token reads derive turn usage from cumulative thread snapshots", () => {
       kind: "turnTokenUsage", observedAt: now - 1_999,
       threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["one"], usageDataVersion: 2,
     }, {
+      kind: "turnUsageContext", model: "gpt-5.4", observedAt: now - 1_999, serviceTier: null,
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["one"],
+    }, {
       createdAt: now - 1_000, durationMs: 1, endedAt: now - 999, harnessId: "codex", kind: "turn",
       nativeLocation: "C:/project", nativeThreadId: fixtureIdentityValues.NativeThreadId["thread"], nativeTurnId: fixtureIdentityValues.NativeTurnId["two"], startedAt: now - 1_000,
       state: "completed", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["two"], turnIndex: 1,
@@ -337,12 +373,16 @@ test("token reads derive turn usage from cumulative thread snapshots", () => {
       },
       kind: "turnTokenUsage", observedAt: now - 999,
       threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["two"], usageDataVersion: 2,
+    }, {
+      kind: "turnUsageContext", model: "gpt-5.6-sol", observedAt: now - 999, serviceTier: null,
+      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"], turnId: fixtureIdentityValues.WorkbenchTurnId["two"],
     }]);
 
-    assert.deepEqual(new WorkbenchStatsRepository(database).read({
-      projectId: fixtureIdentityValues.ProjectId.project,
+    const result = new WorkbenchStatsRepository(database).read({
+      projectIds: [fixtureIdentityValues.ProjectId.project],
       range: "7d",
-    }, now).tokens.totals, {
+    }, now);
+    assert.deepEqual(result.tokens.totals, {
       all: 330,
       cachedInput: 180,
       cacheWriteInput: 0,
@@ -350,6 +390,14 @@ test("token reads derive turn usage from cumulative thread snapshots", () => {
       output: 30,
       uncachedInput: 120,
     });
+    const [thread] = result.topThreads;
+    assert.ok(thread);
+    assert.deepEqual(thread.modelShares.map(({ model, tokens }) => ({ model, tokens })), [
+      { model: "gpt-5.6-sol", tokens: 220 }, { model: "gpt-5.4", tokens: 110 },
+    ]);
+    assert.equal(thread.modelShares.reduce((sum, share) => sum + share.costUsd, 0).toFixed(8), thread.costUsd.toFixed(8));
+    assert.deepEqual(result.summary.buckets.at(-1), { startedAt: Date.UTC(2026, 8, 4), threadCount: 1, turnCount: 2 });
+    assert.ok(result.summary.buckets.slice(0, -1).every(({ threadCount, turnCount }) => threadCount === 0 && turnCount === 0));
   } finally {
     database.close();
   }
@@ -415,7 +463,7 @@ test("cumulative usage keeps pre-filter baselines, ignores repeats, and counts r
 
     assert.deepEqual(new WorkbenchStatsRepository(database).read({
       model: "gpt-5.4",
-      projectId: fixtureIdentityValues.ProjectId.project,
+      projectIds: [fixtureIdentityValues.ProjectId.project],
       range: "7d",
     }, now).tokens.totals, {
       all: 275,
@@ -425,8 +473,8 @@ test("cumulative usage keeps pre-filter baselines, ignores repeats, and counts r
       output: 25,
       uncachedInput: 110,
     });
-    const cache = new WorkbenchStatsRepository(database).readDetailed({
-      model: "gpt-5.4", projectId: fixtureIdentityValues.ProjectId.project, range: "7d", tokenTypes: [],
+    const cache = new WorkbenchStatsRepository(database).read({
+      model: "gpt-5.4", projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d", tokenTypes: [],
     }, now).cacheEfficiency;
     assert.ok(cache);
     assert.equal(cache.totals.inputTokens, 250);
@@ -472,23 +520,24 @@ test("token reads omit stale snapshots and first snapshots without a retained ba
     `).run();
 
     assert.equal(new WorkbenchStatsRepository(database).read({
-      projectId: fixtureIdentityValues.ProjectId.project,
+      projectIds: [fixtureIdentityValues.ProjectId.project],
       range: "7d",
     }, now).tokens.totals.all, 0);
-    assert.equal(new WorkbenchStatsRepository(database).readDetailed({
-      projectId: fixtureIdentityValues.ProjectId.project, range: "7d",
+    assert.equal(new WorkbenchStatsRepository(database).read({
+      projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d",
     }, now).cacheEfficiency?.totals.cacheHitPercent, null);
   } finally {
     database.close();
   }
 });
 
-test("claim traffic counts distinct threads instead of observations or occupied time", () => {
+test("claim traffic counts distinct threads instead of observations or occupied time, and names its claimants", () => {
   const database = createDatabase();
   try {
     const repository = new WorkbenchStatsRepository(database);
     const now = Date.UTC(2026, 8, 4, 12);
-    for (const [threadId, observedAt] of [["one", now - 60_000], ["one", now], ["two", now]] as const) {
+    seedTurn(database, now - 60_000);
+    for (const [threadId, observedAt] of [["two", now - 60_000], ["two", now], ["thread", now]] as const) {
       repository.recordClaimSnapshot({
         harness: "codex",
         observedAt,
@@ -497,11 +546,16 @@ test("claim traffic counts distinct threads instead of observations or occupied 
         threadId,
       });
     }
-    assert.deepEqual(repository.read({ projectId: fixtureIdentityValues.ProjectId.project, range: "7d" }, now).claimHotspots, [{
+    assert.deepEqual(repository.read({ projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d" }, now).claimHotspots, [{
       path: "src/file.ts",
       projectId: fixtureIdentityValues.ProjectId.project,
       rootId: "root",
       threadCount: 2,
+      // Claimants rank by lifetime tokens; provider-only claimants have no openable thread, title, or usage.
+      threads: [
+        { harness: "codex", threadId: "thread", title: "Stats thread", tokens: 9_999 },
+        { harness: "codex", threadId: null, title: null, tokens: 0 },
+      ],
     }]);
   } finally {
     database.close();
@@ -533,7 +587,7 @@ test("rate limits record a current absent secondary window instead of preserving
         secondary: null,
       }],
     });
-    const samples = repository.read({ projectId: null, range: "7d" }, now).rateLimits[0]?.samples;
+    const samples = repository.read({ projectIds: null, range: "7d" }, now).rateLimits[0]?.samples;
     assert.equal(samples?.[0]?.secondary?.usedPercent, 12);
     const sample = samples?.at(-1);
     assert.equal(sample?.primary?.usedPercent, 42);
@@ -559,11 +613,113 @@ test("rate limits preserve a tertiary account window", () => {
         tertiary: { durationMinutes: 43_200, resetsAt: now, usedPercent: 56 },
       }],
     });
-    const sample = repository.read({ projectId: null, range: "7d" }, now).rateLimits[0]?.samples[0];
+    const sample = repository.read({ projectIds: null, range: "7d" }, now).rateLimits[0]?.samples[0];
     assert.equal(sample?.tertiary?.usedPercent, 56);
   } finally {
     database.close();
   }
+});
+
+function seedUsage(database: Database.Database, options: {
+  id: string; projectId: fixtureIdentitySchemas.ProjectId; at: number; model: string | null;
+  harness?: "codex" | "claude" | "opencode"; input: number; output: number;
+}) {
+  const threadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(options.id);
+  const turnId = fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(options.id);
+  new WorkbenchTranscriptRepository(database).settle([{
+    activityAt: options.at, createdAt: options.at, kind: "thread", projectId: options.projectId, projectRoot: "C:/project",
+    threadId, title: options.id, updatedAt: options.at,
+  }, {
+    createdAt: options.at, durationMs: 1, endedAt: options.at + 1, harnessId: options.harness ?? "codex", kind: "turn",
+    nativeLocation: "C:/project", nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse(options.id),
+    nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse(options.id), startedAt: options.at,
+    state: "completed", threadId, turnId, turnIndex: 0,
+  }, ...(options.model ? [{
+    kind: "turnUsageContext" as const, model: options.model, observedAt: options.at, serviceTier: null, threadId, turnId,
+  }] : []), {
+    cumulative: { inputTokens: options.input, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: options.output,
+      reasoningOutputTokens: 0, totalTokens: options.input + options.output },
+    kind: "turnTokenUsage", observedAt: options.at, threadId, turnId, usageDataVersion: 2,
+  }]);
+}
+
+test("project scope reads exactly the selected projects and breaks usage down by project and provider", () => {
+  const database = createDatabase();
+  try {
+    const now = Date.UTC(2026, 8, 4, 12);
+    // Inputs stay under the 272K long-context tier so rates are the standard ones.
+    seedUsage(database, { id: "a", projectId: testProjectIds.project, at: now, model: "gpt-5.4", input: 200_000, output: 0 });
+    seedUsage(database, { id: "b", projectId: testProjectIds.other, at: now, model: "claude-opus-5-5", harness: "claude", input: 0, output: 1_000_000 });
+    seedUsage(database, { id: "c", projectId: testProjectIds.foreign, at: now, model: "gpt-5.4", input: 250_000, output: 0 });
+    const repository = new WorkbenchStatsRepository(database);
+    const scoped = repository.read({ projectIds: [testProjectIds.project, testProjectIds.other], range: "7d" }, now);
+    assert.equal(scoped.tokens.totals.all, 1_200_000);
+    assert.equal(scoped.cost.totalUsd, 20.5);
+    assert.deepEqual(new Map(scoped.projects.map(({ projectId, costUsd }) => [projectId, costUsd])), new Map([
+      [testProjectIds.project, 0.5],
+      [testProjectIds.other, 20],
+    ]));
+    assert.deepEqual(new Set(scoped.providers.map(({ provider }) => provider)), new Set(["codex", "claude"]));
+    assert.equal(repository.read({ projectIds: null, range: "7d" }, now).tokens.totals.all, 1_450_000);
+    assert.equal(repository.read({ projectIds: [], range: "7d" }, now).tokens.totals.all, 0);
+  } finally { database.close(); }
+});
+
+test("the previous window compares the same length immediately before the range", () => {
+  const database = createDatabase();
+  try {
+    const now = Date.UTC(2026, 8, 20, 12);
+    const day = 86_400_000;
+    seedUsage(database, { id: "current", projectId: testProjectIds.project, at: now - day, model: "gpt-5.4", input: 100_000, output: 0 });
+    seedUsage(database, { id: "previous", projectId: testProjectIds.project, at: now - 10 * day, model: "gpt-5.4", input: 200_000, output: 0 });
+    seedUsage(database, { id: "ancient", projectId: testProjectIds.project, at: now - 20 * day, model: "gpt-5.4", input: 250_000, output: 0 });
+    const result = new WorkbenchStatsRepository(database).read({ projectIds: null, range: "7d" }, now);
+    assert.equal(result.tokens.totals.all, 100_000);
+    assert.deepEqual(result.previous, { costUsd: 0.5, threadCount: 1, tokens: 200_000, turnCount: 1 });
+  } finally { database.close(); }
+});
+
+test("unpriced models keep their tokens but never contribute or borrow cost", () => {
+  const database = createDatabase();
+  try {
+    const now = Date.UTC(2026, 8, 4, 12);
+    seedUsage(database, { id: "priced", projectId: testProjectIds.project, at: now, model: "gpt-5.4", input: 200_000, output: 0 });
+    seedUsage(database, { id: "mystery", projectId: testProjectIds.project, at: now, model: "mystery-model", input: 3_000_000, output: 0 });
+    seedUsage(database, { id: "unknown", projectId: testProjectIds.project, at: now, model: null, input: 7, output: 0 });
+    // Earlier releases persisted provider-default guesses; reads must not trust them.
+    database.prepare(`
+      INSERT INTO thread_usage_model_attributions (turn_id, model, source, policy_version, updated_at)
+      VALUES ('unknown', 'gpt-5.4', 'provider', 1, 1)
+    `).run();
+    const result = new WorkbenchStatsRepository(database).read({ projectIds: null, range: "7d" }, now);
+    assert.equal(result.tokens.totals.all, 3_200_007);
+    assert.equal(result.cost.totalUsd, 0.5);
+    assert.equal(result.cost.basis.unpricedTokens, 3_000_007);
+    assert.deepEqual(result.cost.unpricedModels, [
+      { model: "mystery-model", provider: "codex", tokens: 3_000_000 },
+      { model: null, provider: "codex", tokens: 7 },
+    ]);
+    assert.equal(result.models.find(({ model }) => model === "mystery-model")?.costUsd, 0);
+  } finally { database.close(); }
+});
+
+test("claimed roots report only roots with claims in the window and their earliest claim day", () => {
+  const database = createDatabase();
+  try {
+    const repository = new WorkbenchStatsRepository(database);
+    const now = Date.UTC(2026, 8, 20, 12);
+    const day = 86_400_000;
+    for (const [rootId, observedAt] of [["a", now - 3 * day], ["a", now - day], ["b", now - 30 * day]] as const) {
+      repository.recordClaimSnapshot({
+        harness: "codex", observedAt, projectId: testProjectIds.project, roots: [{ paths: ["src/file.ts"], rootId }], threadId: "thread",
+      });
+    }
+    assert.deepEqual(repository.claimedRoots([testProjectIds.project], "7d", now), [
+      { projectId: testProjectIds.project, rootId: "a", earliestClaimedDay: Date.UTC(2026, 8, 17) },
+    ]);
+    assert.equal(repository.claimedRoots(null, "all", now).length, 2);
+    assert.deepEqual(repository.claimedRoots([testProjectIds.other], "all", now), []);
+  } finally { database.close(); }
 });
 
 test("rate-limit reads retain range history and the newest sample within the response bound", () => {
@@ -590,8 +746,8 @@ test("rate-limit reads retain range history and the newest sample within the res
         }
       }
     })();
-    const result = new WorkbenchStatsRepository(database).readDetailed({ projectId: null, range: "7d" }, now);
-    assert.equal(WorkbenchStatsDetailedResponseSchema.safeParse(result).success, true);
+    const result = new WorkbenchStatsRepository(database).read({ projectIds: null, range: "7d" }, now);
+    assert.equal(WorkbenchStatsResponseSchema.safeParse(result).success, true);
     assert.equal(result.rateLimits.length, 2);
     for (const limit of result.rateLimits) {
       assert.ok(limit.samples.length <= 2_000);
