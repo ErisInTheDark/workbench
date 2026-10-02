@@ -12,10 +12,11 @@ import { WorkbenchCommandArgumentError } from "../commands/workbench-agent-comma
 
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry";
-import type {
-  WorkbenchAgentCommandDefinition,
-  WorkbenchAgentCommandRequest,
-  WorkbenchAgentCommandResponseKind,
+import {
+  isWorkbenchAgentCommandVisibleTo,
+  type WorkbenchAgentCommandDefinition,
+  type WorkbenchAgentCommandRequest,
+  type WorkbenchAgentCommandResponseKind,
 } from "../commands/workbench-agent-command-definition";
 
 export type WorkbenchAgentCliRequest = WorkbenchAgentCommandRequest;
@@ -83,7 +84,7 @@ export function listWorkbenchAgentCliCommandDescriptors(catalog: readonly Daemon
 }
 
 const ROOT_HELP_COMMAND_ORDER = [
-  "toc", "rg",
+  "toc", "rg", "rm",
   "tokens", "tokens instructions", "tokens project",
   "transcript projects", "transcript threads", "transcript turns", "transcript search", "transcript read", "transcript show", "transcript stats",
   "stats claims",
@@ -314,7 +315,8 @@ export async function parseWorkbenchAgentCliCommand(
   const workbenchArgs = argsBeforeTrailingSeparator(argv);
   if (!argv.length || workbenchArgs.includes("--help") || argv[0] === "help") {
     const group = matchHelpGroup(helpPath(workbenchArgs));
-    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe"), commands, reloadCatalog) : renderRootHelp(commands, isWorkbenchRoot), kind: "help" };
+    const visible = commands.filter((command) => isWorkbenchAgentCommandVisibleTo(command, callerHarness));
+    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe"), visible, reloadCatalog) : renderRootHelp(visible, isWorkbenchRoot), kind: "help" };
   }
   const matched = commands.flatMap((definition) => (
     [definition.words, ...(definition.aliases ?? [])].map((words) => ({ definition, words }))

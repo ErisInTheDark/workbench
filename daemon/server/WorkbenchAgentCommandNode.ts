@@ -12,6 +12,7 @@ import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchTokenCountController from "./WorkbenchTokenCountController";
 import WorkbenchClaimStatsController from "./WorkbenchClaimStatsController";
+import WorkbenchFileRemovalController from "./WorkbenchFileRemovalController";
 import WorkbenchTranscriptCommandController from "./WorkbenchTranscriptCommandController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { ThreadReferenceSchema, TurnReferenceSchema, ItemReferenceSchema } from "workbench-shared/workbench/identity";
@@ -71,6 +72,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, {
         endpointName: "Project token counting",
       }),
+    });
+    const fileRemoval = new WorkbenchFileRemovalController(async ({ cwd, harness, threadId, paths }, signal) => {
+      const { identity, binding } = await nativeTarget(threadId, cwd, harness);
+      signal.throwIfAborted();
+      return await gitArc.checkActiveClaimPaths(cwd, WorkbenchHarnessSchema.parse(binding.harness), identity.threadId, paths);
     });
     const commandLogger = new WorkbenchAgentCommandLogger();
     const materializeTurn = async (threadId: string, turnId: string | null, signal: AbortSignal) => {
@@ -138,6 +144,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executeTokenCount: async (body, signal) => await tokens.execute(body, signal),
       executeTranscriptQuery: async (body, signal) => await transcriptCommands.execute(body, signal),
       executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
+      executeFileRemoval: async (body, signal) => await fileRemoval.execute(body, signal),
       executeSkillRequest: async (body, signal) => {
         const request = WorkbenchSkillExecutionRequestSchema.parse(body);
         const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
@@ -195,6 +202,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     "daemon/server/WorkbenchRipgrepController*.ts",
     "daemon/server/WorkbenchTokenCountController*.ts",
     "daemon/server/WorkbenchClaimStatsController*.ts",
+    "daemon/server/WorkbenchFileRemovalController*.ts",
     "daemon/server/WorkbenchTranscriptCommandController*.ts",
     "daemon/server/transcript-command-markdown.ts",
     "daemon/server/lib/workbench/commands/**",

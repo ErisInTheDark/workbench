@@ -4,6 +4,7 @@
  * - listWorkbenchAgentCodeModeToolNames: list the explicit default-deny subset safe for nested Code Mode calls.
  */
 import { WORKBENCH_BROWSE_COMMANDS } from "./browse-command-definitions";
+import { WORKBENCH_FILE_REMOVAL_COMMANDS } from "./file-removal-command-definition";
 import { WORKBENCH_GIT_ARC_COMMANDS } from "./git-arc-command-definitions";
 import { WORKBENCH_GIT_COMMANDS } from "./git-command-definitions";
 import { WORKBENCH_LIVE_PROVIDER_TEST_COMMANDS } from "./live-provider-test-command-definition";
@@ -28,6 +29,7 @@ const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Obj
   ...WORKBENCH_TOC_COMMANDS,
   ...WORKBENCH_STATS_COMMANDS,
   ...WORKBENCH_RIPGREP_COMMANDS,
+  ...WORKBENCH_FILE_REMOVAL_COMMANDS,
   ...WORKBENCH_SKILL_COMMANDS,
   ...WORKBENCH_QUESTIONNAIRE_COMMANDS,
   ...WORKBENCH_MESSAGE_COMMANDS,

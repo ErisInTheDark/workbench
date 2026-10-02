@@ -34,6 +34,7 @@ interface WorkbenchAgentDirectPort {
   executeTokenCount?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeTranscriptQuery?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeClaimStats?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeFileRemoval?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeSessionRequest(request: { body: Buffer; method: string; url: string }, signal: AbortSignal): Promise<Response>;
   getReloadScopeCatalog?: () => readonly DaemonReloadScopeDescriptor[];
   readReloadDirtSnapshot?: () => WorkbenchReloadDirtSnapshot;
@@ -352,6 +353,10 @@ export default class WorkbenchAgentCommandController {
     }
     if (request.path === "/api/rg" && request.body) {
       return await this.ripgrep.execute(request.body, signal);
+    }
+    if (request.path === "/api/rm" && request.body) {
+      if (!this.direct.executeFileRemoval) throw new Error("File removal is not configured.");
+      return await this.direct.executeFileRemoval(request.body, signal);
     }
     if (request.path === "/internal/tokens" && request.body) {
       if (!this.direct.executeTokenCount) throw new Error("Token counting is not configured.");

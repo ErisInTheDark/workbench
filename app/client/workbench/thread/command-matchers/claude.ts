@@ -41,7 +41,7 @@ export function isClaudeFileOperation(item: ThreadItem): item is NativeItem & { 
   return item.type === "dynamicToolCall" && item.namespace === "claude" && (item.tool === "Edit" || item.tool === "Write");
 }
 
-export function getClaudeFileChanges(item: NativeItem): NativeFileChange[] {
+export function getClaudeFileChanges(item: ThreadItem): NativeFileChange[] {
   if (!isClaudeFileOperation(item)) return [];
   const path = text(record(item.arguments)?.file_path);
   if (!path) return [];

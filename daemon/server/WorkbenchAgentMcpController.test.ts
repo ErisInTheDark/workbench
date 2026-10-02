@@ -8,7 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-agent-command-registry";
-import type { WorkbenchAgentCommandRequest } from "./lib/workbench/commands/workbench-agent-command-definition";
+import { isWorkbenchAgentCommandVisibleTo, type WorkbenchAgentCommandRequest } from "./lib/workbench/commands/workbench-agent-command-definition";
 import WorkbenchAgentMcpController, { type WorkbenchAgentMcpControllerOptions } from "./WorkbenchAgentMcpController";
 import CodexToolsController from "./CodexToolsController";
 import CodexShellController from "./CodexShellController";
@@ -307,6 +307,33 @@ test("the explicit provider owns MCP metadata and supplies WB command identity",
   }
 });
 
+test("provider-scoped commands register only for their providers", async () => {
+  const controller = new WorkbenchAgentMcpController({
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    executeCommand: async () => { throw new Error("unexpected command"); },
+    tools: () => ({
+      describe: async () => ({ experimental: {}, shellDescription: "sandboxed execution", shellEscalation: false }),
+      caller: async () => { throw new Error("unexpected caller"); },
+      shell: async () => { throw new Error("unexpected shell"); },
+      patchClaims: async () => { throw new Error("unexpected patch"); },
+    }),
+  });
+  const server = await startController(controller);
+  const claudeUrl = new URL(server.url);
+  claudeUrl.searchParams.set("provider", "claude");
+  const claude = await connectClient(claudeUrl);
+  const codex = await connectClient(server.url);
+  try {
+    assert.equal((await claude.listTools()).tools.some(({ name }) => name === "rm"), true);
+    assert.equal((await codex.listTools()).tools.some(({ name }) => name === "rm"), false);
+  } finally {
+    await claude.close();
+    await codex.close();
+    await server.close();
+  }
+});
+
 test("lists one typed tool per eligible command and dispatches with trusted thread cwd", async () => {
   const executed: WorkbenchAgentCommandRequest[] = [];
   const codexRequests: Array<{ method?: string; params?: unknown }> = [];
@@ -346,7 +373,12 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   const projectClient = await connectClient(projectUrl);
   try {
     const inventory = await client.listTools();
-    const eligible = listWorkbenchAgentCommands(reloadCatalog, "agent").filter(({ hideFromMcp, managedThreadRootOnly }) => !hideFromMcp && !managedThreadRootOnly);
+    const eligible = listWorkbenchAgentCommands(reloadCatalog, "agent").filter((definition) => (
+      !definition.hideFromMcp && !definition.managedThreadRootOnly && isWorkbenchAgentCommandVisibleTo(definition, "codex")
+    ));
+    const hiddenFromCodex = new Set(listWorkbenchAgentCommands(reloadCatalog, "agent")
+      .filter((definition) => !isWorkbenchAgentCommandVisibleTo(definition, "codex"))
+      .map((definition) => definition.words.join("_")));
     assert.equal(inventory.tools.length, eligible.length + 1);
     assert.ok(client.getServerCapabilities()?.experimental?.[WORKBENCH_SHELL_SANDBOX_CAPABILITY]);
     assert.equal(inventory.tools.some(({ name }) => name === "browse_raw"), false);
@@ -359,7 +391,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(projectInventory.tools.some(({ name }) => name === "tokens_instructions"), true);
     const instructionTools = controller.listInstructionTools();
     assert.deepEqual(
-      instructionTools.map(({ id }) => id).sort(),
+      instructionTools.map(({ id }) => id).filter((id) => !hiddenFromCodex.has(id)).sort(),
       projectInventory.tools.map(({ name }) => name).sort(),
     );
     assert.equal(instructionTools.find(({ id }) => id === "rg")?.codeModeEligible, true);

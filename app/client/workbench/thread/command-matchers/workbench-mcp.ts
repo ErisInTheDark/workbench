@@ -4,8 +4,10 @@
  * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: resolve a recorded wb MCP call and keep failed Recall calls on the generic MCP error surface. Keywords: workbench, MCP, command, route, failure.
  * - getWorkbenchMcpCommandDisplay: match a simple recorded wb MCP call to its shared summary presentation. Keywords: workbench, MCP, command, rendering.
  * - WorkbenchMcpShellCommandItem/getWorkbenchMcpShellCommandItem: derive valid wb shell evidence and its matcher shell into the ordinary command presentation shape. Keywords: workbench, MCP, shell, command, presentation.
+ * - isWorkbenchFileRemoval/getWorkbenchFileRemovalChanges: present wb rm calls as file-change deletes. Keywords: workbench, MCP, rm, delete, file change.
  */
 import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { NativeFileChange } from "./native-file-changes";
 import {
   getWorkbenchShellAggregatedOutput,
   WorkbenchShellInputSchema,
@@ -85,6 +87,22 @@ export function getWorkbenchMcpShellCommandItem(
     status: item.status,
     type: "commandExecution",
   };
+}
+
+export function isWorkbenchFileRemoval(item: ThreadItem): item is McpToolCallItem & { tool: "rm" } {
+  return item.type === "mcpToolCall" && isWorkbenchMcpServer(item.server) && item.tool === "rm";
+}
+
+export function getWorkbenchFileRemovalChanges(item: ThreadItem): NativeFileChange[] {
+  if (!isWorkbenchFileRemoval(item)) return [];
+  const args = item.arguments;
+  const paths = args !== null && typeof args === "object" && !Array.isArray(args) && Array.isArray(args.paths)
+    ? args.paths.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+    : [];
+  return paths.map((path, sourceChangeIndex) => ({
+    change: { path, kind: { type: "delete" }, diff: "" },
+    sourceItemId: item.id, sourceChangeIndex, danger: item.status === "failed",
+  }));
 }
 
 export function getWorkbenchMcpCommandRoute({

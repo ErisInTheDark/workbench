@@ -4,7 +4,7 @@
  * - WorkbenchSubagentCommand/WorkbenchSubagentCommandTarget/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, and ordered id/name targets.
  * - WorkbenchTaskTitleCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse task title actions and identify standalone title-set displays.
  * - WorkbenchTaskStatusCommand/parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse task completion actions and identify standalone successful displays.
- * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, task, token, subagent, and reload commands.
+ * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, task, token, subagent, and reload commands.
  */
 import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
 
@@ -298,6 +298,19 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       return file && file !== "--help"
         ? getWorkbenchCommandRendering("toc", { file })?.result ?? null
         : null;
+    },
+  }),
+  CommandMatcher({
+    id: "workbench-cli.rm",
+    match: ({ stage, summaryParts }) => {
+      if (summaryParts.length) return null;
+      const tokens = tokenizeCommand(stage.text.trim());
+      if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "") || tokens[1] !== "rm" || tokens.includes("--help")) return null;
+      const separator = tokens.indexOf("--", 2);
+      const paths = tokens.slice(2).filter((token, index) => (
+        separator >= 0 && index + 2 > separator ? true : !token.startsWith("-")
+      ));
+      return paths.length ? getWorkbenchCommandRendering("rm", { paths })?.result ?? null : null;
     },
   }),
   CommandMatcher({

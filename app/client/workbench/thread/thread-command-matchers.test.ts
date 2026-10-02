@@ -17,7 +17,9 @@ import {
 
 import {
   getGitArcMatcherAction,
+  getNativeFileChanges,
   getThreadCommandDisplay,
+  isNativeFileOperation,
   getThreadCommandExecutionOutcome,
   getThreadCommandOutcomeDisplay,
   getWorkbenchThreadRecallSummaryDisplay,
@@ -77,6 +79,19 @@ function shellMcpItem(overrides: Partial<McpToolCallItem> = {}): McpToolCallItem
     ...overrides,
   };
 }
+
+test("wb rm MCP calls render as one delete row per path and fail as danger", () => {
+  const removal = shellMcpItem({ arguments: { paths: ["src/old.ts", "notes.md"] }, id: "rm-one", status: "completed", tool: "rm" });
+  assert.equal(isNativeFileOperation(removal), true);
+  if (!isNativeFileOperation(removal)) assert.fail("Expected a file operation");
+  assert.deepEqual(getNativeFileChanges(removal).map(({ change, danger }) => [change.path, change.kind.type, danger]), [
+    ["src/old.ts", "delete", false],
+    ["notes.md", "delete", false],
+  ]);
+  const failed = { ...removal, status: "failed" as const };
+  assert.deepEqual(getNativeFileChanges(failed).map(({ danger }) => danger), [true, true]);
+  assert.equal(isNativeFileOperation(shellMcpItem({ arguments: { file: "AGENTS.md" }, tool: "toc" })), false);
+});
 
 function assertRouteOnlyDisplay(
   display: ReturnType<typeof getThreadCommandDisplay>,

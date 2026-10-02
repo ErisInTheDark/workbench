@@ -13,8 +13,9 @@ import type { ReactNode } from "react";
 
 import { toWorkspaceDisplayPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
-import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import { getNativeFileChanges } from "../../../workbench/thread/thread-command-matchers";
+import {
+  getNativeFileChanges, getNativeFileOperationOutcome, type NativeFileOperationItem,
+} from "../../../workbench/thread/thread-command-matchers";
 import type { FileChangeAnalysis } from "workbench-shared/workbench/thread/file-change-analysis";
 import { enterMotionClassName } from "../../../tailwind/enter-motion-classes";
 import {
@@ -31,17 +32,17 @@ import { ThreadEntryMotion } from "./thread-scroll-viewport-context";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadToolCallDetails from "./ThreadToolCallDetails";
-import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
+import { formatDynamicToolInvocation, formatMcpToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 
 type FileChangeItem = WorkbenchFileChangeItem;
-type NativeFileItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
+type NativeFileItem = NativeFileOperationItem;
 type FileOperationItem = FileChangeItem | NativeFileItem;
 type FileUpdateChange = FileChangeItem["changes"][number];
 
 export function getThreadFileChangeTotals(items: readonly FileOperationItem[]) {
   return items.reduce((total, item) => {
-    if (item.type === "dynamicToolCall") {
-      if (item.status !== "completed" || item.success === false) return total;
+    if (item.type !== "fileChange") {
+      if (getNativeFileOperationOutcome(item) !== "completed") return total;
       for (const entry of getNativeFileChanges(item)) {
         const counts = parseFileChangeDiff(entry.change);
         total.additions += counts.additions;
@@ -490,12 +491,19 @@ function ThreadFileChangeOutcome ({ item }: { item: FileChangeItem }) {
 function NativeFileEvidence({ item }: { item: NativeFileItem }) {
   return <>
     {item.durationMs !== null ? <ThreadDurationText durationMs={item.durationMs} /> : null}
-    {item.status === "failed" || item.success === false
+    {getNativeFileOperationOutcome(item) === "failed"
       ? <p className="m-0 text-fg/muted">Attempted change. Applied counts are unavailable.</p> : null}
-    <ThreadToolCallDetails
-      invocation={formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool })}
-      output={formatToolCallOutput({ content: item.contentItems })}
-    />
+    {item.type === "dynamicToolCall" ? (
+      <ThreadToolCallDetails
+        invocation={formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool })}
+        output={formatToolCallOutput({ content: item.contentItems })}
+      />
+    ) : (
+      <ThreadToolCallDetails
+        invocation={formatMcpToolInvocation({ argumentsValue: item.arguments, server: item.server, tool: item.tool })}
+        output={formatToolCallOutput({ content: item.result?.content, fallback: item.error?.message ?? null })}
+      />
+    )}
   </>;
 }
 
@@ -514,41 +522,44 @@ export default function ThreadFileChangeItem ({
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const hasRows = items.some((item) => item.type === "dynamicToolCall" || item.changes.length || item.status !== "completed");
-  if (items.length && items.every(item => item.type === "dynamicToolCall"
+  const hasRows = items.some((item) => item.type !== "fileChange" || item.changes.length || item.status !== "completed");
+  if (items.length && items.every(item => item.type !== "fileChange"
     && item.status === "inProgress" && !getNativeFileChanges(item).length)) return null;
   return (
     <div className="space-y-1.5 py-2">
       {items.map((item) => {
-        const nativeChanges = item.type === "dynamicToolCall" ? getNativeFileChanges(item) : [];
-        if (item.type === "dynamicToolCall" && item.status === "inProgress" && !nativeChanges.length) return null;
-        return item.type === "dynamicToolCall" ? (
+        if (item.type !== "fileChange") {
+          const nativeChanges = getNativeFileChanges(item);
+          const outcome = getNativeFileOperationOutcome(item);
+          if (outcome === "inProgress" && !nativeChanges.length) return null;
+          return (
         <div className="space-y-0.5" key={item.id}>
           <ThreadFileChangeRows
             animateEntries={animateEntries}
             changes={nativeChanges.map(({ failureKind, ...entry }, index) => ({
               ...entry,
               details: index === 0 ? <NativeFileEvidence item={item} /> : undefined,
-              detailsAvailable: item.status !== "inProgress" && (index === 0 || Boolean(entry.change.diff)),
+              detailsAvailable: outcome !== "inProgress" && (index === 0 || Boolean(entry.change.diff)),
               showDiff: Boolean(entry.change.diff),
               staticMarker: true,
               presentationLabel: entry.presentationLabel ?? getFileChangeLifecycleLabel(entry.change, {
-                status: item.status === "failed" || item.success === false ? "failed"
-                  : item.status === "inProgress" ? "inProgress" : "completed",
+                status: outcome,
                 workbenchFailureKind: failureKind,
               }),
             }))}
             projectFilePaths={projectFilePaths} projectId={projectId}
             projectRootPath={projectRootPath} workspaceRoots={workspaceRoots}
           />
-          {!nativeChanges.length && item.status !== "inProgress" ? (
-            <ThreadDisclosure summary={<ThreadSummaryText text={item.status === "failed" || item.success === false
+          {!nativeChanges.length && outcome !== "inProgress" ? (
+            <ThreadDisclosure summary={<ThreadSummaryText text={outcome === "failed"
               ? "Failed file operation" : "File operation completed"} />}>
               <NativeFileEvidence item={item} />
             </ThreadDisclosure>
           ) : null}
         </div>
-      ) : (
+          );
+        }
+        return (
         <div className="space-y-0.5" key={item.id}>
           <ThreadFileChangeRows
             animateEntries={animateEntries}
@@ -575,7 +586,8 @@ export default function ThreadFileChangeItem ({
           ) : null}
           <ThreadFileChangeOutcome item={item} />
         </div>
-      ); })}
+        );
+      })}
       {!hasRows ? (
         <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No changed files captured.</p>
       ) : null}

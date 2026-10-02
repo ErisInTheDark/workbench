@@ -90,7 +90,7 @@ export function isOpenCodeFileOperation(item: ThreadItem): item is NativeItem & 
     && ["edit", "write", "patch"].includes(item.tool);
 }
 
-export function getOpenCodeFileChanges(item: NativeItem): NativeFileChange[] {
+export function getOpenCodeFileChanges(item: ThreadItem): NativeFileChange[] {
   if (!isOpenCodeFileOperation(item)) return [];
   const files = record(item.metadata)?.files;
   const failed = item.status === "failed" || item.success === false;

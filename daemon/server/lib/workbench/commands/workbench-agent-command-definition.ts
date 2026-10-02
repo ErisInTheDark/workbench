@@ -7,12 +7,13 @@
  * - WorkbenchAgentCommandContext/WorkbenchAgentCommandDefinition: invocation context and registry definitions.
  * - defineWorkbenchAgentCommand: preserve schema inference at the registry boundary.
  * - getWorkbenchAgentCommandToolName: canonical MCP command name.
+ * - isWorkbenchAgentCommandVisibleTo: whether a provider sees a command in MCP registration and CLI help.
  * - getWorkbenchAgentCommand/postWorkbenchAgentCommand/queryWorkbenchAgentCommandPath: request construction.
  * - createWorkbenchAgentMcpRuntimeReloadInterruption: private reload re-entry signal.
  * - isWorkbenchAgentMcpRuntimeReloadInterruption: recognise cross-generation reload re-entry.
  */
 import { z } from "zod";
-import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
+import { ProviderKeySchema, type ProviderKey } from "workbench-shared/workbench/provider/provider-key";
 
 export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -103,6 +104,8 @@ export interface WorkbenchAgentCommandDefinition {
   buildRequestFromJson(input: object, context: WorkbenchAgentCommandContext): Promise<WorkbenchAgentCommandRequest>;
   description: string;
   effects: WorkbenchAgentCommandEffects;
+  /** Providers that see this command in MCP registration and CLI help; omitted means every provider. */
+  harnesses?: readonly ProviderKey[];
   hideFromMcp?: boolean;
   hideFromRootHelp?: boolean;
   helpGroups: readonly string[];
@@ -120,6 +123,7 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   buildRequest(input: z.output<TSchema>, context: WorkbenchAgentCommandContext): Promise<WorkbenchAgentCommandRequest> | WorkbenchAgentCommandRequest;
   description: string;
   effects?: WorkbenchAgentCommandEffects;
+  harnesses?: readonly ProviderKey[];
   hideFromMcp?: boolean;
   hideFromRootHelp?: boolean;
   helpGroups: readonly string[];
@@ -150,6 +154,7 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     buildRequestFromJson: buildValidatedRequest,
     description: definition.description,
     effects: definition.effects ?? {},
+    harnesses: definition.harnesses,
     hideFromMcp: definition.hideFromMcp,
     hideFromRootHelp: definition.hideFromRootHelp,
     helpGroups: definition.helpGroups,
@@ -165,6 +170,10 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
 
 export function getWorkbenchAgentCommandToolName(definition: Pick<WorkbenchAgentCommandDefinition, "words">) {
   return definition.words.join("_");
+}
+
+export function isWorkbenchAgentCommandVisibleTo(definition: Pick<WorkbenchAgentCommandDefinition, "harnesses">, harness: string) {
+  return !definition.harnesses || definition.harnesses.includes(harness);
 }
 
 export function postWorkbenchAgentCommand(

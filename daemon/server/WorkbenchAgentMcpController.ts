@@ -19,6 +19,7 @@ import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/dae
 import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-agent-command-registry";
 import {
   getWorkbenchAgentCommandToolName,
+  isWorkbenchAgentCommandVisibleTo,
   type WorkbenchAgentCommandDefinition,
   type WorkbenchAgentCommandRequest,
 } from "./lib/workbench/commands/workbench-agent-command-definition";
@@ -197,20 +198,25 @@ export default class WorkbenchAgentMcpController {
     // The accepted HTTP request owns its response and transport after the reloadable feature lease returns.
     const url = new URL(request.url ?? "/", "http://localhost");
     let clientScope: string;
+    let provider: string;
     let tools: WorkbenchProviderTools;
     try {
       clientScope = readClientScope(url);
-      const provider = url.searchParams.get("provider");
-      if (!provider) throw new Error("Workbench MCP requires a provider selector.");
+      const selected = url.searchParams.get("provider");
+      if (!selected) throw new Error("Workbench MCP requires a provider selector.");
+      provider = selected;
       tools = this.tools(provider);
     } catch (error) {
       sendJsonRpcError(response, 400, sanitizeError(error) || "Workbench MCP client scope is invalid.");
       return;
     }
-    void this.completeRequest(request, response, clientScope, url.searchParams.get("project-local") === "true", tools);
+    void this.completeRequest(request, response, clientScope, url.searchParams.get("project-local") === "true", provider, tools);
   }
 
-  private async completeRequest(request: http.IncomingMessage, response: http.ServerResponse, clientScope: string, projectLocal: boolean, tools: WorkbenchProviderTools) {
+  private async completeRequest(
+    request: http.IncomingMessage, response: http.ServerResponse, clientScope: string, projectLocal: boolean,
+    provider: string, tools: WorkbenchProviderTools,
+  ) {
     const requestAbort = new AbortController();
     const abortDisconnectedRequest = () => {
       if (!requestAbort.signal.aborted) requestAbort.abort(new Error("Workbench MCP caller disconnected."));
@@ -230,7 +236,7 @@ export default class WorkbenchAgentMcpController {
       close();
     });
     try {
-      server = await this.createServer(requestAbort.signal, clientScope, projectLocal, tools);
+      server = await this.createServer(requestAbort.signal, clientScope, projectLocal, provider, tools);
       requestAbort.signal.throwIfAborted();
       const body = await readJsonBody(request);
       await server.connect(transport);
@@ -244,7 +250,7 @@ export default class WorkbenchAgentMcpController {
     }
   }
 
-  private async createServer(requestSignal: AbortSignal, clientScope: string, projectLocal: boolean, tools: WorkbenchProviderTools) {
+  private async createServer(requestSignal: AbortSignal, clientScope: string, projectLocal: boolean, provider: string, tools: WorkbenchProviderTools) {
     const description = await tools.describe();
     requestSignal.throwIfAborted();
     const server = new McpServer({ name: "wb", version: "1.0.0" }, {
@@ -281,7 +287,8 @@ export default class WorkbenchAgentMcpController {
         }),
     ));
     for (const definition of listWorkbenchAgentCommands(this.getReloadScopeCatalog(), "agent")) {
-      if (definition.hideFromMcp || (definition.managedThreadRootOnly && !projectLocal)) continue;
+      if (definition.hideFromMcp || (definition.managedThreadRootOnly && !projectLocal)
+        || !isWorkbenchAgentCommandVisibleTo(definition, provider)) continue;
       const name = getWorkbenchAgentCommandToolName(definition);
       if (names.has(name)) throw new Error(`Duplicate Workbench MCP tool name: ${name}`);
       names.add(name);

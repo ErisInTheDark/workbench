@@ -42,7 +42,7 @@ export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcp
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 export type ThreadRenderableBlock =
   | { kind: "commandSequence"; items: CommandSequenceItem[] }
-  | { kind: "fileChangeSequence"; items: Extract<ThreadItem, { type: "fileChange" | "dynamicToolCall" }>[] }
+  | { kind: "fileChangeSequence"; items: Extract<ThreadItem, { type: "fileChange" | "dynamicToolCall" | "mcpToolCall" }>[] }
   | { kind: "reasoningSequence"; items: Extract<ThreadItem, { type: "reasoning" }>[] }
   | { kind: "userMessageSequence"; items: UserMessageItem[]; state: WorkbenchInputState["status"] }
   | { kind: "webSearchSequence"; items: Extract<ThreadItem, { type: "webSearch" }>[] }
@@ -181,7 +181,7 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
       if (!isHiddenCommandExecution(item.command)) commands(item);
       continue;
     }
-    if (item.type === "mcpToolCall") {
+    if (item.type === "mcpToolCall" && !isNativeFileOperation(item)) {
       const shell = getWorkbenchMcpShellCommandItem(item, fallbackCwd);
       if (shell) { if (!isHiddenCommandExecution(shell.command)) commands(shell); continue; }
       const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
@@ -197,7 +197,7 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     }
     if (item.type === "dynamicToolCall" && hidden.dynamicToolCallIds?.has(item.id)) { flush(); continue; }
     if (item.type === "fileChange" || isNativeFileOperation(item)) {
-      if (item.type === "dynamicToolCall" && item.status === "inProgress" && !getNativeFileChanges(item).length) continue;
+      if (item.type !== "fileChange" && item.status === "inProgress" && !getNativeFileChanges(item).length) continue;
       if (pending?.kind !== "fileChangeSequence") { flush(); pending = { kind: "fileChangeSequence", items: [] }; }
       pending.items.push(item);
       continue;

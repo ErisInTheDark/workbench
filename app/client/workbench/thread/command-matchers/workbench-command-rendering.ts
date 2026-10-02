@@ -34,6 +34,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "toc",
   "skill",
   "rg",
+  "rm",
   "tokens",
   "tokens_instructions",
   "tokens_project",
@@ -600,6 +601,16 @@ export function getWorkbenchCommandRoute(
             }),
         },
       };
+    case "rm": {
+      const paths = readStringArray(args.paths);
+      const target = paths.length === 1 ? paths[0]! : paths.length ? `${paths.length} paths` : "files";
+      return simple(
+        "workbench-cli.rm",
+        actionTarget("Deleting ", target),
+        actionTarget("Deleted ", target),
+        { deletedPaths: Math.max(paths.length, 1) },
+      );
+    }
     case "tokens":
       return simple("workbench-cli.tokens", actionTarget("Counting ", "text tokens"), actionTarget("Counted ", "text tokens"));
     case "tokens_instructions":
