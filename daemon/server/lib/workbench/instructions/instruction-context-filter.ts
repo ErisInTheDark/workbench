@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings.
  * - stripWorkbenchInstructionHtmlComments: remove source comments outside Markdown fences while preserving line structure.
- * - filterWorkbenchInstructionContent: strip comments, apply selectors and provider tool references, and collapse inline wrapper regions.
+ * - filterWorkbenchInstructionContent: strip comments, apply selectors, `<else>` fallbacks and provider tool references, and collapse inline wrapper regions.
  * - formatWorkbenchInstructionFilterWarning: render one bounded source diagnostic with ANSI emphasis.
  */
 
@@ -12,7 +12,7 @@ import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { InstructionSourceSpan, RenderedInstructionContent } from "./instruction-file-generation";
 
-type SelectorAxis = "available" | "harness" | "model" | "shell" | "role" | "tool" | "wrapper";
+type SelectorAxis = "available" | "else" | "harness" | "model" | "shell" | "role" | "tool" | "wrapper";
 type WorkbenchShell = "bash" | "pwsh";
 
 export interface WorkbenchInstructionFilterContext {
@@ -41,7 +41,11 @@ export interface WorkbenchInstructionFilterWarning {
 interface SelectorControl {
   axis: SelectorAxis;
   closing: boolean;
+  /** `<else>` only: whether no earlier sibling selector in its `<>` rendered. */
+  elseIncluded?: boolean;
   matchMode: "exact" | "regex";
+  /** `<>` only: whether a selector directly inside it has rendered so far. */
+  matched?: boolean;
   neutral: boolean;
   pattern: RegExp | null;
   value: string;
@@ -59,8 +63,9 @@ const MODEL_MATCHES_TAG = /<model matches="([^"\n]+)">/uy;
 const MODEL_NAME_CLOSE_TAG = /<\/model>/uy;
 const MODEL_ATTR_CLOSE_TAG = /<\/model(\s[^>]*)>/uy;
 const WRAPPER_TAG = /<(\/)?>/uy;
+const ELSE_TAG = /<(\/)?else>/uy;
 const TOOL_TAG = /<tool id="([a-z][a-z0-9_]*)"\s*\/>/uy;
-const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|harness|model|shell|role|tool)(?::|\s|>)/u;
+const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|else|harness|model|shell|role|tool)(?::|\s|>)/u;
 const AVAILABLE_VALUE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
 const MODEL_VALUE = /^[^\s<>]{1,200}$/u;
 const MAX_MODEL_REGEX_LENGTH = 200;
@@ -158,6 +163,25 @@ function scanSelectorTags(line: string, lineIndex: number, onMalformed: (column:
         start: index,
       });
       index += wrapperMatch[0].length;
+      continue;
+    }
+    ELSE_TAG.lastIndex = index;
+    const elseMatch = ELSE_TAG.exec(line);
+    if (elseMatch) {
+      tags.push({
+        control: {
+          axis: "else",
+          closing: Boolean(elseMatch[1]),
+          matchMode: "exact",
+          neutral: false,
+          pattern: null,
+          value: "else",
+        },
+        end: index + elseMatch[0].length,
+        line: lineIndex,
+        start: index,
+      });
+      index += elseMatch[0].length;
       continue;
     }
     MODEL_NAME_CLOSE_TAG.lastIndex = index;
@@ -306,7 +330,7 @@ export function stripWorkbenchInstructionHtmlComments(value: string) {
 }
 
 function isKnownValue(axis: SelectorAxis, value: string) {
-  if (axis === "wrapper") return true;
+  if (axis === "wrapper" || axis === "else") return true;
   if (axis === "tool") return false;
   if (axis === "role") return value === "agent" || value === "voice-to-text";
   if (axis === "harness") return ProviderKeySchema.safeParse(value).success;
@@ -318,6 +342,7 @@ function isKnownValue(axis: SelectorAxis, value: string) {
 function matches(control: SelectorControl, context: WorkbenchInstructionFilterContext) {
   if (control.axis === "wrapper") return true;
   if (control.axis === "tool") return true;
+  if (control.axis === "else") return control.elseIncluded ?? true;
   if (control.axis === "role") return control.value === (context.role ?? "agent");
   if (control.axis === "harness") return control.value === context.harness;
   if (control.axis === "model") {
@@ -417,6 +442,7 @@ function warningMessage(
     return `Unable to check availability of ${sanitizeWarningSource(value).slice(0, MAX_WARNING_VALUE_LENGTH)}`;
   }
   if (recovery === "malformed" && axis === "tool") return "Unknown Workbench tool id";
+  if (recovery === "malformed" && axis === "else") return "Instruction else must sit directly inside <>";
   if (recovery === "malformed") return "Malformed instruction selector";
   if (recovery === "unclosed") return "Instruction selector is not closed";
   if (recovery === "unmatched") return "Instruction selector has no matching opener";
@@ -494,8 +520,10 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
     if (openedFence) {
       fence = openedFence;
       // A wrapper-level fence would be collapsed into one line, so neutralise the wrappers instead.
-      if (openTags.every((tag) => tag.control.axis === "wrapper")) {
-        openTags.forEach((tag) => {
+      const firstWrapper = openTags.findIndex((tag) => tag.control.axis === "wrapper");
+      const wrappers = firstWrapper < 0 ? [] : openTags.slice(firstWrapper);
+      if (wrappers.every((tag) => tag.control.axis === "wrapper")) {
+        wrappers.forEach((tag) => {
           tag.control.neutral = true;
           const wrapperSource = lines[tag.line] ?? "";
           warn(context, locatedSources, tag.line, lineStarts[tag.line] ?? 0, "fenced", wrapperSource, {
@@ -538,6 +566,23 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
         return;
       }
       if (control.axis === "tool") return;
+      if (!control.closing && control.axis !== "wrapper") {
+        // Branches are decided in source order: `<else>` sees only the selectors directly inside its `<>` before it.
+        const parent = openTags.at(-1)?.control;
+        const direct = parent?.axis === "wrapper" && !parent.neutral ? parent : null;
+        if (control.axis === "else") {
+          if (direct) control.elseIncluded = !direct.matched;
+          else {
+            control.neutral = true;
+            warn(context, locatedSources, lineIndex, lineStarts[lineIndex] ?? 0, "malformed", line, {
+              ...detail, column: tag.start, length: tag.end - tag.start,
+            });
+          }
+        } else if (direct && matches(control, context)
+          && openTags.every((opened) => opened.control.neutral || matches(opened.control, context))) {
+          direct.matched = true;
+        }
+      }
       if (!control.closing) { openTags.push(tag); return; }
       const matchingStackIndex = findLastMatchingIndex(openTags, (opened) => pairsWithCloser(opened.control, control));
       if (matchingStackIndex < 0) {
@@ -574,12 +619,15 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
   const included = () => active.every((opened) => opened.neutral || matches(opened, context));
   // An open inline wrapper buffers its region into one rendered line. Segments split wrapper-level
   // text (whitespace collapses) from nested selector interiors (byte-preserved).
-  let inline: { beforeWs: string; depth: number; segments: Array<{ text: string; verbatim: boolean }> } | null = null;
+  // Selectors already open around the wrapper (such as a whole-file role block) do not make its text verbatim.
+  let inline: {
+    baseDepth: number; beforeWs: string; depth: number; segments: Array<{ text: string; verbatim: boolean }>;
+  } | null = null;
   let rendered = "";
   let flushed = false;
   const emit = (text: string) => {
     if (!inline) { rendered += text; return; }
-    const verbatim = active.length > 0;
+    const verbatim = active.length > inline.baseDepth;
     const last = inline.segments[inline.segments.length - 1];
     if (last && last.verbatim === verbatim) last.text += text;
     else inline.segments.push({ text, verbatim });
@@ -635,10 +683,10 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
       if (control.axis === "wrapper") {
         if (!control.closing) {
           if (inline) inline.depth += 1;
-          else if (!control.neutral && active.length === 0) {
+          else if (!control.neutral && included()) {
             const beforeWs = /(\s*)$/u.exec(rendered)?.[1] ?? "";
             rendered = rendered.slice(0, rendered.length - beforeWs.length);
-            inline = { beforeWs, depth: 1, segments: [] };
+            inline = { baseDepth: active.length, beforeWs, depth: 1, segments: [] };
             emit(beforeWs);
           }
           cursor = tag.end;

@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect final row counting and conversation boundaries across CLI and MCP.
+ * No exports. Tests protect final row counting, conversation boundaries across CLI and MCP, and hidden turn-end replies.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -205,6 +205,14 @@ test("new transcript items retain unrelated blocks but invalidate an extended gr
   const replaced = reuseRenderableBlocks(previous, buildRenderableBlocks([{ ...first, status: "failed" }, second]));
   assert.notEqual(replaced[0], previous[0]);
   assert.equal(replaced[1], previous[1]);
+});
+
+test("the turn-end marker reply renders nothing while ordinary replies still render", () => {
+  const reply = (id: string, text: string): ThreadItem => ({
+    type: "agentMessage", id, text, phase: "final_answer", memoryCitation: null, delivery: null, questions: null,
+  });
+  const blocks = buildRenderableBlocks([reply("answer", "done"), reply("end", "\n<wb:end />\n")]);
+  assert.deepEqual(blocks.flatMap(getRenderableBlockItems).map(item => item.id), ["answer"]);
 });
 
 test("block timing changes only when one of its own item observations changes", () => {

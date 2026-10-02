@@ -46,7 +46,9 @@ import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread
 import { isUndeliveredInitialOptimisticInputItem } from "../../../workbench/thread/ThreadOptimisticInputStore";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
-import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import {
+  isVisibleWorkbenchAgentMessageText, isWorkbenchHiddenSystemSteerInput,
+} from "workbench-shared/workbench/thread/thread-recovery-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import {
   getThreadCommandBlockDisplay,
@@ -249,7 +251,7 @@ export function ThreadTurnLoadFailure({
 function getFinalAgentMessageId (turn: Turn) {
   for (let index = turn.items.length - 1; index >= 0; index -= 1) {
     const item = turn.items[index];
-    if (item.type !== "agentMessage" || !item.text.trim()) {
+    if (item.type !== "agentMessage" || !isVisibleWorkbenchAgentMessageText(item.text)) {
       continue;
     }
 

@@ -17,7 +17,9 @@ import { isWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thre
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { getWorkbenchInputState, type WorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
-import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import {
+  isVisibleWorkbenchAgentMessageText, isWorkbenchHiddenSystemSteerInput,
+} from "workbench-shared/workbench/thread/thread-recovery-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
@@ -154,7 +156,7 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     if (compacted && key && getWorkbenchThreadItemIdentityKind(item) === "provisional" && narrativeKeys.has(key)) continue;
     if (key) narrativeKeys.add(key);
     if (item.type === "contextCompaction") compacted = true;
-    if (item.type === "agentMessage" && (!item.text.trim() || hidden.controlAgentMessages)) continue;
+    if (item.type === "agentMessage" && (!isVisibleWorkbenchAgentMessageText(item.text) || hidden.controlAgentMessages)) continue;
     if (item.type === "userMessage" && hidden.controlUserMessages && isWorkbenchHiddenSystemSteerInput(item.content)) continue;
     if (item.type === "userMessage") {
       const steerState = getMergeableSteerState(item);

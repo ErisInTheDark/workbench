@@ -19,7 +19,10 @@ Constraints:
 - The wait survives user steers and scoped Workbench reloads. Do not restart it
 
 Response:
-- **On questionnaire tool timeout error (not your Workbench Long Wait intervals!), override normal workflow completion: immediately call <tool id="task_blocked" />; end the turn with empty final. No commentary, retries, recall, or other work**
+- **On questionnaire tool timeout error (not your Workbench Long Wait intervals!), override normal workflow completion: immediately call <tool id="task_blocked" />; end the turn with <>
+<harness:claude>final with exclusively `<wb:end />`</harness:claude>
+<else>empty final</else>
+</>. No commentary, retries, recall, or other work**
 - If custom text response, classify whether it narrows, clarifies, or changes the visible plan
 - Treat explicit approval plus a bounded narrowing constraint as approval plus detail under the active workflow
 - Treat added scope, ownership changes, lifecycle changes, behavior changes outside the visible plan, validation changes, feasibility changes, or ambiguous approval as a steer that returns to the appropriate workflow mode

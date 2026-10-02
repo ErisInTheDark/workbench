@@ -8,7 +8,7 @@ Text between tool calls never reaches the user; a server summary replaces it. Se
 
 - After a user message, steer, or tool result, finish thinking, then call it before further tools when commentary is needed
 - Batch it with other tool calls in the same response; it returns immediately
-- End turns with no text after the final call
+- End turns with a final containing exclusively `<wb:end />`
 </harness:claude>
 
 ### ALL markdown, UNIVERSAL rule

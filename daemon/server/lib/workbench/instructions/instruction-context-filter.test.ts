@@ -1,4 +1,4 @@
-/* No production exports. Tests protect the selector owner's final instruction filtering behavior. */
+/* No production exports. Tests protect the selector owner's final instruction filtering behavior, including `<else>` fallbacks. */
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +14,7 @@ import { resolveWorkbenchInstructionToolReference } from "./instruction-tool-ref
 
 function filter(
   value: string,
-  harness: "codex" | "copilot" | "opencode" = "codex",
+  harness: "claude" | "codex" | "copilot" | "opencode" = "codex",
   shell: "pwsh" | "bash" = "pwsh",
   available = new Set(["thread-recall"]),
   model: string | null = "gpt-6-astra",
@@ -376,6 +376,35 @@ test("wrapper boundaries glue punctuation and respect tight text", () => {
     filter("<harness:codex>\n<>\ntext\n</>\n</harness:codex>").output,
     filter("<harness:codex>\ntext\n</harness:codex>").output,
   );
+});
+
+test("else renders only when no sibling selector in its wrapper rendered", () => {
+  const value = [
+    "<role:agent>",
+    "- Then send <>",
+    "<harness:claude>final with exclusively `<wb:end />`</harness:claude>",
+    "<else>empty final</else>",
+    "</>.",
+    "</role:agent>",
+  ].join("\n");
+  assert.equal(filter(value, "claude").output, "- Then send final with exclusively `<wb:end />`.");
+  assert.equal(filter(value, "codex").output, "- Then send empty final.");
+  assert.deepEqual(filter(value, "claude").warnings, []);
+});
+
+test("else follows its wrapper's sibling selectors in source order", () => {
+  const nested = "<><harness:opencode><shell:pwsh>deep</shell:pwsh></harness:opencode><else>fallback</else></>";
+  assert.equal(filter(nested).output, "fallback");
+  assert.equal(filter(nested, "opencode").output, "deep");
+  assert.equal(filter("<><else>first</else><harness:codex>codex</harness:codex></>").output, "firstcodex");
+});
+
+test("an else outside a wrapper warns and keeps its content", () => {
+  const stray = filter("before <else>kept</else> after");
+  assert.equal(stray.output, "before kept after");
+  assert.deepEqual(stray.warnings.map((warning) => [warning.recovery, warning.message]), [
+    ["malformed", "Instruction else must sit directly inside <>"],
+  ]);
 });
 
 test("wrapper tags stay literal in code spans and fenced examples", () => {

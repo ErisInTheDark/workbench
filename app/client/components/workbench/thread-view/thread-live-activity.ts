@@ -7,6 +7,7 @@
  * - getLiveThreadActivity: select reasoning first, then ongoing command summaries.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { isVisibleWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { WorkbenchShellInputSchema, WorkbenchShellResultSchema } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchSkillSummary } from "workbench-shared/types";
@@ -160,7 +161,7 @@ export function getLiveThreadActivity({ pendingUserInputRequest, turn, commands 
     for (let index = turn.items.length - 2; index >= 0; index--) {
       const item = turn.items[index]!;
       if (item.type === "reasoning" && ![...item.summary, ...item.content].some(section => section.trim())) continue;
-      if (item.type === "agentMessage" && !item.text.trim()) continue;
+      if (item.type === "agentMessage" && !isVisibleWorkbenchAgentMessageText(item.text)) continue;
       if (item.type !== "webSearch") break;
       if (!isThreadWebSearchPlaceholder(item)) contextItems.unshift(item);
     }

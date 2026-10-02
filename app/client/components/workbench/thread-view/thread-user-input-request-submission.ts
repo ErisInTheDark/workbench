@@ -12,12 +12,13 @@ import type {
 import { isSyntheticQuestionnaireHistoryItem } from "workbench-shared/workbench/thread/thread-questionnaire-history";
 import { isWorkbenchMcpQuestionnaireRequestKey } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { isWorkbenchSyntheticSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
+import { isVisibleWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-recovery-message";
 
 function isQuestionnaireFallbackAnchorItem(item: ThreadPayload["turns"][number]["items"][number]) {
   if (isWorkbenchSyntheticSteerUserMessage(item)) return false;
   switch (item.type) {
     case "agentMessage":
-      return Boolean(item.text.trim());
+      return isVisibleWorkbenchAgentMessageText(item.text);
     case "hookPrompt":
     case "reasoning":
     case "userMessage":

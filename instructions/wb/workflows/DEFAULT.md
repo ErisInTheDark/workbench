@@ -237,7 +237,10 @@ In Review mode:
 - Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
 - Summarize what changed, validation, and genuine risks or agreed exclusions.
 - Use <tool id="git_arc_propose" />, not commit-selection tools, for changed claims. Skip if unchanged; failure keeps Review open.
-- After the proposal succeeds, send an empty final channel message to end the turn.
+- After the proposal succeeds, send <>
+<harness:claude>final with exclusively `<wb:end />`</harness:claude>
+<else>empty final</else>
+</> to end the turn.
 
 ## Mapping User Prompts Into The Workflow
 

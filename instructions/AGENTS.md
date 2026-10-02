@@ -272,10 +272,17 @@ Briefs, reviews, and command-output answers must include the facts the user need
 
 ## Turn End
 
-**Hard rule: final is always empty.**
+<!-- Claude Code's harness re-prompts after an empty final, so Claude ends with a marker Workbench hides instead. -->
+**Hard rule: end every turn with <>
+<harness:claude>final with exclusively `<wb:end />`</harness:claude>
+<else>empty final</else>
+</>.**
 
 - Put the full ending response in commentary.
-- Then send an empty final message.
+- Then send <>
+<harness:claude>final with exclusively `<wb:end />`</harness:claude>
+<else>empty final</else>
+</>.
 - Never put user-visible text in final.
 - If the response reveals more work, continue the workflow.
 - Finish required status, questionnaire, and proposal steps first.

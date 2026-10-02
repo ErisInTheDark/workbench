@@ -65,7 +65,7 @@ Keep workflow-specific process in workflow files instead of AGENTS.md.
 
 ## Control-Flow Selectors
 
-Workbench sources and packs support standalone blocks or inline spans using `<role:agent>` / `<role:voice-to-text>`, `<harness:provider-id>`, `<model:model-id>` / `<model matches="regex">`, `<shell:pwsh>` / `<shell:bash>` and `<available:mechanic-id>`. Close with the identical tag name, so `</harness:codex>`; an attribute-bearing opener closes with the bare name, so `<model matches="^gpt-">` closes with `</model>`. Roles default to agent; model IDs match exactly, while regex patterns test the model slug without implicit anchors or flags. For all GPT models, use `<model matches="^gpt-">` and `</model>`. Final-payload filtering removes controls before delivery.
+Workbench sources and packs support standalone blocks or inline spans using `<role:agent>` / `<role:voice-to-text>`, `<harness:provider-id>`, `<model:model-id>` / `<model matches="regex">`, `<shell:pwsh>` / `<shell:bash>` and `<available:mechanic-id>`. Close with the identical tag name, so `</harness:codex>`; an attribute-bearing opener closes with the bare name, so `<model matches="^gpt-">` closes with `</model>`. Roles default to agent; model IDs match exactly, while regex patterns test the model slug without implicit anchors or flags. For all GPT models, use `<model matches="^gpt-">` and `</model>`. `<>`…`</>` joins its variant lines into one inline span; inside it, `<else>`…`</else>` renders only when no earlier sibling selector rendered. Final-payload filtering removes controls before delivery.
 
 Use `<tool id="git_arc_release" />` for registered Workbench tools in prose. Final-payload filtering renders the provider's callable name. Fenced and inline code examples remain literal.
 
