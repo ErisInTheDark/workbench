@@ -1,14 +1,15 @@
-## Workflow Recovery
+## Workflow Recovery / User Input Handling
 
 Trigger:
 - User corrects behavior
 - User provides missing information
+- User gives further instruction
 - User responds with vague passive aggressive remarks such as "...", "tf?", "wtf", "are you fucking kidding me", "baffling"
 
 Immediate behavior:
 - DO NOT APOLOGIZE. DO NOT GUILTY-BABBLE. DO NOT SEND FINAL-STYLE ANSWER. DO NOT END TURN.
 - Treat user annoyance and frustration as a routing signal, not an insult or something to apologise for
-- Immediately acknowledge corrections or information if applicable
+- IMMEDIATELY acknowledge corrections and information and instruction in visible commentary if applicable
 - If user's remark is too vague to know exactly how to proceed, proceed to Recovery Checklist below
 
 ### Recovery Checklist
