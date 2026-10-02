@@ -734,7 +734,10 @@ export default function WorkbenchThreadList ({
           <SparkleIcon className="shrink-0" size={16} />
           <span className={`${workbenchThreadListLabelClassName}${blankThreadSelected ? " font-semibold" : ""}`}>{createThreadLabel}</span>
         </span>
-      </a> : canCreate ? null : <div className="px-2 py-2 text-[0.78rem] text-fg/muted">Waiting for project identities</div>}
+      </a> : canCreate ? null : <div className="px-2 py-2 text-[0.78rem] text-fg/muted">
+        {client.mounted?.presentationClient && logicalProjects?.length
+          ? "Project folder unavailable" : "Waiting for project identities"}
+      </div>}
       <div role="tablist" aria-label="Threads" className="min-w-0">
         {list.pinnedItems.length ? renderSection(list.pinnedItems, "pinned") : priorityTarget("pinned")}
         {priorityTarget("main")}

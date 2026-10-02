@@ -18,6 +18,7 @@ import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import WorkbenchThreadList from "./WorkbenchThreadList";
 import { useWorkbenchClientController } from "./workbench-client-context";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
+import { resolveSidebarCreateProject } from "./workbench-sidebar-create-project";
 
 function findRow(
   logicalProject: WorkbenchLogicalProject,
@@ -89,13 +90,9 @@ export default memo(function WorkbenchThreadSidebar({
   const actions = WorkbenchThreadSidebarActionsProvider.useActions();
   const ownerProjectId = logicalProject?.id ?? projectId;
   const selection = selectedProjectIds ?? (ownerProjectId ? [ownerProjectId] : []);
-  const selectedSet = new Set(selection);
-  const creationProjects: readonly WorkbenchLogicalProject[] = logicalProject ? [logicalProject] : [];
-  const createProject = logicalProject
-    ? creationProjects.find(project => project.locations.some(location =>
-      location.target.projectId === createProjectId && location.project)
-      && selectedSet.has(project.id)) ?? null
-    : projects.find(({ id }) => id === createProjectId && selectedSet.has(id)) ?? null;
+  const createProject = resolveSidebarCreateProject({
+    createProjectId, logicalProject, logicalProjects, projects, selectedProjectIds: selection,
+  });
 
   const errors = [...new Set(actions.projectThreadSidebars.projects
     .filter(sidebar => selection.includes(sidebar.projectId))
