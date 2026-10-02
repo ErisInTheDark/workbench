@@ -131,7 +131,15 @@ async function checkMessageAmend({ repositoryOwner, root, target }: Awaited<Retu
 }
 
 async function checkIdentityAmend({ repositoryOwner, root }: Awaited<ReturnType<typeof repository>>) {
-  const [base, middle, head] = (await git(root, ["rev-list", "--reverse", "HEAD"])).trim().split(/\r?\n/u) as [string, string, string];
+  const listCommits = async () => (await git(root, ["rev-list", "--reverse", "HEAD"])).trim().split(/\r?\n/u) as [string, string, string];
+  // Pin distinct historical committer dates so a rewrite stamping "now" cannot coincide with them.
+  await new WorkbenchGitHistoryRewriter(repositoryOwner).amend({
+    identity: { committerDate: "1000000000 +0000" }, metadataOnly: true, paths: [], target: (await listCommits())[0],
+  });
+  await new WorkbenchGitHistoryRewriter(repositoryOwner).amend({
+    identity: { committerDate: "1000000500 +0000" }, metadataOnly: true, paths: [], target: (await listCommits())[2],
+  });
+  const [base, middle, head] = await listCommits();
   const before = await repositoryOwner.readCommits([base, middle, head]);
   const worktreeBefore = await git(root, ["diff", "--binary"]);
   const indexBefore = await git(root, ["diff", "--cached", "--binary"]);
@@ -163,6 +171,7 @@ async function checkIdentityAmend({ repositoryOwner, root }: Awaited<ReturnType<
     assert.equal(commit!.authorName, "Ada");
     assert.equal(commit!.authorEmail, "ada@example.com");
     assert.equal(commit!.authorDate, "981126306 +1300");
+    assert.equal(commit!.committerDate, original.committerDate);
     assert.equal(commit!.tree, original.tree);
     assert.equal(commit!.message, `${original.message.trimEnd()}\n\nCo-authored-by: Bo <bo@example.com>\n`);
   }
@@ -173,6 +182,11 @@ async function checkIdentityAmend({ repositoryOwner, root }: Awaited<ReturnType<
   );
   assert.equal(await git(root, ["diff", "--binary"]), worktreeBefore);
   assert.equal(await git(root, ["diff", "--cached", "--binary"]), indexBefore);
+
+  const reworded = await rewriter.amend({ message: "reworded", metadataOnly: true, paths: [], target: rewritten[2]! });
+  const rewordedCommit = await repositoryOwner.readCommit(reworded.amendedCommit);
+  assert.equal(rewordedCommit.message, "reworded\n");
+  assert.equal(rewordedCommit.committerDate, newHead!.committerDate);
 }
 
 historyTest("a descendant conflict leaves branch, worktree, index, refs, and selection unchanged", async (context) => {

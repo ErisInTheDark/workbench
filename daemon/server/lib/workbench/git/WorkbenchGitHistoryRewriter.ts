@@ -116,6 +116,7 @@ export default class WorkbenchGitHistoryRewriter {
    * Rewrites `target` (message, paths and overlays) plus `identityTargets` (overlays only), replaying
    * every later first-parent commit with its original metadata, then publishes all refs atomically.
    * `coAuthors` replaces Co-authored-by trailers on selected commits; `null` strips them.
+   * Never invents dates: every commit keeps its original author/committer dates unless `identity` supplies them.
    */
   async amend({
     coAuthors,
@@ -167,7 +168,6 @@ export default class WorkbenchGitHistoryRewriter {
     const branchCommits = new Map<string, string>();
     const selected = new Set(resolvedTargets);
     const treeChanged = targetTree !== targetMetadata.tree;
-    const now = `${Math.floor(Date.now() / 1000)} +0000`;
     let newParent: string | null = null;
     for (const [index, { commit, metadata }] of commits.entries()) {
       const tree = index === targetIndex
@@ -177,7 +177,7 @@ export default class WorkbenchGitHistoryRewriter {
           : metadata.tree;
       let commitMessage = index === targetIndex && message !== undefined ? `${message.trim()}\n` : metadata.message;
       if (selected.has(commit) && coAuthors !== undefined) commitMessage = replaceCoAuthorTrailers(commitMessage, coAuthors ?? []);
-      const commitIdentity = selected.has(commit) ? { ...metadata, committerDate: now, ...identity } : metadata;
+      const commitIdentity = selected.has(commit) ? { ...metadata, ...identity } : metadata;
       const rewritten = await this.repository.createCommitFromTree(
         tree,
         newParent ?? metadata.parents,
