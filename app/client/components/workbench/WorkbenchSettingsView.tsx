@@ -9,7 +9,9 @@ import type { WorkbenchLocalCapabilitySettings, WorkbenchProjectOption } from "w
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { DaemonId, LogicalProjectId } from "workbench-shared/workbench/identity";
 import type { ProjectFolderOption } from "workbench-shared/workbench/project/project-folder-address";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import CommandApprovalSettings from "./CommandApprovalSettings";
+import WorkbenchEnvironmentSettings from "./environment/WorkbenchEnvironmentSettings";
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import VoiceSettings from "./voice/VoiceSettings";
 import { ProjectIcon } from "./workbench-icons";
@@ -36,6 +38,7 @@ const pages: { id: Page; label: string; sections: { id: string; label: string }[
   { id: "projects", label: "Projects & folders", sections: [
     { id: "settings-files", label: "Files" },
     { id: "settings-discovery", label: "Discovery" },
+    { id: "settings-environment", label: "Environment" },
   ] },
   { id: "agents", label: "Agents", sections: [
     { id: "settings-agent-network", label: "Network access" },
@@ -49,6 +52,14 @@ const pages: { id: Page; label: string; sections: { id: string; label: string }[
   ] },
 ];
 const defaultCapabilities: WorkbenchLocalCapabilitySettings = { browseRawCommandsEnabled: false };
+
+function folderKey(folder: ProjectFolderOption) {
+  return `${folder.target.daemonId}/${folder.target.projectId}`;
+}
+
+function folderLabel(folder: ProjectFolderOption) {
+  return folder.displayPath ?? `${folder.hostname}:${folder.rootPath}`;
+}
 
 
 function BrowseCapability({ daemon }: { daemon: WorkbenchDaemonClient }) {
@@ -92,6 +103,7 @@ export default function WorkbenchSettingsView({
   daemons,
   folders,
   getDaemon,
+  getFolderDaemon,
   logicalProject,
   onError,
   onGitRootsSaved,
@@ -103,6 +115,7 @@ export default function WorkbenchSettingsView({
   daemons: readonly { id: DaemonId; hostname: string }[];
   folders: readonly ProjectFolderOption[];
   getDaemon: (id: DaemonId) => WorkbenchDaemonClient | null;
+  getFolderDaemon: (location: ProjectLocationReference) => WorkbenchDaemonClient | null;
   logicalProject: { id: LogicalProjectId; label: string; iconProject: WorkbenchProjectOption | null } | null;
   onError: (message: string) => void;
   onGitRootsSaved: (daemonId: DaemonId) => Promise<void>;
@@ -119,8 +132,14 @@ export default function WorkbenchSettingsView({
   const daemonFolders = folders.filter(folder => folder.target.daemonId === daemonId && folder.project);
   const folder = daemonFolders.find(item => `${item.target.daemonId}/${item.target.projectId}` === chosenFolderKey)
     ?? daemonFolders[0] ?? null;
+  // Environment belongs to one folder, whichever daemon hosts it.
+  const [environmentFolderKey, setEnvironmentFolderKey] = useState("");
+  const environmentFolders = folders.filter(item => item.project);
+  const environmentFolder = environmentFolders.find(item => folderKey(item) === environmentFolderKey)
+    ?? environmentFolders.find(item => item.target.daemonId === attachedDaemonId) ?? environmentFolders[0] ?? null;
+  const environmentDaemon = environmentFolder ? getFolderDaemon(environmentFolder.target) : null;
   const visibleSections = pages.find(item => item.id === page)!.sections
-    .filter(item => item.id !== "settings-permissions" || logicalProject);
+    .filter(item => (item.id !== "settings-permissions" && item.id !== "settings-environment") || logicalProject);
 
   useEffect(() => { onPageChange(pages.find(item => item.id === page)!.label); }, [onPageChange, page]);
   if (selectionPending) return <p role="status" className="mx-auto max-w-content px-5 py-6 text-sm text-fg/muted">Loading project selection...</p>;
@@ -129,6 +148,10 @@ export default function WorkbenchSettingsView({
   const daemonControl = <WorkbenchSettingsContextRow label="Daemon" value={daemonId ?? ""}
     options={daemons.map(item => ({ id: item.id, label: item.hostname }))}
     onSelect={id => { setChosenDaemonId(id as DaemonId); setChosenFolderKey(""); }} />;
+  const folderControl = daemonFolders.length > 1 ? <WorkbenchSettingsContextRow label="Folder"
+    value={folder ? folderKey(folder) : ""}
+    options={daemonFolders.map(item => ({ id: folderKey(item), label: folderLabel(item) }))}
+    onSelect={setChosenFolderKey} /> : null;
   return <div className="mx-auto w-full max-w-content px-5 pb-10 pt-1 text-text md:max-w-[calc(var(--container-content)+13.25rem)]">
     <div className="grid gap-5 md:grid-cols-[11rem_minmax(0,1fr)] lg:gap-9">
       <aside className="scrollbar-hover-reveal hidden md:sticky md:top-20 md:block md:max-h-[calc(100dvh-6rem)] md:self-start md:overflow-y-auto">
@@ -193,17 +216,23 @@ export default function WorkbenchSettingsView({
               </WorkbenchOperationsContext.Provider> : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
             </div>
           </WorkbenchFormSection>
+          {logicalProject ? <WorkbenchFormSection id="settings-environment" title="Environment">
+            <div className="space-y-3 py-3">
+              <WorkbenchSettingsContextRow label="Folder" value={environmentFolder ? folderKey(environmentFolder) : ""}
+                options={environmentFolders.map(item => ({ id: folderKey(item), label: folderLabel(item) }))}
+                onSelect={setEnvironmentFolderKey} />
+              {environmentDaemon && environmentFolder ? <WorkbenchOperationsContext.Provider value={environmentDaemon}>
+                <WorkbenchEnvironmentSettings key={folderKey(environmentFolder)}
+                  daemonId={environmentFolder.target.daemonId} projectId={environmentFolder.target.projectId} />
+              </WorkbenchOperationsContext.Provider>
+                : <p role="status" className="text-sm text-fg/muted">No folder is available for this project.</p>}
+            </div>
+          </WorkbenchFormSection> : null}
         </> : null}
         {page === "agents" ? <>
           <WorkbenchFormSection id="settings-agent-network" title="Network access">
             {daemonControl}
-            {logicalProject && daemonFolders.length > 1 ? <WorkbenchSettingsContextRow label="Folder"
-              value={folder ? `${folder.target.daemonId}/${folder.target.projectId}` : ""}
-              options={daemonFolders.map(item => ({
-                id: `${item.target.daemonId}/${item.target.projectId}`,
-                label: item.displayPath ?? `${item.hostname}:${item.rootPath}`,
-              }))}
-              onSelect={setChosenFolderKey} /> : null}
+            {logicalProject ? folderControl : null}
             {daemon ? <WorkbenchOperationsContext.Provider value={daemon}>
               <SandboxNetworkSettings key={`${daemonId}/${folder?.target.projectId ?? ""}`}
                 projectId={logicalProject ? folder?.target.projectId ?? null : null}

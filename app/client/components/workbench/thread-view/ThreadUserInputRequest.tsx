@@ -23,6 +23,7 @@ import {
   getActivatedWorkbenchSkillPathsForTextValues,
   type InlineMentionHighlightSources,
 } from "../../../workbench/thread/inline-mention-highlights";
+import { toInlineMentionOverlayHighlights } from "../../../workbench/thread/inline-mention-styles";
 import { getThreadCommandDisplay, isBrowseCommandMatcherClaim } from "../../../workbench/thread/thread-command-matchers";
 import {
   hasWorkbenchApprovalDecisionSelection,
@@ -431,7 +432,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
             const customValue = answerValues.customValue;
             const isSingleChoice = isSingleChoiceQuestion(request, question);
             const customValueHighlights = highlightSources
-              ? buildInlineMentionHighlights(customValue, highlightSources)
+              ? toInlineMentionOverlayHighlights(buildInlineMentionHighlights(customValue, highlightSources))
               : [];
             const quickResponseOption = quickResponseQuestion?.id === question.id
               ? quickResponseQuestion.options[0] ?? null

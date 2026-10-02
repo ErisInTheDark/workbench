@@ -33,6 +33,7 @@ import {
   getActivatedWorkbenchSkillPaths,
   type InlineMentionHighlightSources,
 } from "../../../workbench/thread/inline-mention-highlights";
+import { toInlineMentionOverlayHighlights } from "../../../workbench/thread/inline-mention-styles";
 import { runThreadComposerSubmission } from "../../../workbench/thread/thread-message-submission";
 import {
   createWorkbenchThreadRecoveryInput,
@@ -342,6 +343,7 @@ export default function ThreadComposer ({
   const composerHighlights = useMemo(() => (
     buildInlineMentionHighlights(value, highlightSources)
   ), [highlightSources, value]);
+  const composerOverlayHighlights = useMemo(() => toInlineMentionOverlayHighlights(composerHighlights), [composerHighlights]);
 
   useEffect(() => {
     setIsQuestionnaireVisible(Boolean(visiblePendingUserInputRequest));
@@ -651,7 +653,7 @@ export default function ThreadComposer ({
                 className={`${threadPlaintextEditableClassName} min-h-[5.75rem] w-full border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none`}
                 disabled={isInputDisabled}
                 placeholder={composerPlaceholder}
-                highlights={composerHighlights}
+                highlights={composerOverlayHighlights}
                 mentionSources={highlightSources}
                 mentionSuggestionsPlacement="above"
                 spellCheck={composerSpellCheck}

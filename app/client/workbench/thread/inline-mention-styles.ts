@@ -4,9 +4,10 @@
  * - getInlineMentionMarkToneClassName: return skill or file tone classes for inline mention marks. Keywords: mention, tone, skill, file.
  * - getInlineMentionMarkClassName: build complete inline mention mark classes. Keywords: mention, highlight, reusable.
  * - getInlineMentionOverlayClassName: build overlay pseudo-element mention highlight classes. Keywords: plaintext, overlay, highlight.
+ * - toInlineMentionOverlayHighlights: map resolved mentions to plaintext overlay ranges.
  */
 
-import type { InlineMentionCandidateKind } from "./inline-mention-highlights";
+import type { InlineMentionCandidateKind, InlineMentionHighlight } from "./inline-mention-highlights";
 
 export const inlineMentionMarkBaseClassName = [
   "ring-1 ring-inset",
@@ -31,4 +32,8 @@ export function getInlineMentionOverlayClassName(kind: InlineMentionCandidateKin
       ? "bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] ring-[color-mix(in_srgb,var(--accent)_24%,transparent)] shadow-[0_0_0_0.12em_color-mix(in_srgb,var(--accent)_14%,transparent)]"
       : "bg-[color-mix(in_srgb,var(--success)_14%,transparent)] ring-[color-mix(in_srgb,var(--success)_24%,transparent)] shadow-[0_0_0_0.12em_color-mix(in_srgb,var(--success)_14%,transparent)]",
   ].join(" ");
+}
+
+export function toInlineMentionOverlayHighlights(highlights: readonly InlineMentionHighlight[]) {
+  return highlights.map(({ end, kind, start }) => ({ className: getInlineMentionOverlayClassName(kind), end, start }));
 }

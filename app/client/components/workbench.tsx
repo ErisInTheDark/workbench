@@ -2933,6 +2933,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       ? projectFolderOptions([selectedSettingsProject])
                       : []}
                     getDaemon={daemonId => workbenchClient.mounted?.workspace.daemon({ kind: "installation", daemonId }) ?? null}
+                    getFolderDaemon={location => workbenchClient.mounted?.workspace.daemon({ kind: "folder", location }) ?? null}
                     logicalProject={selectedSettingsProject ? {
                       id: selectedSettingsProject.id,
                       label: selectedSettingsProject.displayName ?? selectedSettingsProject.label,

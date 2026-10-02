@@ -6,14 +6,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ProjectDiscoverySettingsResult } from "workbench-shared/workbench/project/project-discovery-settings";
-import {
-  blurProjectDiscoveryRow,
-  createProjectDiscoveryRows,
-  editProjectDiscoveryRow,
-  populatedProjectDiscoveryRows,
-  removeProjectDiscoveryRow,
-} from "../../workbench/project-discovery-path-editor";
 import InputList from "./InputList";
+import { InputListRows, type InputListRow } from "./input-list-rows";
 import { ResetIcon, SaveIcon } from "./workbench-icons";
 import WorkbenchIconButton from "./WorkbenchIconButton";
 import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
@@ -29,11 +23,15 @@ function looksAbsolute (value: string) {
   return /^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(value);
 }
 
+function rowsFor (paths: readonly string[]) {
+  return InputListRows.create(paths.map(value => ({ value })));
+}
+
 export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSaved: () => Promise<void> }) {
   const daemon = useWorkbenchDaemonClient();
   const [savedPaths, setSavedPaths] = useState<string[]>([]);
-  const [rows, setRows] = useState(() => createProjectDiscoveryRows([]));
-  const [serverIssues, setServerIssues] = useState<Record<number, string>>({});
+  const [rows, setRows] = useState<InputListRow[]>(() => rowsFor([]));
+  const [serverIssues, setServerIssues] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [available, setAvailable] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -49,7 +47,7 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
       if (cancelled) return;
       setAvailable(true);
       setSavedPaths(paths);
-      setRows(createProjectDiscoveryRows(paths));
+      setRows(rowsFor(paths));
       setServerIssues({});
       setLoading(false);
     }).catch((failure: Error) => {
@@ -61,9 +59,9 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
     return () => { cancelled = true; };
   }, [daemon, reloadKey]);
 
-  const filled = useMemo(() => populatedProjectDiscoveryRows(rows), [rows]);
+  const filled = useMemo(() => InputListRows.populated(rows).map(row => ({ id: row.id, value: row.value.trim() })), [rows]);
   const localIssues = useMemo(() => {
-    const issues: Record<number, string> = {};
+    const issues: Record<string, string> = {};
     const seen = new Set<string>();
     for (const row of filled) {
       if (!looksAbsolute(row.value)) {
@@ -89,13 +87,14 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
     try {
       const result = await daemon.projectDiscoverySettings.update({ paths });
       if (!result.accepted) {
-        setServerIssues(Object.fromEntries(result.issues.map(issue => [
-          filled[issue.index]?.id ?? -1, ISSUE_LABELS[issue.reason],
-        ])));
+        setServerIssues(Object.fromEntries(result.issues.flatMap(issue => {
+          const id = filled[issue.index]?.id;
+          return id ? [[id, ISSUE_LABELS[issue.reason]]] : [];
+        })));
         return;
       }
       setSavedPaths(result.paths);
-      setRows(createProjectDiscoveryRows(result.paths));
+      setRows(rowsFor(result.paths));
       setServerIssues({});
       setStatus("Git roots saved.");
       try {
@@ -115,33 +114,20 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
       <p className="m-0 mb-2 text-[0.8rem] leading-5 text-fg/muted">Folders scanned for git repositories and workspaces.</p>
       <InputList
         disabled={loading || saving || !available}
+        errors={{ ...serverIssues, ...localIssues }}
         idPrefix="git-root"
-        onBlur={() => setRows(current => blurProjectDiscoveryRow(current))}
-        onChange={(id, value) => {
-          setRows(current => editProjectDiscoveryRow(current, id, value));
-          setServerIssues(current => {
-            const next = { ...current };
-            delete next[id];
-            return next;
-          });
-          setStatus("");
-        }}
-        onRemove={id => {
-          setRows(current => removeProjectDiscoveryRow(current, id));
-          setServerIssues(current => {
-            const next = { ...current };
-            delete next[id];
-            return next;
-          });
+        onRowsChange={next => {
+          setRows(next);
+          // Server issues describe the submitted text, so editing or removing a row clears its issue.
+          setServerIssues(current => Object.fromEntries(Object.entries(current).filter(([id]) => {
+            const after = next.find(row => row.id === id);
+            return after !== undefined && after.value === rows.find(row => row.id === id)?.value;
+          })));
           setStatus("");
         }}
         placeholder="Absolute folder path"
-        rows={rows.map((row, index) => ({
-          id: row.id,
-          label: `Git root ${index + 1}`,
-          value: row.value,
-          error: localIssues[row.id] ?? serverIssues[row.id],
-        }))}
+        rowLabel="Git root"
+        rows={rows}
       />
       <div className="flex flex-wrap items-center gap-2">
         <WorkbenchIconButton
@@ -151,7 +137,7 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
           label="Reset Git root changes"
           disabled={loading || saving || !available || !dirty}
           onClick={() => {
-            setRows(createProjectDiscoveryRows(savedPaths));
+            setRows(rowsFor(savedPaths));
             setServerIssues({});
             setError("");
             setStatus("");

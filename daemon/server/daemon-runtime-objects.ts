@@ -135,6 +135,7 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   recordApprovalOutcome: import("./database/WorkbenchDatabaseController").default["recordApprovalOutcome"];
   readApprovalOutcomes: import("./database/WorkbenchDatabaseController").default["readApprovalOutcomes"];
   executeThreadGitSelection: import("./database/WorkbenchDatabaseController").default["executeThreadGitSelection"];
+  executeProjectStore: import("./database/WorkbenchDatabaseController").default["executeProjectStore"];
   reserveThreadLaunch: import("./database/WorkbenchDatabaseController").default["reserveThreadLaunch"];
   readThreadLaunch: import("./database/WorkbenchDatabaseController").default["readThreadLaunch"];
   advanceThreadLaunch: import("./database/WorkbenchDatabaseController").default["advanceThreadLaunch"];
@@ -242,6 +243,7 @@ export interface DaemonRuntimeObjects {
   daemonHttp: WorkbenchDaemonHttpRouter;
   projectCatalog: WorkbenchProjectCatalogController;
   projectSnapshot: WorkbenchProjectSnapshotController;
+  projectStore: import("./store/WorkbenchProjectStore").default;
   questionnaires: WorkbenchQuestionnaireController;
   approvals: import("./WorkbenchApprovalController").default;
   reloadController: WorkbenchDaemonReloadController;

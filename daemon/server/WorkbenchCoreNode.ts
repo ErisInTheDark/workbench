@@ -49,6 +49,8 @@ import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import WorkbenchProjectFileController from "./WorkbenchProjectFileController";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
+import WorkbenchProjectStore from "./store/WorkbenchProjectStore";
+import { readDeviceIdentity } from "./store/device-identity";
 import WorkbenchSearchController from "./WorkbenchSearchController";
 import WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import WorkbenchClaimRenameController from "./stats/WorkbenchClaimRenameController";
@@ -361,8 +363,15 @@ function createWorkbenchCoreFeature(
     },
     transitions: worktreeGitTransitions,
   });
+  const projectStore = new WorkbenchProjectStore({
+    execute: command => database.executeProjectStore(command),
+    readDeviceIdentity,
+    resolveProjectById: projectId => projectCatalog.resolveProjectById(projectId),
+    resolveProjectFromCwd: cwd => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Project store" }),
+  });
   const daemonRequests = new WorkbenchDaemonRequestController({
     commandApprovals,
+    projectStore,
     workingTree,
     providers,
     threadActions,
@@ -417,7 +426,7 @@ function createWorkbenchCoreFeature(
     agentContext,
     approvals,
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, questionnaires, stats, subagents, threadGit, threadState, threadActions, transcriptReader, transcriptReconciliation,
+    browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, threadGit, threadState, threadActions, transcriptReader, transcriptReconciliation,
     providerObservations: {
       observe: async (harness, facts) => {
         if (!lease.isCurrent()) return null;

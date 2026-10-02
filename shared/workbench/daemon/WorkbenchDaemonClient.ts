@@ -19,6 +19,7 @@ import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provi
 import { CommandApprovalSnapshotSchema } from "../settings/command-approvals";
 import { ProjectDiscoverySettingsReadSchema, ProjectDiscoverySettingsResultSchema } from "../project/project-discovery-settings";
 import { ProjectCreateResultSchema, ProjectFolderListSchema } from "../project/project-creation";
+import { ProjectStoreSnapshotSchema, ProjectStoreUpdateResultSchema } from "../project/project-store";
 import { WorkbenchProjectLocationsPayloadSchema } from "../project/project-location";
 import { WorkbenchThreadLaunchStateSchema } from "../thread/thread-launch";
 import {
@@ -102,6 +103,8 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "command-approvals/read":
     case "command-approvals/remove": return CommandApprovalSnapshotSchema;
     case "command-approvals/patch": return CommandApprovalSnapshotSchema;
+    case "project/store/read": return ProjectStoreSnapshotSchema;
+    case "project/store/update": return ProjectStoreUpdateResultSchema;
     case "project/discovery-settings/read": return ProjectDiscoverySettingsReadSchema;
     case "project/discovery-settings/update": return ProjectDiscoverySettingsResultSchema;
     case "project/folders/list": return ProjectFolderListSchema;
@@ -313,6 +316,11 @@ class WorkbenchDaemonClient {
     read: (params: WorkbenchDaemonParams<"command-approvals/read">) => this.request("command-approvals/read", params),
     remove: (params: WorkbenchDaemonParams<"command-approvals/remove">) => this.request("command-approvals/remove", params),
     patch: (params: WorkbenchDaemonParams<"command-approvals/patch">) => this.request("command-approvals/patch", params),
+  };
+
+  readonly projectStore = {
+    read: (params: WorkbenchDaemonParams<"project/store/read">) => this.request("project/store/read", params),
+    update: (params: WorkbenchDaemonParams<"project/store/update">) => this.request("project/store/update", params),
   };
 
   readonly projectDiscoverySettings = {

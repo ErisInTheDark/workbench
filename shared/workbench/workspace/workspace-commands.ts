@@ -96,6 +96,8 @@ export const workspaceCommandRoutes = {
   "project/file/read": "folder",
   "project/file/reset": "folder",
   "project/file/save": "folder",
+  "project/store/read": "folder",
+  "project/store/update": "folder",
   "search/query": "folder",
   "questionnaire/respond": "thread",
   "stats/import/start": "installation",

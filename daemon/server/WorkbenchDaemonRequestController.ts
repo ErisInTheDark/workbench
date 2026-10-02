@@ -22,6 +22,7 @@ import { CommandApprovalPatchSchema, CommandApprovalRemoveSchema } from "workben
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
 import { ProjectCreateRequestSchema, ProjectFolderListRequestSchema } from "workbench-shared/workbench/project/project-creation";
 import { WorkbenchProjectFileIndexRequestSchema } from "workbench-shared/workbench/project/project-file-index";
+import { ProjectStoreReadRequestSchema, ProjectStoreUpdateRequestSchema } from "workbench-shared/workbench/project/project-store";
 import ProjectTreeFileIndex from "workbench-shared/workbench/project/ProjectTreeFileIndex";
 import { WorkbenchProjectStateRequestSchema } from "workbench-shared/workbench/project/project-state";
 import { WorkbenchThreadLaunchReadSchema, WorkbenchThreadLaunchRequestSchema } from "workbench-shared/workbench/thread/thread-launch";
@@ -87,6 +88,7 @@ const METHODS = new Set([
   "browse/sessions/forget", "browse/sessions/read", "browse/sessions/stop",
   "sandbox-network/read", "sandbox-network/update",
   "command-approvals/read", "command-approvals/remove", "command-approvals/patch",
+  "project/store/read", "project/store/update",
   "project/discovery-settings/read", "project/discovery-settings/update",
   "project/folders/list", "project/create",
   ...Object.keys(WORKBENCH_GIT_ARC_ACTION_BY_METHOD),
@@ -222,6 +224,7 @@ export default class WorkbenchDaemonRequestController {
 
   constructor(private readonly owners: {
     commandApprovals?: Pick<import("./WorkbenchCommandApprovalController").default, "list" | "remove" | "patch">;
+    projectStore?: Pick<import("./store/WorkbenchProjectStore").default, "read" | "update">;
     providers?: Pick<WorkbenchProviderDispatcher, "get">;
     threadActions?: Pick<WorkbenchThreadActionController, "handle">;
     launches?: Pick<WorkbenchThreadLaunchController, "launch" | "read">;
@@ -395,6 +398,20 @@ export default class WorkbenchDaemonRequestController {
             ) };
           } else {
             result = { rules: await this.owners.commandApprovals.list(projectId) };
+          }
+          break;
+        }
+        case "project/store/read":
+        case "project/store/update": {
+          if (!this.owners.projectStore) throw new Error("The project store is unavailable.");
+          if (request.method === "project/store/read") {
+            const parsed = ProjectStoreReadRequestSchema.safeParse(params);
+            if (!parsed.success) throw new InvalidParamsError("A project ID is required for project store reads.");
+            result = await this.owners.projectStore.read(parsed.data.projectId);
+          } else {
+            const parsed = ProjectStoreUpdateRequestSchema.safeParse(params);
+            if (!parsed.success) throw new InvalidParamsError(parsed.error.issues[0]?.message ?? "Invalid project store update.");
+            result = await this.owners.projectStore.update(parsed.data);
           }
           break;
         }

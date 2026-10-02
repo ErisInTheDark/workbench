@@ -38,6 +38,7 @@ import WorkbenchTranscriptAssetStore from "./transcript/WorkbenchTranscriptAsset
 import WorkbenchLegacyDiffArtifactStore from "./git/WorkbenchLegacyDiffArtifactStore.ts";
 import WorkbenchApprovalOutcomeRepository from "./transcript/WorkbenchApprovalOutcomeRepository.ts";
 import WorkbenchThreadGitSelectionStore from "./git/WorkbenchThreadGitSelectionStore.ts";
+import WorkbenchProjectStoreRepository from "./store/WorkbenchProjectStoreRepository.ts";
 import type { WorkbenchProjectStartup } from "./project/workbench-project-persistence.ts";
 
 if (!parentPort) throw new Error("Workbench database worker requires a parent port");
@@ -255,6 +256,11 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   if (request.type === "threadGitSelection") {
     if (!database) throw new Error("Workbench database is not initialized");
     post({ id: request.id, type: "threadGitSelection", result: new WorkbenchThreadGitSelectionStore(database).execute(request.command) });
+    return;
+  }
+  if (request.type === "projectStore") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    post({ id: request.id, type: "projectStore", result: new WorkbenchProjectStoreRepository(database).execute(request.command) });
     return;
   }
   if (request.type === "readLegacyDiffArtifact") {

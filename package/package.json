@@ -8,10 +8,24 @@
   "bin": {
     "wb": "./wb"
   },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.mjs"
+    }
+  },
   "files": [
     "wb",
     "WorkbenchBootstrap.mjs",
     "WorkbenchInstallPrompt.mjs",
-    "SetupCommand.mjs"
-  ]
+    "SetupCommand.mjs",
+    "index.mjs",
+    "index.d.ts",
+    "store-definitions.mjs",
+    "StoreCommandRunner.mjs",
+    "README.md"
+  ],
+  "dependencies": {
+    "dotenv": "^18.0.4"
+  }
 }

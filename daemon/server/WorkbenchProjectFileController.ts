@@ -1,14 +1,18 @@
 /*
  * Exports:
- * - default WorkbenchProjectFileController: own validated project file reads, writes, HEAD resets, and mtime conflicts.
+ * - default WorkbenchProjectFileController: own validated markdown and .env file reads, writes, HEAD resets, and mtime conflicts.
  */
 import fs from "node:fs/promises";
 
 import { getHeadFileContent } from "./lib/git";
 import { resolveProjectFilePath } from "./lib/project";
 import type { ChangeSummary, SaveConflictPayload } from "workbench-shared/types";
-import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
+import { isEnvironmentFile, isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
+
+function isEditableFile(filePath: string) {
+  return isWorkbenchOpenableFile(filePath) || isEnvironmentFile(filePath);
+}
 
 export default class WorkbenchProjectFileController {
   constructor(
@@ -22,7 +26,7 @@ export default class WorkbenchProjectFileController {
     const project = await this.catalog.resolveProjectById(projectId);
     const file = resolveProjectFilePath(project, path);
     const stats = await fs.stat(file.absolutePath);
-    if (!isWorkbenchOpenableFile(file.rootRelativePath)) throw new Error("Only markdown files can be opened in the workbench.");
+    if (!isEditableFile(file.rootRelativePath)) throw new Error("Only markdown and .env files can be opened in the workbench.");
     if (!stats.isFile()) throw new Error("The requested path is not a file.");
     const [content, headContent] = await Promise.all([
       fs.readFile(file.absolutePath, "utf8"),
@@ -49,7 +53,7 @@ export default class WorkbenchProjectFileController {
     const project = await this.catalog.resolveProjectById(request.projectId);
     const file = resolveProjectFilePath(project, request.path);
     const before = await fs.stat(file.absolutePath);
-    if (!isWorkbenchOpenableFile(file.rootRelativePath)) throw new Error("Only markdown files can be edited in the workbench.");
+    if (!isEditableFile(file.rootRelativePath)) throw new Error("Only markdown and .env files can be edited in the workbench.");
     if (!before.isFile()) throw new Error("The requested path is not a file.");
     const actualMtimeMs = Math.trunc(before.mtimeMs);
     if (!request.force && actualMtimeMs !== Math.trunc(request.expectedMtimeMs)) {

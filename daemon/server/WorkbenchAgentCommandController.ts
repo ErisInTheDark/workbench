@@ -35,6 +35,8 @@ interface WorkbenchAgentDirectPort {
   executeTranscriptQuery?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeClaimStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFileRemoval?: (body: object, signal: AbortSignal) => Promise<Response>;
+  /** Human-only project store access; command parsing already rejected managed callers. */
+  executeProjectStoreRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   /** Warms a virtual repository; the owner rejects calls from catalogues listed before the runtime disappeared. */
   executeRepoWarm?: (body: object, signal: AbortSignal) => Promise<Response>;
   virtualReposAvailable?: () => boolean;
@@ -363,6 +365,10 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/api/rm" && request.body) {
       if (!this.direct.executeFileRemoval) throw new Error("File removal is not configured.");
       return await this.direct.executeFileRemoval(request.body, signal);
+    }
+    if (request.path === "/internal/store" && request.body) {
+      if (!this.direct.executeProjectStoreRequest) throw new Error("The project store is not configured.");
+      return await this.direct.executeProjectStoreRequest(request.body, signal);
     }
     if (request.path === "/internal/repo/warm" && request.body) {
       if (!this.direct.executeRepoWarm) throw new Error("Virtual repositories are not configured.");

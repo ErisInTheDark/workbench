@@ -22,6 +22,7 @@ import { WORKBENCH_TOKEN_COMMANDS } from "./token-command-definition";
 import { WORKBENCH_TRANSCRIPT_COMMANDS } from "./transcript-command-definitions";
 import { WORKBENCH_TOC_COMMANDS } from "./toc-command-definition";
 import { WORKBENCH_STATS_COMMANDS } from "./stats-command-definitions";
+import { WORKBENCH_STORE_COMMANDS } from "./store-command-definitions";
 import {
   getWorkbenchAgentCommandToolName,
   type WorkbenchAgentCommandDefinition,
@@ -43,6 +44,7 @@ const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Obj
   ...WORKBENCH_GIT_ARC_COMMANDS,
   ...WORKBENCH_BROWSE_COMMANDS,
   ...WORKBENCH_LIVE_PROVIDER_TEST_COMMANDS,
+  ...WORKBENCH_STORE_COMMANDS,
 ]);
 
 export interface WorkbenchAgentCommandAvailability {

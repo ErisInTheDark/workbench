@@ -9,17 +9,17 @@ import type { ProjectFolderOption } from "workbench-shared/workbench/project/pro
 import type { CommandApprovalRule } from "workbench-shared/workbench/settings/command-approvals";
 import CommandApprovalSettingsController from "../../workbench/CommandApprovalSettingsController";
 import InputList from "./InputList";
+import { InputListRows, type InputListRow } from "./input-list-rows";
 import { ResetIcon, SaveIcon } from "./workbench-icons";
 import WorkbenchIconButton from "./WorkbenchIconButton";
 import WorkbenchSettingsContextRow from "./WorkbenchSettingsContextRow";
 import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
 
-type Row = { id: string; value: string };
 function prefixText(rule: CommandApprovalRule) {
   return rule.prefix.map(token => /\s/u.test(token) ? JSON.stringify(token) : token).join(" ");
 }
-function rowsFor(rules: readonly CommandApprovalRule[]): Row[] {
-  return [...rules.map(rule => ({ id: rule.id, value: prefixText(rule) })), { id: crypto.randomUUID(), value: "" }];
+function rowsFor(rules: readonly CommandApprovalRule[]): InputListRow[] {
+  return InputListRows.create(rules.map(rule => ({ id: rule.id, value: prefixText(rule) })));
 }
 function workdirKey(value: string) {
   const slash = value.replace(/\\/gu, "/").replace(/\/+$/gu, "") || "/";
@@ -72,7 +72,7 @@ function ApprovalEditor({ projectId, rootPath }: { projectId: string; rootPath: 
     .filter(path => isWithin(rootPath, path) && workdirKey(path) !== workdirKey(rootPath)))];
   const workdir = workdirs.includes(selectedWorkdir) ? selectedWorkdir : rootPath;
   const saved = state.rules.filter(rule => workdirKey(rule.workdir) === workdirKey(workdir));
-  const [rows, setRows] = useState<Row[]>(() => rowsFor([]));
+  const [rows, setRows] = useState<InputListRow[]>(() => rowsFor([]));
   useEffect(() => { setRows(rowsFor(saved)); }, [state.rules, workdir]);
   const byId = new Map(saved.map(rule => [rule.id, prefixText(rule)]));
   const filled = rows.map(row => ({ ...row, value: row.value.trim() })).filter(row => row.value);
@@ -80,33 +80,12 @@ function ApprovalEditor({ projectId, rootPath }: { projectId: string; rootPath: 
   const removeIds = saved.filter(rule => !filled.some(row => row.id === rule.id && row.value === byId.get(rule.id)))
     .map(rule => rule.id);
   const dirty = add.length > 0 || removeIds.length > 0;
-  function change(id: string, value: string) {
-    setRows(current => {
-      const next = current.map(row => row.id === id ? { ...row, value } : row);
-      if (next.every(row => row.value.trim())) next.push({ id: crypto.randomUUID(), value: "" });
-      return next;
-    });
-  }
-  function remove(id: string) {
-    setRows(current => {
-      const next = current.filter(row => row.id !== id);
-      if (next.every(row => row.value.trim())) next.push({ id: crypto.randomUUID(), value: "" });
-      return next;
-    });
-  }
   return <>
     {workdirs.length > 1 ? <WorkbenchSettingsContextRow label="Workdir" value={workdir}
       options={workdirs.map(path => ({ id: path, label: path }))}
       onSelect={setSelectedWorkdir} /> : null}
-    <InputList idPrefix="command-prefix" placeholder="Command prefix"
-      disabled={state.loading} rows={rows.map((row, index) => ({
-        ...row, label: `Command prefix ${index + 1}`,
-      }))}
-      onChange={change} onRemove={remove}
-      onBlur={() => setRows(current => [
-        ...current.filter(row => row.value.trim()),
-        current.findLast(row => !row.value.trim()) ?? { id: crypto.randomUUID(), value: "" },
-      ])} />
+    <InputList idPrefix="command-prefix" placeholder="Command prefix" rowLabel="Command prefix"
+      disabled={state.loading} rows={rows} onRowsChange={setRows} />
     <div className="flex items-center gap-2">
       <WorkbenchIconButton type="button" label="Save command prefixes" disabled={!dirty || state.loading}
         onClick={() => { void controller.save(workdir, add, removeIds); }}>

@@ -5,6 +5,7 @@
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import { WorkbenchRequestUserInputCommandSchema } from "./lib/workbench/commands/questionnaire-command-definition";
+import { WorkbenchStoreCommandRequestSchema } from "./lib/workbench/commands/store-command-definitions";
 import WorkbenchThreadRecallController from "./lib/workbench/thread/WorkbenchThreadRecallController";
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
@@ -39,6 +40,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     };
     const projectCatalog = build.get("projectCatalog");
     const database = build.get("database");
+    const projectStore = build.get("projectStore");
     const stats = build.get("stats");
     const threadIdentity = build.get("threadIdentity");
     const transcriptIdentity = build.get("transcriptIdentity");
@@ -146,6 +148,18 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executeTranscriptQuery: async (body, signal) => await transcriptCommands.execute(body, signal),
       executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
       executeFileRemoval: async (body, signal) => await fileRemoval.execute(body, signal),
+      executeProjectStoreRequest: async (body, signal) => {
+        const request = WorkbenchStoreCommandRequestSchema.parse(body);
+        signal.throwIfAborted();
+        if (request.action === "set") {
+          await projectStore.setFromCwd(request.cwd, request.key, request.value);
+          return new Response(`Saved ${request.key}.\n`, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+        }
+        const value = await projectStore.getFromCwd(request.cwd, request.key);
+        return value === null
+          ? Response.json({ error: `Store key ${request.key} is not set for this project.` }, { status: 404 })
+          : new Response(`${value}\n`, { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
+      },
       executeRepoWarm: async (body, signal) => await repo.warm(body, signal),
       virtualReposAvailable: () => repo.isAvailable(),
       hydrateRepoPath: async (absolutePath, signal) => await repo.hydrate(absolutePath, signal),
@@ -195,7 +209,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["database", "gitArc", "harnesses", "messages", "repo", "projectCatalog", "questionnaires", "reloadDirt", "stats", "subagents", "threadGit", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["database", "gitArc", "harnesses", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "threadGit", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
   safeAll: true,
   scope: "server:commands",
 });

@@ -2,6 +2,7 @@
  * Exports:
  * - default PlaintextEditable: plaintext input with autofocus, overlays and mention suggestions.
  * - PlaintextEditableHandle: focus the editor at a model-text offset.
+ * - PlaintextHighlight: one overlay range and its classes.
  * - threadPlaintextEditableClassName: shared Tailwind styling for thread text editors.
  */
 "use client";
@@ -11,17 +12,22 @@ import { createPortal } from "react-dom";
 
 import {
   buildInlineMentionSuggestions,
-  type InlineMentionHighlight,
   type InlineMentionHighlightSources,
   type InlineMentionSuggestion,
 } from "../../../workbench/thread/inline-mention-highlights";
-import { getInlineMentionMarkClassName, getInlineMentionOverlayClassName } from "../../../workbench/thread/inline-mention-styles";
+import { getInlineMentionMarkClassName } from "../../../workbench/thread/inline-mention-styles";
 import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import VoiceInputControl, { useVoiceInput } from "../voice/VoiceInputControl";
 import { capturePlaintextSelection, restorePlaintextSelection } from "./plaintext-selection";
 import type { VoiceSelection } from "workbench-shared/workbench/voice/voice-document";
 
 export interface PlaintextEditableHandle { focus(offset?: number): void }
+
+export interface PlaintextHighlight {
+  start: number;
+  end: number;
+  className: string;
+}
 
 export const threadPlaintextEditableClassName = `
   block whitespace-pre-wrap wrap-anywhere [word-break: break-word]
@@ -85,7 +91,7 @@ function setEditableValueAndCaret (element: HTMLElement, value: string, caretOff
   restoreEditableCaretOffset(element, caretOffset);
 }
 
-function renderHighlightContent (value: string, highlights: InlineMentionHighlight[]) {
+function renderHighlightContent (value: string, highlights: readonly PlaintextHighlight[]) {
   const content: ReactNode[] = [];
   let cursor = 0;
   highlights.forEach((highlight, index) => {
@@ -95,8 +101,8 @@ function renderHighlightContent (value: string, highlights: InlineMentionHighlig
 
     content.push(
       <span
-        key={`${highlight.kind}:${highlight.start}:${highlight.end}:${index}`}
-        className={getInlineMentionOverlayClassName(highlight.kind)}
+        key={`${highlight.start}:${highlight.end}:${index}`}
+        className={highlight.className}
       >
         {value.slice(highlight.start, highlight.end)}
       </span>,
@@ -216,6 +222,7 @@ export default function PlaintextEditable ({
   onPaste,
   placeholder,
   highlights = [],
+  highlightText = false,
   mentionSources = null,
   mentionSuggestionsPlacement = "above",
   readOnly = false,
@@ -235,7 +242,10 @@ export default function PlaintextEditable ({
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
   placeholder?: string;
-  highlights?: InlineMentionHighlight[];
+  /** Sorted, non-overlapping ranges drawn by the overlay. */
+  highlights?: readonly PlaintextHighlight[];
+  /** Draw the text itself from the overlay so highlight classes may colour it; otherwise highlights are marks behind real text. */
+  highlightText?: boolean;
   mentionSources?: InlineMentionHighlightSources | null;
   mentionSuggestionsPlacement?: "above" | "below";
   readOnly?: boolean;
@@ -430,11 +440,11 @@ export default function PlaintextEditable ({
           aria-hidden="true"
           className={joinClasses(
             className,
-            "pointer-events-none absolute inset-0 z-20 !text-transparent",
+            "pointer-events-none absolute inset-0 z-20",
+            !highlightText && "!text-transparent [& *]:!text-transparent",
             "!m-0",
             "whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
-            "[& *]:!text-transparent",
-            highlights.length === 0 && "hidden",
+            highlights.length === 0 && !highlightText && "hidden",
             voice.visible && "pr-[calc(var(--voice-field-font-size)*2)]",
           )}
         >
@@ -447,7 +457,8 @@ export default function PlaintextEditable ({
           aria-label={ariaLabel}
           aria-multiline="true"
           aria-readonly={readOnly || voice.locked || undefined}
-          className={joinClasses(className, "relative z-10", voice.visible && "pr-[calc(var(--voice-field-font-size)*2)]")}
+          className={joinClasses(className, "relative z-10", highlightText && "!text-transparent caret-text",
+            voice.visible && "pr-[calc(var(--voice-field-font-size)*2)]")}
           contentEditable={readOnly || disabled || voice.locked ? false : "plaintext-only"}
           data-empty={value ? "false" : "true"}
           data-placeholder={placeholder ?? ""}
