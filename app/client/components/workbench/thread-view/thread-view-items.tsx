@@ -1878,7 +1878,10 @@ function ThreadRenderableBlockViewComponent ({
       return null;
     case "contextCompaction": {
       const timelineEntry = findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline);
-      const isActive = turnStatus === "inProgress" && (!timelineEntry || timelineEntry.completedAt === null);
+      // Workbench owns compaction status; only status-less items from older daemons fall back to turn activity.
+      const isActive = block.item.status
+        ? block.item.status === "inProgress"
+        : turnStatus === "inProgress" && (!timelineEntry || timelineEntry.completedAt === null);
       return (
         <ThreadContextCompactionItem
           completedAt={timelineEntry?.completedAt}

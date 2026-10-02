@@ -12,6 +12,7 @@ import {
   createCodexTurnUsageContextObservation,
   createCodexTranscriptProviderDynamicToolObservation,
   createCodexTranscriptProviderItemObservation,
+  createCodexTranscriptProviderItemLifecycleObservation,
   createCodexTranscriptProviderThreadScopeObservation,
   createCodexTranscriptProviderThreadObservation,
   createCodexTranscriptProviderThreadObservations,
@@ -332,6 +333,22 @@ test("provider item lifecycle timestamps remain direct durable facts", () => {
     lastSeenAt: 2_000,
     startedAt: 1_000,
   });
+});
+
+test("live compaction starts and ends report to Workbench while other items stay item facts", () => {
+  const compaction = { id: "compaction", type: "contextCompaction" as const };
+  assert.deepEqual(["item/started", "item/completed"].map(method => createCodexTranscriptProviderItemLifecycleObservation({
+    item: compaction, method: method as "item/started" | "item/completed", observedAt: 2_000, threadId: "thread", turnId: "turn",
+  })), [
+    { kind: "contextCompaction", phase: "started", observedAt: 2_000, reference: "compaction", threadId: "thread", turnId: "turn" },
+    { kind: "contextCompaction", phase: "completed", observedAt: 2_000, reference: "compaction", threadId: "thread", turnId: "turn" },
+  ]);
+  const answer = createCodexTranscriptProviderItemLifecycleObservation({
+    item: { id: "answer", type: "agentMessage", text: "done", phase: null, memoryCitation: null, delivery: null, questions: null },
+    method: "item/completed", observedAt: 2_000, threadId: "thread", turnId: "turn",
+  });
+  assert.equal(answer.kind, "item");
+  assert.equal(answer.kind === "item" ? answer.lifecycle : null, "completed");
 });
 
 test("one provider dynamic-tool request becomes one direct operation item", () => {

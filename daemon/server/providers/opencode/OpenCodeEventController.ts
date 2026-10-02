@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - OpenCodeEventControllerOptions: provider-local event, transcript, and lifecycle ports.
- * - default OpenCodeEventController: translate OpenCode events into direct live facts and one terminal canonical settlement.
+ * - default OpenCodeEventController: translate OpenCode events into direct live facts, compaction reports, and one terminal canonical settlement.
  */
 import type { OpenCodeEvent, SessionToolFailed, SessionToolSuccess } from "@opencode/client";
 import type { WorkbenchProviderObservation, WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
@@ -33,7 +33,7 @@ export interface OpenCodeEventControllerOptions {
     syncCreatedNative?(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId } | null>;
     reconcileActivity?(signal: AbortSignal, wasTouched: (sessionID: string) => boolean): ReturnType<OpenCodeThreadOperations["reconcileActivity"]>;
   } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "completeExecution" | "executionIntentVersion">;
-  transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordItem" | "recordTurnState">
+  transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordCompaction" | "recordItem" | "recordTurnState">
     & Partial<Pick<OpenCodeTranscriptAdapter, "previewToolPatch">>;
 }
 
@@ -308,6 +308,29 @@ export default class OpenCodeEventController {
         });
         this.previews.get(sessionID)?.calls.delete(event.data.id);
         this.deleteTool(sessionID, event.data.id);
+        return;
+      }
+      case "session.compaction.started": {
+        // Sync first: OpenCode's running compaction message is the echo this start adopts instead of duplicating.
+        const identity = await this.options.threads.syncNative(sessionID);
+        const turnId = identity.latestTurnId ?? this.options.threads.currentTurn(sessionID)?.turnId;
+        if (!turnId) throw new Error("OpenCode compaction started without an admitted Workbench turn.");
+        await this.options.transcript.recordCompaction({
+          threadId: identity.threadId, turnId, phase: "started", observedAt: event.created,
+          reference: event.data.inputID ?? null,
+        });
+        return;
+      }
+      case "session.compaction.ended":
+      case "session.compaction.failed": {
+        // Settle before syncing, or the synced echo settles first without the measured end.
+        const active = await this.active(sessionID);
+        await this.options.transcript.recordCompaction({
+          ...active, phase: event.type === "session.compaction.ended" ? "completed" : "failed",
+          observedAt: event.created,
+          reference: event.type === "session.compaction.failed" ? event.data.inputID ?? null : null,
+        });
+        await this.options.threads.syncNative(sessionID);
         return;
       }
       case "session.execution.succeeded":

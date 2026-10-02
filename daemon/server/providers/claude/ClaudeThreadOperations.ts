@@ -548,13 +548,18 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
           spawnClaudeCodeProcess: options => spawnTrackedClaude(options, exit => { processExit = exit; }),
         },
       });
+      const turnId = WorkbenchTurnIdSchema.parse(turn.id);
       for await (const message of sdkQuery) {
-        if (message.type === "system" && message.subtype === "compact_boundary") {
-          await this.options.transcript.recordCompaction(identity.threadId, WorkbenchTurnIdSchema.parse(turn.id), message);
-          compacted = true;
+        if (message.type === "system" && (message.subtype === "compact_boundary" || message.subtype === "status")) {
+          await this.options.transcript.recordCompactionMessage(identity.threadId, turnId, message);
+          if (message.subtype === "compact_boundary") compacted = true;
         }
       }
-      if (!compacted) throw new Error("Claude compaction ended without a native compact boundary.");
+      if (!compacted) {
+        // Settle a compaction Claude started but never finished; with nothing open this records nothing.
+        await this.options.transcript.reportCompaction(identity.threadId, turnId, "failed");
+        throw new Error("Claude compaction ended without a native compact boundary.");
+      }
     } finally {
       sdkQuery?.close();
       if (processExit) await processExit;

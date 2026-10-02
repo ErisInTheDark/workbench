@@ -1,7 +1,8 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptRepository: own atomic settlement, cumulative usage facts, provider reconciliation, and bounded reads.
+ * - default WorkbenchTranscriptRepository: own atomic settlement, context compaction lifecycle, cumulative usage facts, provider reconciliation, and bounded reads.
  */
+import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   ItemReferenceSchema, NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema, TurnReferenceSchema,
@@ -70,9 +71,11 @@ import {
   transformWorkbenchTranscriptItem,
   type WorkbenchTranscriptItemTransform,
 } from "./workbench-transcript-transform-registry.ts";
+import { transformContextCompaction } from "./workbench-transcript-core-transformers.ts";
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptCaptureGapObservation,
+  WorkbenchTranscriptContextCompactionObservation,
   WorkbenchTranscriptContextSnapshot,
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,
@@ -168,6 +171,8 @@ export default class WorkbenchTranscriptRepository {
               ? this.#settleTurnCatalog(observation)
             : observation.kind === "providerTurnScope"
               ? this.#settleProviderTurnScope(observation)
+            : observation.kind === "contextCompaction"
+              ? this.#settleContextCompaction(observation)
             : this.#settleObservation(observation);
           if (threadId) changedThreadIds.add(threadId);
         }
@@ -1052,6 +1057,13 @@ export default class WorkbenchTranscriptRepository {
         });
       }
       if (!insideCanonicalWindow) this.#materializeTurn(observation.threadId, observation.turnId);
+      const settles = observation.state === "completed" || observation.state === "interrupted" || observation.state === "failed";
+      if (!insideCanonicalWindow && settles && (existing?.state === "inProgress" || existing?.state === "admitted")) {
+        this.#interruptContextCompactions(
+          this.#openContextCompactions(observation.threadId).filter(item => item.turn_id === observation.turnId),
+          observation.endedAt ?? Date.now(),
+        );
+      }
       return observation.threadId;
     }
     if (observation.kind === "turnUsageContext") {
@@ -1108,6 +1120,16 @@ export default class WorkbenchTranscriptRepository {
     }
     if (observation.kind === "item") {
       if (!isSupportedWorkbenchTranscriptItem(observation.item)) return observation.threadId;
+      if (observation.item.type === "contextCompaction") {
+        const identity = this.#itemIdentity.resolve({
+          threadId: WorkbenchThreadIdSchema.parse(observation.threadId),
+          turnId: WorkbenchTurnIdSchema.parse(observation.turnId),
+          itemId: ItemReferenceSchema.parse(observation.publicItemId ?? observation.item.id),
+        });
+        const existing = this.#findItem(observation.threadId, identity?.itemId, canonicalIndex);
+        // Workbench settled this compaction; a later native echo can neither reopen nor restate it.
+        if (existing && this.#isSettledContextCompaction(existing.id)) return observation.threadId;
+      }
       let item: ThreadItem = observation.item;
       if (item.type === "functionCallOutput" || item.type === "fileChange") {
         const existingIdentity = this.#itemIdentity.resolve({
@@ -1250,6 +1272,92 @@ export default class WorkbenchTranscriptRepository {
     const identity = this.#itemIdentity.resolve({ threadId, turnId, itemId: ItemReferenceSchema.parse(itemId) });
     const item = this.#findItem(threadId, identity?.itemId, index);
     return item?.turn_id === turnId ? item : null;
+  }
+
+  /**
+   * Workbench owns compaction items. A report lands on its referenced item; an unreferenced start adopts its
+   * turn's running echo and an unreferenced end settles the thread's open compaction; otherwise it creates the
+   * item. Settled compactions never change again, an end with nothing open needs a reference or a measured
+   * duration as evidence before it creates one, and a new start retires any older compaction left open.
+   */
+  #settleContextCompaction(observation: WorkbenchTranscriptContextCompactionObservation) {
+    const threadId = WorkbenchThreadIdSchema.parse(observation.threadId);
+    const turnId = WorkbenchTurnIdSchema.parse(observation.turnId);
+    this.#requiredTurn(threadId, turnId);
+    const { phase, observedAt, reference } = observation;
+    const referenced = reference === null ? null : this.#itemIdentity.resolve({
+      threadId, turnId, itemId: ItemReferenceSchema.parse(reference),
+    });
+    const openItems = this.#openContextCompactions(threadId);
+    const open = reference !== null ? null
+      : (phase === "started" ? openItems.filter(item => item.turn_id === turnId) : openItems).at(-1) ?? null;
+    const existing = referenced ? this.#findItem(threadId, referenced.itemId) : open;
+    if (existing && this.#isSettledContextCompaction(existing.id)) return null;
+    const durationMs = observation.durationMs ?? null;
+    if (!existing && !referenced && phase !== "started" && reference === null && durationMs === null) return null;
+    if (phase === "started") {
+      this.#interruptContextCompactions(openItems.filter(item => item.id !== existing?.id), observedAt);
+    }
+    const publicItemId = referenced?.itemId ?? open?.public_id;
+    const sourceId = open ? open.public_id : reference ?? `workbench-compaction:${randomUUID()}`;
+    const startedAt = phase === "started" ? observedAt
+      : !existing && durationMs !== null ? Math.max(0, observedAt - durationMs) : null;
+    const itemId = this.#writeItem({
+      createTransform: (id) => transformContextCompaction(id, phase === "started" ? "inProgress" : phase),
+      observedAt,
+      ...(publicItemId ? { publicItemId } : {}),
+      replaceTimeline: false,
+      sourceId,
+      timeline: {
+        itemId: publicItemId ?? sourceId,
+        startedAt,
+        firstSeenAt: startedAt ?? observedAt,
+        lastSeenAt: observedAt,
+        completedAt: phase === "started" ? null : observedAt,
+      },
+      threadId,
+      turnId: open?.turn_id ?? turnId,
+    });
+    if (phase !== "started") this.#settlementChanges?.completedItemIds.add(itemId);
+    return threadId;
+  }
+
+  /** Running compactions whose turn settled, or that a newer compaction replaced, were cut off. */
+  #interruptContextCompactions(items: readonly TranscriptItemRow[], endedAt: number) {
+    for (const item of items) {
+      const itemId = this.#writeItem({
+        createTransform: (id) => transformContextCompaction(id, "interrupted"),
+        observedAt: endedAt,
+        publicItemId: item.public_id,
+        replaceTimeline: false,
+        sourceId: item.public_id,
+        timeline: { itemId: item.public_id, startedAt: null, firstSeenAt: endedAt, lastSeenAt: endedAt, completedAt: endedAt },
+        threadId: item.thread_id,
+        turnId: item.turn_id,
+        allowUnmaterializedTurn: true,
+      });
+      this.#settlementChanges?.completedItemIds.add(itemId);
+    }
+  }
+
+  /** The thread's running compactions in creation order, wherever their turns are; manual compaction can follow a settled turn. */
+  #openContextCompactions(threadId: string) {
+    const items = this.#all(selectRows(itemTables.threadItems, {
+      where: { thread_id: threadId, type: "contextCompaction" },
+      orderBy: [{ column: "id" }],
+    }));
+    const open = new Set(this.#rowsByItemIds(itemTables.threadItemContextCompactions, items.map(item => item.id))
+      .filter(row => row.state === "inProgress").map(row => row.item_id));
+    return items.filter(item => open.has(item.id));
+  }
+
+  #contextCompactionState(itemId: number) {
+    return this.#one(selectRows(itemTables.threadItemContextCompactions, { where: { item_id: itemId } }))?.state ?? null;
+  }
+
+  #isSettledContextCompaction(itemId: number) {
+    const state = this.#contextCompactionState(itemId);
+    return state === "completed" || state === "failed";
   }
 
   #writeItem({

@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect direct live text recording and one terminal canonical settlement.
+ * No production exports. Tests protect direct live text recording, compaction report ordering, and one terminal canonical settlement.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -28,7 +28,7 @@ test("compaction execution settles without accepting a user turn or continuing i
     transcript: {
       appendText: () => undefined,
       recordItem: async () => "item" as never,
-      recordTurnState: async () => { assert.fail("Compaction cannot reopen a settled user turn"); },
+      recordCompaction: async () => undefined, recordTurnState: async () => { assert.fail("Compaction cannot reopen a settled user turn"); },
     },
   });
   for (const type of ["session.inbox.delivered", "session.execution.started", "session.execution.succeeded"]) {
@@ -43,7 +43,7 @@ test("reasoning deltas target the visible canonical section before completion", 
     observe: async () => undefined,
     threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
       syncNative: async () => ({ threadId }), latestTurn: async () => turn() },
-    transcript: { recordItem: async () => "item" as never, recordTurnState: async () => undefined,
+    transcript: { recordItem: async () => "item" as never, recordCompaction: async () => undefined, recordTurnState: async () => undefined,
       appendText: input => { deltas.push(input); } },
   });
   await owner.accept(event({ type: "session.reasoning.started", created: 1,
@@ -65,7 +65,7 @@ test("previews join exact native calls in either order and cannot survive reques
     threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
       syncNative: async () => ({ threadId }), latestTurn: async () => turn() },
     transcript: {
-      appendText: () => undefined, recordTurnState: async () => undefined,
+      appendText: () => undefined, recordCompaction: async () => undefined, recordTurnState: async () => undefined,
       recordItem: async input => { items.push(input); return `canonical-${input.source.reference}` as never; },
       previewToolPatch: input => { previews.push(input); },
     },
@@ -99,7 +99,7 @@ test("native error metadata marks success events failed while retaining complete
     observe: async () => undefined,
     threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId: current }),
       syncNative: async () => ({ threadId }), latestTurn: async () => ({ ...turn(), id: current }) },
-    transcript: { appendText: () => undefined, recordTurnState: async () => undefined,
+    transcript: { appendText: () => undefined, recordCompaction: async () => undefined, recordTurnState: async () => undefined,
       recordItem: async input => { items.push(input); return "canonical" as never; } },
   });
   await owner.accept(event({ type: "session.tool.input.started", created: 1, data: { sessionID: "session", id: "call", name: "execute" } }));
@@ -123,7 +123,7 @@ test("write settlement replaces its live preview on the same canonical item for 
       observe: async () => undefined,
       threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
         syncNative: async () => ({ threadId }), latestTurn: async () => turn() },
-      transcript: { appendText: () => undefined, recordTurnState: async () => undefined,
+      transcript: { appendText: () => undefined, recordCompaction: async () => undefined, recordTurnState: async () => undefined,
         recordItem: async input => { items.push(input); return "canonical-write" as never; },
         previewToolPatch: input => { previews.push(input); } },
     });
@@ -176,7 +176,7 @@ test("invalidates cached model catalogues on provider catalogue events", async (
     transcript: {
       appendText: () => undefined,
       recordItem: async () => "item" as never,
-      recordTurnState: async () => undefined,
+      recordCompaction: async () => undefined, recordTurnState: async () => undefined,
     },
   });
   await controller.accept({ type: "model.updated" } as never);
@@ -206,6 +206,48 @@ function turn(status: Turn["status"] = "inProgress", id: string = turnId): Turn 
   };
 }
 
+function compactionHarness() {
+  const steps: string[] = [];
+  const reports: Parameters<OpenCodeTranscriptAdapter["recordCompaction"]>[0][] = [];
+  const owner = new OpenCodeEventController({
+    observe: async () => { assert.fail("Compaction reports cannot change the task lifecycle"); },
+    threads: {
+      ...executionLifecycle,
+      currentTurn: () => ({ threadId, turnId }),
+      latestTurn: async () => turn(),
+      syncNative: async () => { steps.push("sync"); return { threadId, latestTurnId: turnId }; },
+    },
+    transcript: {
+      appendText: () => undefined,
+      recordItem: async () => "item" as never,
+      recordTurnState: async () => undefined,
+      recordCompaction: async report => { steps.push(`report:${report.phase}`); reports.push(report); },
+    },
+  });
+  return { owner, reports, steps };
+}
+
+test("an OpenCode compaction start adopts its synced message and its end settles before the echo", async () => {
+  const { owner, reports, steps } = compactionHarness();
+  await owner.accept(event({ type: "session.compaction.started", created: 10,
+    data: { sessionID: "session", reason: "manual", recent: "", inputID: "compaction-input" } }));
+  await owner.accept(event({ type: "session.compaction.ended", created: 40,
+    data: { sessionID: "session", reason: "manual", text: "summary", recent: "" } }));
+  assert.deepEqual(steps, ["sync", "report:started", "report:completed", "sync"]);
+  assert.deepEqual(reports, [
+    { threadId, turnId, phase: "started", observedAt: 10, reference: "compaction-input" },
+    { threadId, turnId, phase: "completed", observedAt: 40, reference: null },
+  ]);
+});
+
+test("an OpenCode compaction failure fails the compaction it names", async () => {
+  const { owner, reports, steps } = compactionHarness();
+  await owner.accept(event({ type: "session.compaction.failed", created: 20,
+    data: { sessionID: "session", reason: "auto", error: { type: "compaction.failed", message: "too long" } } }));
+  assert.deepEqual(steps, ["report:failed", "sync"]);
+  assert.deepEqual(reports, [{ threadId, turnId, phase: "failed", observedAt: 20, reference: null }]);
+});
+
 test("successful execution reaches unfinished-task enforcement after lifecycle settlement", async () => {
   const calls: string[] = [];
   const controller = new OpenCodeEventController({
@@ -217,7 +259,7 @@ test("successful execution reaches unfinished-task enforcement after lifecycle s
       completeExecution: async () => { calls.push("enforce"); },
     } as never,
     transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
-      recordTurnState: async () => undefined },
+      recordCompaction: async () => undefined, recordTurnState: async () => undefined },
     observe: async () => { calls.push("observe"); },
   });
   await controller.accept(event({
@@ -240,7 +282,7 @@ test("terminal notification waits for canonical settlement when native history s
     transcript: {
       appendText: () => undefined,
       recordItem: async () => "item" as never,
-      recordTurnState: async input => { calls.push(`record:${input.state}`); },
+      recordCompaction: async () => undefined, recordTurnState: async input => { calls.push(`record:${input.state}`); },
     },
     observe: async () => { calls.push("observe"); },
     broadcast: notification => { calls.push(notification.method); },
@@ -272,7 +314,7 @@ test("connection reconciliation restores active work and settles missed terminal
     } as never,
     transcript: {
       appendText: () => undefined, recordItem: async () => "item" as never,
-      recordTurnState: async input => { calls.push(`record:${input.state}`); },
+      recordCompaction: async () => undefined, recordTurnState: async input => { calls.push(`record:${input.state}`); },
     },
     observe: async facts => {
       calls.push(facts.lifecycle?.event.kind ?? "none");
@@ -317,7 +359,7 @@ test("terminal reconciliation never settles a newer user turn", async () => {
       },
       observe: async () => { settled.push("observed"); },
       transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
-        recordTurnState: async () => { settled.push("recorded"); } },
+        recordCompaction: async () => undefined, recordTurnState: async () => { settled.push("recorded"); } },
     });
     const completion = controller.accept(event({ type: "session.execution.succeeded",
       id: "end", created: 3, data: { sessionID: "session" } }));
@@ -350,7 +392,7 @@ test("streams text directly with canonical reads only at execution boundaries", 
       latestTurn: async () => turn("completed"),
     },
     transcript: {
-      recordTurnState: async input => { turnStates.push(input.state); },
+      recordCompaction: async () => undefined, recordTurnState: async input => { turnStates.push(input.state); },
       recordItem: async input => {
         recorded.push({
           source: input.source,
@@ -424,7 +466,7 @@ test("keeps reused tool ids isolated by native session", async () => {
       latestTurn: async () => null,
     },
     transcript: {
-      recordTurnState: async () => undefined,
+      recordCompaction: async () => undefined, recordTurnState: async () => undefined,
       recordItem: async input => {
         if (input.item.type === "dynamicToolCall") {
           recorded.push({
@@ -486,7 +528,7 @@ test("materialises an admitted steer only when OpenCode delivers its inbox item"
       latestTurn: async () => null,
     },
     transcript: {
-      recordTurnState: async () => undefined,
+      recordCompaction: async () => undefined, recordTurnState: async () => undefined,
       recordItem: async () => "00000000-0000-4000-8000-000000000003" as never,
       appendText: () => undefined,
     },
@@ -518,7 +560,7 @@ test("does not complete a WB turn while its next OpenCode steer is pending", asy
       latestTurn: async () => turn(),
     },
     transcript: {
-      recordTurnState: async () => undefined,
+      recordCompaction: async () => undefined, recordTurnState: async () => undefined,
       recordItem: async () => "00000000-0000-4000-8000-000000000003" as never,
       appendText: () => undefined,
     },
@@ -547,7 +589,7 @@ test("broadcasts one settled turn and idle status when an execution ends", async
       latestTurn: async () => turn("completed"),
     },
     transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
-      recordTurnState: async () => undefined },
+      recordCompaction: async () => undefined, recordTurnState: async () => undefined },
   });
 
   await controller.accept(event({
@@ -573,7 +615,7 @@ test("broadcasts an inbox-delivered turn as the app's active turn", async () => 
       latestTurn: async () => turn(),
     },
     transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
-      recordTurnState: async () => undefined },
+      recordCompaction: async () => undefined, recordTurnState: async () => undefined },
   });
 
   await controller.accept(event({
@@ -601,7 +643,7 @@ test("maps OpenCode cancellation failure to interrupted after a WB stop", async 
       latestTurn: async () => turn(),
     },
     transcript: {
-      recordTurnState: async input => { states.push(input.state); },
+      recordCompaction: async () => undefined, recordTurnState: async input => { states.push(input.state); },
       recordItem: async () => "00000000-0000-4000-8000-000000000003" as never,
       appendText: () => undefined,
     },

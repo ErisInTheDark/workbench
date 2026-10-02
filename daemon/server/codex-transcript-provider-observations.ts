@@ -4,6 +4,7 @@
  * - createCodexTranscriptProviderThreadObservation: project one provider thread into its atomic Workbench metadata fact.
  * - createCodexTranscriptProviderTurnObservation: project one provider turn into its atomic Workbench lifecycle fact.
  * - createCodexTranscriptProviderItemObservation: project one provider item lifecycle without reading storage.
+ * - createCodexTranscriptProviderItemLifecycleObservation: project one live item start/end, reporting compaction to Workbench.
  * - createCodexTranscriptProviderDynamicToolObservation: project one provider dynamic-tool request without reading storage.
  * - createCodexTranscriptProviderTurnScopeObservation: project one complete provider turn into a replacement boundary.
  * - createCodexTranscriptProviderThreadObservations: project one complete provider thread response into ordered atomic facts.
@@ -22,6 +23,7 @@ type Thread = Omit<NativeThread, "turns"> & { turns: Turn[] };
 import type { TokenUsageBreakdown } from "workbench-shared/codex/generated/app-server/v2/TokenUsageBreakdown";
 import type {
   NativeTranscriptAtomicObservation,
+  NativeTranscriptObservation,
   WorkbenchTranscriptItemLifecycle,
   WorkbenchTranscriptProviderTurnScopeObservation,
 } from "./database/transcript/workbench-transcript-types.ts";
@@ -227,6 +229,41 @@ export function createCodexTranscriptProviderItemObservation({
     threadId: NativeThreadIdSchema.parse(threadId),
     turnId: NativeTurnIdSchema.parse(turnId),
   };
+}
+
+/** Live item lifecycle: compaction starts and ends are Workbench compaction reports; other items stay item facts. */
+export function createCodexTranscriptProviderItemLifecycleObservation({
+  item,
+  method,
+  observedAt,
+  threadId,
+  turnId,
+}: {
+  item: ThreadItem;
+  method: "item/started" | "item/completed";
+  observedAt: number;
+  threadId: string;
+  turnId: string;
+}): NativeTranscriptObservation {
+  if (item.type === "contextCompaction") {
+    return {
+      kind: "contextCompaction",
+      phase: method === "item/started" ? "started" : "completed",
+      observedAt,
+      reference: item.id,
+      threadId: NativeThreadIdSchema.parse(threadId),
+      turnId: NativeTurnIdSchema.parse(turnId),
+    };
+  }
+  return createCodexTranscriptProviderItemObservation({
+    completedAtMs: method === "item/completed" ? observedAt : undefined,
+    item,
+    lifecycle: method === "item/started" ? "streaming" : "completed",
+    observedAt,
+    startedAtMs: method === "item/started" ? observedAt : undefined,
+    threadId,
+    turnId,
+  });
 }
 
 export function createCodexTranscriptProviderDynamicToolObservation(

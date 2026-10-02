@@ -2,11 +2,11 @@
  * Exports:
  * - claudeTokenBreakdown: convert one Claude usage record into Workbench token accounting.
  * - ClaudeTranscriptTurnState: plain in-flight transcript state of one live turn, handed across bridge reloads.
- * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, live exact commentary-tool message, native tool (with effective Edit/Write diffs and claim denials), steer, screenshot steer, context and billing usage, and compaction facts to canonical history.
+ * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, live exact commentary-tool message, native tool (with effective Edit/Write diffs and claim denials), steer, screenshot steer, context and billing usage to canonical history, and report compaction start and end to Workbench.
  */
 import path from "node:path";
 import type {
-  SDKAssistantMessage, SDKCompactBoundaryMessage, SDKPartialAssistantMessage, SDKUserMessage,
+  SDKAssistantMessage, SDKCompactBoundaryMessage, SDKPartialAssistantMessage, SDKStatusMessage, SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, WorkbenchItemIdSchema,
@@ -351,11 +351,31 @@ export default class ClaudeTranscriptAdapter {
     }
   }
 
-  async recordCompaction(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, message: SDKCompactBoundaryMessage) {
-    await this.recordItem(threadId, turnId, `compact:${message.uuid}`, {
-      type: "contextCompaction", id: message.uuid,
-    });
-    await this.recordContextUsage(threadId, null);
+  /** Report Claude's compaction signals; Workbench owns the item. Claude names neither start nor end, so both are unreferenced. */
+  async recordCompactionMessage(
+    threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, message: SDKStatusMessage | SDKCompactBoundaryMessage,
+  ) {
+    const boundary = message.subtype === "compact_boundary" ? message : null;
+    const status = message.subtype === "status" ? message : null;
+    // A successful status follows or precedes the boundary, which alone reports the completion.
+    const phase = boundary ? "completed"
+      : status?.status === "compacting" ? "started"
+        : status?.compact_result === "failed" ? "failed" : null;
+    if (!phase) return;
+    if (phase === "failed") {
+      console.warn("[claude] context compaction failed", status?.compact_error?.slice(0, 300) ?? "no reason given");
+    }
+    await this.reportCompaction(threadId, turnId, phase, boundary?.compact_metadata.duration_ms ?? null);
+  }
+
+  /** Unreferenced: an end settles the thread's open compaction, or records nothing without a measured duration. */
+  async reportCompaction(
+    threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, phase: "started" | "completed" | "failed", durationMs: number | null = null,
+  ) {
+    await this.owners.transcript.record([{
+      kind: "contextCompaction", threadId, turnId, phase, observedAt: Date.now(), reference: null, durationMs,
+    }], { source: "provider" });
+    if (phase === "completed") await this.recordContextUsage(threadId, null);
   }
 
   readContextUsage(threadId: WorkbenchThreadId) {

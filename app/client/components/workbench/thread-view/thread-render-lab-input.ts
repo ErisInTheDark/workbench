@@ -236,6 +236,7 @@ function normalizeThreadItem(value: JsonValue, index: number): ThreadItem | null
       return {
         type: "contextCompaction",
         id: `lab-context-compaction-${index + 1}`,
+        status: "completed",
       };
     default:
       return null;

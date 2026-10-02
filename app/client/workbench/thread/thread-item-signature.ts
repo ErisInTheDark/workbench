@@ -150,7 +150,7 @@ export function getThreadItemRenderSignature(item: ThreadItem) {
       case "exitedReviewMode":
         return `${item.id}:${item.type}:${item.review}`;
       case "contextCompaction":
-        return `${item.id}:${item.type}`;
+        return `${item.id}:${item.type}:${item.status ?? ""}`;
     }
     console.warn("Unrecognised transcript item uses a generic render signature.");
     return `${identity}:${stableStringify(item)}`;

@@ -74,6 +74,8 @@ export async function admitNativeTranscriptObservations(
       case "providerTurnScope": return observation.observations;
       case "turnCatalog": return observation.catalog;
       case "usageWindow": return [...observation.catalog, ...observation.observations];
+      // Compaction identity is minted or resolved by the repository at settlement.
+      case "contextCompaction": return [];
       default: return [observation];
     }
   });
@@ -242,6 +244,10 @@ export function mapNativeTranscriptObservation(
     providerTurnScope: (input) => ({
       ...input, threadId: threadId(input.threadId), observations: input.observations.map(mapAtomic),
       completeTurnIds: input.completeTurnIds.map((id) => turnId(input.threadId, id)),
+    }),
+    // The reference stays the provider's own id; the repository resolves it within the mapped turn.
+    contextCompaction: (input) => ({
+      ...input, threadId: threadId(input.threadId), turnId: turnId(input.threadId, input.turnId),
     }),
     turnCatalog: (input) => ({
       ...input, threadId: threadId(input.threadId), catalog: input.catalog.map(mapCatalog),

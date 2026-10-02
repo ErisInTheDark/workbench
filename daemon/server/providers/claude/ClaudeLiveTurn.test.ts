@@ -70,7 +70,7 @@ function fixture(
       recordStreamEvent: async () => undefined,
       recordAssistant: async () => undefined,
       recordNativeToolResults: async () => undefined,
-      recordCompaction: async () => undefined,
+      recordCompactionMessage: async () => undefined,
       recordContextUsage: async () => undefined,
       recordSteer: async (entry: WorkbenchSteerHistoryEntry) => { steers.push(entry); },
       settleTurn: async (_turnId: string, status: string) => { log.push(`settle:${status}`); },

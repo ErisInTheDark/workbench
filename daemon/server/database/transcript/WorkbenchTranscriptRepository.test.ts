@@ -2613,6 +2613,134 @@ test("unsupported items remain opaque and a later invalid observation rolls back
   }
 });
 
+function liveTurn(turnId: string, turnIndex: number): Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }> {
+  return { ...turnObservation(turnId, turnIndex), state: "inProgress", endedAt: null, durationMs: null };
+}
+
+function compaction(
+  phase: "started" | "completed" | "failed",
+  observedAt: number,
+  options: { turnId?: string; reference?: string | null; durationMs?: number } = {},
+): WorkbenchTranscriptObservation {
+  return {
+    kind: "contextCompaction", phase, observedAt,
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(options.turnId ?? "live"),
+    reference: options.reference ?? null,
+    ...(options.durationMs === undefined ? {} : { durationMs: options.durationMs }),
+  };
+}
+
+function compactionEcho(lifecycle: "streaming" | "completed", reference: string, observedAt: number): WorkbenchTranscriptObservation {
+  return {
+    kind: "item", lifecycle, observedAt,
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentityValues.WorkbenchTurnId["live"],
+    item: { type: "contextCompaction", id: reference },
+  };
+}
+
+function readCompactions(repository: WorkbenchTranscriptRepository) {
+  const projection = projectWorkbenchTranscript(repository.read({ threadId: "thread", turnLimit: 10 })!);
+  assert.ok(projection.success);
+  const timelines = projection.data.turnHistory.flatMap(entry => entry.itemTimeline ?? []);
+  return projection.data.turns.flatMap(turn => turn.items.flatMap(item => {
+    if (item.type !== "contextCompaction") return [];
+    const timeline = timelines.find(entry => entry.itemId === item.id);
+    return [{
+      turnId: turn.id, status: item.status,
+      startedAt: timeline?.startedAt ?? null, completedAt: timeline?.completedAt ?? null,
+    }];
+  }));
+}
+
+test("a reported compaction is in progress from its start and settles with its measured interval", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([threadObservation(), liveTurn("live", 0), compaction("started", 100)]);
+    assert.deepEqual(readCompactions(repository), [{ turnId: "live", status: "inProgress", startedAt: 100, completedAt: null }]);
+    const settled = repository.settle([compaction("completed", 160)]);
+    assert.deepEqual(readCompactions(repository), [{ turnId: "live", status: "completed", startedAt: 100, completedAt: 160 }]);
+    assert.equal(settled.changes?.[0]?.completedItemIds.length, 1);
+  } finally {
+    database.close();
+  }
+});
+
+test("an unreferenced end settles the thread's open compaction even when it began in a finished turn", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([threadObservation(), turnObservation("first", 0), compaction("started", 100, { turnId: "first" })]);
+    repository.settle([liveTurn("live", 1), compaction("failed", 130)]);
+    assert.deepEqual(readCompactions(repository), [{ turnId: "first", status: "failed", startedAt: 100, completedAt: 130 }]);
+  } finally {
+    database.close();
+  }
+});
+
+test("an end without an open compaction needs a reference or measured duration before it records one", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([threadObservation(), liveTurn("live", 0), compaction("completed", 100)]);
+    assert.deepEqual(readCompactions(repository), []);
+    repository.settle([compaction("completed", 200, { durationMs: 40 })]);
+    assert.deepEqual(readCompactions(repository), [{ turnId: "live", status: "completed", startedAt: 160, completedAt: 200 }]);
+  } finally {
+    database.close();
+  }
+});
+
+test("a settled compaction ignores later reports and native echoes", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([
+      threadObservation(), liveTurn("live", 0),
+      compactionEcho("streaming", "native-compaction", 90),
+      compaction("started", 100, { reference: "native-compaction" }),
+      compaction("failed", 150, { reference: "native-compaction" }),
+    ]);
+    repository.settle([
+      compaction("completed", 170, { reference: "native-compaction" }),
+      compaction("started", 180, { reference: "native-compaction" }),
+      compactionEcho("streaming", "native-compaction", 190),
+      compactionEcho("completed", "native-compaction", 195),
+    ]);
+    assert.deepEqual(readCompactions(repository), [{ turnId: "live", status: "failed", startedAt: 100, completedAt: 150 }]);
+  } finally {
+    database.close();
+  }
+});
+
+test("an unreferenced start adopts the running echo instead of duplicating it", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([threadObservation(), liveTurn("live", 0), compactionEcho("streaming", "native-compaction", 90)]);
+    repository.settle([compaction("started", 100), compaction("completed", 150)]);
+    repository.settle([compactionEcho("completed", "native-compaction", 160)]);
+    assert.deepEqual(readCompactions(repository).map(({ status }) => status), ["completed"]);
+  } finally {
+    database.close();
+  }
+});
+
+test("a turn settling with its compaction still open interrupts it, but re-recording a settled turn does not", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([threadObservation(), turnObservation("first", 0), compaction("started", 100, { turnId: "first" })]);
+    repository.settle([turnObservation("first", 0)]);
+    assert.deepEqual(readCompactions(repository).map(({ status }) => status), ["inProgress"]);
+    repository.settle([liveTurn("live", 1), compaction("started", 200, { reference: "second" })]);
+    repository.settle([{ ...turnObservation("live", 1), state: "interrupted", endedAt: 240 }]);
+    assert.deepEqual(readCompactions(repository), [
+      // A newer compaction starting proves the older one is no longer running.
+      { turnId: "first", status: "failed", startedAt: 100, completedAt: 200 },
+      { turnId: "live", status: "failed", startedAt: 200, completedAt: 240 },
+    ]);
+  } finally {
+    database.close();
+  }
+});
+
 test("capture-gap settlement closes the existing thread-owned failure interval", () => {
   const { database, repository } = createRepository();
   try {

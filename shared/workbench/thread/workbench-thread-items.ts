@@ -14,6 +14,7 @@
  * - CollabAgentTool/CollabAgentToolCallStatus/CollabAgentState/CollabAgentStatus: retained collaboration facts.
  * - SubAgentActivityKind/HookPromptFragment: retained activity and prompt evidence.
  * - ImageGenerationItem/ImageGenerationFailure/SleepItem: image generation and waits.
+ * - ContextCompactionStatus: Workbench-owned context compaction lifecycle.
  */
 import type { ToolPatchPreviewFile } from "./tool-patch-preview.ts";
 
@@ -154,4 +155,10 @@ export type ThreadItem =
   | ({ type: "imageGeneration" } & ImageGenerationItem)
   | { type: "enteredReviewMode"; id: string; review: string }
   | { type: "exitedReviewMode"; id: string; review: string }
-  | { type: "contextCompaction"; id: string };
+  | {
+    type: "contextCompaction"; id: string;
+    /** Workbench-owned lifecycle; projection always sets it, provider input omits it. */
+    status?: ContextCompactionStatus;
+  };
+
+export type ContextCompactionStatus = "inProgress" | "completed" | "failed";

@@ -1,4 +1,4 @@
-/* No production exports. Tests protect Claude streamed text admission (live deltas once, one durable body, no echo), exact live commentary-tool messages, and native file-tool evidence. */
+/* No production exports. Tests protect Claude streamed text admission (live deltas once, one durable body, no echo), exact live commentary-tool messages, native file-tool evidence, and compaction reports. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
@@ -194,4 +194,35 @@ test("settling a turn completes a block that was cut off mid-stream with the tex
   const last = items().at(-1);
   assert.equal(last?.lifecycle, "completed");
   assert.deepEqual(last?.item?.content, ["par"]);
+});
+
+const compactionStatus = (value: object) => ({ type: "system", subtype: "status", status: null, ...value }) as never;
+const compactionReports = (records: readonly Recorded[]) => records.flatMap((record): unknown[][] => {
+  const report = record as Recorded & { phase?: string; reference?: string | null; durationMs?: number | null; snapshot?: { tokenUsage: unknown } };
+  return record.kind === "contextCompaction" ? [[report.phase, report.reference, report.durationMs]]
+    : record.kind === "threadContextUsage" ? [["usageReset", report.snapshot?.tokenUsage === null]] : [];
+});
+
+test("Claude's compacting status starts a compaction and its boundary completes it with the measured duration", async () => {
+  const { adapter, records } = fixture();
+  await adapter.recordCompactionMessage(threadId, turnId, compactionStatus({ status: "compacting" }));
+  await adapter.recordCompactionMessage(threadId, turnId, {
+    type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 1, duration_ms: 1_200 },
+  } as never);
+  assert.deepEqual(compactionReports(records), [
+    ["started", null, null],
+    ["completed", null, 1_200],
+    ["usageReset", true],
+  ]);
+});
+
+test("Claude's success status is not a second completion, and a failed result fails the compaction", async (t) => {
+  const warnings = t.mock.method(console, "warn", () => undefined);
+  const { adapter, records } = fixture();
+  await adapter.recordCompactionMessage(threadId, turnId, compactionStatus({ compact_result: "success" }));
+  await adapter.recordCompactionMessage(threadId, turnId, compactionStatus({ status: "requesting" }));
+  assert.deepEqual(compactionReports(records), []);
+  await adapter.recordCompactionMessage(threadId, turnId, compactionStatus({ compact_result: "failed", compact_error: "too large" }));
+  assert.deepEqual(compactionReports(records), [["failed", null, null]]);
+  assert.deepEqual(warnings.mock.calls.map(call => call.arguments), [["[claude] context compaction failed", "too large"]]);
 });

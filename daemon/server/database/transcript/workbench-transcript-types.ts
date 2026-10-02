@@ -4,6 +4,7 @@
  * - WorkbenchTranscriptAtomicObservation: one source-owned semantic transcript or turn-usage fact.
  * - WorkbenchTranscriptCaptureGapObservation: one closed failed-capture interval.
  * - WorkbenchTranscriptProviderTurnScopeObservation: one complete provider-owned turn replacement boundary.
+ * - WorkbenchTranscriptContextCompactionObservation: one provider report that context compaction started or ended.
  * - WorkbenchTranscriptObservation: ordered transcript input, metadata-only catalogs and restricted usage windows.
  * - NativeTranscriptAtomicObservation/NativeTranscriptObservation: provider-addressed facts before canonical mapping.
  * - WorkbenchTranscriptRecordingContext: fact ownership and provider-recovery boundary for one settlement.
@@ -205,6 +206,22 @@ export type WorkbenchTranscriptCaptureGapObservation<ThreadId extends string = W
   turnId: TurnId | null;
 } & ({ state: "open"; closedAt: null } | { state: "reconciled" | "unrecoverable"; closedAt: number });
 
+/**
+ * A provider's live report that context compaction started or ended. Workbench owns the resulting item: it
+ * resolves the thread's open compaction, its status and its timeline; native echoes fold into it by reference.
+ */
+export interface WorkbenchTranscriptContextCompactionObservation<ThreadId extends string = WorkbenchThreadId, TurnId extends string = WorkbenchTurnId> {
+  kind: "contextCompaction";
+  threadId: ThreadId;
+  turnId: TurnId;
+  phase: "started" | "completed" | "failed";
+  observedAt: number;
+  /** The provider's own compaction id, when it has one; echoes with this id are the same compaction. */
+  reference: string | null;
+  /** Provider-measured duration; dates the start when Workbench never saw one. */
+  durationMs?: number | null;
+}
+
 export interface WorkbenchTranscriptProviderTurnScopeObservation<ThreadId extends string = WorkbenchThreadId, TurnId extends string = WorkbenchTurnId> {
   completeTurnIds: readonly TurnId[];
   kind: "providerTurnScope";
@@ -216,6 +233,7 @@ export type WorkbenchTranscriptObservation<ThreadId extends string = WorkbenchTh
   | WorkbenchTranscriptAtomicObservation<ThreadId, TurnId>
   | WorkbenchTranscriptCaptureGapObservation<ThreadId, TurnId>
   | WorkbenchTranscriptProviderTurnScopeObservation<ThreadId, TurnId>
+  | WorkbenchTranscriptContextCompactionObservation<ThreadId, TurnId>
   | {
     kind: "turnCatalog";
     threadId: ThreadId;

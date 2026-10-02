@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - transformCoreTranscriptItem: convert core transcript items to relational mutations.
+ * - transformContextCompaction: write one context compaction's Workbench-owned state.
  */
-import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { ContextCompactionStatus, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { itemTables } from "../workbench-database-schema.ts";
 import {
@@ -18,6 +19,28 @@ import type {
 
 function itemLifecycleState(lifecycle: WorkbenchTranscriptItemTransformContext["lifecycle"]) {
   return lifecycle;
+}
+
+/** Interruption is a failure the user did not cause; it keeps its own explanation. */
+export function transformContextCompaction(
+  itemId: number,
+  outcome: ContextCompactionStatus | "interrupted",
+): WorkbenchTranscriptItemTransform {
+  return {
+    itemType: "contextCompaction",
+    cleanup: [],
+    mutations: [
+      upsertRow(itemTables.threadItemContextCompactions, {
+        item_id: itemId,
+        state: outcome === "interrupted" ? "failed" : outcome,
+        error_text: outcome === "interrupted" ? "Context compaction was interrupted."
+          : outcome === "failed" ? "Context compaction failed." : null,
+      }, {
+        conflictColumns: ["item_id"],
+        updateColumns: ["state", "error_text"],
+      }),
+    ],
+  };
 }
 
 function childCleanup(itemId: number, table: Parameters<typeof deleteRows>[0]) {
@@ -191,20 +214,7 @@ export function transformCoreTranscriptItem(
   }
 
   if (item.type === "contextCompaction") {
-    return {
-      itemType: "contextCompaction",
-      cleanup: [],
-      mutations: [
-        upsertRow(itemTables.threadItemContextCompactions, {
-          item_id: itemId,
-          state: lifecycle === "streaming" ? "inProgress" : lifecycle === "completed" ? "completed" : "failed",
-          error_text: lifecycle === "interrupted" ? "Context compaction was interrupted." : null,
-        }, {
-          conflictColumns: ["item_id"],
-          updateColumns: ["state", "error_text"],
-        }),
-      ],
-    };
+    return transformContextCompaction(itemId, lifecycle === "streaming" ? "inProgress" : lifecycle);
   }
 
   const coreUnsupported = new Set<ThreadItem["type"]>([

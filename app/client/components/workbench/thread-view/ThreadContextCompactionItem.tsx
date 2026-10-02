@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadContextCompactionItem: render compaction activity and elapsed duration in one label.
+ * - default ThreadContextCompactionItem: render compaction activity, outcome, and elapsed duration in one label.
  */
 "use client";
 
@@ -28,6 +28,8 @@ export default function ThreadContextCompactionItem ({
     : isActive ? 0 : null;
   const visibleDurationMs = useThreadLiveDuration(durationMs, isActive ? startedAt : null);
   const duration = formatThreadDuration(visibleDurationMs ?? null);
+  const label = isActive ? "Context compacting"
+    : item.status === "failed" ? "Context compaction failed" : "Context compacted";
   return (
     <section className="py-2">
       <div
@@ -36,7 +38,7 @@ export default function ThreadContextCompactionItem ({
       >
         <div className="h-[1px] grow bg-fg/muted opacity-10" />
         <p className={isActive ? `${shimmerTextClassName} m-0 text-[0.92em] font-medium leading-[1.6]` : "m-0 text-[0.92em] leading-[1.6]"}>
-          {isActive ? "Context compacting" : "Context compacted"}
+          {label}
           {duration ? ` ${duration}` : ""}
         </p>
         <div className="h-[1px] grow bg-fg/muted opacity-10" />

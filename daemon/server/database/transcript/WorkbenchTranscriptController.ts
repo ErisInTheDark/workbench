@@ -77,6 +77,8 @@ function requestsSubscriptionRefresh(
       case "thread":
       case "questionnaire":
       case "browse":
+      // Workbench-owned compaction can settle in an already-finished turn.
+      case "contextCompaction":
         return true;
       case "turn":
         return observation.state === "completed"
@@ -187,6 +189,7 @@ export default class WorkbenchTranscriptController {
         case "questionnaire":
         case "steer":
         case "browse":
+        case "contextCompaction":
           return true;
         case "turnUsageContext":
           return observation.modelChanged === true;

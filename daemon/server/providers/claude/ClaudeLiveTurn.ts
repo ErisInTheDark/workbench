@@ -78,7 +78,7 @@ export interface ClaudeLiveTurnSnapshot extends ClaudeLiveTurnIdentity {
 export interface ClaudeLiveTurnCollaborators {
   session: ClaudeSession;
   transcript: Pick<ClaudeTranscriptAdapter,
-    "recordStreamEvent" | "recordAssistant" | "recordNativeToolResults" | "recordCompaction"
+    "recordStreamEvent" | "recordAssistant" | "recordNativeToolResults" | "recordCompactionMessage"
     | "recordContextUsage" | "recordSteer" | "settleTurn">;
   /** Claude's session log gained billed calls; billing usage is derived from that log, not from this turn. */
   usageChanged(): void;
@@ -278,8 +278,8 @@ export default class ClaudeLiveTurn {
       } else if (message.type === "user") {
         if ("isReplay" in message && message.isReplay) await this.deliver(message.uuid);
         else await transcript.recordNativeToolResults(this.threadId, message);
-      } else if (message.type === "system" && message.subtype === "compact_boundary") {
-        await transcript.recordCompaction(this.threadId, this.turnId, message);
+      } else if (message.type === "system" && (message.subtype === "compact_boundary" || message.subtype === "status")) {
+        await transcript.recordCompactionMessage(this.threadId, this.turnId, message);
       } else if (message.type === "result") {
         for (const uuid of message.user_message_uuids ?? []) await this.deliver(uuid);
         this.total = addBreakdowns(this.total, claudeTokenBreakdown(message.usage));

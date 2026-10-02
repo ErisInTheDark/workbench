@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests protect CLI/MCP completed-turn status boundaries, terminal output, legacy fallback, and worked timing.
+ * - No production exports; Node tests protect CLI/MCP completed-turn status boundaries, terminal output, legacy fallback, trailing compaction, and worked timing.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -133,6 +133,20 @@ test("failed and in-progress task status commands do not create a terminal bound
   assert.deepEqual(partition.workedItems.map((item) => item.id), [failed.id, running.id, "mcp-failed", "mcp-running"]);
   assert.deepEqual(partition.terminalItems.map((item) => item.id), [finalItem.id]);
   assert.equal(partition.workedDurationMs, null);
+});
+
+test("compaction after a marker-less turn's work stays visible while compaction within it folds into the work", () => {
+  const work = commandItem({ command: "pnpm typecheck", id: "work" });
+  const midTurn = { id: "mid-turn-compaction", type: "contextCompaction" } as const satisfies ThreadItem;
+  const manual = { id: "manual-compaction", type: "contextCompaction" } as const satisfies ThreadItem;
+  const partition = partitionCompletedThreadWork({
+    finalAgentMessageId: finalItem.id,
+    items: [userItem, work, midTurn, finalItem, manual],
+    primaryUserItemId: userItem.id,
+  });
+
+  assert.deepEqual(partition.workedItems.map((item) => item.id), [work.id, midTurn.id]);
+  assert.deepEqual(partition.terminalItems.map((item) => item.id), [finalItem.id, manual.id]);
 });
 
 test("marker-less turns preserve the legacy final-message fallback", () => {

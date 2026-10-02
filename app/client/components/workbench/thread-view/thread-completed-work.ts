@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CompletedThreadWorkPartition: one completed turn split into collapsible work and always-mounted terminal output.
- * - partitionCompletedThreadWork: use the last successful CLI or MCP task-status operation as the terminal boundary, with a legacy final-message fallback.
+ * - partitionCompletedThreadWork: use the last successful CLI or MCP task-status operation as the terminal boundary, with a legacy final-message fallback that keeps trailing compaction visible.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
@@ -54,6 +54,10 @@ export function partitionCompletedThreadWork({
   }
 
   const withoutPrimaryUser = (item: ThreadItem) => item.id !== primaryUserItemId;
+  // Compaction after the turn's work, such as a manual compaction, follows the outcome instead of folding into it.
+  let trailingCompactionIndex = items.length;
+  while (trailingCompactionIndex > 0 && items[trailingCompactionIndex - 1]!.type === "contextCompaction") trailingCompactionIndex -= 1;
+  const trailingCompactions = items.slice(trailingCompactionIndex);
   if (statusMarkerIndex >= 0) {
     const workedItems = items.slice(0, statusMarkerIndex).filter(withoutPrimaryUser);
     return {
@@ -64,12 +68,14 @@ export function partitionCompletedThreadWork({
     };
   }
 
+  const trailing = new Set(trailingCompactions.map((item) => item.id));
   return {
     statusMarkerId: null,
-    terminalItems: finalAgentMessageId
-      ? items.filter((item) => item.id === finalAgentMessageId)
-      : [],
+    terminalItems: [
+      ...(finalAgentMessageId ? items.filter((item) => item.id === finalAgentMessageId) : []),
+      ...trailingCompactions,
+    ],
     workedDurationMs: null,
-    workedItems: items.filter((item) => item.id !== primaryUserItemId && item.id !== finalAgentMessageId),
+    workedItems: items.filter((item) => item.id !== primaryUserItemId && item.id !== finalAgentMessageId && !trailing.has(item.id)),
   };
 }

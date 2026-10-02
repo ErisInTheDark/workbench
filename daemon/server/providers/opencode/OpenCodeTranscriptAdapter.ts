@@ -3,7 +3,7 @@
  * - OpenCodeTranscriptOwners: shared identity and recorder ports used by the provider edge.
  * - openCodeToolContentItems: preserve provider tool content or its bounded structured failure.
  * - isOpenCodeTurnRoot: distinguish a new user turn from an in-turn Workbench steer.
- * - default OpenCodeTranscriptAdapter: translate canonical OpenCode sessions/messages into ordered WB transcript facts.
+ * - default OpenCodeTranscriptAdapter: translate canonical OpenCode sessions/messages into ordered WB transcript facts and report compaction lifecycle.
  */
 import type {
   SessionInfo, SessionMessageAssistant, SessionMessageInfo, SessionMessageUser,
@@ -28,7 +28,9 @@ import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentit
 import type { WorkbenchTurnIdentityMetadata } from "../../database/thread-identity/workbench-thread-identity-types";
 import type WorkbenchTranscriptIdentityController from "../../WorkbenchTranscriptIdentityController";
 import type { WorkbenchTranscriptItemLifecycle } from "../../database/transcript/workbench-transcript-types";
-import type { WorkbenchTranscriptAtomicObservation } from "../../database/transcript/workbench-transcript-types";
+import type {
+  WorkbenchTranscriptAtomicObservation, WorkbenchTranscriptContextCompactionObservation,
+} from "../../database/transcript/workbench-transcript-types";
 import type { DaemonTranscriptRegistration } from "../../daemon-runtime-objects";
 import { WORKBENCH_STATS_USAGE_DATA_VERSION } from "workbench-shared/workbench/stats/workbench-stats-usage";
 import {
@@ -290,6 +292,11 @@ export default class OpenCodeTranscriptAdapter {
       observedAt: input.observedAt,
     }], { source: input.provenance ?? "provider" });
     return itemId;
+  }
+
+  /** Report a compaction start or end; Workbench folds OpenCode's compaction message echo into the same item. */
+  async recordCompaction(report: Omit<WorkbenchTranscriptContextCompactionObservation, "kind">) {
+    await this.owners.transcript.record([{ kind: "contextCompaction", ...report }], { source: "provider" });
   }
 
   async startToolTranscript(input: Omit<WorkbenchToolTranscriptReference, "itemId">): Promise<WorkbenchToolTranscriptReference> {

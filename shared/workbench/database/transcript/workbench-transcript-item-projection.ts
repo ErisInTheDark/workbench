@@ -551,9 +551,10 @@ function projectItem(
     case "questionnaire":
     case "approval":
       return interactionItem(itemId, root.type, indexes);
-    case "contextCompaction":
-      one(indexes.contextCompactions.get(itemId) ?? [], "threadItemContextCompactions", itemId);
-      return { id: itemId, type: "contextCompaction" };
+    case "contextCompaction": {
+      const owner = one(indexes.contextCompactions.get(itemId) ?? [], "threadItemContextCompactions", itemId);
+      return { id: itemId, type: "contextCompaction", status: owner.state };
+    }
     case "unknown": {
       const item = one(indexes.unknownItems.get(itemId) ?? [], "threadItemUnknown", itemId);
       return {

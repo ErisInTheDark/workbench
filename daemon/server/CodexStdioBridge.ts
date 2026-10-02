@@ -65,6 +65,7 @@ import type { NativeTranscriptObservation, WorkbenchTranscriptObservation, Workb
 import {
   createCodexTranscriptProviderDynamicToolObservation,
   createCodexTranscriptProviderItemObservation,
+  createCodexTranscriptProviderItemLifecycleObservation,
   createCodexTranscriptProviderThreadScopeObservation,
   createCodexTranscriptProviderThreadObservation,
   createCodexTranscriptProviderThreadObservations,
@@ -3373,15 +3374,8 @@ export default class CodexStdioBridge {
       const providerObservedAt = notification.method === "item/started"
         ? readNotificationNumberParam(notification, "startedAtMs")
         : readNotificationNumberParam(notification, "completedAtMs");
-      const observedAt = providerObservedAt ?? Date.now();
-      return [createCodexTranscriptProviderItemObservation({
-        completedAtMs: notification.method === "item/completed" ? observedAt : undefined,
-        item,
-        lifecycle: notification.method === "item/started" ? "streaming" : "completed",
-        observedAt,
-        startedAtMs: notification.method === "item/started" ? observedAt : undefined,
-        threadId,
-        turnId,
+      return [createCodexTranscriptProviderItemLifecycleObservation({
+        item, method: notification.method, observedAt: providerObservedAt ?? Date.now(), threadId, turnId,
       })];
     }
     const turn = asRecord(params?.turn) as Turn | null;
