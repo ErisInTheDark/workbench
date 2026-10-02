@@ -60,6 +60,17 @@ test("a failed window probe keeps the model choice without a window and retries 
   assert.equal(probed?.contextWindow?.defaultTokens, 1_000_000);
 });
 
+test("a launch without a configured window resolves the model's default, and a failed probe reports none then retries", async () => {
+  let failing = true;
+  const { owner, warnings } = fixture([], (model, standard) =>
+    failing ? new Error("probe crashed") : model === "claude-opus-5-5" && !standard ? 1_000_000 : 200_000);
+  assert.equal(await owner.defaultContextWindow("claude-opus-5-5"), null);
+  assert.equal(warnings.length, 1);
+  failing = false;
+  assert.equal(await owner.defaultContextWindow("claude-opus-5-5"), 1_000_000);
+  assert.equal(await owner.defaultContextWindow("claude-sonnet-4-6"), 200_000);
+});
+
 test("Claude model choices use canonical versioned IDs and native capabilities", async () => {
   const { owner, closed } = fixture([
     {

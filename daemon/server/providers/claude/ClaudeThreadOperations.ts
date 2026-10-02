@@ -2,7 +2,7 @@
  * Exports:
  * - ClaudeTurnHandoff: one paused live turn's turn and transcript state for the next bridge generation.
  * - ClaudeThreadOperationsOptions: bind host-owned Claude sessions to Workbench identity, state, lifecycle publication, and managed MCP.
- * - default ClaudeThreadOperations: admit Claude turns and steers, launch them on the harness session host, pause and restore live turns across bridge reloads, deliver Browse screenshots, hydrate billing usage from session logs, and own native session operations.
+ * - default ClaudeThreadOperations: admit Claude turns and steers, launch them on the harness session host with their configured or model-default context window, pause and restore live turns across bridge reloads, deliver Browse screenshots, hydrate billing usage from session logs, and own native session operations.
  */
 import {
     deleteSession, getSessionInfo, listSessions, query, renameSession,
@@ -74,6 +74,8 @@ export interface ClaudeThreadOperationsOptions {
     cwd: string; projectId: string; threadId: string; model: string | null; agentPath: string | null;
     workflowIds: readonly string[]; activatedSkillPaths: readonly string[];
   }): Promise<string>;
+  /** The window a profile without a configured window launches with; null keeps Claude's own window. */
+  defaultContextWindow(model: string): Promise<number | null>;
   /** Claude's real data root holding native session logs; defaults to the daemon user's root. */
   claudeDataRoot?: string;
 }
@@ -167,6 +169,12 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
         if (this.scopes.get(scope)?.turnId === turnId) this.scopes.delete(scope);
       },
     };
+  }
+
+  /** A profile without a configured window means its model's default; launching with it keeps the reported window true from the first model round. */
+  private async launchContextWindow(settings: { model?: string | null; contextWindowTokens?: number | null } | null | undefined) {
+    if (settings?.contextWindowTokens != null) return settings.contextWindowTokens;
+    return settings?.model ? await this.options.defaultContextWindow(settings.model) : null;
   }
 
   private track(task: Promise<void>) {
@@ -354,7 +362,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : null;
     const model = settings?.model ?? null;
-    const contextWindow = settings?.contextWindowTokens ?? null;
+    const contextWindow = await this.launchContextWindow(settings);
     const instructions = await this.options.buildInstructions({
       cwd: binding.nativeLocation, projectId: identity.projectId, threadId: identity.threadId,
       model, agentPath: settings?.agentPath ?? null,
@@ -519,6 +527,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       workflowIds: [], activatedSkillPaths: [],
     });
     if (!instructions.trim()) throw new Error("Claude managed instructions are unavailable for compaction.");
+    const contextWindow = await this.launchContextWindow(settings);
     const fakeEndpoint = process.env.WORKBENCH_CLAUDE_FAKE_ENDPOINT;
     const { viewsRoot } = this.options.sessions;
     const view = viewsRoot ? await ClaudeConfigView.create(viewsRoot) : null;
@@ -531,7 +540,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
         options: {
           cwd: binding.nativeLocation, resume: binding.nativeThreadId,
           pathToClaudeCodeExecutable: this.options.resolveExecutable?.() ?? claudeExecutable(),
-          env: claudeEnvironment(fakeEndpoint, view?.env, settings?.contextWindowTokens ?? null),
+          env: claudeEnvironment(fakeEndpoint, view?.env, contextWindow),
           settingSources: [],
           skills: [],
           systemPrompt: { type: "custom", prompt: instructions, snapshot: false },

@@ -220,6 +220,7 @@ export interface DaemonRuntimeObjects {
   claudeSessions: import("./providers/claude/ClaudeSessionHost").default;
   claudeThreadOperations: import("./providers/claude/ClaudeThreadOperations").default;
   claudeTranscriptAdapter: import("./providers/claude/ClaudeTranscriptAdapter").default;
+  claudeConfiguration: import("./providers/claude/ClaudeConfigurationController").default;
   claudeProvider: WorkbenchProvider;
   agentCommand: WorkbenchAgentCommandController;
   browseExecution: DaemonBrowseExecution;

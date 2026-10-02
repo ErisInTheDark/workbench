@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ClaudeBridgeNode: own reloadable Claude turn logic, lifecycle publication, native edit claim gating, and canonical transcript adapter while preserving the parent harness's live processes.
+ * - default ClaudeBridgeNode: own reloadable Claude turn logic, lifecycle publication, native edit claim gating, model configuration probes, and canonical transcript adapter while preserving the parent harness's live processes.
  */
 import ReloadableNode from "../../ReloadableNode";
 import type { DaemonProcessContext } from "../../daemon-process-context";
@@ -10,6 +10,7 @@ import {
   buildWorkbenchManagedThreadActivatedSkills,
   buildWorkbenchManagedThreadInstructions,
 } from "../../lib/workbench/instructions/WorkbenchPromptFiles";
+import ClaudeConfigurationController from "./ClaudeConfigurationController";
 import ClaudeProviderNode from "./ClaudeProviderNode";
 import ClaudeThreadOperations, { type ClaudeTurnHandoff } from "./ClaudeThreadOperations";
 import ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
@@ -26,6 +27,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const sessions = build.get("claudeSessions");
     const inherited = (build.handoffState as ClaudeBridgeHandoff | undefined)?.turns ?? [];
     const settings = new WorkbenchServerSettings(build.get("database"));
+    // Turn launches resolve default windows here; the provider definition reads the same probes for model choices.
+    const configuration = new ClaudeConfigurationController();
     const transcript = new ClaudeTranscriptAdapter({
       threads: build.get("threadIdentity"),
       items: build.get("transcriptIdentity"),
@@ -45,6 +48,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       state: build.get("threadState"),
       transcript,
       signal: lifetime.signal,
+      defaultContextWindow: model => configuration.defaultContextWindow(model),
       buildInstructions: async input => {
         const project = await build.get("projectCatalog").resolveProjectById(input.projectId);
         const promptContext = {
@@ -82,10 +86,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const dispose = async () => {
       lifetime.abort(new Error("Claude provider bridge disposed."));
       await threads.dispose();
+      configuration.dispose();
       await releaseHooks();
     };
     return {
-      registrations: { claudeThreadOperations: threads, claudeTranscriptAdapter: transcript },
+      registrations: { claudeThreadOperations: threads, claudeTranscriptAdapter: transcript, claudeConfiguration: configuration },
       hasPendingWork: () => threads.hasPendingWork(),
       start: () => {
         attachHooks();
@@ -117,7 +122,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   },
   description: "Reload Claude turn and transcript integration without restarting live Claude sessions.",
   lifecycle: "handoff",
-  provides: ["claudeThreadOperations", "claudeTranscriptAdapter"],
+  provides: ["claudeThreadOperations", "claudeTranscriptAdapter", "claudeConfiguration"],
   requires: [
     "claudeSessions", "gitArc", "projectCatalog", "questionnaires", "approvals", "threadIdentity", "transcriptIdentity", "database",
     "threadState", "transcript", "transcriptReader", "providerObservations",

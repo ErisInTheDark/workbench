@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - claudeAccountLimits: map Claude plan usage windows into the shared account-limit contract.
- * - default ClaudeConfigurationController: read Claude Code model choices, context window bounds, and plan usage through idle control queries.
+ * - default ClaudeConfigurationController: read Claude Code model choices, context window bounds and defaults, and plan usage through idle control queries.
  */
 import { query, type ModelInfo, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { WorkbenchModelContextCapability } from "workbench-shared/types";
@@ -117,6 +117,18 @@ export default class ClaudeConfigurationController {
   /** Claude defaults to each model's native window; the floor is the window Claude uses with 1M context disabled. */
   async modelContext(): Promise<WorkbenchModelContextCapability[]> {
     return this.capabilities((await this.catalogue()).map(model => model.id));
+  }
+
+  /** The window a profile without a configured window means; null when the probe fails, so Claude keeps its own. */
+  async defaultContextWindow(model: string): Promise<number | null> {
+    try {
+      return (await this.capability(model)).defaultTokens;
+    } catch (error) {
+      if (this.disposed) throw error;
+      this.warn(`Default context window of ${model} is unavailable; Claude launches without a window: ${
+        error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
+      return null;
+    }
   }
 
   private async capabilities(models: string[]) {

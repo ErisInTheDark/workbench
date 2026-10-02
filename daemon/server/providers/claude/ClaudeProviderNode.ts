@@ -7,7 +7,6 @@ import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import CodexShellController from "../../CodexShellController";
 import ClaudeToolsController from "./ClaudeToolsController";
-import ClaudeConfigurationController from "./ClaudeConfigurationController";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
@@ -22,7 +21,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       threads, transcript: get("claudeTranscriptAdapter"),
       execute: shell.executeAdmitted.bind(shell),
     });
-    const configuration = new ClaudeConfigurationController();
+    const configuration = get("claudeConfiguration");
     return {
       registrations: {
         claudeProvider: {
@@ -37,13 +36,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         },
       },
       start: () => undefined,
-      dispose: () => configuration.dispose(),
+      dispose: () => undefined,
     };
   },
   description: "Reload Claude provider definition.",
   lifecycle: "atomic",
   provides: ["claudeProvider"],
-  requires: ["claudeThreadOperations", "claudeTranscriptAdapter", "codexExecutor", "codexThreadOperations"],
+  requires: ["claudeConfiguration", "claudeThreadOperations", "claudeTranscriptAdapter", "codexExecutor", "codexThreadOperations"],
   safeAll: true,
   scope: "server:claude/def",
 });
