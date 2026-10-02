@@ -124,7 +124,9 @@ export default function ReloadNecessary ({
                   <p className="m-0 min-w-0 truncate text-[0.8rem] font-medium text-text">{scope.scope}</p>
                   <PrimaryButton
                     className={`!shrink-0 !px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px] ${affectedScopes.has(scope.scope)
-                        ? "[&>span:first-of-type]:!ring-2 [&>span:first-of-type]:!ring-accent"
+                        ? `[&>span:first-of-type]:!ring-2 ${scope.destructive
+                          ? "[&>span:first-of-type]:!ring-danger"
+                          : "[&>span:first-of-type]:!ring-accent"}`
                         : ""
                       }`}
                     disabled={allBusy}
