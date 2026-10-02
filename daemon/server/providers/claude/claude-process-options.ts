@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - claudeExecutable: resolve the installed Claude Code executable.
- * - claudeEnvironment: disable account connectors, apply an optional config view and selected context window, and isolate fake-model traffic.
+ * - claudeEnvironment: default eager tool-input streaming, disable account connectors, apply an optional config view and selected context window, and isolate fake-model traffic.
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -23,6 +23,8 @@ export function claudeEnvironment(
   endpoint?: string, view?: NodeJS.ProcessEnv, contextWindowTokens: number | null = null,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
+    // Streams commentary-tool text as it is generated; an explicit user setting still wins.
+    CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING: "1",
     ...process.env,
     ...view,
     // Claude Code's window cap; it outranks the model's native window and drives auto-compaction.

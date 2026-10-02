@@ -45,6 +45,7 @@ import type ClaudeSessionHost from "./ClaudeSessionHost";
 import { ENDED_CLAUDE_SESSION, spawnTrackedClaude } from "./ClaudeSessionHost";
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 import type { ClaudeTranscriptTurnState } from "./ClaudeTranscriptAdapter";
+import { CLAUDE_COMMENTARY_SERVER_NAME, createClaudeCommentaryServer } from "./claude-commentary-tool";
 import ClaudeUsageHydrator from "./ClaudeUsageHydrator";
 
 export interface ClaudeTurnHandoff {
@@ -422,7 +423,10 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
               });
             },
           }),
-          mcpServers: { wb: { type: "http", url: endpoint.href, alwaysLoad: true } },
+          mcpServers: {
+            wb: { type: "http", url: endpoint.href, alwaysLoad: true },
+            [CLAUDE_COMMENTARY_SERVER_NAME]: createClaudeCommentaryServer(),
+          },
           includePartialMessages: true,
           // Replay acknowledgements mark when a queued steer is folded into the conversation.
           extraArgs: { "replay-user-messages": null },

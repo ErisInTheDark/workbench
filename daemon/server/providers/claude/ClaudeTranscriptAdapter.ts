@@ -2,7 +2,7 @@
  * Exports:
  * - claudeTokenBreakdown: convert one Claude usage record into Workbench token accounting.
  * - ClaudeTranscriptTurnState: plain in-flight transcript state of one live turn, handed across bridge reloads.
- * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, native tool (with effective Edit/Write diffs and claim denials), steer, screenshot steer, context and billing usage, and compaction facts to canonical history.
+ * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, live exact commentary-tool message, native tool (with effective Edit/Write diffs and claim denials), steer, screenshot steer, context and billing usage, and compaction facts to canonical history.
  */
 import path from "node:path";
 import type {
@@ -29,6 +29,7 @@ import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentit
 import type WorkbenchTranscriptIdentityController from "../../WorkbenchTranscriptIdentityController";
 import type { DaemonTranscriptRegistration } from "../../daemon-runtime-objects";
 import type { WorkbenchTranscriptItemLifecycle } from "../../database/transcript/workbench-transcript-types";
+import { CLAUDE_COMMENTARY_TOOL_NAME, readStreamedCommentaryText } from "./claude-commentary-tool";
 
 interface TurnScope {
   threadId: WorkbenchThreadId;
@@ -41,8 +42,9 @@ interface TurnScope {
   turnIndex: number;
 }
 
-type StreamedKind = "text" | "thinking";
-interface StreamedBlock { kind: StreamedKind; itemId: string; reference: string; text: string }
+type StreamedKind = "text" | "thinking" | "commentary";
+/** Commentary blocks keep raw tool-input JSON; `text` is its decoded `text` prefix. */
+interface StreamedBlock { kind: StreamedKind; itemId: string; reference: string; text: string; partialJson?: string }
 interface TurnStream {
   threadId: WorkbenchThreadId;
   messageId: string | null;
@@ -109,9 +111,12 @@ function claudeFileChange(tool: string, args: ProviderToolMetadata, result: unkn
 }
 
 function blockItem(kind: StreamedKind, text: string): ThreadItem {
-  return kind === "text"
-    ? { type: "agentMessage", id: "pending", text, phase: null, memoryCitation: null, delivery: null, questions: null }
-    : { type: "reasoning", id: "pending", summary: [], content: [text] };
+  return kind === "thinking"
+    ? { type: "reasoning", id: "pending", summary: [], content: [text] }
+    : {
+      type: "agentMessage", id: "pending", text, phase: kind === "commentary" ? "commentary" : null,
+      memoryCitation: null, delivery: null, questions: null,
+    };
 }
 
 export default class ClaudeTranscriptAdapter {
@@ -241,7 +246,7 @@ export default class ClaudeTranscriptAdapter {
     return itemId;
   }
 
-  /** Stream text and thinking blocks; their completed form is recorded from the same buffer. */
+  /** Stream text, thinking, and commentary-tool blocks; their completed form is recorded from the same buffer. */
   async recordStreamEvent(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, message: SDKPartialAssistantMessage) {
     if (message.parent_tool_use_id) return;
     const stream = this.streams.get(turnId)
@@ -255,23 +260,32 @@ export default class ClaudeTranscriptAdapter {
     if (!stream.messageId) return;
     if (event.type === "content_block_start") {
       const block = event.content_block;
-      if (block.type !== "text" && block.type !== "thinking") return;
-      const kind: StreamedKind = block.type;
-      const text = block.type === "text" ? block.text : block.thinking;
-      const reference = `assistant:${stream.messageId}:${event.index}`;
+      const opened = block.type === "text" ? { kind: "text" as const, text: block.text, reference: `assistant:${stream.messageId}:${event.index}` }
+        : block.type === "thinking" ? { kind: "thinking" as const, text: block.thinking, reference: `assistant:${stream.messageId}:${event.index}` }
+        : block.type === "tool_use" && block.name === CLAUDE_COMMENTARY_TOOL_NAME
+          ? { kind: "commentary" as const, text: "", reference: `tool:${block.id}` } : null;
+      if (!opened) return;
       stream.streamedMessageIds.add(stream.messageId);
-      const itemId = await this.recordItem(threadId, turnId, reference, blockItem(kind, text), Date.now(), "provider", "streaming");
-      stream.open.set(event.index, { kind, itemId, reference, text });
+      const itemId = await this.recordItem(threadId, turnId, opened.reference, blockItem(opened.kind, opened.text), Date.now(), "provider", "streaming");
+      stream.open.set(event.index, { ...opened, itemId, ...(opened.kind === "commentary" ? { partialJson: "" } : {}) });
     } else if (event.type === "content_block_delta") {
       const block = stream.open.get(event.index);
-      const text = event.delta.type === "text_delta" ? event.delta.text
-        : event.delta.type === "thinking_delta" ? event.delta.thinking : "";
-      if (!block || !text) return;
+      if (!block) return;
+      let text = "";
+      if (block.kind === "commentary") {
+        if (event.delta.type !== "input_json_delta") return;
+        block.partialJson = (block.partialJson ?? "") + event.delta.partial_json;
+        text = readStreamedCommentaryText(block.partialJson).slice(block.text.length);
+      } else {
+        text = event.delta.type === "text_delta" ? event.delta.text
+          : event.delta.type === "thinking_delta" ? event.delta.thinking : "";
+      }
+      if (!text) return;
       block.text += text;
       this.owners.transcript.acceptLiveUpdate?.({
         kind: "text", threadId, turnId, itemId: block.itemId,
-        field: block.kind === "text" ? "agentMessageText" : "reasoningContent",
-        index: block.kind === "text" ? null : 0, text, append: true,
+        field: block.kind === "thinking" ? "reasoningContent" : "agentMessageText",
+        index: block.kind === "thinking" ? 0 : null, text, append: true,
       });
     } else if (event.type === "content_block_stop") {
       const block = stream.open.get(event.index);
@@ -289,6 +303,10 @@ export default class ClaudeTranscriptAdapter {
         await this.recordItem(threadId, turnId, `assistant:${message.uuid}:text:${index}`, blockItem("text", block.text));
       } else if (block.type === "thinking" && !streamed) {
         await this.recordItem(threadId, turnId, `assistant:${message.uuid}:thinking:${index}`, blockItem("thinking", block.thinking));
+      } else if (block.type === "tool_use" && block.name === CLAUDE_COMMENTARY_TOOL_NAME) {
+        // The parsed input is the exact authored text; it settles any streamed copy under the same reference.
+        const text = record(block.input)?.text;
+        if (typeof text === "string") await this.recordItem(threadId, turnId, `tool:${block.id}`, blockItem("commentary", text));
       } else if (block.type === "tool_use" && !block.name.startsWith("mcp__wb__")) {
         const itemId = await this.recordItem(threadId, turnId, `tool:${block.id}`, {
           type: "dynamicToolCall", id: block.id, namespace: "claude", tool: block.name,

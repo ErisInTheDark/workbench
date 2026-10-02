@@ -1,6 +1,16 @@
 ## Workbench Rendering
 Keep commentary quality high. Spend time reasoning to ensure your commentary will be clear, concise, complete, and correct
 
+<harness:claude>
+<!-- Claude's API replaces prose between tool calls with server-written summaries (thinking blocks tagged "narration"), so the user never sees the agent's wording or markup. Tool input is preserved verbatim and Workbench streams it live, so all commentary goes through the tool. -->
+### CRITICAL: MESSAGE THE USER WITH `mcp__user__message`
+Text between tool calls never reaches the user; a server summary replaces it. Send every ack, progress update, plan, brief, and review through `mcp__user__message`. Its `text` reaches the user exactly and streams live; put Workbench markup like mode tags inside it.
+
+- After a user message, steer, or tool result, finish thinking, then call it before further tools when commentary is needed
+- Batch it with other tool calls in the same response; it returns immediately
+- End turns with no text after the final call
+</harness:claude>
+
 ### ALL markdown, UNIVERSAL rule
 - Avoid manual line breaks merely to keep lines visually narrow. Prefer natural paragraphs; let renderers wrap lines
 

@@ -1,15 +1,16 @@
-/* No production exports. Tests protect Claude streamed text admission (live deltas once, one durable body, no echo) and native file-tool evidence. */
+/* No production exports. Tests protect Claude streamed text admission (live deltas once, one durable body, no echo), exact live commentary-tool messages, and native file-tool evidence. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
+import { CLAUDE_COMMENTARY_TOOL_NAME } from "./claude-commentary-tool";
 
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
 const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");
 
 type Recorded = { kind: string; publicItemId?: string; lifecycle?: string; item?: {
-  type: string; text?: string; content?: string[]; status?: string; metadata?: unknown;
+  type: string; text?: string; content?: string[]; status?: string; metadata?: unknown; phase?: string | null;
 } };
 
 function fixture(assets?: object) {
@@ -87,6 +88,44 @@ const toolResult = (id: string, isError: boolean, toolUseResult?: object) => ({
   message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: isError ? "denied" : "ok", is_error: isError }] },
   ...(toolUseResult ? { tool_use_result: toolUseResult } : {}),
 }) as never;
+const commentaryStart = (id: string) => stream({
+  type: "content_block_start", index: 1, content_block: { type: "tool_use", id, name: CLAUDE_COMMENTARY_TOOL_NAME, input: {} },
+});
+const inputDelta = (partial: string) => stream({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: partial } });
+
+test("commentary tool input streams live as decoded text and settles in place to the exact authored message", async () => {
+  const { adapter, items, live } = fixture();
+  const exact = "<set-state mode=\"Inspect\" />\nhi \u03bb";
+  await adapter.recordStreamEvent(threadId, turnId, stream({ type: "message_start", message: { id: "msg_1" } }));
+  await adapter.recordStreamEvent(threadId, turnId, commentaryStart("say"));
+  for (const partial of ["{\"te", "xt\": \"<set-state mode=\\", "\"Inspect\\\" />\\", "nhi \\u03", "bb\"}"]) {
+    await adapter.recordStreamEvent(threadId, turnId, inputDelta(partial));
+  }
+  await adapter.recordStreamEvent(threadId, turnId, stream({ type: "content_block_stop", index: 1 }));
+  await adapter.recordAssistant(threadId, turnId, assistant([{ type: "tool_use", id: "say", name: CLAUDE_COMMENTARY_TOOL_NAME, input: { text: exact } }]));
+  await adapter.recordNativeToolResults(threadId, toolResult("say", false));
+  assert.equal(live.map(update => update.text).join(""), exact);
+  const bodies = items();
+  assert.equal(new Set(bodies.map(record => record.publicItemId)).size, 1, "one message item, no tool item");
+  assert.deepEqual([bodies.at(-1)?.item?.type, bodies.at(-1)?.item?.phase, bodies.at(-1)?.item?.text], ["agentMessage", "commentary", exact]);
+});
+
+test("commentary cut off across a bridge reload settles with the text that streamed", async () => {
+  const previous = fixture();
+  await previous.adapter.startTurn({ threadId, sessionId: "session", cwd: "C:/repo", clientMessageId: turnId, content: [] });
+  await previous.adapter.recordStreamEvent(threadId, turnId, stream({ type: "message_start", message: { id: "msg_1" } }));
+  await previous.adapter.recordStreamEvent(threadId, turnId, commentaryStart("say"));
+  await previous.adapter.recordStreamEvent(threadId, turnId, inputDelta("{\"text\": \"par"));
+  const state = previous.adapter.captureTurn(turnId);
+  assert.ok(state);
+  const next = fixture();
+  next.adapter.restoreTurn(state);
+  await next.adapter.recordStreamEvent(threadId, turnId, inputDelta("tial\\"));
+  await next.adapter.settleTurn(turnId, "interrupted");
+  assert.deepEqual(next.live.map(update => update.text), ["tial"]);
+  assert.deepEqual(next.items().map(record => [record.lifecycle, record.item?.text]), [["completed", "partial"]]);
+});
+
 const fileTool = (id: string, tool: string, filePath: string) => assistant([{ type: "tool_use", id, name: tool, input: { file_path: filePath } }]);
 
 test("native Edit and Write record the effective diff Claude applied, not the call's arguments", async () => {
