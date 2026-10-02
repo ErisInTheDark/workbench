@@ -334,6 +334,40 @@ test("provider-scoped commands register only for their providers", async () => {
   }
 });
 
+test("git_repo exists only while the virtual repository runtime is available", async () => {
+  let available = false;
+  const controller = new WorkbenchAgentMcpController({
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    virtualReposAvailable: () => available,
+    executeCommand: async () => { throw new Error("unexpected command"); },
+    tools: () => ({
+      describe: async () => ({ experimental: {}, shellDescription: "sandboxed execution", shellEscalation: false }),
+      caller: async () => { throw new Error("unexpected caller"); },
+      shell: async () => { throw new Error("unexpected shell"); },
+      patchClaims: async () => { throw new Error("unexpected patch"); },
+    }),
+  });
+  const hasRepoTool = () => controller.listInstructionTools().some(({ id }) => id === "git_repo");
+  const server = await startController(controller);
+  try {
+    const listed = async () => {
+      const client = await connectClient(server.url);
+      try { return (await client.listTools()).tools.some(({ name }) => name === "git_repo"); }
+      finally { await client.close(); }
+    };
+    assert.equal(await listed(), false);
+    assert.equal(hasRepoTool(), false);
+    available = true;
+    assert.equal(await listed(), true, "a new session must see the tool once the runtime appears");
+    assert.equal(hasRepoTool(), true);
+    available = false;
+    assert.equal(await listed(), false, "the tool must disappear with the runtime");
+  } finally {
+    await server.close();
+  }
+});
+
 test("lists one typed tool per eligible command and dispatches with trusted thread cwd", async () => {
   const executed: WorkbenchAgentCommandRequest[] = [];
   const codexRequests: Array<{ method?: string; params?: unknown }> = [];

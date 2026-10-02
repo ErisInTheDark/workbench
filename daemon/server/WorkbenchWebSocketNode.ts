@@ -15,6 +15,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const threadState = build.get("threadState").controller;
     const controller = new WorkbenchWebSocketRequestController({
       voice: build.get("voice"),
+      repo: build.get("repo"),
       harnesses: build.get("harnesses"),
       identities: { threads: threadIdentity, items: build.get("transcriptIdentity") },
       daemonRequests: build.get("daemonRequests"),
@@ -54,7 +55,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload browser WebSocket routing, request diagnostics, and aggregate event-stream health without restarting sockets.",
   lifecycle: "handoff",
   provides: ["webSocketRequests"],
-  requires: ["voice", "daemonRequests", "harnesses", "reloadController", "stats", "threadState", "threadActions", "threadIdentity", "transcriptIdentity", "transcript", "projectCatalog", "projectSnapshot"],
+  requires: ["voice", "repo", "daemonRequests", "harnesses", "reloadController", "stats", "threadState", "threadActions", "threadIdentity", "transcriptIdentity", "transcript", "projectCatalog", "projectSnapshot"],
   safeAll: true,
   scope: "server:websocket",
 });

@@ -132,6 +132,7 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "voice/audio": { params: import("../voice/voice-session-contract").VoiceAudio; result: { ok: true } };
   "voice/finish": { params: { sessionId: string }; result: { ok: true } };
   "voice/cancel": { params: { sessionId: string }; result: { ok: true } };
+  "repo/runtime/read": { params: object; result: import("../repo/virtual-repo-contract").VirtualRepoAvailability };
   "git/working-tree/read": { params: { projectId: string; preferCached?: boolean }; result: import("../git/working-tree-contracts").WorkingTreeRead };
   "git/working-tree/summary": { params: { projectId: string }; result: import("../git/working-tree-contracts").WorkingTreeSummary };
   "git/working-tree/diff": { params: import("../git/working-tree-contracts").WorkingTreeFileRequest; result: import("../git/working-tree-contracts").WorkingTreeDiff };

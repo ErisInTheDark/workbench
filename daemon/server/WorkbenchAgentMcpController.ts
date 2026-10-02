@@ -48,6 +48,8 @@ export interface WorkbenchAgentMcpControllerOptions {
   tools: (provider: string) => WorkbenchProviderTools;
   executeCommand: (request: WorkbenchAgentCommandRequest, signal: AbortSignal) => Promise<Response>;
   getReloadScopeCatalog?: () => readonly DaemonReloadScopeDescriptor[];
+  /** Read per request so the catalogue follows the virtual repository runtime as it appears or disappears. */
+  virtualReposAvailable?: () => boolean;
   lifecycleLogError?: (name: string, message: string) => void;
   daemonOrigin: string;
   requestRegistry?: WorkbenchAgentMcpRequestRegistry;
@@ -133,6 +135,7 @@ function readClientScope(url: URL) {
 export default class WorkbenchAgentMcpController {
   private readonly executeCommand: WorkbenchAgentMcpControllerOptions["executeCommand"];
   private readonly getReloadScopeCatalog: NonNullable<WorkbenchAgentMcpControllerOptions["getReloadScopeCatalog"]>;
+  private readonly virtualReposAvailable: NonNullable<WorkbenchAgentMcpControllerOptions["virtualReposAvailable"]>;
   private readonly lifecycleLogError: NonNullable<WorkbenchAgentMcpControllerOptions["lifecycleLogError"]>;
   private readonly daemonOrigin: string;
   private readonly requestRegistry: WorkbenchAgentMcpRequestRegistry;
@@ -144,6 +147,7 @@ export default class WorkbenchAgentMcpController {
   constructor({
     executeCommand,
     getReloadScopeCatalog = () => [],
+    virtualReposAvailable = () => false,
     lifecycleLogError = logError,
     daemonOrigin,
     tools,
@@ -153,6 +157,7 @@ export default class WorkbenchAgentMcpController {
   }: WorkbenchAgentMcpControllerOptions) {
     this.executeCommand = executeCommand;
     this.getReloadScopeCatalog = getReloadScopeCatalog;
+    this.virtualReposAvailable = virtualReposAvailable;
     this.lifecycleLogError = lifecycleLogError;
     this.daemonOrigin = daemonOrigin;
     this.requestRegistry = requestRegistry;
@@ -286,7 +291,7 @@ export default class WorkbenchAgentMcpController {
           params: { progressToken: extra._meta!.progressToken!, progress },
         }),
     ));
-    for (const definition of listWorkbenchAgentCommands(this.getReloadScopeCatalog(), "agent")) {
+    for (const definition of this.listCommands()) {
       if (definition.hideFromMcp || (definition.managedThreadRootOnly && !projectLocal)
         || !isWorkbenchAgentCommandVisibleTo(definition, provider)) continue;
       const name = getWorkbenchAgentCommandToolName(definition);
@@ -411,10 +416,14 @@ export default class WorkbenchAgentMcpController {
       () => this.executeTool(definition, input, meta, clientScope, requestId, signal, tools, sendProgress));
   }
 
+  private listCommands() {
+    return listWorkbenchAgentCommands(this.getReloadScopeCatalog(), "agent", { virtualRepos: this.virtualReposAvailable() });
+  }
+
   listInstructionTools(): WorkbenchInstructionTool[] {
     return [
       { id: WORKBENCH_SHELL_MCP_TOOL_NAME, codeModeEligible: true },
-      ...listWorkbenchAgentCommands(this.getReloadScopeCatalog(), "agent")
+      ...this.listCommands()
         .filter(definition => !definition.hideFromMcp)
         .map(definition => ({
           id: getWorkbenchAgentCommandToolName(definition),

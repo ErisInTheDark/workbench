@@ -1,0 +1,15 @@
+{
+  "protocol": 1,
+  "artifacts": {
+    "windows-x64": {
+      "file": "windows-x64/workbench-repo.exe",
+      "sha256": "4436bee34853f2db99061cfe717e7c729e6baa2b77ad2dd12efae429a460df89",
+      "sourceHash": "6d925d02570d207ed7703a4c46dd8a2d8e667727cd68aff21e26ef7b44581524"
+    },
+    "linux-x64": {
+      "file": "linux-x64/workbench-repo",
+      "sha256": "6cc8884fe4130224ff315e714200e87019c1bc5a0fa5452be337da78d9cbf1d7",
+      "sourceHash": "6d925d02570d207ed7703a4c46dd8a2d8e667727cd68aff21e26ef7b44581524"
+    }
+  }
+}

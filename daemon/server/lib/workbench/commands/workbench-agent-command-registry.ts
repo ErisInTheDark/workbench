@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - WorkbenchAgentCommandAvailability: host capabilities that add or omit runtime-dependent commands.
  * - listWorkbenchAgentCommands: assemble canonical typed wb commands with reload definitions from the active topology catalog.
  * - listWorkbenchAgentCodeModeToolNames: list the explicit default-deny subset safe for nested Code Mode calls.
  */
@@ -7,6 +8,7 @@ import { WORKBENCH_BROWSE_COMMANDS } from "./browse-command-definitions";
 import { WORKBENCH_FILE_REMOVAL_COMMANDS } from "./file-removal-command-definition";
 import { WORKBENCH_GIT_ARC_COMMANDS } from "./git-arc-command-definitions";
 import { WORKBENCH_GIT_COMMANDS } from "./git-command-definitions";
+import { WORKBENCH_GIT_REPO_COMMANDS } from "./git-repo-command-definition";
 import { WORKBENCH_LIVE_PROVIDER_TEST_COMMANDS } from "./live-provider-test-command-definition";
 import { WORKBENCH_MESSAGE_COMMANDS } from "./message-command-definitions";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
@@ -43,11 +45,21 @@ const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Obj
   ...WORKBENCH_LIVE_PROVIDER_TEST_COMMANDS,
 ]);
 
+export interface WorkbenchAgentCommandAvailability {
+  /** The selected daemon detected its virtual repository runtime; otherwise wb git repo does not exist. */
+  virtualRepos?: boolean;
+}
+
 export function listWorkbenchAgentCommands(
   catalog: readonly DaemonReloadScopeDescriptor[] = [],
   access: DaemonReloadScopeDescriptor["access"] = "agent",
+  { virtualRepos = false }: WorkbenchAgentCommandAvailability = {},
 ) {
-  return [...WORKBENCH_AGENT_COMMANDS, ...createWorkbenchReloadCommands(catalog, access)];
+  return [
+    ...WORKBENCH_AGENT_COMMANDS,
+    ...(virtualRepos ? WORKBENCH_GIT_REPO_COMMANDS : []),
+    ...createWorkbenchReloadCommands(catalog, access),
+  ];
 }
 
 export function listWorkbenchAgentCodeModeToolNames() {

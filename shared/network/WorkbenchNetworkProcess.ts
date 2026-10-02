@@ -3,23 +3,19 @@
  * - default WorkbenchNetworkProcess: verify bundled artifacts and own one cancellable sidecar pipe lifecycle.
  */
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import type { WorkbenchDaemonDiscovery } from "../http/workbench-daemon-discovery.ts";
+import { nativeSidecarSourceHash, verifyNativeSidecarArtifact, type NativeSidecarArtifact } from "../native/native-sidecar-artifact.ts";
 import {
   WORKBENCH_NETWORK_PROTOCOL, WorkbenchNetworkCommandSchema, WorkbenchNetworkPipeResponseSchema,
   type WorkbenchNetworkCommand, type WorkbenchNetworkResult, type WorkbenchNetworkRuntime, type WorkbenchNetworkMember,
   type WorkbenchNetworkConfiguration,
 } from "workbench-shared/http/workbench-network";
 
-const digest = z.string().regex(/^[a-f0-9]{64}$/u);
-const artifactSchema = z.object({ file: z.string(), sha256: digest, sourceHash: digest }).strict();
-const manifestSchema = z.object({
-  protocol: z.literal(WORKBENCH_NETWORK_PROTOCOL),
-  artifacts: z.object({ "windows-x64": artifactSchema.optional(), "linux-x64": artifactSchema.optional() }).strict(),
-}).strict();
+const NETWORK_ARTIFACT: NativeSidecarArtifact = {
+  label: "network", buildScript: "build:network", source: "shared/network/native",
+  executable: "workbench-network", protocol: WORKBENCH_NETWORK_PROTOCOL,
+};
 
 export default class WorkbenchNetworkProcess {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -49,38 +45,11 @@ export default class WorkbenchNetworkProcess {
   }) {}
 
   static async sourceHash(directory: string): Promise<string> {
-    const names = (await fs.readdir(directory))
-      .filter(name => name === "go.mod" || name === "go.sum" || (name.endsWith(".go") && !name.endsWith("_test.go")))
-      .sort();
-    const hash = createHash("sha256");
-    for (const name of names) {
-      hash.update(name).update("\0");
-      hash.update((await fs.readFile(path.join(directory, name), "utf8")).replaceAll("\r\n", "\n"));
-      hash.update("\0");
-    }
-    return hash.digest("hex");
+    return await nativeSidecarSourceHash(directory);
   }
 
   static async inspect(root: string): Promise<string> {
-    if (process.arch !== "x64" || (process.platform !== "win32" && process.platform !== "linux")) {
-      throw new Error("A bundled network executable is not available for this host platform.");
-    }
-    const source = path.join(root, "shared/network/native");
-    let manifest: z.infer<typeof manifestSchema>;
-    try {
-      manifest = manifestSchema.parse(JSON.parse(await fs.readFile(path.join(source, "bin/manifest.json"), "utf8")));
-    } catch {
-      throw new Error("The bundled network manifest is missing or invalid. Run pnpm build:network from the Workbench repository.");
-    }
-    const platform = process.platform === "win32" ? "windows-x64" : "linux-x64";
-    const name = process.platform === "win32" ? "workbench-network.exe" : "workbench-network";
-    const artifact = manifest.artifacts[platform];
-    if (!artifact || artifact.file !== `${platform}/${name}`) throw new Error("The network executable for this host has not been published. Run pnpm build:network from the Workbench repository.");
-    const executable = path.join(source, "bin", platform, name);
-    const bytes = await fs.readFile(executable);
-    if (createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) throw new Error("The network executable does not match its manifest.");
-    if (await WorkbenchNetworkProcess.sourceHash(source) !== artifact.sourceHash) throw new Error("Network sources changed; rebuild the bundled executable.");
-    return executable;
+    return await verifyNativeSidecarArtifact(root, NETWORK_ARTIFACT);
   }
 
   start() {

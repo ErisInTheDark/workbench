@@ -13,6 +13,7 @@ import type {
 import { WORKBENCH_GIT_ARC_ACTION_BY_METHOD } from "./workbench-daemon-requests.ts";
 import { z } from "zod";
 import { VoiceConfigurationSchema, VoiceSessionEventSchema, type VoiceSessionEvent } from "../voice/voice-session-contract";
+import { VirtualRepoAvailabilitySchema } from "../repo/virtual-repo-contract";
 import { WorkingTreeReadSchema, WorkingTreeSummarySchema, WorkingTreeDiffSchema, WorkingTreePreviewSchema, WorkingTreeResultSchema } from "../git/working-tree-contracts";
 import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provider-settings";
 import { CommandApprovalSnapshotSchema } from "../settings/command-approvals";
@@ -87,6 +88,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "voice/audio":
     case "voice/finish":
     case "voice/cancel": return z.object({ ok: z.literal(true) }).strict();
+    case "repo/runtime/read": return VirtualRepoAvailabilitySchema;
     case "git/working-tree/read": return WorkingTreeReadSchema;
     case "git/working-tree/summary": return WorkingTreeSummarySchema;
     case "git/working-tree/diff": return WorkingTreeDiffSchema;
@@ -274,6 +276,11 @@ class WorkbenchDaemonClient {
 
   readonly search = {
     query: (params: WorkbenchDaemonParams<"search/query">) => this.request("search/query", params),
+  };
+
+  readonly virtualRepos = {
+    /** Probes the selected daemon again, so it doubles as the settings recheck. */
+    availability: () => this.request("repo/runtime/read", {}),
   };
 
   readonly localCapabilities = {

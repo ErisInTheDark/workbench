@@ -35,6 +35,7 @@ import {
 import type { BridgeClient, JsonRpcRequest } from "./bridge-types";
 import { z } from "zod";
 import { VoiceAudioSchema, VoiceConfigurationSchema, VoiceStartSchema } from "workbench-shared/workbench/voice/voice-session-contract";
+import { REPO_RUNTIME_READ_METHOD } from "workbench-shared/workbench/repo/virtual-repo-contract";
 import type { DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import {
   mapWorkbenchThreadStateRequest,
@@ -129,6 +130,7 @@ interface PendingRequest extends WorkbenchWebSocketPendingRequestState {
 export interface WorkbenchWebSocketRequestControllerOptions {
   workspace?: Omit<ConstructorParameters<typeof WorkbenchWorkspaceObservationController<BridgeClient>>[0], "publish" | "warn" | "reload">;
   voice?: DaemonRuntimeObjects["voice"];
+  repo?: Pick<DaemonRuntimeObjects["repo"], "readAvailability">;
   reportDelivery: (delivery: WorkbenchWebSocketDelivery) => void;
   clearTimeout?: (timer: Timer) => void;
   daemonRequests?: Pick<WorkbenchDaemonRequestController, "accepts" | "handle">;
@@ -189,6 +191,7 @@ function readResponseErrorMessage(message: unknown) {
 
 export default class WorkbenchWebSocketRequestController {
   private readonly voice: DaemonRuntimeObjects["voice"] | undefined;
+  private readonly repo: WorkbenchWebSocketRequestControllerOptions["repo"];
   private lifecycle: "active" | "suspended" | "disposed" = "active";
   private get detached() { return this.lifecycle !== "active"; }
   private generation = new AbortController();
@@ -220,6 +223,7 @@ export default class WorkbenchWebSocketRequestController {
 
   constructor({
     voice,
+    repo,
     clearTimeout: cancel = clearTimeout,
     daemonRequests = {
       accepts: () => false,
@@ -239,6 +243,7 @@ export default class WorkbenchWebSocketRequestController {
     writeLine = (line) => process.stdout.write(`${line}\n`),
   }: WorkbenchWebSocketRequestControllerOptions) {
     this.voice = voice;
+    this.repo = repo;
     this.cancel = cancel;
     this.eventLog = new WorkbenchWebSocketEventLog({ clearTimeout: cancel, now, setTimeout: schedule, writeLine });
     this.daemonRequests = daemonRequests;
@@ -354,7 +359,8 @@ export default class WorkbenchWebSocketRequestController {
     const transcriptRequest = decodeWorkbenchTranscriptRequest(method, message.params);
     const daemonRequest = this.daemonRequests.accepts(method);
     const workspaceRequest = method === WORKSPACE_OBSERVE_METHOD || method === WORKSPACE_RELEASE_METHOD;
-    const workbenchRequest = daemonRequest || method.startsWith("voice/") || method.startsWith("workbench/thread-state/")
+    const workbenchRequest = daemonRequest || method.startsWith("voice/") || method === REPO_RUNTIME_READ_METHOD
+      || method.startsWith("workbench/thread-state/")
       || workspaceRequest
       || method === WORKBENCH_RELOAD_DIRT_READ_METHOD
       || transcriptRequest !== null;
@@ -423,6 +429,16 @@ export default class WorkbenchWebSocketRequestController {
         } catch (error) {
           await this.sendJsonToClient(client, { id: requestId, error: { code: -32000,
             message: error instanceof z.ZodError ? "Invalid voice request." : error instanceof Error ? error.message.slice(0, 512) : "Voice request failed." } });
+        }
+        return;
+      }
+      if (method === REPO_RUNTIME_READ_METHOD) {
+        try {
+          if (!this.repo) throw new Error("Virtual repository support is unavailable or reloading.");
+          await this.sendJsonToClient(client, { id: requestId, result: await this.repo.readAvailability() });
+        } catch (error) {
+          await this.sendJsonToClient(client, { id: requestId, error: { code: -32000,
+            message: error instanceof Error ? error.message.slice(0, 512) : "Repository availability check failed." } });
         }
         return;
       }

@@ -1,0 +1,5 @@
+- Daemon owns read-only repo mounts while awake; data-root cache and 24-hour leases survive sleep. Only explicit warm renews a lease. Paths pin commit OIDs.
+- Unmount and evict only verified Workbench-owned paths. On wake, clear expired cache and reconcile stale mounts before returning a path.
+- Keep credentials out of paths, responses, logs and mount data. Never silently fall back to a full checkout or follow repository symlinks outside the snapshot.
+- Report prerequisites from the selected daemon. When the runtime is absent, omit repo CLI/MCP registration; keep settings guidance visible. Never auto-install OS drivers.
+- Run `pnpm test:repo` for native Git/VFS invariants; run `wb test` and `pnpm typecheck` for daemon, settings and commands.

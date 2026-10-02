@@ -92,7 +92,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop",
   "task set", "task get", "task completed", "task blocked",
   "thread recall", "thread recall search", "thread recall expand",
-  "git add", "git unstage", "git commit", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
+  "git add", "git unstage", "git commit", "git repo", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
   "git arc status", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
   "browse run", "browse raw", "browse sessions", "browse stop", "browse forget",
 ] as const;
@@ -183,7 +183,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     key: "thread-recall", usage: "wb thread recall [command] [options]", words: ["thread", "recall"],
   },
   {
-    commandOrder: ["git add", "git unstage", "git commit"],
+    commandOrder: ["git add", "git unstage", "git commit", "git repo"],
     footer: [
       "Run from the repository root and use . with add to select all changed files.",
       "Run from the repository root and use . with unstage to clear the thread selection.",
@@ -292,6 +292,7 @@ export async function parseWorkbenchAgentCliCommand(
     workbenchOrigin = process.env.WORKBENCH_ORIGIN?.trim() || null,
     reloadCatalog = [],
     projectRoot = null,
+    virtualRepos = false,
   }: {
     callerHarness?: string;
     callerThreadId?: string | null;
@@ -299,6 +300,8 @@ export async function parseWorkbenchAgentCliCommand(
     workbenchOrigin?: string | null;
     reloadCatalog?: readonly DaemonReloadScopeDescriptor[];
     projectRoot?: string | null;
+    /** Whether the selected daemon detected its virtual repository runtime. */
+    virtualRepos?: boolean;
   } = {},
 ): Promise<WorkbenchAgentCliParseResult> {
   const resolvedCwd = path.resolve(cwd);
@@ -307,7 +310,7 @@ export async function parseWorkbenchAgentCliCommand(
       ? resolvedCwd.toLocaleLowerCase() === path.resolve(projectRoot).toLocaleLowerCase()
       : resolvedCwd === path.resolve(projectRoot)
   );
-  const commands = listWorkbenchAgentCommands(reloadCatalog, "cli").filter((command) => (
+  const commands = listWorkbenchAgentCommands(reloadCatalog, "cli", { virtualRepos }).filter((command) => (
     !command.managedThreadRootOnly || callerThreadId === null || isWorkbenchRoot
   ));
   const isLegacyCheckpointCommand = (argv[0] === "git" && argv[1] === "checkpoint") || argv[0] === "checkpoint";

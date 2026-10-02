@@ -29,6 +29,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   children: [WorkbenchMcpNode],
   create: (context, build) => {
     const gitArc = build.get("gitArc");
+    const repo = build.get("repo");
     const harnesses = build.get("harnesses");
     const providers = new WorkbenchProviderDispatcher(build.run);
     const provider = (harness: string) => {
@@ -145,6 +146,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executeTranscriptQuery: async (body, signal) => await transcriptCommands.execute(body, signal),
       executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
       executeFileRemoval: async (body, signal) => await fileRemoval.execute(body, signal),
+      executeRepoWarm: async (body, signal) => await repo.warm(body, signal),
+      virtualReposAvailable: () => repo.isAvailable(),
       executeSkillRequest: async (body, signal) => {
         const request = WorkbenchSkillExecutionRequestSchema.parse(body);
         const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
@@ -191,7 +194,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["database", "gitArc", "harnesses", "messages", "projectCatalog", "questionnaires", "reloadDirt", "stats", "subagents", "threadGit", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["database", "gitArc", "harnesses", "messages", "repo", "projectCatalog", "questionnaires", "reloadDirt", "stats", "subagents", "threadGit", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
   safeAll: true,
   scope: "server:commands",
 });

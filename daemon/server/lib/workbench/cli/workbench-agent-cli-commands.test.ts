@@ -49,6 +49,41 @@ function execFileWithInput(command: string, args: string[], input: string, optio
 }
 const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
 
+test("wb git repo does not exist unless the virtual repository runtime is available", async () => {
+  const absent = await parseWorkbenchAgentCliCommand(["git", "repo", "https://github.com/team/project.git"], { cwd: "C:/workspace" });
+  assert.equal(absent.kind, "error");
+  assert.match(absent.kind === "error" ? absent.error : "", /Unsupported wb command: git repo/);
+  for (const argv of [["--help"], ["git", "--help"]]) {
+    const help = await parseWorkbenchAgentCliCommand(argv, { cwd: "C:/workspace" });
+    assert.equal(help.kind, "help");
+    assert.doesNotMatch(help.kind === "help" ? help.help : "", /git repo/);
+    const shown = await parseWorkbenchAgentCliCommand(argv, { cwd: "C:/workspace", virtualRepos: true });
+    assert.match(shown.kind === "help" ? shown.help : "", /wb git repo <url>/);
+  }
+});
+
+test("wb git repo splits refs only inside the repository path", async () => {
+  const cases: Array<[string[], Record<string, string>]> = [
+    [["https://github.com/team/project.git"], { url: "https://github.com/team/project.git" }],
+    [["https://github.com/team/project.git@feature/x"], { url: "https://github.com/team/project.git", ref: "feature/x" }],
+    [["git@github.com:team/project.git"], { url: "git@github.com:team/project.git" }],
+    [["git@github.com:team/project.git@v1.2", "--kind", "tag"], { url: "git@github.com:team/project.git", ref: "v1.2", kind: "tag" }],
+    [["ssh://git@host.example:2222/a/b@main"], { url: "ssh://git@host.example:2222/a/b", ref: "main" }],
+  ];
+  for (const [args, body] of cases) {
+    const parsed = await parseWorkbenchAgentCliCommand(["git", "repo", ...args], { cwd: "C:/workspace", virtualRepos: true });
+    assert.equal(parsed.kind, "request", args.join(" "));
+    assert.deepEqual(parsed.kind === "request" ? parsed.request.body : null, body);
+  }
+  for (const args of [
+    [], ["https://github.com/team/project.git@"], ["https://user:token@github.com/team/project.git"],
+    ["https://github.com/team/project.git", "--kind", "commit"],
+  ]) {
+    const parsed = await parseWorkbenchAgentCliCommand(["git", "repo", ...args], { cwd: "C:/workspace", virtualRepos: true });
+    assert.equal(parsed.kind, "error", args.join(" "));
+  }
+});
+
 test("status selectors preserve equivalent CLI and MCP inputs", async () => {
   const definition = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === "git arc status");
   assert.ok(definition, "status must be registered for CLI and MCP");

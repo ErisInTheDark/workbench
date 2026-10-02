@@ -21,6 +21,7 @@ const REQUIRED_REGISTRATIONS = [
   "projectCatalog",
   "projectSnapshot",
   "reloadController",
+  "repo",
   "threadGit",
   "threadIdentity",
   "threadState",
@@ -33,6 +34,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const agentCommand = build.get("agentCommand");
     const providers = new WorkbenchProviderDispatcher(build.run);
     const toolRevision = build.get("toolRevision");
+    const repo = build.get("repo");
     const threadIdentity = build.get("threadIdentity");
     const threadState = build.get("threadState");
     build.get("reloadController");
@@ -58,6 +60,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
       executeCommand: async (request, signal) => await requestRegistry.executeCommand(request, signal),
       getReloadScopeCatalog: context.getReloadScopeCatalog,
+      virtualReposAvailable: () => repo.isAvailable(),
       daemonOrigin: context.localDaemonOrigin,
       requestRegistry,
       runLoggedCommand: async (label, signal, operation, succeeded) => (

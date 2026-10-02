@@ -227,6 +227,7 @@ export interface DaemonRuntimeObjects {
   codexAppServer: DaemonCodexAppServerRuntime;
   codexBridge: CodexStdioBridge;
   toolRevision: WorkbenchToolRevisionController;
+  repo: import("./WorkbenchRepoController").default;
   codexSandboxNetwork: WorkbenchCodexSandboxNetworkController;
   codexInstructions: WorkbenchCodexInstructionAdapter;
   database: DaemonDatabaseRegistration;

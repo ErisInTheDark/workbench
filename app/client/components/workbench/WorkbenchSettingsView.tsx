@@ -19,6 +19,7 @@ import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
 import WorkbenchProjectDiscoverySettings from "./WorkbenchProjectDiscoverySettings";
 import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
 import WorkbenchReactDevelopmentModeSetting from "./WorkbenchReactDevelopmentModeSetting";
+import WorkbenchRepoPrerequisiteSettings from "./WorkbenchRepoPrerequisiteSettings";
 import WorkbenchSettingsContextRow from "./WorkbenchSettingsContextRow";
 import WorkbenchSettingsPreferences from "./WorkbenchSettingsPreferences";
 import { WorkbenchOperationsContext } from "./WorkbenchWorkspaceContext";
@@ -212,6 +213,7 @@ export default function WorkbenchSettingsView({
           </WorkbenchFormSection>
           <WorkbenchFormSection id="settings-capabilities" title="Capabilities">
             {daemon ? <BrowseCapability key={daemonId} daemon={daemon} /> : null}
+            {daemon ? <WorkbenchRepoPrerequisiteSettings key={`repo-${daemonId}`} daemon={daemon} /> : null}
           </WorkbenchFormSection>
           {logicalProject ? <WorkbenchFormSection id="settings-permissions" title="Permissions">
             {daemon && folder ? <WorkbenchOperationsContext.Provider value={daemon}>
