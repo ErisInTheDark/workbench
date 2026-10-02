@@ -1515,8 +1515,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const showFileView = route.view === "file" || mobileMosaicFallbackTarget?.kind === "file";
   // New full-page views belong in workbenchRouteViews, not new show* booleans; settings/stats/git should migrate there.
   const routeView = workbenchRouteViews[route.view] ?? null;
-  const newProjectRoute = useMemo(() => withProjectSelection(createNewProjectRoute(), route.selectedProjectIds),
-    [route.selectedProjectIds]);
+  const newProjectRoute = useMemo(() => withProjectSelection(
+    createNewProjectRoute(),
+    selectionProjectIds.length ? selectionProjectIds : null,
+  ), [selectionProjectIds]);
   const showSettingsView = route.view === "settings";
   const selectedSettingsProject = selectionProjectIds.length === 1
     ? displayedLogicalProjects?.find(project => project.id === selectionProjectIds[0]) ?? null
