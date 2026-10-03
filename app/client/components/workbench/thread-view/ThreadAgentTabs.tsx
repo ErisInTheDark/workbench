@@ -120,6 +120,7 @@ function SubagentTabLink({
       }}
     >
       <WorkbenchThreadHoverTooltip
+        agentName={tab.subagent ? <ThreadAgentName subagent={tab.subagent} thread={tab.thread} /> : undefined}
         placement="top"
         thread={parsedProjectId ? { harness, projectId: parsedProjectId, threadId } : null}
         title={tab.subagent?.title ?? tab.subagent?.name ?? "Subagent"}

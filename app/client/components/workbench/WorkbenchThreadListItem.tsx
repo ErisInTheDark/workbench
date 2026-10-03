@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchThreadListItem: render a thread row or disclosure body with shared status, optional action slot, navigation and context menu.
- * - ThreadTooltipContent: render thread status and active claim paths, grouped per subagent, without exposing stashed paths.
+ * - ThreadTooltipContent: render thread title (optionally after an agent name), status, and active claim paths grouped per coloured, titled subagent, without exposing stashed paths.
  * Status derivation is shared through thread-entry-presentation.
  */
 "use client";
@@ -36,6 +36,7 @@ import { useWorkbenchContextMenu, type WorkbenchContextMenuDefinition } from "./
 import WorkbenchTooltip from "./WorkbenchTooltip";
 import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
 import WorkbenchThreadTitleHistory from "./WorkbenchThreadTitleHistory";
+import ThreadAgentName from "./thread-view/ThreadAgentName";
 import { getThreadRowActions, type ThreadRowAction } from "./thread-row-actions";
 
 type ThreadAction = ThreadRowAction;
@@ -56,14 +57,23 @@ function targetForEntry(entry: ThreadListEntry): WorkbenchThreadTarget {
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
 }
 
-function ClaimedPathsPanel({ label, paths, projectId }: { label?: string; paths: readonly string[]; projectId: ProjectId }) {
+/** A labelled panel gets its own header line so a long subagent title cannot shove the paths around. */
+function ClaimedPathsPanel({ label, paths, projectId, title }: { label?: ReactNode; paths: readonly string[]; projectId: ProjectId; title?: string }) {
+  const flag = (
+    <span className="inline-flex size-5 shrink-0 items-center justify-center text-fg/muted" aria-hidden="true">
+      <FlagIcon size={14} />
+    </span>
+  );
   return (
     <div className="scrollbar-hover-reveal flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in srgb, var(--text) 4%, transparent)] [--thread-files-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))] p-2">
       <div className="contents [--fg-bg:var(--thread-files-bg)]">
-        <span className="inline-flex size-5 shrink-0 items-center justify-center text-fg/muted" aria-hidden="true">
-          <FlagIcon size={14} />
-        </span>
-        {label ? <span className="mr-1 text-[0.76rem] font-medium text-fg/muted">{label}</span> : null}
+        {label ? (
+          <div className="flex w-full min-w-0 items-center gap-1 text-[0.76rem]">
+            {flag}
+            <span className="shrink-0 font-medium text-fg/muted">{label}</span>
+            {title ? <span className="min-w-0 truncate text-fg/muted">{title}</span> : null}
+          </div>
+        ) : flag}
         {paths.map((filePath) => (
           <ProjectFilePath className="max-w-full shrink" disambiguationPaths={paths} key={filePath} path={filePath} projectId={projectId} />
         ))}
@@ -73,6 +83,7 @@ function ClaimedPathsPanel({ label, paths, projectId }: { label?: string; paths:
 }
 
 export function ThreadTooltipContent({
+  agentName,
   claimedPaths,
   dateTime,
   exactTime,
@@ -88,6 +99,8 @@ export function ThreadTooltipContent({
   title,
   identity,
 }: {
+  /** Shown before the title, e.g. a coloured subagent name. */
+  agentName?: ReactNode;
   claimedPaths: readonly string[];
   dateTime: string;
   exactTime: string;
@@ -107,7 +120,10 @@ export function ThreadTooltipContent({
   const ownClaims = stashed ? [] : claimedPaths;
   return (
     <div data-thread-project-file-link-boundary="true" className="flex max-h-full min-w-0 max-w-[min(28rem,calc(100vw-2rem))] flex-col gap-2">
-      <p className="m-0 truncate text-[0.9rem] font-medium leading-[1.45] text-text">{title}</p>
+      <p className="m-0 truncate text-[0.9rem] font-medium leading-[1.45] text-text">
+        {agentName ? <>{agentName}{" "}</> : null}
+        {title}
+      </p>
       {identity ? <WorkbenchThreadTitleHistory key={`${projectId}:${identity.harness}:${identity.threadId}`} projectId={projectId} harness={identity.harness} threadId={identity.threadId} /> : null}
       <div className="flex min-w-0 items-center gap-1.5 text-[0.76rem] text-fg/muted">
         <Icon className={`shrink-0 ${statusClassName}`} size={14} />
@@ -118,8 +134,14 @@ export function ThreadTooltipContent({
       </div>
       {extraDetails}
       {ownClaims.length ? <ClaimedPathsPanel label={subagentClaims.length ? "Main agent" : undefined} paths={ownClaims} projectId={projectId} /> : null}
-      {subagentClaims.map(({ claimedPaths: paths, name, threadId }) => (
-        <ClaimedPathsPanel key={threadId} label={name} paths={paths} projectId={projectId} />
+      {subagentClaims.map((child) => (
+        <ClaimedPathsPanel
+          key={child.threadId}
+          label={<ThreadAgentName subagent={child} thread={null} />}
+          paths={child.claimedPaths}
+          projectId={projectId}
+          title={child.title}
+        />
       ))}
     </div>
   );

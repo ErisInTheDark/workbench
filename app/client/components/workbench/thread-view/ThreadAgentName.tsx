@@ -6,9 +6,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import type { WorkbenchSubagentSummary } from "workbench-shared/types";
-
-import { getThreadAgentAccentHue, getThreadAgentLabelParts } from "../../../workbench/thread/thread-subagents";
+import { getThreadAgentAccentHue, getThreadAgentLabelParts, type ThreadAgentIdentitySubject } from "../../../workbench/thread/thread-subagents";
 import type { IdentityAccentStyle } from "../../../workbench/identity-accent-color";
 
 export default function ThreadAgentName ({
@@ -21,7 +19,7 @@ export default function ThreadAgentName ({
   accentChromaPercent?: number;
   className?: string;
   roleClassName?: string;
-  subagent?: WorkbenchSubagentSummary | null;
+  subagent?: ThreadAgentIdentitySubject | null;
   thread: {
     agentNickname?: string | null;
     agentRole?: string | null;

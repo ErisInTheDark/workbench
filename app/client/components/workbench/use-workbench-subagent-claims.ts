@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchSubagentClaims: one direct child's active claim paths, labelled by its subagent name.
+ * - WorkbenchSubagentClaims: one direct child's active claim paths with its name, colour identity, and title.
  * - collectSubagentClaims: select direct children of a parent that hold active (unstashed) claims.
  * - useWorkbenchSubagentClaims: subscribe to a parent's direct-child claims from its project sidebar.
  */
@@ -10,12 +10,13 @@ import { useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 
 import type { ProjectId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
+import type { ThreadAgentIdentitySubject } from "../../workbench/thread/thread-subagents";
 import WorkbenchClientContext from "./workbench-client-context";
 
-export interface WorkbenchSubagentClaims {
+export interface WorkbenchSubagentClaims extends ThreadAgentIdentitySubject {
   claimedPaths: readonly string[];
-  name: string;
   threadId: string;
+  title: string;
 }
 
 const NO_CLAIMS: readonly WorkbenchSubagentClaims[] = [];
@@ -24,7 +25,14 @@ export function collectSubagentClaims(entries: readonly WorkbenchThreadSidebarEn
   const claims = entries.flatMap((entry) => entry.entryKind === "subagent"
     && entry.parentThreadId === parentThreadId
     && entry.gitArc?.phase === "active"
-    ? [{ claimedPaths: entry.gitArc.claimedPaths, name: entry.name, threadId: entry.identity.threadId }]
+    ? [{
+      claimedPaths: entry.gitArc.claimedPaths,
+      directSubagentIndex: entry.directSubagentIndex,
+      name: entry.name,
+      parentThreadId: entry.parentThreadId,
+      threadId: entry.identity.threadId,
+      title: entry.title,
+    }]
     : []);
   return claims.length ? claims.sort((left, right) => left.name.localeCompare(right.name) || left.threadId.localeCompare(right.threadId)) : NO_CLAIMS;
 }

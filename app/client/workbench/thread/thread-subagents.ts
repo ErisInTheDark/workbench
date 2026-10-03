@@ -2,6 +2,7 @@
  * Keywords: thread, subagent, identity, harness, command, tabs, lifecycle, hydration, hue.
  * Exports:
  * - ThreadAgentLabelParts: nickname, role, and combined display label.
+ * - ThreadAgentIdentitySubject: the child fields naming and colouring need, shared by summaries and sidebar rows.
  * - WorkbenchSubagentCommandDisplayTarget: durable identity for a command selector.
  * - sortWorkbenchSubagents: order children by lifecycle, Lock, and activity.
  * - SubagentTabOrder/reconcileSubagentTabOrder: stable tab order that only promotes new or unsettled children.
@@ -30,6 +31,8 @@ export interface ThreadAgentLabelParts {
   role: string | null;
   text: string;
 }
+
+export type ThreadAgentIdentitySubject = Pick<WorkbenchSubagentSummary, "directSubagentIndex" | "name" | "parentThreadId">;
 
 export interface WorkbenchSubagentCommandDisplayTarget {
   fallbackName: string | null;
@@ -227,7 +230,7 @@ export function filterSubagentThreadSummaries(
 
 export function getThreadAgentLabelParts(
   thread: Partial<ThreadAgentIdentity> | null | undefined,
-  subagent?: WorkbenchSubagentSummary | null,
+  subagent?: Pick<ThreadAgentIdentitySubject, "name"> | null,
 ): ThreadAgentLabelParts {
   const role = normalizeLabel(thread?.agentRole);
   const nickname = normalizeLabel(subagent?.name) ?? normalizeLabel(thread?.agentNickname);
