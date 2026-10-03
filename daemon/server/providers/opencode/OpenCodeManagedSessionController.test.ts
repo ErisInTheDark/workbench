@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - tests: protect managed OpenCode metadata, permissions, and fresh instruction entries.
+ * - tests: protect managed OpenCode metadata, permissions, fresh instruction entries, and prompt-bound activated skills.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -55,8 +55,10 @@ test("marks managed sessions and refreshes filtered instructions before each pro
     workflowIds: ["default"],
     activatedSkillPaths: ["C:/skills/one/SKILL.md"],
   };
+  const first = await controller.refresh(context);
   await controller.refresh(context);
-  await controller.refresh(context);
+  // Skill bodies belong in the prompt, not in instructions the next refresh replaces.
+  assert.deepEqual(first, { activatedSkills: "C:/skills/one/SKILL.md" });
   assert.deepEqual(updates, [
     {
       sessionID: "session",
@@ -78,12 +80,12 @@ test("marks managed sessions and refreshes filtered instructions before each pro
     {
       sessionID: "session",
       key: "workbench",
-      value: "base-1-opencode\n\ndeveloper-opencode/model\n\nC:/skills/one/SKILL.md",
+      value: "base-1-opencode\n\ndeveloper-opencode/model",
     },
     {
       sessionID: "session",
       key: "workbench",
-      value: "base-2-opencode\n\ndeveloper-opencode/model\n\nC:/skills/one/SKILL.md",
+      value: "base-2-opencode\n\ndeveloper-opencode/model",
     },
   ]);
 });

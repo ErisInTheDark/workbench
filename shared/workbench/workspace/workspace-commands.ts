@@ -52,6 +52,8 @@ export const workspaceCommandRoutes = {
   "thread/goal/read": "thread",
   "thread/goal/update": "thread",
   "thread/goal/remove": "thread",
+  "thread/skills/read": "thread",
+  "thread/skills/deactivate": "thread",
   "voice/configuration/read": "installation",
   "voice/configuration/write": "installation",
   "voice/agents": "installation",

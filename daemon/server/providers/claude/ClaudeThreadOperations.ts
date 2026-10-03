@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - ClaudeTurnHandoff: one paused live turn's turn and transcript state for the next bridge generation.
+ * - ClaudeInstructionInput: thread facts one managed Claude prompt build reads.
  * - ClaudeThreadOperationsOptions: bind host-owned Claude sessions to Workbench identity, state, lifecycle publication, and managed MCP.
- * - default ClaudeThreadOperations: admit Claude turns and steers, launch them on the harness session host with their configured or model-default context window, pause and restore live turns across bridge reloads, continue unfinished turns with their launch context, attest turn liveness, hold admitted steers in canonical history, deliver Browse screenshots, hydrate billing usage from session logs, and own native session operations.
+ * - default ClaudeThreadOperations: admit Claude turns and steers with their activated skill bodies and pending agent context, launch them on the harness session host with their configured or model-default context window, pause and restore live turns across bridge reloads, continue unfinished turns with their launch context, attest turn liveness, hold admitted steers in canonical history, deliver Browse screenshots, hydrate billing usage from session logs, and own native session operations.
  */
 import {
     deleteSession, getSessionInfo, listSessions, query, renameSession,
@@ -14,7 +15,9 @@ import {
     WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
     type WorkbenchThreadId, type WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
-import type { WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
+import type { WorkbenchContextTrigger, WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
+import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
+import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
 import { toWorkbenchThreadUserInput } from "workbench-shared/workbench/provider/provider-input";
 import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
 import type {
@@ -36,7 +39,9 @@ import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature"
 import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
 import { createClaudeFileClaimHooks } from "./claude-file-claim-hook";
 import { claudeEnvironment, claudeExecutable } from "./claude-process-options";
-import { claudeImageBlock, claudePromptContent, prefixClaudePrompt } from "./claude-prompt-content";
+import {
+    appendClaudePrompt, claudeImageBlock, claudePromptContent, prefixClaudePrompt, type ClaudePromptContent,
+} from "./claude-prompt-content";
 import type { WorkbenchProviderBrowse } from "workbench-shared/workbench/provider/provider-browse";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 import ClaudeConfigView from "./ClaudeConfigView";
@@ -51,6 +56,11 @@ import ClaudeUsageHydrator from "./ClaudeUsageHydrator";
 export interface ClaudeTurnHandoff {
   turn: ClaudeLiveTurnSnapshot;
   transcript: ClaudeTranscriptTurnState;
+}
+
+export interface ClaudeInstructionInput {
+  cwd: string; projectId: string; threadId: string; model: string | null; agentPath: string | null;
+  workflowIds: readonly string[];
 }
 
 export interface ClaudeThreadOperationsOptions {
@@ -69,10 +79,11 @@ export interface ClaudeThreadOperationsOptions {
   signal: AbortSignal;
   observe(facts: WorkbenchProviderObservation): Promise<unknown>;
   broadcast(notification: WorkbenchTranscriptNotification): void;
-  buildInstructions(input: {
-    cwd: string; projectId: string; threadId: string; model: string | null; agentPath: string | null;
-    workflowIds: readonly string[]; activatedSkillPaths: readonly string[];
-  }): Promise<string>;
+  buildInstructions(input: ClaudeInstructionInput): Promise<string>;
+  /** Filtered bodies of the skills one submission activates; null when none resolve. */
+  buildActivatedSkills(input: ClaudeInstructionInput & { activatedSkillPaths: readonly string[] }): Promise<string | null>;
+  /** Admit pending agent context at an input boundary; live turns receive it through `context.inject`. */
+  collectInputContext(threadId: WorkbenchThreadId, trigger: WorkbenchContextTrigger, signal: AbortSignal): Promise<void>;
   /** The window a profile without a configured window launches with; null keeps Claude's own window. */
   defaultContextWindow(model: string): Promise<number | null>;
   /** Claude's real data root holding native session logs; defaults to the daemon user's root. */
@@ -339,10 +350,16 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       runtime = this.live.get(identity.threadId);
     }
     const content = await claudePromptContent(input.input);
+    const binding = identity.bindings.find(value => value.harness === "claude");
+    if (!binding) throw new Error("Claude thread has no native session identity.");
+    const activatedSkillPaths = collectActivatedSkillPaths(input.input, input.context);
     if (runtime && input.intent !== "newTurn") {
       if ("expectedTurnId" in input && input.expectedTurnId && input.expectedTurnId !== runtime.turnId) {
         throw new Error("Claude steer targeted a different turn.");
       }
+      const steerContent = activatedSkillPaths.length
+        ? await this.withActivatedSkills(content, activatedSkillPaths, await this.instructionInput(identity, binding, input.context))
+        : content;
       const itemId = WorkbenchItemIdSchema.parse(randomUUID());
       const entry = {
         threadId: identity.threadId, turnId: runtime.turnId, itemId, entryKey: itemId,
@@ -352,40 +369,33 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       };
       // Held in canonical history before delivery, so a dying process cannot take the steer with it.
       await this.options.transcript.recordSteer(entry);
-      runtime.steer(entry, content);
+      runtime.steer(entry, steerContent);
+      await this.collectInputContext(identity.threadId, "steer");
       return { kind: "steered" as const, turnId: runtime.turnId };
     }
     if (runtime) throw new Error("Claude turn is already active.");
-    const binding = identity.bindings.find(value => value.harness === "claude");
-    if (!binding) throw new Error("Claude thread has no native session identity.");
     const nativeHistoryExists = Boolean((await this.read(identity.threadId)).turns.at(-1));
     if (nativeHistoryExists && !await getSessionInfo(binding.nativeThreadId, { dir: binding.nativeLocation })) {
       throw new Error("Claude native session history is unavailable for continuation.");
     }
     const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : null;
-    const model = settings?.model ?? null;
     const contextWindow = await this.launchContextWindow(settings);
-    const activatedSkillPaths = [...new Set([
-      ...(input.context?.activatedSkillPaths ?? []),
-      ...input.input.flatMap(part => part.type === "skill" ? [part.path] : []),
-    ])];
-    // Instructions are rebuilt per launch, so an unfinished-turn continuation must replay exactly this context.
-    const turnContext: WorkbenchMessageContext = { ...input.context, activatedSkillPaths };
-    const instructions = await this.options.buildInstructions({
-      cwd: binding.nativeLocation, projectId: identity.projectId, threadId: identity.threadId,
-      model, agentPath: settings?.agentPath ?? null,
-      workflowIds: turnContext.workflowIds ?? [],
-      activatedSkillPaths,
-    });
+    // Instructions are rebuilt per launch, so an unfinished-turn continuation must replay this context. Activated
+    // skills are not replayed: their bodies already sit in native history.
+    const { activatedSkillPaths: _activated, ...turnContext }: WorkbenchMessageContext = input.context ?? {};
+    const instructionInput = this.instructionInputFor(identity, binding, settings, turnContext);
+    const instructions = await this.options.buildInstructions(instructionInput);
     if (!instructions.trim()) throw new Error("Claude managed instructions are unavailable.");
+    const promptContent = await this.withActivatedSkills(content, activatedSkillPaths, instructionInput);
     const hasQuestionnaireResponse = toWorkbenchThreadUserInput(input.input).some(isWorkbenchQuestionnaireResponsePart);
     const workingStatusInPrompt = entry?.entryKind === "thread" && entry.lifecycle.kind === "working"
       || hasQuestionnaireResponse;
     const managedPrompt = workingStatusInPrompt
       ? `${instructions}\n\n${WORKBENCH_THREAD_WORKING_STATUS_MESSAGE}` : instructions;
     const sdkContent = workingStatusInPrompt
-      ? prefixClaudePrompt(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE, content) : content;
+      ? prefixClaudePrompt(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE, promptContent) : promptContent;
+    const { model } = instructionInput;
     const executable = this.options.resolveExecutable?.() ?? claudeExecutable();
     const usage = (await this.options.transcript.readContextUsage(identity.threadId))?.tokenUsage ?? null;
     // Earlier turns a reload killed never settled their usage; the log still has their calls.
@@ -459,6 +469,8 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     this.completedTurns.delete(identity.threadId);
     this.live.set(identity.threadId, live);
     this.scopes.set(scope, live);
+    // The registered runtime takes injected context ahead of its first prompt.
+    await this.collectInputContext(identity.threadId, "start");
     const started = await live.start(sdkContent);
     this.track(started.task);
     const turn = (await this.read(identity.threadId)).turns.find(value => value.id === turnId);
@@ -535,11 +547,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     if (!binding || !turn) throw new Error("Claude compaction requires an existing native turn.");
     const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : null;
-    const instructions = await this.options.buildInstructions({
-      cwd: binding.nativeLocation, projectId: identity.projectId, threadId: identity.threadId,
-      model: settings?.model ?? null, agentPath: settings?.agentPath ?? null,
-      workflowIds: [], activatedSkillPaths: [],
-    });
+    const instructions = await this.options.buildInstructions(this.instructionInputFor(identity, binding, settings, {}));
     if (!instructions.trim()) throw new Error("Claude managed instructions are unavailable for compaction.");
     const contextWindow = await this.launchContextWindow(settings);
     const fakeEndpoint = process.env.WORKBENCH_CLAUDE_FAKE_ENDPOINT;
@@ -622,4 +630,45 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     if (!identity) throw new Error("Claude thread identity is unavailable.");
     return identity;
   }
+
+  private instructionInputFor(
+    identity: ClaudeIdentity,
+    binding: ClaudeIdentity["bindings"][number],
+    settings: { model?: string | null; agentPath?: string | null } | null | undefined,
+    context: Pick<WorkbenchMessageContext, "workflowIds">,
+  ): ClaudeInstructionInput {
+    return {
+      cwd: binding.nativeLocation, projectId: identity.projectId, threadId: identity.threadId,
+      model: settings?.model ?? null, agentPath: settings?.agentPath ?? null,
+      workflowIds: context.workflowIds ?? [],
+    };
+  }
+
+  private async instructionInput(
+    identity: ClaudeIdentity,
+    binding: ClaudeIdentity["bindings"][number],
+    context: WorkbenchMessageContext | undefined,
+  ) {
+    const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+    return this.instructionInputFor(identity, binding, entry && entry.entryKind !== "draft" ? entry.profile?.settings : null, context ?? {});
+  }
+
+  /** Activated skill bodies join the user message, so they stay in native history across later launches. */
+  private async withActivatedSkills(content: ClaudePromptContent, activatedSkillPaths: readonly string[], input: ClaudeInstructionInput) {
+    if (!activatedSkillPaths.length) return content;
+    const catalog = await this.options.buildActivatedSkills({ ...input, activatedSkillPaths });
+    return catalog ? appendClaudePrompt(content, createWorkbenchActivatedSkillsInput(catalog).text) : content;
+  }
+
+  /** Accepted input is never undone because background context could not be collected. */
+  private async collectInputContext(threadId: WorkbenchThreadId, trigger: WorkbenchContextTrigger) {
+    try {
+      await this.options.collectInputContext(threadId, trigger, this.options.signal);
+    } catch (error) {
+      console.warn("[claude] input-time agent context was not collected",
+        error instanceof Error ? error.message.slice(0, 300) : "unknown failure");
+    }
+  }
 }
+
+type ClaudeIdentity = Awaited<ReturnType<ClaudeThreadOperations["identity"]>>;

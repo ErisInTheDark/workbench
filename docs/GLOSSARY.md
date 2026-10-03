@@ -6,6 +6,7 @@
 | Project Skill | A skill package stored inside the selected project and surfaced to supported harnesses for that project |
 | Project Agent | An agent prompt stored inside `.agents/agents` in the selected project and surfaced in the composer agent selector for that project |
 | Skill Load | The act of reading a skill's instruction file so the agent can apply that skill's workflow to the current task |
+| Active Skill | A skill recorded for one thread after user activation or agent Skill Load, until the user deactivates it |
 | thread state | Durable sidebar state owned by `WorkbenchThreadStateController`. It includes project thread and draft records, project display order, new-thread profile selection, home display order, and pinned layout |
 | thread priority | Sidebar placement state: pinned, main, or snoozed. Settled is lifecycle, not priority. |
 | thread attention | Amber when unsnoozed; purple when snoozed. Existing snooze wake rules apply. |

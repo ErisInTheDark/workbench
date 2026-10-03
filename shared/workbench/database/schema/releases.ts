@@ -66,6 +66,7 @@ const databaseReleases = Object.freeze({
   itemApprovals: release(56, "9b56b657bcbe98b59b26b361d3e50437b8a81e3c59123b91159fe9da47d4ad34"),
   projectStore: release(57, "5155d5e9352aead0b3cd3ecec4f3072045878a9f3735a44f7e8d02f6f2736c11"),
   heldSteers: release(58, "99feffc1bf1c8063bce0da13ecf4789929ee14e1b81bc08d85c9846c5fd2138e"),
+  threadSkills: release(59, "ccc415485c1c7e8a4bbedde78edc0c9e7e302ca6a0a15e9f9b1ea6b88912a06f"),
 });
 
 export default databaseReleases;

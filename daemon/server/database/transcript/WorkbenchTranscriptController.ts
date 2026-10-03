@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchTranscriptItemActivity: one committed admission of new thread items.
- * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions, item-activity publication and disposal.
+ * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions, item-activity and live compaction publication, and disposal.
  */
 import { logError } from "../../process-helpers.ts";
 import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
@@ -76,6 +76,11 @@ function reportItemActivityFailure(error: unknown) {
   logError("workbench-transcript-item-activity", `listener failed: ${message.slice(0, 500)}`);
 }
 
+function reportCompactionFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  logError("workbench-transcript-compaction", `listener failed: ${message.slice(0, 500)}`);
+}
+
 function reportSubscriptionFailure(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   logError(
@@ -141,6 +146,7 @@ export default class WorkbenchTranscriptController {
   readonly #subscriptions: WorkbenchTranscriptSubscriptionController;
   readonly #live = new WorkbenchTranscriptLiveController();
   readonly #itemActivityListeners = new Set<(activity: WorkbenchTranscriptItemActivity) => Promise<void> | void>();
+  readonly #compactionListeners = new Set<(threadId: WorkbenchThreadId) => Promise<void> | void>();
   #liveBoundary: ((operation: () => Promise<void>) => Promise<void>) | null = null;
   #disposed = false;
 
@@ -261,6 +267,7 @@ export default class WorkbenchTranscriptController {
       snapshots: requestsSubscriptionRefresh(observations, context.source),
     });
     this.#publishSettlement(settlement, observations, context.source);
+    this.#publishContextCompactions(observations);
     return settlement;
   }
 
@@ -282,6 +289,12 @@ export default class WorkbenchTranscriptController {
     return () => { this.#itemActivityListeners.delete(listener); };
   }
 
+  /** Observe live completed context compactions after their durable commit; recovery replays never fire. */
+  subscribeContextCompaction(listener: (threadId: WorkbenchThreadId) => Promise<void> | void) {
+    this.#compactionListeners.add(listener);
+    return () => { this.#compactionListeners.delete(listener); };
+  }
+
   acceptLiveUpdate(update: TranscriptLiveUpdate) {
     if (!this.#disposed) this.#live.acceptLiveUpdate(update);
   }
@@ -300,6 +313,21 @@ export default class WorkbenchTranscriptController {
     } catch (error) {
       // Publication failure must never relabel a successful durable commit as a capture gap.
       reportSubscriptionFailure(error);
+    }
+  }
+
+  #publishContextCompactions(observations: readonly WorkbenchTranscriptObservation[]) {
+    if (this.#disposed) return;
+    for (const observation of observations) {
+      if (observation.kind !== "contextCompaction" || observation.phase !== "completed") continue;
+      for (const listener of this.#compactionListeners) {
+        // Listener failure must never relabel a successful durable commit as a capture gap.
+        try {
+          void Promise.resolve(listener(observation.threadId)).catch(reportCompactionFailure);
+        } catch (error) {
+          reportCompactionFailure(error);
+        }
+      }
     }
   }
 

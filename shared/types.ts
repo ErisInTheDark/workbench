@@ -139,6 +139,7 @@
  * - WorkbenchControls: top-level Workbench command surface.
  * - WorkbenchThreadGoalSnapshot: thread goal state.
  * - WorkbenchThreadGoalControls: thread goal command surface.
+ * - WorkbenchThreadSkillSnapshot/WorkbenchThreadSkillControls: thread active-skill state and command surface.
  * - WorkbenchBindings: Workbench UI bindings contract.
  * - FilePayload: file-read payload.
  * - CreateEntryPayload: project entry creation payload.
@@ -1232,6 +1233,7 @@ export interface WorkbenchControls {
   threadAction: (threadId: WorkbenchThreadId, intent: WorkbenchThreadIntent) => Promise<boolean>;
   setThreadTitle: (request: WorkbenchThreadTitleRequest) => Promise<string>;
   threadGoals: WorkbenchThreadGoalControls;
+  threadSkills: WorkbenchThreadSkillControls;
   submitPendingUserInputRequest: (
     threadId: string,
     response: WorkbenchUserInputResponse,
@@ -1313,6 +1315,21 @@ export interface WorkbenchThreadGoalControls {
   refresh: (threadId: string) => Promise<void>;
   subscribe: (threadId: string, listener: () => void) => () => void;
   updateObjective: (threadId: string, objective: string) => Promise<void>;
+}
+
+export interface WorkbenchThreadSkillSnapshot {
+  error: string | null;
+  isLoaded: boolean;
+  /** Skill paths whose deactivation is awaiting the daemon. */
+  pendingPaths: readonly string[];
+  skills: readonly import("./workbench/thread/thread-skill-state.ts").WorkbenchThreadSkill[];
+}
+
+export interface WorkbenchThreadSkillControls {
+  deactivate: (threadId: string, path: string) => Promise<void>;
+  getSnapshot: (threadId: string) => WorkbenchThreadSkillSnapshot;
+  load: (threadId: string) => Promise<void>;
+  subscribe: (threadId: string, listener: () => void) => () => void;
 }
 
 export interface WorkbenchBindings {

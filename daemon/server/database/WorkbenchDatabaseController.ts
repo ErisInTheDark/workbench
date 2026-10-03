@@ -8,6 +8,7 @@ import { Worker } from "node:worker_threads";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { LegacyDiffArtifactReference } from "./git/WorkbenchLegacyDiffArtifactStore";
 import type { ThreadGitSelectionCommand } from "./git/WorkbenchThreadGitSelectionStore";
+import type { ThreadSkillCommand } from "./skills/WorkbenchThreadSkillStore";
 import type { ProjectStoreCommand } from "./store/WorkbenchProjectStoreRepository";
 import type { TranscriptAssetRead, TranscriptAssetWrite } from "./transcript/WorkbenchTranscriptAssetStore";
 import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
@@ -290,6 +291,13 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     await this.start();
     const response = await this.#request({ type: "threadGitSelection", command });
     if (response.type !== "threadGitSelection") throw new WorkbenchDatabaseFailure(`Unexpected thread Git selection response: ${response.type}`);
+    return response.result;
+  }
+
+  async executeThreadSkills(command: ThreadSkillCommand) {
+    await this.start();
+    const response = await this.#request({ type: "threadSkills", command });
+    if (response.type !== "threadSkills") throw new WorkbenchDatabaseFailure(`Unexpected thread skill response: ${response.type}`);
     return response.result;
   }
 

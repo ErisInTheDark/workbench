@@ -335,6 +335,7 @@ export default memo(function ThreadViewContent ({
   );
   const transcriptSource = activeThreadController.state.transcript;
   const threadGoalControls = threads.goals;
+  const threadSkillControls = threads.skills;
   const threadScrollViewport = useThreadScrollViewportContext();
   const rateLimits = activeThreadController.state.rateLimits;
   const [areSettledSubagentsVisible, setAreSettledSubagentsVisible] = useState(false);
@@ -1274,7 +1275,7 @@ export default memo(function ThreadViewContent ({
         ) : null}
         {activeThread && !isDraftThreadView ? <ThreadErrorCard thread={activeThread} /> : null}
         {activeThread && activeThreadController.state.entry && threadGoalControls ? (
-          <ThreadGoalControl controls={threadGoalControls} thread={activeThread}>
+          <ThreadGoalControl controls={threadGoalControls} skillControls={isDraftThreadView ? null : threadSkillControls} thread={activeThread}>
             {agentTabs}
           </ThreadGoalControl>
         ) : agentTabs ? (

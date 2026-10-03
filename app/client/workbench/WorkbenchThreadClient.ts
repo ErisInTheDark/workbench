@@ -37,7 +37,7 @@ import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
 import { getCurrentInProgressTurn, getCurrentTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
-import type { ThreadPayload, ThreadSummary, WorkbenchBrowseResultEntry, WorkbenchComposerSettings, WorkbenchHarness, WorkbenchListModelsOptions, WorkbenchModelOption, WorkbenchPendingUserInputRequest, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchQuestionnaireHistoryEntry, WorkbenchReadThreadOptions, WorkbenchSendThreadMessageOptions, WorkbenchSteerHistoryEntry, WorkbenchSubagentSummary, WorkbenchSubmitUserInputRequestOptions, WorkbenchThreadGoalControls, WorkbenchThreadRuntimeSnapshot, WorkbenchThreadTurnHistoryEntry, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
+import type { ThreadPayload, ThreadSummary, WorkbenchBrowseResultEntry, WorkbenchComposerSettings, WorkbenchHarness, WorkbenchListModelsOptions, WorkbenchModelOption, WorkbenchPendingUserInputRequest, WorkbenchProjectOption, WorkbenchProjectRoot, WorkbenchQuestionnaireHistoryEntry, WorkbenchReadThreadOptions, WorkbenchSendThreadMessageOptions, WorkbenchSteerHistoryEntry, WorkbenchSubagentSummary, WorkbenchSubmitUserInputRequestOptions, WorkbenchThreadGoalControls, WorkbenchThreadSkillControls, WorkbenchThreadRuntimeSnapshot, WorkbenchThreadTurnHistoryEntry, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 import { normalizeWorkbenchAgentPath } from "workbench-shared/workbench/agent-paths";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import WorkbenchTranscriptClient from "./database/transcript/WorkbenchTranscriptClient";
@@ -52,6 +52,7 @@ import ThreadDocumentController, {
   type ThreadStablePreferences,
 } from "./thread/ThreadDocumentController";
 import ThreadGoalController from "./thread/ThreadGoalController";
+import ThreadSkillController from "./thread/ThreadSkillController";
 import ThreadMessageAdmissionController from "./thread/ThreadMessageAdmissionController";
 import ThreadOptimisticInputStore from "./thread/ThreadOptimisticInputStore";
 import type { WorkbenchThreadIdentityResolution, WorkbenchThreadIdentityResolveRequest } from "workbench-shared/workbench/thread/workbench-thread-identity";
@@ -189,6 +190,7 @@ interface WorkbenchThreadClient {
   resendSteer: (threadId: string, itemId: string) => Promise<void>;
   dismissSteer: (threadId: string, itemId: string) => Promise<void>;
   threadGoals: WorkbenchThreadGoalControls;
+  threadSkills: WorkbenchThreadSkillControls;
   transcripts: WorkbenchTranscriptClient;
   submitPendingUserInputRequest: (
     threadId: string,
@@ -620,6 +622,10 @@ function WorkbenchThreadClient(
     clear: params => daemon.threads.goal.clear(params),
     get: params => daemon.threads.goal.read(params),
     set: params => daemon.threads.goal.update(params),
+  });
+  const threadSkills = new ThreadSkillController({
+    read: params => daemon.threads.skills.read(params),
+    deactivate: params => daemon.threads.skills.deactivate(params),
   });
   const listeners = new Set<WorkbenchThreadListener>();
   const account = new WorkbenchAccountClient({
@@ -3822,6 +3828,7 @@ function WorkbenchThreadClient(
         });
       case "thread/goal/updated":
       case "thread/goal/cleared":
+      case "thread/skills/updated":
       case "item/plan/delta":
       case "item/fileChange/outputDelta":
       case "questionnaire/requested":
@@ -4435,6 +4442,9 @@ function WorkbenchThreadClient(
     if (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared") {
       threadGoals.observeNotification(notification);
     }
+    if (notification.method === "thread/skills/updated") {
+      threadSkills.observeNotification(notification);
+    }
 
     if (notification.method === "questionnaire/requested") {
       const providerRequests = providerPendingUserInputRequestsByHarness.get(harness) ?? new Map<string, WorkbenchPendingUserInputRequest>();
@@ -4699,6 +4709,7 @@ function WorkbenchThreadClient(
     listeners.clear();
     transcripts.dispose();
     threadGoals.dispose();
+    threadSkills.dispose();
     account.dispose();
     modelUpdateListeners.clear();
     textPresentation.dispose();
@@ -4759,6 +4770,7 @@ function WorkbenchThreadClient(
     resendSteer,
     dismissSteer,
     threadGoals,
+    threadSkills,
     transcripts,
     submitPendingUserInputRequest,
     setCurrentThreadAgent,

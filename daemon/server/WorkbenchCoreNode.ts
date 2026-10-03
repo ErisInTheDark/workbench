@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchCoreNode: own core state, Git, questionnaire, harness, project, orphaned-turn settlement, unfinished-turn continuation, and supervisor registrations plus direct child declarations.
+ * - default WorkbenchCoreNode: own core state, Git, thread skills, questionnaire, harness, project, orphaned-turn settlement, unfinished-turn continuation, and supervisor registrations plus direct child declarations.
  * Local helpers: construct reloadable modules, harness capabilities, and the core feature lifecycle.
  */
 import * as project from "./lib/project";
@@ -43,6 +43,7 @@ import WorkbenchHarnessController from "./WorkbenchHarnessController";
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
+import WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
 import WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
 import WorkbenchUnfinishedTurnController from "./WorkbenchUnfinishedTurnController";
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
@@ -93,7 +94,7 @@ function createWorkbenchCoreFeature(
   reloadDirt: WorkbenchReloadDirtController,
   database: DaemonDatabaseRegistration,
   commandApprovals: DaemonRuntimeObjects["commandApprovals"],
-  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps" | "record" | "subscribeItemActivity">,
+  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps" | "record" | "subscribeItemActivity" | "subscribeContextCompaction">,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
   turnRecovery: DaemonRuntimeObjects["turnRecovery"],
@@ -122,8 +123,49 @@ function createWorkbenchCoreFeature(
   let threadState: WorkbenchThreadStateFeature | null = null;
   let stats: WorkbenchStatsController | null = null;
   const providers = new WorkbenchProviderDispatcher(run);
+  const threadSkillTarget = async (threadId: string) => {
+    const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+    const harness = installedProviderKeys.find(key => key === identity?.bindings[0]?.harness);
+    return identity && harness ? { identity, harness } : null;
+  };
+  const threadSkills = new WorkbenchThreadSkillsController({
+    store: command => database.executeThreadSkills(command),
+    target: async threadId => {
+      const resolved = await threadSkillTarget(threadId);
+      return resolved ? { harness: resolved.harness, threadId: resolved.identity.threadId } : null;
+    },
+    resolve: async (target, paths) => {
+      const resolved = await threadSkillTarget(target.threadId);
+      if (!resolved) return [];
+      const owner = await projectCatalog.resolveProjectById(resolved.identity.projectId);
+      return workbenchLibrary.resolveWorkbenchActivatedSkills(await project.listProjectSkillDefinitionsFromRoot(owner.rootPath), paths);
+    },
+    buildCatalog: async (target, paths) => {
+      const resolved = await threadSkillTarget(target.threadId);
+      if (!resolved) return null;
+      const owner = await projectCatalog.resolveProjectById(resolved.identity.projectId);
+      const profile = await requireThreadState().controller.readComposerProfileTarget({
+        harness: target.harness, kind: "thread", projectId: owner.id, threadId: resolved.identity.threadId,
+      });
+      return workbenchPromptFiles.buildWorkbenchManagedThreadActivatedSkills({
+        cwd: owner.rootPath, projectId: owner.id, threadId: resolved.identity.threadId,
+        roots: owner.roots.map(root => ({
+          id: root.id, name: root.name, relativePath: root.relativePath ?? ".",
+          rootPath: root.rootPath, isPrimary: root.rootPath === owner.rootPath,
+        })),
+        harness: target.harness, managedThread: true, model: profile?.settings.model ?? null,
+        activatedSkillPaths: paths, workbenchOrigin: context.localDaemonOrigin,
+        readInstructionTools: () => run("mcp", mcp => mcp.listInstructionTools(), "Thread skill instruction tool catalogue"),
+      }, () => settings.readLocalCapabilities());
+    },
+    publish: (target, text) => agentContext.publish(target, text),
+    broadcast: (target, skills) => context.broadcastProviderNotification(target.harness, {
+      method: "thread/skills/updated", params: { threadId: target.threadId, skills },
+    }),
+    warn: message => { console.warn("[thread-skills]", message.slice(0, 500)); },
+  });
   const agentContext = new WorkbenchAgentContextController({
-    sources: [],
+    sources: [threadSkills.contextSource],
     inject: async (target, text, signal) => {
       if (!lease.isCurrent()) throw new Error("Agent context generation has retired.");
       return await providers.get(target.harness).context?.inject({ threadId: target.threadId, text }, signal) ?? "unsupported";
@@ -300,10 +342,15 @@ function createWorkbenchCoreFeature(
     recordOutcome: entry => database.recordApprovalOutcome(entry),
     resolveProject: async threadId => (await threadIdentity.resolve({ threadId }))?.projectId ?? null,
   }, approvalHandoff);
+  const recordSkillActivations = (threadId: string, paths: readonly string[]) => threadSkills.recordActivations(threadId, paths, "user");
+  const unsubscribeCompaction = transcript.subscribeContextCompaction(async threadId => {
+    if (lease.isCurrent()) await threadSkills.observeCompaction(threadId);
+  });
   const questionnaireResponses = new WorkbenchQuestionnaireResponseController({
     approvals,
     harnesses,
     providers,
+    recordSkillActivations,
     resolveLatestTurn: async ({ projectId, threadId }) => {
       const snapshot = await transcript.read({ threadId, turnLimit: 1 });
       if (!snapshot) return null;
@@ -387,6 +434,7 @@ function createWorkbenchCoreFeature(
     settlement: turnSettlement,
     providers, projects: projectCatalog, identities: threadIdentity,
     profiles: threadState, state: threadState.controller,
+    skills: threadSkills, recordSkillActivations,
     warn: message => logThreadStateWarning(message),
   });
   const launches = new WorkbenchThreadLaunchController({
@@ -472,7 +520,7 @@ function createWorkbenchCoreFeature(
     agentContext,
     approvals,
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, threadGit, threadState, threadActions, transcriptReader, transcriptReconciliation,
+    browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, threadGit, threadState, threadActions, threadSkills, transcriptReader, transcriptReconciliation,
     providerObservations: {
       observe: async (harness, facts) => {
         if (!lease.isCurrent()) return null;
@@ -508,6 +556,7 @@ function createWorkbenchCoreFeature(
     },
     beginRuntimeDrain: () => { launches.beginRuntimeDrain(); messages.beginRuntimeDrain(); subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
+      unsubscribeCompaction();
       unfinishedTurns.dispose();
       reportPhase("orphaned turn sweep disposal");
       await turnSettlement.dispose();

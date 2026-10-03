@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ClaudeBridgeNode: own reloadable Claude turn logic, lifecycle publication, native edit claim gating, model configuration probes, and canonical transcript adapter while preserving the parent harness's live processes.
+ * - default ClaudeBridgeNode: own reloadable Claude turn logic, managed prompt and activated-skill builds, input-time agent context, lifecycle publication, native edit claim gating, model configuration probes, and canonical transcript adapter while preserving the parent harness's live processes.
  */
 import ReloadableNode from "../../ReloadableNode";
 import type { DaemonProcessContext } from "../../daemon-process-context";
@@ -12,7 +12,7 @@ import {
 } from "../../lib/workbench/instructions/WorkbenchPromptFiles";
 import ClaudeConfigurationController from "./ClaudeConfigurationController";
 import ClaudeProviderNode from "./ClaudeProviderNode";
-import ClaudeThreadOperations, { type ClaudeTurnHandoff } from "./ClaudeThreadOperations";
+import ClaudeThreadOperations, { type ClaudeInstructionInput, type ClaudeTurnHandoff } from "./ClaudeThreadOperations";
 import ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 
 interface ClaudeBridgeHandoff {
@@ -29,6 +29,19 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const settings = new WorkbenchServerSettings(build.get("database"));
     // Turn launches resolve default windows here; the provider definition reads the same probes for model choices.
     const configuration = new ClaudeConfigurationController();
+    const promptContext = async (input: ClaudeInstructionInput & { activatedSkillPaths?: readonly string[] }) => {
+      const project = await build.get("projectCatalog").resolveProjectById(input.projectId);
+      return {
+        ...input,
+        roots: project.roots.map(root => ({
+          id: root.id, name: root.name, relativePath: root.relativePath ?? ".",
+          rootPath: root.rootPath, isPrimary: root.rootPath === project.rootPath,
+        })),
+        harness: "claude" as const, managedThread: true,
+        readInstructionTools: () => build.run("mcp", mcp => mcp.listInstructionTools(), "Claude instruction tool catalogue"),
+        workbenchOrigin: context.localDaemonOrigin,
+      };
+    };
     const transcript = new ClaudeTranscriptAdapter({
       threads: build.get("threadIdentity"),
       items: build.get("transcriptIdentity"),
@@ -49,24 +62,18 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       signal: lifetime.signal,
       defaultContextWindow: model => configuration.defaultContextWindow(model),
       buildInstructions: async input => {
-        const project = await build.get("projectCatalog").resolveProjectById(input.projectId);
-        const promptContext = {
-          ...input,
-          roots: project.roots.map(root => ({
-            id: root.id, name: root.name, relativePath: root.relativePath ?? ".",
-            rootPath: root.rootPath, isPrimary: root.rootPath === project.rootPath,
-          })),
-          harness: "claude" as const, managedThread: true,
-          readInstructionTools: () => build.run("mcp", mcp => mcp.listInstructionTools(), "Claude instruction tool catalogue"),
-          workbenchOrigin: context.localDaemonOrigin,
-        };
-        const [instructions, activatedSkills] = await Promise.all([
-          buildWorkbenchManagedThreadInstructions(promptContext, () => settings.readLocalCapabilities()),
-          buildWorkbenchManagedThreadActivatedSkills(promptContext, () => settings.readLocalCapabilities()),
-        ]);
-        return [instructions.baseInstructions, instructions.developerInstructions, activatedSkills]
+        const instructions = await buildWorkbenchManagedThreadInstructions(
+          await promptContext(input), () => settings.readLocalCapabilities(),
+        );
+        return [instructions.baseInstructions, instructions.developerInstructions]
           .filter((part): part is string => Boolean(part?.trim())).join("\n\n");
       },
+      buildActivatedSkills: async input => buildWorkbenchManagedThreadActivatedSkills(
+        await promptContext(input), () => settings.readLocalCapabilities(),
+      ),
+      collectInputContext: (threadId, trigger, signal) => (
+        build.get("agentContext").collect({ harness: "claude", threadId }, trigger, signal)
+      ),
     });
     const gitArc = build.get("gitArc");
     let detachHooks: (() => Promise<void>) | null = null;
@@ -124,7 +131,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   provides: ["claudeThreadOperations", "claudeTranscriptAdapter", "claudeConfiguration"],
   requires: [
     "claudeSessions", "gitArc", "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity", "database",
-    "threadState", "transcript", "transcriptReader", "providerObservations",
+    "threadState", "transcript", "transcriptReader", "providerObservations", "agentContext",
   ],
   safeAll: true,
   scope: "server:claude",

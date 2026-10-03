@@ -2,7 +2,7 @@
  * Exports:
  * - OpenCodeManagedSessionContext: provider-local instruction refresh input.
  * - OpenCodeManagedSessionControllerOptions: injectable managed-session boundaries.
- * - default OpenCodeManagedSessionController: own OpenCode session marking, native command denial, and fresh instructions.
+ * - default OpenCodeManagedSessionController: own OpenCode session marking, native command denial, fresh instructions, and activated skill builds.
  */
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import type { WorkbenchInstructionTool } from "../../lib/workbench/instructions/instruction-tool-reference";
@@ -59,13 +59,16 @@ export default class OpenCodeManagedSessionController {
     };
   }
 
-  async refresh(input: OpenCodeManagedSessionContext) {
+  /**
+   * Replace the session's managed instructions. Activated skill bodies are returned for the prompt instead: they
+   * must stay in conversation history, not in instructions the next refresh replaces.
+   */
+  async refresh(input: OpenCodeManagedSessionContext): Promise<{ activatedSkills: string | null }> {
     const context = { ...input, harness: "opencode" as const };
     const built = await (this.options.build ?? (value => this.build(value)))(context);
     const value = [
       built.baseInstructions,
       built.developerInstructions,
-      built.activatedSkills,
       input.workingStatus ? WORKBENCH_THREAD_WORKING_STATUS_MESSAGE : null,
     ].filter((part): part is string => Boolean(part?.trim())).join("\n\n");
     const session = (await this.options.acquire()).session;
@@ -78,6 +81,7 @@ export default class OpenCodeManagedSessionController {
       key: "workbench",
       value,
     });
+    return { activatedSkills: built.activatedSkills?.trim() ? built.activatedSkills : null };
   }
 
   private async build(context: OpenCodeManagedSessionContext & { harness: "opencode" }): Promise<BuiltInstructions> {

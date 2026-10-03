@@ -1,14 +1,15 @@
 /*
  * Exports:
- * - default ThreadGoalControl: render the Codex goal flag, objective card, compact editor, and clear confirmation around an agent-tab row.
+ * - default ThreadGoalControl: render the Codex goal flag, objective card, compact editor, and clear confirmation around an active-skill and agent-tab row.
  */
 "use client";
 
 import { useCallback, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
 
-import type { ThreadPayload, WorkbenchThreadGoalControls } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchThreadGoalControls, WorkbenchThreadSkillControls } from "workbench-shared/types";
 import { FlagIcon } from "../workbench-icons";
 import PlaintextEditable from "./PlaintextEditable";
+import ThreadSkillPills from "./ThreadSkillPills";
 
 const MAX_GOAL_OBJECTIVE_LENGTH = 4_000;
 
@@ -42,10 +43,13 @@ const quietButtonClassName = "rounded-lg px-2.5 py-1.5 text-[0.76em] font-medium
 export default function ThreadGoalControl ({
   children,
   controls,
+  skillControls,
   thread,
 }: {
   children?: ReactNode;
   controls: WorkbenchThreadGoalControls;
+  /** Active skill pills sit between the goal flag and the agent tabs. */
+  skillControls?: WorkbenchThreadSkillControls | null;
   thread: Pick<ThreadPayload, "id">;
 }) {
   const panelId = useId();
@@ -84,12 +88,23 @@ export default function ThreadGoalControl ({
     if (!isEditing) setDraft(goal.objective);
   }, [goal?.objective, isEditing, thread.id]);
 
+  const skills = skillControls
+    ? (separators: { before: boolean; after: boolean }) => (
+      <ThreadSkillPills controls={skillControls} separatorAfter={separators.after} separatorBefore={separators.before} threadId={thread.id} />
+    )
+    : () => null;
+
   if (!snapshot.isLoaded || !goal) {
-    return children ? (
-      <div className="mt-6">
-        <div className="flex flex-wrap items-center gap-0.5">{children}</div>
+    if (!children && !skillControls) return null;
+    // Pills render nothing for a thread without active skills; the row then collapses with its margin.
+    return (
+      <div className="mt-6 has-[>div:empty]:hidden">
+        <div className="flex flex-wrap items-center gap-2">
+          {skills({ before: false, after: Boolean(children) })}
+          {children}
+        </div>
       </div>
-    ) : null;
+    );
   }
 
   const save = async () => {
@@ -135,6 +150,7 @@ export default function ThreadGoalControl ({
         >
           <FlagIcon size={16} />
         </button>
+        {skills({ before: true, after: false })}
         {children ? <span className="text-[0.84em] text-fg/muted" aria-hidden="true">|</span> : null}
         {children}
       </div>

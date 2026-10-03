@@ -11,6 +11,7 @@
  * - listWorkbenchLibraryInstructions: discover cached universal Workbench instruction packs. Keywords: instructions, universal, bootstrap, fingerprint.
  * - WorkbenchLibraryBootstrapInstructionsOptions: controls duplicate instruction-pack filtering. Keywords: bootstrap, dedupe, codex.
  * - buildWorkbenchLibraryBootstrapInstructions/buildWorkbenchSkillManifestInstructions/buildWorkbenchSkillCatalog/buildWorkbenchActivatedSkillCatalog: build harness skill instructions, compact manifest catalogs, activated skill bodies, and universal instruction content. Keywords: bootstrap, skills, catalog.
+ * - resolveWorkbenchActivatedSkills: canonical path and catalog name for each active skill selected by path.
  */
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -501,23 +502,34 @@ export async function buildWorkbenchSkillCatalog(
   )).join("\n");
 }
 
-export async function buildWorkbenchActivatedSkillCatalog(
-  projectSkills: readonly WorkbenchSkillDefinition[] = [],
-  activatedSkillPaths: readonly string[] = [],
+async function listActivatedSkillDefinitions(
+  projectSkills: readonly WorkbenchSkillDefinition[],
+  activatedSkillPaths: readonly string[],
 ) {
   const activatedPaths = new Set(
     activatedSkillPaths
       .map(normalizeSkillPathIdentity)
       .filter(Boolean),
   );
-  if (!activatedPaths.size) {
-    return null;
-  }
-
+  if (!activatedPaths.size) return [];
   const activeSkills = await listActiveWorkbenchSkillDefinitions(projectSkills);
-  const activatedSkills = activeSkills.filter((skill) => (
-    activatedPaths.has(normalizeSkillPathIdentity(skill.path))
-  ));
+  return activeSkills.filter((skill) => activatedPaths.has(normalizeSkillPathIdentity(skill.path)));
+}
+
+/** Canonical path and catalog name of each active skill the paths select; unknown paths drop out. */
+export async function resolveWorkbenchActivatedSkills(
+  projectSkills: readonly WorkbenchSkillDefinition[],
+  activatedSkillPaths: readonly string[],
+) {
+  return (await listActivatedSkillDefinitions(projectSkills, activatedSkillPaths))
+    .map(skill => ({ path: skill.path, name: createSkillShadowKey(skill) }));
+}
+
+export async function buildWorkbenchActivatedSkillCatalog(
+  projectSkills: readonly WorkbenchSkillDefinition[] = [],
+  activatedSkillPaths: readonly string[] = [],
+) {
+  const activatedSkills = await listActivatedSkillDefinitions(projectSkills, activatedSkillPaths);
   if (!activatedSkills.length) {
     return null;
   }

@@ -75,6 +75,7 @@ import type { LegacyDiffArtifactReference } from "./git/WorkbenchLegacyDiffArtif
 import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
 import type { ThreadGitSelectionCommand, ThreadGitSelectionResult } from "./git/WorkbenchThreadGitSelectionStore.ts";
 import type { ProjectStoreCommand, ProjectStoreResult } from "./store/WorkbenchProjectStoreRepository.ts";
+import type { ThreadSkillCommand, ThreadSkillState } from "./skills/WorkbenchThreadSkillStore.ts";
 
 export type WorkbenchDatabaseControllerState = "starting" | "ready" | "suspended" | "failed" | "closed";
 
@@ -89,6 +90,7 @@ export interface WorkbenchDatabaseMutationResult {
 
 export type WorkbenchDatabaseRequestPayload =
   | { type: "threadGitSelection"; command: ThreadGitSelectionCommand }
+  | { type: "threadSkills"; command: ThreadSkillCommand }
   | { type: "projectStore"; command: ProjectStoreCommand }
   | { type: "readLegacyDiffArtifact"; input: LegacyDiffArtifactReference }
   | { type: "recordApprovalOutcome"; entry: WorkbenchApprovalOutcomeEntry }
@@ -198,6 +200,7 @@ export function isWorkbenchDatabaseReadRequest(request: WorkbenchDatabaseRequest
 
 export type WorkbenchDatabaseResponse =
   | { id: number; type: "threadGitSelection"; result: ThreadGitSelectionResult }
+  | { id: number; type: "threadSkills"; result: ThreadSkillState }
   | { id: number; type: "projectStore"; result: ProjectStoreResult }
   | { id: number; type: "legacyDiffArtifact"; diff: string | null }
   | { id: number; type: "approvalOutcomes"; entries: WorkbenchApprovalOutcomeEntry[] }

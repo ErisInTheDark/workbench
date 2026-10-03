@@ -1,6 +1,7 @@
-/* No production exports. Tests protect Claude model-use admission, post-acceptance failure reporting, launch context windows, unfinished-turn continuation, and turn liveness attestation. */
+/* No production exports. Tests protect Claude model-use admission, post-acceptance failure reporting, launch context windows, unfinished-turn continuation, conversation skill delivery, input-time agent context, and turn liveness attestation. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
 import { isWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
@@ -15,8 +16,23 @@ const selection = { kind: "custom" as const, settings: {
   reasoningEffort: null, serviceTier: null,
 } };
 
+interface Captured {
+  /** Each launch's custom system prompt. */
+  systemPrompts: string[];
+  /** Text of every user message pushed into a live session, in order. */
+  pushed: string[];
+  /** Input-context collection triggers, in order. */
+  collected: string[];
+}
+
+function messageText(content: unknown) {
+  if (typeof content === "string") return content;
+  return (content as { type: string; text?: string }[]).map(block => block.text ?? "").join("\n");
+}
+
 function fixture({
   failNative = false, failUsage = false, usage, contextWindowTokens, launches = [], windows = [], defaults = [],
+  captured, hold,
 }: {
   failNative?: boolean;
   failUsage?: boolean;
@@ -28,6 +44,9 @@ function fixture({
   windows?: (number | null)[];
   /** Models whose default window was looked up. */
   defaults?: string[];
+  captured?: Captured;
+  /** Keeps launched turns live until it resolves. */
+  hold?: Promise<void>;
 }) {
   let reads = 0;
   const profile = contextWindowTokens === undefined ? selection
@@ -37,12 +56,17 @@ function fixture({
     createQuery: ({ options }) => {
       if (failNative) throw new Error("native start failed");
       launches.push(options?.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW);
+      const systemPrompt = options?.systemPrompt;
+      if (systemPrompt && typeof systemPrompt === "object" && "prompt" in systemPrompt) {
+        captured?.systemPrompts.push(String(systemPrompt.prompt));
+      }
       return {
         async *[Symbol.asyncIterator]() {
           yield {
             type: "assistant", parent_tool_use_id: null,
             message: { role: "assistant", content: [], usage: { input_tokens: 1, output_tokens: 1 } },
           };
+          await hold;
           yield { type: "result", subtype: "success", is_error: false, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage: {} };
         },
         close: () => undefined,
@@ -50,6 +74,22 @@ function fixture({
       } as never;
     },
   });
+  if (captured) {
+    const launch = sessions.launch.bind(sessions);
+    Object.assign(sessions, {
+      launch: async (...args: Parameters<ClaudeSessionHost["launch"]>) => {
+        const session = await launch(...args);
+        const push = session.push.bind(session);
+        Object.assign(session, {
+          push: (message: SDKUserMessage) => {
+            captured.pushed.push(messageText(message.message.content));
+            push(message);
+          },
+        });
+        return session;
+      },
+    });
+  }
   const owner = new ClaudeThreadOperations({
     daemonOrigin: "http://127.0.0.1:1",
     sessions,
@@ -64,6 +104,10 @@ function fixture({
       return 1_000_000;
     },
     buildInstructions: async () => "instructions",
+    buildActivatedSkills: async ({ activatedSkillPaths }: { activatedSkillPaths: readonly string[] }) => (
+      activatedSkillPaths.length ? activatedSkillPaths.map(path => `<skill path="${path}" />`).join("\n") : null
+    ),
+    collectInputContext: async (_threadId: string, trigger: string) => { captured?.collected.push(trigger); },
     state: { controller: {
       getCanonicalThreadEntry: async () => ({
         entryKind: "thread", lifecycle: { kind: "needsAttention" }, profile,
@@ -75,6 +119,7 @@ function fixture({
     } },
     transcript: {
       startTurn: async () => turnId,
+      recordSteer: async () => undefined,
       settleTurn: async () => undefined,
       recordAssistant: async () => undefined,
       readContextUsage: async () => null,
@@ -144,7 +189,43 @@ test("an unfinished Claude turn continues once with the hidden input and the con
   assert.equal(continued[0]!.intent, "newTurn");
   assert.equal(isWorkbenchUnfinishedTurnInput(continued[0]!.input as never), true);
   assert.deepEqual(continued[0]!.context?.workflowIds, ["default"]);
-  assert.deepEqual(new Set(continued[0]!.context?.activatedSkillPaths), new Set(["skills/react", "skills/review"]));
+  // The skill bodies already sit in native history; replaying them would duplicate them.
+  assert.equal(continued[0]!.context?.activatedSkillPaths, undefined);
+});
+
+test("Claude delivers activated skills in the new turn's conversation content, not its per-launch system prompt", async () => {
+  const captured: Captured = { systemPrompts: [], pushed: [], collected: [] };
+  const owner = fixture({ usage: [], captured });
+  await owner.submit({ threadId, clientMessageId: "message", intent: "newTurn",
+    input: [{ type: "text", text: "hello", text_elements: [] }, { type: "skill", name: "review", path: "skills/review" }],
+    context: { activatedSkillPaths: ["skills/react"] } });
+  await owner.dispose();
+  assert.equal(captured.systemPrompts.length, 1);
+  assert.doesNotMatch(captured.systemPrompts[0]!, /wb:activated-skills|skills\/re/u);
+  const skillMessages = captured.pushed.filter(text => text.includes("<wb:activated-skills>"));
+  assert.equal(skillMessages.length, 1);
+  assert.match(skillMessages[0]!, /skills\/react/u);
+  assert.match(skillMessages[0]!, /skills\/review/u);
+  assert.match(skillMessages[0]!, /hello/u);
+  assert.deepEqual(captured.collected, ["start"]);
+});
+
+test("a Claude steer delivers the skills it activates and collects pending agent context", async () => {
+  const captured: Captured = { systemPrompts: [], pushed: [], collected: [] };
+  const release = Promise.withResolvers<void>();
+  const owner = fixture({ usage: [], captured, hold: release.promise });
+  await owner.submit({ threadId, clientMessageId: "message", intent: "newTurn",
+    input: [{ type: "text", text: "hello", text_elements: [] }] });
+  const steered = await owner.submit({ threadId, clientMessageId: "steer", intent: "steer", expectedTurnId: turnId,
+    input: [{ type: "text", text: "also this", text_elements: [] }, { type: "skill", name: "review", path: "skills/review" }] });
+  release.resolve();
+  await (Reflect.get(owner, "live") as Map<string, { whenSettled(): Promise<void> }>).get(threadId)?.whenSettled();
+  await owner.dispose();
+  assert.equal(steered.kind, "steered");
+  const steer = captured.pushed.find(text => text.includes("also this"));
+  assert.ok(steer);
+  assert.match(steer, /<wb:activated-skills>[\s\S]*skills\/review/u);
+  assert.deepEqual(captured.collected, ["start", "steer"]);
 });
 
 test("a Claude turn is live only while this daemon runs it or still owns its transcript scope", async () => {

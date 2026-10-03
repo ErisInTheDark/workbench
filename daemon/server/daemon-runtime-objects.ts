@@ -135,6 +135,7 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   recordApprovalOutcome: import("./database/WorkbenchDatabaseController").default["recordApprovalOutcome"];
   readApprovalOutcomes: import("./database/WorkbenchDatabaseController").default["readApprovalOutcomes"];
   executeThreadGitSelection: import("./database/WorkbenchDatabaseController").default["executeThreadGitSelection"];
+  executeThreadSkills: import("./database/WorkbenchDatabaseController").default["executeThreadSkills"];
   executeProjectStore: import("./database/WorkbenchDatabaseController").default["executeProjectStore"];
   reserveThreadLaunch: import("./database/WorkbenchDatabaseController").default["reserveThreadLaunch"];
   readThreadLaunch: import("./database/WorkbenchDatabaseController").default["readThreadLaunch"];
@@ -179,6 +180,9 @@ export interface DaemonTranscriptRegistration {
   subscribeItemActivity(
     listener: (activity: import("./database/transcript/WorkbenchTranscriptController").WorkbenchTranscriptItemActivity) => Promise<void> | void,
   ): () => void;
+  subscribeContextCompaction(
+    listener: (threadId: import("workbench-shared/workbench/identity").WorkbenchThreadId) => Promise<void> | void,
+  ): () => void;
   subscribe(subscription: {
     id: string;
     request: { threadId: string; turnIds?: string[]; turnLimit: number };
@@ -191,6 +195,7 @@ export interface DaemonTranscriptRegistration {
 
 export interface DaemonRuntimeObjects {
   agentContext: import("./WorkbenchAgentContextController").default;
+  threadSkills: import("./WorkbenchThreadSkillsController").default;
   daemonSleep: WorkbenchDaemonSleepController;
   transcriptReader: import("./WorkbenchTranscriptReader").default;
   transcriptReconciliation: import("./WorkbenchTranscriptReconciliationController").default;

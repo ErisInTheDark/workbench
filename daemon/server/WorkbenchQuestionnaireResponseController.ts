@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchQuestionnaireResponseStatePort: atomic durable questionnaire settlement boundary.
  * - WorkbenchQuestionnaireResponseControllerOptions: approval owner, questionnaire waiter, harness, and durable-state ports.
- * - default WorkbenchQuestionnaireResponseController: route one answer to its live approval, live delivery, or managed continuation.
+ * - default WorkbenchQuestionnaireResponseController: route one answer to its live approval, live delivery, or managed continuation, recording skills it activates.
  */
 import type {
   WorkbenchQuestionnaireRespondRequest,
@@ -26,6 +26,7 @@ import {
   isWorkbenchMcpQuestionnaireRequestKey,
 } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import type { WorkbenchHarness, WorkbenchUserInputResponse } from "workbench-shared/types";
+import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
 import type WorkbenchApprovalController from "./WorkbenchApprovalController";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
@@ -64,6 +65,8 @@ export interface WorkbenchQuestionnaireResponseControllerOptions {
     threadId: ReturnType<typeof WorkbenchThreadIdSchema.parse>;
   }): Promise<WorkbenchTurnId | null>;
   state: WorkbenchQuestionnaireResponseStatePort;
+  /** Record skills an accepted answer activated; failure never undoes the answer. */
+  recordSkillActivations?(threadId: string, paths: readonly string[]): Promise<void>;
 }
 
 type QuestionnaireDelivery =
@@ -197,6 +200,16 @@ export default class WorkbenchQuestionnaireResponseController {
         threadId: input.threadId,
         activatedSkillPaths,
     });
+    await this.recordSkillActivations(input.threadId, collectActivatedSkillPaths(supplementalInput, { activatedSkillPaths }));
+  }
+
+  private async recordSkillActivations(threadId: string, paths: readonly string[]) {
+    try {
+      await this.options.recordSkillActivations?.(threadId, paths);
+    } catch (error) {
+      console.warn("[questionnaire] activated skills were not recorded",
+        error instanceof Error ? error.message.slice(0, 300) : "unknown failure");
+    }
   }
 
   private async resolveLiveTurn(
@@ -223,6 +236,7 @@ export default class WorkbenchQuestionnaireResponseController {
       input: turnInput,
       ...(activatedSkillPaths.length ? { context: { activatedSkillPaths } } : {}),
     });
+    await this.recordSkillActivations(input.threadId, collectActivatedSkillPaths(turnInput, { activatedSkillPaths }));
     return {
       turnId: WorkbenchTurnIdSchema.parse(result.kind === "started" ? result.turn.id : result.turnId),
       ...(result.warning ? { warning: result.warning } : {}),

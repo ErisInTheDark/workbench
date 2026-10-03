@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchSkillController: load and render one precedence-selected skill for a managed caller.
+ * - default WorkbenchSkillController: load and render one precedence-selected skill for a managed caller, reporting the load.
  */
 import type { WorkbenchSkillDefinition, WorkbenchHarness, WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import type { WorkbenchInstructionTool } from "./lib/workbench/instructions/instruction-tool-reference";
@@ -13,6 +13,8 @@ interface WorkbenchSkillControllerOptions {
   listSkills: (projectRoot: string) => Promise<readonly WorkbenchSkillDefinition[]>;
   readInstructionTools: () => Promise<readonly WorkbenchInstructionTool[]>;
   readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>;
+  /** Observe a successful Skill Load; failure never withholds the loaded body. */
+  onLoaded?: (input: { threadId: string; path: string }) => Promise<void>;
 }
 
 interface WorkbenchSkillRequest {
@@ -47,7 +49,12 @@ export default class WorkbenchSkillController {
         threadId: request.threadId,
       }, this.options.readLocalCapabilities);
       signal.throwIfAborted();
-      return new Response(filter(body, skill.path)?.trim() ?? "", {
+      const rendered = filter(body, skill.path)?.trim() ?? "";
+      await this.options.onLoaded?.({ threadId: request.threadId, path: skill.path }).catch((error: unknown) => {
+        const detail = error instanceof Error ? error.message : "unknown error";
+        console.warn(`[workbench-skill] Skill load was not recorded: ${detail.replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 300)}`);
+      });
+      return new Response(rendered, {
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     } catch (error) {

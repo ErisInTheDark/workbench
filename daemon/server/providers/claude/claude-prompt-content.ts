@@ -3,6 +3,7 @@
  * - ClaudeContentBlock/ClaudePromptContent: SDK user-message content; text-only prompts stay plain strings.
  * - claudeImageBlock: convert a base64 data URL or http(s) URL into a Claude image block.
  * - claudePromptContent: translate submitted Workbench input into Claude prompt content, including images.
+ * - appendClaudePrompt: put hidden Workbench content after prompt content without disturbing attached images.
  * - prefixClaudePrompt: put Workbench context ahead of prompt content without disturbing attached images.
  */
 import { readFile } from "node:fs/promises";
@@ -66,6 +67,11 @@ export async function claudePromptContent(parts: readonly WorkbenchUserInput[]):
   }
   if (blocks.every(block => block.type === "text")) return blocks.map(block => block.text).join("\n");
   return blocks;
+}
+
+export function appendClaudePrompt(content: ClaudePromptContent, suffix: string): ClaudePromptContent {
+  if (typeof content === "string") return content ? `${content}\n\n${suffix}` : suffix;
+  return [...content, { type: "text", text: suffix }];
 }
 
 export function prefixClaudePrompt(prefix: string, content: ClaudePromptContent): ClaudePromptContent {

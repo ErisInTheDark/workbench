@@ -2,7 +2,7 @@
  * Exports:
  * - OpenCodeThreadOperationsOptions: provider-local dependencies for native session operations.
  * - OpenCodeNativeActivity: one connection-recovery observation from native session state.
- * - default OpenCodeThreadOperations: translate WB thread intent to the pinned OpenCode client and canonical SQL history, attest session liveness, and admit fenced unfinished-turn continuations.
+ * - default OpenCodeThreadOperations: translate WB thread intent to the pinned OpenCode client and canonical SQL history, carry activated skill bodies in prompts, attest session liveness, and admit fenced unfinished-turn continuations.
  */
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -19,6 +19,8 @@ import type { WorkbenchThreadMessageResult } from "workbench-shared/workbench/th
 import type { WorkbenchUserInput } from "workbench-shared/workbench/provider/provider-input";
 import { createWorkbenchTextInput, toWorkbenchThreadUserInput, WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
+import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchProjectCatalogController from "../../WorkbenchProjectCatalogController";
@@ -335,14 +337,9 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const native = await this.native(input.threadId);
     const execution = this.execution(native.binding.nativeThreadId);
     execution.intentVersion++;
-    const context = {
-      ...input.context,
-      activatedSkillPaths: [...new Set([
-        ...(input.context?.activatedSkillPaths ?? []),
-        ...input.input.flatMap(part => part.type === "skill" ? [part.path] : []),
-      ])],
-    };
-    execution.context = context;
+    const context = { ...input.context, activatedSkillPaths: collectActivatedSkillPaths(input.input, input.context) };
+    // Hidden continuation replays instruction selections only; activated skill bodies already sit in history.
+    execution.context = { ...context, activatedSkillPaths: [] };
     return this.admit(execution, () => this.submitNative({ ...input, context }, native, execution));
   }
 
@@ -394,10 +391,29 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const activeTurn = execution.active ? execution.turn : null;
     const delivery = input.intent === "newTurn" || !activeTurn ? "queue" : "steer";
     const workingStatus = toWorkbenchThreadUserInput(input.input).some(isWorkbenchQuestionnaireResponsePart);
+    const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : undefined;
+    // After reload there may be no captured workflow context. Keep the session's installed
+    // instructions for hidden continuation instead of replacing them with an empty workflow.
+    const managed = !continuation || input.context ? await this.options.managed.refresh({
+      sessionID: binding.nativeThreadId,
+      cwd: session.location.directory,
+      projectId: identity.projectId,
+      threadId: identity.threadId,
+      model: settings?.model ?? null,
+      agentPath: settings?.agentPath ?? null,
+      workflowIds: input.context?.workflowIds ?? [],
+      activatedSkillPaths: input.context?.activatedSkillPaths ?? [],
+      workingStatus,
+    }) : null;
     const nativePrompt = prompt(input.input);
-    const request = workingStatus
-      ? { ...nativePrompt, text: `${WORKBENCH_THREAD_WORKING_STATUS_MESSAGE}\n\n${nativePrompt.text}` }
-      : nativePrompt;
+    // Display reads metadata input, so the hidden skill block reaches only the model.
+    const skillText = managed?.activatedSkills
+      ? createWorkbenchActivatedSkillsInput(managed.activatedSkills).text : null;
+    const promptText = skillText ? [nativePrompt.text, skillText].filter(Boolean).join("\n\n") : nativePrompt.text;
+    const request = {
+      ...nativePrompt,
+      text: workingStatus ? `${WORKBENCH_THREAD_WORKING_STATUS_MESSAGE}\n\n${promptText}` : promptText,
+    };
     const messageId = nativeMessageId(input.clientMessageId);
     const itemId = WorkbenchItemIdSchema.parse(randomUUID());
     const metadata = {
@@ -410,20 +426,6 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         input: input.input,
       },
     };
-    const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : undefined;
-    // After reload there may be no captured workflow context. Keep the session's installed
-    // instructions for hidden continuation instead of replacing them with an empty workflow.
-    if (!continuation || input.context) await this.options.managed.refresh({
-      sessionID: binding.nativeThreadId,
-      cwd: session.location.directory,
-      projectId: identity.projectId,
-      threadId: identity.threadId,
-      model: settings?.model ?? null,
-      agentPath: settings?.agentPath ?? null,
-      workflowIds: input.context?.workflowIds ?? [],
-      activatedSkillPaths: input.context?.activatedSkillPaths ?? [],
-      workingStatus,
-    });
     if (continuation && !continuation()) throw supersededContinuation;
     if (continuation && input.context) {
       const fresh = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);

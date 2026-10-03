@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state and project owners.
  * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
- * - default WorkbenchThreadActionController: route WB actions without constructing provider packets, settle orphaned turns on stop, and resend or dismiss undelivered steers.
+ * - default WorkbenchThreadActionController: route WB actions without constructing provider packets, record activated skills, settle orphaned turns on stop, and resend or dismiss undelivered steers.
  */
 import { randomUUID } from "node:crypto";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -26,6 +26,8 @@ import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import type WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import type WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
+import type WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
+import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
 
 export interface WorkbenchThreadActionOwners {
   approvals: Pick<WorkbenchApprovalController, "list">;
@@ -43,6 +45,9 @@ export interface WorkbenchThreadActionOwners {
     WorkbenchThreadStateController,
     "acceptProviderIntent" | "getCanonicalThreadEntry" | "handleRequest" | "listPendingQuestionnaires"
   >;
+  skills: Pick<WorkbenchThreadSkillsController, "read" | "deactivate">;
+  /** Record skills an accepted submission activated. */
+  recordSkillActivations(threadId: string, paths: readonly string[]): Promise<void>;
   warn(message: string): void;
 }
 
@@ -163,6 +168,8 @@ export default class WorkbenchThreadActionController {
       await target.provider.goals?.clear(target.identity.threadId);
       return { ok: true };
     },
+    "thread/skills/read": async input => ({ skills: await this.owners.skills.read(input.threadId) }),
+    "thread/skills/deactivate": async input => ({ skills: await this.owners.skills.deactivate(input.threadId, input.path) }),
     "thread/steer/resend": input => this.resendSteer(input),
     "thread/steer/dismiss": input => this.dismissSteer(input),
   };
@@ -220,6 +227,14 @@ export default class WorkbenchThreadActionController {
           intent: "continue" as const,
         };
     const result = await provider.threads.submit(providerInput);
+    const warnings: string[] = [];
+    try {
+      await this.owners.recordSkillActivations(identity.threadId, collectActivatedSkillPaths(input.input, input.context));
+    } catch (error) {
+      const warning = "Your message was accepted, but Workbench could not record its activated skills.";
+      this.owners.warn(`${warning} ${error instanceof Error ? error.message.slice(0, 300) : ""}`);
+      warnings.push(warning);
+    }
     try {
       const turnId = WorkbenchTurnIdSchema.parse(result.kind === "started" ? result.turn.id : result.turnId);
       const firstText = input.intent === "newTurn"
@@ -232,9 +247,11 @@ export default class WorkbenchThreadActionController {
     } catch {
       const warning = "Your message was accepted, but Workbench could not update its thread state. Do not resend it.";
       this.owners.warn(warning);
-      return { ...result, warning: [result.warning?.slice(0, 500), warning].filter(Boolean).join(" ") };
+      warnings.push(warning);
     }
-    return result;
+    return warnings.length
+      ? { ...result, warning: [result.warning?.slice(0, 500), ...warnings].filter(Boolean).join(" ") }
+      : result;
   }
 
   private async stop(input: WorkbenchThreadStop, connectionId?: string): Promise<{ ok: true }> {

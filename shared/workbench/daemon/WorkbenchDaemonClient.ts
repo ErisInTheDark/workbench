@@ -241,6 +241,10 @@ class WorkbenchDaemonClient {
       update: (params: WorkbenchDaemonParams<"thread/goal/update">) => this.request("thread/goal/update", params),
       clear: (params: WorkbenchDaemonParams<"thread/goal/remove">) => this.request("thread/goal/remove", params),
     },
+    skills: {
+      read: (params: WorkbenchDaemonParams<"thread/skills/read">) => this.request("thread/skills/read", params),
+      deactivate: (params: WorkbenchDaemonParams<"thread/skills/deactivate">) => this.request("thread/skills/deactivate", params),
+    },
   };
 
   readonly questionnaires = {

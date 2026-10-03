@@ -779,6 +779,12 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       subscribe: (id, listener) => rendererForThread(id).threadGoals.subscribe(id, listener),
       updateObjective: (id, objective) => rendererForThread(id).threadGoals.updateObjective(id, objective),
     },
+    threadSkills: {
+      deactivate: (id, path) => rendererForThread(id).threadSkills.deactivate(id, path),
+      getSnapshot: id => rendererForThread(id).threadSkills.getSnapshot(id),
+      load: id => rendererForThread(id).threadSkills.load(id),
+      subscribe: (id, listener) => rendererForThread(id).threadSkills.subscribe(id, listener),
+    },
     submitPendingUserInputRequest: (id, ...args) => rendererForThread(id).submitPendingUserInputRequest(id, ...args),
     listModels: (...args) => threadClient.listModels(...args),
     refreshRateLimits: () => threadClient.refreshRateLimits(),

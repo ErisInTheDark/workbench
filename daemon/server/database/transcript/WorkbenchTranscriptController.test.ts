@@ -1,11 +1,11 @@
 /*
- * No production exports. Tests protect transcript readiness, durable recording, per-thread gaps, recovery, subscriptions, and disposal.
+ * No production exports. Tests protect transcript readiness, durable recording, per-thread gaps, recovery, subscriptions, live compaction publication, and disposal.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 
 import WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
 import WorkbenchTranscriptCaptureGapController from "./WorkbenchTranscriptCaptureGapController.ts";
@@ -21,6 +21,16 @@ import { createThreadStateTestDatabase } from "../../workbench-thread-state-test
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository";
 import { workbenchDatabaseTables } from "../workbench-database-schema";
 import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "workbench-shared/database/workbench-database-statements";
+
+/** Settlement failures are reported on stderr; tests that provoke them own that output. */
+function captureSettlementReports(context: TestContext) {
+  const reports: string[] = [];
+  context.mock.method(process.stderr, "write", (chunk: string | Uint8Array) => {
+    reports.push(String(chunk));
+    return true;
+  });
+  return reports;
+}
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -79,7 +89,8 @@ function observationsFor(threadId: string): WorkbenchTranscriptAtomicObservation
   }];
 }
 
-test("demanded recovery closes only prefetched complete-turn gaps after successful SQLite settlement", async () => {
+test("demanded recovery closes only prefetched complete-turn gaps after successful SQLite settlement", async context => {
+  const reports = captureSettlementReports(context);
   const fixture = createThreadStateTestDatabase();
   const threadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
   fixture.admitThread(testProjectIds.project, threadId, "codex", "native-thread", "C:/project");
@@ -141,10 +152,12 @@ test("demanded recovery closes only prefetched complete-turn gaps after successf
     assert.deepEqual(pending.map(gap => gap.errorText).sort(), ["during fetch", "settlement failed", "unknown scope"]);
     const states = fixture.sqlite.prepare("SELECT state FROM transcript_capture_gaps WHERE state = 'unrecoverable'").all();
     assert.equal(states.length, 1);
+    assert.equal(reports.filter(report => report.includes("settlement failed")).length, 1);
   } finally { owner.dispose(); }
 });
 
-test("recording activity retires previews before persistence, but history and delayed settlement preserve newer accumulation", async () => {
+test("recording activity retires previews before persistence, but history and delayed settlement preserve newer accumulation", async context => {
+  const reports = captureSettlementReports(context);
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-preview-activity-");
   const directory = temporary.path;
   const database = new WorkbenchDatabaseController({ databasePath: join(directory, "workbench.sqlite3") });
@@ -249,6 +262,7 @@ test("recording activity retires previews before persistence, but history and de
     database.settleTranscript = async () => { throw new Error("recording unavailable"); };
     await assert.rejects(controller.record([item], { source: "workbench" }));
     assert.deepEqual(patches().at(-1), { ...newer, changes: [] }, "Recording failure must not strand the previous preview");
+    assert.ok(reports.some(report => report.includes("recording unavailable")));
   } finally {
     release.resolve();
     database.settleTranscript = settle;
@@ -571,7 +585,8 @@ test("durable item facts refresh subscriptions only at complete projection bound
   }
 });
 
-test("durable capture gaps do not block historical imports, subscriptions or live recording", async () => {
+test("durable capture gaps do not block historical imports, subscriptions or live recording", async context => {
+  const reports = captureSettlementReports(context);
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-transcript-controller-gap-");
   const directory = temporary.path;
   const databasePath = join(directory, "workbench.sqlite3");
@@ -609,6 +624,7 @@ test("durable capture gaps do not block historical imports, subscriptions or liv
     );
     failed.assertReady();
     assert.deepEqual(await failed.pendingRecoveryThreadIds, ["provider-thread"]);
+    assert.equal(reports.filter(report => report.includes("settlement failed")).length, 2);
 
     rejectSettlements = false;
     await failed.record([{
@@ -748,6 +764,48 @@ test("committed admissions of new thread items notify item-activity listeners un
     unsubscribe();
     await owner.record([message("second", 60)], { source: "provider" });
     assert.equal(received.length, 1);
+  } finally {
+    owner.dispose();
+  }
+});
+
+test("only live completed context compactions notify compaction listeners", async () => {
+  const fixture = createThreadStateTestDatabase();
+  const threadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000003");
+  fixture.admitThread(testProjectIds.project, threadId, "codex", "native-thread", "C:/project");
+  const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
+  const nativeTurn = observationsFor(threadId)[1]!;
+  assert.ok(nativeTurn.kind === "turn");
+  const { turnId } = await fixture.identities.threads.observeTurn({
+    ...nativeTurn, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread"),
+  });
+  repository.settle(observationsFor(threadId).map(observation => observation.kind === "turn"
+    ? { ...observation, turnId, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread") } : observation));
+  const database = {
+    failure: null,
+    start: async () => ({ tableNames: [], schemaVersion: 1 }),
+    readThreadContextUsage: async (id: string) => repository.readContextUsage(id),
+    readTranscript: async (request: Parameters<typeof repository.read>[0]) => repository.read(request),
+    settleTranscript: async (observations: readonly WorkbenchTranscriptObservation[]) => repository.settle(observations),
+    query: async <Row extends WorkbenchDatabaseRow>(query: WorkbenchDatabaseQuery<Row>): Promise<Row[]> => {
+      const compiled = compileWorkbenchDatabaseStatement(workbenchDatabaseTables, query);
+      return fixture.sqlite.prepare(compiled.sql).all(...compiled.parameters) as Row[];
+    },
+  };
+  const owner = new WorkbenchTranscriptController(database, new WorkbenchTranscriptCaptureGapController({ database }));
+  const compaction = (phase: "started" | "completed", observedAt: number): WorkbenchTranscriptObservation => ({
+    kind: "contextCompaction", threadId, turnId, phase, observedAt, reference: null,
+  });
+  const received: string[] = [];
+  owner.subscribeContextCompaction(id => { received.push(id); });
+  try {
+    await owner.record([compaction("started", 10)], { source: "provider" });
+    assert.deepEqual(received, []);
+    await owner.record([compaction("completed", 20)], { source: "provider" });
+    assert.deepEqual(received, [threadId]);
+    // Recovery replays history; it must not re-send skills for an old compaction.
+    await owner.record([compaction("completed", 30)], { source: "provider", recovery: { gapIds: [], scope: "thread" } });
+    assert.deepEqual(received, [threadId]);
   } finally {
     owner.dispose();
   }

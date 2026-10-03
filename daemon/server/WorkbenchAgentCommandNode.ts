@@ -67,6 +67,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       listSkills: async root => await listActiveWorkbenchSkillDefinitions(await listProjectSkillDefinitionsFromRoot(root)),
       readInstructionTools: () => build.run("mcp", mcp => mcp.listInstructionTools(), "Skill instruction tool catalogue"),
       readLocalCapabilities: () => settings.readLocalCapabilities(),
+      onLoaded: ({ threadId, path }) => build.get("threadSkills").recordActivations(threadId, [path], "agent"),
     });
     const transcript = build.get("transcript");
     const reloadDirt = build.get("reloadDirt");
@@ -209,7 +210,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["database", "gitArc", "harnesses", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "threadGit", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["database", "gitArc", "harnesses", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "threadGit", "threadSkills", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
   safeAll: true,
   scope: "server:commands",
 });

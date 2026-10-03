@@ -26,6 +26,7 @@ import { WorkbenchMessageContextSchema, WorkbenchUserInputSchema } from "../prov
 import { WorkbenchProviderGoalSchema, WorkbenchProviderGoalUpdateSchema } from "../provider/provider-goal.ts";
 import { WORKBENCH_APPROVAL_OUTCOMES, type WorkbenchApprovalOutcomeEntry } from "../provider/provider-approval.ts";
 import { WorkbenchDurableQuestionnaireSchema, WorkbenchQuestionnaireHistoryEntrySchema } from "./thread-state.ts";
+import { WorkbenchThreadSkillSchema } from "./thread-skill-state.ts";
 
 const threadId = z.string().trim().min(1);
 export const WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED = -32011;
@@ -142,6 +143,7 @@ export const WorkbenchThreadPageResultSchema = z.custom<WorkbenchThreadPageResul
 );
 const ok = z.object({ ok: z.literal(true) });
 const goalResult = z.object({ goal: WorkbenchProviderGoalSchema.nullable() });
+const skillsResult = z.object({ skills: z.array(WorkbenchThreadSkillSchema) });
 const questionnaireRequest = WorkbenchDurableQuestionnaireSchema.shape.request.extend({
   questions: z.array(WorkbenchDurableQuestionnaireSchema.shape.request.shape.questions.element),
 }).passthrough();
@@ -188,6 +190,8 @@ export const workbenchThreadActions = {
   "thread/goal/read": { params: WorkbenchThreadTargetSchema, result: goalResult },
   "thread/goal/update": { params: WorkbenchProviderGoalUpdateSchema, result: goalResult },
   "thread/goal/remove": { params: WorkbenchThreadTargetSchema, result: ok },
+  "thread/skills/read": { params: WorkbenchThreadTargetSchema, result: skillsResult },
+  "thread/skills/deactivate": { params: WorkbenchThreadTargetSchema.extend({ path: z.string().min(1) }), result: skillsResult },
 } as const;
 export type WorkbenchThreadActionMap = {
   [Method in keyof typeof workbenchThreadActions]: {

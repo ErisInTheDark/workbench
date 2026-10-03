@@ -640,14 +640,18 @@ test("new user intent admitted before completion enforcement wins over the stale
   await owner.settle();
 });
 
-test("hidden continuation retains workflow and activated skill instructions", async () => {
+test("activated skills ride in the prompt once; hidden continuation retains only workflow instructions", async () => {
   const refreshes: Parameters<OpenCodeManagedSessionController["refresh"]>[0][] = [];
+  const prompts: string[] = [];
   const owner = operations({
-    session: { prompt: async () => ({}) },
+    session: { prompt: async (input: { text: string }) => { prompts.push(input.text); return {}; } },
     message: { list: async () => ({ data: [], cursor: {} }) },
   }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
   { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: unfinished }) } },
-  { refresh: async input => { refreshes.push(input); } });
+  { refresh: async input => {
+    refreshes.push(input);
+    return { activatedSkills: input.activatedSkillPaths.length ? input.activatedSkillPaths.join("\n") : null };
+  } });
   await owner.submit({ threadId, clientMessageId: "user", intent: "newTurn",
     input: [{ type: "skill", name: "review", path: "skills/review" }],
     context: { workflowIds: ["default"], activatedSkillPaths: ["skills/react"] } });
@@ -655,8 +659,11 @@ test("hidden continuation retains workflow and activated skill instructions", as
   owner.settleExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" });
   await owner.continueUnfinished(target);
   assert.equal(refreshes.length, 2);
+  assert.match(prompts[0]!, /<wb:activated-skills>[\s\S]*skills\/react[\s\S]*skills\/review/u);
   assert.deepEqual(refreshes[1]!.workflowIds, ["default"]);
-  assert.deepEqual(new Set(refreshes[1]!.activatedSkillPaths), new Set(["skills/react", "skills/review"]));
+  // The bodies already sit in native history; continuation must not resend them.
+  assert.deepEqual(refreshes[1]!.activatedSkillPaths, []);
+  assert.doesNotMatch(prompts[1]!, /wb:activated-skills/u);
   await owner.settle();
 });
 
@@ -670,7 +677,10 @@ test("user intent arriving during continuation preparation cancels only the hidd
     message: { list: async () => ({ data: [], cursor: {} }) },
   }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
   { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: unfinished }) } },
-  { refresh: async () => { if (prepare) { entered.resolve(); await release.promise; } } });
+  { refresh: async () => {
+    if (prepare) { entered.resolve(); await release.promise; }
+    return { activatedSkills: null };
+  } });
   await owner.submit({ threadId, clientMessageId: "first", intent: "newTurn",
     input: [{ type: "text", text: "first", text_elements: [] }], context: { workflowIds: ["default"] } });
   owner.markExecutionSettled(nativeThreadId);

@@ -54,6 +54,8 @@ function fixture(providerWarning?: string) {
       }],
     }) },
     profiles: { captureCreationProfile: unused, captureCreationProfileForProject: unused },
+    skills: { read: unused, deactivate: unused },
+    recordSkillActivations: async () => undefined,
     state: {
       acceptProviderIntent: async (_project, _harness, acceptedThread, acceptedTurn) => {
         assert.equal(acceptedThread, threadId);
