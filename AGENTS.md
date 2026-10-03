@@ -70,6 +70,7 @@ treat "noise" & slow tests in the output as relevant for your work. if you can a
 note: the following two scenario tests take a LONG time, and should be used for FINAL validation
 `pnpm test:lifecycle` runs a clone of the full app, testing schema migration; do not use if you have not changed the db!
 `pnpm test:thread --<provider>=<paid|fake> [...--<provider>=<paid|fake>]` (eg `pnpm test:thread --codex=fake --opencode=paid`) runs clones of the full app, testing with paid or emulated provider turns, only use paid when the user asks for it!
+`pnpm test:install` runs the real wb installer in a sandboxed home/VP_HOME with pretend host actions; use when changing `package/` installer or setup code
 
 also available:
 `cargo test --manifest-path ..\tray\Cargo.toml`

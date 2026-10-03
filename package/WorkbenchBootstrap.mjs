@@ -174,8 +174,9 @@ export default class WorkbenchBootstrap {
       let record = { version: 1, root, phase: "cloning" };
       await this.writeInstallation(record);
       try {
-        await this.commands.run("git", ["clone", "--progress", "--branch", "main", "--single-branch",
-          "https://github.com/ErisInTheDark/workbench.git", root]);
+        // Install sandboxes substitute a local snapshot; ordinary installs clone the public repository.
+        const repository = this.environment.WORKBENCH_INSTALL_REPOSITORY || "https://github.com/ErisInTheDark/workbench.git";
+        await this.commands.run("git", ["clone", "--progress", "--branch", "main", "--single-branch", repository, root]);
         if (!await this.checkoutExists(root)) throw new Error("Clone did not produce a Workbench checkout.");
         record = { ...record, phase: "setup" };
         await this.writeInstallation(record);

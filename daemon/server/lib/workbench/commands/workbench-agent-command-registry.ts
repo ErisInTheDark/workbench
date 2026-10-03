@@ -9,7 +9,7 @@ import { WORKBENCH_FILE_REMOVAL_COMMANDS } from "./file-removal-command-definiti
 import { WORKBENCH_GIT_ARC_COMMANDS } from "./git-arc-command-definitions";
 import { WORKBENCH_GIT_COMMANDS } from "./git-command-definitions";
 import { WORKBENCH_GIT_REPO_COMMANDS } from "./git-repo-command-definition";
-import { WORKBENCH_LIVE_PROVIDER_TEST_COMMANDS } from "./live-provider-test-command-definition";
+import { WORKBENCH_LIVE_SCENARIO_COMMANDS } from "./live-scenario-command-definition";
 import { WORKBENCH_MESSAGE_COMMANDS } from "./message-command-definitions";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import { WORKBENCH_QUESTIONNAIRE_COMMANDS } from "./questionnaire-command-definition";
@@ -43,7 +43,7 @@ const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Obj
   ...WORKBENCH_GIT_COMMANDS,
   ...WORKBENCH_GIT_ARC_COMMANDS,
   ...WORKBENCH_BROWSE_COMMANDS,
-  ...WORKBENCH_LIVE_PROVIDER_TEST_COMMANDS,
+  ...WORKBENCH_LIVE_SCENARIO_COMMANDS,
   ...WORKBENCH_STORE_COMMANDS,
 ]);
 

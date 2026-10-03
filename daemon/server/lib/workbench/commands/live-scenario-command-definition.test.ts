@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect the exact live-provider scenario allowlist and daemon request shape.
+ * No exports. Tests protect the exact live scenario allowlist and daemon request shape.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -28,7 +28,7 @@ test("live provider tests admit only explicit modes and the exact scenario", asy
     assert.deepEqual(parsed.request, {
       body: { cwd: context.cwd, file, providers },
       method: "POST",
-      path: "/internal/test/live-provider",
+      path: "/internal/test/live-scenario",
       responseKind: "native",
     });
   }
@@ -45,6 +45,23 @@ test("live provider tests admit only explicit modes and the exact scenario", asy
   }
 });
 
+test("the installer scenario takes no provider modes, and provider journeys still require them", async () => {
+  const install = "test/install/InstallSandbox.scenario.test.ts";
+  const parsed = await parseWorkbenchAgentCliCommand(["test", "live", "--", install], context);
+  assert.equal(parsed.kind, "request");
+  if (parsed.kind === "request") {
+    assert.deepEqual(parsed.request.body, { cwd: context.cwd, file: install });
+    assert.equal(parsed.request.path, "/internal/test/live-scenario");
+  }
+  for (const args of [
+    ["test", "live", "--codex=fake", "--", install],
+    ["test", "live", "--", "test/scenarios/thread.scenario.test.ts"],
+    ["test", "live", "--", "test/arbitrary.test.ts"],
+  ]) {
+    assert.equal((await parseWorkbenchAgentCliCommand(args, context)).kind, "error");
+  }
+});
+
 test("live provider cancellation targets only the trusted runner", async () => {
   const parsed = await parseWorkbenchAgentCliCommand(["test", "live", "cancel"], context);
   assert.equal(parsed.kind, "request");
@@ -52,7 +69,7 @@ test("live provider cancellation targets only the trusted runner", async () => {
   assert.deepEqual(parsed.request, {
     body: {},
     method: "POST",
-    path: "/internal/test/live-provider/cancel",
+    path: "/internal/test/live-scenario/cancel",
     responseKind: "native",
   });
 });

@@ -1,23 +1,24 @@
 /*
  * Exports:
- * - WorkbenchAgentCommandLiveTestControllerOptions: inject filesystem, process and retirement boundaries.
- * - default WorkbenchAgentCommandLiveTestController: own one allowlisted provider scenario and bounded diagnostics.
+ * - WorkbenchAgentCommandLiveScenarioControllerOptions: inject filesystem, process and retirement boundaries.
+ * - default WorkbenchAgentCommandLiveScenarioController: own one allowlisted live scenario run and its bounded diagnostics.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 
 import {
-  WorkbenchLiveProviderTestRequestSchema,
-  type WorkbenchLiveProviderTestRequest,
-} from "./lib/workbench/commands/live-provider-test-command-definition";
+  WORKBENCH_LIVE_SCENARIOS,
+  WorkbenchLiveScenarioRequestSchema,
+  type WorkbenchLiveScenarioRequest,
+} from "./lib/workbench/commands/live-scenario-command-definition";
 import { createSpawnOptions, killProcessTreeAsync } from "./process-helpers";
 import WorkbenchTestProcessResources from "./WorkbenchTestProcessResources";
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
-const OUTPUT_TRUNCATED = "\n[workbench live-provider test output truncated]\n";
+const OUTPUT_TRUNCATED = "\n[workbench live scenario output truncated]\n";
 
-export interface WorkbenchAgentCommandLiveTestControllerOptions {
+export interface WorkbenchAgentCommandLiveScenarioControllerOptions {
   realpath?: (value: string) => Promise<string>;
   retireProcess?: (pid: number | undefined) => Promise<void>;
   spawnProcess?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
@@ -29,16 +30,16 @@ function samePath(left: string, right: string) {
     : left === right;
 }
 
-export default class WorkbenchAgentCommandLiveTestController {
+export default class WorkbenchAgentCommandLiveScenarioController {
   private active = false;
   private activeAbort: AbortController | null = null;
-  private readonly readRealpath: NonNullable<WorkbenchAgentCommandLiveTestControllerOptions["realpath"]>;
-  private readonly retireProcess: NonNullable<WorkbenchAgentCommandLiveTestControllerOptions["retireProcess"]>;
-  private readonly spawnProcess: NonNullable<WorkbenchAgentCommandLiveTestControllerOptions["spawnProcess"]>;
+  private readonly readRealpath: NonNullable<WorkbenchAgentCommandLiveScenarioControllerOptions["realpath"]>;
+  private readonly retireProcess: NonNullable<WorkbenchAgentCommandLiveScenarioControllerOptions["retireProcess"]>;
+  private readonly spawnProcess: NonNullable<WorkbenchAgentCommandLiveScenarioControllerOptions["spawnProcess"]>;
 
   constructor(
     private readonly projectRoot: string,
-    options: WorkbenchAgentCommandLiveTestControllerOptions = {},
+    options: WorkbenchAgentCommandLiveScenarioControllerOptions = {},
   ) {
     this.readRealpath = options.realpath ?? realpath;
     this.retireProcess = options.retireProcess ?? killProcessTreeAsync;
@@ -46,15 +47,15 @@ export default class WorkbenchAgentCommandLiveTestController {
   }
 
   async execute(input: object, signal: AbortSignal) {
-    const request = WorkbenchLiveProviderTestRequestSchema.parse(input);
-    if (this.active) throw new Error("A live provider test is already running.");
+    const request = WorkbenchLiveScenarioRequestSchema.parse(input);
+    if (this.active) throw new Error("A live scenario is already running.");
     this.active = true;
     const cancellation = new AbortController();
     this.activeAbort = cancellation;
     const activeSignal = AbortSignal.any([signal, cancellation.signal]);
     try {
       const [root, cwd] = await Promise.all([this.readRealpath(this.projectRoot), this.readRealpath(request.cwd)]);
-      if (!samePath(root, cwd)) throw new Error("Live provider tests only run from the Workbench repository root.");
+      if (!samePath(root, cwd)) throw new Error("Live scenarios only run from the Workbench repository root.");
       activeSignal.throwIfAborted();
       return await this.run(root, request, activeSignal);
     } finally {
@@ -65,11 +66,11 @@ export default class WorkbenchAgentCommandLiveTestController {
 
   cancel() {
     if (!this.activeAbort || this.activeAbort.signal.aborted) return false;
-    this.activeAbort.abort(new Error("Live provider test cancelled."));
+    this.activeAbort.abort(new Error("Live scenario cancelled."));
     return true;
   }
 
-  private async run(root: string, request: WorkbenchLiveProviderTestRequest, signal: AbortSignal) {
+  private async run(root: string, request: WorkbenchLiveScenarioRequest, signal: AbortSignal) {
     const services = await WorkbenchTestProcessResources.create(false, root);
     try {
       return await this.runOwned(root, request, signal, services.environment);
@@ -78,14 +79,17 @@ export default class WorkbenchAgentCommandLiveTestController {
     }
   }
 
-  private async runOwned(root: string, request: WorkbenchLiveProviderTestRequest, signal: AbortSignal, environment: NodeJS.ProcessEnv) {
-    const entry = path.join(root, "test", "run-live-provider-test.mjs");
+  private async runOwned(root: string, request: WorkbenchLiveScenarioRequest, signal: AbortSignal, environment: NodeJS.ProcessEnv) {
+    const entry = path.join(root, WORKBENCH_LIVE_SCENARIOS[request.file].entry);
+    const providers = "providers" in request
+      ? Object.entries(request.providers).map(([provider, mode]) => `--${provider}=${mode}`)
+      : [];
     const child = this.spawnProcess(process.execPath, [
       "--disable-warning=ExperimentalWarning",
       "--import",
       "tsx",
       entry,
-      ...Object.entries(request.providers).map(([provider, mode]) => `--${provider}=${mode}`),
+      ...providers,
       request.file,
     ], {
       ...createSpawnOptions(root, { ...process.env, ...environment }, true),
@@ -123,7 +127,7 @@ export default class WorkbenchAgentCommandLiveTestController {
       signal.throwIfAborted();
       const successful = result.exitCode === 0 && result.signal === null;
       if (!successful) {
-        capture(`\nLive provider test exited with code ${result.exitCode ?? "null"} and signal ${result.signal ?? "none"}.\n`);
+        capture(`\nLive scenario exited with code ${result.exitCode ?? "null"} and signal ${result.signal ?? "none"}.\n`);
       }
       return new Response(output, {
         headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },

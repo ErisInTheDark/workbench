@@ -14,6 +14,8 @@
     "test": "node --disable-warning=ExperimentalWarning --import tsx test/run-project-tests.mjs",
     "test:thread": "node --disable-warning=ExperimentalWarning --import tsx test/run-thread-test.mjs",
     "test:lifecycle": "node --disable-warning=ExperimentalWarning --import tsx test/run-lifecycle-test.mjs",
+    "test:install": "node --disable-warning=ExperimentalWarning --import tsx test/run-install-test.mjs",
+    "sandbox:install": "node --disable-warning=ExperimentalWarning --import tsx test/install/open-install-sandbox.ts",
     "typecheck": "node scripts/typecheck.mjs",
     "dev": "node --env-file-if-exists=./daemon/.env.local --import tsx ./daemon/host/foreground.ts",
     "codex:types": "codex app-server generate-ts --experimental --out ./shared/codex/generated/app-server",

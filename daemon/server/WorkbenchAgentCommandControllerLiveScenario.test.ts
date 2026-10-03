@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect live-provider allowlisting, single-run ownership, bounded output, and cancellation.
+ * No exports. Tests protect live scenario allowlisting, single-run ownership, bounded output, and cancellation.
  */
 import assert from "node:assert/strict";
 import { ChildProcess, type SpawnOptions } from "node:child_process";
@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import fs from "node:fs/promises";
 
-import WorkbenchAgentCommandLiveTestController from "./WorkbenchAgentCommandControllerLiveTest";
+import WorkbenchAgentCommandLiveScenarioController from "./WorkbenchAgentCommandControllerLiveScenario";
 import WorkbenchTestProcessResources from "./WorkbenchTestProcessResources";
 
 function child() {
@@ -23,7 +23,7 @@ test("runs one exact provider selection and rejects overlap", async () => {
   const running = child();
   let didSpawn!: () => void;
   const spawnedChild = new Promise<void>(resolve => { didSpawn = resolve; });
-  const controller = new WorkbenchAgentCommandLiveTestController("C:/git/web/workbench", {
+  const controller = new WorkbenchAgentCommandLiveScenarioController("C:/git/web/workbench", {
     realpath: async value => value,
     spawnProcess: (command, args, options) => {
       spawned.push({ args, command, options });
@@ -50,12 +50,37 @@ test("runs one exact provider selection and rejects overlap", async () => {
   assert.deepEqual(spawned[0]?.args.slice(-2), ["--opencode=fake", "test/scenarios/thread.scenario.test.ts"]);
 });
 
+test("the installer scenario runs its own entry with no provider modes", async () => {
+  const running = child();
+  const spawned: string[][] = [];
+  const controller = new WorkbenchAgentCommandLiveScenarioController("C:/git/web/workbench", {
+    realpath: async value => value,
+    spawnProcess: (_command, args) => {
+      spawned.push(args);
+      queueMicrotask(() => running.emit("close", 0, null));
+      return running;
+    },
+  });
+  await controller.execute({
+    cwd: "C:/git/web/workbench",
+    file: "test/install/InstallSandbox.scenario.test.ts",
+  }, new AbortController().signal);
+  const args = spawned[0]!;
+  assert.match(args.at(-2)!, /run-live-install-test\.mjs$/u);
+  assert.equal(args.at(-1), "test/install/InstallSandbox.scenario.test.ts");
+  await assert.rejects(controller.execute({
+    cwd: "C:/git/web/workbench",
+    file: "test/install/InstallSandbox.scenario.test.ts",
+    providers: { codex: "fake" },
+  }, new AbortController().signal));
+});
+
 test("cancellation retires the exact owned child", async () => {
   const running = child();
   const retired: number[] = [];
   let spawned!: () => void;
   const didSpawn = new Promise<void>(resolve => { spawned = resolve; });
-  const controller = new WorkbenchAgentCommandLiveTestController("C:/git/web/workbench", {
+  const controller = new WorkbenchAgentCommandLiveScenarioController("C:/git/web/workbench", {
     realpath: async value => value,
     retireProcess: async pid => { if (pid) retired.push(pid); },
     spawnProcess: () => {
@@ -82,7 +107,7 @@ test("explicit cancellation retires the active child", async () => {
   const retired: number[] = [];
   let spawned!: () => void;
   const didSpawn = new Promise<void>(resolve => { spawned = resolve; });
-  const controller = new WorkbenchAgentCommandLiveTestController("C:/git/web/workbench", {
+  const controller = new WorkbenchAgentCommandLiveScenarioController("C:/git/web/workbench", {
     realpath: async value => value,
     retireProcess: async pid => { if (pid) retired.push(pid); },
     spawnProcess: () => {
@@ -108,7 +133,7 @@ test("cancellation during spawn still retires the child", async () => {
   const running = child();
   const retired: number[] = [];
   const abort = new AbortController();
-  const controller = new WorkbenchAgentCommandLiveTestController("C:/git/web/workbench", {
+  const controller = new WorkbenchAgentCommandLiveScenarioController("C:/git/web/workbench", {
     realpath: async value => value,
     retireProcess: async pid => { if (pid) retired.push(pid); },
     spawnProcess: () => {
@@ -136,7 +161,7 @@ test("cancellation remains owned until the detached service cleanup finishes", a
     cleanupStarted.resolve();
     await cleanupFinished.promise;
   });
-  const controller = new WorkbenchAgentCommandLiveTestController("C:/git/web/workbench", {
+  const controller = new WorkbenchAgentCommandLiveScenarioController("C:/git/web/workbench", {
     realpath: async value => value,
     retireProcess: async () => {},
     spawnProcess: (_command, _args, options) => {
