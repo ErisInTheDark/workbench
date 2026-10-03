@@ -106,7 +106,8 @@ test("installation records the selected checkout and never clones it again", asy
   const runtimeInstall = f.calls.findIndex(call => call.command === "vp" && call.args[0] === "env" && call.args[1] === "install");
   const setup = f.calls.findIndex(call => call.command === "vp" && call.args[0] === "node" && call.args.includes("--prepare"));
   assert.ok(runtimeInstall >= 0 && setup > runtimeInstall);
-  assert.ok(f.calls.some(call => call.args.includes("--connect")));
+  // Setup prompts need the caller's terminal; piped stdio makes them refuse.
+  assert.equal(f.calls.find(call => call.args.includes("--connect"))?.config?.interactive, true);
   f.calls.length = 0;
   await f.bootstrap.run([]);
   assert.equal(f.calls.filter(call => call.command === "git").length, 0);
@@ -146,6 +147,7 @@ test("failed setup is cleaned and the next run starts with the ordinary consent 
   await f.bootstrap.run([]);
   assert.equal(f.calls.filter(call => call.command === "git" && call.args[0] === "clone").length, 2);
   assert.equal(f.prompts.length, 4);
+  assert.equal(f.calls.find(call => call.args.includes("--welcome"))?.config?.interactive, true);
 });
 
 test("a failed record warns in the ordinary prompt and cancellation preserves the checkout", async context => {

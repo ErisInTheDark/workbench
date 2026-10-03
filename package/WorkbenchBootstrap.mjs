@@ -199,7 +199,7 @@ export default class WorkbenchBootstrap {
     // Persist readiness before optional platform actions: missing native artifacts
     // must not turn a usable source installation into an endless setup loop.
     await this.commands.run("vp", ["node", path.join(root, "package", "setup.mjs"),
-      args[0] === "connect" ? "--connect" : "--welcome"], { cwd: root });
+      args[0] === "connect" ? "--connect" : "--welcome"], { cwd: root, interactive: true });
   }
 
   async delegate(root, args, humanCommand) {
