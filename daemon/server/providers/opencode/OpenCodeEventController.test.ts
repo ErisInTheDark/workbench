@@ -23,7 +23,7 @@ test("compaction execution settles without accepting a user turn or continuing i
       syncNative: async () => ({ threadId, latestTurnId: turnId, maintenance: true }),
       markExecutionStarted: () => { active = true; },
       markExecutionSettled: () => { active = false; },
-      completeExecution: async () => { assert.fail("Compaction cannot trigger a continuation"); },
+      settleExecution: () => { assert.fail("Compaction cannot fence a continuation"); },
     },
     transcript: {
       appendText: () => undefined,
@@ -154,7 +154,7 @@ test("write settlement replaces its live preview on the same canonical item for 
 
 const executionLifecycle = {
   acceptExecutionEvent: () => true,
-  completeExecution: async () => undefined,
+  settleExecution: () => undefined,
   executionIntentVersion: () => 0,
   markExecutionSettled: (_sessionID: string) => undefined,
   markExecutionStarted: (_sessionID: string) => undefined,
@@ -248,7 +248,7 @@ test("an OpenCode compaction failure fails the compaction it names", async () =>
   assert.deepEqual(reports, [{ threadId, turnId, phase: "failed", observedAt: 20, reference: null }]);
 });
 
-test("successful execution reaches unfinished-task enforcement after lifecycle settlement", async () => {
+test("successful execution fences its completion before the lifecycle observation that may continue it", async () => {
   const calls: string[] = [];
   const controller = new OpenCodeEventController({
     threads: {
@@ -256,7 +256,7 @@ test("successful execution reaches unfinished-task enforcement after lifecycle s
       currentTurn: () => ({ threadId, turnId }),
       syncNative: async () => ({ threadId }),
       latestTurn: async () => turn(),
-      completeExecution: async () => { calls.push("enforce"); },
+      settleExecution: () => { calls.push("settle"); },
     } as never,
     transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
       recordCompaction: async () => undefined, recordTurnState: async () => undefined },
@@ -266,7 +266,7 @@ test("successful execution reaches unfinished-task enforcement after lifecycle s
     id: "end", created: 3, type: "session.execution.succeeded", durable,
     data: { sessionID: "session" },
   }));
-  assert.deepEqual(calls, ["observe", "enforce"]);
+  assert.deepEqual(calls, ["settle", "observe"]);
 });
 
 test("terminal notification waits for canonical settlement when native history still reports an active turn", async () => {
@@ -277,7 +277,7 @@ test("terminal notification waits for canonical settlement when native history s
       currentTurn: () => ({ threadId, turnId }),
       syncNative: async () => ({ threadId, latestTurnId: turnId }),
       latestTurn: async () => turn("inProgress"),
-      completeExecution: async () => { calls.push("enforce"); },
+      settleExecution: () => { calls.push("settle"); },
     },
     transcript: {
       appendText: () => undefined,
@@ -292,7 +292,7 @@ test("terminal notification waits for canonical settlement when native history s
     data: { sessionID: "session" },
   }));
   assert.deepEqual(calls, [
-    "record:completed", "observe", "turn/completed", "thread/status/changed", "enforce",
+    "record:completed", "settle", "observe", "turn/completed", "thread/status/changed",
   ]);
 });
 
@@ -310,7 +310,7 @@ test("connection reconciliation restores active work and settles missed terminal
       }],
       markExecutionStarted: () => { calls.push("started"); },
       markExecutionSettled: () => { calls.push("settled"); },
-      completeExecution: async () => { calls.push("enforce"); },
+      settleExecution: () => { calls.push("settle"); },
     } as never,
     transcript: {
       appendText: () => undefined, recordItem: async () => "item" as never,
@@ -330,7 +330,7 @@ test("connection reconciliation restores active work and settles missed terminal
   active = false;
   await controller.reconcileConnection(new AbortController().signal, () => false);
   assert.deepEqual(calls, [
-    "models/updated", "record:completed", "settled", "turnCompleted", "turn/completed", "thread/status/changed", "enforce",
+    "models/updated", "record:completed", "settled", "settle", "turnCompleted", "turn/completed", "thread/status/changed",
   ]);
   assert.deepEqual(projects, [projectId]);
 });
@@ -355,7 +355,7 @@ test("terminal reconciliation never settles a newer user turn", async () => {
           return { ...turn(), id: current };
         },
         markExecutionSettled: () => { settled.push("settled"); },
-        completeExecution: async () => { settled.push("continued"); },
+        settleExecution: () => { settled.push("fenced"); },
       },
       observe: async () => { settled.push("observed"); },
       transcript: { appendText: () => undefined, recordItem: async () => "item" as never,

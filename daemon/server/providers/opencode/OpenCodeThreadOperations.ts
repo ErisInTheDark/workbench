@@ -2,7 +2,7 @@
  * Exports:
  * - OpenCodeThreadOperationsOptions: provider-local dependencies for native session operations.
  * - OpenCodeNativeActivity: one connection-recovery observation from native session state.
- * - default OpenCodeThreadOperations: translate WB thread intent to the pinned OpenCode client and canonical SQL history, and attest session liveness.
+ * - default OpenCodeThreadOperations: translate WB thread intent to the pinned OpenCode client and canonical SQL history, attest session liveness, and admit fenced unfinished-turn continuations.
  */
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -33,7 +33,8 @@ import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
 import OpenCodeThreadWindowLoader from "./OpenCodeThreadWindowLoader";
 import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
 import type WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
-import { getWorkbenchLifecycleTurnId, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
 import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import {
@@ -87,6 +88,8 @@ interface SessionExecution {
   intentVersion: number;
   context?: Parameters<WorkbenchProviderThreads["submit"]>[0]["context"];
   admission: Promise<void> | null;
+  /** The last completed turn and the intent it ended, until continued or superseded. */
+  completion?: { eventID: string; turnId: WorkbenchTurnId; intentVersion: number } | null;
 }
 export interface OpenCodeNativeActivity {
   sessionID: string;
@@ -774,18 +777,30 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     return execution;
   }
 
-  async completeExecution(input: {
+  /** Fence a completed execution so Workbench core's later continuation request knows which intent it ended. */
+  settleExecution(input: {
     sessionID: string; eventID: string; turnId: WorkbenchTurnId;
     status: "completed" | "interrupted" | "failed";
-    lifecycle: WorkbenchThreadLifecycle | null;
     intentVersion?: number;
   }) {
-    if (input.status !== "completed" || !this.options.recovery.shouldContinue(input.lifecycle, false)) return;
     const execution = this.execution(input.sessionID);
-    const version = input.intentVersion ?? execution.intentVersion;
+    execution.completion = input.status === "completed" ? {
+      eventID: input.eventID, turnId: input.turnId, intentVersion: input.intentVersion ?? execution.intentVersion,
+    } : null;
+  }
+
+  /** Admit the hidden unfinished-turn prompt once, unless newer intent, steers or interruption superseded the turn. */
+  async continueUnfinished(target: WorkbenchUnfinishedTurnTarget) {
+    if (this.options.signal.aborted) return;
+    const { binding } = await this.native(target.threadId);
+    const sessionID = binding.nativeThreadId;
+    const execution = this.execution(sessionID);
+    const completion = execution.completion;
+    if (!completion || completion.turnId !== target.turnId) return;
+    execution.completion = null;
     const current = () => !this.options.signal.aborted && !execution.active
-      && execution.turn?.turnId === input.turnId && execution.intentVersion === version
-      && !this.pendingSteerSessions.has(input.sessionID) && !this.requestedInterruptions.has(input.sessionID);
+      && execution.turn?.turnId === completion.turnId && execution.intentVersion === completion.intentVersion
+      && !this.pendingSteerSessions.has(sessionID) && !this.requestedInterruptions.has(sessionID);
     if (!current() || !execution.turn) return;
     const threadId = execution.turn.threadId;
     try {
@@ -796,16 +811,14 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         if (!current() || !entry || entry.entryKind === "draft"
           || !this.options.recovery.shouldContinue(entry.lifecycle, false)) return;
         await this.submitNative({
-          threadId, clientMessageId: createWorkbenchThreadRecoveryId(`opencode:${input.eventID}`),
+          threadId, clientMessageId: createWorkbenchThreadRecoveryId(`opencode:${completion.eventID}`),
           input: createWorkbenchUnfinishedTurnInput(), intent: "newTurn", context: execution.context,
         }, native, execution, current);
       });
     } catch (error) {
-      if (error === supersededContinuation) return;
-      if (this.options.signal.aborted) return;
-      console.warn(`[opencode] Unfinished-turn admission failed (${error instanceof Error ? error.name : "unknown error"}).`);
-      await this.options.observe({ activity: null, displayLabel: null,
-        lifecycle: { threadId, event: { kind: "recoveryFailed" } } });
+      if (error === supersededContinuation || this.options.signal.aborted) return;
+      // Native admission errors can carry session content; only their class crosses this edge.
+      throw new Error(`OpenCode unfinished-turn admission failed (${error instanceof Error ? error.name : "unknown error"}).`);
     }
   }
 

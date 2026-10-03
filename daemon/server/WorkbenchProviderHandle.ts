@@ -1,10 +1,11 @@
 /*
  * Exports:
- * - default WorkbenchProviderHandle: forward each operation through the current definition lease.
+ * - default WorkbenchProviderHandle: forward each operation through the current definition lease, reporting when unfinished-turn continuation is unsupported.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
 import providerRegistrations, { type WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
+import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
 
 export default class WorkbenchProviderHandle implements WorkbenchProvider {
   constructor(
@@ -85,10 +86,20 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
 
   readonly recovery: NonNullable<WorkbenchProvider["recovery"]> = {
     refresh: threadId => this.run(providerRegistrations[this.key], provider => {
-      if (!provider.recovery) throw new Error(`Provider ${this.key} does not support managed refresh.`);
+      if (!provider.recovery?.refresh) throw new Error(`Provider ${this.key} does not support managed refresh.`);
       return provider.recovery.refresh(threadId);
     }, `${this.key}: recovery.refresh`),
+    continueUnfinished: async target => { await this.continueUnfinishedTurn(target); },
   };
+
+  /** "unsupported" when this provider generation has no unfinished-turn continuation. */
+  continueUnfinishedTurn(target: WorkbenchUnfinishedTurnTarget) {
+    return this.run(providerRegistrations[this.key], async provider => {
+      if (!provider.recovery?.continueUnfinished) return "unsupported" as const;
+      await provider.recovery.continueUnfinished(target);
+      return "handled" as const;
+    }, `${this.key}: recovery.continueUnfinished`);
+  }
 
   private singleFileOperation<T>(operation: (owner: NonNullable<WorkbenchProvider["singleFile"]>) => Promise<T>) {
     return this.run(providerRegistrations[this.key], provider => {

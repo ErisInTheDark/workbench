@@ -32,7 +32,7 @@ export interface OpenCodeEventControllerOptions {
     syncNative(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId; latestTurnId?: WorkbenchTurnId | null; hasPendingSteers?: boolean; maintenance?: boolean }>;
     syncCreatedNative?(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId } | null>;
     reconcileActivity?(signal: AbortSignal, wasTouched: (sessionID: string) => boolean): ReturnType<OpenCodeThreadOperations["reconcileActivity"]>;
-  } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "completeExecution" | "executionIntentVersion">;
+  } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "settleExecution" | "executionIntentVersion">;
   transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordCompaction" | "recordItem" | "recordTurnState">
     & Partial<Pick<OpenCodeTranscriptAdapter, "previewToolPatch">>;
 }
@@ -113,17 +113,18 @@ export default class OpenCodeEventController {
       }
       if (wasTouched(fact.sessionID)) continue;
       this.options.threads.markExecutionSettled(fact.sessionID);
-      const lifecycle = await this.options.observe({
+      // Fence before observing: the observation is what lets Workbench core request a continuation.
+      this.options.threads.settleExecution({
+        sessionID: fact.sessionID,
+        eventID: `reconnected:${fact.sessionID}:${turnId}:${fact.idleAt ?? 0}`,
+        turnId, status,
+      });
+      await this.options.observe({
         projectId: fact.projectId, activity: null, displayLabel: null,
         lifecycle: { threadId: fact.threadId, event: { kind: "turnCompleted", turnId, status } },
       });
       this.broadcastTurn("turn/completed", fact.threadId, { ...fact.turn, status });
       this.broadcastThreadStatus(fact.threadId, { type: "idle" });
-      await this.options.threads.completeExecution({
-        sessionID: fact.sessionID,
-        eventID: `reconnected:${fact.sessionID}:${turnId}:${fact.idleAt ?? 0}`,
-        turnId, status, lifecycle: lifecycle || null,
-      });
     }
   }
 
@@ -365,7 +366,11 @@ export default class OpenCodeEventController {
             observedAt: event.created,
           });
         }
-        const lifecycle = await this.options.observe({
+        // Fence before observing: the observation is what lets Workbench core request a continuation.
+        this.options.threads.settleExecution({
+          sessionID, eventID: event.id, turnId: WorkbenchTurnIdSchema.parse(turn.id), status, intentVersion,
+        });
+        await this.options.observe({
           activity: null,
           lifecycle: {
             threadId: identity.threadId,
@@ -379,10 +384,6 @@ export default class OpenCodeEventController {
         });
         this.broadcastTurn("turn/completed", identity.threadId, { ...turn, status });
         this.broadcastThreadStatus(identity.threadId, { type: "idle" });
-        await this.options.threads.completeExecution({
-          sessionID, eventID: event.id, turnId: WorkbenchTurnIdSchema.parse(turn.id),
-          status, lifecycle: lifecycle || null, intentVersion,
-        });
       }
     }
   }

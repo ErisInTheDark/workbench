@@ -528,6 +528,8 @@ test("execution outlives submission and only terminal execution releases the idl
   assert.equal(owner.hasPendingWork(), false);
 });
 
+const target = { threadId, turnId };
+
 test("unfinished completion admits the hidden continuation once, while terminal task decisions and interruption do not", async () => {
   for (const state of [
     unfinished,
@@ -543,13 +545,17 @@ test("unfinished completion admits the hidden continuation once, while terminal 
       record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }),
     }, { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: state }) } });
     await owner.syncNative(nativeThreadId);
-    const completion = { sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" as const, lifecycle: state };
+    const completion = { sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" as const };
     assert.equal(owner.acceptExecutionEvent(nativeThreadId, 10), true);
-    await owner.completeExecution(completion);
+    owner.settleExecution(completion);
+    await owner.continueUnfinished(target);
+    await owner.continueUnfinished(target);
     assert.equal(owner.acceptExecutionEvent(nativeThreadId, 10), false);
     assert.equal(owner.acceptExecutionEvent(nativeThreadId, 9), false);
-    await owner.completeExecution({ ...completion, status: "interrupted" });
-    await owner.completeExecution({ ...completion, status: "failed" });
+    for (const status of ["interrupted", "failed"] as const) {
+      owner.settleExecution({ ...completion, status });
+      await owner.continueUnfinished(target);
+    }
     assert.equal(prompts.length, state === unfinished ? 1 : 0);
     if (prompts.length) assert.equal(isWorkbenchUnfinishedTurnInput(prompts[0]!.metadata.workbench.input), true);
     await owner.settle();
@@ -566,7 +572,8 @@ test("a fresh task decision suppresses a continuation requested against stale un
     entryKind: "thread", lifecycle: { kind: "needsAttention", reason: "agentBlocked", settled: false, agent: { agentStatus: "blocked", turnId } },
   }) } });
   await owner.syncNative(nativeThreadId);
-  await owner.completeExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed", lifecycle: unfinished });
+  owner.settleExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" });
+  await owner.continueUnfinished(target);
   assert.equal(prompts, 0);
 });
 
@@ -583,15 +590,13 @@ test("a task blocked during continuation preparation is not submitted", async ()
     },
   }) } });
   await owner.syncNative(nativeThreadId);
-  await owner.completeExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed", lifecycle: unfinished });
+  owner.settleExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" });
+  await owner.continueUnfinished(target);
   assert.equal(prompts, 0);
 });
 
-test("continuation disposal and failed admission do not retry or lose failure state", async t => {
-  const warnings: string[] = [];
-  t.mock.method(console, "warn", (message: string) => { warnings.push(message); });
+test("failed continuation admission throws sanitized, does not retry, and disposal stops later requests", async () => {
   const signal = new AbortController();
-  const observations: object[] = [];
   let records = 0;
   const owner = operations({ message: { list: async () => ({ data: [], cursor: {} }) } }, {
     record: async () => {
@@ -599,16 +604,19 @@ test("continuation disposal and failed admission do not retry or lose failure st
       return { threadId, latestTurnId: turnId, latestTurnState: "completed" };
     },
   }, { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: unfinished }) } },
-  { signal: signal.signal, observe: async facts => { observations.push(facts); } });
+  { signal: signal.signal });
   await owner.syncNative(nativeThreadId);
-  const completion = { sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" as const, lifecycle: unfinished };
-  await owner.completeExecution(completion);
+  const completion = { sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" as const };
+  owner.settleExecution(completion);
+  const failure = await owner.continueUnfinished(target).then(() => null, (error: unknown) => error);
+  assert.ok(failure instanceof Error);
+  assert.doesNotMatch(failure.message, /PRIVATE/);
   assert.equal(records, 3);
-  assert.deepEqual(observations, [{ activity: null, displayLabel: null, lifecycle: { threadId, event: { kind: "recoveryFailed" } } }]);
-  assert.equal(warnings.length, 1);
-  assert.doesNotMatch(warnings.join(""), /PRIVATE/);
+  await owner.continueUnfinished(target);
+  assert.equal(records, 3, "a consumed completion is never retried");
+  owner.settleExecution(completion);
   signal.abort();
-  await owner.completeExecution(completion);
+  await owner.continueUnfinished(target);
   assert.equal(records, 3);
 });
 
@@ -626,8 +634,8 @@ test("new user intent admitted before completion enforcement wins over the stale
   recorded = nextTurn;
   await owner.submit({ threadId, clientMessageId: "user", intent: "newTurn",
     input: [{ type: "text", text: "new direction", text_elements: [] }] });
-  await owner.completeExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed",
-    lifecycle: unfinished, intentVersion: version });
+  owner.settleExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed", intentVersion: version });
+  await owner.continueUnfinished(target);
   assert.deepEqual(prompts, ["new direction"]);
   await owner.settle();
 });
@@ -644,8 +652,8 @@ test("hidden continuation retains workflow and activated skill instructions", as
     input: [{ type: "skill", name: "review", path: "skills/review" }],
     context: { workflowIds: ["default"], activatedSkillPaths: ["skills/react"] } });
   owner.markExecutionSettled(nativeThreadId);
-  await owner.completeExecution({ sessionID: nativeThreadId, eventID: "end", turnId,
-    status: "completed", lifecycle: unfinished });
+  owner.settleExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" });
+  await owner.continueUnfinished(target);
   assert.equal(refreshes.length, 2);
   assert.deepEqual(refreshes[1]!.workflowIds, ["default"]);
   assert.deepEqual(new Set(refreshes[1]!.activatedSkillPaths), new Set(["skills/react", "skills/review"]));
@@ -667,8 +675,8 @@ test("user intent arriving during continuation preparation cancels only the hidd
     input: [{ type: "text", text: "first", text_elements: [] }], context: { workflowIds: ["default"] } });
   owner.markExecutionSettled(nativeThreadId);
   prepare = true;
-  const continuation = owner.completeExecution({ sessionID: nativeThreadId, eventID: "end", turnId,
-    status: "completed", lifecycle: unfinished });
+  owner.settleExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" });
+  const continuation = owner.continueUnfinished(target);
   await entered.promise;
   const submission = owner.submit({ threadId, clientMessageId: "next", intent: "newTurn",
     input: [{ type: "text", text: "new direction", text_elements: [] }] });

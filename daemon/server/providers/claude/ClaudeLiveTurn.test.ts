@@ -1,4 +1,4 @@
-/* No production exports. Tests protect Claude live-turn admission order, settlement, lifecycle publication, steer delivery, and reload restoration. */
+/* No production exports. Tests protect Claude live-turn admission order, settlement, lifecycle publication, steer and working-notice delivery, and reload restoration. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -38,6 +38,7 @@ function fixture(
   onAccepted?: (turn: ClaudeLiveTurn, log: string[]) => void,
   usage: ConstructorParameters<typeof ClaudeLiveTurn>[0]["usage"] = null,
   contextWindow: number | null = null,
+  workingStatusInPrompt = false,
 ) {
   const pending: (object | Error)[] = [];
   let wake: (() => void) | null = null;
@@ -99,9 +100,10 @@ function fixture(
     },
     readTurn: async () => ({ id: turnId, status: "inProgress" }) as never,
     release: async () => { log.push("release"); },
+    settling: status => { log.push(`reported:${status}`); },
   };
   turn = new ClaudeLiveTurn({
-    scope: "scope", cwd: "C:/repo", projectId, threadId, turnId, workingStatusInPrompt: false, usage, contextWindow,
+    scope: "scope", cwd: "C:/repo", projectId, threadId, turnId, workingStatusInPrompt, usage, contextWindow,
     ...collaborators,
   });
   return { turn, push, log, steers, queue, usageSignals, liveUsage, collaborators };
@@ -120,7 +122,8 @@ test("a completed turn is accepted before its prompt and releases its process be
   await task;
   assert.deepEqual(log, [
     "activity:turnStarted", "observe:acceptedIntent", "prompts:0", "status:active", "turn/started",
-    "release", "settle:completed", "observe:turnCompleted:completed", "turn/completed", "status:idle",
+    // Settlement is reported before the observation that lets Workbench core continue the turn.
+    "release", "settle:completed", "reported:completed", "observe:turnCompleted:completed", "turn/completed", "status:idle",
   ]);
 });
 
@@ -211,7 +214,7 @@ test("a failed query settles failed and still publishes idle", async context => 
   const { task } = await turn.start("hi");
   push(new Error("native crash"));
   await task;
-  assert.deepEqual(log.slice(5), ["release", "settle:failed", "observe:turnCompleted:failed", "turn/completed", "status:idle"]);
+  assert.deepEqual(log.slice(5), ["release", "settle:failed", "reported:failed", "observe:turnCompleted:failed", "turn/completed", "status:idle"]);
 });
 
 test("interruption settles exactly once as interrupted and retires undelivered steers", async () => {
@@ -251,6 +254,18 @@ test("a steer still queued when Claude's reply ends keeps the Workbench turn ope
   await task;
   assert.deepEqual(steers.map(entry => entry.status), ["sent"]);
   assert.deepEqual(log.filter(entry => entry.startsWith("settle")), ["settle:completed"]);
+});
+
+test("a launch prompt carrying the working notice drops only acceptance's duplicate, and later transitions still reach Claude", async () => {
+  const notice = "<wb:thread-status value=\"working\" />";
+  const { turn, push, queue } = fixture(accepted => accepted.injectWorkingStatus(notice), null, null, true);
+  const { task } = await turn.start("do the thing");
+  turn.injectWorkingStatus(notice);
+  assert.deepEqual(queue.pushed.map(message => [message.message.content, message.isSynthetic ?? false]), [
+    ["do the thing", false], [notice, true],
+  ]);
+  push(result());
+  await task;
 });
 
 test("late queued context that is not a steer does not hold the turn open for another model turn", async () => {

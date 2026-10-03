@@ -1,8 +1,9 @@
-/* No production exports. Tests protect Claude model-use admission, post-acceptance failure reporting, launch context windows, and turn liveness attestation. */
+/* No production exports. Tests protect Claude model-use admission, post-acceptance failure reporting, launch context windows, unfinished-turn continuation, and turn liveness attestation. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
+import { isWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import ClaudeSessionHost from "./ClaudeSessionHost";
 import ClaudeThreadOperations from "./ClaudeThreadOperations";
 
@@ -125,6 +126,25 @@ test("Claude launches with the configured window, or the model's default, and re
   assert.deepEqual(configured.defaults, []);
   assert.deepEqual(configured.launches, ["300000"]);
   assert.equal(configured.windows[0], 300_000);
+});
+
+test("an unfinished Claude turn continues once with the hidden input and the context its instructions were built from", async () => {
+  const owner = fixture({ usage: [] });
+  await owner.submit({ threadId, clientMessageId: "message", intent: "newTurn",
+    input: [{ type: "skill", name: "review", path: "skills/review" }],
+    context: { workflowIds: ["default"], activatedSkillPaths: ["skills/react"] } });
+  await owner.dispose();
+  const continued: Parameters<ClaudeThreadOperations["submit"]>[0][] = [];
+  Object.assign(owner, { submit: async (input: Parameters<ClaudeThreadOperations["submit"]>[0]) => { continued.push(input); } });
+  await owner.continueUnfinished({ threadId, turnId: WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000009") });
+  assert.equal(continued.length, 0, "a different turn was superseded");
+  await owner.continueUnfinished({ threadId, turnId });
+  await owner.continueUnfinished({ threadId, turnId });
+  assert.equal(continued.length, 1);
+  assert.equal(continued[0]!.intent, "newTurn");
+  assert.equal(isWorkbenchUnfinishedTurnInput(continued[0]!.input as never), true);
+  assert.deepEqual(continued[0]!.context?.workflowIds, ["default"]);
+  assert.deepEqual(new Set(continued[0]!.context?.activatedSkillPaths), new Set(["skills/react", "skills/review"]));
 });
 
 test("a Claude turn is live only while this daemon runs it or still owns its transcript scope", async () => {

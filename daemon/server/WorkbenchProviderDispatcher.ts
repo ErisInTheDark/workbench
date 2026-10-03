@@ -5,6 +5,7 @@
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
 import type { WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
+import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
 import WorkbenchProviderHandle from "./WorkbenchProviderHandle";
 
 export default class WorkbenchProviderDispatcher {
@@ -16,5 +17,9 @@ export default class WorkbenchProviderDispatcher {
 
   hydratesUsage(key: WorkbenchProviderKey) {
     return new WorkbenchProviderHandle(key, this.run).hydratesUsage();
+  }
+
+  continueUnfinished(key: WorkbenchProviderKey, target: WorkbenchUnfinishedTurnTarget) {
+    return new WorkbenchProviderHandle(key, this.run).continueUnfinishedTurn(target);
   }
 }

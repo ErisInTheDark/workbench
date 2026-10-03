@@ -205,15 +205,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       onNotification: (notification, facts, nativeNotification) => {
         turnRecovery.observeNotification("codex", nativeNotification);
         context.broadcastProviderNotification("codex", notification);
+        // Workbench core decides unfinished-turn continuation from the observed lifecycle.
         void persist(async () => {
-          let lifecycle;
-          try {
-            lifecycle = await build.get("providerObservations").observe("codex", facts);
-          } catch (error) {
-            await turnRecovery.completeObservedTurn("codex", nativeNotification, null);
-            throw error;
-          }
-          await turnRecovery.completeObservedTurn("codex", nativeNotification, lifecycle);
+          await build.get("providerObservations").observe("codex", facts);
         }).catch(error => logError("thread-state",
           `failed to observe Codex notification: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
       },

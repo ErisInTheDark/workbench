@@ -2,7 +2,7 @@
  * Exports:
  * - ClaudeTurnHandoff: one paused live turn's turn and transcript state for the next bridge generation.
  * - ClaudeThreadOperationsOptions: bind host-owned Claude sessions to Workbench identity, state, lifecycle publication, and managed MCP.
- * - default ClaudeThreadOperations: admit Claude turns and steers, launch them on the harness session host with their configured or model-default context window, pause and restore live turns across bridge reloads, attest turn liveness, hold admitted steers in canonical history, deliver Browse screenshots, hydrate billing usage from session logs, and own native session operations.
+ * - default ClaudeThreadOperations: admit Claude turns and steers, launch them on the harness session host with their configured or model-default context window, pause and restore live turns across bridge reloads, continue unfinished turns with their launch context, attest turn liveness, hold admitted steers in canonical history, deliver Browse screenshots, hydrate billing usage from session logs, and own native session operations.
  */
 import {
     deleteSession, getSessionInfo, listSessions, query, renameSession,
@@ -23,9 +23,12 @@ import type {
 import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provider/provider-thread";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import {
+    createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput,
     isWorkbenchQuestionnaireResponsePart,
     WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
+import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
+import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
 import type WorkbenchProjectCatalogController from "../../WorkbenchProjectCatalogController";
 import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireController";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
@@ -79,6 +82,8 @@ export interface ClaudeThreadOperationsOptions {
 export default class ClaudeThreadOperations implements WorkbenchProviderThreads {
   private readonly live = new Map<WorkbenchThreadId, ClaudeLiveTurn>();
   private readonly scopes = new Map<string, ClaudeLiveTurn>();
+  /** Each thread's last completed turn and its launch context, until continued or superseded by a new turn. */
+  private readonly completedTurns = new Map<WorkbenchThreadId, { turnId: WorkbenchTurnId; context: WorkbenchMessageContext | undefined }>();
   private readonly pending = new Set<Promise<void>>();
   private readonly usageHydrator: ClaudeUsageHydrator;
 
@@ -136,7 +141,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       if (!session) console.error("[claude] live turn lost its process across reload", snapshot.turnId);
       const live = ClaudeLiveTurn.restore(snapshot, {
         session: session ?? ENDED_CLAUDE_SESSION,
-        ...this.collaborators(snapshot.threadId, snapshot.turnId, snapshot.scope),
+        ...this.collaborators(snapshot.threadId, snapshot.turnId, snapshot.scope, snapshot.context),
       });
       this.live.set(snapshot.threadId, live);
       this.scopes.set(snapshot.scope, live);
@@ -151,7 +156,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     await this.usageHydrator.settle();
   }
 
-  private collaborators(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, scope: string) {
+  private collaborators(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, scope: string, context: WorkbenchMessageContext | undefined) {
     return {
       transcript: this.options.transcript,
       usageChanged: () => this.refreshUsage(threadId),
@@ -161,6 +166,10 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       release: async () => {
         if (this.live.get(threadId)?.turnId === turnId) this.live.delete(threadId);
         if (this.scopes.get(scope)?.turnId === turnId) this.scopes.delete(scope);
+      },
+      settling: (status: "completed" | "failed" | "interrupted") => {
+        if (status === "completed") this.completedTurns.set(threadId, { turnId, context });
+        else if (this.completedTurns.get(threadId)?.turnId === turnId) this.completedTurns.delete(threadId);
       },
     };
   }
@@ -212,10 +221,8 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       const identity = await this.identity(input.threadId);
       const runtime = this.live.get(identity.threadId);
       if (runtime) {
-        if (input.text === WORKBENCH_THREAD_WORKING_STATUS_MESSAGE && runtime.workingStatusInPrompt) {
-          return "admitted";
-        }
-        runtime.inject(input.text);
+        if (input.text === WORKBENCH_THREAD_WORKING_STATUS_MESSAGE) runtime.injectWorkingStatus(input.text);
+        else runtime.inject(input.text);
         return "admitted";
       }
       if (input.text === WORKBENCH_THREAD_WORKING_STATUS_MESSAGE) {
@@ -359,14 +366,17 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : null;
     const model = settings?.model ?? null;
     const contextWindow = await this.launchContextWindow(settings);
+    const activatedSkillPaths = [...new Set([
+      ...(input.context?.activatedSkillPaths ?? []),
+      ...input.input.flatMap(part => part.type === "skill" ? [part.path] : []),
+    ])];
+    // Instructions are rebuilt per launch, so an unfinished-turn continuation must replay exactly this context.
+    const turnContext: WorkbenchMessageContext = { ...input.context, activatedSkillPaths };
     const instructions = await this.options.buildInstructions({
       cwd: binding.nativeLocation, projectId: identity.projectId, threadId: identity.threadId,
       model, agentPath: settings?.agentPath ?? null,
-      workflowIds: input.context?.workflowIds ?? [],
-      activatedSkillPaths: [...new Set([
-        ...(input.context?.activatedSkillPaths ?? []),
-        ...input.input.flatMap(part => part.type === "skill" ? [part.path] : []),
-      ])],
+      workflowIds: turnContext.workflowIds ?? [],
+      activatedSkillPaths,
     });
     if (!instructions.trim()) throw new Error("Claude managed instructions are unavailable.");
     const hasQuestionnaireResponse = toWorkbenchThreadUserInput(input.input).some(isWorkbenchQuestionnaireResponsePart);
@@ -443,9 +453,10 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const live = new ClaudeLiveTurn({
       session, scope, cwd: binding.nativeLocation,
       projectId: ProjectIdSchema.parse(identity.projectId),
-      threadId: identity.threadId, turnId, workingStatusInPrompt, usage, contextWindow,
-      ...this.collaborators(identity.threadId, turnId, scope),
+      threadId: identity.threadId, turnId, workingStatusInPrompt, usage, contextWindow, context: turnContext,
+      ...this.collaborators(identity.threadId, turnId, scope, turnContext),
     });
+    this.completedTurns.delete(identity.threadId);
     this.live.set(identity.threadId, live);
     this.scopes.set(scope, live);
     const started = await live.start(sdkContent);
@@ -472,6 +483,22 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       threadId: input.threadId, clientMessageId: randomUUID(),
       input: [{ type: "text", text: createWorkbenchAgentMessageText(input.message), text_elements: [] }],
       intent: "continue", context: input.context,
+    });
+  }
+
+  /** Relaunch the thread's last completed turn context with the hidden unfinished-turn input, once. */
+  async continueUnfinished(target: WorkbenchUnfinishedTurnTarget) {
+    // A retired bridge generation hands live turns over; it never owns new continuations.
+    if (this.options.signal.aborted) return;
+    const identity = await this.identity(target.threadId);
+    const completed = this.completedTurns.get(identity.threadId);
+    // No record: a newer turn superseded it, or a bridge reload dropped it and the thread stays in needs attention.
+    if (!completed || completed.turnId !== target.turnId || this.live.has(identity.threadId)) return;
+    this.completedTurns.delete(identity.threadId);
+    await this.submit({
+      threadId: identity.threadId, clientMessageId: createWorkbenchThreadRecoveryId(`claude:${target.turnId}`),
+      input: createWorkbenchUnfinishedTurnInput(), intent: "newTurn",
+      ...(completed.context ? { context: completed.context } : {}),
     });
   }
 

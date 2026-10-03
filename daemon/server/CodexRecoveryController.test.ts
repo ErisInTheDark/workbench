@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { WORKBENCH_UNFINISHED_TURN_MESSAGE } from "workbench-shared/workbench/thread/thread-recovery-message";
-import { WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import CodexRecoveryController, { type CodexRecoveryOptions } from "./CodexRecoveryController";
 import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type { JsonRpcRequest } from "./bridge-types";
@@ -149,16 +149,26 @@ test("busy refresh retains the observed turn and draining rejects new work", asy
   await assert.rejects(controller.requestResume("codex", "thread", async () => "recovered"), /draining/);
 });
 
-test("normally completed unfinished turns preserve request context and continue only once", async () => {
-  const controller = createRecovery();
+const target = {
+  threadId: WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001"),
+  turnId: WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002"),
+};
+const completed = (status = "completed", id = "turn") => (
+  { method: "turn/completed", params: { threadId: "thread", turn: { id, status } } }
+);
+const resolveThread = async () => "thread";
+
+test("a completed turn continues once, across a reload, with its exact request context", async () => {
+  const controller = createRecovery({ resolveThread });
   observe(controller);
-  const notification = { method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "completed" } } };
-  controller.observeNotification("codex", notification);
+  controller.observeNotification("codex", completed());
+  await assert.rejects(controller.requestResume("codex", "thread", async () => "recovered"), /no captured/,
+    "a completed turn cannot be refreshed");
+  const restored = createRecovery({ resolveThread, state: await controller.detachForReload() });
   const starts: JsonRpcRequest[] = [];
-  const lifecycle = { kind: "needsAttention", reason: "noActiveTurn", settled: false } as const;
   const port = async (_candidate: object, request: JsonRpcRequest) => { starts.push(request); };
-  assert.equal(await controller.completeObservedTurn("codex", notification, lifecycle, port), true);
-  assert.equal(await controller.completeObservedTurn("codex", notification, lifecycle, port), false);
+  await restored.continueUnfinished(target, port);
+  await restored.continueUnfinished(target, port);
   assert.equal(starts.length, 1);
   assert.deepEqual(starts[0].workbenchPromptContext, { agentPath: "agent://lily.md", workflowIds: ["default"] });
   assert.deepEqual(starts[0].params, {
@@ -167,56 +177,43 @@ test("normally completed unfinished turns preserve request context and continue 
   });
 });
 
-test("unfinished continuation respects terminal owners, user stops, provider failures and goals", async () => {
-  const lifecycles = [
-    { agent: { agentStatus: "completed", turnId: WorkbenchTurnIdSchema.parse("turn") }, kind: "completed", reason: "agentCompleted", settled: false } as const,
-    { agent: { agentStatus: "blocked", turnId: WorkbenchTurnIdSchema.parse("turn") }, kind: "needsAttention", reason: "agentBlocked", settled: false } as const,
-    { kind: "needsAttention", reason: "pendingInput", requestKey: "question", settled: false, turnId: WorkbenchTurnIdSchema.parse("turn") } as const,
-    { kind: "needsAttention", reason: "noActiveTurn", settled: false } as const,
-  ];
-  for (const lifecycle of lifecycles) {
-    for (const status of ["completed", "interrupted", "failed"]) {
-      for (const goalOwned of [false, true]) {
-        if (lifecycle.reason === "noActiveTurn" && status === "completed" && !goalOwned) continue;
-        const controller = createRecovery();
-        observe(controller);
-        if (goalOwned) {
-          controller.observeRequest("codex", { method: "thread/goal/set", params: { threadId: "thread" } });
-          controller.observeRequest("codex", { method: "thread/goal/clear", params: { threadId: "thread" } });
-        }
-        const notification = { method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status } } };
-        controller.observeNotification("codex", notification);
-        assert.equal(await controller.completeObservedTurn("codex", notification, lifecycle, async () => {
-          assert.fail("terminal owner must prevent continuation");
-        }), false);
-      }
-    }
+test("stopped, failed, superseded and goal-owned turns never continue", async () => {
+  const never = async () => assert.fail("this turn must not continue");
+  for (const status of ["interrupted", "failed"]) {
+    const controller = createRecovery({ resolveThread });
+    observe(controller);
+    controller.observeNotification("codex", completed(status));
+    await controller.continueUnfinished(target, never);
   }
+  const superseded = createRecovery({ resolveThread });
+  observe(superseded);
+  superseded.observeNotification("codex", completed());
+  observe(superseded, "codex", "thread", "user-message");
+  await superseded.continueUnfinished(target, never);
+  const goal = createRecovery({ resolveThread });
+  observe(goal);
+  goal.observeRequest("codex", { method: "thread/goal/set", params: { threadId: "thread" } });
+  goal.observeRequest("codex", { method: "thread/goal/clear", params: { threadId: "thread" } });
+  goal.observeNotification("codex", completed());
+  await goal.continueUnfinished(target, never);
 });
 
-test("failed unfinished continuation reports once and retires its own replacement", async () => {
-  const failures: string[] = [];
-  const controller = createRecovery({ reportFailure: async candidate => { failures.push(candidate.threadId); } });
+test("failed unfinished continuation throws to its caller and retires its own replacement", async () => {
+  const controller = createRecovery({ resolveThread });
   observe(controller);
-  const notification = { method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "completed" } } };
-  assert.equal(await controller.completeObservedTurn("codex", notification, {
-    kind: "needsAttention", reason: "noActiveTurn", settled: false,
-  }, async (candidate, request) => {
+  controller.observeNotification("codex", completed());
+  await assert.rejects(controller.continueUnfinished(target, async (candidate, request) => {
     controller.observeRequest(candidate.harness, request);
     throw new Error("provider rejected continuation");
-  }), false);
-  assert.deepEqual(failures, ["thread"]);
+  }), /provider rejected continuation/);
   assert.deepEqual((await controller.detachForReload()).candidates, []);
 });
 
 test("late completion of another turn cannot retire current context", async () => {
-  const controller = createRecovery();
+  const controller = createRecovery({ resolveThread });
   observe(controller);
-  const notification = { method: "turn/completed", params: { threadId: "thread", turn: { id: "older", status: "interrupted" } } };
-  controller.observeNotification("codex", notification);
-  assert.equal(await controller.completeObservedTurn("codex", notification, {
-    kind: "needsAttention", reason: "noActiveTurn", settled: false,
-  }, async () => assert.fail("must not continue an older turn")), false);
+  controller.observeNotification("codex", completed("completed", "older"));
+  await controller.continueUnfinished(target, async () => assert.fail("must not continue an older turn"));
   const state = await controller.detachForReload();
   assert.equal(state.candidates[0].turnId, "turn");
 });

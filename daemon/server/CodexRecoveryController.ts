@@ -1,16 +1,16 @@
 /*
  * Exports:
  * - CodexTurnRecoveryPort/CodexTurnRecoveryResult: native replay boundary and terminal outcomes.
- * - CodexRecoveryControllerState: exact native request capture handoff.
+ * - CodexRecoveryControllerState: exact native request capture handoff, including completed turns awaiting continuation.
  * - CodexObservedTurnCandidate: native request and turn context.
  * - CodexUnfinishedTurnPort: admitted hidden continuation boundary.
  * - CodexRecoveryOptions: shared scheduling and native replay/identity dependencies.
- * - default CodexRecoveryController: own native capture, replay and generation cancellation.
+ * - default CodexRecoveryController: own native capture, manual refresh, unfinished-turn replay and generation cancellation.
  */
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
-import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -32,6 +32,8 @@ export type CodexUnfinishedTurnPort = (candidate: CodexObservedTurnCandidate, re
 
 export interface CodexRecoveryControllerState {
   candidates: CodexObservedTurnCandidate[];
+  /** Last completed turn per thread, awaiting Workbench core's unfinished-turn decision. */
+  completedTurns?: CodexObservedTurnCandidate[];
   goalOwnedThreads: string[];
   activeGoalThreads?: string[];
   resumeRequests: Array<[string, JsonRpcRequest]>;
@@ -75,6 +77,7 @@ function createCodexTurnRecoveryResumeRequest(request: JsonRpcRequest, threadId:
 
 export default class CodexRecoveryController {
   private readonly candidates = new Map<string, CodexObservedTurnCandidate>();
+  private readonly completedTurns = new Map<string, CodexObservedTurnCandidate>();
   private readonly goalOwnedThreads = new Map<string, boolean>();
   private readonly resumeRequests = new Map<string, JsonRpcRequest>();
   private acceptingRecovery = true;
@@ -82,6 +85,7 @@ export default class CodexRecoveryController {
   constructor(private readonly options: CodexRecoveryOptions) {
     const { state } = options;
     for (const candidate of state?.candidates ?? []) this.candidates.set(candidate.key, structuredClone(candidate));
+    for (const candidate of state?.completedTurns ?? []) this.completedTurns.set(candidate.key, structuredClone(candidate));
     for (const threadId of state?.goalOwnedThreads ?? []) {
       this.goalOwnedThreads.set(threadId, state?.activeGoalThreads?.includes(threadId) ?? true);
     }
@@ -116,6 +120,7 @@ export default class CodexRecoveryController {
     if (harness === "codex" && request.method === "thread/goal/clear" && threadId) this.goalOwnedThreads.delete(threadId);
     if (request.method !== "turn/start" || !threadId) return;
     const key = `${harness}:${threadId}`;
+    this.completedTurns.delete(key);
     this.candidates.set(key, {
       goalOwned: this.goalOwnedThreads.has(threadId),
       harness,
@@ -145,9 +150,10 @@ export default class CodexRecoveryController {
       notification.method === "turn/completed"
       && candidate
       && (!candidate.turnId || !turn?.id || candidate.turnId === turn.id)
-      && turn?.status !== "completed"
     ) {
+      // A completed turn can no longer be refreshed; Workbench core decides whether it continues.
       this.candidates.delete(key);
+      if (turn?.status === "completed") this.completedTurns.set(key, candidate);
     }
     if (harness === "codex" && notification.method === "thread/goal/cleared") this.goalOwnedThreads.delete(threadId);
     if (harness === "codex" && notification.method === "thread/goal/updated") {
@@ -162,10 +168,12 @@ export default class CodexRecoveryController {
     }
   }
 
-  async completeObservedTurn(
-    harness: WorkbenchHarness,
-    notification: JsonRpcNotification,
-    lifecycle: WorkbenchThreadLifecycle | null,
+  /**
+   * Replay the last completed turn's exact start request with the hidden unfinished-turn input. Goal-owned threads
+   * continue through Codex goals instead; a newer turn start or another continuation supersedes the turn quietly.
+   */
+  async continueUnfinished(
+    target: WorkbenchUnfinishedTurnTarget,
     port: CodexUnfinishedTurnPort = async (candidate, request) => {
       if (!candidate.resumeRequest || !this.options.request) throw new Error("The unfinished Codex turn has no captured admission context.");
       this.observeRequest("codex", request);
@@ -178,20 +186,14 @@ export default class CodexRecoveryController {
     },
   ) {
     const signal = this.recoveryGeneration.signal;
-    if (signal.aborted) return false;
-    if (notification.method !== "turn/completed") return false;
-    const params = record(notification.params);
-    const threadId = threadIdFrom(notification.params);
-    const turn = record(params?.turn);
-    if (!threadId) return false;
-    const key = `${harness}:${threadId}`;
-    const candidate = this.candidates.get(key);
-    if (!candidate || (candidate.turnId && typeof turn?.id === "string" && candidate.turnId !== turn.id)) return false;
-    this.candidates.delete(key);
-    if (
-      turn?.status !== "completed"
-      || !this.options.coordinator.shouldContinue(lifecycle, candidate.goalOwned === true)
-    ) return false;
+    if (signal.aborted) return;
+    if (!this.options.resolveThread) throw new Error("Codex recovery identity is unavailable.");
+    const threadId = await this.options.resolveThread(target.threadId);
+    const key = `codex:${threadId}`;
+    const candidate = this.completedTurns.get(key);
+    if (signal.aborted || !candidate) return;
+    this.completedTurns.delete(key);
+    if (candidate.goalOwned) return;
 
     const continuationId = createWorkbenchThreadRecoveryId(`unfinished:${candidate.recoveryId}`);
     const paramsRecord = record(candidate.request.params) ?? {};
@@ -208,17 +210,14 @@ export default class CodexRecoveryController {
     };
     try {
       await port(structuredClone(candidate), request);
-      return !signal.aborted;
     } catch (error) {
       if (signal.aborted) {
         this.options.log(`Retired unfinished-turn continuation failed: ${error instanceof Error ? error.message : String(error)}`);
-        return false;
+        return;
       }
       const replacement = this.candidates.get(key);
       if (replacement?.request.id === continuationId) this.candidates.delete(key);
-      await this.publishFailure(candidate, error, this.options.reportFailure);
-      this.options.log(`Unfinished-turn continuation failed for ${harness}:${threadId}: ${error instanceof Error ? error.message : String(error)}`);
-      return false;
+      throw error;
     }
   }
 
@@ -249,6 +248,7 @@ export default class CodexRecoveryController {
   captureReloadState(): CodexRecoveryControllerState {
     return {
       candidates: structuredClone([...this.candidates.values()]),
+      completedTurns: structuredClone([...this.completedTurns.values()]),
       goalOwnedThreads: [...this.goalOwnedThreads.keys()],
       activeGoalThreads: [...this.goalOwnedThreads].filter(([, active]) => active).map(([threadId]) => threadId),
       resumeRequests: [...this.resumeRequests].map(([threadId, request]) => [threadId, structuredClone(request)]),

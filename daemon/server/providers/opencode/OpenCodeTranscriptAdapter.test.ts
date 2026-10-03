@@ -203,7 +203,7 @@ test("native reasoning streams through SQLite identity and live projection befor
       id: active.turnId, items: [], itemsView: "notLoaded", status: "inProgress",
       error: null, startedAt: null, completedAt: null, durationMs: null,
     }),
-      acceptExecutionEvent: () => true, completeExecution: async () => undefined, executionIntentVersion: () => 0,
+      acceptExecutionEvent: () => true, settleExecution: () => undefined, executionIntentVersion: () => 0,
       syncNative: async () => admitted, markExecutionSettled: () => undefined, markExecutionStarted: () => undefined },
     transcript: adapter,
   });

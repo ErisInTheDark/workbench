@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchCoreNode: own core state, Git, questionnaire, harness, project, orphaned-turn settlement, and supervisor registrations plus direct child declarations.
+ * - default WorkbenchCoreNode: own core state, Git, questionnaire, harness, project, orphaned-turn settlement, unfinished-turn continuation, and supervisor registrations plus direct child declarations.
  * Local helpers: construct reloadable modules, harness capabilities, and the core feature lifecycle.
  */
 import * as project from "./lib/project";
@@ -44,6 +44,7 @@ import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-r
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
+import WorkbenchUnfinishedTurnController from "./WorkbenchUnfinishedTurnController";
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
@@ -95,6 +96,7 @@ function createWorkbenchCoreFeature(
   transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps" | "record">,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
+  turnRecovery: DaemonRuntimeObjects["turnRecovery"],
   /** A fresh daemon process: no turn a previous process left running is owned here unless its provider says so. */
   coldStart: boolean,
   initialCatalog?: WorkbenchProjectStartup,
@@ -345,6 +347,21 @@ function createWorkbenchCoreFeature(
     },
     warn: message => logThreadStateWarning(message),
   });
+  const unfinishedTurns = new WorkbenchUnfinishedTurnController({
+    coordinator: turnRecovery,
+    readLifecycle: async (harness, threadId) => {
+      const identity = await threadIdentity.resolve({ harness, threadId: ThreadReferenceSchema.parse(threadId) });
+      if (!identity) return null;
+      const entry = await requireThreadState().controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+      return entry && entry.entryKind !== "draft" ? { projectId: identity.projectId, lifecycle: entry.lifecycle } : null;
+    },
+    continueUnfinished: async (harness, target) => {
+      const key = installedProviderKeys.find(key => key === harness);
+      return key ? await providers.continueUnfinished(key, target) : "unsupported";
+    },
+    reportFailed: async (projectId, harness, threadId) => await requireThreadState().controller.reportRecoveryFailed(projectId, harness, threadId),
+    log: context.logTurnRecovery,
+  });
   const turnSettlement = new WorkbenchTurnSettlementController({
     providers, identities: threadIdentity, transcripts: transcriptReader, transcript,
     observe: async (harness, facts) => await requireThreadState().observeProviderNotification(harness, facts),
@@ -460,7 +477,10 @@ function createWorkbenchCoreFeature(
         if (!lease.isCurrent()) return null;
         stats.observeProviderNotification(harness, facts);
         const observation = await threadState!.observeProviderNotification(harness, facts);
-        return lease.isCurrent() ? observation?.lifecycle ?? null : null;
+        if (!lease.isCurrent()) return null;
+        const lifecycle = observation?.lifecycle ?? null;
+        unfinishedTurns.observe(harness, facts, lifecycle);
+        return lifecycle;
       },
     },
   };
@@ -487,6 +507,7 @@ function createWorkbenchCoreFeature(
     },
     beginRuntimeDrain: () => { launches.beginRuntimeDrain(); messages.beginRuntimeDrain(); subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
+      unfinishedTurns.dispose();
       reportPhase("orphaned turn sweep disposal");
       await turnSettlement.dispose();
       reportPhase("transcript reconciliation disposal");
@@ -560,6 +581,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       get("transcript"),
       get("threadIdentity"),
       get("transcriptIdentity"),
+      get("turnRecovery"),
       mode === "initial",
       isReplacing("server:database") ? undefined : reloadState?.projectStartup,
       reloadState?.approvals,
@@ -568,7 +590,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
-  requires: ["database", "commandApprovals", "reloadDirt", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["database", "commandApprovals", "reloadDirt", "transcript", "threadIdentity", "transcriptIdentity", "turnRecovery"],
   safeAll: true,
   scope: "server:core",
 });
