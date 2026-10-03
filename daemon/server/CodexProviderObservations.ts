@@ -45,6 +45,12 @@ function timestamp(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? normalizeWorkbenchTimestampMs(value) : null;
 }
 
+/** User messages and Workbench agent messages both hand a thread new input; other tool output is passive context. */
+function isDeliveredInput(item: Record<string, unknown> | null) {
+  return item?.type === "userMessage"
+    || (item?.type === "functionCallOutput" && item.namespace === "workbench" && item.name === "agent_message");
+}
+
 export function mapProviderLifecycleNotification(
   notification: JsonRpcNotification, identities: AdmittedIdentities,
 ): WorkbenchProviderObservation["lifecycle"] {
@@ -55,14 +61,14 @@ export function mapProviderLifecycleNotification(
   if (notification.method === "item/started" || notification.method === "item/completed") {
     const item = record(params.item);
     const turnId = typeof params.turnId === "string" ? identities.knownTurn(TurnReferenceSchema.parse(params.turnId)).turnId : null;
-    return item?.type === "userMessage" && turnId ? { event: { kind: "userInputDelivered", turnId }, threadId } : null;
+    return isDeliveredInput(item) && turnId ? { event: { kind: "userInputDelivered", turnId }, threadId } : null;
   }
   if (notification.method === "turn/started") {
     const turn = record(params.turn);
     if (turn?.workbenchAdmission === "connecting" || turn?.workbenchAdmission === "providerPending") return null;
     const turnId = typeof turn?.id === "string" ? identities.knownTurn(TurnReferenceSchema.parse(turn.id)).turnId : null;
     const items = Array.isArray(turn?.items) ? turn.items : [];
-    return turnId && items.some(item => record(item)?.type === "userMessage")
+    return turnId && items.some(item => isDeliveredInput(record(item)))
       ? { event: { kind: "userInputDelivered", turnId }, threadId } : null;
   }
   if (notification.method === "turn/completed") {

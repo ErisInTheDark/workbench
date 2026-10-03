@@ -513,6 +513,24 @@ test("provider lifecycle notification mapping is exact and bounded", () => {
   assert.deepEqual(mapProviderLifecycleNotification({ method: "questionnaire/requested", params: { requestKey: "question", threadId: "child", turnId: null } }), {
     event: { kind: "pendingInput", questionnaire: null, requestKey: "question", turnId: null }, threadId: "child",
   });
+  // A parent's message reaches its child as Workbench tool output, not a user message, yet still resumes work.
+  const agentMessage = { id: "fco", type: "functionCallOutput", namespace: "workbench", name: "agent_message", output: "hi" };
+  assert.deepEqual(mapProviderLifecycleNotification({
+    method: "item/completed",
+    params: { item: agentMessage, threadId: "child", turnId: "turn" },
+  }), {
+    event: { kind: "userInputDelivered", turnId: "turn" }, threadId: "child",
+  });
+  assert.deepEqual(mapProviderLifecycleNotification({
+    method: "turn/started",
+    params: { threadId: "child", turn: { id: "agent-turn", items: [agentMessage] } },
+  }), {
+    event: { kind: "userInputDelivered", turnId: "agent-turn" }, threadId: "child",
+  });
+  assert.equal(mapProviderLifecycleNotification({
+    method: "item/completed",
+    params: { item: { ...agentMessage, name: "patch_recovery" }, threadId: "child", turnId: "turn" },
+  }), null, "passive tool context does not count as delivered input");
   assert.equal(mapProviderLifecycleNotification({
     method: "item/completed",
     params: { item: { id: "agent", type: "agentMessage" }, threadId: "child", turnId: "turn" },
