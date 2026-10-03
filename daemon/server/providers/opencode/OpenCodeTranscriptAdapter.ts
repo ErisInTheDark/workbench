@@ -330,10 +330,15 @@ export default class OpenCodeTranscriptAdapter {
   }
 
   async recordSteer(entry: OpenCodeSteerEntry) {
+    const itemId = WorkbenchItemIdSchema.parse(entry.itemId);
+    // A Workbench-minted steer id has no provider source yet; it must own its identity before its body.
+    await this.owners.items.admit([{
+      threadId: entry.threadId, itemId, sources: [{ turnId: entry.turnId, kind: "stable", reference: itemId }],
+    }]);
     await this.owners.transcript.record([{
       kind: "steer",
       entry,
-      publicItemId: WorkbenchItemIdSchema.parse(entry.itemId),
+      publicItemId: itemId,
       observedAt: entry.resolvedAt ?? entry.attemptedAt,
     }], { source: "workbench" });
   }

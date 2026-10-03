@@ -582,3 +582,38 @@ test("keeps the latest turn open while a WB steer awaits native delivery", async
   });
   assert.equal(usage?.snapshot.tokenUsage?.modelContextWindow, 200_000);
 });
+
+test("a fresh Workbench steer admits its own item identity before recording and resolves in place", async context => {
+  const fixture = createThreadStateTestDatabase();
+  context.after(() => fixture.sqlite.close());
+  fixture.admitThread(testProjectIds.project, "wb-thread", "opencode", "session", "C:/repo");
+  const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
+  const adapter = new OpenCodeTranscriptAdapter({
+    ...fixture.identities,
+    transcript: { record: async observations => repository.settle(observations) },
+  });
+  const session = {
+    id: "session", projectID: "project", title: "Thread", cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 1 }, location: { directory: "C:/repo" },
+  };
+  await adapter.record(session, [{ id: "root", type: "user", text: "work", time: { created: 1 } }],
+    { id: testProjectIds.project, rootPath: "C:/repo" });
+  const turnId = WorkbenchTurnIdSchema.parse(repository.read({ threadId: "wb-thread", turnLimit: 1 })!.turns.at(-1)!.id);
+  const itemId = WorkbenchItemIdSchema.parse("00000000-0000-4000-8000-000000000030");
+  const pending = {
+    threadId: WorkbenchThreadIdSchema.parse("wb-thread"), turnId, itemId, entryKey: itemId,
+    input: [{ type: "text" as const, text: "steer", text_elements: [] }], status: "pending" as const,
+    attemptedAt: 2, resolvedAt: null, requestId: null, canonicalItemId: null, clientUserMessageId: "steer-client",
+    dispatchSequence: null, error: null,
+  };
+  const steerItems = () => {
+    const projected = projectWorkbenchTranscript(repository.read({ threadId: "wb-thread", turnLimit: 1 })!);
+    assert.ok(projected.success);
+    return projected.data.turns.flatMap(turn => turn.items).filter(item => item.id === itemId);
+  };
+  await adapter.recordSteer(pending);
+  assert.equal(steerItems().length, 1);
+  await adapter.recordSteer({ ...pending, status: "sent", resolvedAt: 3 });
+  assert.equal(steerItems().length, 1, "resolving the steer updates its admitted item");
+});
