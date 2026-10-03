@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createHomeHref,
+  createHomeThreadRoute,
+  createLogicalExistingThreadRoute,
   createProjectSelectionRoute,
+  createSettledThreadExitRoute,
   createToggledProjectSelectionRoute,
   createHomeThreadHref,
   createPinnedThreadHref,
@@ -16,6 +19,7 @@ import {
   isWorkbenchRouteOwnerOfThread,
   isWorkbenchThreadTargetSelected,
   parseWorkbenchRouteFromPath,
+  withProjectSelection,
 } from "./workbench-route.ts";
 import { createWorkbenchMosaicSplit, createWorkbenchMosaicTarget, parseWorkbenchMosaicRouteExpression, serializeWorkbenchMosaicRouteExpression } from "./workbench-mosaic-route.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -232,6 +236,33 @@ test("thread target selection matches the visible root without crossing unrelate
   assert.equal(isWorkbenchThreadTargetSelected({ kind: "new" }, { kind: "new" }), true);
   assert.equal(isWorkbenchThreadTargetSelected({ folderId: fixtureIdentityValues.FolderId["one"], kind: "new" }, { folderId: fixtureIdentitySchemas.FolderIdSchema.parse("two"), kind: "new" }), false);
   assert.equal(isWorkbenchThreadTargetSelected({ kind: "new" }, null), false);
+});
+
+test("settling the viewed thread keeps the project selection it was listed under", () => {
+  const first = "123e4567-e89b-42d3-a456-426614174001";
+  const second = "123e4567-e89b-42d3-a456-426614174002";
+  const target = { harness: "codex" as const, kind: "provider" as const, threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("one") };
+
+  const multi = createSettledThreadExitRoute({
+    ...withProjectSelection(createLogicalExistingThreadRoute(null, target), [first, second]),
+    folderAddress: ["folder"],
+  }, "");
+  assert.deepEqual(multi.selectedProjectIds, [first, second]);
+  assert.deepEqual(multi.folderAddress, ["folder"]);
+  assert.notEqual(createWorkbenchHref(multi), "/");
+
+  const single = createSettledThreadExitRoute(createLogicalExistingThreadRoute(first, target), "");
+  assert.equal(single.logical?.projectId, first);
+  assert.deepEqual(single.selectedProjectIds, [first]);
+
+  const dynamic = createSettledThreadExitRoute(createLogicalExistingThreadRoute(null, target), "");
+  assert.equal(dynamic.selectedProjectIds, null);
+  assert.equal(createWorkbenchHref(dynamic), "/");
+
+  const physical = createSettledThreadExitRoute(
+    withProjectSelection(createHomeThreadRoute("owner", "one"), ["viewed", "owner"]), "owner");
+  assert.deepEqual(physical.threadTarget, { kind: "new" });
+  assert.deepEqual(physical.selectedProjectIds, ["viewed", "owner"]);
 });
 
 test("missing or malformed draft routes never fall through to provider identity", () => {

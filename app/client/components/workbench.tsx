@@ -47,6 +47,7 @@ import {
     createProjectRoute,
     createNewProjectRoute,
     createSettingsRoute,
+    createSettledThreadExitRoute,
     createStatsRoute,
     createThreadRoute,
     createToggledProjectSelectionRoute,
@@ -1575,18 +1576,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       || !isWorkbenchThreadTargetSelected(settledTarget, currentRoute.threadTarget)) {
       return;
     }
-
-    if (currentRoute.logical) {
-      navigateToRoute(currentRoute.logical.projectId
-        ? createLogicalProjectRoute(currentRoute.logical.projectId,
-          currentRoute.logical.browseLocation ?? null)
-        : createHomeRoute());
-      return;
-    }
-    const targetProjectId = ownerProjectId || currentRoute.threadOwnerProjectId || currentRoute.projectId;
-    navigateToRoute(!currentRoute.projectId
-      ? createHomeThreadRoute(targetProjectId, { kind: "new" })
-      : createThreadRoute(currentRoute.projectId, { kind: "new" }));
+    navigateToRoute(createSettledThreadExitRoute(currentRoute, ownerProjectId ?? ""));
   }, [navigateToRoute]);
   const usesDesktopSidebarCollapse = !isMobile;
   const effectiveThreadTarget = mobileMosaicFallbackTarget?.kind === "thread" ? mobileMosaicFallbackTarget.target : route.threadTarget;

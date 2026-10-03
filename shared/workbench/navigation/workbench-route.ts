@@ -3,6 +3,7 @@
  * - WORKBENCH_ROUTE_MARKER: route marker for workbench URLs.
  * - WORKBENCH_FOLDER_MARKER: marker segment for the sidebar folder selection slot.
  * - WorkbenchRouteView/WorkbenchRoute/WorkbenchRouteParseResult: normalized route contracts.
+ * - createSettledThreadExitRoute: leave a settled viewed thread while keeping the project selection.
  * - createHomeRoute/createProjectSelectionRoute/createToggledProjectSelectionRoute/withProjectSelection/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createNewProjectRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
  * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute/createLogicalMosaicRoute: internal project, target and UUID routes.
  * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
@@ -111,6 +112,26 @@ export function createToggledProjectSelectionRoute(
   return route.view === "thread" && !(projectId === ownerProjectId && selectedProjectIds.includes(projectId))
     ? withProjectSelection(route, nextIds)
     : createProjectSelectionRoute(nextIds);
+}
+
+/** Leave a settled thread for the view that listed it, keeping the project selection. */
+export function createSettledThreadExitRoute(route: WorkbenchRoute, ownerProjectId: string): WorkbenchRoute {
+  const selection = route.selectedProjectIds;
+  if (route.logical) {
+    const projectId = route.logical.projectId;
+    if (projectId && (selection === null || (selection.length === 1 && selection[0] === projectId))) {
+      return createLogicalProjectRoute(projectId, route.logical.browseLocation ?? null);
+    }
+    const selectionRoute = createProjectSelectionRoute(selection);
+    return route.folderAddress === undefined ? selectionRoute : {
+      ...selectionRoute,
+      folderAddress: route.folderAddress && [...route.folderAddress],
+    };
+  }
+  const targetProjectId = ownerProjectId || route.threadOwnerProjectId || route.projectId;
+  return withProjectSelection(!route.projectId
+    ? createHomeThreadRoute(targetProjectId, { kind: "new" })
+    : createThreadRoute(route.projectId, { kind: "new" }), selection);
 }
 
 export function withProjectSelection(route: WorkbenchRoute, selectedProjectIds: readonly string[] | null): WorkbenchRoute {
