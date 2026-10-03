@@ -182,6 +182,12 @@ export interface DaemonTranscriptRegistration {
   subscribeContextCompaction(
     listener: (threadId: import("workbench-shared/workbench/identity").WorkbenchThreadId) => Promise<void> | void,
   ): () => void;
+  subscribeTurnStarted(
+    listener: (event: import("./database/transcript/WorkbenchTranscriptController").WorkbenchTranscriptTurnEvent) => Promise<void> | void,
+  ): () => void;
+  subscribeHeldSteers(
+    listener: (event: import("./database/transcript/WorkbenchTranscriptController").WorkbenchTranscriptTurnEvent) => Promise<void> | void,
+  ): () => void;
   subscribe(subscription: {
     id: string;
     request: { threadId: string; turnIds?: string[]; turnLimit: number };

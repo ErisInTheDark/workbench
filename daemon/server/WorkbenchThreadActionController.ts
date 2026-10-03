@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project and steer-wait owners.
  * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
- * - default WorkbenchThreadActionController: route WB actions without constructing provider packets, interrupt waits on accepted steers, record activated skills, settle orphaned turns on stop, and resend or dismiss undelivered steers.
+ * - default WorkbenchThreadActionController: route WB actions without constructing provider packets, interrupt waits on accepted steers, record activated skills, settle orphaned turns on stop, resend or dismiss undelivered steers, and redeliver stranded agent messages into a new turn.
  */
 import { randomUUID } from "node:crypto";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -28,6 +28,7 @@ import type WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import type WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 import type WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
 import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
+import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 
 export interface WorkbenchThreadActionOwners {
   approvals: Pick<WorkbenchApprovalController, "list">;
@@ -63,6 +64,9 @@ type Actions = {
 export class WorkbenchThreadCreationNotDispatchedError extends Error {}
 
 export default class WorkbenchThreadActionController {
+  /** Per-thread redelivery chain, so overlapping turn starts never send one stranded message twice. */
+  private readonly redeliveries = new Map<string, Promise<void>>();
+
   constructor(private readonly owners: WorkbenchThreadActionOwners) {}
 
   async materialize(threadId: string, turnIds: string[], signal?: AbortSignal) {
@@ -327,5 +331,39 @@ export default class WorkbenchThreadActionController {
     });
     await this.recordDismissed(steer);
     return result;
+  }
+
+  /**
+   * Agents cannot press resend, so their undelivered messages follow the thread into its next running turn,
+   * oldest first. They steer only a turn that is still running; one that already ended leaves them undelivered
+   * for the next turn, so a thread waiting on its user is not woken. User steers keep their resend/dismiss controls.
+   */
+  resendUndeliveredAgentMessages(threadId: string, turnId: string) {
+    const run = (this.redeliveries.get(threadId) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => this.redeliverAgentMessages(threadId, turnId));
+    this.redeliveries.set(threadId, run);
+    // The caller owns run's failure; this chain only retires the slot.
+    void run.then(() => undefined, () => undefined).then(() => {
+      if (this.redeliveries.get(threadId) === run) this.redeliveries.delete(threadId);
+    });
+    return run;
+  }
+
+  private async redeliverAgentMessages(threadId: string, turnId: string) {
+    const { identity, provider } = await this.target(threadId);
+    const stranded = (await this.owners.transcripts.history(identity.threadId)).steerEntries
+      .filter(entry => (entry.status === "failed" || entry.status === "interrupted")
+        && entry.itemId && readWorkbenchAgentMessageInput(entry.input))
+      .sort((left, right) => left.attemptedAt - right.attemptedAt);
+    if (!stranded.length || !await provider.threads.isTurnLive(identity.threadId, turnId)) return;
+    for (const entry of stranded) {
+      const result = await provider.threads.submit({
+        threadId: identity.threadId, clientMessageId: randomUUID(), intent: "steer", expectedTurnId: turnId,
+        input: WorkbenchUserInputSchema.array().parse(entry.input),
+      });
+      if (result.kind === "steered") this.owners.interruptSteerWaits(identity.threadId);
+      await this.recordDismissed({ identity, entry, itemId: WorkbenchItemIdSchema.parse(entry.itemId) });
+    }
   }
 }

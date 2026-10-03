@@ -79,7 +79,6 @@ import {
   getSubagentSummary,
   resolveWorkbenchSubagentCommandTargets,
 } from "../../../workbench/thread/thread-subagents";
-import WorkbenchSpinningBorder from "../WorkbenchSpinningBorder";
 import {
   formatThreadDuration,
   humanizeThreadLabel,
@@ -145,6 +144,7 @@ import projectThreadRenderTurns from "./thread-render-turns";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import { getUserMessageCopyMarkdown } from "./bubble-copy";
 import ThreadBubbleCopyButton, { threadBubbleControlClassName } from "./ThreadBubbleCopyButton";
+import ThreadSteerDecoration from "./ThreadSteerDecoration";
 import ThreadSteerActionsContext from "./ThreadSteerActionsContext";
 import { RefreshCwIcon, XIcon } from "../workbench-icons";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
@@ -544,6 +544,7 @@ function ThreadUserMessageItem ({
       <ThreadIncomingAgentMessageItem
         message={agentMessage}
         steerState={steerState}
+        steerActions={steerState === "unsent" ? <UndeliveredSteerActions itemIds={storedUndeliveredSteerIds(sourceItems ?? [item])} /> : undefined}
         subagent={getSubagentSummary(subagents, agentMessage.senderThreadId)}
         timestamp={<ThreadMessageTimestamp className="mt-1" timestampSeconds={startedAt} />}
         inlineMentionSources={inlineMentionSources}
@@ -567,61 +568,30 @@ function ThreadUserMessageItem ({
 
   const steerState = getSteerUserMessageState(item);
   const isPendingInitial = isUndeliveredInitialOptimisticInputItem(item);
-  const isPending = steerState === "pending" || isPendingInitial;
-  const isDecoratedInput = steerState !== null || isPendingInitial;
   const displayContent = unwrapWorkbenchSteerDisplayInput(item.content);
   const copyMarkdown = getUserMessageCopyMarkdown(displayContent);
-  const inputMessageClass = isPending
-    ? " relative isolate overflow-hidden rounded-[1.4rem]"
-    : steerState === "unsent"
-      ? " relative isolate overflow-hidden rounded-[1.4rem] px-0.5 py-0.5"
-      : "";
-  const decoratedInputSurfaceClass = isPending
-    ? " relative z-10 rounded-[1.4rem] border-[3px] border-transparent bg-[color: color-mix(in srgb, var(--text) 6%, var(--app-bg-solid))] [--fg-bg: color-mix(in srgb, var(--text) 6%, var(--app-bg-solid))] [clip-path: padding-box] px-4 py-3"
-    : isDecoratedInput
-      ? " relative z-10 rounded-[1.15rem] bg-[color-mix(in srgb, var(--text) 6%, transparent)] [--fg-bg: color-mix(in srgb, var(--text) 6%, var(--app-bg-solid))] px-4 py-3"
-      : " rounded-[1.15rem] bg-[color-mix(in srgb, var(--text) 6%, transparent)] [--fg-bg: color-mix(in srgb, var(--text) 6%, var(--app-bg-solid))] px-4 py-3";
   return (
     <section
       className="flex flex-col items-end py-2"
       data-thread-user-message-state={isPendingInitial ? "pending-initial" : steerState ? `${steerState}-steer` : undefined}
     >
       <div className="group/thread-bubble relative w-fit max-w-[min(100%,42rem)]">
-        <div className={isDecoratedInput ? inputMessageClass : undefined}>
-          {isPending ? <WorkbenchSpinningBorder radius="1.4rem" /> : null}
-          {steerState === "unsent" ? (
-            <>
-              <span
-                aria-hidden="true"
-                className={`
-                  pointer-events-none absolute inset-0 -z-20 rounded-[inherit]
-                  bg-[
-                    radial-gradient(circle at 22% 18%, color-mix(in srgb, #f97316 38%, transparent), transparent 32%),
-                    radial-gradient(circle at 82% 72%, color-mix(in srgb, #ef4444 30%, transparent), transparent 34%),
-                    linear-gradient(135deg, color-mix(in srgb, #f97316 42%, transparent), color-mix(in srgb, #ef4444 30%, transparent))
-                  ] opacity-[0.46]
-                `}
-              />
-              <span aria-hidden="true" className="pointer-events-none absolute inset-0.5 -z-10 rounded-[inherit] bg-canvas" />
-            </>
-          ) : null}
-          <div className={`space-y-2 text-left${decoratedInputSurfaceClass}`}>
-            {displayContent.length ? displayContent.map((content, index) => (
-              <ThreadUserInputLine
-                key={`${item.id}:content:${index}:${content.type}`}
-                input={content}
-                inlineMentionSources={inlineMentionSources}
-                threadCwdPath={threadCwdPath}
-                projectFilePaths={projectFilePaths}
-                projectId={projectId}
-                projectRootPath={projectRootPath}
-                workspaceRoots={workspaceRoots}
-              />
-            )) : (
-              <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No user content captured.</p>
-            )}
-          </div>
-        </div>
+        <ThreadSteerDecoration className="space-y-2 text-left" state={isPendingInitial ? "pending" : steerState}>
+          {displayContent.length ? displayContent.map((content, index) => (
+            <ThreadUserInputLine
+              key={`${item.id}:content:${index}:${content.type}`}
+              input={content}
+              inlineMentionSources={inlineMentionSources}
+              threadCwdPath={threadCwdPath}
+              projectFilePaths={projectFilePaths}
+              projectId={projectId}
+              projectRootPath={projectRootPath}
+              workspaceRoots={workspaceRoots}
+            />
+          )) : (
+            <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No user content captured.</p>
+          )}
+        </ThreadSteerDecoration>
         <ThreadBubbleCopyButton
           actions={steerState === "unsent"
             ? <UndeliveredSteerActions itemIds={storedUndeliveredSteerIds(sourceItems ?? [item])} />

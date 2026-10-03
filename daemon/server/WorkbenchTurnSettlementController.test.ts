@@ -1,13 +1,19 @@
-/* No production exports. Tests protect orphaned-turn settlement on stop and on a cold daemon start, including stale-lifecycle repair and stalled providers. */
+/* No production exports. Tests protect orphaned-turn settlement on stop, on a new turn, and on a cold daemon start, including stale-lifecycle repair and stalled providers. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchTurnSettlementController, { type WorkbenchTurnSettlementOwners } from "./WorkbenchTurnSettlementController";
 
 const projectId = ProjectIdSchema.parse("project");
+const workingLifecycle = { kind: "working", reason: "acceptedIntent", settled: false, agent: { agentStatus: "working" } } as WorkbenchThreadLifecycle;
+const questionnaireLifecycle = { kind: "needsAttention", reason: "pendingInput", requestKey: "question", settled: false } as WorkbenchThreadLifecycle;
+const idleLifecycle = { kind: "completed", reason: "providerInactive", settled: false } as WorkbenchThreadLifecycle;
 
 function fixture({
   live = new Set<string>(), working = ["zombie", "running"], statuses = new Map<string, string>(),
+  lifecycles: threadLifecycles = new Map<string, WorkbenchThreadLifecycle>(),
+  turns = new Map<string, Array<{ id: string; status: string }>>(),
   isTurnLive = async (threadId: string) => live.has(threadId),
 } = {}) {
   const recorded: unknown[] = [];
@@ -21,7 +27,7 @@ function fixture({
       bindings: [{ harness: "claude", nativeLocation: "C:/project", nativeThreadId: NativeThreadIdSchema.parse(`native-${threadId}`), pending: false, turnIndex: 0 }],
     }) },
     transcripts: {
-      readPage: async ({ threadId }) => ({ thread: { turns: [
+      readPage: async ({ threadId }) => ({ thread: { turns: turns.get(threadId) ?? [
         { id: `${threadId}-turn`, status: statuses.get(threadId) ?? "inProgress" },
       ] } }) as never,
       storedTurnSettlement: async (threadId, turnId) => {
@@ -31,7 +37,10 @@ function fixture({
     },
     transcript: { record: async observations => { recorded.push(...observations); return undefined as never; } },
     observe: async (_harness, facts) => { lifecycles.push(facts.lifecycle); },
-    listWorkingThreads: async () => working,
+    listThreadLifecycles: async () => [
+      ...working.map(threadId => ({ threadId, lifecycle: workingLifecycle })),
+      ...[...threadLifecycles].map(([threadId, lifecycle]) => ({ threadId, lifecycle })),
+    ],
     warn: message => { warnings.push(message); },
   };
   return { controller: new WorkbenchTurnSettlementController(owners), owners, recorded, lifecycles, warnings, settlements };
@@ -81,6 +90,39 @@ test("the cold sweep publishes a working thread's already-ended turn with its st
     { threadId: "ended", event: { kind: "turnCompleted", turnId: "ended-turn", status: "interrupted" } },
     { threadId: "finished", event: { kind: "turnCompleted", turnId: "finished-turn", status: "completed" } },
   ]);
+});
+
+test("the cold sweep settles a dead turn whose thread waits on a questionnaire, but leaves idle threads alone", async () => {
+  const f = fixture({ working: [], lifecycles: new Map([["asking", questionnaireLifecycle], ["idle", idleLifecycle]]) });
+  await f.controller.startColdSweep();
+  assert.deepEqual(f.settlements, ["asking:asking-turn"]);
+});
+
+test("the cold sweep settles every older turn still marked running, not only the newest", async () => {
+  const f = fixture({ working: ["stacked"], turns: new Map([["stacked", [
+    { id: "old", status: "inProgress" }, { id: "done", status: "completed" }, { id: "older-dead", status: "inProgress" },
+    { id: "newest", status: "inProgress" },
+  ]]]) });
+  await f.controller.startColdSweep();
+  assert.deepEqual(f.settlements, ["stacked:old", "stacked:older-dead", "stacked:newest"]);
+});
+
+test("a new turn settles the earlier turns still marked running, without asking the provider, and never itself", async () => {
+  const f = fixture({
+    isTurnLive: async () => assert.fail("a newer turn already proves older runtimes are gone"),
+    turns: new Map([["parent", [
+      { id: "dead", status: "inProgress" }, { id: "ended", status: "interrupted" }, { id: "also-dead", status: "inProgress" },
+      { id: "new", status: "inProgress" }, { id: "later", status: "inProgress" },
+    ]]]),
+  });
+  await f.controller.settleSuperseded("parent", "new");
+  assert.deepEqual(f.settlements, ["parent:dead", "parent:also-dead"]);
+  assert.deepEqual(f.lifecycles, [
+    { threadId: "parent", event: { kind: "turnCompleted", turnId: "dead", status: "interrupted" } },
+    { threadId: "parent", event: { kind: "turnCompleted", turnId: "also-dead", status: "interrupted" } },
+  ]);
+  await f.controller.settleSuperseded("parent", "unknown");
+  assert.equal(f.settlements.length, 2, "an unloaded turn supersedes nothing");
 });
 
 test("a provider whose liveness check never answers does not hold other threads' settlement back", async () => {

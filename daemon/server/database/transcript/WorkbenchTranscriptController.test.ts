@@ -727,9 +727,10 @@ test("durable capture gaps do not block historical imports, subscriptions or liv
   }
 });
 
-test("committed admissions of new thread items notify item-activity listeners until unsubscribed", async () => {
+/** A controller over a real repository whose thread already has one admitted, running turn. */
+async function createListenerFixture(threadSuffix: string) {
   const fixture = createThreadStateTestDatabase();
-  const threadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000002");
+  const threadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(`00000000-0000-4000-8000-00000000000${threadSuffix}`);
   fixture.admitThread(testProjectIds.project, threadId, "codex", "native-thread", "C:/project");
   const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
   const nativeTurn = observationsFor(threadId)[1]!;
@@ -751,6 +752,11 @@ test("committed admissions of new thread items notify item-activity listeners un
     },
   };
   const owner = new WorkbenchTranscriptController(database, new WorkbenchTranscriptCaptureGapController({ database }));
+  return { owner, threadId, turnId, turn: { ...nativeTurn, turnId, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread") } };
+}
+
+test("committed admissions of new thread items notify item-activity listeners until unsubscribed", async () => {
+  const { owner, threadId, turnId } = await createListenerFixture("2");
   const message = (id: string, observedAt: number): WorkbenchTranscriptObservation => ({
     kind: "item", threadId, turnId, lifecycle: "completed", observedAt,
     item: { id, type: "agentMessage", text: id, phase: "commentary", memoryCitation: null, delivery: null, questions: null },
@@ -770,29 +776,7 @@ test("committed admissions of new thread items notify item-activity listeners un
 });
 
 test("only live completed context compactions notify compaction listeners", async () => {
-  const fixture = createThreadStateTestDatabase();
-  const threadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000003");
-  fixture.admitThread(testProjectIds.project, threadId, "codex", "native-thread", "C:/project");
-  const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
-  const nativeTurn = observationsFor(threadId)[1]!;
-  assert.ok(nativeTurn.kind === "turn");
-  const { turnId } = await fixture.identities.threads.observeTurn({
-    ...nativeTurn, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread"),
-  });
-  repository.settle(observationsFor(threadId).map(observation => observation.kind === "turn"
-    ? { ...observation, turnId, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread") } : observation));
-  const database = {
-    failure: null,
-    start: async () => ({ tableNames: [], schemaVersion: 1 }),
-    readThreadContextUsage: async (id: string) => repository.readContextUsage(id),
-    readTranscript: async (request: Parameters<typeof repository.read>[0]) => repository.read(request),
-    settleTranscript: async (observations: readonly WorkbenchTranscriptObservation[]) => repository.settle(observations),
-    query: async <Row extends WorkbenchDatabaseRow>(query: WorkbenchDatabaseQuery<Row>): Promise<Row[]> => {
-      const compiled = compileWorkbenchDatabaseStatement(workbenchDatabaseTables, query);
-      return fixture.sqlite.prepare(compiled.sql).all(...compiled.parameters) as Row[];
-    },
-  };
-  const owner = new WorkbenchTranscriptController(database, new WorkbenchTranscriptCaptureGapController({ database }));
+  const { owner, threadId, turnId } = await createListenerFixture("3");
   const compaction = (phase: "started" | "completed", observedAt: number): WorkbenchTranscriptObservation => ({
     kind: "contextCompaction", threadId, turnId, phase, observedAt, reference: null,
   });
@@ -806,6 +790,34 @@ test("only live completed context compactions notify compaction listeners", asyn
     // Recovery replays history; it must not re-send skills for an old compaction.
     await owner.record([compaction("completed", 30)], { source: "provider", recovery: { gapIds: [], scope: "thread" } });
     assert.deepEqual(received, [threadId]);
+  } finally {
+    owner.dispose();
+  }
+});
+
+test("live running turns notify turn-start listeners and held steers notify steer listeners, after commit", async () => {
+  const { owner, threadId, turnId, turn } = await createListenerFixture("4");
+  const started: unknown[] = [];
+  const steers: unknown[] = [];
+  owner.subscribeTurnStarted(event => { started.push(event); });
+  owner.subscribeHeldSteers(event => { steers.push(event); });
+  const heldSteer: WorkbenchTranscriptObservation = {
+    kind: "steer", observedAt: 5,
+    entry: {
+      threadId, turnId, itemId: "held-steer", entryKey: "held-steer", status: "pending", attemptedAt: 5,
+      resolvedAt: null, requestId: null, canonicalItemId: null,
+      clientUserMessageId: null, dispatchSequence: null, error: null,
+      input: [{ type: "text", text: "late news", text_elements: [] }],
+    },
+  };
+  try {
+    await owner.record([{ ...turn, state: "inProgress" }], { source: "provider" });
+    assert.deepEqual(started, [{ threadId, turnId }]);
+    await owner.record([{ ...turn, state: "inProgress" }], { source: "provider", recovery: { gapIds: [], scope: "thread" } });
+    await owner.record([heldSteer], { source: "workbench" });
+    assert.deepEqual(steers, [{ threadId, turnId }]);
+    await owner.record([{ ...turn, state: "completed", endedAt: 7, durationMs: 5 }], { source: "provider" });
+    assert.deepEqual(started, [{ threadId, turnId }], "recovery replays and settlements are not turn starts");
   } finally {
     owner.dispose();
   }

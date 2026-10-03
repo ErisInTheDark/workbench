@@ -3835,6 +3835,7 @@ function WorkbenchThreadClient(
       case "questionnaire/requested":
       case "questionnaire/resolved":
       case "browse/result/recorded":
+      case "steer/history/changed":
       case "account/updated":
       case "account/rateLimits/updated":
       case "models/updated":
@@ -4523,6 +4524,14 @@ function WorkbenchThreadClient(
     if (notification.method === "browse/result/recorded") {
       if (doesNotificationTargetKnownThread(notification, harness)) {
         void readBrowseResultEntries(notification.params.threadId);
+      }
+      return;
+    }
+
+    // Held steers sit outside the transcript stream; this push is how an open view learns one arrived mid-turn.
+    if (notification.method === "steer/history/changed") {
+      if (doesNotificationTargetKnownThread(notification, harness)) {
+        void readCompletedSteerHistory(notification.params.threadId);
       }
       return;
     }

@@ -4,6 +4,7 @@
  * - WorkbenchQuestionnaireRequestedNotification: provider questionnaire publication.
  * - WorkbenchQuestionnaireResolvedNotification: resolution with optional successful-answer evidence.
  * - WorkbenchBrowseResultRecordedNotification: Workbench-owned Browse result sidecar notification.
+ * - WorkbenchSteerHistoryChangedNotification: a held steer was admitted or changed outside the transcript stream.
  * - isCodexAppServerNotification: identify JSON-RPC app-server notifications from incoming WebSocket messages.
  */
 import type { ServerNotification } from "./generated/app-server/ServerNotification.ts";
@@ -37,9 +38,18 @@ export interface WorkbenchBrowseResultRecordedNotification {
   };
 }
 
+export interface WorkbenchSteerHistoryChangedNotification {
+  method: "steer/history/changed";
+  params: {
+    threadId: string;
+    turnId: string;
+  };
+}
+
 export type CodexAppServerNotification =
   | ServerNotification
   | WorkbenchBrowseResultRecordedNotification
+  | WorkbenchSteerHistoryChangedNotification
   | WorkbenchQuestionnaireRequestedNotification
   | WorkbenchQuestionnaireResolvedNotification;
 

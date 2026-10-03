@@ -23,7 +23,7 @@ const publicMethods = new Set<string>([
   "item/agentMessage/delta", "item/plan/delta", "item/commandExecution/outputDelta",
   "item/fileChange/outputDelta", "item/fileChange/patchUpdated", "item/reasoning/summaryTextDelta",
   "item/reasoning/summaryPartAdded", "item/reasoning/textDelta",
-  "questionnaire/requested", "questionnaire/resolved", "browse/result/recorded",
+  "questionnaire/requested", "questionnaire/resolved", "browse/result/recorded", "steer/history/changed",
 ] satisfies WorkbenchTranscriptNotification["method"][]);
 
 export function isWorkbenchPublicNotification(message: unknown): message is WorkbenchTranscriptNotification {
@@ -60,7 +60,8 @@ export type WorkbenchTranscriptNotification =
     threadId: string; turnId: string | null; itemId: string | null; requestKey: string; request: WorkbenchUserInputRequest;
   } }
   | { method: "questionnaire/resolved"; params: { threadId: string; requestKey: string } }
-  | { method: "browse/result/recorded"; params: { threadId: string; turnId: string } };
+  | { method: "browse/result/recorded"; params: { threadId: string; turnId: string } }
+  | { method: "steer/history/changed"; params: { threadId: string; turnId: string } };
 
 export type WorkbenchProviderLifecycleEvent =
   | Exclude<WorkbenchLifecycleEvent, { kind: "inputResolved" | "pendingInput" }>

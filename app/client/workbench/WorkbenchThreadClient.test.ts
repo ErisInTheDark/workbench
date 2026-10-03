@@ -2860,6 +2860,26 @@ test("questionnaire and Browse history reads are latest-wins within one project"
   assert.deepEqual(current?.browseResultEntries, []);
 }));
 
+test("a held steer admitted mid-turn appears without waiting for the turn to end", async () => withClient(async (client, socket) => {
+  client.selectThreadPayload(activeThread());
+  const steerRequests: SocketRequest[] = [];
+  FakeWebSocket.intercept = (_target, request) => {
+    if (request.method !== "thread/steers/read") return false;
+    steerRequests.push(request);
+    return true;
+  };
+  socket.notify("steer/history/changed", { threadId: "thread", turnId: "turn" });
+  await waitForRequest(socket, "thread/steers/read", 0);
+  socket.respond(steerRequests[0]!.id, { data: [{
+    threadId: "thread", turnId: "turn", itemId: "held", entryKey: "held", status: "pending",
+    input: [{ type: "text", text: "news from a child", text_elements: [] }],
+    attemptedAt: 1, resolvedAt: null, requestId: null, canonicalItemId: null, clientUserMessageId: null,
+    dispatchSequence: null, error: null,
+  }] });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(client.getSnapshot().currentThread?.turns.flatMap((turn) => turn.items).some((item) => item.id === "held"));
+}));
+
 test("questionnaire history keeps last-known answers through refresh failures and clears on later empty success", async () => {
   const statusMessages: string[] = [];
   await withClient(async (client, socket) => {

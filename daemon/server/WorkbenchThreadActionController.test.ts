@@ -1,4 +1,4 @@
-/* Exports: none. Protect WB action ownership, accepted-message settlement, orphaned stop settlement and undelivered steer resend/dismiss. */
+/* Exports: none. Protect WB action ownership, accepted-message settlement, orphaned stop settlement, undelivered steer resend/dismiss and agent-message redelivery. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import WorkbenchThreadActionController, {
@@ -6,6 +6,7 @@ import WorkbenchThreadActionController, {
 } from "./WorkbenchThreadActionController";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 
 function fixture(providerWarning?: string) {
   const unused = async (): Promise<never> => { throw new Error("Unexpected operation."); };
@@ -319,6 +320,69 @@ test("resending submits the held input as a fresh message before retiring the un
   failed.provider.threads.submit = async () => { throw new Error("provider unavailable"); };
   await assert.rejects(failed.controller.handle("thread/steer/resend", { threadId: "wb-thread", itemId: "steer-item" }), /provider unavailable/);
   assert.deepEqual(failed.recorded, []);
+});
+
+function agentSteer(itemId: string, status: string, attemptedAt: number, sender = "Rose") {
+  return {
+    ...heldSteer(status), itemId, entryKey: itemId, turnId: "dead-turn", attemptedAt,
+    input: [{ type: "text", text: createWorkbenchAgentMessageText({ message: `note ${itemId}`, senderName: sender, senderThreadId: "child" }), text_elements: [] }],
+  };
+}
+
+test("a new turn receives the thread's undelivered agent messages oldest first, and their stranded copies retire", async () => {
+  const f = fixture();
+  const live: string[] = [];
+  f.provider.threads.isTurnLive = async (_threadId, turnId) => { live.push(turnId); return true; };
+  f.owners.transcripts.history = async () => ({ steerEntries: [
+    agentSteer("later", "interrupted", 30),
+    { ...heldSteer("interrupted"), itemId: "user-steer" },
+    agentSteer("earlier", "failed", 10),
+    agentSteer("still-held", "pending", 20),
+    agentSteer("already-dismissed", "dismissed", 5),
+  ] }) as never;
+  await f.controller.resendUndeliveredAgentMessages("wb-thread", "new-turn");
+  const sent = f.messages as Array<{ intent: string; expectedTurnId: string; input: Array<{ text: string }>; clientMessageId: string }>;
+  assert.deepEqual(sent.map(message => [message.intent, message.expectedTurnId, message.input[0]!.text.includes("note earlier")]), [
+    ["steer", "new-turn", true], ["steer", "new-turn", false],
+  ]);
+  assert.ok(sent[1]!.input[0]!.text.includes("note later"));
+  assert.ok(sent.every(message => message.clientMessageId !== "old-client"));
+  assert.deepEqual((f.recorded as Array<{ publicItemId: string; entry: { status: string } }>)
+    .map(entry => [entry.publicItemId, entry.entry.status]), [["earlier", "dismissed"], ["later", "dismissed"]]);
+  assert.deepEqual(f.interruptedWaits, ["wb-thread", "wb-thread"]);
+  assert.deepEqual(live, ["new-turn"]);
+});
+
+test("agent messages stay undelivered when the new turn already ended or the steer fails", async () => {
+  const ended = fixture();
+  ended.provider.threads.isTurnLive = async () => false;
+  ended.owners.transcripts.history = async () => ({ steerEntries: [agentSteer("held", "interrupted", 1)] }) as never;
+  await ended.controller.resendUndeliveredAgentMessages("wb-thread", "gone-turn");
+  assert.deepEqual([ended.messages, ended.recorded], [[], []]);
+
+  const failed = fixture();
+  failed.provider.threads.isTurnLive = async () => true;
+  failed.owners.transcripts.history = async () => ({ steerEntries: [agentSteer("first", "interrupted", 1), agentSteer("second", "interrupted", 2)] }) as never;
+  failed.provider.threads.submit = async () => { throw new Error("turn ended meanwhile"); };
+  await assert.rejects(failed.controller.resendUndeliveredAgentMessages("wb-thread", "new-turn"), /turn ended meanwhile/);
+  assert.deepEqual(failed.recorded, []);
+});
+
+test("overlapping turn starts resend each stranded agent message once", async () => {
+  const f = fixture();
+  f.provider.threads.isTurnLive = async () => true;
+  let steers = [agentSteer("only", "interrupted", 1)];
+  f.owners.transcripts.history = async () => ({ steerEntries: steers }) as never;
+  f.owners.transcript.record = async observations => {
+    f.recorded.push(...observations);
+    steers = [];
+    return undefined as never;
+  };
+  await Promise.all([
+    f.controller.resendUndeliveredAgentMessages("wb-thread", "new-turn"),
+    f.controller.resendUndeliveredAgentMessages("wb-thread", "new-turn"),
+  ]);
+  assert.equal(f.messages.length, 1);
 });
 
 test("failed interruption preserves the pending questionnaire", async () => {

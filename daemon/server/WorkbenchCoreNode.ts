@@ -6,7 +6,7 @@
 import * as project from "./lib/project";
 import * as threadBootstrap from "./lib/thread-bootstrap";
 import type { WorkbenchHarness } from "workbench-shared/types";
-import { type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
+import { type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
@@ -95,7 +95,7 @@ function createWorkbenchCoreFeature(
   reloadDirt: WorkbenchReloadDirtController,
   database: DaemonDatabaseRegistration,
   commandApprovals: DaemonRuntimeObjects["commandApprovals"],
-  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps" | "record" | "subscribeItemActivity" | "subscribeContextCompaction">,
+  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps" | "record" | "subscribeItemActivity" | "subscribeContextCompaction" | "subscribeTurnStarted" | "subscribeHeldSteers">,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
   turnRecovery: DaemonRuntimeObjects["turnRecovery"],
@@ -420,16 +420,16 @@ function createWorkbenchCoreFeature(
   const turnSettlement = new WorkbenchTurnSettlementController({
     providers, identities: threadIdentity, transcripts: transcriptReader, transcript,
     observe: async (harness, facts) => await requireThreadState().observeProviderNotification(harness, facts),
-    listWorkingThreads: async () => {
+    listThreadLifecycles: async () => {
       const { data } = await projectCatalog.readCatalog();
-      const working: string[] = [];
+      const threads: Array<{ threadId: string; lifecycle: WorkbenchThreadLifecycle }> = [];
       for (const { id } of data) {
         const { entries } = await requireThreadState().controller.getSnapshot(ProjectIdSchema.parse(id));
         for (const entry of entries) {
-          if (entry.entryKind !== "draft" && entry.lifecycle.kind === "working") working.push(entry.identity.threadId);
+          if (entry.entryKind !== "draft") threads.push({ threadId: entry.identity.threadId, lifecycle: entry.lifecycle });
         }
       }
-      return working;
+      return threads;
     },
     warn: message => logThreadStateWarning(message),
   });
@@ -444,6 +444,22 @@ function createWorkbenchCoreFeature(
     profiles: threadState, state: threadState.controller,
     skills: threadSkills, recordSkillActivations,
     warn: message => logThreadStateWarning(message),
+  });
+  // A new turn retires the dead turns beneath it, then takes the agent messages they stranded.
+  const unsubscribeTurnStarted = transcript.subscribeTurnStarted(async ({ threadId, turnId }) => {
+    if (!lease.isCurrent()) return;
+    await turnSettlement.settleSuperseded(threadId, turnId);
+    if (lease.isCurrent()) await threadActions.resendUndeliveredAgentMessages(threadId, turnId);
+  });
+  // Held steers live outside the transcript stream, so open views learn about them from this push.
+  const unsubscribeHeldSteers = transcript.subscribeHeldSteers(async ({ threadId, turnId }) => {
+    if (!lease.isCurrent()) return;
+    const harness = (await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) }))?.bindings[0]?.harness;
+    if (harness && lease.isCurrent()) {
+      context.broadcastProviderNotification(WorkbenchHarnessSchema.parse(harness), {
+        method: "steer/history/changed", params: { threadId, turnId },
+      });
+    }
   });
   const launches = new WorkbenchThreadLaunchController({
     database, projects: projectCatalog, actions: threadActions,
@@ -565,6 +581,8 @@ function createWorkbenchCoreFeature(
     beginRuntimeDrain: () => { launches.beginRuntimeDrain(); messages.beginRuntimeDrain(); subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
       unsubscribeCompaction();
+      unsubscribeTurnStarted();
+      unsubscribeHeldSteers();
       unfinishedTurns.dispose();
       reportPhase("orphaned turn sweep disposal");
       await turnSettlement.dispose();

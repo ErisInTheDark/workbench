@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchTranscriptItemActivity: one committed admission of new thread items.
- * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions, item-activity and live compaction publication, and disposal.
+ * - WorkbenchTranscriptTurnEvent: one thread turn named by a committed observation.
+ * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions, item-activity, turn-start, held-steer and live compaction publication, and disposal.
  */
 import { logError } from "../../process-helpers.ts";
 import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
@@ -76,9 +77,31 @@ function reportItemActivityFailure(error: unknown) {
   logError("workbench-transcript-item-activity", `listener failed: ${message.slice(0, 500)}`);
 }
 
-function reportCompactionFailure(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  logError("workbench-transcript-compaction", `listener failed: ${message.slice(0, 500)}`);
+export interface WorkbenchTranscriptTurnEvent {
+  threadId: WorkbenchThreadId;
+  turnId: WorkbenchTurnId;
+}
+
+function reportListenerFailure(scope: string) {
+  return (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    logError(scope, `listener failed: ${message.slice(0, 500)}`);
+  };
+}
+
+const reportCompactionFailure = reportListenerFailure("workbench-transcript-compaction");
+const reportTurnStartFailure = reportListenerFailure("workbench-transcript-turn-start");
+const reportHeldSteerFailure = reportListenerFailure("workbench-transcript-held-steer");
+
+/** Listener failure must never relabel a successful durable commit as a capture gap. */
+function notifyListeners<Event>(listeners: ReadonlySet<(event: Event) => Promise<void> | void>, event: Event, report: (error: unknown) => void) {
+  for (const listener of listeners) {
+    try {
+      void Promise.resolve(listener(event)).catch(report);
+    } catch (error) {
+      report(error);
+    }
+  }
 }
 
 function reportSubscriptionFailure(error: unknown) {
@@ -147,6 +170,8 @@ export default class WorkbenchTranscriptController {
   readonly #live = new WorkbenchTranscriptLiveController();
   readonly #itemActivityListeners = new Set<(activity: WorkbenchTranscriptItemActivity) => Promise<void> | void>();
   readonly #compactionListeners = new Set<(threadId: WorkbenchThreadId) => Promise<void> | void>();
+  readonly #turnStartListeners = new Set<(event: WorkbenchTranscriptTurnEvent) => Promise<void> | void>();
+  readonly #heldSteerListeners = new Set<(event: WorkbenchTranscriptTurnEvent) => Promise<void> | void>();
   #disposed = false;
 
   constructor(
@@ -264,6 +289,8 @@ export default class WorkbenchTranscriptController {
     });
     this.#publishSettlement(settlement, observations, context.source);
     this.#publishContextCompactions(observations);
+    // Compatibility imports replay history; their turns and steers are not live news.
+    if (context.source !== "compatibility") this.#publishTurnEvents(observations);
     return settlement;
   }
 
@@ -282,6 +309,18 @@ export default class WorkbenchTranscriptController {
   subscribeContextCompaction(listener: (threadId: WorkbenchThreadId) => Promise<void> | void) {
     this.#compactionListeners.add(listener);
     return () => { this.#compactionListeners.delete(listener); };
+  }
+
+  /** Observe live running-turn observations after their commit; recovery replays never fire. */
+  subscribeTurnStarted(listener: (event: WorkbenchTranscriptTurnEvent) => Promise<void> | void) {
+    this.#turnStartListeners.add(listener);
+    return () => { this.#turnStartListeners.delete(listener); };
+  }
+
+  /** Observe live held-steer changes after their commit; recovery replays never fire. */
+  subscribeHeldSteers(listener: (event: WorkbenchTranscriptTurnEvent) => Promise<void> | void) {
+    this.#heldSteerListeners.add(listener);
+    return () => { this.#heldSteerListeners.delete(listener); };
   }
 
   acceptLiveUpdate(update: TranscriptLiveUpdate) {
@@ -309,13 +348,19 @@ export default class WorkbenchTranscriptController {
     if (this.#disposed) return;
     for (const observation of observations) {
       if (observation.kind !== "contextCompaction" || observation.phase !== "completed") continue;
-      for (const listener of this.#compactionListeners) {
-        // Listener failure must never relabel a successful durable commit as a capture gap.
-        try {
-          void Promise.resolve(listener(observation.threadId)).catch(reportCompactionFailure);
-        } catch (error) {
-          reportCompactionFailure(error);
-        }
+      notifyListeners(this.#compactionListeners, observation.threadId, reportCompactionFailure);
+    }
+  }
+
+  #publishTurnEvents(observations: readonly WorkbenchTranscriptObservation[]) {
+    if (this.#disposed) return;
+    for (const observation of observations) {
+      if (observation.kind === "turn" && (observation.state === "inProgress" || observation.state === "admitted")) {
+        notifyListeners(this.#turnStartListeners, { threadId: observation.threadId, turnId: observation.turnId }, reportTurnStartFailure);
+      } else if (observation.kind === "steer" && observation.entry.turnId) {
+        notifyListeners(this.#heldSteerListeners, {
+          threadId: observation.entry.threadId, turnId: observation.entry.turnId,
+        }, reportHeldSteerFailure);
       }
     }
   }
