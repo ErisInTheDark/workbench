@@ -5,7 +5,7 @@
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
-import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchTranscriptReadRequest, WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { WorkbenchThreadPage, WorkbenchThreadPageResult } from "workbench-shared/workbench/thread/thread-actions";
@@ -29,6 +29,40 @@ export interface WorkbenchTranscriptReaderOptions {
     entry: WorkbenchThreadSidebarEntry | null;
     harness: WorkbenchHarness;
   }>;
+}
+
+type SnapshotRows = WorkbenchTranscriptSnapshot["rows"];
+
+function heldSteerInput(part: SnapshotRows["threadHeldSteerParts"][number]): UserInput {
+  const required = <Value>(value: Value | null) => {
+    if (value === null) throw new Error("Stored held steer part is incomplete.");
+    return value;
+  };
+  const detail = part.image_detail ? { detail: part.image_detail } : {};
+  switch (part.part_type) {
+    case "text": return { type: "text", text: required(part.text), text_elements: [] };
+    case "image": return { type: "image", url: required(part.url), ...detail };
+    case "localImage": return { type: "localImage", path: required(part.path), ...detail };
+    case "audio": return { type: "audio", url: required(part.url) };
+    case "localAudio": return { type: "localAudio", path: required(part.path) };
+    case "skill":
+    case "mention": return { type: part.part_type, name: required(part.name), path: required(part.path) };
+  }
+}
+
+/** Held steers sit outside the transcript; history offers every one the user has not dismissed. */
+function heldSteerEntries(snapshot: WorkbenchTranscriptSnapshot): WorkbenchThreadPageResult["steerEntries"] {
+  const partsBySteer = new Map<number, SnapshotRows["threadHeldSteerParts"]>();
+  for (const part of snapshot.rows.threadHeldSteerParts) {
+    partsBySteer.set(part.steer_id, [...partsBySteer.get(part.steer_id) ?? [], part]);
+  }
+  return snapshot.rows.threadHeldSteers.flatMap(steer => steer.state === "dismissed" ? [] : [{
+    threadId: snapshot.thread.id, turnId: steer.turn_id, itemId: steer.public_id, entryKey: steer.entry_key,
+    input: (partsBySteer.get(steer.id) ?? []).sort((left, right) => left.part_index - right.part_index).map(heldSteerInput),
+    status: steer.state, attemptedAt: steer.attempted_at, resolvedAt: steer.resolved_at, requestId: steer.request_id,
+    canonicalItemId: null, clientUserMessageId: steer.client_id, dispatchSequence: steer.dispatch_sequence,
+    error: steer.error_text,
+  }]);
 }
 
 export default class WorkbenchTranscriptReader {
@@ -146,15 +180,15 @@ export default class WorkbenchTranscriptReader {
         if (item.type === "userMessage" && root && input?.input_kind === "steer") {
           steerEntries.push({
             threadId: snapshot.thread.id, turnId: turn.id, itemId: item.id, entryKey: item.id,
-            input: item.content, status: input.delivery_state === "delivered" ? "sent" : input.delivery_state,
+            input: item.content, status: "sent",
             attemptedAt: root.created_at, resolvedAt: root.updated_at, requestId: null,
-            canonicalItemId: input.delivery_state === "delivered" ? item.id : null,
-            clientUserMessageId: input.client_id, error: input.error_text,
+            canonicalItemId: item.id, clientUserMessageId: input.client_id, error: null,
           });
         }
       }
       return { ...turn, items };
     });
+    steerEntries.push(...heldSteerEntries(snapshot));
     return {
       turns, turnHistory: projected.data.turnHistory, questionnaireEntries, steerEntries,
       browseResultEntries: projected.data.browseResultEntries,

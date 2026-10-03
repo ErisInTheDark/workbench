@@ -671,8 +671,6 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
     assert.deepEqual(records.map(({ kind }) => kind), [
       "user-message",
       "user-steer",
-      "user-steer",
-      "user-steer",
       "plan",
       "commentary",
       "questionnaire",
@@ -687,8 +685,9 @@ test("projects canonical SQLite narrative rows with turn-owning refs and plan de
       selectWorkbenchThreadRecallRecords(records, ["commentary", "plan"]).some(({ kind }) => kind === "plan"),
       false,
     );
-    assert.equal(records.some(({ text }) => text === "failed steer"), true);
-    assert.equal(records.some(({ text }) => text === "interrupted steer"), true);
+    // Recall is transcript narrative; undelivered steers never reached the agent and stay held outside it.
+    assert.equal(records.some(({ text }) => text === "failed steer"), false);
+    assert.equal(records.some(({ text }) => text === "interrupted steer"), false);
     assert.match(records.find(({ kind }) => kind === "questionnaire")?.text ?? "", /Which route\?/u);
   } finally {
     database.close();

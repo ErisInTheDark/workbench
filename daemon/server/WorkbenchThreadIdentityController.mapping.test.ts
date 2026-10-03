@@ -1107,7 +1107,9 @@ test("canonical recording maps structural references without changing evidence, 
     repository.settle([mapped]);
     const snapshot = repository.read({ threadId: parent.threadId, turnLimit: 1 })!;
     assert.deepEqual(snapshot.rows.threadItems.map(({ public_id, item_position }) => [public_id, item_position]),
-      [[item!.id, 0], [questionnaire!.itemId, 1], [steer!.itemId, 2]]);
+      [[item!.id, 0], [questionnaire!.itemId, 1]]);
+    // The undelivered steer keeps its mapped identity but is held outside the transcript.
+    assert.deepEqual(snapshot.rows.threadHeldSteers.map(({ public_id }) => public_id), [steer!.itemId]);
     assert.deepEqual(database.prepare("SELECT native_thread_id, native_item_id, payload_json FROM transcript_native_records").all(),
       [{ native_thread_id: native.nativeThreadId, native_item_id: sourceItem.id, payload_json: '{"threadId":"native-parent"}' }]);
     assert.deepEqual(observations, original);

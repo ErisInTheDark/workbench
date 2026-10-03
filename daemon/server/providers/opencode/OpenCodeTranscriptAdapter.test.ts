@@ -583,7 +583,7 @@ test("keeps the latest turn open while a WB steer awaits native delivery", async
   assert.equal(usage?.snapshot.tokenUsage?.modelContextWindow, 200_000);
 });
 
-test("a fresh Workbench steer admits its own item identity before recording and resolves in place", async context => {
+test("a fresh Workbench steer admits its own item identity, stays held outside the transcript, and enters it on delivery", async context => {
   const fixture = createThreadStateTestDatabase();
   context.after(() => fixture.sqlite.close());
   fixture.admitThread(testProjectIds.project, "wb-thread", "opencode", "session", "C:/repo");
@@ -612,8 +612,11 @@ test("a fresh Workbench steer admits its own item identity before recording and 
     assert.ok(projected.success);
     return projected.data.turns.flatMap(turn => turn.items).filter(item => item.id === itemId);
   };
+  const held = () => repository.read({ threadId: "wb-thread", turnLimit: 1 })!.rows.threadHeldSteers.map(({ public_id }) => public_id);
   await adapter.recordSteer(pending);
-  assert.equal(steerItems().length, 1);
+  assert.equal(steerItems().length, 0);
+  assert.deepEqual(held(), [itemId]);
   await adapter.recordSteer({ ...pending, status: "sent", resolvedAt: 3 });
-  assert.equal(steerItems().length, 1, "resolving the steer updates its admitted item");
+  assert.equal(steerItems().length, 1, "delivery gives the admitted identity its transcript item");
+  assert.deepEqual(held(), []);
 });

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptRepository: own atomic settlement, held-steer lifecycle, context compaction lifecycle, cumulative usage facts, provider reconciliation, and bounded reads.
+ * - default WorkbenchTranscriptRepository: own atomic settlement, held-steer lifecycle outside the transcript, context compaction lifecycle, cumulative usage facts, provider reconciliation, and bounded reads.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -63,11 +63,13 @@ import {
   type WorkbenchDatabaseRowInFilter,
 } from "workbench-shared/database/workbench-database-statements";
 import {
+  heldSteerPartMutations,
   resolveQuestionnaireTranscriptSourceId,
   resolveSteerTranscriptSourceId,
   transformQuestionnaireEntry,
   transformSteerEntry,
 } from "./workbench-transcript-interaction-transformers.ts";
+import { heldSteerTables } from "workbench-shared/workbench/database/schema/item-schema";
 import {
   transformWorkbenchTranscriptItem,
   type WorkbenchTranscriptItemTransform,
@@ -308,7 +310,18 @@ export default class WorkbenchTranscriptRepository {
         threadItems = threadItems.filter(item => item.type === "questionnaire" || item.type === "approval"
           || item.type === "userMessage" || browseItems.has(item.id) || retainedSteers.has(item.id));
       }
-      const rows = this.#readRows(threadId, threadItems);
+      const threadHeldSteers = this.#all(selectRows(heldSteerTables.threadHeldSteers, {
+        where: { thread_id: threadId },
+        whereIn: { turn_id: loadedTurnIds },
+        orderBy: [{ column: "id" }],
+      }));
+      const rows = {
+        ...this.#readRows(threadId, threadItems),
+        threadHeldSteers,
+        threadHeldSteerParts: this.#all(selectRows(heldSteerTables.threadHeldSteerParts, {
+          whereIn: { steer_id: threadHeldSteers.map(({ id }) => id) },
+        })),
+      };
       return {
         thread,
         turns,
@@ -923,6 +936,12 @@ export default class WorkbenchTranscriptRepository {
     }
 
     for (const observation of window.observations) {
+      // Settled undelivered steers are held, not positioned; a window's pending steer is stale evidence.
+      if (observation.kind === "steer") {
+        const { status, turnId } = observation.entry;
+        if (status !== "sent" && status !== "pending" && missingTurnIds.has(turnId)) this.#settleObservation(observation, true, index);
+        continue;
+      }
       if (
         observation.kind !== "thread"
         && observation.kind !== "turn"
@@ -1069,7 +1088,7 @@ export default class WorkbenchTranscriptRepository {
           this.#openContextCompactions(observation.threadId).filter(item => item.turn_id === observation.turnId),
           observation.endedAt ?? Date.now(),
         );
-        this.#interruptHeldSteers(observation.turnId);
+        this.#interruptHeldSteers(observation.turnId, observation.endedAt ?? Date.now());
       }
       return observation.threadId;
     }
@@ -1206,8 +1225,14 @@ export default class WorkbenchTranscriptRepository {
       return observation.entry.threadId;
     }
     if (observation.kind === "steer") {
-      const writtenItemId = this.#writeItem({
-        createTransform: (itemId) => transformSteerEntry(this.#heldSteerEntry(observation.entry, itemId), itemId),
+      if (observation.entry.status !== "sent") {
+        this.#holdSteer(observation, insideCanonicalWindow);
+        return observation.entry.threadId;
+      }
+      const held = this.#findHeldSteer(observation.entry, observation.publicItemId);
+      // Delivery creates the transcript item, so it lands where the agent received it, not where it was sent.
+      this.#writeItem({
+        createTransform: (itemId) => transformSteerEntry(observation.entry, itemId),
         itemPosition: observation.itemPosition,
         observedAt: observation.observedAt,
         replaceTimeline: insideCanonicalWindow,
@@ -1218,7 +1243,7 @@ export default class WorkbenchTranscriptRepository {
         allowUnmaterializedTurn: insideCanonicalWindow,
         canonicalIndex,
       });
-      if (!insideCanonicalWindow) this.#retireHeldSteerCopy(observation.entry, writtenItemId);
+      if (held) this.#run(deleteRows(heldSteerTables.threadHeldSteers, { id: held.id }));
       return observation.entry.threadId;
     }
     if (observation.kind === "browse") {
@@ -1344,41 +1369,71 @@ export default class WorkbenchTranscriptRepository {
   }
 
   /**
-   * Steer truth only moves forward: a settled steer never returns to `pending`, and the user's dismissal is final.
-   * Late delivery evidence may still upgrade an undelivered steer to `sent`.
+   * A provider can record delivery under its own message identity rather than the held steer's, so the
+   * held steer is found by its own identity first and its stable entry key second.
    */
-  #heldSteerEntry(entry: WorkbenchSteerHistoryEntry, itemId: number): WorkbenchSteerHistoryEntry {
-    const existing = this.#one(selectRows(itemTables.threadItemUserMessages, { where: { item_id: itemId } }));
-    if (!existing || existing.input_kind !== "steer") return entry;
-    if (existing.delivery_state === "dismissed") return { ...entry, status: "dismissed", error: null };
-    if (entry.status !== "pending" || existing.delivery_state === "pending") return entry;
-    return existing.delivery_state === "delivered"
-      ? { ...entry, status: "sent", error: null }
-      : { ...entry, status: existing.delivery_state, error: existing.error_text };
+  #findHeldSteer(entry: WorkbenchSteerHistoryEntry, publicItemId: string | undefined) {
+    for (const id of new Set([publicItemId, entry.itemId].filter((id): id is string => Boolean(id)))) {
+      const held = this.#one(selectRows(heldSteerTables.threadHeldSteers, { where: { public_id: id } }));
+      if (held) return held;
+    }
+    return this.#one(selectRows(heldSteerTables.threadHeldSteers, {
+      where: { thread_id: entry.threadId, entry_key: entry.entryKey },
+    }));
   }
 
   /**
-   * A provider can record delivery under its own message identity rather than the held steer's. Delivery is
-   * positive evidence about the same steer, so its held copy is retired instead of later turning undelivered.
+   * Held steer truth only moves forward: news never returns a settled steer to `pending`, and the user's
+   * dismissal is final against later undelivered news. Delivery evidence always wins and retires the hold.
    */
-  #retireHeldSteerCopy(entry: WorkbenchSteerHistoryEntry, deliveredRowId: number) {
-    if (entry.status !== "sent" || !entry.itemId) return;
-    const held = this.#findReferencedItem(
-      WorkbenchThreadIdSchema.parse(entry.threadId), WorkbenchTurnIdSchema.parse(entry.turnId), entry.itemId,
-    );
-    if (!held || held.id === deliveredRowId || held.type !== "userMessage") return;
-    const owner = this.#one(selectRows(itemTables.threadItemUserMessages, { where: { item_id: held.id } }));
-    if (owner?.input_kind !== "steer" || owner.delivery_state === "delivered" || owner.delivery_state === "dismissed") return;
-    this.#run(deleteRows(itemTables.threadItems, { id: held.id }));
+  #holdSteer(observation: Extract<WorkbenchTranscriptAtomicObservation, { kind: "steer" }>, insideCanonicalWindow: boolean) {
+    const { entry } = observation;
+    if (entry.status === "sent") throw new Error("A delivered steer cannot be held.");
+    this.#requiredTurn(entry.threadId, entry.turnId);
+    if (!insideCanonicalWindow && !this.#isTurnMaterialized(entry.threadId, entry.turnId)) {
+      throw new Error(`Held steer ${entry.entryKey} references an unmaterialized turn`);
+    }
+    const existing = this.#findHeldSteer(entry, observation.publicItemId);
+    const publicId = existing?.public_id ?? observation.publicItemId ?? this.#itemIdentity.admit({
+      threadId: WorkbenchThreadIdSchema.parse(entry.threadId),
+      sources: [{
+        turnId: WorkbenchTurnIdSchema.parse(entry.turnId),
+        kind: "stable",
+        reference: resolveSteerTranscriptSourceId(entry),
+      }],
+    }).itemId;
+    // Late undelivered news about a steer the transcript already received changes nothing.
+    if (!existing && this.#findItem(entry.threadId, publicId)) return;
+    if (existing && (existing.state === "dismissed" || (entry.status === "pending" && existing.state !== "pending"))) return;
+    const values = {
+      state: entry.status,
+      error_text: entry.status === "failed" ? entry.error ?? "Steer delivery failed." : null,
+      resolved_at: entry.status === "pending" ? null : entry.resolvedAt ?? observation.observedAt,
+      request_id: entry.requestId,
+      client_id: entry.clientUserMessageId ?? null,
+      dispatch_sequence: entry.dispatchSequence ?? null,
+    };
+    let steerId = existing?.id;
+    if (existing) {
+      this.#run(updateRows(heldSteerTables.threadHeldSteers, values, { id: existing.id }));
+    } else {
+      steerId = Number(this.#run(insertRow(heldSteerTables.threadHeldSteers, {
+        ...values,
+        public_id: publicId,
+        thread_id: entry.threadId,
+        turn_id: entry.turnId,
+        entry_key: entry.entryKey,
+        attempted_at: entry.attemptedAt,
+      })).lastInsertRowid);
+    }
+    this.#runAll(heldSteerPartMutations(entry, steerId!));
   }
 
   /** A turn that ends can no longer deliver the steers it still holds; they become undelivered, not lost. */
-  #interruptHeldSteers(turnId: string) {
-    const items = this.#all(selectRows(itemTables.threadItems, { where: { turn_id: turnId, type: "userMessage" } }));
-    for (const row of this.#rowsByItemIds(itemTables.threadItemUserMessages, items.map(item => item.id))) {
-      if (row.input_kind !== "steer" || row.delivery_state !== "pending") continue;
-      this.#run(updateRows(itemTables.threadItemUserMessages, { delivery_state: "interrupted" }, { item_id: row.item_id }));
-    }
+  #interruptHeldSteers(turnId: string, endedAt: number) {
+    this.#run(updateRows(heldSteerTables.threadHeldSteers, {
+      state: "interrupted", resolved_at: endedAt,
+    }, { turn_id: turnId, state: "pending" }));
   }
 
   /** The thread's running compactions in creation order, wherever their turns are; manual compaction can follow a settled turn. */
@@ -1809,6 +1864,9 @@ export default class WorkbenchTranscriptRepository {
       threadItemTimelineAliases: itemRows(itemTables.threadItemTimelineAliases),
       threadItemUserMessages: itemRows(itemTables.threadItemUserMessages),
       threadUserMessageParts: itemRows(itemTables.threadUserMessageParts),
+      // Held steers are not items; only transcript reads attach them.
+      threadHeldSteers: [],
+      threadHeldSteerParts: [],
       threadItemAssistantMessages: itemRows(itemTables.threadItemAssistantMessages),
       threadItemReasoning: itemRows(itemTables.threadItemReasoning),
       threadReasoningSections: itemRows(itemTables.threadReasoningSections),
@@ -1908,9 +1966,9 @@ export default class WorkbenchTranscriptRepository {
     if (observation.kind === "item") return observation.item.id;
     if (observation.kind === "questionnaire") return resolveQuestionnaireTranscriptSourceId(observation.entry);
     if (observation.kind === "steer") {
-      return observation.entry.status === "pending"
-        ? null
-        : resolveSteerTranscriptSourceId(observation.entry);
+      return observation.entry.status === "sent"
+        ? resolveSteerTranscriptSourceId(observation.entry)
+        : null;
     }
     return null;
   }

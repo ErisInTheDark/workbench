@@ -6,7 +6,8 @@
  * - resolveQuestionnaireTranscriptSourceId: retain private questionnaire source lookup.
  * - resolveSteerTranscriptSourceId: retain private steer source lookup.
  * - transformQuestionnaireEntry: convert settled questionnaires and approvals.
- * - transformSteerEntry: convert a held, settled or dismissed steer to a typed user-message row.
+ * - transformSteerEntry: convert a delivered steer to a typed user-message row.
+ * - heldSteerPartMutations: replace one held steer's typed input parts.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
@@ -17,6 +18,7 @@ import type {
   WorkbenchSteerHistoryEntry,
 } from "workbench-shared/types";
 import { interactionTables, itemTables } from "../workbench-database-schema.ts";
+import { heldSteerTables } from "workbench-shared/workbench/database/schema/item-schema";
 import {
   deleteRows,
   insertRow,
@@ -197,10 +199,35 @@ export function transformQuestionnaireEntry(
   };
 }
 
+/** Held input parts, replaced whole; audio keeps typed rows here because no transcript owner exists yet. */
+export function heldSteerPartMutations(entry: WorkbenchSteerHistoryEntry, steerId: number): WorkbenchDatabaseMutation[] {
+  return [
+    deleteRows(heldSteerTables.threadHeldSteerParts, { steer_id: steerId }),
+    ...entry.input.map((part, partIndex) => {
+      const base = { steer_id: steerId, part_index: partIndex };
+      switch (part.type) {
+        case "text": return insertRow(heldSteerTables.threadHeldSteerParts, { ...base, part_type: "text", text: part.text });
+        case "image":
+          return insertRow(heldSteerTables.threadHeldSteerParts, { ...base, part_type: "image", url: part.url, image_detail: part.detail ?? null });
+        case "localImage":
+          return insertRow(heldSteerTables.threadHeldSteerParts, { ...base, part_type: "localImage", path: part.path, image_detail: part.detail ?? null });
+        case "audio": return insertRow(heldSteerTables.threadHeldSteerParts, { ...base, part_type: "audio", url: part.url });
+        case "localAudio": return insertRow(heldSteerTables.threadHeldSteerParts, { ...base, part_type: "localAudio", path: part.path });
+        case "skill":
+        case "mention":
+          return insertRow(heldSteerTables.threadHeldSteerParts, { ...base, part_type: part.type, path: part.path, name: part.name });
+      }
+      throw new Error("Unsupported held steer part.");
+    }),
+  ];
+}
+
+/** Only a delivered steer becomes a transcript item; held states live in `thread_held_steers`. */
 export function transformSteerEntry(
   entry: WorkbenchSteerHistoryEntry,
   itemId: number,
 ): WorkbenchInteractionTransform {
+  if (entry.status !== "sent") throw new Error("Only a delivered steer can become a transcript item.");
   if (entry.input.some((part) => part.type === "audio" || part.type === "localAudio")) {
     return {
       itemType: "unknown",
@@ -224,9 +251,9 @@ export function transformSteerEntry(
       upsertRow(itemTables.threadItemUserMessages, {
         item_id: itemId,
         input_kind: "steer",
-        delivery_state: entry.status === "sent" ? "delivered" : entry.status,
+        delivery_state: "delivered",
         client_id: entry.clientUserMessageId ?? null,
-        error_text: entry.status === "failed" ? entry.error ?? "Steer delivery failed." : null,
+        error_text: null,
       }, {
         conflictColumns: ["item_id"],
         updateColumns: ["input_kind", "delivery_state", "client_id", "error_text"],

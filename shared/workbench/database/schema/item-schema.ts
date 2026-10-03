@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - threadItems: canonical thread item roots.
- * - threadItemUserMessages/threadUserMessageParts: user-message storage.
+ * - threadItemUserMessages/threadUserMessageParts: delivered user-message storage.
+ * - threadHeldSteers/threadHeldSteerParts/heldSteerTables: undelivered steers held outside the transcript.
  * - threadItemAssistantMessages: assistant-message storage.
  * - threadItemReasoning/threadReasoningSections: reasoning storage.
  * - threadItemFileChanges/threadFileChanges/threadFileChangeHunks/threadFileChangeCandidates: file-change storage.
@@ -38,6 +39,7 @@ import {
   defineTableHistory,
   rebuildTable,
   retireTableHistory,
+  sqlData,
   tableVersion,
 } from "../../../database/schema/schema-history.ts";
 import { evidenceTables } from "./evidence-schema.ts";
@@ -232,7 +234,7 @@ const threadItemUserMessagesV1 = defineTable("thread_item_user_messages", {
 const threadItemUserMessagesV2 = evolveTable(threadItemUserMessagesV1, {
   add: { input_kind: enumText("initial", "steer").notNull().default("initial") },
 });
-// Steers are held from admission (`pending`) until delivered, undelivered, or dismissed by the user.
+// Schema 58 briefly held undelivered steers as transcript rows; schema 60 moves them to `thread_held_steers`.
 const threadItemUserMessagesV3 = defineTable("thread_item_user_messages", {
   item_id: integer().primaryKey(),
   item_type: enumText("userMessage").notNull().default("userMessage"),
@@ -253,8 +255,33 @@ const threadItemUserMessagesV3 = defineTable("thread_item_user_messages", {
     }),
   ],
 }));
+// Only delivered input belongs to the transcript; held steers live in `thread_held_steers`.
+const threadItemUserMessagesV4 = defineTable("thread_item_user_messages", {
+  item_id: integer().primaryKey(),
+  item_type: enumText("userMessage").notNull().default("userMessage"),
+  delivery_state: enumText("delivered", "interrupted", "failed").notNull(),
+  client_id: text(),
+  error_text: text(),
+  input_kind: enumText("initial", "steer").notNull().default("initial"),
+}, (table) => ({
+  constraints: [
+    check(sql`
+      (${table.delivery_state} = ${literal("failed")} AND ${table.error_text} IS NOT NULL)
+      OR (${table.delivery_state} <> ${literal("failed")} AND ${table.error_text} IS NULL)
+    `),
+    foreignKey([table.item_id, table.item_type], {
+      table: "thread_items",
+      columns: ["id", "type"],
+      onDelete: "CASCADE",
+    }),
+  ],
+}));
+const HELD_STEER_ROOTS = `
+  SELECT i.id FROM thread_items i JOIN thread_item_user_messages u ON u.item_id = i.id
+  WHERE u.input_kind = 'steer' AND u.delivery_state IN ('pending', 'interrupted', 'failed', 'dismissed')
+`;
 const threadItemUserMessagesHistory = defineTableHistory({
-  current: threadItemUserMessagesV3,
+  current: threadItemUserMessagesV4,
   versions: [
     tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadItemUserMessagesV1, migration: createTable(threadItemUserMessagesV1) }),
     tableVersion({
@@ -266,6 +293,34 @@ const threadItemUserMessagesHistory = defineTableHistory({
       schemaVersion: databaseReleases.heldSteers.version,
       table: threadItemUserMessagesV3,
       migration: rebuildTable({ from: threadItemUserMessagesV2, to: threadItemUserMessagesV3 }),
+    }),
+    // Data only, so foreign keys stay on and deleting the held roots cascades their transcript bodies.
+    tableVersion({
+      schemaVersion: databaseReleases.heldSteerOverlay.version,
+      table: threadItemUserMessagesV3,
+      migration: sqlData([
+        `INSERT INTO thread_held_steers (
+          public_id, thread_id, turn_id, entry_key, client_id, state, error_text, attempted_at, resolved_at
+        )
+        SELECT i.public_id, i.thread_id, i.turn_id, i.public_id, u.client_id, u.delivery_state, u.error_text, i.created_at,
+          CASE WHEN u.delivery_state = 'pending' THEN NULL ELSE i.updated_at END
+        FROM thread_items i JOIN thread_item_user_messages u ON u.item_id = i.id
+        WHERE i.id IN (${HELD_STEER_ROOTS})`,
+        `INSERT INTO thread_held_steer_parts (steer_id, part_index, part_type, text, url, path, name, image_detail)
+        SELECT h.id, p.part_index, p.part_type, p.text, p.url, p.path, p.name, p.image_detail
+        FROM thread_user_message_parts p
+        JOIN thread_items i ON i.id = p.item_id
+        JOIN thread_held_steers h ON h.public_id = i.public_id
+        WHERE i.id IN (${HELD_STEER_ROOTS})`,
+        `UPDATE ${evidenceTables.transcriptNativeRecords.name} SET link_kind = 'turn', item_id = NULL
+        WHERE item_id IN (${HELD_STEER_ROOTS})`,
+        `DELETE FROM thread_items WHERE id IN (${HELD_STEER_ROOTS})`,
+      ]),
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.transcriptDeliveryStates.version,
+      table: threadItemUserMessagesV4,
+      migration: rebuildTable({ from: threadItemUserMessagesV3, to: threadItemUserMessagesV4 }),
     }),
   ],
 });
@@ -293,6 +348,65 @@ const threadUserMessagePartsV1 = defineTable("thread_user_message_parts", {
 }));
 const threadUserMessagePartsHistory = initialHistory(threadUserMessagePartsV1);
 export const threadUserMessageParts = threadUserMessagePartsHistory.current;
+
+// A held steer waits outside the transcript until delivery creates its transcript item; dismissal is final.
+const threadHeldSteersV1 = defineTable("thread_held_steers", {
+  id: integer().primaryKey({ autoincrement: true }),
+  public_id: text().notNull(),
+  thread_id: text().notNull(),
+  turn_id: text().notNull(),
+  entry_key: text().notNull(),
+  request_id: text(),
+  client_id: text(),
+  dispatch_sequence: integer(),
+  state: enumText("pending", "interrupted", "failed", "dismissed").notNull(),
+  error_text: text(),
+  attempted_at: integer().notNull(),
+  resolved_at: integer(),
+}, (table) => ({
+  constraints: [
+    unique([table.public_id]),
+    unique([table.thread_id, table.entry_key]),
+    check(sql`
+      (${table.state} = ${literal("failed")} AND ${table.error_text} IS NOT NULL)
+      OR (${table.state} <> ${literal("failed")} AND ${table.error_text} IS NULL)
+    `),
+    foreignKey([table.turn_id, table.thread_id], {
+      table: "thread_turns", columns: ["id", "thread_id"], onDelete: "CASCADE",
+    }),
+    foreignKey([table.public_id, table.thread_id], {
+      table: "workbench_transcript_item_identities", columns: ["id", "thread_id"], onDelete: "CASCADE",
+    }),
+  ],
+  indexes: [index("thread_held_steers_turn_idx", [table.turn_id])],
+}));
+const threadHeldSteersHistory = initialHistory(threadHeldSteersV1, databaseReleases.heldSteerOverlay.version);
+export const threadHeldSteers = threadHeldSteersHistory.current;
+
+const threadHeldSteerPartsV1 = defineTable("thread_held_steer_parts", {
+  steer_id: integer().notNull().references("thread_held_steers", "id", { onDelete: "CASCADE" }),
+  part_index: integer().notNull(),
+  part_type: enumText("text", "image", "localImage", "audio", "localAudio", "skill", "mention").notNull(),
+  text: text(),
+  url: text(),
+  path: text(),
+  name: text(),
+  image_detail: enumText("auto", "low", "high", "original"),
+}, (table) => ({
+  constraints: [
+    primaryKey([table.steer_id, table.part_index]),
+    check(sql`
+      (${table.part_type} = ${literal("text")} AND ${table.text} IS NOT NULL AND ${table.url} IS NULL AND ${table.path} IS NULL AND ${table.name} IS NULL AND ${table.image_detail} IS NULL)
+      OR (${table.part_type} = ${literal("image")} AND ${table.text} IS NULL AND ${table.url} IS NOT NULL AND ${table.path} IS NULL AND ${table.name} IS NULL)
+      OR (${table.part_type} = ${literal("localImage")} AND ${table.text} IS NULL AND ${table.url} IS NULL AND ${table.path} IS NOT NULL AND ${table.name} IS NULL)
+      OR (${table.part_type} = ${literal("audio")} AND ${table.text} IS NULL AND ${table.url} IS NOT NULL AND ${table.path} IS NULL AND ${table.name} IS NULL AND ${table.image_detail} IS NULL)
+      OR (${table.part_type} = ${literal("localAudio")} AND ${table.text} IS NULL AND ${table.url} IS NULL AND ${table.path} IS NOT NULL AND ${table.name} IS NULL AND ${table.image_detail} IS NULL)
+      OR (${table.part_type} IN (${literal("skill")}, ${literal("mention")}) AND ${table.text} IS NULL AND ${table.url} IS NULL AND ${table.path} IS NOT NULL AND ${table.name} IS NOT NULL AND ${table.image_detail} IS NULL)
+    `),
+  ],
+}));
+const threadHeldSteerPartsHistory = initialHistory(threadHeldSteerPartsV1, databaseReleases.heldSteerOverlay.version);
+export const threadHeldSteerParts = threadHeldSteerPartsHistory.current;
 
 const threadItemAssistantMessagesV1 = defineTable("thread_item_assistant_messages", {
   item_id: integer().primaryKey(),
@@ -574,10 +688,15 @@ export type ItemSchemaRows = {
   [Name in keyof typeof itemTables]: SelectRow<(typeof itemTables)[Name]>;
 };
 
+export const heldSteerTables = Object.freeze({ threadHeldSteers, threadHeldSteerParts });
+
 export const itemSchemaHistory = defineSubsystemHistory([
   threadItemsHistory,
   threadItemTimelinesHistory,
   threadItemTimelineAliasesHistory,
+  // Held steer tables precede the user-message release that moves schema 58 held rows into them.
+  threadHeldSteersHistory,
+  threadHeldSteerPartsHistory,
   threadItemUserMessagesHistory,
   threadUserMessagePartsHistory,
   threadItemAssistantMessagesHistory,

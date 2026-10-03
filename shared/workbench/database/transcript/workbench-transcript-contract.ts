@@ -16,7 +16,7 @@ import { coreTables } from "../schema/core-schema.ts";
 import { ToolPatchPreviewFileSchema } from "../../thread/tool-patch-preview.ts";
 import { evidenceTables } from "../schema/evidence-schema.ts";
 import { interactionTables } from "../schema/interaction-schema.ts";
-import { itemTables } from "../schema/item-schema.ts";
+import { heldSteerTables, itemTables } from "../schema/item-schema.ts";
 import { operationSourceTables } from "../schema/operation-source-schema.ts";
 import { transcriptIdentityTables } from "../schema/transcript-identity-schema.ts";
 import {
@@ -39,6 +39,9 @@ export const transcriptSnapshotTables = Object.freeze({
   threadItemTimelineAliases: itemTables.threadItemTimelineAliases,
   threadItemUserMessages: itemTables.threadItemUserMessages,
   threadUserMessageParts: itemTables.threadUserMessageParts,
+  // Held steers ride along for history reads only; transcript projection never renders them.
+  threadHeldSteers: heldSteerTables.threadHeldSteers,
+  threadHeldSteerParts: heldSteerTables.threadHeldSteerParts,
   threadItemAssistantMessages: itemTables.threadItemAssistantMessages,
   threadItemReasoning: itemTables.threadItemReasoning,
   threadReasoningSections: itemTables.threadReasoningSections,

@@ -40,6 +40,45 @@ test("retiring stale projections preserves canonical state and foreign-key integ
   } finally { database.close(); }
 });
 
+test("upgrading moves schema 58 held steers out of the transcript and keeps delivered steers in place", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database, { targetVersion: databaseReleases.threadSkills.version });
+    database.exec(`
+      INSERT INTO workbench_projects(id) VALUES ('${testProjectIds.project}');
+      INSERT INTO workbench_harnesses(id) VALUES ('claude');
+      INSERT INTO workbench_threads(id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+      VALUES ('thread', '${testProjectIds.project}', '/retained', 'title', 3, 1, 2, 3);
+      INSERT INTO thread_turns(id, thread_id, turn_index, harness_id, native_location, native_thread_id, state, created_at)
+      VALUES ('turn', 'thread', 0, 'claude', '/retained', 'native', 'completed', 1);
+      INSERT INTO workbench_transcript_item_identities(id, thread_id) VALUES ('held', 'thread'), ('delivered', 'thread');
+      INSERT INTO thread_items(id, public_id, thread_id, turn_id, item_position, type, created_at, updated_at)
+      VALUES (1, 'held', 'thread', 'turn', 0, 'userMessage', 4, 5), (2, 'delivered', 'thread', 'turn', 1, 'userMessage', 6, 7);
+      INSERT INTO thread_item_user_messages(item_id, delivery_state, client_id, error_text, input_kind)
+      VALUES (1, 'failed', 'held-client', 'lost', 'steer'), (2, 'delivered', 'delivered-client', NULL, 'steer');
+      INSERT INTO thread_user_message_parts(item_id, part_index, part_type, text)
+      VALUES (1, 0, 'text', 'held text'), (2, 0, 'text', 'delivered text');
+      INSERT INTO thread_item_timelines(item_id, first_seen_at) VALUES (1, 4);
+    `);
+    installWorkbenchDatabaseSchema(database);
+    assert.deepEqual(database.prepare(`
+      SELECT public_id, thread_id, turn_id, entry_key, client_id, state, error_text, attempted_at, resolved_at FROM thread_held_steers
+    `).all(), [{
+      public_id: "held", thread_id: "thread", turn_id: "turn", entry_key: "held", client_id: "held-client",
+      state: "failed", error_text: "lost", attempted_at: 4, resolved_at: 5,
+    }]);
+    assert.deepEqual(database.prepare("SELECT part_index, part_type, text FROM thread_held_steer_parts").all(), [
+      { part_index: 0, part_type: "text", text: "held text" },
+    ]);
+    assert.deepEqual(database.prepare("SELECT public_id, item_position FROM thread_items").all(), [{ public_id: "delivered", item_position: 1 }]);
+    assert.deepEqual(database.prepare("SELECT item_id, delivery_state FROM thread_item_user_messages").all(), [{ item_id: 2, delivery_state: "delivered" }]);
+    assert.deepEqual(database.prepare("SELECT item_id, text FROM thread_user_message_parts").all(), [{ item_id: 2, text: "delivered text" }]);
+    assert.deepEqual(database.prepare("SELECT item_id FROM thread_item_timelines").all(), []);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
 test("project overrides require a retained project owner", () => {
   const database = new Database(":memory:");
   try {

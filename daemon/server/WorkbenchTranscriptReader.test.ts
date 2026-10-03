@@ -139,6 +139,10 @@ test("empty canonical history and retained interaction facts need no provider in
       entry: { threadId, turnId, entryKey: "steer", input: [{ type: "text", text: "retry", text_elements: [] }],
         status: "interrupted", attemptedAt: 2, resolvedAt: 3, requestId: null, canonicalItemId: null, error: null },
     }, {
+      kind: "steer", observedAt: 3,
+      entry: { threadId, turnId, entryKey: "dismissed", input: [{ type: "text", text: "never mind", text_elements: [] }],
+        status: "dismissed", attemptedAt: 2, resolvedAt: 3, requestId: null, canonicalItemId: null, error: null },
+    }, {
       kind: "browse",
       entry: { action: "snapshot", actionIndex: 0, assetUrl: null, commandItemId: "browse-command",
         detailKind: "text", detailLabel: "snapshot", detailText: "retained result", durationMs: 1,
@@ -152,7 +156,11 @@ test("empty canonical history and retained interaction facts need no provider in
     assert.deepEqual(page.questionnaireEntries[0]?.response, response);
     const command = page.thread.turns[0]!.items.find(item => item.type === "commandExecution")!;
     assert.equal(page.questionnaireEntries[0]?.insertAfterItemId, command.id);
-    assert.equal(page.steerEntries[0]?.status, "interrupted");
+    // Held steers come back as history beside the transcript, never inside it; dismissed ones not at all.
+    assert.deepEqual(page.steerEntries.map(({ status, input }) => ({ status, input })), [
+      { status: "interrupted", input: [{ type: "text", text: "retry", text_elements: [] }] },
+    ]);
+    assert.equal(page.thread.turns[0]!.items.some(item => item.type === "userMessage"), false);
     assert.equal(page.browseResultEntries[0]?.detailText, "retained result");
     assert.equal(page.browseResultEntries[0]?.commandItemId, command.id);
     const history = await reader.history(threadId);

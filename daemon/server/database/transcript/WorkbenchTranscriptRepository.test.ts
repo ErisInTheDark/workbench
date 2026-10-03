@@ -1159,7 +1159,13 @@ for (const windowed of [false, true]) {
   });
 }
 
-test("failed and interrupted steers keep the renderer's synthetic item identity", () => {
+function heldSteerRows(database: Database.Database) {
+  return database.prepare("SELECT public_id, entry_key, state, error_text FROM thread_held_steers ORDER BY id").all() as {
+    public_id: string; entry_key: string; state: string; error_text: string | null;
+  }[];
+}
+
+test("settled undelivered steers in a canonical window are held outside the transcript", () => {
   const { database, repository } = createRepository();
   const entries: StoredSteerEntry[] = [
     {
@@ -1201,17 +1207,12 @@ test("failed and interrupted steers keep the renderer's synthetic item identity"
     ], ["turn-0"])]);
     const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
     assert.ok(snapshot);
-    assert.deepEqual(
-      rootsWithReferences(snapshot).map(({ reference }) => reference),
-      entries.map(resolveSteerHistoryItemId),
-    );
-    assert.deepEqual(snapshot.rows.threadItemUserMessages.map((row) => ({
-      deliveryState: row.delivery_state,
-      error: row.error_text,
-    })), [
-      { deliveryState: "failed", error: "delivery failed" },
-      { deliveryState: "interrupted", error: null },
+    assert.deepEqual(snapshot.rows.threadItems, []);
+    assert.deepEqual(snapshot.rows.threadHeldSteers.map((row) => ({ state: row.state, error: row.error_text })), [
+      { state: "failed", error: "delivery failed" },
+      { state: "interrupted", error: null },
     ]);
+    assert.deepEqual(snapshot.rows.threadHeldSteerParts.map(({ text }) => text), ["failed steer", "interrupted steer"]);
   } finally {
     database.close();
   }
@@ -1249,7 +1250,7 @@ test("command approval context survives transcript persistence with legacy absen
   } finally { database.close(); }
 });
 
-test("interaction bodies reuse admitted identities and positions through steer settlement changes", () => {
+test("held steer settlement never takes a transcript position from neighbouring interactions", () => {
   const { database, repository } = createRepository();
   try {
     repository.settle([threadObservation(), turnObservation("turn", 0)]);
@@ -1287,23 +1288,18 @@ test("interaction bodies reuse admitted identities and positions through steer s
     };
     repository.settle([{ kind: "steer", entry: steer, observedAt: 4, publicItemId: steerIdentity.itemId }, questionnaire]);
     const roots = database.prepare("SELECT id, public_id, item_position FROM thread_items ORDER BY item_position").all();
-    assert.deepEqual(roots.map((row) => (row as { public_id: string }).public_id),
-      [steerIdentity.itemId, questionnaireIdentity.itemId]);
+    assert.deepEqual(roots.map((row) => (row as { public_id: string }).public_id), [questionnaireIdentity.itemId]);
     repository.settle([{ kind: "steer", entry: interrupted, observedAt: 5, publicItemId: steerIdentity.itemId }, questionnaire]);
     assert.deepEqual(database.prepare("SELECT id, public_id, item_position FROM thread_items ORDER BY item_position").all(), roots);
-    const projected = projectWorkbenchTranscriptItems(repository.read({ threadId: "thread", turnLimit: 1 })!.rows);
-    assert.equal(projected.success, true);
-    if (!projected.success) throw new Error("Interaction projection failed");
-    const item = projected.data.find(({ item }) => item.id === steerIdentity.itemId)!.item;
-    assert.equal(item.type, "userMessage");
-    if (item.type !== "userMessage") throw new Error("Steer projection has the wrong kind");
-    assert.deepEqual(getWorkbenchInputState(item), { kind: "steer", status: "interrupted" });
+    assert.deepEqual(heldSteerRows(database), [
+      { public_id: steerIdentity.itemId, entry_key: "request", state: "interrupted", error_text: null },
+    ]);
   } finally {
     database.close();
   }
 });
 
-test("held steers persist, never fall back to pending, end undelivered with their turn, and stay dismissed", () => {
+test("held steers persist outside the transcript, never fall back to pending, end undelivered with their turn, and stay dismissed", () => {
   const { database, repository } = createRepository();
   try {
     const turnId = fixtureIdentityValues.WorkbenchTurnId.turn;
@@ -1322,32 +1318,64 @@ test("held steers persist, never fall back to pending, end undelivered with thei
       repository.settle([{ kind: "steer", entry, observedAt: 4, publicItemId: itemId }]);
       return itemId;
     };
-    const state = (itemId: string) => (database.prepare(`
-      SELECT u.delivery_state AS state FROM thread_item_user_messages u
-      JOIN thread_items i ON i.id = u.item_id WHERE i.public_id = ?
-    `).get(itemId) as { state: string }).state;
+    const heldState = (itemId: string) => heldSteerRows(database).find(row => row.public_id === itemId)?.state ?? null;
 
     const delivered = record(held("delivered"));
     const undelivered = record(held("undelivered"));
-    assert.equal(state(delivered), "pending");
-    assert.equal(state(undelivered), "pending");
+    assert.equal(heldState(delivered), "pending");
+    assert.equal(heldState(undelivered), "pending");
+    assert.equal(projectWorkbenchTranscriptItems(repository.read({ threadId: "thread", turnLimit: 1 })!.rows).success, true);
+    assert.deepEqual(database.prepare("SELECT public_id FROM thread_items").all(), []);
     record({ ...held("delivered"), status: "sent", resolvedAt: 5 });
     record(held("delivered"));
-    assert.equal(state(delivered), "delivered");
+    assert.equal(heldState(delivered), null, "delivery retires the hold and late pending news cannot revive it");
 
     repository.settle([{ ...turnObservation("turn", 0), state: "interrupted" }]);
-    assert.equal(state(undelivered), "interrupted");
-    assert.equal(state(delivered), "delivered");
+    assert.equal(heldState(undelivered), "interrupted");
     record(held("undelivered"));
-    assert.equal(state(undelivered), "interrupted");
+    assert.equal(heldState(undelivered), "interrupted");
 
     record({ ...held("undelivered"), status: "dismissed", resolvedAt: 6 });
     record({ ...held("undelivered"), status: "interrupted", resolvedAt: 7 });
-    assert.equal(state(undelivered), "dismissed");
+    assert.equal(heldState(undelivered), "dismissed");
     const projected = projectWorkbenchTranscriptItems(repository.read({ threadId: "thread", turnLimit: 1 })!.rows);
     assert.equal(projected.success, true);
     if (!projected.success) throw new Error("Held steer projection failed.");
     assert.deepEqual(projected.data.map(({ item }) => item.id), [delivered]);
+    const item = projected.data[0]!.item;
+    assert.deepEqual(item.type === "userMessage" ? getWorkbenchInputState(item) : null, { kind: "steer", status: "sent" });
+  } finally {
+    database.close();
+  }
+});
+
+test("a delivered steer enters the transcript where it was delivered, after work recorded while it was held", () => {
+  const { database, repository } = createRepository();
+  try {
+    const threadId = fixtureIdentityValues.WorkbenchThreadId.thread;
+    const turnId = fixtureIdentityValues.WorkbenchTurnId.turn;
+    repository.settle([threadObservation(), { ...turnObservation("turn", 0), state: "inProgress", endedAt: null, durationMs: null }]);
+    const reasoning = (id: string, observedAt: number): WorkbenchTranscriptAtomicObservation => ({
+      kind: "item", threadId, turnId, lifecycle: "completed", observedAt,
+      item: { type: "reasoning", id, summary: [id], content: [] },
+    });
+    const { itemId } = new WorkbenchTranscriptIdentityRepository(database).admit({
+      threadId, sources: [{ turnId, kind: "stable", reference: "steer" }],
+    });
+    const steer: StoredSteerEntry = {
+      itemId, attemptedAt: 3, canonicalItemId: null, clientUserMessageId: "client", entryKey: itemId, error: null,
+      input: [{ type: "text", text: "late thought", text_elements: [] }], requestId: null, resolvedAt: null,
+      status: "pending", threadId, turnId,
+    };
+    repository.settle([reasoning("before", 2)]);
+    repository.settle([{ kind: "steer", entry: steer, observedAt: 3, publicItemId: itemId }]);
+    repository.settle([reasoning("while-held", 4)]);
+    repository.settle([{ kind: "steer", entry: { ...steer, status: "sent", canonicalItemId: itemId, resolvedAt: 5 }, observedAt: 5, publicItemId: itemId }]);
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 })!;
+    assert.deepEqual(rootsWithReferences(snapshot)
+      .sort((left, right) => left.item_position - right.item_position)
+      .map(({ reference }) => reference), ["before", "while-held", "steer"]);
+    assert.deepEqual(snapshot.rows.threadHeldSteers, []);
   } finally {
     database.close();
   }
@@ -1365,10 +1393,12 @@ test("a steer delivered under the provider's own message identity retires its he
     };
     // Codex-shaped: no public item id, so each status picks its own source identity.
     repository.settle([{ kind: "steer", entry: held, observedAt: 3 }]);
+    assert.deepEqual(heldSteerRows(database).map(({ entry_key, state }) => ({ entry_key, state })), [{ entry_key: "request", state: "pending" }]);
     repository.settle([{ kind: "steer", entry: { ...held, status: "sent", canonicalItemId: "native-message", resolvedAt: 4 }, observedAt: 4 }]);
     repository.settle([{ ...turnObservation("turn", 0), state: "completed" }]);
     const states = database.prepare("SELECT delivery_state AS state FROM thread_item_user_messages").all();
     assert.deepEqual(states, [{ state: "delivered" }]);
+    assert.deepEqual(heldSteerRows(database), []);
   } finally {
     database.close();
   }
@@ -2179,12 +2209,15 @@ test("complete provider scopes preserve admitted facts and placement", () => {
         ["rs-b", 4],
         ["item-2", 5],
         ["questionnaire", 6],
-        [resolveSteerHistoryItemId(failedSteer), 7],
-        ["workbench-file-failure", 8],
-        ["stale", 9],
-        ["answer", 10],
+        ["workbench-file-failure", 7],
+        ["stale", 8],
+        ["answer", 9],
       ],
     );
+    // The undelivered steer is held beside the transcript and survives provider replacement untouched.
+    assert.deepEqual(snapshot.rows.threadHeldSteers.map(({ entry_key, state }) => ({ entry_key, state })), [
+      { entry_key: failedSteer.entryKey, state: "failed" },
+    ]);
     assert.equal(snapshot.rows.threadBrowseEntries.length, 1);
     assert.equal(snapshot.rows.transcriptAssets.length, 1);
     assert.equal(snapshot.rows.threadItemInteractions.length, 1);

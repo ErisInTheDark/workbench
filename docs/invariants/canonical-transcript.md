@@ -2,6 +2,7 @@
 - Browser transcript reads use one Workbench first-page and next-page contract.
 - Browser page cursors resolve through one Workbench SQLite reader, independent of provider bindings. Provider import and recovery never run implicitly during history reads.
 - Store every permanent visible thread item as one row in `thread_items`.
+- Held steers live outside `thread_items`. A steer enters the transcript only at delivery, as a new item at the delivery point.
 - Use turn indexes to order turns.
 - Use item positions to order items within one turn.
 - Use item ids, not reusable request keys, as transcript item identity.
