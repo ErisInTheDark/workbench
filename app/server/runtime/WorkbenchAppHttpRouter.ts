@@ -16,6 +16,7 @@ import WorkbenchPresentationRoutes from "../state/workbench-presentation-routes.
 import type WorkbenchPresentationController from "../state/WorkbenchPresentationController.ts";
 import type WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController.ts";
 import type WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
+import type WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTrafficBuffer";
 import type WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
 import type WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
@@ -107,6 +108,7 @@ export default class WorkbenchAppHttpRouter {
     state: WorkbenchBrowserStateRegistry;
     presentation?: WorkbenchPresentationController;
     sources?: WorkbenchDaemonSources;
+    socketTraffic?: Pick<WebSocketTrafficBuffer, "record">;
     workspace?: WorkbenchWorkspaceController;
     workspaceThreads?: WorkbenchWorkspaceThreads;
     workspaceDrafts?: WorkbenchWorkspaceDrafts;
@@ -160,6 +162,7 @@ export default class WorkbenchAppHttpRouter {
           settings: this.settingsRoutes, port: this.portRoutes,
           sources: options.sources, workspace: options.workspace,
           workspaceThreads: options.workspaceThreads, workspaceDrafts: options.workspaceDrafts,
+          traffic: options.socketTraffic,
         }) : null;
     this.staticRequests = new StaticHttpRequestController({
       cacheSeconds: 0,

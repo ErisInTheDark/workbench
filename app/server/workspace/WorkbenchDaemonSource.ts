@@ -3,7 +3,7 @@
  * - WorkbenchDaemonSourceDescriptor: verified endpoint and access facts for one durable daemon.
  * - WorkbenchDaemonObservationFact: received data with connection-aware freshness.
  * - WorkbenchDaemonTranscriptEvent: source-owned transcript baseline, stream and freshness delivery.
- * - default WorkbenchDaemonSource: own one daemon connection, shared read interests and operation retention.
+ * - default WorkbenchDaemonSource: own one daemon connection, shared read interests, operation retention and socket spy answers.
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -13,6 +13,10 @@ import WorkbenchSocketClient from "workbench-shared/workbench/WorkbenchSocketCli
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
+import {
+  WEBSOCKET_SPY_QUERY_METHOD, WEBSOCKET_SPY_RESULT_METHOD, WebSocketSpyQueryNotificationSchema,
+  type WebSocketTrafficQuery, type WebSocketTrafficResult,
+} from "workbench-shared/process/WebSocketTrafficBuffer";
 import {
   DaemonWorkspaceQuerySchema, DaemonWorkspaceObservationSchema, WorkspaceObservationDeltaSchema,
   daemonObservationShape, type WorkspaceObservationDelta,
@@ -99,6 +103,8 @@ export default class WorkbenchDaemonSource {
     private readonly options: {
       warn(message: string): void;
       createSocket?: (url: string) => WebSocket;
+      /** Answers `wb socket spy` for this daemon; null withholds browser traffic (e.g. from peer daemons). */
+      answerSpy?: (query: WebSocketTrafficQuery) => WebSocketTrafficResult | null;
     },
   ) {
     this.socket = new WorkbenchSocketClient({
@@ -126,6 +132,16 @@ export default class WorkbenchDaemonSource {
       }),
       this.socket.onWorkbenchNotification(notification => {
         if (notification.method === WORKSPACE_DELTA_METHOD) this.receiveDelta(notification.params);
+      }),
+      this.socket.onWorkbenchNotification(notification => {
+        if (notification.method !== WEBSOCKET_SPY_QUERY_METHOD) return;
+        const query = WebSocketSpyQueryNotificationSchema.safeParse(notification);
+        if (!query.success) {
+          reportClientSchemaError("Rejected daemon socket spy query", query.error);
+          return;
+        }
+        const result = this.options.answerSpy?.(query.data.params.query);
+        if (result) this.socket.send({ method: WEBSOCKET_SPY_RESULT_METHOD, params: { requestId: query.data.params.requestId, result } });
       }),
       this.socket.onWorkbenchNotification(notification => {
         if (notification.method === "workbench/transcript/updated" || notification.method === "workbench/transcript/streamed") {

@@ -5,7 +5,7 @@
  * - WorkbenchWebSocketReloadDirtObserverState: reload-dirt subscriber identity.
  * - WorkbenchWebSocketRequestControllerState: request, observer, and stream handoff.
  * - WorkbenchWebSocketRequestControllerOptions: routing, clock, scheduler, and logging ports.
- * - default WorkbenchWebSocketRequestController: route feature requests and own event-stream health.
+ * - default WorkbenchWebSocketRequestController: route feature requests, own event-stream health, and answer socket spy queries from recorded frames.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
@@ -64,11 +64,18 @@ import {
   type DaemonWorkspaceObservation,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { describeObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
+import WebSocketTrafficBuffer, {
+  WEBSOCKET_SPY_QUERY_METHOD, WEBSOCKET_SPY_RESULT_METHOD, WebSocketSpyResultNotificationSchema,
+  type WebSocketTrafficQuery, type WebSocketTrafficResult,
+} from "workbench-shared/process/WebSocketTrafficBuffer";
+import { randomUUID } from "node:crypto";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
 /** A keyed delta for one busy thread is hundreds of bytes; pushes past this name themselves in the log. */
 const WORKSPACE_PUSH_WARNING_BYTES = 32 * 1024;
 const DEFAULT_PENDING_THRESHOLD_MS = 2_000;
+/** Owner: socket spy. A local app answers from memory in milliseconds; past this the CLI reports it unanswered. */
+const SPY_ANSWER_DEADLINE_MS = 2_000;
 const PENDING_WARNING_INTERVAL_MS = 2_000;
 const ANSI_GREEN = "\u001b[32m";
 const ANSI_RED = "\u001b[31m";
@@ -229,6 +236,10 @@ export default class WorkbenchWebSocketRequestController {
   private workspace: WorkbenchWorkspaceObservationController<BridgeClient> | null = null;
   private workspaceInterests: NonNullable<WorkbenchWebSocketRequestControllerState["workspaceInterests"]> = [];
   private readonly writeLine: NonNullable<WorkbenchWebSocketRequestControllerOptions["writeLine"]>;
+  /** Recent frames for `wb socket spy`; memory only and reset with this reloadable owner. */
+  private readonly traffic = new WebSocketTrafficBuffer();
+  private readonly connectionIds = new Map<BridgeClient, string>();
+  private readonly spyQueries = new Map<string, (result: WebSocketTrafficResult) => void>();
 
   constructor({
     voice,
@@ -373,15 +384,27 @@ export default class WorkbenchWebSocketRequestController {
     this.assertActive();
     const signal = this.generation.signal;
     let message: JsonRpcRequest;
+    const raw = data.toString();
+    this.connectionIds.set(client, connectionId);
     try {
-      message = JSON.parse(data.toString()) as JsonRpcRequest;
+      message = JSON.parse(raw) as JsonRpcRequest;
     } catch {
+      this.traffic.record({ direction: "in", connection: connectionId, label: "invalid JSON", payload: raw, bytes: data.length });
       client.close(1003, "Invalid JSON.");
       return;
     }
     const method = typeof message.method === "string" && message.method ? message.method : null;
+    this.traffic.record({ direction: "in", connection: connectionId,
+      label: `wb:${method ?? "missing method"}${"id" in message ? ` #${String(message.id)}` : ""}`, payload: raw, bytes: data.length });
     if (!method) throw new Error("Workbench WebSocket message is missing a method.");
     this.stream.connect(client);
+
+    if (method === WEBSOCKET_SPY_RESULT_METHOD) {
+      const answer = WebSocketSpyResultNotificationSchema.safeParse(message);
+      if (answer.success) this.spyQueries.get(answer.data.params.requestId)?.(answer.data.params.result);
+      else this.writeLine("[socket-spy] rejected an app spy result that did not match its contract");
+      return;
+    }
 
     if (method === WORKBENCH_EVENT_STREAM_ACK_METHOD) {
       this.eventLog.record("in", "workbench", method, data.length);
@@ -544,6 +567,39 @@ export default class WorkbenchWebSocketRequestController {
     }
   }
 
+  /**
+   * Answers `wb socket spy` from this daemon's frames and each connected app server's frames. Apps answer over
+   * the socket they already hold. A CLI inspection has no use for an answer after SPY_ANSWER_DEADLINE_MS, so a
+   * silent connection (a peer, or an app mid-reload) is reported as unanswered rather than awaited.
+   */
+  async spy(query: WebSocketTrafficQuery, target: "all" | "daemon" | "app", signal: AbortSignal) {
+    this.assertActive();
+    const daemon = target === "app" ? null : this.traffic.query(query);
+    if (target === "daemon") return { daemon, apps: [] };
+    const clients = [...this.connectionIds].filter(([client]) => client.readyState === client.OPEN);
+    return { daemon, apps: await Promise.all(clients.map(([client, connection]) => this.askAppTraffic(client, connection, query, signal))) };
+  }
+
+  private askAppTraffic(client: BridgeClient, connection: string, query: WebSocketTrafficQuery, signal: AbortSignal) {
+    type Answer = { connection: string; result: WebSocketTrafficResult | null; failure: string | null };
+    const requestId = randomUUID();
+    return new Promise<Answer>(resolve => {
+      const finish = (answer: Omit<Answer, "connection">) => {
+        if (!this.spyQueries.delete(requestId)) return;
+        this.cancel(timer);
+        signal.removeEventListener("abort", abort);
+        resolve({ connection, ...answer });
+      };
+      const abort = () => finish({ result: null, failure: "cancelled" });
+      const timer = this.schedule(() => finish({ result: null,
+        failure: `no answer within ${SPY_ANSWER_DEADLINE_MS}ms (not the local app server, or reloading)` }), SPY_ANSWER_DEADLINE_MS);
+      this.spyQueries.set(requestId, result => finish({ result, failure: null }));
+      signal.addEventListener("abort", abort, { once: true });
+      void this.sendJsonToClient(client, { method: WEBSOCKET_SPY_QUERY_METHOD, params: { requestId, query } }).catch(error =>
+        finish({ result: null, failure: `send failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}` }));
+    });
+  }
+
   reportSendFailure(message: unknown, error: unknown) {
     process.stderr.write(`${formatWebSocketSendFailure(message, error)}\n`);
   }
@@ -599,6 +655,13 @@ export default class WorkbenchWebSocketRequestController {
       if (pending) this.complete(pending, "closed", processMs, jsonMs, 0, outBytes);
       return;
     }
+    const trafficHarness = ProviderKeySchema.safeParse(eventHarness).success ? eventHarness as WorkbenchHarness : "workbench";
+    this.traffic.record({
+      direction: "out", connection: this.connectionIds.get(client) ?? "unknown", payload: serialized, bytes: outBytes,
+      label: eventMethod
+        ? `${methodLabel(trafficHarness, eventMethod)} ${options.eventDetail ?? describeWebSocketEvent(envelope?.params)}`
+        : `wb:response #${String(responseId)}${pending ? ` ${pending.method}` : ""}`,
+    });
 
     await new Promise<void>((resolve, reject) => {
       const sentAt = this.now();
@@ -641,6 +704,7 @@ export default class WorkbenchWebSocketRequestController {
     this.assertActive();
     const requests = [...(this.pending.get(client)?.values() ?? [])];
     for (const request of requests) this.complete(request, "closed", this.now() - request.startedAt, 0, 0, 0);
+    this.connectionIds.delete(client);
     this.stream.disconnect(client);
     this.reloadDirtObservers.delete(connectionId);
     this.statsObservers.delete(connectionId);

@@ -22,6 +22,7 @@
 | held steer | An admitted steer awaiting delivery (pending) or never delivered (undelivered). Stored outside the transcript and shown as an overlay at the thread bottom until delivered, dismissed, or resent |
 | transcripts | Actual thread data instead of just the visible narrative. `wb transcript --help` for looking through them |
 | logs | Persisted daemon and app server logs under `.workbench/logs/`. |
+| socket spy | `wb socket spy`: search recent daemon and app WebSocket frames held in memory, or print one frame's exact payload. |
 | layered sort | A sort where each layer orders only ties from earlier layers. A user override replaces later layers within its slot. |
 | daemon | The Workbench harness, applied on top of existing harnesses. Server source lives in `daemon/server/`. |
 | daemon host | Lightweight service under `daemon/host/`. Owns networking, durable daemon identity and supervised daemon startup independently of the app. |

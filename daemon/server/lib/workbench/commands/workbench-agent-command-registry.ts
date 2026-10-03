@@ -16,6 +16,7 @@ import { WORKBENCH_QUESTIONNAIRE_COMMANDS } from "./questionnaire-command-defini
 import { createWorkbenchReloadCommands } from "./reload-command-definitions";
 import { WORKBENCH_RIPGREP_COMMANDS } from "./ripgrep-command-definition";
 import { WORKBENCH_SKILL_COMMANDS } from "./skill-command-definition";
+import { WORKBENCH_SOCKET_COMMANDS } from "./socket-command-definitions";
 import { WORKBENCH_SUBAGENT_COMMANDS } from "./subagent-command-definitions";
 import { WORKBENCH_THREAD_COMMANDS } from "./thread-command-definitions";
 import { WORKBENCH_TOKEN_COMMANDS } from "./token-command-definition";
@@ -45,6 +46,7 @@ const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Obj
   ...WORKBENCH_BROWSE_COMMANDS,
   ...WORKBENCH_LIVE_SCENARIO_COMMANDS,
   ...WORKBENCH_STORE_COMMANDS,
+  ...WORKBENCH_SOCKET_COMMANDS,
 ]);
 
 export interface WorkbenchAgentCommandAvailability {

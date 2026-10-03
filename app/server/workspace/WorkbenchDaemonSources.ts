@@ -7,6 +7,7 @@ import type WorkbenchNetworkController from "../network/WorkbenchNetworkControll
 import WorkbenchDaemonSource, { type WorkbenchDaemonSourceDescriptor } from "./WorkbenchDaemonSource";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { WorkspaceDaemonFact } from "workbench-shared/workbench/workspace/workspace-observation";
+import type WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTrafficBuffer";
 
 type Network = Pick<WorkbenchNetworkController, "daemonSources" | "canAccessPeer" | "subscribe">;
 interface Entry {
@@ -38,6 +39,8 @@ export default class WorkbenchDaemonSources {
     network: Network;
     warn(message: string): void;
     createSource?: (descriptor: WorkbenchDaemonSourceDescriptor) => WorkbenchDaemonSource;
+    /** Browser traffic for `wb socket spy`; only the attached local daemon may read it. */
+    traffic?: Pick<WebSocketTrafficBuffer, "query">;
   }) {}
 
   start() {
@@ -125,8 +128,12 @@ export default class WorkbenchDaemonSources {
           entry.peers = next.peers;
           entry.source.update(next.descriptor);
         } else {
+          const traffic = this.options.traffic;
           const source = this.options.createSource?.(next.descriptor)
-            ?? new WorkbenchDaemonSource(next.descriptor, { warn: this.options.warn });
+            ?? new WorkbenchDaemonSource(next.descriptor, {
+              warn: this.options.warn,
+              answerSpy: traffic ? query => id === this.attachedId ? traffic.query(query) : null : undefined,
+            });
           this.entries.set(id, { source, descriptor: next.descriptor, peers: next.peers,
             unsubscribe: source.subscribe(() => { if (!this.reconciling) this.publish(); }) });
         }

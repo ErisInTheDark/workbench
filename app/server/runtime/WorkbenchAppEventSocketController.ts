@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAppEventSocketController: own reloadable app event sockets, grants, delivery and bounded traffic logs named by the event each frame carries.
+ * - default WorkbenchAppEventSocketController: own reloadable app event sockets, grants, delivery, bounded traffic logs named by the event each frame carries, and socket spy recording.
  */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
@@ -11,6 +11,7 @@ import { WorkbenchAppRpcRequestSchema, WorkbenchAppRuntimeResponseSchema } from 
 import type { WorkspaceObservationDelta } from "workbench-shared/workbench/workspace/workspace-observation";
 import { describeObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 import { formatWebSocketBytes, formatWebSocketEventSummary } from "workbench-shared/process/websocket-traffic-format";
+import type WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTrafficBuffer";
 import WorkbenchWorkspaceRequestController from "../workspace/WorkbenchWorkspaceRequestController";
 import type WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
@@ -103,7 +104,10 @@ export default class WorkbenchAppEventSocketController {
     workspace?: WorkbenchWorkspaceController;
     workspaceThreads?: WorkbenchWorkspaceThreads;
     workspaceDrafts?: WorkbenchWorkspaceDrafts;
+    /** Records every browser frame for `wb socket spy`. */
+    traffic?: Pick<WebSocketTrafficBuffer, "record">;
   }) {}
+  private nextConnection = 0;
 
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer) {
     const url = new URL(request.url ?? "/", "http://workbench.local");
@@ -119,6 +123,7 @@ export default class WorkbenchAppEventSocketController {
     if (this.closed || this.suspended) { connection.close(1012, "App routes reloading"); return; }
     let released = false;
     let stateOwner: string | null | undefined;
+    const connectionName = `browser-${++this.nextConnection}`;
     /** `method` names the request an RPC response answers. */
     const send = (
       frame: Frame | { id: number | null; result?: Json | object; error?: { code: number; message: string; data?: Json } },
@@ -151,6 +156,7 @@ export default class WorkbenchAppEventSocketController {
           `WS network ${kind} send failed: ${boundedSocketError(error)}`);
       });
       const label = "kind" in frame ? describeFrame(frame) : `rpc ${method}`;
+      this.options.traffic?.record({ direction: "out", connection: connectionName, label: `app:${label}`, payload, bytes: payloadBytes });
       if (kind === "workspaceDelta" && payloadBytes > WORKSPACE_PUSH_WARNING_BYTES) {
         this.options.logger.error("app", `WS oversized workspace push ${formatWebSocketBytes(payloadBytes)}: ${label}`);
       }
@@ -227,6 +233,8 @@ export default class WorkbenchAppEventSocketController {
       }
       const parsed = WorkbenchAppRpcRequestSchema.safeParse(value);
       this.recordTraffic("in", parsed.success ? `rpc ${parsed.data.method}` : "rpc invalid", receivedBytes);
+      this.options.traffic?.record({ direction: "in", connection: connectionName,
+        label: `app:${parsed.success ? `rpc ${parsed.data.method} #${parsed.data.id}` : "rpc invalid"}`, payload: raw, bytes: receivedBytes });
       if (!parsed.success) {
         const id = value && typeof value === "object" && "id" in value
           && typeof value.id === "number" && Number.isSafeInteger(value.id) && value.id > 0

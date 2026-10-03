@@ -10,6 +10,7 @@ import type { BridgeClient, JsonRpcRequest, JsonRpcResponse } from "./bridge-typ
 
 import WorkbenchWebSocketRequestController, { type WorkbenchWebSocketRequestControllerOptions } from "./WorkbenchWebSocketRequestController";
 import WorkbenchVoiceController from "./voice/WorkbenchVoiceController";
+import { WEBSOCKET_SPY_QUERY_METHOD, WEBSOCKET_SPY_RESULT_METHOD } from "workbench-shared/process/WebSocketTrafficBuffer";
 
 class FakeClock {
   nowMs = 0;
@@ -415,6 +416,38 @@ function observeThread(controller: WorkbenchWebSocketRequestController, client: 
     client, connectionId: "connection-1", subscriptionId: `${threadId}-view`, threadId, turnLimit: 1,
   });
 }
+
+test("socket spy merges daemon frames with the answering app's frames and reports a silent connection", async () => {
+  const clock = new FakeClock();
+  const { controller } = createController({ clock });
+  const appEntry = { seq: 7, at: 0, direction: "out" as const, connection: "browser-1", label: "app:workspace thread", bytes: 12, truncated: false, preview: "{}" };
+  const app = createClient((data, callback) => {
+    callback?.();
+    const message = JSON.parse(String(data)) as { method?: string; params?: { requestId: string } };
+    if (message.method !== WEBSOCKET_SPY_QUERY_METHOD) return;
+    queueMicrotask(() => void controller.handleMessage(app, "app", notificationFrame(WEBSOCKET_SPY_RESULT_METHOD, {
+      requestId: message.params!.requestId,
+      result: { action: "search", entries: [appEntry], retained: { count: 1, bytes: 2, oldestSeq: 7, newestSeq: 7 } },
+    }), false));
+  });
+  const peer = createClient();
+  const unknownAnswer = { requestId: "stale", result: { action: "read", entry: null } };
+  await controller.handleMessage(app, "app", notificationFrame(WEBSOCKET_SPY_RESULT_METHOD, unknownAnswer), false);
+  await controller.handleMessage(peer, "peer", notificationFrame(WEBSOCKET_SPY_RESULT_METHOD, unknownAnswer), false);
+
+  const spying = controller.spy({ action: "search", limit: 40 }, "all", new AbortController().signal);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  clock.advance(2_000);
+  const answer = await spying;
+
+  assert.ok(answer.daemon?.action === "search" && answer.daemon.entries.some(entry => entry.direction === "in" && entry.connection === "peer"));
+  const byConnection = new Map(answer.apps.map(item => [item.connection, item]));
+  assert.deepEqual(byConnection.get("app")?.result, {
+    action: "search", entries: [appEntry], retained: { count: 1, bytes: 2, oldestSeq: 7, newestSeq: 7 } });
+  assert.equal(byConnection.get("peer")?.result, null);
+  assert.match(byConnection.get("peer")?.failure ?? "", /no answer/u);
+  controller.dispose();
+});
 
 test("provider events for threads a connection does not observe are not sent; account events always are", async () => {
   const sent: Array<Record<string, unknown>> = [];

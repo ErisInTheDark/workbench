@@ -4,6 +4,7 @@
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 import WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
+import WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTrafficBuffer";
 import WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
 import WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
 import WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
@@ -20,7 +21,9 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
     const canAdmit = () => admitting;
     const presentation = build.get("presentation");
     const warn = (message: string) => build.get("logger").error("app", message);
-    const sources = new WorkbenchDaemonSources({ network: build.get("network"), warn });
+    // Browser frames for `wb socket spy`: recorded by the HTTP node's sockets, read through the attached daemon.
+    const socketTraffic = new WebSocketTrafficBuffer();
+    const sources = new WorkbenchDaemonSources({ network: build.get("network"), warn, traffic: socketTraffic });
     const workspace = new WorkbenchWorkspaceController({ sources, presentation, warn, canProject: canAdmit });
     const workspaceThreads = new WorkbenchWorkspaceThreads({ sources, presentation, warn, canProject: canAdmit });
     const workspaceDrafts = new WorkbenchWorkspaceDrafts({
@@ -55,7 +58,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
         },
         commit: dispose,
       }),
-      registrations: { sources, workspace, workspaceThreads, workspaceDrafts, presentationImport },
+      registrations: { sources, socketTraffic, workspace, workspaceThreads, workspaceDrafts, presentationImport },
       start: () => {
         workspace.start();
         workspaceThreads.start();
@@ -67,7 +70,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   },
   description: "Reload app-owned daemon connections, workspace queries and semantic operations.",
   lifecycle: "handoff",
-  provides: ["sources", "workspace", "workspaceThreads", "workspaceDrafts", "presentationImport"],
+  provides: ["sources", "socketTraffic", "workspace", "workspaceThreads", "workspaceDrafts", "presentationImport"],
   requires: ["network", "presentation", "logger"],
   safeAll: false,
   scope: "client:workspace",

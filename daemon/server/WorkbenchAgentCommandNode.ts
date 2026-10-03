@@ -6,6 +6,7 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import { WorkbenchRequestUserInputCommandSchema } from "./lib/workbench/commands/questionnaire-command-definition";
 import { WorkbenchStoreCommandRequestSchema } from "./lib/workbench/commands/store-command-definitions";
+import { WorkbenchSocketSpyRequestSchema, formatWorkbenchSocketSpy } from "./lib/workbench/commands/socket-command-definitions";
 import WorkbenchThreadRecallController from "./lib/workbench/thread/WorkbenchThreadRecallController";
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
@@ -147,6 +148,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
       executeTokenCount: async (body, signal) => await tokens.execute(body, signal),
       executeTranscriptQuery: async (body, signal) => await transcriptCommands.execute(body, signal),
+      executeSocketSpy: async (body, signal) => {
+        const request = WorkbenchSocketSpyRequestSchema.parse(body);
+        const answer = await build.run("webSocketRequests", controller => controller.spy(request.query, request.target, signal), "socket spy");
+        return new Response(formatWorkbenchSocketSpy(answer), {
+          headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+        });
+      },
       executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
       executeFileRemoval: async (body, signal) => await fileRemoval.execute(body, signal),
       executeProjectStoreRequest: async (body, signal) => {
