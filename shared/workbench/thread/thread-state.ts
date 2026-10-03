@@ -210,6 +210,7 @@ const WorkingLifecycleSchema = z.object({
 const CanonicalNeedsAttentionLifecycleSchema = z.discriminatedUnion("reason", [
   z.object({ kind: z.literal("needsAttention"), reason: z.literal("pendingInput"), requestKey: z.string().min(1), settled: z.literal(false), turnId: z.string().min(1).brand<"WorkbenchTurnId">().optional() }).strict(),
   z.object({ kind: z.literal("needsAttention"), reason: z.literal("noActiveTurn"), settled: z.literal(false) }).strict(),
+  z.object({ kind: z.literal("needsAttention"), reason: z.literal("interrupted"), settled: z.literal(false), turnId: z.string().min(1).brand<"WorkbenchTurnId">() }).strict(),
   z.object({ agent: AgentStatusSchema.extend({ agentStatus: z.literal("blocked") }), kind: z.literal("needsAttention"), reason: z.literal("agentBlocked"), settled: z.literal(false) }).strict(),
 ]);
 
@@ -225,10 +226,14 @@ const CompletedLifecycleSchema = z.discriminatedUnion("reason", [
   z.object({ kind: z.literal("completed"), reason: z.literal("providerInactive"), settled: z.boolean() }).strict(),
 ]);
 
-const StoppedLifecycleSchema = z.discriminatedUnion("reason", [
-  z.object({ kind: z.literal("stopped"), reason: z.literal("providerInterrupted"), settled: z.boolean(), turnId: z.string().min(1).brand<"WorkbenchTurnId">() }).strict(),
-  z.object({ agent: AgentStatusSchema.optional(), kind: z.literal("stopped"), reason: z.literal("userMarkedStopped"), settled: z.boolean() }).strict(),
-]);
+const StoppedLifecycleSchema = z.object({
+  agent: AgentStatusSchema.optional(), kind: z.literal("stopped"), reason: z.literal("userMarkedStopped"), settled: z.boolean(),
+}).strict();
+
+/** Interrupts were once stored as stops; old daemons may still send this shape. */
+const LegacyInterruptedLifecycleSchema = z.object({
+  kind: z.literal("stopped"), reason: z.literal("providerInterrupted"), settled: z.boolean(), turnId: z.string().min(1).brand<"WorkbenchTurnId">(),
+}).strict();
 
 export const WorkbenchThreadLifecycleSchema = z.union([
   WorkingLifecycleSchema,
@@ -236,13 +241,21 @@ export const WorkbenchThreadLifecycleSchema = z.union([
   LegacyNeedsAttentionLifecycleSchema,
   CompletedLifecycleSchema,
   StoppedLifecycleSchema,
-]).transform((lifecycle) => lifecycle.kind === "needsAttention" && (
-  lifecycle.reason === "turnEnded"
-  || lifecycle.reason === "restartRecoveryFailed"
-  || lifecycle.reason === "providerSystemError"
-)
-  ? { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const }
-  : lifecycle);
+  LegacyInterruptedLifecycleSchema,
+]).transform((lifecycle) => {
+  if (lifecycle.kind === "stopped" && lifecycle.reason === "providerInterrupted") {
+    return lifecycle.settled
+      ? { kind: "completed" as const, reason: "userCompleted" as const, settled: true }
+      : { kind: "needsAttention" as const, reason: "interrupted" as const, settled: false as const, turnId: lifecycle.turnId };
+  }
+  return lifecycle.kind === "needsAttention" && (
+    lifecycle.reason === "turnEnded"
+    || lifecycle.reason === "restartRecoveryFailed"
+    || lifecycle.reason === "providerSystemError"
+  )
+    ? { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const }
+    : lifecycle;
+});
 export type WorkbenchThreadLifecycle = z.infer<typeof WorkbenchThreadLifecycleSchema>;
 
 const WorkbenchGitArcProposalStateSchema = z.object({
@@ -611,7 +624,8 @@ export const WorkbenchThreadStateRequestSchema = z.discriminatedUnion("method", 
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/settle") }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/restore") }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/status/set"), status: z.enum(["needsAttention", "completed", "stopped"]) }),
-  ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/dismiss"), requestKey: z.string().min(1) }),
+  /** Mark stopped and dismiss the pending questionnaire, which must be the one `requestKey` names. */
+  ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/stop"), requestKey: z.string().min(1).optional() }),
   ProjectRequestBase.extend({ identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/snooze"), requestKey: z.string().min(1) }),
   ProjectRequestBase.extend({ entry: WorkbenchQuestionnaireHistoryEntrySchema, identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/questionnaire/resolve") }),
   ProjectRequestBase.extend({ archived: z.boolean(), identity: ThreadIdentitySchema, method: z.literal("workbench/thread-state/archive/set") }),
@@ -803,11 +817,11 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
     case "userInputDelivered":
       if (
         (current?.kind === "completed" && current.reason === "userCompleted")
-        || (current?.kind === "stopped" && (
-          current.reason === "userMarkedStopped"
-          || current.turnId === event.turnId
+        || current?.kind === "stopped"
+        || (current?.kind === "needsAttention" && (
+          current.reason === "pendingInput"
+          || (current.reason === "interrupted" && current.turnId === event.turnId)
         ))
-        || (current?.kind === "needsAttention" && current.reason === "pendingInput")
       ) return current;
       return { agent: { agentStatus: "working", turnId: event.turnId }, kind: "working", reason: "acceptedIntent", settled: false };
     case "pendingInput":
@@ -834,8 +848,10 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
     case "turnCompleted": {
       if (current?.kind === "completed" && current.reason === "agentCompleted") return current;
       if (current?.kind === "needsAttention" && current.reason === "agentBlocked") return current;
+      // Stop marks the thread before its interrupt lands; the late event must not undo that.
+      if (current?.kind === "stopped") return current;
       if (currentTurnId !== event.turnId) return current!;
-      if (event.status === "interrupted") return { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: event.turnId };
+      if (event.status === "interrupted") return { kind: "needsAttention", reason: "interrupted", settled: false, turnId: event.turnId };
       return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
     }
     case "recoveryFailed": return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
@@ -857,7 +873,7 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
     }
     case "settle":
       if (current?.kind === "needsAttention") {
-        return current.reason === "noActiveTurn" || current.reason === "agentBlocked"
+        return current.reason === "noActiveTurn" || current.reason === "interrupted" || current.reason === "agentBlocked"
           ? { kind: "completed", reason: "userCompleted", settled: true }
           : current;
       }

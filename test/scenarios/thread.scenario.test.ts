@@ -737,7 +737,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     const liveHistory = await runtime.daemon.threads.history.questionnaires({ threadId });
     assert.ok(liveHistory.data.some(entry => entry.requestKey === liveQuestion.requestKey
       && entry.turnId === activeTurn && entry.response.answers["live-answer"]?.answers.includes(liveProof)));
-    await runtime.daemon.threads.stop({ threadId, intent: "snooze", requestKey: heldQuestion.requestKey });
+    await runtime.daemon.threads.interrupt({ threadId, requestKey: heldQuestion.requestKey });
     await waitTurn(activeTurn, "interrupted");
     fakeModel?.forgetInterruptedTool();
     assert.ok((await readRetainedQuestions()).some(question => question.requestKey === heldQuestion.requestKey));
@@ -773,7 +773,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     const continuedTurnId = dismissQuestion.turnId;
     assert.ok(continuedTurnId, "The retained question must identify its owning turn");
     assert.equal(continuedTurnId, heldEntry.turnId);
-    await runtime.daemon.threads.stop({ threadId, intent: "snooze", requestKey: dismissQuestion.requestKey });
+    await runtime.daemon.threads.interrupt({ threadId, requestKey: dismissQuestion.requestKey });
     const beforeDismiss = await waitTurn(continuedTurnId, "interrupted");
     await providerRegistry[provider].verifySnoozedTurnSettled?.(continuedTurnId);
     fakeModel?.forgetInterruptedTool();

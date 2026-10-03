@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project and steer-wait owners.
  * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
- * - default WorkbenchThreadActionController: route WB actions without constructing provider packets, interrupt waits on accepted steers, record activated skills, settle orphaned turns on stop, stop threads for parent agents, resend or dismiss undelivered steers, and redeliver stranded agent messages into a new turn.
+ * - default WorkbenchThreadActionController: route WB actions without constructing provider packets, interrupt waits on accepted steers, record activated skills, stop threads (settling orphaned turns and always marking them stopped) for users and parent agents, route questionnaire interrupts to snooze, resend or dismiss undelivered steers, and redeliver stranded agent messages into a new turn.
  */
 import { randomUUID } from "node:crypto";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -52,6 +52,12 @@ export interface WorkbenchThreadActionOwners {
   /** Record skills an accepted submission activated. */
   recordSkillActivations(threadId: string, paths: readonly string[]): Promise<void>;
   warn(message: string): void;
+}
+
+type ActionTarget = Awaited<ReturnType<WorkbenchThreadActionController["target"]>>;
+
+function stateTarget({ identity, harness }: ActionTarget) {
+  return { projectId: identity.projectId, identity: { harness, threadId: identity.threadId } };
 }
 
 type Actions = {
@@ -160,6 +166,10 @@ export default class WorkbenchThreadActionController {
       return { ok: true };
     },
     "thread/stop": (input, connectionId) => this.stop(input, connectionId),
+    "thread/interrupt": async (input, connectionId) => {
+      await this.snoozeQuestionnaire(await this.target(input.threadId), input.requestKey, connectionId ?? "");
+      return { ok: true };
+    },
     "thread/goal/read": async input => {
       const target = await this.target(input.threadId);
       return { goal: await target.provider.goals?.read(target.identity.threadId) ?? null };
@@ -262,7 +272,7 @@ export default class WorkbenchThreadActionController {
       : result;
   }
 
-  /** Stop on a parent agent's behalf: interrupt the live turn, then dismiss the questionnaire that interruption retains. */
+  /** Stop on a parent agent's behalf: interrupt the live turn, then mark stopped, dismissing the questionnaire that interruption retains. */
   async stopThread(threadId: WorkbenchThreadId) {
     const target = await this.target(threadId);
     const turn = await target.provider.threads.latestTurn(target.identity.threadId);
@@ -270,23 +280,18 @@ export default class WorkbenchThreadActionController {
     if (turn?.status === "inProgress") await this.interruptTurn(target, turn.id, { preserveGoal: true });
     const entry = await this.owners.state.getCanonicalThreadEntry(target.identity.projectId, target.identity.threadId);
     const requestKey = entry && entry.entryKind !== "draft" ? entry.pendingQuestionnaire?.requestKey : undefined;
-    if (requestKey) await this.mutateQuestionnaire(target, "dismiss", requestKey, "");
+    await this.markStopped(target, requestKey, "");
   }
 
   private async stop(input: WorkbenchThreadStop, connectionId?: string): Promise<{ ok: true }> {
     const target = await this.target(input.threadId);
-    if (input.intent === "snooze") {
-      if (!input.requestKey) throw new Error("There is no pending questionnaire to snooze.");
-      await this.mutateQuestionnaire(target, "snooze", input.requestKey, connectionId ?? "");
-      return { ok: true };
-    }
     if (input.turnId) await this.interruptTurn(target, input.turnId);
-    if (input.requestKey) await this.mutateQuestionnaire(target, "dismiss", input.requestKey, connectionId ?? "");
+    await this.markStopped(target, input.requestKey, connectionId ?? "");
     return { ok: true };
   }
 
   private async interruptTurn(
-    { identity, provider }: Awaited<ReturnType<WorkbenchThreadActionController["target"]>>,
+    { identity, provider }: ActionTarget,
     turnId: string,
     options?: { preserveGoal: true },
   ) {
@@ -295,20 +300,25 @@ export default class WorkbenchThreadActionController {
     await this.owners.settlement.settleIfOrphaned(identity.threadId, turnId);
   }
 
-  private async mutateQuestionnaire(
-    { identity, harness }: Awaited<ReturnType<WorkbenchThreadActionController["target"]>>,
-    action: "dismiss" | "snooze",
-    requestKey: string,
-    connectionId: string,
-  ) {
-    const response = await this.owners.state.handleRequest(connectionId, {
-      method: `workbench/thread-state/questionnaire/${action}`,
-      projectId: identity.projectId, identity: { harness, threadId: identity.threadId },
-      requestKey,
+  /** Mark stopped, dismissing the questionnaire the caller saw (or none); rejects if it changed. */
+  private async markStopped(target: ActionTarget, requestKey: string | undefined, connectionId: string) {
+    await this.mutateState(connectionId, "dismissed", {
+      method: "workbench/thread-state/stop", ...stateTarget(target), ...(requestKey ? { requestKey } : {}),
     });
+  }
+
+  /** Interrupt the questionnaire's turn and snooze the thread, keeping the questionnaire. */
+  private async snoozeQuestionnaire(target: ActionTarget, requestKey: string, connectionId: string) {
+    await this.mutateState(connectionId, "snoozed", {
+      method: "workbench/thread-state/questionnaire/snooze", ...stateTarget(target), requestKey,
+    });
+  }
+
+  private async mutateState(connectionId: string, outcome: string, request: Parameters<WorkbenchThreadActionOwners["state"]["handleRequest"]>[1]) {
+    const response = await this.owners.state.handleRequest(connectionId, request);
     if ("error" in response) throw new Error(response.error.message);
     if (typeof response.result === "object" && response.result !== null && "accepted" in response.result && !response.result.accepted) {
-      throw new Error(`The pending questionnaire changed before it could be ${action === "dismiss" ? "dismissed" : "snoozed"}.`);
+      throw new Error(`The pending questionnaire changed before it could be ${outcome}.`);
     }
   }
 

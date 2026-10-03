@@ -149,7 +149,7 @@ export function isWorkbenchThreadRecoveryEligible(
     && !hasPendingUserInput
     && getCurrentInProgressTurn(thread) === null
     && Boolean(
-      (lifecycle?.kind === "needsAttention" && lifecycle.reason === "noActiveTurn")
+      (lifecycle?.kind === "needsAttention" && (lifecycle.reason === "noActiveTurn" || lifecycle.reason === "interrupted"))
       || lifecycle?.kind === "stopped",
     );
 }

@@ -1160,13 +1160,39 @@ test("questionnaire snooze retains input through interruption, then stop dismiss
     assert.ok(entry?.entryKind === "thread");
     assert.equal(entry.lifecycle.kind, "needsAttention");
     await controller.handleRequest("observer", {
-      method: "workbench/thread-state/questionnaire/dismiss", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: provider.identity, requestKey: question.requestKey,
+      method: "workbench/thread-state/stop", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: provider.identity, requestKey: question.requestKey,
     });
     entry = await read();
     assert.ok(entry?.entryKind === "thread");
     assert.equal(entry.lifecycle.kind, "stopped");
     assert.equal(entry.metadata.snoozed, false);
     assert.equal(entry.pendingQuestionnaire, null);
+  } finally { await controller.dispose(); }
+});
+
+test("stop marks a working thread stopped without waiting for its interrupt event", async () => {
+  const working: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1, entryKind: "thread", title: "Task", identity: { harness: "codex", threadId: fixtureThreadIds["active"] },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    lifecycle: { agent: { agentStatus: "working", turnId: fixtureTurnIds["turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
+  };
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "thread-stop", threadStateStore: new MemoryThreadStatePersistence(),
+    getProjectCatalog: projectCatalog,
+    reconcileProject: async (_project, _signal, accept) => { await accept("codex", [working], { complete: true }); return []; },
+  });
+  try {
+    await controller.readProject(fixtureProjectIds["project"]);
+    await controller.refresh(fixtureProjectIds["project"]);
+    const response = await controller.handleRequest("observer", {
+      method: "workbench/thread-state/stop", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: working.identity,
+    });
+    assert.deepEqual(response.result && typeof response.result === "object" && "accepted" in response.result && response.result.accepted, true);
+    await controller.applyLifecycle(fixtureProjectIds["project"], "codex", working.identity.threadId, { kind: "turnCompleted", status: "interrupted", turnId: fixtureTurnIds["turn"] });
+    const entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries
+      .find(candidate => candidate.entryKind === "thread" && candidate.identity.threadId === working.identity.threadId);
+    assert.ok(entry?.entryKind === "thread");
+    assert.equal(entry.lifecycle.kind, "stopped");
   } finally { await controller.dispose(); }
 });
 
@@ -1194,7 +1220,7 @@ test("stopping a subagent questionnaire leaves the child stopped instead of prov
     await controller.readProject(fixtureProjectIds["project"]);
     await controller.refresh(fixtureProjectIds["project"]);
     const response = await controller.handleRequest("subagent-controller", {
-      method: "workbench/thread-state/questionnaire/dismiss", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: child.identity, requestKey: question.requestKey,
+      method: "workbench/thread-state/stop", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: child.identity, requestKey: question.requestKey,
     });
     assert.equal(response.error, undefined);
     const entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries
@@ -3015,14 +3041,14 @@ test("proper questionnaires and late-response history survive controller restart
   assert.deepEqual(second.listPendingQuestionnaires("opencode"), []);
   const rejectedDismissal = await second.handleRequest("second", {
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
-    method: "workbench/thread-state/questionnaire/dismiss",
+    method: "workbench/thread-state/stop",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     requestKey: "different-request",
   });
   assert.equal("result" in rejectedDismissal && (rejectedDismissal.result as { accepted?: boolean }).accepted, false);
   const dismissal = await second.handleRequest("second", {
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
-    method: "workbench/thread-state/questionnaire/dismiss",
+    method: "workbench/thread-state/stop",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     requestKey: "request-key",
   });
@@ -3040,7 +3066,7 @@ test("proper questionnaires and late-response history survive controller restart
   assert.deepEqual(reloadedDismissal?.entryKind === "thread" ? reloadedDismissal.questionnaireHistory ?? [] : null, []);
   const repeatedDismissal = await third.handleRequest("third", {
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
-    method: "workbench/thread-state/questionnaire/dismiss",
+    method: "workbench/thread-state/stop",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     requestKey: "request-key",
   });

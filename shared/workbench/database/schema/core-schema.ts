@@ -27,6 +27,7 @@ import {
   text,
   unique,
   type SelectRow,
+  type SqlFragment,
   type TableDefinition,
 } from "../../../database/schema/schema-definition.ts";
 import {
@@ -339,8 +340,45 @@ export function defineThreadDomainCoreSchema(schemaVersion: number) {
       ],
     }),
   });
+  // Interrupts leave a thread needing attention; stopped means an explicit stop by the user or a parent agent.
+  const interruptedLifecycle = defineTable("workbench_thread_lifecycle", {
+    thread_id: text().primaryKey().references("workbench_threads", "id", { onDelete: "CASCADE" }),
+    lifecycle_kind: enumText("working", "needsAttention", "completed", "stopped").notNull(),
+    reason: enumText(
+      "acceptedIntent", "pendingInput", "noActiveTurn", "interrupted", "agentBlocked", "agentCompleted",
+      "userCompleted", "providerInactive", "userMarkedStopped",
+    ).notNull(),
+    settled: booleanInteger().notNull(),
+    turn_id: text(),
+    request_key: text(),
+    agent_status: enumText("working", "completed", "blocked"),
+    updated_at: integer().notNull(),
+  }, (table) => ({
+    constraints: [
+      foreignKey([table.turn_id, table.thread_id], {
+        table: "thread_turns", columns: ["id", "thread_id"], onDelete: "CASCADE",
+      }),
+      check(sql`
+        (${table.lifecycle_kind} = ${literal("working")} AND ${table.reason} = ${literal("acceptedIntent")}
+          AND ${table.settled} = ${literal(0)} AND ${table.request_key} IS NULL AND ${table.agent_status} IS ${literal("working")})
+        OR (${table.lifecycle_kind} = ${literal("needsAttention")} AND ${table.settled} = ${literal(0)} AND (
+          (${table.reason} = ${literal("noActiveTurn")} AND ${table.turn_id} IS NULL AND ${table.request_key} IS NULL AND ${table.agent_status} IS NULL)
+          OR (${table.reason} = ${literal("interrupted")} AND ${table.turn_id} IS NOT NULL AND ${table.request_key} IS NULL AND ${table.agent_status} IS NULL)
+          OR (${table.reason} = ${literal("pendingInput")} AND ${table.request_key} IS NOT NULL AND ${table.agent_status} IS NULL)
+          OR (${table.reason} = ${literal("agentBlocked")} AND ${table.request_key} IS NULL AND ${table.agent_status} IS ${literal("blocked")})
+        ))
+        OR (${table.lifecycle_kind} = ${literal("completed")} AND ${table.request_key} IS NULL AND (
+          (${table.reason} = ${literal("agentCompleted")} AND ${table.agent_status} IS ${literal("completed")})
+          OR (${table.reason} = ${literal("providerInactive")} AND ${table.turn_id} IS NULL AND ${table.agent_status} IS NULL)
+          OR (${table.reason} = ${literal("userCompleted")} AND (${table.turn_id} IS NULL OR ${table.agent_status} IS NOT NULL))
+        ))
+        OR (${table.lifecycle_kind} = ${literal("stopped")} AND ${table.request_key} IS NULL
+          AND ${table.reason} = ${literal("userMarkedStopped")} AND (${table.turn_id} IS NULL OR ${table.agent_status} IS NOT NULL))
+      `),
+    ],
+  }));
   const lifecycleHistory = defineTableHistory({
-    current: threadOwnedLifecycle,
+    current: interruptedLifecycle,
     versions: [
       ...workbenchThreadLifecycleHistory.versions,
       tableVersion({
@@ -349,6 +387,18 @@ export function defineThreadDomainCoreSchema(schemaVersion: number) {
       tableVersion({
         schemaVersion: databaseReleases.threadOwnedLifecycle.version, table: threadOwnedLifecycle,
         migration: rebuildTable({ from: lifecycle, to: threadOwnedLifecycle }),
+      }),
+      tableVersion({
+        schemaVersion: databaseReleases.interruptedLifecycle.version, table: interruptedLifecycle,
+        // Unsettled interrupts need attention; settled ones become what settling an interrupt produces.
+        migration: rebuildTable({
+          from: threadOwnedLifecycle, to: interruptedLifecycle,
+          map: ({ from, expression }) => ({
+            lifecycle_kind: expression.text`CASE WHEN ${from.reason} = 'providerInterrupted' THEN CASE WHEN ${from.settled} = 1 THEN 'completed' ELSE 'needsAttention' END ELSE ${from.lifecycle_kind} END` as SqlFragment<SelectRow<typeof interruptedLifecycle>["lifecycle_kind"]>,
+            reason: expression.text`CASE WHEN ${from.reason} = 'providerInterrupted' THEN CASE WHEN ${from.settled} = 1 THEN 'userCompleted' ELSE 'interrupted' END ELSE ${from.reason} END` as SqlFragment<SelectRow<typeof interruptedLifecycle>["reason"]>,
+            turn_id: expression.text`CASE WHEN ${from.reason} = 'providerInterrupted' AND ${from.settled} = 1 THEN NULL ELSE ${from.turn_id} END` as SqlFragment<string | null>,
+          }),
+        }),
       }),
     ],
   });

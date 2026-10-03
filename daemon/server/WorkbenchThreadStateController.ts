@@ -813,7 +813,8 @@ export default class WorkbenchThreadStateController {
       // The lifecycle is the only input the shared recovery gate reads, so a thread that is
       // waiting on a questionnaire must never be left in the state that gate treats as resumable,
       // and a turn boundary must not end the wait.
-      const recoverableLifecycle = reducedLifecycle.kind === "needsAttention" && reducedLifecycle.reason === "noActiveTurn";
+      const recoverableLifecycle = reducedLifecycle.kind === "needsAttention"
+        && (reducedLifecycle.reason === "noActiveTurn" || reducedLifecycle.reason === "interrupted");
       const lifecycle = heldQuestionnaire && (retainedQuestionnaire || recoverableLifecycle)
         ? this.waitOnQuestionnaire(existing.lifecycle, heldQuestionnaire)
         : reducedLifecycle;
@@ -2080,16 +2081,20 @@ export default class WorkbenchThreadStateController {
         next = { ...entry, lifecycle, metadata: { ...entry.metadata, snoozed: false }, snoozedUntil: null };
       }
       if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: request.archived ? { archived: true, pinned: false, snoozed: false } : { archived: false, pinned: false, snoozed: false }, snoozedUntil: null };
-      if (request.method === "workbench/thread-state/questionnaire/dismiss") {
-        if (entry.pendingQuestionnaire?.requestKey === request.requestKey) {
-          // A pendingInput lifecycle without its question would stay provider-owned forever.
+      if (request.method === "workbench/thread-state/stop") {
+        // The caller must have seen the questionnaire it dismisses, including seeing none.
+        if (entry.pendingQuestionnaire && entry.pendingQuestionnaire.requestKey !== request.requestKey) {
+          return { accepted: false, revision: state.revision };
+        }
+        // Stopping finished work would erase its outcome; only live or interrupted work becomes stopped.
+        const finished = entry.lifecycle.settled || entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped";
+        if (entry.pendingQuestionnaire || !finished) {
+          // Stop owns this lifecycle; dropping the agent marker keeps late provider events from reopening it.
           const lifecycle = reduceWorkbenchThreadLifecycle(null, { kind: "userStopped" });
           next = entry.entryKind === "thread" ? {
             ...entry, pendingQuestionnaire: null, lifecycle,
             metadata: { ...entry.metadata, snoozed: false }, snoozedUntil: null,
           } : { ...entry, pendingQuestionnaire: null, lifecycle };
-        } else if (entry.pendingQuestionnaire) {
-          return { accepted: false, revision: state.revision };
         }
       }
       if (request.method === "workbench/thread-state/questionnaire/resolve") {

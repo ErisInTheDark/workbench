@@ -49,6 +49,7 @@ export const workspaceCommandRoutes = {
   "thread/compact": "thread",
   "thread/provider/delete": "thread",
   "thread/stop": "thread",
+  "thread/interrupt": "thread",
   "thread/goal/read": "thread",
   "thread/goal/update": "thread",
   "thread/goal/remove": "thread",
@@ -158,7 +159,7 @@ const threadMutationMethods = [
   "workbench/thread-state/title/set", "workbench/thread-state/title/dismiss",
   "workbench/thread-state/pin/set", "workbench/thread-state/snooze/set", "workbench/thread-state/snooze/until",
   "workbench/thread-state/settle", "workbench/thread-state/restore", "workbench/thread-state/status/set",
-  "workbench/thread-state/questionnaire/dismiss", "workbench/thread-state/questionnaire/snooze",
+  "workbench/thread-state/questionnaire/snooze",
   "workbench/thread-state/archive/set",
 ] as const;
 export type WorkspaceThreadMutation = Extract<WorkbenchThreadStateRequest, { method: typeof threadMutationMethods[number] }>;

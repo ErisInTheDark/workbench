@@ -252,10 +252,10 @@ test("admitted native turns settle questionnaire history under SQLite canonical 
   }
 });
 
-test("stopped lifecycle admits even when the daemon still exposes an orphan waiter", async () => {
+test("interrupted lifecycle admits even when the daemon still exposes an orphan waiter", async () => {
   const harness = createHarness({
-    kind: "stopped",
-    reason: "providerInterrupted",
+    kind: "needsAttention",
+    reason: "interrupted",
     turnId,
     settled: false,
   });

@@ -505,7 +505,7 @@ test("live lifecycle presentation outranks a hanging proposed commit", () => {
       label: "Needs attention",
     },
     {
-      entry: { ...proposed, lifecycle: { kind: "stopped" as const, reason: "providerInterrupted" as const, settled: false as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-two") } },
+      entry: { ...proposed, lifecycle: { kind: "stopped" as const, reason: "userMarkedStopped" as const, settled: false as const } },
       label: "Stopped",
     },
   ];

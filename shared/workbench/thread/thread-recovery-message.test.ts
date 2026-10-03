@@ -68,6 +68,7 @@ test("manual recovery follows inactive Workbench lifecycle without competing wit
   const attention = { kind: "needsAttention", reason: "noActiveTurn", settled: false } as const;
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, attention, false), true);
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, { kind: "stopped", reason: "userMarkedStopped", settled: false }, false), true);
+  assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, { kind: "needsAttention", reason: "interrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, false), true);
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, attention, true), false);
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, { kind: "needsAttention", reason: "pendingInput", requestKey: "request", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, false), false);
   assert.equal(isWorkbenchThreadRecoveryEligible({ turns: [interruptedTurn] }, { kind: "completed", reason: "userCompleted", settled: false }, false), false);

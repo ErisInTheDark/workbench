@@ -9,7 +9,8 @@
  * - WorkbenchThreadReconcileSchema/WorkbenchThreadReconcile: explicit canonical reconciliation intent.
  * - WorkbenchThreadReconcileResultSchema/WorkbenchThreadReconcileResult: recorded recovery outcome, never native content.
  * - WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED/WorkbenchTranscriptRecoveryRequiredError: a valid requested window needs explicit reconciliation.
- * - WorkbenchThreadStopSchema/WorkbenchThreadStop: shared stop versus snooze intent.
+ * - WorkbenchThreadStopSchema/WorkbenchThreadStop: user stop of a live turn and its seen questionnaire.
+ * - WorkbenchThreadInterruptSchema/WorkbenchThreadInterrupt: interrupt that snoozes and keeps a questionnaire.
  * - WorkbenchThreadSteerTargetSchema/WorkbenchThreadSteerTarget: one held steer to resend or dismiss.
  * - WorkbenchThreadPayloadSchema: validate the public metadata envelope.
  * - WorkbenchThreadPageResult/WorkbenchThreadPageResultSchema: WB page and domain-history facts.
@@ -92,11 +93,17 @@ export const WorkbenchThreadPageSchema = WorkbenchThreadTargetSchema.extend({
 });
 export type WorkbenchThreadPage = z.infer<typeof WorkbenchThreadPageSchema>;
 export const WorkbenchThreadStopSchema = WorkbenchThreadTargetSchema.extend({
-  intent: z.enum(["stop", "snooze"]),
+  // Kept so either reload order works with daemons that still require it.
+  intent: z.literal("stop"),
   turnId: z.string().min(1).optional(),
   requestKey: z.string().min(1).optional(),
 });
 export type WorkbenchThreadStop = z.infer<typeof WorkbenchThreadStopSchema>;
+/** Interrupt the turn holding this questionnaire and snooze the thread, keeping the questionnaire. */
+export const WorkbenchThreadInterruptSchema = WorkbenchThreadTargetSchema.extend({
+  requestKey: z.string().min(1),
+});
+export type WorkbenchThreadInterrupt = z.infer<typeof WorkbenchThreadInterruptSchema>;
 export const WorkbenchThreadSteerTargetSchema = WorkbenchThreadTargetSchema.extend({
   itemId: z.string().min(1),
 });
@@ -185,6 +192,7 @@ export const workbenchThreadActions = {
   "thread/compact": { params: WorkbenchThreadTargetSchema, result: ok },
   "thread/provider/delete": { params: WorkbenchThreadTargetSchema, result: ok },
   "thread/stop": { params: WorkbenchThreadStopSchema, result: ok },
+  "thread/interrupt": { params: WorkbenchThreadInterruptSchema, result: ok },
   "thread/steer/resend": { params: WorkbenchThreadSteerTargetSchema, result: WorkbenchThreadMessageResultSchema },
   "thread/steer/dismiss": { params: WorkbenchThreadSteerTargetSchema, result: ok },
   "thread/goal/read": { params: WorkbenchThreadTargetSchema, result: goalResult },

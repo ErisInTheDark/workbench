@@ -69,6 +69,7 @@ const databaseReleases = Object.freeze({
   threadSkills: release(59, "ccc415485c1c7e8a4bbedde78edc0c9e7e302ca6a0a15e9f9b1ea6b88912a06f"),
   heldSteerOverlay: release(60, "6cceb448fe15e9f7ad38056e02fb6f54a7b71480449061fcb06b58b411501fc3"),
   transcriptDeliveryStates: release(61, "0f02d62d3da2c78a0603b9b26949ce9336d30f6238b7529d298ffe19f339a165"),
+  interruptedLifecycle: release(62, "c8aff20aa665e47762e541306cd763b4e3b1800bb6816b52a1d5c6671d15be2a"),
 });
 
 export default databaseReleases;

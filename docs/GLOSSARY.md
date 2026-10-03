@@ -35,6 +35,6 @@
 | claim traffic | Distinct managed threads whose active Git arc checkpoints declared each file in a selected period; directory scopes expand to contained files, including unchanged files, while inactive plan scope does not count. Unambiguous committed rename chains within one root combine under their latest path; reused names remain separate. |
 | questionnaire | A form delivered to the user via request_user_input, appearing within the same UI as the composer |
 | approval questionnaire | A questionnaire form shown due to an agent attempting to escalate a tool call outside the sandbox. |
-| interrupt | Ends the live turn but keeps its pending questionnaire and thread status. |
+| interrupt | Ends the live turn but keeps its pending questionnaire; the thread needs attention. |
 | stop | Interrupts the live turn, dismisses its pending questionnaire and sets status to stopped. |
 | held questionnaire | A questionnaire form that is no longer attached to a request_user_input tool call due to an interruption; the thread is stopped, but the form remains answerable by the user. (Response admitted via normal user message) |

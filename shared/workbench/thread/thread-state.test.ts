@@ -250,7 +250,20 @@ test("strict lifecycle rejects impossible combinations", () => {
   assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "working", reason: "acceptedIntent", settled: true, agent: { agentStatus: "working", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("t") } }).success, false);
   assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "needsAttention", reason: "pendingInput", settled: false, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("t") }).success, false);
   assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "stopped", reason: "providerInterrupted", settled: false }).success, false);
+  assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "needsAttention", reason: "interrupted", settled: false }).success, false);
   assert.equal(WorkbenchThreadLifecycleSchema.safeParse({ kind: "completed", reason: "providerInactive", settled: false }).success, true);
+});
+
+test("legacy provider-interrupted stops read as interrupts", () => {
+  const turnId = fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("t");
+  assert.deepEqual(
+    WorkbenchThreadLifecycleSchema.parse({ kind: "stopped", reason: "providerInterrupted", settled: false, turnId }),
+    { kind: "needsAttention", reason: "interrupted", settled: false, turnId },
+  );
+  assert.deepEqual(
+    WorkbenchThreadLifecycleSchema.parse({ kind: "stopped", reason: "providerInterrupted", settled: true, turnId }),
+    { kind: "completed", reason: "userCompleted", settled: true },
+  );
 });
 
 test("manual status request accepts exactly the three radio statuses", () => {
@@ -372,14 +385,15 @@ test("durable questionnaire state accepts proper questions and rejects approvals
   }).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
-    method: "workbench/thread-state/questionnaire/dismiss",
+    method: "workbench/thread-state/stop",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     requestKey: "request-key",
   }).success, true);
   assert.equal(WorkbenchThreadStateRequestSchema.safeParse({
     identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") },
-    method: "workbench/thread-state/questionnaire/dismiss",
+    method: "workbench/thread-state/stop",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    requestKey: "",
   }).success, false);
 });
 
@@ -563,8 +577,16 @@ test("exact-turn transitions reject stale completion and stopped settlement pres
   const settled = reduceWorkbenchThreadLifecycle(completed, { kind: "settle", entryKind: "thread" });
   assert.equal(settled.settled, true);
   assert.deepEqual(reduceWorkbenchThreadLifecycle(settled, { kind: "restore" }), completed);
-  const stopped = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
-  for (const lifecycle of [stopped, reduceWorkbenchThreadLifecycle(completed, { kind: "userStopped" })]) {
+  const interrupted = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
+  assert.deepEqual(interrupted, { kind: "needsAttention", reason: "interrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
+  assert.equal(isWorkbenchThreadStatusProviderOwned(interrupted), false);
+  for (const entryKind of ["thread", "subagent"] as const) {
+    assert.deepEqual(reduceWorkbenchThreadLifecycle(interrupted, { kind: "settle", entryKind }), { kind: "completed", reason: "userCompleted", settled: true });
+  }
+  // A stop marks the thread stopped before the provider's interrupt event can land.
+  const stoppedWhileWorking = reduceWorkbenchThreadLifecycle(working, { kind: "userStopped" });
+  assert.equal(reduceWorkbenchThreadLifecycle(stoppedWhileWorking, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] }), stoppedWhileWorking);
+  for (const lifecycle of [reduceWorkbenchThreadLifecycle(completed, { kind: "userStopped" })]) {
     const settledStop = reduceWorkbenchThreadLifecycle(lifecycle, { kind: "settle", entryKind: "thread" });
     assert.deepEqual(settledStop, { ...lifecycle, settled: true });
     assert.deepEqual(reduceWorkbenchThreadLifecycle(settledStop, { kind: "settle", entryKind: "thread" }), settledStop);
@@ -589,7 +611,7 @@ test("exact-turn transitions reject stale completion and stopped settlement pres
   assert.deepEqual(reduceWorkbenchThreadLifecycle(completed, { kind: "userStopped" }), {
     agent: { agentStatus: "completed", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("new") }, kind: "stopped", reason: "userMarkedStopped", settled: false,
   });
-  assert.deepEqual(reduceWorkbenchThreadLifecycle(stopped, { kind: "userCompleted" }), {
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(interrupted, { kind: "userCompleted" }), {
     kind: "completed", reason: "userCompleted", settled: false,
   });
   const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
@@ -619,11 +641,11 @@ test("delivered user input reactivates provider-owned terminal state without ove
   assert.deepEqual(reduceWorkbenchThreadLifecycle({ kind: "completed", reason: "providerInactive", settled: true }, delivered), reactivated);
 
   const userCompleted = reduceWorkbenchThreadLifecycle(completed, { kind: "userCompleted" });
-  const providerStopped = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
+  const interrupted = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
   const userStopped = reduceWorkbenchThreadLifecycle(completed, { kind: "userStopped" });
   const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
-  assert.equal(reduceWorkbenchThreadLifecycle(providerStopped, { kind: "userInputDelivered", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }), providerStopped);
-  assert.deepEqual(reduceWorkbenchThreadLifecycle(providerStopped, delivered), reactivated);
+  assert.equal(reduceWorkbenchThreadLifecycle(interrupted, { kind: "userInputDelivered", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }), interrupted);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(interrupted, delivered), reactivated);
   assert.equal(reduceWorkbenchThreadLifecycle(userCompleted, delivered), userCompleted);
   assert.equal(reduceWorkbenchThreadLifecycle(userStopped, delivered), userStopped);
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, delivered), pendingInput);

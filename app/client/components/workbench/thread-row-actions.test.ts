@@ -23,7 +23,7 @@ const fixtureIdentityValues = {
 const stopped: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
   activityAt: 1, title: "Task", entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
   metadata: { archived: false, pinned: false, snoozed: false },
-  lifecycle: { kind: "stopped", reason: "providerInterrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], settled: false },
+  lifecycle: { kind: "stopped", reason: "userMarkedStopped", settled: false },
 };
 const pending: typeof stopped = {
   ...stopped,
@@ -41,7 +41,7 @@ const completed: typeof stopped = {
 test("stopped sidebar rows settle directly while retaining priority and claim blockers", () => {
   assert.deepEqual(getThreadRowActions(stopped, "main"), { baseAction: "settle", shiftAction: null });
   assert.equal(getThreadRowActions(stopped, "snoozed").baseAction, "wake");
-  assert.equal(getThreadRowActions({ ...stopped, lifecycle: { kind: "stopped", reason: "providerInterrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"], settled: true } }, "settled").baseAction, "restore");
+  assert.equal(getThreadRowActions({ ...stopped, lifecycle: { kind: "stopped", reason: "userMarkedStopped", settled: true } }, "settled").baseAction, "restore");
   const claimed = { ...stopped, gitArc: {
     checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], intentName: "work",
     intentDescription: "", phase: "active" as const, proposals: [], updatedAt: "2026-09-08T00:00:00Z",

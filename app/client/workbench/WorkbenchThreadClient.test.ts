@@ -197,7 +197,7 @@ class FakeWebSocket {
       } }));
     } else if (request.method === "workbench/thread-state/release") {
       queueMicrotask(() => this.respond(request.id, { accepted: true }));
-    } else if (request.method === "workbench/thread-state/intent/accept" || request.method === "workbench/thread-state/questionnaire/dismiss" || request.method === "workbench/thread-state/questionnaire/resolve") {
+    } else if (request.method === "workbench/thread-state/intent/accept" || request.method === "workbench/thread-state/stop" || request.method === "workbench/thread-state/questionnaire/resolve") {
       queueMicrotask(() => this.respond(request.id, { accepted: true, revision: 1 }));
     } else {
       queueMicrotask(() => this.fail(request.id, `unexpected ${request.method}`));
@@ -3117,7 +3117,7 @@ test("observed questionnaires survive shell project changes while native request
     activityAt: 2,
     entryKind: "thread",
     identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
-    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
+    lifecycle: { kind: "needsAttention", reason: "interrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
     metadata: { archived: false, pinned: false, snoozed: false },
     pendingQuestionnaire: { itemId: "item", request: durableRequest, requestKey: "durable", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
     title: "Thread",
@@ -3161,7 +3161,7 @@ test("stop dismisses detached questionnaires without interrupting an inactive pr
     title: "Questionnaire",
   };
   await installProjectThreadState(client, {
-    entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, title: "Thread" }],
+    entries: [{ activityAt: 2, entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, lifecycle: { kind: "needsAttention", reason: "interrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, metadata: { archived: false, pinned: false, snoozed: false }, pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, title: "Thread" }],
     error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision: 1,
   });
   await waitForCondition(() => client.getSnapshot().pendingUserInputRequestsByThreadId.thread?.requestKey === "question", "Durable questionnaire was not installed.");
@@ -3213,7 +3213,7 @@ test("detached Workbench questionnaires submit one daemon-owned answer intent", 
     activityAt: 2,
     entryKind: "thread",
     identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
-    lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
+    lifecycle: { kind: "needsAttention", reason: "interrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
     metadata: { archived: false, pinned: false, snoozed: false },
     pendingQuestionnaire: { itemId: "item", request, requestKey: "question", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
     title: "Thread",
@@ -3396,7 +3396,7 @@ async function installRecoveredWorkbenchQuestionnaire(
       activityAt: 2,
       entryKind: "thread",
       identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
-      lifecycle: { kind: "stopped", reason: "providerInterrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
+      lifecycle: { kind: "needsAttention", reason: "interrupted", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
       metadata: { archived: false, pinned: false, snoozed: false },
       pendingQuestionnaire: durable,
       title: "Thread",

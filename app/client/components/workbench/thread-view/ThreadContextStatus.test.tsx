@@ -67,14 +67,14 @@ test("measured context usage remains visible", () => {
 });
 
 test("interrupted Workbench state overrides stale active provider status for context compaction", () => {
-  const stopped = render({
-    kind: "stopped",
-    reason: "providerInterrupted",
+  const interrupted = render({
+    kind: "needsAttention",
+    reason: "interrupted",
     settled: false,
     turnId: WorkbenchTurnIdSchema.parse("turn"),
   });
-  assert.doesNotMatch(stopped, /disabled=""/u);
-  assert.match(stopped, /aria-label="Compact thread context"/u);
+  assert.doesNotMatch(interrupted, /disabled=""/u);
+  assert.match(interrupted, /aria-label="Compact thread context"/u);
 
   const noActiveTurn = render({
     kind: "needsAttention",
