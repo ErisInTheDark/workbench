@@ -16,14 +16,17 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   children: [CodexProvider, WorkbenchAgentCommandNode],
   create: (_context, { get }) => {
     const threads = get("codexThreadOperations");
+    const sandboxAcl = get("codexSandboxAcl");
     const tools = new CodexToolsController({
       resolvePatchCaller: (threadId, cwd) => threads.resolvePatchCaller(threadId, cwd),
       readCallerThread: async nativeThreadId => {
         const thread = await threads.read(nativeThreadId);
         return { id: WorkbenchThreadIdSchema.parse(thread.id), cwd: thread.cwd };
       },
+      sandboxAcl,
       shell: new CodexShellController({
         executor: get("codexExecutor"),
+        sandboxAcl,
         readConfiguration: cwd => threads.requestNative("config/read", { cwd, includeLayers: false }),
       }),
     });
@@ -32,7 +35,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload Codex tool identity and sandbox execution.",
   lifecycle: "atomic",
   provides: ["codexTools"],
-  requires: ["codexThreadOperations", "codexExecutor"],
+  requires: ["codexThreadOperations", "codexExecutor", "codexSandboxAcl"],
   safeAll: true,
   scope: "server:codex/tools",
 });

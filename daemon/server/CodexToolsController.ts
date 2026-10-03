@@ -1,10 +1,11 @@
 /*
  * Exports:
- * - default CodexToolsController: interpret Codex MCP metadata and execute tools inside its native sandbox.
+ * - default CodexToolsController: interpret Codex MCP metadata, gate apply_patch on claims and sandbox ACL repair, and execute tools inside its native sandbox.
  */
 import { NativeThreadIdSchema, type NativeThreadId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { ProviderToolMetadata, WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
 import CodexShellController, { WORKBENCH_SHELL_SANDBOX_CAPABILITY, WORKBENCH_SHELL_TOOL_DESCRIPTION } from "./CodexShellController";
+import type CodexSandboxAclController from "./CodexSandboxAclController";
 import { allowCodexApplyPatch, denyCodexApplyPatch, parseCodexApplyPatchClaimHook } from "./lib/workbench/codex-apply-patch-claim-hook";
 import {
   createWorkbenchFileChangeFailureSystemMessage, WORKBENCH_UNCLAIMED_FILE_CHANGE_REASON_PREFIX,
@@ -16,7 +17,9 @@ export default class CodexToolsController implements WorkbenchProviderTools {
   constructor(private readonly options: {
     readCallerThread(nativeThreadId: NativeThreadId): Promise<{ id: WorkbenchThreadId; cwd: string }>;
     resolvePatchCaller(threadId: string, cwd: string): Promise<{ threadId: WorkbenchThreadId; nativeThreadId: NativeThreadId }>;
-    shell: Pick<CodexShellController, "execute"> & Partial<Pick<CodexShellController, "executeAdmitted">>;
+    /** Repairs Windows sandbox write ACEs on patch targets so the sandboxed apply_patch can write them. */
+    sandboxAcl?: Pick<CodexSandboxAclController, "ensureWritable">;
+    shell: Pick<CodexShellController, "execute"> & Partial<Pick<CodexShellController, "executeAdmitted" | "runSandboxed">>;
   }) {
     this.execute = options.shell.executeAdmitted?.bind(options.shell);
   }
@@ -28,7 +31,10 @@ export default class CodexToolsController implements WorkbenchProviderTools {
       const caller = await this.options.resolvePatchCaller(input.callerThreadId ?? hook.sessionId, hook.cwd);
       signal.throwIfAborted();
       if (hook.sessionId !== caller.nativeThreadId) throw new Error("Codex hook session_id does not match the managed thread.");
-      const result = await check({ cwd: hook.cwd, harness: "codex", paths: hook.paths, threadId: caller.threadId });
+      const [result] = await Promise.all([
+        check({ cwd: hook.cwd, harness: "codex", paths: hook.paths, threadId: caller.threadId }),
+        this.options.sandboxAcl?.ensureWritable(hook.paths, signal, this.options.shell.runSandboxed),
+      ]);
       signal.throwIfAborted();
       if (result.allowed) return JSON.stringify(allowCodexApplyPatch());
       const uncoveredPaths = new Set(result.uncoveredPaths);

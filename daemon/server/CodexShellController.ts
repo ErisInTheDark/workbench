@@ -2,7 +2,7 @@
  * Exports:
  * - WORKBENCH_SHELL_SANDBOX_CAPABILITY/WORKBENCH_SHELL_TOOL_DESCRIPTION: advertise the MCP-only sandbox metadata and behavior contract.
  * - prepareWorkbenchShellExecution: translate escalating shell input into one admitted host-shell command.
- * - CodexShellControllerOptions: inject Codex execution and host environment.
+ * - CodexShellControllerOptions: inject Codex execution, sandbox ACL repair and host environment.
  * - default CodexShellController: run host-shell commands through the Codex thread's exact sandbox state.
  */
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -17,6 +17,8 @@ import {
 } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { WorkbenchAdmittedExecution } from "workbench-shared/workbench/provider/provider-execution";
 import type CodexExecServer from "./CodexExecServer";
+import type CodexSandboxAclController from "./CodexSandboxAclController";
+import type { CodexSandboxAclCommandRunner } from "./CodexSandboxAclController";
 import executeApprovedCommand from "./WorkbenchApprovedCommandExecutor";
 import { CodexExecPermissionSchema, type CodexExecPermission, type CodexExecRequest } from "./codex-exec-protocol";
 
@@ -76,6 +78,8 @@ export const WORKBENCH_SHELL_TOOL_DESCRIPTION = "Run a shell command inside the 
 
 export interface CodexShellControllerOptions {
   executor: Pick<CodexExecServer, "execute">;
+  /** Background repair of Windows sandbox write ACEs that never reached existing files. */
+  sandboxAcl?: Pick<CodexSandboxAclController, "checkInBackground">;
   readConfiguration(cwd: string): Promise<unknown>;
   executeApproved?: typeof executeApprovedCommand;
   platform?: NodeJS.Platform;
@@ -174,6 +178,7 @@ export default class CodexShellController {
       type: "managed", network: "restricted",
       file_system: { type: "restricted", entries: [{ access: "read", path: { type: "special", value: { kind: "root" } } }] },
     } : sandboxState.permissionProfile;
+    this.options.sandboxAcl?.checkInBackground(sandboxCwd, this.runSandboxed);
     const configuration = await this.configuration(commandCwd);
     signal.throwIfAborted();
     const result = await this.options.executor.execute({
@@ -193,7 +198,29 @@ export default class CodexShellController {
     return { ...result, cwd: commandCwd, shell: shellCommand.shell };
   }
 
+  /** Run argv as the Codex sandbox identity with only `root` writable; ACL repair needs the owner of sandbox-created objects. */
+  readonly runSandboxed: CodexSandboxAclCommandRunner = async (command, root, signal) => {
+    const configuration = await this.configuration(root);
+    signal.throwIfAborted();
+    const result = await this.options.executor.execute({
+      ...configuration, command, cwd: root, workspaceRoots: [root],
+      permissions: {
+        type: "managed", network: "restricted",
+        file_system: {
+          type: "restricted",
+          entries: [
+            { access: "read", path: { type: "special", value: { kind: "root" } } },
+            { access: "write", path: { type: "path", path: pathToFileURL(root).href } },
+          ],
+        },
+      },
+      env: { CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "", WORKBENCH_HARNESS: "" },
+    }, signal);
+    return { code: result.exitCode, stdout: result.stdout };
+  };
+
   async executeAdmitted(request: WorkbenchAdmittedExecution, signal: AbortSignal) {
+    if (request.permissions.mode !== "approved-unrestricted") this.options.sandboxAcl?.checkInBackground(request.cwd, this.runSandboxed);
     const configuration = await this.configuration(request.cwd);
     signal.throwIfAborted();
     if (request.permissions.mode === "approved-unrestricted" && this.platform === "win32") {
