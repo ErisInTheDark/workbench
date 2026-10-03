@@ -5,7 +5,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { WorkbenchLocalCapabilitySettings, WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchLocalCapabilitySettings, WorkbenchLogicalProject } from "workbench-shared/types";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { DaemonId, LogicalProjectId } from "workbench-shared/workbench/identity";
 import type { ProjectFolderOption } from "workbench-shared/workbench/project/project-folder-address";
@@ -14,7 +14,6 @@ import CommandApprovalSettings from "./CommandApprovalSettings";
 import WorkbenchEnvironmentSettings from "./environment/WorkbenchEnvironmentSettings";
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import VoiceSettings from "./voice/VoiceSettings";
-import { ProjectIcon } from "./workbench-icons";
 import WorkbenchFormSection from "./WorkbenchFormSection";
 import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
 import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
@@ -116,7 +115,7 @@ export default function WorkbenchSettingsView({
   folders: readonly ProjectFolderOption[];
   getDaemon: (id: DaemonId) => WorkbenchDaemonClient | null;
   getFolderDaemon: (location: ProjectLocationReference) => WorkbenchDaemonClient | null;
-  logicalProject: { id: LogicalProjectId; label: string; iconProject: WorkbenchProjectOption | null } | null;
+  logicalProject: { id: LogicalProjectId; label: string; iconProject: WorkbenchLogicalProject } | null;
   onError: (message: string) => void;
   onGitRootsSaved: (daemonId: DaemonId) => Promise<void>;
   onPageChange: (title: string) => void;
@@ -156,8 +155,7 @@ export default function WorkbenchSettingsView({
     <div className="grid gap-5 md:grid-cols-[11rem_minmax(0,1fr)] lg:gap-9">
       <aside className="scrollbar-hover-reveal hidden md:sticky md:top-20 md:block md:max-h-[calc(100dvh-6rem)] md:self-start md:overflow-y-auto">
         <div className="mb-3 flex min-w-0 items-center gap-2 px-2 py-2 text-sm text-text">
-          {logicalProject?.iconProject ? <WorkbenchProjectIcon project={logicalProject.iconProject} />
-            : logicalProject ? <ProjectIcon aria-hidden="true" className="size-5 shrink-0" />
+          {logicalProject ? <WorkbenchProjectIcon project={logicalProject.iconProject} />
             : <svg aria-hidden="true" className="size-5 shrink-0" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />

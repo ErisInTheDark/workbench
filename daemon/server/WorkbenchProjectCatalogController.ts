@@ -180,6 +180,9 @@ export default class WorkbenchProjectCatalogController {
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly cancellation = new AbortController();
   private readonly iconWork = new Map<ProjectId, Promise<void>>();
+  private iconSweep: Promise<void> | null = null;
+  /** Icon sources the sweep already attempted; tree observation owns later rechecks and retries. */
+  private readonly sweptIconSources = new Set<string>();
   private readonly persistence: WorkbenchProjectPersistence;
   private readonly settings?: WorkbenchProjectCatalogControllerOptions["settings"];
   private readonly loadInitialProjects?: () => WorkbenchProjectStartup;
@@ -243,7 +246,11 @@ export default class WorkbenchProjectCatalogController {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
     this.listeners.clear();
-    const work = [...this.iconWork.values(), ...(this.refreshInFlight ? [this.refreshInFlight] : [])];
+    const work = [
+      ...this.iconWork.values(),
+      ...(this.iconSweep ? [this.iconSweep] : []),
+      ...(this.refreshInFlight ? [this.refreshInFlight] : []),
+    ];
     this.cwdResolutions.clear();
     for (const watcher of this.projectWatchers) watcher.close();
     this.projectWatchers = [];
@@ -276,6 +283,13 @@ export default class WorkbenchProjectCatalogController {
         if (!accepted || this.disposed || !this.catalog) return;
         const current = this.catalog.records?.find(item => item.project.id === projectId);
         if (!current || current.sourceKey !== record.sourceKey) return;
+        const previous = current.project.icon;
+        if (previous?.rootId === icon?.rootId && previous?.path === icon?.path) {
+          // Only freshness changed; the published catalogue is identical.
+          const records = this.catalog.records!.map(item => item === current ? { ...current, checkedAt } : item);
+          this.catalog = { ...this.catalog, records };
+          return;
+        }
         const { icon: _previous, ...metadata } = current.project;
         const project = { ...metadata, ...(icon ? { icon } : {}) };
         const records = this.catalog.records!.map(item => item === current ? { ...current, project, checkedAt } : item);
@@ -711,6 +725,7 @@ export default class WorkbenchProjectCatalogController {
         this.hardStale = false;
         this.refreshFailure = null;
         this.publishFacts();
+        this.sweepUncheckedIcons();
         return catalog;
       }
     })();
@@ -731,6 +746,30 @@ export default class WorkbenchProjectCatalogController {
       settled();
     });
     return refresh;
+  }
+
+  /**
+   * Tree observation only covers browsed folders, but every catalogued folder can be displayed.
+   * Discover never-checked sources one at a time after publication so startup stays unblocked.
+   */
+  private sweepUncheckedIcons() {
+    if (this.iconSweep || this.disposed) return;
+    const sweep = (async () => {
+      for (;;) {
+        if (this.disposed) return;
+        const record = this.catalog?.records.find(item => item.checkedAt === null
+          && item.project.kind !== "workbench-library" && !this.sweptIconSources.has(item.sourceKey));
+        if (!record) return;
+        this.sweptIconSources.add(record.sourceKey);
+        await this.observeProjectIcon(record.project.id);
+      }
+    })();
+    this.iconSweep = sweep;
+    const settled = () => { if (this.iconSweep === sweep) this.iconSweep = null; };
+    void sweep.then(settled, error => {
+      settled();
+      if (!isOwnedCancellation(error, this.cancellation.signal)) this.logError(`project icon sweep failed: ${sanitizeRefreshError(error)}`);
+    });
   }
 
   private shouldRefresh() {

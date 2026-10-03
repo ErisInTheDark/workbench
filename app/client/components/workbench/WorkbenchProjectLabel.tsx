@@ -6,7 +6,6 @@
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
-import { ProjectIcon } from "./workbench-icons";
 import WorkbenchProjectLocationLabel from "./WorkbenchProjectLocationLabel";
 
 function getWorkbenchProjectDisplayPath(project: WorkbenchProjectOption) {
@@ -34,7 +33,6 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
   if ("matchKey" in project) {
     const location = project.locations.find(item => item.project)
       ?? project.observedLocations?.[0] ?? project.locations[0];
-    const assetSource = location ? { kind: "source" as const, daemonId: location.daemonId } : undefined;
     const name = project.displayName ?? project.label;
     const hasDistinctRemoteLabel = project.matchKey.startsWith("remote://") && project.label !== name;
     const secondary = hasDistinctRemoteLabel ? project.label : project.displayPath ?? null;
@@ -42,9 +40,7 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
       <span className="flex min-w-0 items-center gap-2" title={[
         ...project.locations, ...(project.observedLocations ?? []),
       ].map(item => `${item.hostname}: ${item.rootPath}`).join("\n") || project.matchKey}>
-        {location?.project
-          ? <WorkbenchProjectIcon project={location.project} assetSource={assetSource} variant={variant} />
-          : <ProjectIcon className="shrink-0" size={variant === "heading" ? 20 : 16} />}
+        <WorkbenchProjectIcon project={project} variant={variant} />
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
           <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate text-text${active || variant === "heading" ? " font-semibold" : ""}`}>
             {name}

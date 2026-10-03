@@ -2927,7 +2927,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     logicalProject={selectedSettingsProject ? {
                       id: selectedSettingsProject.id,
                       label: selectedSettingsProject.displayName ?? selectedSettingsProject.label,
-                      iconProject: selectedSettingsProject.locations.find(location => location.project)?.project ?? null,
+                      iconProject: selectedSettingsProject,
                     } : null}
                     onError={setSelectionError}
                     onGitRootsSaved={async daemonId => {

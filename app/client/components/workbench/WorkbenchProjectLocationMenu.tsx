@@ -8,7 +8,7 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import type { ProjectFolderOption } from "workbench-shared/workbench/project/project-folder-address";
 import WorkbenchPressDragMenu from "./WorkbenchPressDragMenu";
 import WorkbenchProjectLocationLabel from "./WorkbenchProjectLocationLabel";
-import { ProjectIcon } from "./workbench-icons";
+import { FolderOpenIcon } from "./workbench-icons";
 
 export default function WorkbenchProjectLocationMenu({
   folders,
@@ -48,7 +48,7 @@ export default function WorkbenchProjectLocationMenu({
         if (folder) onSelect(folder.target);
       }}
     >
-      <ProjectIcon className="shrink-0" size={16} />
+      <FolderOpenIcon className="shrink-0" size={16} />
       <span className="min-w-0 max-w-52 truncate" title={current?.rootPath}>
         {current ? <WorkbenchProjectLocationLabel
           displayPath={current.displayPath ?? `${current.hostname}:${current.rootPath}`}

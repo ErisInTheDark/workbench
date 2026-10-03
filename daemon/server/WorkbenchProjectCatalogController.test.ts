@@ -328,6 +328,54 @@ test("icon observations keep stale data, coalesce work, and retain successful ab
   }
 });
 
+test("catalogue publication discovers never-checked icons without tree observation and sweeps each source once", async context => {
+  const failing = createProject("local://C:/projects/failing", "C:/projects/failing");
+  const iconic = createProject("local://C:/projects/iconic", "C:/projects/iconic");
+  const records: WorkbenchProjectCacheRecord[] = [failing, iconic].map(project => {
+    const identityKey = fixtureIdentitySchemas.ProjectIdentityKeySchema.parse(`local://${project.rootPath}`);
+    return { project, identityKey, rootIdentityKeys: [identityKey], sourceKey: project.name, checkedAt: null };
+  });
+  const scans: string[] = [];
+  const errors: string[] = [];
+  const controller = new WorkbenchProjectCatalogController({
+    persistence: {
+      readRetainedProjectCatalog: async () => reconciledProjects(records),
+      reconcileProjectCatalog: async () => reconciledProjects(records),
+      readProjectAliases: async () => [],
+      resolveProjectIdentity: async () => iconic.id,
+      settleProjectIcon: async () => true,
+    },
+    discoverProjectIdentities: async () => discoveryForProjects([failing, iconic]),
+    discoverIcon: async roots => {
+      scans.push(roots[0]!.rootPath);
+      if (roots[0]!.rootPath === failing.rootPath) throw new Error("icon scan failed");
+      return { rootId: iconic.roots[0].id, path: "favicon.png" };
+    },
+    logError: message => errors.push(message),
+    createWatcher: (root, listener, recursive) => new FakeWatcher(root, listener, recursive),
+  });
+  let publications = 0;
+  let wasCurrent = false;
+  const current = [deferred<void>(), deferred<void>()];
+  const iconPublished = deferred<void>();
+  const stop = controller.subscribe(() => {
+    const facts = controller.getFacts();
+    if (facts.phase === "current" && !wasCurrent) current[publications++]?.resolve();
+    wasCurrent = facts.phase === "current";
+    if (facts.catalogue?.data.find(project => project.id === iconic.id)?.icon) iconPublished.resolve();
+  });
+  context.after(async () => { stop(); await controller.dispose(); });
+  await current[0]!.promise;
+  assert.deepEqual(scans, [failing.rootPath]);
+  await iconPublished.promise;
+  controller.invalidate();
+  await current[1]!.promise;
+  await controller.dispose();
+  assert.deepEqual(scans, [failing.rootPath, iconic.rootPath]);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]!, /icon scan failed/u);
+});
+
 test("every disposal caller waits for icon settlement and unexpected settlement failure stays visible", async () => {
   const project = createProject("local://C:/projects/icon", "C:/projects/icon");
   const settlement = deferred<boolean>();

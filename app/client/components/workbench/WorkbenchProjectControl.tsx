@@ -6,8 +6,8 @@
 
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import ChevronIcon from "./ChevronIcon";
-import { ProjectIcon } from "./workbench-icons";
 import WorkbenchPressDragMenu from "./WorkbenchPressDragMenu";
+import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
 
 type DraftProject = WorkbenchProjectOption | WorkbenchLogicalProject;
 
@@ -37,7 +37,7 @@ export default function WorkbenchProjectControl({
         id: candidate.id,
         checked: candidate.id === project.id,
         content: <span className="flex min-w-0 items-center gap-2">
-          <ProjectIcon className="shrink-0" size={16} />
+          <WorkbenchProjectIcon project={candidate} variant="thread" />
           <span className="truncate">{projectLabel(candidate)}</span>
         </span>,
       }))}
@@ -48,7 +48,7 @@ export default function WorkbenchProjectControl({
       }}
       onSelect={onSelect}
     >
-      <ProjectIcon className="shrink-0" size={16} />
+      <WorkbenchProjectIcon project={project} variant="thread" />
       <span className="truncate">{label}</span>
       <ChevronIcon aria-hidden="true" className="shrink-0" size={14} />
     </WorkbenchPressDragMenu>
