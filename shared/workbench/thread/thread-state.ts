@@ -252,6 +252,7 @@ const WorkbenchGitArcProposalStateSchema = z.object({
 }).strict();
 
 const workbenchGitArcMemberState = {
+  stashedPaths: z.array(z.string().min(1)).default([]).optional(),
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
   harness: z.string().min(1),
   intentDescription: z.string(),
@@ -284,6 +285,7 @@ const WorkbenchGitArcMemberStateSchema = z.discriminatedUnion("phase", [
 ]);
 
 const workbenchGitArcLifecycleState = {
+  stashedPaths: z.array(z.string().min(1)).default([]).optional(),
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
   intentDescription: z.string(),
   intentName: z.string().min(1),
@@ -312,8 +314,8 @@ export const WorkbenchGitArcLifecycleStateSchema = z.discriminatedUnion("phase",
 ]);
 export type WorkbenchGitArcLifecycleState = z.infer<typeof WorkbenchGitArcLifecycleStateSchema>;
 
-export function gitArcPreventsThreadSettlement<Arc extends Pick<WorkbenchGitArcLifecycleState, "phase" | "claimedPaths">>(gitArc: Arc | null | undefined) {
-  return Boolean(gitArc?.claimedPaths.length || gitArc?.phase === "stashed");
+export function gitArcPreventsThreadSettlement<Arc extends Pick<WorkbenchGitArcLifecycleState, "phase" | "claimedPaths"> & { stashedPaths?: readonly string[] }>(gitArc: Arc | null | undefined) {
+  return Boolean(gitArc?.claimedPaths.length || gitArc?.stashedPaths?.length || gitArc?.phase === "stashed");
 }
 
 export const WorkbenchGitArcPlanStateSchema = z.object({
@@ -722,7 +724,7 @@ export function getWorkbenchThreadClaimIntersections(
     && entry.identity.threadId === identity.threadId
   ));
   const scopePaths = scope === "stashed"
-    ? owner?.gitArc?.phase === "stashed" ? owner.gitArc.stashedPaths : []
+    ? owner?.gitArc?.stashedPaths ?? []
     : owner?.gitArcPlan?.scopePaths ?? [];
   if (!scopePaths.length) return EMPTY_WORKBENCH_THREAD_CLAIM_INTERSECTIONS;
   const candidates = entries.filter((entry): entry is TopLevelSidebarRow => (

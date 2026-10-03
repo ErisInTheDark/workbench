@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchSidebarGitArcSchema/WorkbenchSidebarGitArc: Git arc facts a sidebar row needs; live paths only for active/stashed arcs.
+ * - WorkbenchSidebarGitArcSchema/WorkbenchSidebarGitArc: independently live and saved Git work for sidebar rows.
  * - WorkbenchSidebarGitArcPlanSchema/WorkbenchSidebarGitArcPlan: inactive-plan scope a sidebar row needs for collisions.
  * - WorkbenchThreadSidebarRowSchema/WorkbenchThreadSidebarRow: lean list-rendering row; per-thread detail rides the thread observation.
  * - WorkbenchThreadSidebarRowSnapshotSchema/WorkbenchThreadSidebarRowSnapshot: one project's unarchived rows plus its archived count.
@@ -20,9 +20,9 @@ const proposals = z.array(z.object({
   proposalId: z.string().min(1), rootId: z.string().min(1).optional(), status: z.enum(["committed", "proposed"]),
 }).strict());
 export const WorkbenchSidebarGitArcSchema = z.discriminatedUnion("phase", [
-  z.object({ phase: z.literal("active"), checkpointCommit: commit, proposals, claimedPaths: paths.min(1) }).strict(),
+  z.object({ phase: z.literal("active"), checkpointCommit: commit, proposals, claimedPaths: paths.min(1), stashedPaths: paths.default([]).optional() }).strict(),
   z.object({ phase: z.literal("stashed"), checkpointCommit: commit, proposals, claimedPaths: paths.length(0), stashedPaths: paths.min(1) }).strict(),
-  z.object({ phase: z.literal("resolved"), checkpointCommit: commit, proposals, claimedPaths: paths.length(0) }).strict(),
+  z.object({ phase: z.literal("resolved"), checkpointCommit: commit, proposals, claimedPaths: paths.length(0), stashedPaths: paths.default([]).optional() }).strict(),
 ]);
 export type WorkbenchSidebarGitArc = z.infer<typeof WorkbenchSidebarGitArcSchema>;
 export const WorkbenchSidebarGitArcPlanSchema = z.object({ checkpointCommit: commit, scopePaths: paths }).strict();
@@ -57,7 +57,7 @@ export function sidebarRowKey(row: RowSource) {
 }
 
 function leanArc(arc: NonNullable<Exclude<RowSource, { entryKind: "draft" }>["gitArc"]>): WorkbenchSidebarGitArc {
-  const base = { checkpointCommit: arc.checkpointCommit, proposals: arc.proposals.map(({ proposalId, rootId, status }) => (
+  const base = { checkpointCommit: arc.checkpointCommit, ...(arc.stashedPaths?.length ? { stashedPaths: arc.stashedPaths } : {}), proposals: arc.proposals.map(({ proposalId, rootId, status }) => (
     rootId ? { proposalId, rootId, status } : { proposalId, status })) };
   if (arc.phase === "active") return { ...base, phase: "active", claimedPaths: arc.claimedPaths as [string, ...string[]] };
   if (arc.phase === "stashed") return { ...base, phase: "stashed", claimedPaths: [], stashedPaths: arc.stashedPaths as [string, ...string[]] };

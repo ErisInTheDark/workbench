@@ -24,6 +24,8 @@ import {
   type WorkbenchAgentCommandRequest,
 } from "./lib/workbench/commands/workbench-agent-command-definition";
 import type { WorkbenchInstructionTool } from "./lib/workbench/instructions/instruction-tool-reference";
+import { isWorkbenchToolVisibleTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
+import type { WorkbenchProviderCaller } from "workbench-shared/workbench/provider/provider-execution";
 import {
   getWorkbenchShellAggregatedOutput,
   WORKBENCH_SHELL_MCP_TOOL_NAME,
@@ -46,6 +48,7 @@ const MCP_CLIENT_SCOPE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0
 type WorkbenchAgentMcpRequestId = number | string;
 
 export interface WorkbenchAgentMcpControllerOptions {
+  isSubagentCaller?: (caller: WorkbenchProviderCaller) => Promise<boolean>;
   tools: (provider: string) => WorkbenchProviderTools;
   /** Workbench approval for outside-sandbox commands on the Workbench-hosted shell. */
   approveHostedShell?: WorkbenchToolAdmissionOptions["approve"];
@@ -147,6 +150,7 @@ export default class WorkbenchAgentMcpController {
   private readonly approveHostedShell: WorkbenchAgentMcpControllerOptions["approveHostedShell"];
   private readonly runLoggedCommand: NonNullable<WorkbenchAgentMcpControllerOptions["runLoggedCommand"]>;
   private readonly runtimeOwner = {};
+  private readonly isSubagentCaller: NonNullable<WorkbenchAgentMcpControllerOptions["isSubagentCaller"]>;
 
   constructor({
     executeCommand,
@@ -159,6 +163,7 @@ export default class WorkbenchAgentMcpController {
     requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry(),
     scheduleProgress: schedule = scheduleProgress,
     runLoggedCommand = async (_label, _signal, operation) => await operation(),
+    isSubagentCaller = async () => false,
   }: WorkbenchAgentMcpControllerOptions) {
     this.executeCommand = executeCommand;
     this.getReloadScopeCatalog = getReloadScopeCatalog;
@@ -170,6 +175,7 @@ export default class WorkbenchAgentMcpController {
     this.tools = tools;
     this.approveHostedShell = approveHostedShell;
     this.runLoggedCommand = runLoggedCommand;
+    this.isSubagentCaller = isSubagentCaller;
   }
 
   beginRuntimeDrain() {
@@ -221,12 +227,13 @@ export default class WorkbenchAgentMcpController {
       sendJsonRpcError(response, 400, sanitizeError(error) || "Workbench MCP client scope is invalid.");
       return;
     }
-    void this.completeRequest(request, response, clientScope, url.searchParams.get("project-local") === "true", provider, tools);
+    void this.completeRequest(request, response, clientScope, url.searchParams.get("project-local") === "true", provider, tools, url.searchParams.get("subagent") === "true");
   }
 
   private async completeRequest(
     request: http.IncomingMessage, response: http.ServerResponse, clientScope: string, projectLocal: boolean,
     provider: string, tools: WorkbenchProviderTools,
+    subagent: boolean,
   ) {
     const requestAbort = new AbortController();
     const abortDisconnectedRequest = () => {
@@ -247,7 +254,7 @@ export default class WorkbenchAgentMcpController {
       close();
     });
     try {
-      server = await this.createServer(requestAbort.signal, clientScope, projectLocal, provider, tools);
+      server = await this.createServer(requestAbort.signal, clientScope, projectLocal, provider, tools, subagent);
       requestAbort.signal.throwIfAborted();
       const body = await readJsonBody(request);
       await server.connect(transport);
@@ -261,7 +268,7 @@ export default class WorkbenchAgentMcpController {
     }
   }
 
-  private async createServer(requestSignal: AbortSignal, clientScope: string, projectLocal: boolean, provider: string, tools: WorkbenchProviderTools) {
+  private async createServer(requestSignal: AbortSignal, clientScope: string, projectLocal: boolean, provider: string, tools: WorkbenchProviderTools, subagent = false) {
     const description = await tools.describe();
     requestSignal.throwIfAborted();
     const server = new McpServer({ name: "wb", version: "1.0.0" }, {
@@ -299,6 +306,7 @@ export default class WorkbenchAgentMcpController {
         }),
     ));
     for (const definition of this.listCommands()) {
+      if (!isWorkbenchToolVisibleTo(getWorkbenchAgentCommandToolName(definition), subagent)) continue;
       if (definition.hideFromMcp || (definition.managedThreadRootOnly && !projectLocal)
         || !isWorkbenchAgentCommandVisibleTo(definition, provider)) continue;
       const name = getWorkbenchAgentCommandToolName(definition);
@@ -512,6 +520,12 @@ export default class WorkbenchAgentMcpController {
       const caller = await tools.caller(ProviderToolMetadataSchema.parse(meta ?? {}), signal, { clientScope });
       if (signal.aborted) throw signal.reason;
       registration.setWorkbenchThreadId(caller.threadId);
+      if (!isWorkbenchToolVisibleTo(toolName, true) && await this.isSubagentCaller(caller)) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: "Subagents leave claims for parent adoption; the parent creates commit proposals." }],
+        };
+      }
       const request = await definition.buildRequestFromJson(input, {
         callerHarness: caller.harness,
         callerThreadId: caller.threadId,

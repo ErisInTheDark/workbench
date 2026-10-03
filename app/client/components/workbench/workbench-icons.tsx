@@ -773,8 +773,8 @@ export function GitArcIcon({ action, ...props }: IconProps & { action: GitArcCom
   if (action === "start" || action === "continue" || action === "planStart") {
     return <OutlinedIcon {...props}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z" /></OutlinedIcon>;
   }
-  if (action === "claims" || action === "release") {
-    return <OutlinedIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M8 12h8" />{action === "claims" ? <path d="M12 8v8" /> : null}</OutlinedIcon>;
+  if (action === "claims" || action === "adopt" || action === "release") {
+    return <OutlinedIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M8 12h8" />{action !== "release" ? <path d="M12 8v8" /> : null}</OutlinedIcon>;
   }
   if (action === "mv") return <FileMoveIcon {...props} />;
   if (action === "propose" || action === "rescind" || action === "unknown") {

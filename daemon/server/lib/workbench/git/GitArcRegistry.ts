@@ -6,12 +6,15 @@
  * - GitArcRegistryEntry: stored arc lifecycle and claims.
  * - GitArcRegistryMutation: prepared canonical state and ref updates.
  * - GitArcRegistryReplaceOptions: replacement guards, remaps and claim-loss snapshot.
+ * - GitArcOwnerReplacement: guarded ownership row replacement within one ref transaction.
+ * - GitArcPreparedOperation: one prepared transition with explicit member compensation.
  * - GitArcCollision: overlapping sibling claims.
  * - GitArcCollisionError: conflicting ownership rejection.
  * - findGitArcCollisions: detect overlapping live sibling claims.
  * - getGitArcLiveClaimPaths: derive live claims from arc lifecycle.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import { GitArcSavedStashSchema, type GitArcSavedStash } from "workbench-shared/workbench/git/git-arc-storage";
 import type { DaemonReloadScope } from "workbench-shared/types";
 import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
 import WorkbenchGitRepository, { type GitRefUpdate, type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
@@ -46,6 +49,7 @@ export interface GitArcRegistryEntry extends GitArcIdentity {
     proposalIds: string[];
     reloadScopes?: DaemonReloadScope[];
   } | null;
+  savedStash?: GitArcSavedStash | null;
   updatedAt: string;
 }
 
@@ -84,6 +88,18 @@ export interface GitArcRegistryReplaceOptions {
   commitRemaps?: ReadonlyMap<string, string>;
   expectedCheckpointCommit?: string;
   claimLossSnapshot?: GitWorktreeSnapshot;
+}
+
+export interface GitArcPreparedOperation<Result> {
+  result: Result;
+  apply(): Promise<Result>;
+  rollback(): Promise<void>;
+}
+
+export interface GitArcOwnerReplacement {
+  identity: GitArcIdentity;
+  expectedCheckpointCommit: string | null;
+  next: Omit<GitArcRegistryEntry, "updatedAt"> | null;
 }
 
 function normalizeIdentityPart(value: string, label: string) {
@@ -131,6 +147,9 @@ function parseState(contents: string): GitArcRegistryState {
       })() : null;
       return {
         ...storedEntry,
+        ...(entry.savedStash !== undefined ? {
+          savedStash: entry.savedStash === null ? null : GitArcSavedStashSchema.parse(entry.savedStash),
+        } : {}),
         claimedPaths: phase === "resolved" ? [] : entry.claimedPaths,
         phase,
         proposalId: proposalIds.at(-1) ?? null,
@@ -160,12 +179,37 @@ function remapState(state: GitArcRegistryState, commits?: ReadonlyMap<string, st
           checkpointCommit: commits.get(entry.retainedArc.checkpointCommit) ?? entry.retainedArc.checkpointCommit,
         },
       } : {}),
+      ...(entry.savedStash ? {
+        savedStash: {
+          ...entry.savedStash,
+          checkpointCommit: commits.get(entry.savedStash.checkpointCommit) ?? entry.savedStash.checkpointCommit,
+        },
+      } : {}),
     })),
     version: 1,
   };
 }
 
 export default class GitArcRegistry {
+  static async rollbackRefs(
+    repository: WorkbenchGitRepository,
+    updates: readonly GitRefUpdate[],
+    deletes: readonly { oldValue?: string; ref: string }[] = [],
+  ) {
+    const restored: GitRefUpdate[] = [];
+    const removed: Array<{ oldValue: string; ref: string }> = [];
+    for (const update of updates) {
+      if (update.oldValue === undefined) throw new Error("Cannot compensate an unguarded Git ref update.");
+      if (/^0+$/u.test(update.oldValue)) removed.push({ ref: update.ref, oldValue: update.newValue });
+      else restored.push({ ref: update.ref, newValue: update.oldValue, oldValue: update.newValue });
+    }
+    for (const deletion of deletes) {
+      if (!deletion.oldValue) throw new Error("Cannot compensate an unguarded Git ref deletion.");
+      restored.push({ ref: deletion.ref, newValue: deletion.oldValue, oldValue: "0".repeat(40) });
+    }
+    await repository.updateRefs(restored, removed);
+  }
+
   constructor(
     private readonly repository: WorkbenchGitRepository,
     private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
@@ -236,6 +280,52 @@ export default class GitArcRegistry {
     return { newValue: nextBlob, oldValue: blob, ref: REGISTRY_REF };
   }
 
+  async prepareOwners(replacements: readonly GitArcOwnerReplacement[]): Promise<GitArcRegistryMutation> {
+    const { blob, state } = await this.readStored();
+    const resolved = await this.resolveEntries(state.entries);
+    const changes = await Promise.all(replacements.map(async replacement => {
+      const identity = await this.resolveIdentity(replacement.identity);
+      if (!identity) throw new Error("The Git arc owner identity is unavailable.");
+      const key = identityKey({ ...replacement.identity, threadId: identity.threadId });
+      const owned = resolved.filter(row => identityKey(row.resolved) === key);
+      const current = owned[0]?.resolved ?? null;
+      if ((current?.checkpointCommit ?? null) !== replacement.expectedCheckpointCommit) {
+        throw new Error("Git arc ownership changed before its transfer completed.");
+      }
+      const next = replacement.next ? {
+        ...replacement.next, harness: replacement.identity.harness, threadId: identity.threadId,
+        savedStash: replacement.next.savedStash === undefined ? current?.savedStash ?? null : replacement.next.savedStash,
+        updatedAt: new Date().toISOString(),
+      } satisfies GitArcRegistryEntry : null;
+      return { key, owned, current, next };
+    }));
+    if (new Set(changes.map(change => change.key)).size !== changes.length) {
+      throw new Error("Git arc ownership replacements must identify distinct threads.");
+    }
+    const replaced = new Set(changes.flatMap(change => change.owned.map(row => row.raw)));
+    const entries = [...state.entries.filter(row => !replaced.has(row)), ...changes.flatMap(change => change.next ?? [])]
+      .sort((left, right) => identityKey(left).localeCompare(identityKey(right)));
+    const canonical = [
+      ...resolved.filter(row => !replaced.has(row.raw)).map(row => row.resolved),
+      ...changes.flatMap(change => change.next ?? []),
+    ];
+    for (const change of changes) {
+      if (!change.next) continue;
+      const collisions = findGitArcCollisions(canonical, change.next, getGitArcLiveClaimPaths(change.next));
+      if (collisions.length) throw new GitArcCollisionError(collisions);
+    }
+    const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
+    const updates: GitRefUpdate[] = [{ ref: REGISTRY_REF, newValue: nextBlob, oldValue: blob ?? "0".repeat(40) }];
+    for (const change of changes) {
+      const previous = change.current ? getGitArcLiveClaimPaths(change.current) : [];
+      if (change.current && previous.length && (!change.next || !getGitArcLiveClaimPaths(change.next).length)) {
+        updates.push(await new GitArcClaimLossStore(this.repository, this.resolveThreadIdentity)
+          .prepare(change.current, previous));
+      }
+    }
+    return { nextState: { entries: canonical, version: 1 }, updates };
+  }
+
   async prepareClaim(
     entry: Omit<GitArcRegistryEntry, "updatedAt">,
     options?: GitArcRegistryReplaceOptions,
@@ -274,6 +364,7 @@ export default class GitArcRegistry {
       proposalId: proposalIds.at(-1) ?? null,
       proposalIds,
       retainedArc: canonicalEntry.retainedArc ?? null,
+      savedStash: canonicalEntry.savedStash === undefined ? current?.savedStash ?? null : canonicalEntry.savedStash,
       updatedAt: new Date().toISOString(),
     };
     const ownedRaw = new Set(owned.map(candidate => candidate.raw));
@@ -305,6 +396,7 @@ export default class GitArcRegistry {
       }
     }
     if (!blob || !current) return null;
+    if (current.savedStash) throw new Error("Git arc ownership cannot be released while adopted saved work remains.");
     const ownedRaw = new Set(
       resolvedStoredEntries.filter(candidate => identityKey(candidate.resolved) === key).map(candidate => candidate.raw),
     );
@@ -363,6 +455,7 @@ export default class GitArcRegistry {
       proposalId: proposalIds.at(-1) ?? null,
       proposalIds,
       retainedArc: canonicalEntry.retainedArc ?? null,
+      savedStash: canonicalEntry.savedStash === undefined ? current?.savedStash ?? null : canonicalEntry.savedStash,
       updatedAt: new Date().toISOString(),
     };
     const ownedRaw = new Set(owned.map(candidate => candidate.raw));

@@ -67,6 +67,20 @@ test("expired plan-only thread cleanup removes its refs without touching another
     proposalIds: [...active.proposalIds, proposalId],
     retainedArc: null,
   }, active.checkpointCommit);
+  const planOnly = await registry.find({ harness: "codex", threadId: nativeThreadId });
+  assert.ok(planOnly);
+  const savedStash = {
+    checkpointCommit: active.checkpointCommit, paths: ["one.txt"], intentName: "saved",
+    intentDescription: "", proposalIds: [],
+  };
+  await registry.set({ ...planOnly, savedStash }, planOnly.checkpointCommit);
+  assert.equal(await controller.canPruneThreadHistory({
+    cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
+  }), false, "saved work blocks pruning even beneath a plan with no live claims");
+  await assert.rejects(controller.pruneThreadHistory({
+    cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
+  }), /saved work/i);
+  await registry.set({ ...planOnly, savedStash: null }, planOnly.checkpointCommit);
   assert.equal(await controller.canPruneThreadHistory({
     cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
   }), true);

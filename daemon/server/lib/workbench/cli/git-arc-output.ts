@@ -80,7 +80,7 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
       ...(payload.unchanged === true ? { unchanged: true } : {}),
       additionalClaims: additions.filter((path) => !removed.has(path)),
       removedClaims: removals.filter((path) => !added.has(path)),
-      ...(action === "stash" ? { stashedPaths: paths(payload, "stashedPaths") } : {}),
+      ...(action === "stash" || action === "adopt" ? { stashedPaths: paths(payload, "stashedPaths") } : {}),
       ...(action === "unstash" ? { conflictedPaths: paths(payload, "conflictedPaths") } : {}),
       acceptedProposals: sources.flatMap((member) => rows(member, "acceptedProposals").map((accepted) => ({ proposalId: string(accepted, "proposalId"), commitSha: string(accepted, "commitSha") }))),
       planningDrift,
@@ -156,7 +156,7 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
       "Resolve the conflict markers directly. No Git continuation or abort command is required.",
     );
   }
-  if (action === "release" && request.body?.disown !== true && claimedPaths.length) {
+  if (action === "release" && request.body?.action === "arcRelease" && request.body.disown !== true && claimedPaths.length) {
     lines.push(
       "These dirty paths remain claimed:",
       ...claimedPaths.map(escapeGitArcValue),

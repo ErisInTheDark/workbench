@@ -230,6 +230,12 @@ test("a stashed arc stays hoisted while its proposals are no longer actionable",
     proposalObservations: {},
     proposalTurnIds: oldProposalTurns,
   }), null, "an in-progress latest turn still suppresses stashed presentation");
+  assert.ok(getHoistedThreadGitArc({
+    currentTurn,
+    gitArc: { ...stashedGitArc(), phase: "resolved" },
+    proposalObservations: {},
+    proposalTurnIds: new Map(),
+  }), "independently saved work remains recoverable after the live arc resolves");
 });
 
 test("visible proposal intents associate title and description with the proposal receipt", () => {

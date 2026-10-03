@@ -9,6 +9,7 @@ import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCa
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import { CLAIM_LOSS_OPERATIONS_FIXTURE } from "./GitArcClaimLossTestFixtures";
+import { CONTROLLER_BASE_FIXTURE } from "./GitArcControllerTestFixtures";
 import type { GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
 
 const fixtures = new GitTestFixtureCache();
@@ -127,4 +128,27 @@ test("claim-loss boundaries", { concurrency: 2 }, async context => {
     context.test("final-loss ref and registry compare-and-swap publish together and preserve the disown snapshot", () => checkAtomicLoss(prepared)),
     context.test("planning, final removal and restore capture the boundary while unchanged dirty release does not", () => checkLossRoutes(prepared)),
   ]);
+});
+
+test("rehome refuses an occupied caller stash address without losing the source snapshot", async context => {
+  const fixture = await fixtures.copyFresh(CONTROLLER_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  const controller = new WorkbenchGitCheckpointController();
+  const source = { harness: "codex" as const, threadId: "child" };
+  const caller = { harness: "codex" as const, threadId: "parent" };
+  await controller.createAndStartPlan({ cwd: fixture.root, ...source, intentName: "save child work", paths: ["two.txt"] });
+  await fs.writeFile(path.join(fixture.root, "two.txt"), "saved\n");
+  await controller.stashArc({ cwd: fixture.root, ...source });
+  const snapshots = new GitArcClaimLossStore(repository);
+  const frozen = await snapshots.read(source);
+  assert.ok(frozen?.frozen);
+  const occupiedRef = "refs/worktree/agents/codex/parent/arc-stash";
+  await repository.updateRef(occupiedRef, frozen.commit);
+  const prepare = Reflect.get(snapshots, "prepareRehomeFrozen");
+  assert.equal(typeof prepare, "function", "the frozen snapshot owner must guard rehoming");
+  await assert.rejects(prepare.call(snapshots, source, caller, ["two.txt"]), /already|occupied/i);
+  assert.equal((await snapshots.read(source))?.commit, frozen.commit);
+  assert.equal(await repository.readRef(occupiedRef), frozen.commit);
+  assert.equal(await fs.readFile(path.join(fixture.root, "two.txt"), "utf8"), "two\n");
 });

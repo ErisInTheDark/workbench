@@ -12,6 +12,7 @@ import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rej
 import type { GitCheckpointProposal, GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcMissingClaimSetError, GitArcProposalAlreadyCommittedError } from "workbench-shared/workbench/git/git-arc-failures";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
+import type { GitArcSavedStash } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcProposalDiffController from "./GitArcProposalDiffController";
 import {
   passthroughGitArcThreadIdentityResolver,
@@ -105,6 +106,7 @@ function projectLifecycleState(
   entry: GitArcRegistryEntry,
   lifecycle: NonNullable<ReturnType<typeof lifecycleEntry>>,
   summaries: GitArcProposalSummary[],
+  saved?: GitArcSavedStash | null,
 ): GitArcLifecycleState {
   const common = {
     checkpointCommit: lifecycle.checkpointCommit,
@@ -116,12 +118,22 @@ function projectLifecycleState(
     )),
     threadId: entry.threadId,
     updatedAt: entry.updatedAt,
+    ...(saved ? { stashedPaths: saved.paths } : {}),
   };
   if (lifecycle.phase === "stashed") {
     return { ...common, claimedPaths: [], phase: "stashed", stashedPaths: lifecycle.claimedPaths };
   }
   if (lifecycle.phase === "resolved") return { ...common, claimedPaths: [], phase: "resolved" };
   return { ...common, claimedPaths: lifecycle.claimedPaths, phase: "active" };
+}
+
+function savedLifecycle(entry: GitArcRegistryEntry, saved: GitArcSavedStash | null) {
+  const live = lifecycleEntry(entry);
+  return saved && (!live || live.phase !== "active" || !live.claimedPaths.length) ? {
+    checkpointCommit: saved.checkpointCommit, claimedPaths: saved.paths,
+    intentDescription: saved.intentDescription, intentName: saved.intentName,
+    phase: "stashed" as const, proposalIds: saved.proposalIds,
+  } : live;
 }
 
 function acceptedReceiptMessage(receipts: Array<{ commitSha: string; proposalId: string; title: string }>, claimedPaths: string[]) {
@@ -550,14 +562,18 @@ export default class GitArcProposalController {
     const repository = await WorkbenchGitRepository.tryOpen(cwd);
     if (!repository) return [];
     const entries = await this.registry(repository).list();
-    const projected = entries.map((entry) => ({ entry, lifecycle: lifecycleEntry(entry) })).filter((value) => value.lifecycle !== null);
+    const candidates = entries.map(entry => {
+      const saved = entry.savedStash ?? null;
+      return { entry, saved, lifecycle: savedLifecycle(entry, saved) };
+    });
+    const projected = candidates.filter(value => value.lifecycle !== null);
     const summaries = await this.store(repository).readProposalSummaryGroups(projected.map(({ entry, lifecycle }) => ({
       harness: normalizeHarness(entry.harness),
       proposalIds: lifecycle!.proposalIds,
       threadId: entry.threadId,
     })));
-    return projected.map(({ entry, lifecycle }, index) => (
-      projectLifecycleState(entry, lifecycle!, summaries[index] ?? [])
+    return projected.map(({ entry, lifecycle, saved }, index) => (
+      projectLifecycleState(entry, lifecycle!, summaries[index] ?? [], saved)
     ));
   }
 
@@ -567,14 +583,15 @@ export default class GitArcProposalController {
     const harness = normalizeHarness(input.harness);
     const entry = await this.registry(repository).find({ harness, threadId: input.threadId });
     if (!entry) return null;
-    const lifecycle = lifecycleEntry(entry);
+    const saved = entry.savedStash ?? null;
+    const lifecycle = savedLifecycle(entry, saved);
     if (!lifecycle) return null;
     const summaries = await this.store(repository).readProposalSummaries(
       harness,
       input.threadId,
       lifecycle.proposalIds,
     );
-    return projectLifecycleState(entry, lifecycle, summaries);
+    return projectLifecycleState(entry, lifecycle, summaries, saved);
   }
 
   async readAcceptedOutcomes(input: ArcIdentityInput & {

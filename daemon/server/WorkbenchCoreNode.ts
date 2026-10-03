@@ -211,6 +211,7 @@ function createWorkbenchCoreFeature(
       await threadState.controller.refreshGitArcState(projectId, harness, threadId);
     },
     publishAgentContext: (target, text) => agentContext.publish(target, text),
+    resolveSubagentPeer: input => subagents.resolveGitArcPeer(input),
     observeClaimSnapshot: (snapshot) => stats?.observeClaimSnapshot(snapshot),
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" }),
     transitions: worktreeGitTransitions,

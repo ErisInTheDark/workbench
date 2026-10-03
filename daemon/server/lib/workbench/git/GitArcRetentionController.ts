@@ -35,6 +35,7 @@ export default class GitArcRetentionController {
     if (!repository) return true;
     const registry = new GitArcRegistry(repository, this.resolveThreadIdentity);
     const entry = await registry.find({ harness, threadId });
+    if (entry?.savedStash) return false;
     return !entry || entry.phase === "resolved"
       || (entry.phase === "plan" && !getGitArcLiveClaimPaths(entry).length);
   }
@@ -54,6 +55,9 @@ export default class GitArcRetentionController {
     if (!identity) throw new Error("The Git arc owner identity is unavailable.");
     const registry = new GitArcRegistry(repository, this.resolveThreadIdentity);
     const entry = await registry.find({ harness, threadId });
+    if (entry?.savedStash) {
+      throw new Error("Git arc history cannot expire while the thread owns saved work.");
+    }
     if (entry && entry.phase !== "resolved"
       && !(entry.phase === "plan" && !getGitArcLiveClaimPaths(entry).length)) {
       throw new Error("Git arc history cannot expire while the thread owns live or stashed work.");

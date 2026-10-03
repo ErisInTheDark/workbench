@@ -102,9 +102,10 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     this.workbenchRoot = path.resolve(workbenchRoot);
   }
 
-  private withMcpConfig(params: Record<string, unknown>, cwd?: string | null) {
+  private withMcpConfig(params: Record<string, unknown>, cwd?: string | null, subagentName?: string | null) {
     return withWorkbenchCodexMcpConfig(params, this.bridgeUrl, {
       projectLocal: typeof cwd === "string" && cwd.trim() !== "" && pathsEqual(cwd, this.workbenchRoot),
+      subagent: Boolean(subagentName?.trim()),
     });
   }
 
@@ -119,7 +120,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
       params: this.withMcpConfig({
         ...params,
         ...(typeof sourceModel === "string" ? { model: sourceModel } : {}),
-      }, sourceCwd),
+      }, sourceCwd, promptContext?.subagentName),
       ...(promptContext ? { [WORKBENCH_PROMPT_CONTEXT_FIELD]: promptContext } : {}),
     };
   }
@@ -197,7 +198,7 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     );
     return {
       ...message,
-      params: this.withMcpConfig(buildWorkbenchOwnedPromptParams(params, promptInstructions), context.cwd),
+      params: this.withMcpConfig(buildWorkbenchOwnedPromptParams(params, promptInstructions), context.cwd, context.subagentName),
     };
   }
 }

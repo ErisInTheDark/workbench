@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 
 import { listWorkbenchAgentCodeModeToolNames } from "./lib/workbench/commands/workbench-agent-command-registry";
 import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "workbench-shared/workbench/commands/workbench-shell-command";
+import { WORKBENCH_PARENT_ONLY_TOOLS } from "workbench-shared/workbench/commands/workbench-tool-audience";
 
 const WORKBENCH_CODE_MODE_MCP_TOOL_TIMEOUT_SECONDS = 6 * 60 * 60;
 const WORKBENCH_DIRECT_MCP_TOOL_TIMEOUT_SECONDS = 30 * 60;
@@ -16,7 +17,7 @@ function asRecord(value: unknown) {
     : {};
 }
 
-function getWorkbenchMcpUrl(bridgeUrl: string, projectLocal: boolean) {
+function getWorkbenchMcpUrl(bridgeUrl: string, projectLocal: boolean, subagent: boolean) {
   const url = new URL(bridgeUrl);
   if (url.protocol !== "ws:" && url.protocol !== "wss:") {
     throw new Error(`Workbench Codex bridge URL must use ws:// or wss://, received ${bridgeUrl}`);
@@ -27,13 +28,14 @@ function getWorkbenchMcpUrl(bridgeUrl: string, projectLocal: boolean) {
   mcpUrl.searchParams.set("provider", "codex");
   mcpUrl.searchParams.set("client", randomUUID());
   if (projectLocal) mcpUrl.searchParams.set("project-local", "true");
+  if (subagent) mcpUrl.searchParams.set("subagent", "true");
   return mcpUrl.toString();
 }
 
 export function withWorkbenchCodexMcpConfig(
   params: Record<string, unknown>,
   bridgeUrl: string,
-  { projectLocal = false }: { projectLocal?: boolean } = {},
+  { projectLocal = false, subagent = false }: { projectLocal?: boolean; subagent?: boolean } = {},
 ) {
   const config = asRecord(params.config);
   const mcpServers = asRecord(config.mcp_servers);
@@ -53,15 +55,15 @@ export function withWorkbenchCodexMcpConfig(
           omit_tools_from: ["direct", "deferred"],
           required: true,
           tool_timeout_sec: WORKBENCH_CODE_MODE_MCP_TOOL_TIMEOUT_SECONDS,
-          url: getWorkbenchMcpUrl(bridgeUrl, projectLocal),
+          url: getWorkbenchMcpUrl(bridgeUrl, projectLocal, subagent),
         },
         wbex: {
           default_tools_approval_mode: "approve",
-          disabled_tools: codeModeToolNames,
+          disabled_tools: subagent ? [...codeModeToolNames, ...WORKBENCH_PARENT_ONLY_TOOLS] : codeModeToolNames,
           omit_tools_from: ["code_mode", "deferred"],
           required: true,
           tool_timeout_sec: WORKBENCH_DIRECT_MCP_TOOL_TIMEOUT_SECONDS,
-          url: getWorkbenchMcpUrl(bridgeUrl, projectLocal),
+          url: getWorkbenchMcpUrl(bridgeUrl, projectLocal, subagent),
         },
       },
     },

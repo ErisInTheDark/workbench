@@ -2141,7 +2141,7 @@ test("headless provider refresh preserves Git lifecycle and MCP generation witho
   assert.equal(await controller.getMcpGeneration(fixtureProjectIds["project"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("headless")), "epoch:2");
   const projected = await controller.getSnapshot(fixtureProjectIds["project"]);
   const projectedEntry = projected.entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "headless");
-  assert.deepEqual(projectedEntry?.entryKind === "thread" ? { gitArc: projectedEntry.gitArc, gitArcPlan: projectedEntry.gitArcPlan } : null, { gitArc, gitArcPlan });
+  assert.deepEqual(projectedEntry?.entryKind === "thread" ? { gitArc: projectedEntry.gitArc, gitArcPlan: projectedEntry.gitArcPlan } : null, { gitArc: { ...gitArc, stashedPaths: [] }, gitArcPlan });
   assert.equal(projected.entries.some((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "headless"), true);
   assert.equal(JSON.stringify(projected).includes("mcpGeneration"), false);
   assert.equal(JSON.stringify(projected).includes("providerObserved"), false);
@@ -2150,7 +2150,7 @@ test("headless provider refresh preserves Git lifecycle and MCP generation witho
   const reopened = createController();
   assert.equal(await reopened.getMcpGeneration(fixtureProjectIds["project"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("headless")), "epoch:2");
   const reopenedEntry = (await reopened.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "headless");
-  assert.deepEqual(reopenedEntry?.entryKind === "thread" ? { gitArc: reopenedEntry.gitArc, gitArcPlan: reopenedEntry.gitArcPlan } : null, { gitArc, gitArcPlan });
+  assert.deepEqual(reopenedEntry?.entryKind === "thread" ? { gitArc: reopenedEntry.gitArc, gitArcPlan: reopenedEntry.gitArcPlan } : null, { gitArc: { ...gitArc, stashedPaths: [] }, gitArcPlan });
   await reopened.dispose();
   await temporary.dispose();
 });

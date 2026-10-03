@@ -27,6 +27,7 @@ import { getUnknownGitArcCommandRoute, getWorkbenchCommandRendering, type Workbe
 export type GitArcCommandAction = WorkbenchGitArcOperation["action"];
 
 const ARC_MATCHER_IDS = {
+  adopt: "git-arc.adopt",
   claims: "git-arc.claims",
   scope: "git-arc.scope",
   status: "git-arc.status",
@@ -68,6 +69,8 @@ export interface GitArcCommandIntent {
   move?: GitArcMoveArguments;
   paths: string[];
   proposalId?: string | null;
+  source?: { name?: string; threadId?: string };
+  toSubagent?: string;
   ref: string | null;
 }
 
@@ -156,6 +159,11 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     presentationName: "git_arc_restore",
   }),
   createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+adopt(?:\s|$)/iu,
+    id: ARC_MATCHER_IDS.adopt,
+    presentationName: "git_arc_adopt",
+  }),
+  createMatcher({
     commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+stash(?:\s|$)/iu,
     id: ARC_MATCHER_IDS.stash,
     presentationName: "git_arc_stash",
@@ -231,8 +239,17 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
       return null;
     }
   }
+  if (action === "adopt") {
+    const [flag, value, ...extra] = tokens.slice(cursor);
+    if (extra.length || !value || (flag !== "--name" && flag !== "--thread")) return null;
+    return {
+      action, intentName: null, paths: [], ref: null,
+      source: flag === "--name" ? { name: value } : { threadId: value },
+    };
+  }
 
   let disown = false;
+  let toSubagent: string | null = null;
   let proposalId: string | null = null;
   let ref: string | null = null;
   for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
@@ -243,10 +260,13 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
       continue;
     }
     const value = tokens[cursor + 1];
-    if (!value || (flag !== "--proposal" && flag !== "--ref")) return null;
+    if (!value || (flag !== "--proposal" && flag !== "--ref" && flag !== "--to-subagent")) return null;
     if (flag === "--ref") {
       if (ref) return null;
       ref = value;
+    } else if (flag === "--to-subagent") {
+      if (action !== "release" || toSubagent) return null;
+      toSubagent = value;
     } else if (flag === "--proposal") {
       if (proposalId) return null;
       proposalId = value;
@@ -260,9 +280,10 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
       : null;
   }
   if (proposalId) return null;
+  if (action === "release" && (Boolean(toSubagent) !== Boolean(paths.length) || toSubagent && disown)) return null;
   if ((action === "stash" || action === "unstash") && (ref || paths.length || disown)) return null;
   if (action === "restore" && !ref) return null;
-  return { action, ...(action === "release" ? { disown } : {}), intentName: null, paths, ref };
+  return { action, ...(action === "release" ? { disown, ...(toSubagent ? { toSubagent } : {}) } : {}), intentName: null, paths, ref };
 }
 
 export function parseGitCheckpointCompareOutput(output: string) {

@@ -12,19 +12,13 @@ Selections are thread- and worktree-isolated but do not snapshot contents. The c
 
 ## Workbench Git Plans and Arcs
 
-Workbench stores workflow baselines as local Git objects under hidden per-worktree refs. The registry keeps one current lifecycle entry in `plan`, `active`, `stashed`, or `resolved` phase.
-
-Plan ref: immutable full-worktree snapshot; registry owns current scope, including empty plans.
-
-Arc ref: immutable historical snapshot.
-
-Arc: registered changeset in plan, active, stashed or resolved phase. Missing phase means active.
+Workbench stores immutable plan/arc snapshots under local per-worktree Git refs. Registry owns current scope, including empty plans; missing phase means active. Plans snapshot the full worktree; arc refs preserve history. Ordinary stashes keep `stashed` phase and frozen claim-loss refs. Adopted stashes may coexist with live claims under caller-owned `arc-stash` refs.
 
 Ordinary operations resolve registered lifecycle; omit refs. <tool id="git_arc_status" /> provides ownership, proposal and recovery facts.
 
 `wb git arc status [--full=dirty,clean,unclaimed-dirt]`; MCP `full: ["dirty", "clean", "unclaimed-dirt"]`. Empty groups are omitted; file groups list up to five paths, otherwise counts. `full` expands selected groups. Pending proposals must remain valid; accepted proposals remain until the next implementation arc starts. Unclaimed dirt excludes all live owners, not older files.
 
-Stashed status retains scope but owns no live claims. Only continue work or unstash when you and the user agree work should resume.
+Stashes own no live claims. Resume saved work only with user agreement.
 
 Final claim loss atomically records its exact scope, HEAD and snapshot under the thread's Git refs. Status reports intersecting commits and per-file counts; ref-free compare/diff use that boundary while claims remain absent, including during planning. Explicit plan refs still inspect planning drift. Reads never refresh the boundary. Existing settled-history retention removes it with other thread refs.
 
@@ -44,7 +38,9 @@ Create the full plan in one <tool id="git_plan_claims" /> call. Put each project
 
 Ordinary operations resolve registered members. Preserve root/ref pairs only for historical inspection, restoration or deliberate baseline selection. Partial failures report successful members. Inspect the partial outcome and retry only unfinished edits; do not repeat successful removals or roll back successful repositories.
 
-For multi-root proposals, call <tool id="git_arc_propose" /> once per workspace root and pass that proposal's `rootId`. A proposal cannot cross root boundaries. Omit `paths` to select that root's changed claims, or pass a narrower subset from that root. Never combine files from different roots into one proposed commit.
+<available:git-proposals>
+Call <tool id="git_arc_propose" /> once per root with `rootId`. Omit `paths` for that root's changed claims, or select a narrower subset. Never combine roots in one commit.
+</available:git-proposals>
 
 The terminal lifecycle card aggregates every project proposal and every live claim. If the user chooses restore or unclaim instead of committing, use the aggregate card so all remaining repo members stay visible and recoverable.
 </available:multi-root>
@@ -76,7 +72,7 @@ CLI: `wb git plan claims -m "intent" -- new.ts`, then `wb git plan claims --inhe
 
 <tool id="git_arc_start" /> activates an inactive plan. Omit `ref` for registered lifecycle; explicit `ref` selects a historical plan. Success reports released/acquired claims. Empty plans cannot start.
 
-Drift rejects activation and reports plan-intersecting comparison counts. <tool id="git_arc_diff" /> reads changes against supplied ref. `git_plan_start({ inherit: true })` refreshes baselines and activates inherited scope.
+Drift rejects activation and reports plan-intersecting counts. <tool id="git_arc_diff" /> reads against supplied ref. <tool id="git_plan_start" /> with `{ inherit: true }` refreshes baselines and activates inherited scope.
 
 <tool id="git_arc_wait" /> waits for sibling claims, then activates the inactive plan. Do not republish that plan for collisions. If requested scope has no inactive plan, publish it first. Waiting never refreshes baselines. Treat it as a Workbench Long Wait.
 
@@ -86,15 +82,17 @@ Before another implementation pass without scope changes, call <tool id="git_arc
 
 Acceptance releases clean claims. Continuation uses the narrowed live set and reports accepted proposal IDs/commit SHAs. Resolved continuation succeeds without acquiring anything.
 
-Edit active claims with `git_arc_claims({ inherit: true, addPaths, removePaths, adoptPaths })`. **Continuation checks and accepted-outcome reconciliation are included; do not continue first.** Omit unused arrays. CLI uses `wb git arc claims --inherit -- added.ts -removed.ts '*adopted.ts'`.
+Edit active claims with <tool id="git_arc_claims" /> and `{ inherit: true, addPaths?, removePaths?, adoptPaths? }`. **Includes continuation checks and accepted-outcome reconciliation; do not continue first.** Omit unused arrays. CLI: `wb git arc claims --inherit -- added.ts -removed.ts '*adopted.ts'`.
 
-<tool id="git_arc_stash" /> / `wb git arc stash` saves the whole dirty claim set and releases all live claims. <tool id="git_arc_unstash" /> / `wb git arc unstash` reacquires the whole set and reapplies saved work. Neither accepts paths. Text conflicts are ordinary worktree markers: edit them directly; no Git continue or abort command is required. Unsupported conflicts reject and stay stashed.
+<tool id="git_arc_adopt" /> transfers a source's complete live claims and stash. Use `threadId` only on explicit user instruction, or `name` for an owned subagent when needed. Preserve caller claims and worktree; plans/proposals stay with source. Reject stash transfer if caller has one.
+
+<tool id="git_arc_stash" /> saves all claimed work and releases live claims. <tool id="git_arc_unstash" /> restores it alongside current claims. Neither accepts paths. Preserve pending plans and frozen merge base; reject stash replacement. Text conflicts are editable worktree markers, not a Git operation; no Git continue/abort is required. Unsupported conflicts reject and preserve stash.
 
 After resolution, explicit approved additions/adoptions begin follow-up scope with stored intent, never old claims. Exact removals cannot expose dirty owned work. Folder paths are shorthand: activation claims their current files, so claim new files under them separately; removing a folder drops its file claims. Removing final clean scope resolves lifecycle.
 
 Never use claim expansion to excuse vague planning. Never restore, release, unclaim, or discard only to change scope.
 
-Use <tool id="git_arc_release" /> to release every live claim without changing workspace or Git content. It rejects dirty claims by default. Set `disown: true` only after explicit user direction to release dirty ownership. Releasing retained claims keeps the current inactive plan.
+Use <tool id="git_arc_release" /> to release clean claims without changing workspace or Git content; `disown: true` releases dirty ownership only on explicit user direction. `toSubagent` plus exact `paths` atomically gives selected live claims to an owned child, including dirty claims, without moving stash or files. Releasing retained claims keeps the current inactive plan.
 
 Active claim edits mutate ownership; inactive planning publishes scope. Recover a lost proposal response with <tool id="git_arc_status" /> before retrying, never as a preflight. Updates report phase, outcome, counts and net changes.
 
@@ -104,26 +102,28 @@ Use <tool id="git_arc_mv" /> for approved path moves. Source and destination sta
 
 Use <tool id="git_arc_compare" /> for counts or <tool id="git_arc_diff" /> for unified details. Omit paths and refs for the caller's registered scope. Explicit refs select historical snapshots/proposals, never a guessed "latest" ref. Explicit paths return complete unpaged data; page 1 is redundant, higher pages reject. Unscoped results report next page or end. Follow returned cursors with the same target.
 
+<available:git-proposals>
 Proposal creation requires prior arc comparison or diff inspection.
 
 ### propose, replace, rescind, or amend
 
 <!-- Failure: long arcs forget outcomes; titles hide changes; descriptions hide work. -->
-Track all arc outcomes. Reconcile the list with the full selected diff. New proposals call <tool id="git_arc_propose" /> with `title`, optional `description`, and no `paths` for all changed claims. It opens the UI without committing. Make `title` a simple symptom or outcome encompassing the full changeset. Use `description` for concrete work beyond that summary. Identify every distinct or unrelated bundled item, why included, and its additional technical changes. Do not repeat `title` or present expected constituent work as an unrelated "also."
+Track all arc outcomes against the full selected diff. <tool id="git_arc_propose" /> with `title`, optional `description`, no `paths` proposes all changed claims in the UI without committing. Title names a simple symptom/outcome for the whole changeset. Description identifies every distinct/unrelated bundled item, reason and technical changes; never repeat title or label expected constituent work "also."
 
 Set `replace: proposalId` to replace one pending proposal. Use <tool id="git_arc_rescind" /> to rescind one. Do not combine replacement and amendment.
 
 <!-- Failure: corrective amends rewrite history; additive amends hide scope. -->
 <!-- Failure: agents avoided amend proposals or pre-checked HEAD/push state. Amend proposals carry both amend and fresh-commit choices, and Workbench converts impossible amends (e.g. pushed targets) into fresh-commit proposals, so the agent never needs to judge amendability. -->
-**Default to amend proposals for fixes and minor addendums to committed work.** The user owns the amend-or-fresh choice; Workbench handles impossible amends. Set `amend: proposalId` for any committed proposal or `amend: true` for HEAD; do not pre-check targets. Compare amendments against their target. Update title/description for changed scope; omit both to inherit. Content amendments require `freshTitle` and optional `freshDescription` for the fresh-commit choice. Use <tool id="git_arc_reword" /> with `{ proposalId, title, description? }` for a message-only proposal, not an immediate commit.
+**Default to amend proposals for fixes/minor addendums to committed work.** User chooses amend or fresh; Workbench handles impossible amends. Set `amend: proposalId` for committed proposals or `amend: true` for HEAD; do not pre-check targets. Compare against target. Update title/description for changed scope, or omit both to inherit. Content amendments require `freshTitle` and optional `freshDescription`. For message-only proposals use <tool id="git_arc_reword" /> with `{ proposalId, title, description? }`, not immediate commit.
 
-Proposal acceptance atomically changes branch history, proposal metadata, the accepted receipt ledger, and live claims. It preserves excluded newer work.
+Proposal acceptance atomically changes branch history, proposal metadata, accepted receipts and live claims. Preserve excluded newer work.
+</available:git-proposals>
 
 ### restore selected paths
 
 - Use <tool id="git_arc_restore" /> with exact ref and path list to restore to pre-patch state
 - Do not restore more than required
-- After restore, remove unneeded clean claims with `git_arc_claims({ inherit: true, removePaths })`
+- After restore, remove unneeded clean claims with <tool id="git_arc_claims" /> and `{ inherit: true, removePaths }`
 
 ### restore full arc
 

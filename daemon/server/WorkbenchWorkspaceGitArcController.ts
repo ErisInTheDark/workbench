@@ -33,6 +33,8 @@ import WorkbenchGitRepository from "./lib/workbench/git/WorkbenchGitRepository";
 import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import type { AgentEndpointProjectResolution } from "./lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
+import type { GitArcPreparedOperation } from "./lib/workbench/git/GitArcRegistry";
+import type { GitArcAdoptionInput } from "./lib/workbench/git/GitArcOwnershipTransferController";
 
 export class WorkspaceGitArcMemberError extends Error {
   constructor(readonly workspace: NonNullable<GitArcFailure["workspace"]>, cause: unknown) {
@@ -421,6 +423,8 @@ export default class WorkbenchWorkspaceGitArcController {
       case "arcStash":
       case "arcUnstash": return await this.executeStash(project, members, request);
       case "arcDiscardStash": return await this.executeDiscardStash(project, members, request);
+      case "arcAdoptSource": throw new Error("Source adoption requires canonical identity ingress.");
+      case "arcTransferClaims": throw new Error("Selected claim transfer requires canonical child identity ingress.");
       case "arcStart":
       case "arcContinue": return await this.executeRefOperation(project, members, request);
       case "arcWait": return await this.findPlanClaimCollisions(project, request);
@@ -818,19 +822,20 @@ export default class WorkbenchWorkspaceGitArcController {
     return blocked.some(Boolean);
   }
 
-  private async runReversibleMembers<T>(
-    selected: readonly RepoMember[],
-    operation: (member: RepoMember) => Promise<T>,
-    rollback: (member: RepoMember, result: T) => Promise<void>,
-    preflight: (member: RepoMember) => Promise<void>,
-    observation: { harness: WorkbenchHarness; project: AgentEndpointProjectResolution; threadId: string },
+  private async runPreparedMembers<T>(
+    members: readonly RepoMember[],
+    select: () => Promise<readonly RepoMember[]>,
+    prepare: (member: RepoMember) => Promise<GitArcPreparedOperation<T>>,
+    observations: readonly { harness: WorkbenchHarness; project: AgentEndpointProjectResolution; threadId: string }[],
   ) {
-    if (!selected.length) throw new GitArcRejectionError({ reason: "missingWorkspaceMembers" }, "This workspace Git arc has no matching repository members.");
-    return await this.transitions.runMany(selected.map(({ repoRoot }) => repoRoot), async () => {
+    return await this.transitions.runMany(members.map(({ repoRoot }) => repoRoot), async () => {
       try {
+        const selected = await select();
+        if (!selected.length) throw new GitArcRejectionError({ reason: "missingWorkspaceMembers" }, "This workspace Git arc has no matching repository members.");
+        const prepared: Array<{ member: RepoMember; operation: GitArcPreparedOperation<T> }> = [];
         for (const member of selected) {
           try {
-            await preflight(member);
+            prepared.push({ member, operation: await prepare(member) });
           } catch (error) {
             throw new WorkspaceGitArcMemberError({
               failedRootIds: member.roots.map(({ id }) => id), completedRootIds: [], stage: "preflight",
@@ -838,17 +843,19 @@ export default class WorkbenchWorkspaceGitArcController {
           }
         }
         const results: Array<{ member: RepoMember; result: T }> = [];
-        for (const member of selected) {
+        const completed: typeof prepared = [];
+        for (const { member, operation } of prepared) {
           try {
-            results.push({ member, result: await operation(member) });
+            results.push({ member, result: await operation.apply() });
+            completed.push({ member, operation });
           } catch (error) {
             const operationError = new WorkspaceGitArcMemberError({
               failedRootIds: member.roots.map(({ id }) => id), completedRootIds: [], stage: "operation",
             }, error);
             const rollbackErrors: unknown[] = [];
-            for (const completed of [...results].reverse()) {
+            for (const saved of [...completed].reverse()) {
               try {
-                await rollback(completed.member, completed.result);
+                await saved.operation.rollback();
               } catch (rollbackError) {
                 rollbackErrors.push(rollbackError);
               }
@@ -861,7 +868,7 @@ export default class WorkbenchWorkspaceGitArcController {
         }
         return results;
       } finally {
-        await this.observeMemberClaims(selected, observation);
+        for (const observation of observations) await this.observeMemberClaims(members, observation);
       }
     });
   }
@@ -871,27 +878,23 @@ export default class WorkbenchWorkspaceGitArcController {
     members: readonly RepoMember[],
     request: Extract<GitCheckpointRequest, { action: "arcStash" | "arcUnstash" }>,
   ) {
-    const lifecycle = await this.findLifecycleStateInMembers(project, members, request.harness, request.threadId);
-    const selectedRoots = new Set(lifecycle?.members
-      .filter(({ phase }) => phase === (request.action === "arcStash" ? "active" : "stashed"))
-      .map(({ repoRoot }) => repoRoot));
-    const selected = members.filter((member) => selectedRoots.has(member.repoRoot));
-    const values = await this.runReversibleMembers(
-      selected,
-      async (member) => request.action === "arcStash"
-        ? await this.local.stashArc({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId })
-        : await this.local.unstashArc({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId }),
-      async (member) => {
-        if (request.action === "arcStash") {
-          await this.local.unstashArc({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId });
-        } else {
-          await this.local.restashArc({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId });
+    const values = await this.runPreparedMembers(
+      members,
+      async () => {
+        const lifecycle = await this.findLifecycleStateInMembers(project, members, request.harness, request.threadId);
+        if (request.action === "arcStash" && lifecycle?.stashedPaths?.length) {
+          throw new Error("This thread already has a stash. Restore or discard it before saving another.");
         }
+        const selected = new Set(lifecycle?.members
+          .filter(member => request.action === "arcStash" ? member.claimedPaths.length : member.stashedPaths?.length)
+          .map(member => member.repoRoot));
+        return members.filter(member => selected.has(member.repoRoot));
       },
-      async (member) => request.action === "arcStash"
-        ? await this.local.assertArcStashable({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId })
-        : await this.local.assertArcUnstashable({ cwd: member.repoRoot, harness: request.harness, threadId: request.threadId }),
-      { harness: request.harness, project, threadId: request.threadId },
+      member => this.local.prepareStashOperation(
+        { cwd: member.repoRoot, harness: request.harness, threadId: request.threadId },
+        request.action === "arcStash" ? "stash" : "unstash",
+      ),
+      [{ harness: request.harness, project, threadId: request.threadId }],
     );
     return this.aggregateResults(project, values);
   }
@@ -901,25 +904,90 @@ export default class WorkbenchWorkspaceGitArcController {
     members: readonly RepoMember[],
     request: Extract<GitCheckpointRequest, { action: "arcDiscardStash" }>,
   ) {
-    const lifecycle = await this.findLifecycleStateInMembers(project, members, request.harness, request.threadId);
-    const selectedRoots = new Set(lifecycle?.members
-      .filter(({ phase }) => phase === "stashed")
-      .map(({ repoRoot }) => repoRoot));
-    const selected = members.filter((member) => selectedRoots.has(member.repoRoot));
-    await this.runReversibleMembers(
-      selected,
-      async (member) => await this.local.discardStashedArc({
+    await this.runPreparedMembers(
+      members,
+      async () => {
+        const lifecycle = await this.findLifecycleStateInMembers(project, members, request.harness, request.threadId);
+        const selected = new Set(lifecycle?.members.filter(member => member.stashedPaths?.length).map(member => member.repoRoot));
+        return members.filter(member => selected.has(member.repoRoot));
+      },
+      member => this.local.prepareStashOperation({
         cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
-      }),
-      async (member, discarded) => await this.local.undoDiscardedStash({
-        cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
-      }, discarded),
-      async (member) => await this.local.assertArcDiscardable({
-        cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
-      }),
-      { harness: request.harness, project, threadId: request.threadId },
+      }, "discard"),
+      [{ harness: request.harness, project, threadId: request.threadId }],
     );
     return { ok: true as const };
+  }
+
+  async adopt(project: AgentEndpointProjectResolution, input: GitArcAdoptionInput, beforeTransfer?: () => Promise<void>) {
+    const members = await this.resolveRepoMembers(project);
+    const harness = input.harness ?? "codex";
+    const values = await this.runPreparedMembers(
+      members,
+      async () => {
+        await beforeTransfer?.();
+        const [source, caller] = await Promise.all([
+          this.findLifecycleStateInMembers(project, members, input.source.harness, input.source.threadId),
+          this.findLifecycleStateInMembers(project, members, harness, input.threadId),
+        ]);
+        if (source?.stashedPaths?.length && caller?.stashedPaths?.length) {
+          throw new Error("The calling thread already has a stash. Adoption cannot replace it.");
+        }
+        const selected = new Set(source?.members
+          .filter(member => member.claimedPaths.length || member.stashedPaths?.length)
+          .map(member => member.repoRoot));
+        return members.filter(member => selected.has(member.repoRoot));
+      },
+      member => this.local.prepareAdoption({ ...input, harness, cwd: member.repoRoot }),
+      [{ harness, project, threadId: input.threadId }, { ...input.source, project }],
+    );
+    return this.aggregateResults(project, values);
+  }
+
+  async releaseToChild(
+    project: AgentEndpointProjectResolution,
+    input: { cwd: string; harness: WorkbenchHarness; threadId: string; destination: { harness: WorkbenchHarness; threadId: string }; paths: string[] },
+    beforeTransfer?: () => Promise<void>,
+  ) {
+    const members = await this.resolveRepoMembers(project);
+    const selectedPaths = input.paths.map(value => this.parseRootPath(project, value, project.root.id).absolute);
+    if (!selectedPaths.length || new Set(selectedPaths.map(comparable)).size !== selectedPaths.length) {
+      throw new Error("Release to a subagent requires distinct live claim paths.");
+    }
+    const groups = this.groupRootPaths(project, members, input.paths, []);
+    const selected = new Map(groups.map(group => [group.member.repoRoot, group.paths]));
+    const values = await this.runPreparedMembers<object>(
+      members,
+      async () => {
+        await beforeTransfer?.();
+        const parent = await this.findLifecycleStateInMembers(project, members, input.harness, input.threadId);
+        const owned = new Set(parent?.members.filter(member => member.claimedPaths.length).map(member => member.repoRoot));
+        return members.filter(member => selected.has(member.repoRoot) || owned.has(member.repoRoot));
+      },
+      async member => {
+        const paths = selected.get(member.repoRoot);
+        if (paths) return await this.local.prepareReleaseToChild({
+          cwd: member.repoRoot,
+          harness: input.destination.harness,
+          threadId: input.destination.threadId,
+          source: { harness: input.harness, threadId: input.threadId },
+          selectedPaths: paths,
+        });
+        const scope = await this.local.readScope({
+          cwd: member.repoRoot, harness: input.harness, threadId: input.threadId,
+        });
+        if (!scope) throw new Error("The releasing thread's unaffected claims are unavailable.");
+        const result = {
+          checkpointCommit: scope.checkpointCommit, intentName: scope.intentName,
+          kind: "arc" as const, phase: scope.phase, repoRoot: member.repoRoot,
+          scopePaths: scope.claimedPaths, claimedPaths: scope.claimedPaths, releasedClaims: [],
+          ...(scope.phase === "plan" ? { plannedPaths: scope.plannedPaths } : {}),
+        };
+        return { result, apply: async () => result, rollback: async () => {} };
+      },
+      [{ harness: input.harness, project, threadId: input.threadId }, { ...input.destination, project }],
+    );
+    return this.aggregateResults(project, values);
   }
 
   private async executeRefOperation(
@@ -1191,7 +1259,7 @@ export default class WorkbenchWorkspaceGitArcController {
     const members = await Promise.all(values.map(async ({ member, state }): Promise<WorkspaceGitArcMemberState> => ({
       ...state,
       claimedPaths: state.claimedPaths.map((candidate) => this.qualify(project, member, candidate)),
-      ...(state.phase === "stashed" ? {
+      ...(state.stashedPaths?.length ? {
         stashedPaths: state.stashedPaths?.map((candidate) => this.qualify(project, member, candidate)) ?? [],
       } : {}),
       proposals: await Promise.all(state.proposals.map(async (proposal) => {
@@ -1220,7 +1288,7 @@ export default class WorkbenchWorkspaceGitArcController {
       proposals: members.flatMap(({ proposals }) => proposals),
       threadId: first.threadId,
       updatedAt: members.map(({ updatedAt }) => updatedAt).sort().at(-1) ?? first.updatedAt,
-      ...(phase === "stashed" ? { stashedPaths: members.flatMap(({ stashedPaths }) => stashedPaths ?? []) } : {}),
+      stashedPaths: members.flatMap(({ stashedPaths }) => stashedPaths ?? []),
     };
   }
 

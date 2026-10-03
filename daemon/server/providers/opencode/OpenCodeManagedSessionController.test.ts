@@ -57,25 +57,16 @@ test("marks managed sessions and refreshes filtered instructions before each pro
   };
   const first = await controller.refresh(context);
   await controller.refresh(context);
+  await controller.refresh({ ...context, subagentName: "mira" });
   // Skill bodies belong in the prompt, not in instructions the next refresh replaces.
   assert.deepEqual(first, { activatedSkills: "C:/skills/one/SKILL.md" });
-  assert.deepEqual(updates, [
-    {
-      sessionID: "session",
-      permissions: [
-        { action: "bash", resource: "*", effect: "deny" },
-        { action: "shell", resource: "*", effect: "deny" },
-      ],
-    },
-    {
-      sessionID: "session",
-      permissions: [
-        { action: "bash", resource: "*", effect: "deny" },
-        { action: "shell", resource: "*", effect: "deny" },
-      ],
-    },
+  assert.deepEqual((updates[0] as { permissions: object[] }).permissions, controller.creation().permissions);
+  assert.deepEqual((updates[1] as { permissions: object[] }).permissions, controller.creation().permissions);
+  assert.deepEqual((updates[2] as { permissions: object[] }).permissions, [
+    ...controller.creation().permissions,
+    { action: "wb_git_arc_propose", resource: "*", effect: "deny" },
   ]);
-  assert.deepEqual(operations, ["permissions", "instructions", "permissions", "instructions"]);
+  assert.deepEqual(operations, ["permissions", "instructions", "permissions", "instructions", "permissions", "instructions"]);
   assert.deepEqual(puts, [
     {
       sessionID: "session",
@@ -86,6 +77,11 @@ test("marks managed sessions and refreshes filtered instructions before each pro
       sessionID: "session",
       key: "workbench",
       value: "base-2-opencode\n\ndeveloper-opencode/model",
+    },
+    {
+      sessionID: "session",
+      key: "workbench",
+      value: "base-3-opencode\n\ndeveloper-opencode/model",
     },
   ]);
 });

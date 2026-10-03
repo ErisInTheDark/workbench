@@ -30,6 +30,7 @@ import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadGitArcStatusDetails from "./ThreadGitArcStatusDetails";
 
 const ACTION_LABELS = {
+  adopt: { completed: "Adopted claims", failed: "Failed to adopt claims", inProgress: "Adopting claims", timedOut: "Timed out adopting claims" },
   claims: { completed: "Updated claims", failed: "Failed to update claims", inProgress: "Updating claims", timedOut: "Timed out updating claims" },
   scope: { completed: "Read scope", failed: "Failed to read scope", inProgress: "Reading scope", timedOut: "Timed out reading scope" },
   status: { completed: "Read status", failed: "Failed to read status", inProgress: "Reading status", timedOut: "Timed out reading status" },
@@ -55,6 +56,7 @@ function actionState (outcome: ThreadCommandExecutionOutcome) {
 
 function failureAction (action: GitArcCommandAction): GitArcFailureAction {
   const actions: Record<GitArcCommandAction, GitArcFailureAction> = {
+    adopt: "arcAdoptSource",
     claims: "arcClaims",
     scope: "arcScope",
     status: "arcStatus",
@@ -169,6 +171,13 @@ export default function ThreadGitArcItem ({
   const ordinarySelectedPaths = selectedPaths.filter((candidate) => !adoptPathSet.has(candidate));
   const labels = movePreview
     ? { completed: "Previewed", failed: "Failed to preview moves", inProgress: "Previewing moves", timedOut: "Timed out previewing moves" }
+    : commandIntent.action === "release" && commandIntent.toSubagent
+      ? {
+        completed: `Transferred claims to ${commandIntent.toSubagent}`,
+        failed: `Failed to transfer claims to ${commandIntent.toSubagent}`,
+        inProgress: `Transferring claims to ${commandIntent.toSubagent}`,
+        timedOut: `Timed out transferring claims to ${commandIntent.toSubagent}`,
+      }
     : commandIntent.action === "release" && commandIntent.disown
       ? { completed: "Disowned", failed: "Failed to disown", inProgress: "Disowning", timedOut: "Timed out disowning" }
       : adoptPaths.length && ordinarySelectedPaths.length && commandIntent.action === "plan"

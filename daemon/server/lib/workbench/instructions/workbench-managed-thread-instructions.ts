@@ -13,6 +13,7 @@ import type { InstructionSourceSpan } from "./instruction-file-generation";
 import { listWorkbenchInstructionMechanics } from "./workbench-instruction-mechanics";
 import { loadFreshWorkbenchPromptAssembly } from "./workbench-prompt-generation";
 import type { WorkbenchPromptContext } from "./workbench-prompt-types";
+import { isWorkbenchToolVisibleTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
 
 export interface ManagedThreadInstructionContext extends WorkbenchPromptContext {
   readonly harness: WorkbenchHarness;
@@ -30,7 +31,9 @@ export async function createManagedThreadFilter(
   readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>,
 ) {
   const available = await listWorkbenchInstructionMechanics(context, readLocalCapabilities);
-  const catalogue = await context.readInstructionTools();
+  const catalogue = (await context.readInstructionTools()).filter(tool => (
+    isWorkbenchToolVisibleTo(tool.id, Boolean(context.subagentName?.trim()))
+  ));
   return (value: string | null, field: string, sources: readonly InstructionSourceSpan[] = []) => (
     filterWorkbenchInstructionContent(value, {
       available,

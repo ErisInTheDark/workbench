@@ -2,6 +2,7 @@
  * Exports:
  * - GitArcClaimRootSchema: root-qualified literal claim edits.
  * - GitArcClaimsSchema: inherited active scope edits.
+ * - GitArcAdoptionSourceSchema: exclusive admitted-thread or owned-child source.
  * - GitArcPlanClaimsSchema: replacement or inherited planning scope.
  * - GitArcRootPathsSchema/GitArcRootPaths and GitArcPlanRootSchema/GitArcPlanRoot: root-qualified path selections.
  * - GitArcMemberRefSchema/GitArcMemberRef and GitArcInspectionMemberRefSchema/GitArcInspectionMemberRef: lifecycle and inspection refs.
@@ -26,6 +27,11 @@ const checkpointSha = nonEmptyString.regex(/^[a-f0-9]{7,64}$/iu);
 const checkpointPaths = z.array(nonEmptyString).min(1);
 const optionalCheckpointPaths = z.array(nonEmptyString);
 const rootId = nonEmptyString;
+
+export const GitArcAdoptionSourceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("thread"), threadId: nonEmptyString }).strict(),
+  z.object({ kind: z.literal("subagent"), name: nonEmptyString }).strict(),
+]);
 
 const claimPaths = {
   addPaths: optionalCheckpointPaths.default([]),
@@ -103,6 +109,13 @@ const checkpointBaseRequest = {
 };
 
 export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("arcAdoptSource"), source: GitArcAdoptionSourceSchema, ...checkpointBaseRequest }).strict(),
+  z.object({
+    action: z.literal("arcTransferClaims"),
+    destination: z.object({ kind: z.literal("subagent"), name: nonEmptyString }).strict(),
+    paths: checkpointPaths,
+    ...checkpointBaseRequest,
+  }).strict(),
   GitArcPlanClaimsSchema.safeExtend({ action: z.literal("planClaims"), start: z.boolean().default(false), ...checkpointBaseRequest }),
   GitArcClaimsSchema.extend({ action: z.literal("arcClaims"), ...checkpointBaseRequest }),
   z.object({ action: z.literal("arcScope"), ...checkpointBaseRequest }).strict(),

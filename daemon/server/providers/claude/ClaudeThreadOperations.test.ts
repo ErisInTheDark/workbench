@@ -23,6 +23,8 @@ interface Captured {
   pushed: string[];
   /** Input-context collection triggers, in order. */
   collected: string[];
+  mcpUrls?: string[];
+  instructionNames?: Array<string | null>;
 }
 
 function messageText(content: unknown) {
@@ -32,7 +34,7 @@ function messageText(content: unknown) {
 
 function fixture({
   failNative = false, failUsage = false, usage, contextWindowTokens, launches = [], windows = [], defaults = [],
-  captured, hold,
+  captured, hold, subagentName,
 }: {
   failNative?: boolean;
   failUsage?: boolean;
@@ -47,6 +49,7 @@ function fixture({
   captured?: Captured;
   /** Keeps launched turns live until it resolves. */
   hold?: Promise<void>;
+  subagentName?: string;
 }) {
   let reads = 0;
   const profile = contextWindowTokens === undefined ? selection
@@ -57,6 +60,8 @@ function fixture({
       if (failNative) throw new Error("native start failed");
       launches.push(options?.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW);
       const systemPrompt = options?.systemPrompt;
+      const wb = options?.mcpServers?.wb;
+      if (wb && "url" in wb) captured?.mcpUrls?.push(wb.url);
       if (systemPrompt && typeof systemPrompt === "object" && "prompt" in systemPrompt) {
         captured?.systemPrompts.push(String(systemPrompt.prompt));
       }
@@ -103,14 +108,18 @@ function fixture({
       defaults.push(model);
       return 1_000_000;
     },
-    buildInstructions: async () => "instructions",
+    buildInstructions: async input => {
+      captured?.instructionNames?.push(Reflect.get(input, "subagentName") ?? null);
+      return "instructions";
+    },
     buildActivatedSkills: async ({ activatedSkillPaths }: { activatedSkillPaths: readonly string[] }) => (
       activatedSkillPaths.length ? activatedSkillPaths.map(path => `<skill path="${path}" />`).join("\n") : null
     ),
     collectInputContext: async (_threadId: string, trigger: string) => { captured?.collected.push(trigger); },
     state: { controller: {
       getCanonicalThreadEntry: async () => ({
-        entryKind: "thread", lifecycle: { kind: "needsAttention" }, profile,
+        entryKind: subagentName ? "subagent" : "thread", name: subagentName,
+        lifecycle: { kind: "needsAttention" }, profile,
       }),
       recordAcceptedSelection: async (applied: typeof selection) => {
         usage.push(applied.settings.model);
@@ -150,6 +159,19 @@ test("Claude records accepted model use and treats recency failure as a warning,
   assert.match(warned.warning ?? "", /history unavailable/u);
   await assert.rejects(fixture({ usage, failNative: true }).submit(input), /native start failed/u);
   assert.deepEqual(usage, ["sonnet", "sonnet"]);
+});
+
+test("Claude child turns carry canonical audience into their prompt and MCP catalogue", async () => {
+  for (const subagentName of [undefined, "mira"]) {
+    const captured: Captured = { systemPrompts: [], pushed: [], collected: [], mcpUrls: [], instructionNames: [] };
+    const owner = fixture({ usage: [], captured, subagentName });
+    try {
+      await owner.submit({ threadId, clientMessageId: "audience", intent: "newTurn",
+        input: [{ type: "text", text: "work", text_elements: [] }] });
+      assert.deepEqual(captured.instructionNames, [subagentName ?? null]);
+      assert.equal(new URL(captured.mcpUrls![0]!).searchParams.get("subagent"), subagentName ? "true" : null);
+    } finally { await owner.dispose(); }
+  }
 });
 
 test("Claude launches with the configured window, or the model's default, and reports it before the turn's result", async () => {

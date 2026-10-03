@@ -61,6 +61,7 @@ export interface ClaudeTurnHandoff {
 export interface ClaudeInstructionInput {
   cwd: string; projectId: string; threadId: string; model: string | null; agentPath: string | null;
   workflowIds: readonly string[];
+  subagentName?: string | null;
 }
 
 export interface ClaudeThreadOperationsOptions {
@@ -384,7 +385,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     // Instructions are rebuilt per launch, so an unfinished-turn continuation must replay this context. Activated
     // skills are not replayed: their bodies already sit in native history.
     const { activatedSkillPaths: _activated, ...turnContext }: WorkbenchMessageContext = input.context ?? {};
-    const instructionInput = this.instructionInputFor(identity, binding, settings, turnContext);
+    const instructionInput = this.instructionInputFor(identity, binding, settings, turnContext, entry?.entryKind === "subagent" ? entry.name : null);
     const instructions = await this.options.buildInstructions(instructionInput);
     if (!instructions.trim()) throw new Error("Claude managed instructions are unavailable.");
     const promptContent = await this.withActivatedSkills(content, activatedSkillPaths, instructionInput);
@@ -408,6 +409,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const endpoint = new URL("/daemon/mcp", this.options.daemonOrigin);
     endpoint.searchParams.set("provider", "claude");
     endpoint.searchParams.set("client", scope);
+    if (instructionInput.subagentName) endpoint.searchParams.set("subagent", "true");
     const fakeEndpoint = process.env.WORKBENCH_CLAUDE_FAKE_ENDPOINT;
     const { sessions } = this.options;
     let session: Awaited<ReturnType<ClaudeSessionHost["launch"]>>;
@@ -547,7 +549,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     if (!binding || !turn) throw new Error("Claude compaction requires an existing native turn.");
     const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : null;
-    const instructions = await this.options.buildInstructions(this.instructionInputFor(identity, binding, settings, {}));
+    const instructions = await this.options.buildInstructions(this.instructionInputFor(identity, binding, settings, {}, entry?.entryKind === "subagent" ? entry.name : null));
     if (!instructions.trim()) throw new Error("Claude managed instructions are unavailable for compaction.");
     const contextWindow = await this.launchContextWindow(settings);
     const fakeEndpoint = process.env.WORKBENCH_CLAUDE_FAKE_ENDPOINT;
@@ -636,11 +638,13 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     binding: ClaudeIdentity["bindings"][number],
     settings: { model?: string | null; agentPath?: string | null } | null | undefined,
     context: Pick<WorkbenchMessageContext, "workflowIds">,
+    subagentName: string | null = null,
   ): ClaudeInstructionInput {
     return {
       cwd: binding.nativeLocation, projectId: identity.projectId, threadId: identity.threadId,
       model: settings?.model ?? null, agentPath: settings?.agentPath ?? null,
       workflowIds: context.workflowIds ?? [],
+      subagentName,
     };
   }
 
@@ -650,7 +654,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     context: WorkbenchMessageContext | undefined,
   ) {
     const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
-    return this.instructionInputFor(identity, binding, entry && entry.entryKind !== "draft" ? entry.profile?.settings : null, context ?? {});
+    return this.instructionInputFor(identity, binding, entry && entry.entryKind !== "draft" ? entry.profile?.settings : null, context ?? {}, entry?.entryKind === "subagent" ? entry.name : null);
   }
 
   /** Activated skill bodies join the user message, so they stay in native history across later launches. */

@@ -204,7 +204,7 @@ Before the first file edit in Implement mode:
 - Read the successful phase/outcome and continue without supplementary preflights.
 - Start drift below 2,000 plan-scoped additions + deletions: inspect <tool id="git_arc_diff" /> against supplied ref.
 - Larger or binary drift: enter Inspect; reread affected current code and owners; rebase planned work, not Git history.
-- Preserve approval only if scope, behavior, structure, ownership, mechanics and validation match. Then enter Implement and `git_plan_start({ inherit: true })`; otherwise revise in Brief and seek approval.
+- Preserve approval only if scope, behavior, structure, ownership, mechanics and validation match. Enter Implement and <tool id="git_plan_start" /> with `{ inherit: true }`; otherwise revise in Brief and seek approval.
 - Acceptance narrows live scope. Read every accepted proposal ID/SHA. Resolved continuation succeeds without acquiring claims; approved follow-up requires explicit additions/adoptions through <tool id="git_arc_claims" />. Changed approval boundaries return to Brief and <tool id="git_plan_claims" />.
 - Replacement plans must cover every dirty owned file. Publication releases clean claims, retaining covered dirt through approval. Dirty unclaimed adoption stays explicit. Never ask the user to clean another agent's work.
 <!-- Failure: agents erase valid work, ask permission for forgotten paths, or plan vague scope. -->
@@ -230,14 +230,19 @@ Use validation that matches the risk. Prefer non-emitting checks unless project 
 
 ## Review Mode
 
-Review is the user-visible summary and proposal phase after the completion gate. Do not inspect, implement, validate, or ask questions on this path.
-
-In Review mode:
+Review follows completion gate: summarize/propose. No inspection, implementation, validation, or questions.
 
 - Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
 - Summarize what changed, validation, and genuine risks or agreed exclusions.
-- Use <tool id="git_arc_propose" />, not commit-selection tools, for changed claims. Skip if unchanged; failure keeps Review open.
-- After the proposal succeeds, send <>
+<>
+<available:git-proposals>
+- Use <tool id="git_arc_propose" />, not commit-selection tools, for changed claims. Skip unchanged; failure keeps Review open.
+</available:git-proposals>
+<else>
+- Report changes and validation to parent; keep claims for adoption.
+</else>
+</>
+- After proposal, unchanged review, or parent handoff, send <>
 <harness:claude>final with exclusively `<wb:end />`</harness:claude>
 <else>empty final</else>
 </> to end the turn.

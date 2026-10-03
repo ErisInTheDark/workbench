@@ -6,6 +6,7 @@ import test from "node:test";
 import { isWorkbenchSidebarThreadCompletionAvailable, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema } from "./thread-state.ts";
 import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, hasUnarchivedSidebarWork, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { projectSidebarRow } from "./thread-sidebar-row";
 
 const fixtureIdentityValues = {
   DraftId: {
@@ -130,6 +131,9 @@ test("live claims prevent thread settlement while proposals do not", () => {
     stashedPaths: ["owned.ts"],
   };
   assert.equal(WorkbenchGitArcLifecycleStateSchema.safeParse(stashed).success, true);
+  assert.equal(WorkbenchGitArcLifecycleStateSchema.safeParse({
+    ...stashed, phase: "active", claimedPaths: ["live.ts"],
+  }).success, true);
   assert.equal(gitArcPreventsThreadSettlement(stashed), true);
   assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "pending", status: "proposed" }] }), false);
   assert.equal(gitArcPreventsThreadSettlement({ ...resolved, proposals: [{ proposalId: "accepted", status: "committed" }] }), false);
@@ -509,6 +513,15 @@ test("stashed claim intersections use retained paths rather than a pending plan"
   assert.deepEqual(stashed.plannedEntries, []);
   assert.deepEqual(getWorkbenchThreadClaimIntersections(entries, owner.identity, "plan").activeEntries.map(({ entry }) => entry.title), ["unrelated"]);
   assert.deepEqual(getWorkbenchThreadClaimIntersections([owner], owner.identity, "stashed").activeEntries, []);
+  const mixed = {
+    ...owner,
+    gitArc: WorkbenchGitArcLifecycleStateSchema.parse({
+      ...owner.gitArc, phase: "active", claimedPaths: ["live.ts"],
+    }),
+  };
+  assert.deepEqual(getWorkbenchThreadClaimIntersections(
+    [mixed, ...entries.slice(1)].map(projectSidebarRow), owner.identity, "stashed",
+  ).activeEntries.map(({ entry }) => entry.title), ["blocking"]);
 });
 
 test("lifecycle parsing preserves canonical attention variants and normalizes legacy reasons", () => {

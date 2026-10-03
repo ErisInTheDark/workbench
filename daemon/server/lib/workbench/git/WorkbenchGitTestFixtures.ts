@@ -317,6 +317,12 @@ function demand<State extends object>(spec: GitTestFixtureSpec<State>, copies: n
 }
 
 const specsByGitTestFile = new Map<string, GitTestFileSpec>([
+  ["GitArcOwnershipTransferController.test.ts", { fixtures: [
+    demand(CONTROLLER_BASE_FIXTURE, 9),
+  ], nested: false }],
+  ["GitArcStashController.test.ts", { fixtures: [
+    demand(CONTROLLER_BASE_FIXTURE, 1),
+  ], nested: false }],
   ["ReloadDirtController.test.ts", { fixtures: [
     demand(RELOAD_DIRT_FIXTURE, 1),
   ], nested: false }],

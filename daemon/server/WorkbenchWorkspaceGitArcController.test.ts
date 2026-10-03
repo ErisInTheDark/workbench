@@ -125,6 +125,12 @@ class FakeLocalGitArcController {
   readonly discardFailureRoots = new Set<string>();
   readonly discardCalls: string[] = [];
   readonly undoDiscardCalls: string[] = [];
+  readonly adoptionFailureRoots = new Set<string>();
+  readonly adoptionCalls: string[] = [];
+  readonly undoAdoptionCalls: string[] = [];
+  readonly transferFailureRoots = new Set<string>();
+  readonly transferCalls: Array<{ cwd: string; paths: string[] }> = [];
+  readonly undoTransferCalls: string[] = [];
   readonly startCalls: string[] = [];
   private nextProposal = 0;
   private readonly plans = new Map<string, { checkpointCommit: string; harness: string; intentDescription: string; intentName: string; scopePaths: string[]; threadId: string; updatedAt: string }>();
@@ -274,6 +280,80 @@ class FakeLocalGitArcController {
 
   async assertArcDiscardable(input: { cwd: string }) {
     if (this.states.get(input.cwd)?.phase !== "stashed") throw new Error("This thread does not own a stashed Git arc.");
+  }
+
+  async prepareStashOperation(input: { cwd: string }, action: "stash" | "unstash" | "discard") {
+    if (action === "stash") await this.assertArcStashable(input);
+    else if (action === "unstash") await this.assertArcUnstashable(input);
+    else await this.assertArcDiscardable(input);
+    let discarded: Awaited<ReturnType<FakeLocalGitArcController["discardStashedArc"]>> | null = null;
+    return {
+      result: {},
+      apply: async () => {
+        if (action === "stash") return await this.stashArc(input);
+        if (action === "unstash") return await this.unstashArc(input);
+        discarded = await this.discardStashedArc(input);
+        return {};
+      },
+      rollback: async () => {
+        if (action === "stash") await this.unstashArc(input);
+        else if (action === "unstash") await this.restashArc(input);
+        else {
+          if (!discarded) throw new Error("Discarded work was not captured for rollback.");
+          await this.undoDiscardedStash(input, discarded);
+        }
+      },
+    };
+  }
+
+  async prepareAdoption(input: { cwd: string; threadId: string; source: { threadId: string } }) {
+    const source = this.states.get(input.cwd);
+    if (!source || source.threadId !== input.source.threadId) throw new Error("Source claims are unavailable.");
+    const result = {
+      checkpointCommit: source.checkpointCommit, checkpointRef: `refs/${source.checkpointCommit}`,
+      intentName: source.intentName, kind: "arc" as const, phase: "active" as const,
+      repoRoot: input.cwd, scopePaths: source.claimedPaths, claimedPaths: source.claimedPaths,
+      additionalClaims: source.claimedPaths, stashedPaths: [],
+    };
+    return {
+      result,
+      apply: async () => {
+        this.adoptionCalls.push(input.cwd);
+        if (this.adoptionFailureRoots.has(input.cwd)) throw new Error("adoption failed");
+        this.states.set(input.cwd, { ...source, threadId: input.threadId });
+        return result;
+      },
+      rollback: async () => {
+        this.undoAdoptionCalls.push(input.cwd);
+        this.states.set(input.cwd, source);
+      },
+    };
+  }
+
+  async prepareReleaseToChild(input: { cwd: string; threadId: string; source: { threadId: string }; selectedPaths: string[] }) {
+    const source = this.states.get(input.cwd);
+    if (!source || source.threadId !== input.source.threadId) throw new Error("Source claims are unavailable.");
+    const paths = input.selectedPaths.map(value => path.relative(input.cwd, value).replace(/\\/gu, "/"));
+    if (paths.some(value => !source.claimedPaths.includes(value))) throw new Error("Selected claims are unavailable.");
+    const remaining = source.claimedPaths.filter(value => !paths.includes(value));
+    const result = {
+      checkpointCommit: source.checkpointCommit, checkpointRef: `refs/${source.checkpointCommit}`,
+      intentName: source.intentName, kind: "arc" as const, phase: remaining.length ? "active" as const : "resolved" as const,
+      repoRoot: input.cwd, scopePaths: remaining, releasedClaims: paths,
+    };
+    return {
+      result,
+      apply: async () => {
+        this.transferCalls.push({ cwd: input.cwd, paths });
+        if (this.transferFailureRoots.has(input.cwd)) throw new Error("transfer failed");
+        this.states.set(input.cwd, { ...source, threadId: input.threadId, claimedPaths: paths });
+        return result;
+      },
+      rollback: async () => {
+        this.undoTransferCalls.push(input.cwd);
+        this.states.set(input.cwd, source);
+      },
+    };
   }
 
   async discardStashedArc(input: { cwd: string }) {
@@ -1056,6 +1136,113 @@ test("workspace stash and unstash compensate completed members when a later repo
     method: "POST", path: "/api/git/arc/unstash", responseKind: "git-arc-unstash",
   }, restored as Record<string, unknown>), /^arc unstash plan$/mu);
   assert.equal((await controller.execute(project, { ...identity, action: "arcScope" }) as { members: Array<{ phase: string }> }).members[0]?.phase, "plan");
+});
+
+test("workspace adoption restores an earlier source member when a later member fails", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async root => root,
+  );
+  const source = { cwd: project.cwd, harness: "codex" as const, threadId: "child" };
+  const plan = await controller.execute(project, {
+    ...source, action: "planClaims", inherit: false, start: false,
+    intentName: "child work", addPaths: [], removePaths: [], adoptPaths: [],
+    roots: [
+      { rootId: "api", addPaths: ["one.ts"], removePaths: [], adoptPaths: [] },
+      { rootId: "web", addPaths: ["two.ts"], removePaths: [], adoptPaths: [] },
+    ],
+  }) as { members: Array<{ checkpointCommit: string; rootId: string }> };
+  await controller.execute(project, {
+    ...source, action: "arcStart",
+    refs: plan.members.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })),
+  });
+  local.adoptionFailureRoots.add("C:/repo/web");
+  await assert.rejects(controller.adopt(project, {
+    cwd: project.cwd, harness: "codex", threadId: "parent",
+    source: { harness: "codex", threadId: "child" },
+  }), /adoption failed/u);
+  assert.deepEqual(local.adoptionCalls.map(path.normalize), [
+    path.resolve("C:/repo/api"), path.resolve("C:/repo/web"),
+  ].map(path.normalize));
+  assert.deepEqual(local.undoAdoptionCalls.map(path.normalize), [path.resolve("C:/repo/api")].map(path.normalize));
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "child"))?.claimedPaths, ["api:one.ts", "web:two.ts"]);
+  assert.equal(await controller.findLifecycleState(project, "codex", "parent"), null);
+});
+
+test("selected release leaves other roots claimed and compensates a later transfer failure", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async root => root,
+  );
+  for (const [rootId, file] of [["api", "one.ts"], ["web", "two.ts"]] as const) {
+    const cwd = `C:/repo/${rootId}`;
+    await local.createPlan({ cwd, harness: "codex", threadId: "parent", paths: [`${cwd}/${file}`], intentName: "parent work", intentDescription: "" });
+    await local.startArc({ cwd });
+  }
+  const input = {
+    cwd: project.cwd, harness: "codex" as const, threadId: "parent",
+    destination: { harness: "codex" as const, threadId: "child" },
+  };
+  const result = await controller.releaseToChild(project, { ...input, paths: ["api:one.ts"] });
+  assert.deepEqual(result.releasedClaims, ["api:one.ts"]);
+  assert.deepEqual(result.scopePaths, ["web:two.ts"]);
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "child"))?.claimedPaths, ["api:one.ts"]);
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "parent"))?.claimedPaths, ["web:two.ts"]);
+
+  await local.createPlan({
+    cwd: "C:/repo/api", harness: "codex", threadId: "parent",
+    paths: ["C:/repo/api/one.ts"], intentName: "parent work", intentDescription: "",
+  });
+  await local.startArc({ cwd: "C:/repo/api" });
+  local.transferFailureRoots.add("C:/repo/web");
+  await assert.rejects(controller.releaseToChild(project, {
+    ...input, paths: ["api:one.ts", "web:two.ts"],
+  }), /transfer failed/u);
+  assert.deepEqual(local.undoTransferCalls, ["C:/repo/api"]);
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "parent"))?.claimedPaths, ["api:one.ts", "web:two.ts"]);
+});
+
+test("a caller stash in another root blocks the whole source stash transfer", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async root => root,
+  );
+  for (const [threadId, rootId, file] of [
+    ["parent", "api", "one.ts"], ["child", "web", "two.ts"],
+  ] as const) {
+    const identity = { cwd: project.cwd, harness: "codex" as const, threadId };
+    const cwd = `C:/repo/${rootId}`;
+    await local.createPlan({ cwd, harness: "codex", threadId, paths: [`${cwd}/${file}`], intentName: "save work", intentDescription: "" });
+    await local.startArc({ cwd });
+    await controller.execute(project, { ...identity, action: "arcStash" });
+  }
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "parent"))?.stashedPaths, ["api:one.ts"]);
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "child"))?.stashedPaths, ["web:two.ts"]);
+  await assert.rejects(controller.adopt(project, {
+    cwd: project.cwd, harness: "codex", threadId: "parent",
+    source: { harness: "codex", threadId: "child" },
+  }), /already has a stash/u);
+  assert.deepEqual(local.adoptionCalls, []);
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "parent"))?.stashedPaths, ["api:one.ts"]);
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "child"))?.stashedPaths, ["web:two.ts"]);
+  await local.createPlan({
+    cwd: "C:/repo/web", harness: "codex", threadId: "parent",
+    paths: ["C:/repo/web/two.ts"], intentName: "continue work", intentDescription: "",
+  });
+  await local.startArc({ cwd: "C:/repo/web" });
+  await assert.rejects(controller.execute(project, {
+    cwd: project.cwd, harness: "codex", threadId: "parent", action: "arcStash",
+  }), /already has a stash/u);
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "parent"))?.stashedPaths, ["api:one.ts"]);
 });
 
 test("workspace retention defers a whole thread before pruning any repository member", async () => {

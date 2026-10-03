@@ -89,9 +89,8 @@ function SubagentTabLink({
   const threadId = WorkbenchThreadIdSchema.parse(tab.id);
   const entry = useWorkbenchThreadSidebarEntry(parsedProjectId, harness, threadId);
   const hasComposerDraft = useWorkbenchComposerDraftPresence(projectId, tab.id);
-  const stashed = entry?.gitArc?.phase === "stashed";
-  const claimedCount = stashed ? 0 : entry?.gitArc?.claimedPaths.length ?? 0;
-  const stashedCount = entry?.gitArc?.phase === "stashed" ? entry.gitArc.stashedPaths.length : 0;
+  const claimedCount = entry?.gitArc?.claimedPaths.length ?? 0;
+  const stashedCount = entry?.gitArc?.stashedPaths?.length ?? 0;
   const accentChromaPercent = selected ? 90 : 55;
   return (
     <ContextMenuCapability

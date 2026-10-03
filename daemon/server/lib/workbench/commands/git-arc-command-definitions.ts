@@ -128,23 +128,33 @@ const move = defineWorkbenchAgentCommand({
 });
 
 const release = defineWorkbenchAgentCommand({
-  description: "Release clean claims owned by this thread without changing Git or workspace content.",
+  description: "Release clean claims, or transfer selected live claims atomically to an owned subagent without changing workspace content.",
   effects: { destructive: true },
   helpGroups: ["git-arc"],
   words: ["git", "arc", "release"],
-  usage: "wb git arc release [--disown]",
+  usage: "wb git arc release [--disown] | wb git arc release --to-subagent <name> -- <claim-path> [<claim-path>...]",
   inputSchema: z.object({
     disown: z.boolean().default(false).describe("Release ownership of dirty claims without changing their workspace or Git content."),
-  }).strict(),
+    toSubagent: requiredText.optional().describe("Owned unsettled subagent receiving selected live claims."),
+    paths: paths.default([]),
+  }).strict().superRefine((input, context) => {
+    if (input.toSubagent && (!input.paths.length || input.disown) || !input.toSubagent && input.paths.length) {
+      context.addIssue({ code: "custom", message: "A subagent transfer requires paths and cannot use disown; ordinary release accepts no paths." });
+    }
+  }),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--disown"] });
-    return { disown: flags.has("--disown") };
+    const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, {
+      boolean: ["--disown"], values: ["--to-subagent"],
+    }), { boolean: ["--disown"], trailing: true, values: ["--to-subagent"] });
+    return { disown: flags.has("--disown"), toSubagent: flags.optional("--to-subagent") ?? undefined, paths: flags.trailing };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
-      action: "arcRelease",
+      ...(input.toSubagent
+        ? { action: "arcTransferClaims" as const, destination: { kind: "subagent" as const, name: input.toSubagent }, paths: input.paths }
+        : { action: "arcRelease" as const }),
       ...baseBody(callerHarness, callerThreadId, cwd),
-      disown: input.disown,
+      ...(!input.toSubagent ? { disown: input.disown } : {}),
     }, "git-arc-release");
   },
 });
@@ -263,6 +273,25 @@ const claims = defineWorkbenchAgentCommand({
   },
 });
 
+const adopt = defineWorkbenchAgentCommand({
+  description: "Adopt a source's complete live claims and saved stash. Thread IDs require explicit user instruction; names select an owned unsettled unlocked child. Preserve caller claims; source stash requires no caller stash.",
+  helpGroups: ["git-arc"],
+  words: ["git", "arc", "adopt"],
+  usage: "wb git arc adopt (--thread <id> | --name <name>)",
+  inputSchema: z.object({ threadId: requiredText.optional(), name: requiredText.optional() }).strict()
+    .refine(input => Boolean(input.threadId) !== Boolean(input.name), "Supply exactly one threadId or name source."),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--thread", "--name"] });
+    return { threadId: flags.optional("--thread") ?? undefined, name: flags.optional("--name") ?? undefined };
+  },
+  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/git-checkpoint", {
+      ...baseBody(callerHarness, callerThreadId, cwd), action: "arcAdoptSource",
+      source: input.name ? { kind: "subagent", name: input.name } : { kind: "thread", threadId: input.threadId! },
+    }, "git-arc-adopt");
+  },
+});
+
 function stashCommand(action: "arcStash" | "arcUnstash", word: "stash" | "unstash") {
   return defineWorkbenchAgentCommand({
     description: word === "stash"
@@ -322,6 +351,7 @@ export const WORKBENCH_GIT_ARC_COMMANDS = [
   wait,
   continueArc,
   claims,
+  adopt,
   status,
   move,
   release,

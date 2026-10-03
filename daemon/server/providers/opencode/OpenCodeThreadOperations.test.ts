@@ -510,6 +510,27 @@ test("provider-owned active execution submits a steer once with native steer del
   }]);
 });
 
+test("managed prompt refresh receives the canonical subagent name rather than native session metadata", async () => {
+  const names: Array<string | null | undefined> = [];
+  const owner = operations({
+    session: { prompt: async () => ({
+      id: "inbox", sessionID: nativeThreadId, time: { created: 3 },
+      type: "user", payload: { text: "work" }, delivery: "steer",
+    }) },
+  }, { recordSteer: async () => undefined }, {
+    controller: { getCanonicalThreadEntry: async () => ({
+      entryKind: "subagent", name: "mira",
+      lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+      profile: { settings: { harness: "opencode", model: null, agentPath: null } },
+    }) },
+  }, { refresh: async input => { names.push(input.subagentName); return { activatedSkills: null }; } });
+  await owner.submit({
+    threadId, clientMessageId: "child-audience", intent: "continue",
+    input: [{ type: "text", text: "work", text_elements: [] }],
+  });
+  assert.deepEqual(names, ["mira"]);
+});
+
 const unfinished: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "noActiveTurn", settled: false };
 
 test("execution outlives submission and only terminal execution releases the idle boundary", async () => {

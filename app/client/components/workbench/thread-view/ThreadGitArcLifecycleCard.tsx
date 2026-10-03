@@ -63,7 +63,9 @@ export default function ThreadGitArcLifecycleCard ({
   const [changeState, setChangeState] = useState<ClaimChangeState>("loading");
   const [conflictedPaths, setConflictedPaths] = useState<string[]>([]);
   const [failure, setFailure] = useState<GitArcFailure | null>(null);
-  const memberRefs = claim.members?.map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })) ?? [];
+  const memberRefs = claim.members?.filter(member => member.claimedPaths.length)
+    .map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })) ?? [];
+  const stashWouldReplace = Boolean(claim.stashedPaths?.length);
 
   useEffect(() => {
     if (phase !== "active" || !claim.claimedPaths.length) {
@@ -144,9 +146,12 @@ export default function ThreadGitArcLifecycleCard ({
     }
   };
 
-  if (phase === "resolved" && !visibleProposals.length) return null;
+  if (phase === "resolved" && !visibleProposals.length && !claim.stashedPaths?.length) return null;
   const showCombinedAction = activeAction === "restoreAndUnclaim" || (activeAction === null && isShiftPressed);
-  const lifecyclePaths = phase === "stashed" ? claim.stashedPaths ?? [] : claim.claimedPaths;
+  const sections = [
+    ...(claim.claimedPaths.length ? [{ phase: "active" as const, paths: claim.claimedPaths }] : []),
+    ...(claim.stashedPaths?.length ? [{ phase: "stashed" as const, paths: claim.stashedPaths }] : []),
+  ];
 
   return (
     <div className="my-2 w-full" data-thread-git-arc-lifecycle="true">
@@ -162,9 +167,13 @@ export default function ThreadGitArcLifecycleCard ({
             </div>
           ))
         ) : null}
-        {phase !== "resolved" ? (
+        {sections.map(({ phase, paths: lifecyclePaths }, index) => (
           <div
-            className={`${visibleProposals.length ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] " : ""}px-3 py-2`}
+            key={phase}
+            className={`
+              ${visibleProposals.length || index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]" : ""}
+              px-3 py-2
+            `}
             data-thread-git-arc-resolution="true"
             data-thread-git-arc-resolution-separator={visibleProposals.length ? "true" : undefined}
           >
@@ -243,7 +252,7 @@ export default function ThreadGitArcLifecycleCard ({
                       </PrimaryButton>
                     ) : phase === "active" && changeState === "loading" ? <span className="text-[0.74em] text-fg/muted">Checking claimed files…</span> : null}
                     {phase === "active" ? (
-                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("stash")} pendingHalo={activeAction === "stash"}>
+                      <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null || stashWouldReplace} title={stashWouldReplace ? "Restore or discard the existing stash first." : undefined} onClick={() => void runAction("stash")} pendingHalo={activeAction === "stash"}>
                         <GitArcIcon action="stash" className="mr-1.5" size={14} />
                         {activeAction === "stash" ? "Stashing…" : "Stash"}
                       </PrimaryButton>
@@ -265,6 +274,10 @@ export default function ThreadGitArcLifecycleCard ({
                 workspaceRoots={workspaceRoots}
               />
             </ThreadDisclosure>
+          </div>
+        ))}
+        {failure || conflictedPaths.length ? (
+          <div className="px-3 pb-2">
             {failure ? (
               <ThreadGitArcFailure
                 failure={failure}

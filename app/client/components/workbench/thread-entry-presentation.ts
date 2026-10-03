@@ -43,8 +43,9 @@ export function describeThreadEntry(entry: ThreadListEntry, { attentionLabel = "
   const lifecycle = entry.entryKind === "draft" ? null : entry.lifecycle;
   const gitArc = entry.entryKind === "draft" ? null : entry.gitArc ?? null;
   const hasActiveGitArc = gitArc?.phase === "active";
-  const stashed = gitArc?.phase === "stashed";
-  const claimedPaths = stashed ? gitArc.stashedPaths : gitArc?.claimedPaths ?? [];
+  const savedPaths = gitArc?.stashedPaths ?? [];
+  const stashed = !gitArc?.claimedPaths.length && savedPaths.length > 0;
+  const claimedPaths = stashed ? savedPaths : gitArc?.claimedPaths ?? [];
   const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
   const waiting = entry.entryKind !== "draft" && Boolean(entry.waitingFor);
   const showProposedCommit = !waiting && lifecycle?.kind === "completed" && hasProposedCommit;

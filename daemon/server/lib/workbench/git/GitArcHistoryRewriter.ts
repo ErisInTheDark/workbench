@@ -79,7 +79,7 @@ export default class GitArcHistoryRewriter {
     const refs = (await this.repository.listRefsWithValues("refs/worktree/agents"))
       .filter(({ ref }) => !excludedRefs.has(ref));
     const missingRefs = refs.filter(({ objectType, ref }) => (
-      objectType === "missing" && /\/(?:(?:arc-outcomes|checkpoint-proposals|checkpoints)\/|claim-loss$)/u.test(ref)
+      objectType === "missing" && /\/(?:(?:arc-outcomes|checkpoint-proposals|checkpoints)\/|claim-loss$|arc-stash$)/u.test(ref)
     ));
     for (const entry of missingRefs.slice(0, 20)) {
       warnings.push(`Skipped unreadable Workbench ref ${entry.ref}: missing object ${entry.value}`);
@@ -94,10 +94,12 @@ export default class GitArcHistoryRewriter {
     const claimLossRefs = refs
       .filter(({ objectType, ref }) => objectType === "commit" && /\/claim-loss$/u.test(ref))
       .sort((left, right) => left.ref.localeCompare(right.ref));
+    const stashRefs = refs.filter(({ objectType, ref }) => objectType === "commit" && ref.endsWith("/arc-stash"));
     const proposalRefs = refs.filter(({ objectType, ref }) => objectType === "commit" && /\/checkpoint-proposals\//u.test(ref));
     const commitBatch = await this.repository.readCommits([
       ...checkpointRefs.map(({ value }) => value),
       ...claimLossRefs.map(({ value }) => value),
+      ...stashRefs.map(({ value }) => value),
       ...proposalRefs.map(({ value }) => value),
       ...branchCommits.keys(),
       ...branchCommits.values(),
@@ -246,6 +248,21 @@ export default class GitArcHistoryRewriter {
       else {
         deletes.push({ oldValue: entry.value, ref: entry.ref });
         updates.push({ newValue: blob, oldValue: "0".repeat(40), ref: nextRef });
+      }
+    }
+
+    for (const entry of stashRefs) {
+      const oldCommit = commitBatch.commits.get(entry.value);
+      if (!oldCommit) {
+        warnings.push(`Skipped unreadable saved-work ref ${entry.ref}.`);
+        continue;
+      }
+      let frozen: ReturnType<typeof GitArcClaimLossSchema.safeParse>;
+      try { frozen = GitArcClaimLossSchema.safeParse(JSON.parse(oldCommit.message)); }
+      catch { throw new Error("Saved work has invalid frozen snapshot metadata."); }
+      if (!frozen.success || !frozen.data.frozen || oldCommit.parents.length > 1
+        || (oldCommit.parents[0] ?? null) !== frozen.data.head) {
+        throw new Error("Saved work has invalid frozen snapshot metadata.");
       }
     }
 

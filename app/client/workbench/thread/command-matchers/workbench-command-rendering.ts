@@ -65,6 +65,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "git_arc_status",
   "git_arc_reword",
   "git_arc_start",
+  "git_arc_adopt",
   "git_arc_stash",
   "git_arc_unstash",
   "git_arc_wait",
@@ -86,7 +87,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
 export type WorkbenchCommandPresentationName = typeof WORKBENCH_COMMAND_PRESENTATION_NAMES[number];
 
 export type WorkbenchGitArcOperation = {
-  action: "claims" | "scope" | "status" | "compare" | "continue" | "diff" | "mv" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restore" | "start" | "stash" | "unstash" | "unknown";
+  action: "adopt" | "claims" | "scope" | "status" | "compare" | "continue" | "diff" | "mv" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restore" | "start" | "stash" | "unstash" | "unknown";
   adoptPaths?: string[];
   removePaths?: string[];
   disown?: boolean;
@@ -94,6 +95,8 @@ export type WorkbenchGitArcOperation = {
   move?: GitArcMoveArguments;
   paths: string[];
   proposalId?: string | null;
+  source?: { name?: string; threadId?: string };
+  toSubagent?: string;
   proposalIntent?: {
     amend: boolean;
     description: string;
@@ -406,6 +409,7 @@ function gitArcAction(name: WorkbenchCommandPresentationName): WorkbenchGitArcOp
     git_arc_rescind: "rescind",
     git_arc_restore: "restore",
     git_arc_start: "start",
+    git_arc_adopt: "adopt",
     git_arc_stash: "stash",
     git_arc_unstash: "unstash",
   };
@@ -460,10 +464,15 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     ...(adoptPaths.length ? { adoptPaths } : {}),
     ...(removePaths.length ? { removePaths } : {}),
     ...(action === "release" ? { disown: readBoolean(args.disown) } : {}),
+    ...(action === "release" && readString(args.toSubagent) ? { toSubagent: readString(args.toSubagent)! } : {}),
     intentName,
     ...(parsedMove ? { move: parsedMove } : {}),
     paths,
     ...(proposalId ? { proposalId } : {}),
+    ...(action === "adopt" ? { source: {
+      ...(readString(args.name) ? { name: readString(args.name)! } : {}),
+      ...(readString(args.threadId) ? { threadId: readString(args.threadId)! } : {}),
+    } } : {}),
     ...(action === "propose"
       ? {
         proposalIntent: {
@@ -480,6 +489,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     ref: readString(args.ref),
   };
   const matcherIds: Record<WorkbenchGitArcOperation["action"], string> = {
+    adopt: "git-arc.adopt",
     claims: "git-arc.claims",
     scope: "git-arc.scope",
     status: "git-arc.status",

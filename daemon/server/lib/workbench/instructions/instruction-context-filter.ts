@@ -77,6 +77,7 @@ const KNOWN_AVAILABLE_VALUES = new Set([
   "multi-root",
   "subagents",
   "thread-git",
+  "git-proposals",
   "thread-recall",
   "thread-refresh",
   "task-status",

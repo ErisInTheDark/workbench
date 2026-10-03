@@ -44,6 +44,38 @@ const { listWorkbenchAgentCommands } = require("../../../../daemon/server/lib/wo
 const { getWorkbenchAgentCommandToolName } = require("../../../../daemon/server/lib/workbench/commands/workbench-agent-command-definition.ts") as typeof import("../../../../daemon/server/lib/workbench/commands/workbench-agent-command-definition.ts");
 const PROJECT_ROOT = "C:/git/web/workbench";
 
+test("adoption commands retain the source selector in transcript intent", () => {
+  assert.deepEqual(parseGitArcCommand("wb git arc adopt --name mira")?.source, { name: "mira" });
+  assert.deepEqual(parseGitArcCommand("wb git arc adopt --thread child-id")?.source, { threadId: "child-id" });
+  assert.equal(parseGitArcCommand("wb git arc adopt --name mira --thread child-id"), null);
+  const route = getWorkbenchMcpCommandRoute({
+    server: "wbex", tool: "git_arc_adopt", argumentsValue: { name: "mira" },
+  });
+  assert.equal(route?.kind, "specialized");
+  if (route?.kind === "specialized" && route.operation.kind === "gitArc") {
+    assert.equal(route.operation.operation.action, "adopt");
+    assert.deepEqual(route.operation.operation.source, { name: "mira" });
+  }
+});
+
+test("release-to-child commands retain the destination and selected claim paths", () => {
+  const cli = parseGitArcCommand("wb git arc release --to-subagent mira -- api:src/one.ts");
+  assert.equal(cli?.action, "release");
+  assert.equal(cli?.toSubagent, "mira");
+  assert.deepEqual(cli?.paths, ["api:src/one.ts"]);
+  assert.equal(parseGitArcCommand("wb git arc release --to-subagent mira --disown -- api:src/one.ts"), null);
+  const route = getWorkbenchMcpCommandRoute({
+    server: "wbex", tool: "git_arc_release",
+    argumentsValue: { toSubagent: "mira", paths: ["api:src/one.ts"] },
+  });
+  assert.equal(route?.kind, "specialized");
+  if (route?.kind === "specialized" && route.operation.kind === "gitArc") {
+    assert.equal(route.operation.operation.action, "release");
+    assert.equal(route.operation.operation.toSubagent, "mira");
+    assert.deepEqual(route.operation.operation.paths, ["api:src/one.ts"]);
+  }
+});
+
 test("combined scope transcript intent preserves literal MCP paths and CLI operations", () => {
   const cli = parseGitArcCommand("wb git plan claims --inherit -- new.ts -old.ts '*dirty.ts'");
   assert.deepEqual(cli?.paths, ["new.ts"]);

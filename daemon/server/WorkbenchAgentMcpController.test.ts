@@ -573,8 +573,8 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
 
     const release = inventory.tools.find(({ name }) => name === "git_arc_release");
     assert.ok(release);
-    assert.deepEqual(Object.keys(release.inputSchema.properties ?? {}), ["disown"]);
-    assert.match(release.description ?? "", /Release clean claims owned by this thread/u);
+    assert.ok("toSubagent" in (release.inputSchema.properties ?? {}));
+    assert.ok("paths" in (release.inputSchema.properties ?? {}));
     const releaseDefinition = eligible.find(({ words }) => words.join("_") === "git_arc_release");
     assert.ok(releaseDefinition);
     assert.deepEqual(await releaseDefinition.buildRequestFromJson({}, {
@@ -587,6 +587,14 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       method: "POST",
       path: "/api/git-checkpoint",
       responseKind: "git-arc-release",
+    });
+    assert.deepEqual((await releaseDefinition.buildRequestFromJson({
+      toSubagent: "mira", paths: ["src/one.ts"],
+    }, {
+      callerHarness: "codex", callerThreadId: "thread-1", cwd: "C:/authoritative", workbenchOrigin: null,
+    })).body, {
+      action: "arcTransferClaims", cwd: "C:/authoritative", harness: "codex", threadId: "thread-1",
+      destination: { kind: "subagent", name: "mira" }, paths: ["src/one.ts"],
     });
 
     const searchResult = await client.callTool({
@@ -682,6 +690,50 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   } finally {
     await projectClient.close();
     await capableClient.close();
+    await client.close();
+    await server.close();
+  }
+});
+
+test("child catalogues omit proposals while parent catalogues retain them", async () => {
+  const controller = codexController({
+    executeCommand: async () => Response.json({}),
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } }),
+    shell: { execute: async () => ({ cwd: "C:/authoritative", exitCode: 0, shell: "pwsh", stderr: "", stdout: "" }) },
+  });
+  const server = await startController(controller);
+  const parent = await connectClient(server.url);
+  const childUrl = new URL(server.url);
+  childUrl.searchParams.set("subagent", "true");
+  const child = await connectClient(childUrl);
+  try {
+    assert.ok((await parent.listTools()).tools.some(tool => tool.name === "git_arc_propose"));
+    assert.equal((await child.listTools()).tools.some(tool => tool.name === "git_arc_propose"), false);
+    assert.ok((await child.listTools()).tools.some(tool => tool.name === "git_arc_claims"));
+  } finally {
+    await Promise.all([parent.close(), child.close()]);
+    await server.close();
+  }
+});
+
+test("a stale proposal tool cannot dispatch for a canonical child caller", async () => {
+  let dispatches = 0;
+  const controller = codexController({
+    ...{ isSubagentCaller: async () => true },
+    executeCommand: async () => { dispatches++; return Response.json({}); },
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } }),
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  try {
+    const result = await client.callTool({
+      name: "git_arc_propose", arguments: { title: "change files" }, _meta: { threadId: "child" },
+    });
+    assert.equal(result.isError, true);
+    assert.equal(dispatches, 0);
+  } finally {
     await client.close();
     await server.close();
   }

@@ -47,12 +47,12 @@ function observations(): WorkbenchThreadGitObservations {
   };
   return {
     gitArc: {
-      ...common, phase: "active", claimedPaths: ["z.ts", "a.ts"],
+      ...common, phase: "active", claimedPaths: ["z.ts", "a.ts"], stashedPaths: [],
       proposals: [
         { proposalId: "second", status: "proposed", rootId: "root-b" },
         { proposalId: "first", status: "committed" },
       ],
-      members: [{ ...member, phase: "active", claimedPaths: ["member.ts"], proposals: [] }],
+      members: [{ ...member, phase: "active", claimedPaths: ["member.ts"], stashedPaths: [], proposals: [] }],
     },
     gitArcPlan: {
       ...common, scopePaths: [],

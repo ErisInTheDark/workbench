@@ -55,6 +55,8 @@ import GitArcRetentionController, { type GitArcRetentionResult } from "./GitArcR
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
+import GitArcStashController from "./GitArcStashController";
+import GitArcOwnershipTransferController, { type GitArcAdoptionInput, type GitArcSelectedTransferInput } from "./GitArcOwnershipTransferController";
 import { collectGitArcDrift } from "./git-arc-drift";
 import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import WorkbenchGitRepository, { type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
@@ -124,6 +126,8 @@ export interface GitCheckpointCreateResult {
 }
 
 export interface GitArcReleaseResult extends GitCheckpointCreateResult {
+  claimedPaths?: string[];
+  plannedPaths?: string[];
   releasedClaims: string[];
   unchanged?: boolean;
 }
@@ -229,6 +233,8 @@ export default class WorkbenchGitCheckpointController {
   private readonly plans: GitArcPlanController;
   private readonly proposals: GitArcProposalController;
   private readonly lifecycle: GitArcLifecycleController;
+  private readonly stashes: GitArcStashController;
+  private readonly transfers: GitArcOwnershipTransferController;
 
   constructor(
     proposalDiffs = new GitArcProposalDiffController(),
@@ -238,6 +244,8 @@ export default class WorkbenchGitCheckpointController {
     this.plans = new GitArcPlanController(resolveThreadIdentity);
     this.proposals = new GitArcProposalController(proposalDiffs, resolveThreadIdentity);
     this.lifecycle = new GitArcLifecycleController(resolveThreadIdentity);
+    this.stashes = new GitArcStashController(resolveThreadIdentity);
+    this.transfers = new GitArcOwnershipTransferController(resolveThreadIdentity);
   }
 
   private registry(repository: WorkbenchGitRepository) {
@@ -311,28 +319,6 @@ export default class WorkbenchGitCheckpointController {
     return { active, checkpoint, harness, metadata, registry, repository };
   }
 
-  private async requireStashableArc({ cwd, harness: rawHarness, threadId }: ControllerInput) {
-    const repository = await WorkbenchGitRepository.open(cwd);
-    const harness = normalizeHarness(rawHarness);
-    const registry = this.registry(repository);
-    const active = await registry.find({ harness, threadId });
-    const retained = active?.phase === "plan" ? active.retainedArc : null;
-    const arc = retained ?? (active?.phase === "active" ? active : null);
-    if (!active || !arc || arc.phase !== "active" || !arc.claimedPaths.length) {
-      throw new Error("This thread does not own active or plan-retained Git arc claims.");
-    }
-    const checkpoint = await readCheckpoint(repository.root, harness, threadId, arc.checkpointCommit, this.resolveThreadIdentity);
-    const metadata = requireArcMetadata(checkpoint);
-    if (arc.claimedPaths.some((path) => !metadata.scopePaths.includes(path))) {
-      throw new Error("The retained Git arc registry does not match its checkpoint claim set.");
-    }
-    const plan = active.phase === "plan"
-      ? await readCheckpoint(repository.root, harness, threadId, active.checkpointCommit, this.resolveThreadIdentity)
-      : null;
-    if (plan && plan.metadata?.kind !== "plan") throw new Error("The pending plan checkpoint is invalid.");
-    return { active, arc, checkpoint, harness, metadata, plan, registry, repository };
-  }
-
   private async requireMutableActiveArc(input: ControllerInput) {
     const activeArc = await this.requireActiveArc(input);
     await this.proposals.requireNoAcceptedReceipts({
@@ -382,283 +368,44 @@ export default class WorkbenchGitCheckpointController {
     };
   }
 
-  private async requireStashedArc({ cwd, harness: rawHarness, threadId }: ControllerInput) {
-    const repository = await WorkbenchGitRepository.open(cwd);
-    const harness = normalizeHarness(rawHarness);
-    const registry = this.registry(repository);
-    const active = await registry.find({ harness, threadId });
-    if (!active || active.phase !== "stashed" || !active.claimedPaths.length) {
-      throw new Error("This thread does not own a stashed Git arc.");
-    }
-    const checkpoint = await readCheckpoint(
-      repository.root, harness, threadId, active.retainedArc?.checkpointCommit ?? active.checkpointCommit, this.resolveThreadIdentity,
-    );
-    requireArcMetadata(checkpoint);
-    const plan = active.retainedArc
-      ? await readCheckpoint(repository.root, harness, threadId, active.checkpointCommit, this.resolveThreadIdentity)
-      : null;
-    if (plan && plan.metadata?.kind !== "plan") throw new Error("The stashed pending plan checkpoint is invalid.");
-    return { active, checkpoint, harness, plan, registry, repository };
+  async prepareStashOperation(input: ControllerInput, action: "stash" | "unstash" | "discard") {
+    return await GitObjectReadSession.run(() => this.stashes.prepare(input, action));
   }
 
-  private async requireDiscardableStash(input: ControllerInput) {
-    const state = await this.requireStashedArc(input);
-    const lossStore = new GitArcClaimLossStore(state.repository, this.resolveThreadIdentity);
-    const prepared = await lossStore.prepareDeleteFrozen(
-      { harness: state.harness, threadId: input.threadId }, state.active.claimedPaths,
-    );
-    return { ...state, ...prepared };
-  }
-
-  private async replaceWorktreePaths(
-    repository: WorkbenchGitRepository,
-    source: string | null,
-    paths: string[],
-  ) {
-    const [currentPaths, sourcePaths] = await Promise.all([
-      repository.listWorktreePaths(paths),
-      repository.listTreePaths(source, paths),
-    ]);
-    const sourceSet = new Set(sourcePaths);
-    await Promise.all(currentPaths.filter(filePath => !sourceSet.has(filePath)).map(async (filePath) => {
-      await fs.rm(repository.resolvePath(filePath), { force: true, recursive: true });
-    }));
-    await repository.restorePaths(source, sourcePaths);
-  }
-
-  async assertArcStashable(input: ControllerInput) {
-    await GitObjectReadSession.run(async () => {
-      await this.requireStashableArc(input);
-    });
-  }
-
-  async assertArcUnstashable(input: ControllerInput) {
-    await GitObjectReadSession.run(async () => {
-      const { active, harness, repository } = await this.requireStashedArc(input);
-      const head = await repository.headOrNull();
-      const dirty = await repository.listWorktreeChangedPaths(head, active.claimedPaths);
-      if (dirty.length) throw new Error(`Stashed paths contain current worktree changes: ${dirty.join(", ")}`);
-      const collisions = findGitArcCollisions(await this.registry(repository).list(), { harness, threadId: input.threadId }, active.claimedPaths);
-      if (collisions.length) throw new GitArcCollisionError(collisions);
-      const snapshot = await new GitArcClaimLossStore(repository, this.resolveThreadIdentity).read({ harness, threadId: input.threadId });
-      const paths = [...active.claimedPaths];
-      if (!snapshot?.frozen || snapshot.paths.length !== paths.length || snapshot.paths.some((path, index) => path !== paths[index])) {
-        throw new Error("The stashed Git arc snapshot is unavailable or does not match its retained claim set.");
-      }
-      const merged = await repository.mergeWorktreeTrees(snapshot.head, head, snapshot.commit);
-      if (merged.unsupportedConflictTypes.length) {
-        throw new Error(`The stashed changes have conflicts that cannot be represented as editable markers: ${merged.unsupportedConflictTypes.join(", ")}`);
-      }
-    });
-  }
+  async assertArcStashable(input: ControllerInput) { await this.prepareStashOperation(input, "stash"); }
+  async assertArcUnstashable(input: ControllerInput) { await this.prepareStashOperation(input, "unstash"); }
+  async assertArcDiscardable(input: ControllerInput) { await this.prepareStashOperation(input, "discard"); }
 
   async stashArc(input: ControllerInput): Promise<GitArcStashResult> {
-    return await GitObjectReadSession.run(async () => {
-      const { active, arc, checkpoint, plan, registry, repository } = await this.requireStashableArc(input);
-      const head = await repository.headOrNull();
-      const paths = [...arc.claimedPaths];
-      const snapshot = { head, tree: await repository.writeScopedWorktreeTree(paths, head) };
-      const previousIndex = await repository.writeIndexTree();
-      const mutation = await registry.prepareSet(
-        {
-          ...active, claimedPaths: paths, phase: "stashed",
-          proposalIds: active.phase === "plan" ? arc.proposalIds ?? [] : active.proposalIds,
-        },
-        active.checkpointCommit,
-        { claimLossSnapshot: snapshot },
-      );
-      try {
-        await this.replaceWorktreePaths(repository, head, paths);
-        await repository.resetMixedPaths(await repository.resolveTree(head), paths);
-        await repository.updateRefs(mutation.updates);
-      } catch (publicationError) {
-        try {
-          await repository.resetMixedPaths(previousIndex, paths);
-          await this.replaceWorktreePaths(repository, snapshot.tree, paths);
-        } catch (rollbackError) {
-          throw new AggregateError([publicationError, rollbackError], "Arc stash publication failed and worktree rollback also failed.");
-        }
-        throw publicationError;
-      }
-      return {
-        checkpointCommit: active.checkpointCommit,
-        checkpointRef: plan?.checkpointRef ?? checkpoint.checkpointRef,
-        conflictedPaths: [],
-        intentName: active.intentName,
-        kind: "arc",
-        phase: "stashed",
-        repoRoot: repository.root,
-        scopePaths: [],
-        stashedPaths: paths,
-      };
-    });
+    return await GitObjectReadSession.run(async () => await (await this.stashes.prepare(input, "stash")).apply());
+  }
+
+  async unstashArc(input: ControllerInput): Promise<GitArcStashResult> {
+    return await GitObjectReadSession.run(async () => await (await this.stashes.prepare(input, "unstash")).apply());
   }
 
   async discardStashedArc(input: ControllerInput) {
     return await GitObjectReadSession.run(async () => {
-      const { active, deletions, registry, repository } = await this.requireDiscardableStash(input);
-      const next = active.retainedArc
-        ? { ...active, claimedPaths: [], phase: "plan" as const, proposalId: null, proposalIds: [], retainedArc: null }
-        : { ...active, claimedPaths: [], phase: "resolved" as const };
-      const mutation = await registry.prepareSet(next, active.checkpointCommit);
-      await repository.updateRefs(mutation.updates, deletions);
-      return { previous: active, snapshots: deletions };
+      const operation = await this.stashes.prepare(input, "discard");
+      await operation.apply();
+      return operation;
     });
   }
 
-  async assertArcDiscardable(input: ControllerInput) {
-    await GitObjectReadSession.run(async () => {
-      await this.requireDiscardableStash(input);
-    });
+  async undoDiscardedStash(_input: ControllerInput, discarded: Awaited<ReturnType<WorkbenchGitCheckpointController["discardStashedArc"]>>) {
+    await discarded.rollback();
   }
 
-  async undoDiscardedStash(input: ControllerInput, discarded: Awaited<ReturnType<WorkbenchGitCheckpointController["discardStashedArc"]>>) {
-    await GitObjectReadSession.run(async () => {
-      const repository = await WorkbenchGitRepository.open(input.cwd);
-      const registry = this.registry(repository);
-      const current = await registry.find({ harness: normalizeHarness(input.harness), threadId: input.threadId });
-      if (!current || current.checkpointCommit !== discarded.previous.checkpointCommit
-        || current.phase !== (discarded.previous.retainedArc ? "plan" : "resolved")) {
-        throw new Error("The discarded Git arc changed before rollback.");
-      }
-      const mutation = await registry.prepareSet(discarded.previous, current.checkpointCommit);
-      await repository.updateRefs(
-        [
-          ...mutation.updates,
-          ...discarded.snapshots.map(({ oldValue, ref }) => ({
-            newValue: oldValue, oldValue: "0".repeat(40), ref,
-          })),
-        ],
-      );
-    });
+  async prepareAdoption(input: GitArcAdoptionInput) {
+    return await GitObjectReadSession.run(() => this.transfers.prepareAdoption(input));
   }
 
-  async unstashArc(input: ControllerInput): Promise<GitArcStashResult> {
-    return await GitObjectReadSession.run(async () => {
-      const { active, checkpoint, harness, plan, registry, repository } = await this.requireStashedArc(input);
-      const metadata = requireArcMetadata(checkpoint);
-      const paths = [...active.claimedPaths];
-      const head = await repository.headOrNull();
-      const dirty = await repository.listWorktreeChangedPaths(head, paths);
-      if (dirty.length) throw new Error(`Stashed paths contain current worktree changes: ${dirty.join(", ")}`);
-      const collisions = findGitArcCollisions(await registry.list(), { harness, threadId: input.threadId }, paths);
-      if (collisions.length) throw new GitArcCollisionError(collisions);
-      const snapshot = await new GitArcClaimLossStore(repository, this.resolveThreadIdentity).read({ harness, threadId: input.threadId });
-      if (!snapshot?.frozen || snapshot.paths.length !== paths.length || snapshot.paths.some((path, index) => path !== paths[index])) {
-        throw new Error("The stashed Git arc snapshot is unavailable or does not match its retained claim set.");
-      }
-      const merged = await repository.mergeWorktreeTrees(snapshot.head, head, snapshot.commit);
-      if (merged.unsupportedConflictTypes.length) {
-        throw new Error(`The stashed changes have conflicts that cannot be represented as editable markers: ${merged.unsupportedConflictTypes.join(", ")}`);
-      }
-      const rebased = await this.store(repository).prepareCheckpoint(
-        harness,
-        input.threadId,
-        await repository.resolveTree(head),
-        head,
-        {
-          amendedFrom: checkpoint.checkpointCommit,
-          ...(active.intentDescription ? { intentDescription: active.intentDescription } : {}),
-          ...(metadata.intentName ? { intentName: metadata.intentName } : {}),
-          kind: "arc",
-          ...(metadata.priorProposalId ? { priorProposalId: metadata.priorProposalId } : {}),
-          registryLifecycle: true,
-          restoredFromStash: true,
-          scopePaths: paths,
-          version: 3,
-        },
-      );
-      const mutation = plan
-        ? await registry.prepareSet({
-          ...active,
-          claimedPaths: [],
-          phase: "plan",
-          proposalIds: [],
-          retainedArc: { ...active.retainedArc!, checkpointCommit: rebased.checkpointCommit, claimedPaths: paths },
-        }, active.checkpointCommit)
-        : await registry.prepareClaim(
-          { ...active, checkpointCommit: rebased.checkpointCommit, phase: "active" },
-          { expectedCheckpointCommit: active.checkpointCommit },
-        );
-      await repository.updateRefs([rebased.update, ...mutation.updates]);
-      try {
-        await this.replaceWorktreePaths(repository, merged.tree, paths);
-      } catch (restoreError) {
-        try {
-          await this.replaceWorktreePaths(repository, head, paths);
-          const rollback = await registry.prepareSet(
-            active,
-            plan ? active.checkpointCommit : rebased.checkpointCommit,
-            { claimLossSnapshot: { head: snapshot.head, tree: snapshot.tree } },
-          );
-          await repository.updateRefs(
-            rollback.updates,
-            [{ oldValue: rebased.checkpointCommit, ref: rebased.checkpointRef }],
-          );
-        } catch (rollbackError) {
-          throw new AggregateError([restoreError, rollbackError], "Arc unstash failed and lifecycle rollback also failed.");
-        }
-        throw restoreError;
-      }
-      return {
-        checkpointCommit: plan?.checkpointCommit ?? rebased.checkpointCommit,
-        checkpointRef: plan?.checkpointRef ?? rebased.checkpointRef,
-        conflictedPaths: merged.conflictedPaths,
-        intentName: active.intentName,
-        kind: plan ? "plan" : "arc",
-        phase: "active",
-        repoRoot: repository.root,
-        scopePaths: plan?.metadata?.scopePaths ?? paths,
-        ...(plan ? { claimedPaths: paths, plannedPaths: plan.metadata?.scopePaths ?? [] } : {}),
-        stashedPaths: [],
-      };
-    });
+  async adoptArc(input: GitArcAdoptionInput) {
+    return await GitObjectReadSession.run(async () => await (await this.transfers.prepareAdoption(input)).apply());
   }
 
-  async restashArc(input: ControllerInput): Promise<GitArcStashResult> {
-    return await GitObjectReadSession.run(async () => {
-      const { active, arc, checkpoint, harness, plan, registry, repository } = await this.requireStashableArc(input);
-      const paths = [...arc.claimedPaths];
-      const snapshot = await new GitArcClaimLossStore(repository, this.resolveThreadIdentity).read({ harness, threadId: input.threadId });
-      if (!snapshot?.frozen || snapshot.paths.length !== paths.length || snapshot.paths.some((path, index) => path !== paths[index])) {
-        throw new Error("The original stashed Git arc snapshot is unavailable for rollback.");
-      }
-      const head = await repository.headOrNull();
-      const rollbackTree = await repository.writeScopedWorktreeTree(paths, head);
-      const previousIndex = await repository.writeIndexTree();
-      const mutation = await registry.prepareSet(
-        {
-          ...active, claimedPaths: paths, phase: "stashed",
-          proposalIds: active.phase === "plan" ? arc.proposalIds ?? [] : active.proposalIds,
-        },
-        active.checkpointCommit,
-        { claimLossSnapshot: { head: snapshot.head, tree: snapshot.tree } },
-      );
-      try {
-        await this.replaceWorktreePaths(repository, head, paths);
-        await repository.resetMixedPaths(await repository.resolveTree(head), paths);
-        await repository.updateRefs(mutation.updates);
-      } catch (publicationError) {
-        try {
-          await repository.resetMixedPaths(previousIndex, paths);
-          await this.replaceWorktreePaths(repository, rollbackTree, paths);
-        } catch (rollbackError) {
-          throw new AggregateError([publicationError, rollbackError], "Arc restash publication failed and worktree rollback also failed.");
-        }
-        throw publicationError;
-      }
-      return {
-        checkpointCommit: active.checkpointCommit,
-        checkpointRef: plan?.checkpointRef ?? checkpoint.checkpointRef,
-        conflictedPaths: [],
-        intentName: active.intentName,
-        kind: "arc",
-        phase: "stashed",
-        repoRoot: repository.root,
-        scopePaths: [],
-        stashedPaths: paths,
-      };
-    });
+  async prepareReleaseToChild(input: GitArcSelectedTransferInput) {
+    return await GitObjectReadSession.run(() => this.transfers.prepareReleaseToChild(input));
   }
 
   async assertArcReleasable(input: ControllerInput): Promise<void> {
@@ -855,7 +602,7 @@ export default class WorkbenchGitCheckpointController {
     return await GitObjectReadSession.run(async () => {
       const harness = normalizeHarness(rawHarness);
       const entry = await this.registry(new WorkbenchGitRepository(cwd)).find({ harness, threadId });
-      return Boolean(entry && (getGitArcLiveClaimPaths(entry).length || entry.phase === "stashed"));
+      return Boolean(entry && (getGitArcLiveClaimPaths(entry).length || entry.phase === "stashed" || entry.savedStash));
     });
   }
 
@@ -1011,6 +758,7 @@ export default class WorkbenchGitCheckpointController {
         ? entries.find(entry => entry.harness === harness && entry.threadId === normalizeThreadId(owner.threadId))
         : undefined;
       const claims = current ? getGitArcLiveClaimPaths(current) : [];
+      const savedPaths = current?.savedStash?.paths ?? (current?.phase === "stashed" ? current.claimedPaths : []);
       const dirt = await repository.listAllChangedPaths(head, tree);
       const allClaims = entries.flatMap(getGitArcLiveClaimPaths);
       const lifecycle = current?.phase === "plan" ? current.retainedArc : current;
@@ -1020,7 +768,7 @@ export default class WorkbenchGitCheckpointController {
         ...proposals,
         dirtyClaims: claims.filter(claim => dirt.some(file => gitArcPathsOverlap(claim, file))),
         cleanClaims: claims.filter(claim => !dirt.some(file => gitArcPathsOverlap(claim, file))),
-        stashedClaims: current?.phase === "stashed" ? current.claimedPaths : [],
+        stashedClaims: savedPaths,
         unclaimedDirt: dirt.filter(file => !allClaims.some(claim => gitArcPathsOverlap(claim, file))),
         recovery: [], unavailableRecovery: [],
       };
@@ -1058,7 +806,7 @@ export default class WorkbenchGitCheckpointController {
           }
         }
       }
-      if (!claims.length && current?.phase !== "stashed") {
+      if (!claims.length && !savedPaths.length) {
         const lost = owner
           ? await new GitArcClaimLossStore(repository, this.resolveThreadIdentity).read({ harness, threadId: owner.threadId })
           : null;

@@ -44,14 +44,16 @@ export default class GitArcLifecycleController {
     const current = await new GitArcRegistry(repository, this.resolveThreadIdentity).find({ harness, threadId: input.threadId });
     if (!current) return null;
     const checkpoint = await new GitCheckpointStore(repository, this.resolveThreadIdentity).readCheckpoint(harness, input.threadId, current.checkpointCommit);
+    const live = getGitArcLiveClaimPaths(current);
+    const savedPaths = current.savedStash?.paths ?? (current.phase === "stashed" ? current.claimedPaths : []);
     return {
-      phase: current.phase ?? "active",
+      phase: savedPaths.length && !live.length ? "stashed" : current.phase ?? "active",
       checkpointCommit: current.checkpointCommit,
       intentName: current.intentName,
       plannedPaths: current.phase === "plan" || (current.phase === "stashed" && current.retainedArc)
         ? checkpoint.metadata?.scopePaths ?? [] : [],
-      claimedPaths: getGitArcLiveClaimPaths(current),
-      ...(current.phase === "stashed" ? { stashedPaths: current.claimedPaths } : {}),
+      claimedPaths: live,
+      ...(savedPaths.length ? { stashedPaths: savedPaths } : {}),
       adoptedPaths: current.phase === "plan" || (current.phase === "stashed" && current.retainedArc)
         ? checkpoint.metadata?.adoptedPaths ?? [] : [],
       proposals: (await this.proposals.findLifecycleState(input))?.proposals ?? [],

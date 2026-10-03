@@ -36,6 +36,7 @@ import WorkbenchWorkspaceGitArcController, { WorkspaceGitArcMemberError, type Wo
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import GitArcProposalDiffController, { type GitArcProposalDiffStore } from "./lib/workbench/git/GitArcProposalDiffController";
 
@@ -51,6 +52,7 @@ export interface WorkbenchGitArcFeatureOptions {
   getThreadClaimContext(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadClaimContext | null>;
   refreshThreadGitArcState(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<void>;
   publishAgentContext?(target: WorkbenchAgentContextTarget, text: string): Promise<WorkbenchContextAdmission | "failed">;
+  resolveSubagentPeer?(input: { cwd: string; parentThreadId: WorkbenchThreadId; name: string }): Promise<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>;
   onReloadEligibilityChanged?: () => void;
   observeClaimSnapshot?(snapshot: WorkbenchGitClaimSnapshot): void;
   reloadScopeProjectRoot?: string;
@@ -70,6 +72,8 @@ export type WorkbenchGitArcPlanState = PublicGitState<WorkspaceGitArcPlanState>;
 export type WorkbenchGitArcActiveClaim = PublicGitOwner<GitArcActiveClaim>;
 
 const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
+  "arcAdoptSource",
+  "arcTransferClaims",
   "planClaims", "arcClaims",
   "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRelease", "arcRemove", "arcStart", "arcStash", "arcUnstash", "arcDiscardStash", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "proposalCommit", "proposalCreate", "proposalRescind", "restore",
@@ -320,6 +324,10 @@ export default class WorkbenchGitArcFeature {
         ? { harness: target.harness, threadId: WorkbenchThreadIdSchema.parse(target.threadId) }
         : { harness: request.harness, threadId: request.threadId };
       const effectiveRequest = target ? { ...request, ...owner } : request;
+      const adoptionSource = effectiveRequest.action === "arcAdoptSource"
+        ? await this.resolveAdoptionSource(project, effectiveRequest) : null;
+      const transferDestination = effectiveRequest.action === "arcTransferClaims"
+        ? await this.resolveOwnedSubagent(project, owner.threadId, effectiveRequest.destination.name) : null;
       const modifiedSince = effectiveRequest.action === "compare" || effectiveRequest.action === "diff"
         ? await this.options.getThreadCreatedAt(project.project.id, owner.harness, owner.threadId)
         : null;
@@ -343,7 +351,27 @@ export default class WorkbenchGitArcFeature {
           }
           let response: Response;
           try {
-            response = effectiveRequest.action === "readDiffArtifact"
+            response = effectiveRequest.action === "arcTransferClaims" && transferDestination
+              ? Response.json(await this.workspaceController.releaseToChild(project, {
+                cwd: project.cwd, harness: owner.harness, threadId: owner.threadId,
+                destination: transferDestination, paths: effectiveRequest.paths,
+              }, async () => {
+                const [parent, child] = await Promise.all([
+                  this.options.getThreadClaimContext(project.project.id, owner.harness, owner.threadId),
+                  this.options.getThreadClaimContext(project.project.id, transferDestination.harness, transferDestination.threadId),
+                ]);
+                if (!parent || parent.lifecycle.settled || !child || child.lifecycle.settled) {
+                  throw new Error("Both ownership threads must be available and unsettled during claim transfer.");
+                }
+              }))
+              : effectiveRequest.action === "arcAdoptSource" && adoptionSource
+              ? Response.json(await this.workspaceController.adopt(project, {
+                cwd: project.cwd, harness: owner.harness, threadId: owner.threadId, source: adoptionSource,
+              }, async () => {
+                const caller = await this.options.getThreadClaimContext(project.project.id, owner.harness, owner.threadId);
+                if (!caller || caller.lifecycle.settled) throw new Error("A settled or unavailable thread cannot adopt Git arc ownership.");
+              }))
+              : effectiveRequest.action === "readDiffArtifact"
               ? await this.dispatch(effectiveRequest)
               : usesWorkspaceController(project, effectiveRequest)
                 ? Response.json(await this.workspaceController.execute(project, effectiveRequest, { modifiedSince: modifiedSince ?? undefined }))
@@ -382,11 +410,37 @@ export default class WorkbenchGitArcFeature {
               console.error(`Git arc unstash restored work, but conflict context admission failed: ${sanitizeError(error)}`);
             }
           }
+          if (response.ok && adoptionSource) {
+            try {
+              const sourceHarness = installedProviderKeys.find(key => key === adoptionSource.harness);
+              if (!sourceHarness) throw new Error("The adopted source provider is unavailable for passive context.");
+              const admission = await this.options.publishAgentContext?.({ harness: sourceHarness, threadId: adoptionSource.threadId },
+                `Git arc claims and saved stash ownership transferred to coordinating thread ${owner.threadId}. Read arc status before further edits; transferred work is no longer yours.`) ?? "unsupported";
+              if (admission === "unsupported") console.warn("Git arc adoption succeeded, but passive source context is unsupported.");
+              if (admission === "failed") console.error("Git arc adoption succeeded, but passive source context admission failed.");
+            } catch (error) {
+              console.error(`Git arc adoption succeeded, but source context admission failed: ${sanitizeError(error)}`);
+            }
+          }
+          if (response.ok && transferDestination) {
+            try {
+              const harness = installedProviderKeys.find(key => key === transferDestination.harness);
+              if (!harness) throw new Error("The receiving subagent provider is unavailable for passive context.");
+              const admission = await this.options.publishAgentContext?.({ harness, threadId: transferDestination.threadId },
+                `Selected Git arc claims were transferred to you by coordinating thread ${owner.threadId}. Read arc status before editing their paths.`) ?? "unsupported";
+              if (admission === "unsupported") console.warn("Git arc release transferred claims, but passive child context is unsupported.");
+              if (admission === "failed") console.error("Git arc release transferred claims, but passive child context admission failed.");
+            } catch (error) {
+              console.error(`Git arc release transferred claims, but child context admission failed: ${sanitizeError(error)}`);
+            }
+          }
           return response;
         } finally {
           if (mutatesGitArcState(effectiveRequest)) {
             this.notifyClaimMutation();
             await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
+            if (adoptionSource) await this.refreshThreadGitArcState(project.project.id, adoptionSource.harness, adoptionSource.threadId);
+            if (transferDestination) await this.refreshThreadGitArcState(project.project.id, transferDestination.harness, transferDestination.threadId);
           }
         }
       };
@@ -710,6 +764,27 @@ export default class WorkbenchGitArcFeature {
     return { harness, threadId: WorkbenchThreadIdSchema.parse(identity.threadId) };
   }
 
+  private async resolveAdoptionSource(
+    project: AgentEndpointProjectResolution,
+    input: Extract<GitCheckpointRequest, { action: "arcAdoptSource" }>,
+  ) {
+    if (input.source.kind === "subagent") {
+      return await this.resolveOwnedSubagent(project, WorkbenchThreadIdSchema.parse(input.threadId), input.source.name);
+    }
+    const source = await this.options.identities.resolveGitArcThreadOwner({
+      projectId: project.project.id, repositoryRoot: project.cwd, threadId: input.source.threadId,
+    });
+    if (!source) throw new Error("The source thread has no admitted Git arc identity for this repository.");
+    return { harness: ProviderKeySchema.parse(source.harness), threadId: WorkbenchThreadIdSchema.parse(source.threadId) };
+  }
+
+  private async resolveOwnedSubagent(project: AgentEndpointProjectResolution, parentThreadId: WorkbenchThreadId, name: string) {
+    const child = await this.options.resolveSubagentPeer?.({ cwd: project.cwd, parentThreadId, name });
+    if (!child) throw new Error("Owned subagent resolution is unavailable.");
+    const identity = await this.gitThreadIdentity(project, child.harness, child.threadId);
+    return { ...identity, harness: ProviderKeySchema.parse(identity.harness) };
+  }
+
   private publicState<T extends WorkspaceGitArcLifecycleState | WorkspaceGitArcPlanState>(state: T): PublicGitState<T> {
     return {
       ...state,
@@ -726,6 +801,8 @@ export default class WorkbenchGitArcFeature {
     switch (input.action) {
       case "planClaims": return Response.json(await this.controller.editPlanClaims({ ...common, ...input }));
       case "arcClaims": return Response.json(await this.controller.editArcClaims({ ...common, ...input }));
+      case "arcAdoptSource": throw new Error("Source adoption requires canonical identity ingress.");
+      case "arcTransferClaims": throw new Error("Selected claim transfer requires canonical child identity ingress.");
       case "arcScope": return Response.json(await this.controller.readScope(common));
       case "arcStatus": return Response.json(await this.controller.readStatus(common));
       case "plan": return Response.json(await this.controller.createPlan({

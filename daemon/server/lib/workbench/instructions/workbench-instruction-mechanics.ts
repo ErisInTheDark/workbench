@@ -34,7 +34,10 @@ export async function listWorkbenchInstructionMechanics(
     available.add("thread-recall");
     available.add("thread-refresh");
     available.add("task-status");
-    if (!context.subagentName?.trim()) available.add("task-title");
+    if (!context.subagentName?.trim()) {
+      available.add("task-title");
+      available.add("git-proposals");
+    }
   }
   return available;
 }

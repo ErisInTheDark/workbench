@@ -57,4 +57,7 @@ export default class WorkbenchSubagentFeature {
   dispose() { return this.controller.dispose(); }
   handleRequest(request: JsonRpcRequest): Promise<JsonRpcResponse> { return this.controller.handleRequest(request); }
   listRelationships(projectId: ProjectId) { return this.store.list({ projectId }); }
+  resolveGitArcPeer(input: { cwd: string; parentThreadId: WorkbenchThreadId; name: string }) {
+    return this.controller.resolveGitArcPeer(input);
+  }
 }

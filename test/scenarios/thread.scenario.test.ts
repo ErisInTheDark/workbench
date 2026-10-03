@@ -798,7 +798,11 @@ test("selected providers complete the shared thread boundary journey in one clon
     const beforeCompact = await durable();
     const priorCompactions = new Set(beforeCompact.turns.flatMap(turn => turn.items)
       .filter(item => item.type === "contextCompaction").map(item => item.id));
-    if (fakeModel) fakeModel.enqueue([{ text: `Summary ${prefixProof}` }]);
+    // OpenCode resumes the model after summarising; keep that response ahead of the final turn's script.
+    if (fakeModel) fakeModel.enqueue([
+      { text: `Summary ${prefixProof}` },
+      ...(provider === "opencode" ? [{ text: `Continuing after compaction ${prefixProof}` }] : []),
+    ]);
     console.log(`[${provider} live] requesting compaction`);
     await runtime.daemon.threads.compact({ threadId });
     await waitForFact(durable, value => {

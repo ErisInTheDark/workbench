@@ -333,6 +333,14 @@ export default class WorkbenchSubagentController {
     return result;
   }
 
+  async resolveGitArcPeer(input: { cwd: string; parentThreadId: WorkbenchThreadId; name: string }) {
+    const records = await this.ownedRecords({ cwd: input.cwd, callerThreadId: input.parentThreadId, name: input.name });
+    const record = records[0];
+    if (!record) throw new Error("The owned subagent is unavailable.");
+    await this.assertUnlocked(record.projectId, records);
+    return { harness: record.harness, threadId: record.threadId };
+  }
+
   private async ownedRecords(params: Record<string, unknown>) {
     const callerThreadId = this.readThreadId(params, "callerThreadId");
     const cwd = requiredString(params, "cwd");

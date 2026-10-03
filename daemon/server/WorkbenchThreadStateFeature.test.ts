@@ -1025,6 +1025,7 @@ test("provider reconciliation publishes its first page before deeper history and
       intentName: lifecycleState.intentName,
       phase: "active",
       proposals: lifecycleState.proposals,
+      stashedPaths: [],
       updatedAt: lifecycleState.updatedAt,
     },
     gitArcPlan: {
@@ -1045,6 +1046,7 @@ test("provider reconciliation publishes its first page before deeper history and
     intentName: lifecycleState.intentName,
     phase: "active",
     proposals: lifecycleState.proposals,
+    stashedPaths: [],
     updatedAt: lifecycleState.updatedAt,
   });
   assert.deepEqual(refreshedParent?.entryKind === "thread" ? refreshedParent.gitArcPlan : null, {
@@ -1438,7 +1440,7 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
   assert.ok(thread && thread.entryKind === "thread");
   assert.deepEqual(thread.gitArc, {
     checkpointCommit: "b".repeat(40), claimedPaths: [], intentDescription: "", intentName: "settle projection",
-    phase: "resolved", proposals: [{ proposalId: "proposal-two", status: "committed" }], updatedAt: "2026-08-23T00:01:00.000Z",
+    phase: "resolved", proposals: [{ proposalId: "proposal-two", status: "committed" }], stashedPaths: [], updatedAt: "2026-08-23T00:01:00.000Z",
   });
   assert.equal(thread.gitArcPlan, null);
   await feature.dispose();

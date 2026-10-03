@@ -70,6 +70,65 @@ function waitFeature(extraOptions: object = {}) {
   });
 }
 
+test("adoption resolves admitted source ids and owned names without replacing the caller identity", async () => {
+  const captured: Array<{ threadId: string; source: { harness: string; threadId: string } }> = [];
+  const feature = waitFeature({
+    publishAgentContext: async () => "admitted",
+    resolveSubagentPeer: async () => ({
+      harness: "opencode", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(wbThreadId("opencode", "sibling")),
+    }),
+  });
+  const internal = feature as unknown as {
+    workspaceController: { adopt: (project: object, input: { threadId: string; source: { harness: string; threadId: string } }) => Promise<object> };
+  };
+  internal.workspaceController.adopt = async (_project, input) => { captured.push(input); return {}; };
+  for (const source of [{ kind: "thread", threadId: wbThreadId("codex", "sibling") }, { kind: "subagent", name: "mira" }]) {
+    const response = await feature.executeRequest({
+      action: "arcAdoptSource", cwd: "C:/Git/Project", harness: "codex", threadId: "thread", source,
+    });
+    assert.equal(response.ok, true, await response.text());
+  }
+  assert.deepEqual(captured, [
+    { cwd: "C:/Git/Project", harness: "codex", threadId: wbThreadId("codex", "thread"), source: { harness: "codex", threadId: wbThreadId("codex", "sibling") } },
+    { cwd: "C:/Git/Project", harness: "codex", threadId: wbThreadId("codex", "thread"), source: { harness: "opencode", threadId: wbThreadId("opencode", "sibling") } },
+  ]);
+});
+
+test("release to a named child keeps the parent as source and refreshes both owners", async () => {
+  const refreshed: string[] = [];
+  const notices: string[] = [];
+  const childId = wbThreadId("opencode", "sibling");
+  const feature = waitFeature({
+    refreshThreadGitArcState: async (_project: string, _harness: string, threadId: string) => { refreshed.push(threadId); },
+    publishAgentContext: async (target: { threadId: string }) => { notices.push(target.threadId); return "admitted"; },
+    resolveSubagentPeer: async () => ({
+      harness: "opencode", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(childId),
+    }),
+  });
+  let captured: object | null = null;
+  const internal = feature as unknown as {
+    workspaceController: {
+      releaseToChild: (project: object, input: object, beforeTransfer: () => Promise<void>) => Promise<object>;
+    };
+  };
+  internal.workspaceController.releaseToChild = async (_project, input, beforeTransfer) => {
+    await beforeTransfer();
+    captured = input;
+    return { checkpointCommit: "a".repeat(40), intentName: "parent", kind: "arc", phase: "resolved", scopePaths: [], releasedClaims: ["one.txt"] };
+  };
+  const response = await feature.executeRequest({
+    action: "arcTransferClaims", cwd: "C:/Git/Project", harness: "codex", threadId: "thread",
+    destination: { kind: "subagent", name: "mira" }, paths: ["one.txt"],
+  });
+  assert.equal(response.ok, true, await response.text());
+  assert.deepEqual(captured, {
+    cwd: "C:/Git/Project", harness: "codex", threadId: wbThreadId("codex", "thread"),
+    destination: { harness: "opencode", threadId: childId }, paths: ["one.txt"],
+  });
+  assert.deepEqual(refreshed, [wbThreadId("codex", "thread"), childId]);
+  assert.deepEqual(notices, [childId]);
+});
+
 test("conflicted unstash passively informs the owner without changing the successful result", async () => {
   const admitted: Array<{ harness: string; threadId: string; text: string }> = [];
   let admission: "admitted" | "failed" = "admitted";

@@ -44,6 +44,24 @@ function createContext(activatedSkillPaths: readonly string[] = []) {
 
 const readNoLocalCapabilities = async () => ({ browseRawCommandsEnabled: false });
 
+test("proposal instructions resolve for parents but become handoff instructions for children", async () => {
+  const base = createContext();
+  const tools = async () => [{ id: "git_arc_propose", codeModeEligible: false }];
+  const input = [
+    "<>",
+    "<available:git-proposals>propose with <tool id=\"git_arc_propose\" /></available:git-proposals>",
+    "<else>handoff</else>",
+    "</>",
+  ].join("\n");
+  const parent = await managed.createManagedThreadFilter({ ...base, readInstructionTools: tools }, readNoLocalCapabilities);
+  const child = await managed.createManagedThreadFilter({
+    ...base, readInstructionTools: tools, subagentName: "mira",
+  }, readNoLocalCapabilities);
+  assert.match(parent(input, "policy") ?? "", /tools\.wb\.git_arc_propose/u);
+  assert.doesNotMatch(parent(input, "policy") ?? "", /handoff/u);
+  assert.equal(child(input, "policy"), "handoff");
+});
+
 test("managed prompts carry skill manifests while only activation carries bodies", async () => {
   const skillPath = path.join(projectRoot, ".agents", "skills", "iterate", "SKILL.md");
   const bodyMarker = "FRESH ITERATE SKILL BODY";

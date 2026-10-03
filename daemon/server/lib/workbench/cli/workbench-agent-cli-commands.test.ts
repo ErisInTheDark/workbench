@@ -187,6 +187,18 @@ test("combined claim CLI preserves addition, removal and adoption as separate ar
   assert.equal(missing.kind, "error");
 });
 
+test("whole-source adoption requires exactly one thread or child-name selector", async () => {
+  for (const [flag, source] of [["--thread", { kind: "thread", threadId: "source" }], ["--name", { kind: "subagent", name: "source" }]] as const) {
+    const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "adopt", flag, "source"], gitArcOptions);
+    assert.equal(parsed.kind, "request");
+    assert.deepEqual(parsed.request.body?.source, source);
+    assert.equal(parsed.request.body?.threadId, gitArcOptions.callerThreadId);
+  }
+  for (const args of [[], ["--thread", "source", "--name", "mira"], ["--thread", "source", "--", "one.ts"]]) {
+    assert.equal((await parseWorkbenchAgentCliCommand(["git", "arc", "adopt", ...args], gitArcOptions)).kind, "error");
+  }
+});
+
 test("plan claim revisions recover removal-only operands when PowerShell consumes the separator", async () => {
   const parsed = await parseWorkbenchAgentCliCommand(["git", "plan", "claims", "--inherit", "-old.ts"], gitArcOptions);
   assert.equal(parsed.kind, "request");
@@ -846,6 +858,21 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   const disown = await parseWorkbenchAgentCliCommand(["git", "arc", "release", "--disown"], gitOptions);
   assert.equal(disown.kind, "request");
   assert.deepEqual(disown.request.body, { ...release.request.body, disown: true });
+  const transfer = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "release", "--to-subagent", "mira", "--", "api:src/one.ts",
+  ], gitOptions);
+  assert.equal(transfer.kind, "request");
+  assert.deepEqual(transfer.request.body, {
+    action: "arcTransferClaims", cwd: "C:/workspace", harness: "codex", threadId: "thread-1",
+    destination: { kind: "subagent", name: "mira" }, paths: ["api:src/one.ts"],
+  });
+  for (const invalid of [
+    ["--to-subagent", "mira"],
+    ["--to-subagent", "mira", "--disown", "--", "src/one.ts"],
+    ["--", "src/one.ts"],
+  ]) {
+    assert.equal((await parseWorkbenchAgentCliCommand(["git", "arc", "release", ...invalid], gitOptions)).kind, "error");
+  }
 
   const proposal = await parseWorkbenchAgentCliCommand([
     "git", "arc", "propose", "--title", "Title", "--description", "Description",
@@ -1742,6 +1769,13 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
   );
   assert.deepEqual(parseGitArcReceipt(partialReleaseResponse.stdout)?.removedClaims, ["src/clean.ts"]);
   assert.equal(parseGitArcReceipt(partialReleaseResponse.stdout)?.plannedPathCount, undefined);
+  const transferred = adapt("git-arc-release", {
+    checkpointCommit: planRef, intentName: "Parent work", phase: "active",
+    releasedClaims: ["api:src/one.ts"], scopePaths: ["web:src/two.ts"],
+  }, { action: "arcTransferClaims", destination: { kind: "subagent", name: "mira" }, paths: ["api:src/one.ts"] });
+  assert.deepEqual(parseGitArcReceipt(transferred.stdout)?.removedClaims, ["api:src/one.ts"]);
+  assert.equal(parseGitArcReceipt(transferred.stdout)?.claimedPathCount, 1);
+  assert.doesNotMatch(transferred.stdout, /Set disown/u);
   const waitResponse = adapt("git-arc-wait", {
     acquiredClaims: ["api:src/api.ts", "web:src/web.ts"],
     changes: [],

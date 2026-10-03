@@ -6,6 +6,7 @@
  */
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import type { WorkbenchInstructionTool } from "../../lib/workbench/instructions/instruction-tool-reference";
+import { WORKBENCH_PARENT_ONLY_TOOLS } from "workbench-shared/workbench/commands/workbench-tool-audience";
 import { WORKBENCH_THREAD_WORKING_STATUS_MESSAGE } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 import {
@@ -15,8 +16,8 @@ import {
 
 const NATIVE_COMMAND_ACTIONS = ["bash", "shell"] as const;
 
-function managedPermissions() {
-  return NATIVE_COMMAND_ACTIONS.map(action => ({
+function managedPermissions(subagent = false) {
+  return [...NATIVE_COMMAND_ACTIONS, ...(subagent ? WORKBENCH_PARENT_ONLY_TOOLS.map(id => `wb_${id}`) : [])].map(action => ({
     action,
     resource: "*",
     effect: "deny" as const,
@@ -33,6 +34,7 @@ export interface OpenCodeManagedSessionContext {
   workflowIds: readonly string[];
   activatedSkillPaths: readonly string[];
   workingStatus?: boolean;
+  subagentName?: string | null;
 }
 
 interface BuiltInstructions {
@@ -72,10 +74,7 @@ export default class OpenCodeManagedSessionController {
       input.workingStatus ? WORKBENCH_THREAD_WORKING_STATUS_MESSAGE : null,
     ].filter((part): part is string => Boolean(part?.trim())).join("\n\n");
     const session = (await this.options.acquire()).session;
-    await session.update({
-      sessionID: input.sessionID,
-      permissions: managedPermissions(),
-    });
+    await session.update({ sessionID: input.sessionID, permissions: managedPermissions(Boolean(input.subagentName)) });
     await session.instructions.entry.put({
       sessionID: input.sessionID,
       key: "workbench",
@@ -97,6 +96,7 @@ export default class OpenCodeManagedSessionController {
       threadId: context.threadId,
       workbenchOrigin: this.options.workbenchOrigin,
       workflowIds: context.workflowIds,
+      subagentName: context.subagentName,
     };
     const [instructions, activatedSkills] = await Promise.all([
       buildWorkbenchManagedThreadInstructions(promptContext, this.options.readLocalCapabilities),

@@ -35,6 +35,25 @@ test("stashed entries retain their complete path set without exposing live claim
   assert.deepEqual(getGitArcLiveClaimPaths(stashed), []);
 });
 
+test("adopted saved work survives ordinary claim edits and follows checkpoint history", async () => {
+  const owner = entry("provider-owner", ["owned.ts"]);
+  owner.savedStash = {
+    checkpointCommit: "a".repeat(40), paths: ["saved.ts"], intentName: "saved",
+    intentDescription: "", proposalIds: [],
+  };
+  const { registry, written } = fixture([owner]);
+  const revised = await registry.prepareSet({
+    ...input("wb-owner", ["owned.ts", "more.ts"]), checkpointCommit: "b".repeat(40),
+  }, owner.checkpointCommit);
+  const persisted = JSON.parse(written.get(revised.updates[0]!.newValue)!) as { entries: GitArcRegistryEntry[] };
+  assert.deepEqual(persisted.entries[0]?.savedStash, owner.savedStash);
+  const remapped = await registry.prepareCommitRemap(new Map([["a".repeat(40), "c".repeat(40)]]));
+  assert.ok(remapped);
+  const history = JSON.parse(written.get(remapped.newValue)!) as { entries: GitArcRegistryEntry[] };
+  assert.equal(history.entries[0]?.savedStash?.checkpointCommit, "c".repeat(40));
+  await assert.rejects(registry.prepareRelease({ harness: "codex", threadId: "wb-owner" }), /saved work/u);
+});
+
 function fixture(entries: GitArcRegistryEntry[]) {
   const written = new Map<string, string>();
   const resolutions: string[] = [];

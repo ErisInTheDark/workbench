@@ -392,6 +392,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const delivery = input.intent === "newTurn" || !activeTurn ? "queue" : "steer";
     const workingStatus = toWorkbenchThreadUserInput(input.input).some(isWorkbenchQuestionnaireResponsePart);
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : undefined;
+    const subagentName = entry?.entryKind === "subagent" ? entry.name : null;
     // After reload there may be no captured workflow context. Keep the session's installed
     // instructions for hidden continuation instead of replacing them with an empty workflow.
     const managed = !continuation || input.context ? await this.options.managed.refresh({
@@ -404,6 +405,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       workflowIds: input.context?.workflowIds ?? [],
       activatedSkillPaths: input.context?.activatedSkillPaths ?? [],
       workingStatus,
+      subagentName,
     }) : null;
     const nativePrompt = prompt(input.input);
     // Display reads metadata input, so the hidden skill block reaches only the model.

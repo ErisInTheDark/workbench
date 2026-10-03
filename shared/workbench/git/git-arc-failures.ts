@@ -31,6 +31,8 @@ export type GitArcDriftComparison = z.infer<typeof GitArcDriftComparisonSchema>;
 
 const GitArcFailureActionSchema = z.enum([
   "planClaims", "arcClaims", "arcScope", "arcStatus",
+  "arcAdoptSource",
+  "arcTransferClaims",
   "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "arcContinue", "arcStart", "arcStash", "arcUnstash", "arcDiscardStash", "arcWait", "arcAdd", "arcAdopt", "arcRemove", "arcRelease", "arcMove",
   "compare", "diff", "proposalCreate", "proposalRescind", "proposalState", "proposalCommit",

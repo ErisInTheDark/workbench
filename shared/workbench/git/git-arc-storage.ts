@@ -13,7 +13,9 @@
  * - checkpointMessage/proposalMessage: serialise marked metadata.
  * - parseMarkedMetadata: decode marked metadata messages.
  * - remapCheckpointMetadata/remapProposalMetadata/remapArcOutcome: rewrite stored commit identities.
+ * - GitArcSavedStashSchema/GitArcSavedStash: caller-owned adopted-stash registry metadata.
  */
+import { z } from "zod";
 
 export const CHECKPOINT_METADATA_MARKER = "workbench-git-checkpoint-v1";
 export const PROPOSAL_METADATA_MARKER = "workbench-git-checkpoint-proposal-v1";
@@ -72,6 +74,15 @@ export interface ArcOutcome {
   successorCheckpoint: string | null;
   version: 1;
 }
+
+export const GitArcSavedStashSchema = z.object({
+  checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
+  paths: z.array(z.string().min(1)).min(1),
+  intentName: z.string().min(1),
+  intentDescription: z.string(),
+  proposalIds: z.array(z.string().min(1)),
+}).strict();
+export type GitArcSavedStash = z.infer<typeof GitArcSavedStashSchema>;
 
 export function normalizeArcOutcome(outcome: ArcOutcome, currentHead?: string): ArcOutcome {
   if (outcome.acceptedProposals) return outcome;
