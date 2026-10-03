@@ -10,10 +10,6 @@ import { ZapIcon } from "../workbench-icons";
 import WorkbenchPressDragSlider from "../WorkbenchPressDragSlider";
 import { formatProfileContext, profileContextColour, profileEffortColour } from "./ThreadProfileEditor";
 
-function joinClasses(...values: Array<string | false | null | undefined>) {
-  return values.filter(Boolean).join(" ");
-}
-
 export default function ThreadComposerRibbon({
   agentLabel,
   currentReasoningEffort,
@@ -76,17 +72,11 @@ export default function ThreadComposerRibbon({
             type="button"
             aria-label={isFastModeEnabled ? "Turn fast mode off" : "Turn fast mode on"}
             aria-pressed={isFastModeEnabled}
-            className={joinClasses(
-              "enabled:cursor-pointer",
-              "relative isolate inline-flex shrink-0 items-center justify-center bg-transparent px-2.5 py-2 transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft",
-              isFastModeEnabled
-                ? "text-text"
-                : "text-fg/muted",
-            )}
+            className="enabled:cursor-pointer relative isolate inline-flex shrink-0 items-center justify-center bg-transparent px-2.5 py-2 text-text transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
             title={isFastModeEnabled ? "Fast mode is on" : "Fast mode is off"}
             onClick={onFastModeToggle}
           >
-            <ZapIcon size={18} />
+            <ZapIcon size={18} className={isFastModeEnabled ? "fill-current" : undefined} />
           </button>
         </>
       ) : null}

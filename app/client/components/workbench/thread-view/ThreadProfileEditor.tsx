@@ -198,9 +198,9 @@ export default function ThreadProfileEditor ({
             label={settings.serviceTier === "fast" ? "Turn fast mode off" : "Turn fast mode on"}
             title={settings.serviceTier === "fast" ? "Fast mode is on" : "Fast mode is off"}
             aria-pressed={settings.serviceTier === "fast"}
-            className={`row-span-2 self-center ml-auto ${settings.serviceTier === "fast" ? "text-text" : ""}`}
+            className="row-span-2 self-center ml-auto text-text"
             onClick={() => update({ serviceTier: settings.serviceTier === "fast" ? null : "fast" })}
-          ><ZapIcon size={16} /></WorkbenchIconButton> : null}
+          ><ZapIcon size={16} className={settings.serviceTier === "fast" ? "fill-current" : undefined} /></WorkbenchIconButton> : null}
           {capability ? <div className="grid grid-cols-subgrid col-span-3 min-w-0 items-center gap-3 px-4 py-0.5 text-sm">
             <span className="text-fg/muted">Context</span>
             <WorkbenchPressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:context`} label="Context window" min={contextWindowFloor(capability)} max={capability.maximumTokens} step={1000} value={settings.contextWindowTokens ?? capability.defaultTokens} format={formatProfileContext} colour={profileContextColour} onChange={(contextWindowTokens) => update({ contextWindowTokens })} />
