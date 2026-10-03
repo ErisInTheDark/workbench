@@ -1,18 +1,19 @@
 /*
  * Exports:
- * - InlineMentionCandidate: suggestion-ready skill or file target used by inline mention matching. Keywords: composer, questionnaire, mentions, suggestions.
- * - InlineMentionFileCandidateInput: project file input with optional ignored metadata. Keywords: file mention, gitignore, candidate.
- * - InlineMentionHighlight: resolved token range and target metadata for editor highlights. Keywords: highlight, token, skill, file.
- * - InlineMentionHighlightSources: grouped skill and file candidates for reusable mention resolution. Keywords: source, resolver, popup.
- * - InlineMentionSuggestion: active caret suggestion candidate with replacement range. Keywords: autocomplete, popup, mention.
- * - BuildInlineMentionCandidatesOptions: project, skill, and workspace inputs for mention source building. Keywords: mentions, builder, options.
- * - buildInlineMentionCandidates: convert loaded skills and project files into suggestion-ready candidates. Keywords: skills, files, source.
- * - buildInlineMentionCandidatesCooperatively: build mention candidates in browser-yielding slices. Keywords: skills, files, scheduler.
- * - buildInlineMentionHighlights: resolve unambiguous /skill and #file tokens in plaintext. Keywords: parser, highlighter, plaintext.
- * - getActivatedWorkbenchSkillPaths: return unique resolved skill paths from mention highlights. Keywords: skills, activation, paths.
- * - getActivatedWorkbenchSkillPathsForTextValues: resolve unique skill paths across independent user-authored text values. Keywords: skills, questionnaire, activation.
- * - buildInlineMentionSuggestions: rank caret-local skill or file suggestions. Keywords: autocomplete, caret, ranking.
- * - readCachedInlineMentionCandidates: return already-prepared mention candidates without rebuilding. Keywords: cache, mentions, render.
+ * - InlineMentionCandidateKind: skill or file mention discriminator.
+ * - InlineMentionCandidate: suggestion-ready skill or file target.
+ * - InlineMentionFileCandidateInput: project file input with optional ignored metadata.
+ * - InlineMentionHighlight: resolved token range and target metadata.
+ * - InlineMentionHighlightSources: grouped skill and file resolution candidates.
+ * - InlineMentionSuggestion: caret-local suggestion with replacement range.
+ * - BuildInlineMentionCandidatesOptions: project, skill, and workspace source inputs.
+ * - buildInlineMentionCandidates: prepare skill and file candidates.
+ * - buildInlineMentionCandidatesCooperatively: prepare candidates in browser-yielding slices.
+ * - buildInlineMentionHighlights: resolve unambiguous plaintext mentions.
+ * - getActivatedWorkbenchSkillPaths: dedupe skill paths from highlights.
+ * - getActivatedWorkbenchSkillPathsForTextValues: resolve skill paths across independent text values.
+ * - buildInlineMentionSuggestions: rank suggestions outside resolved highlights.
+ * - readCachedInlineMentionCandidates: read prepared candidates without rebuilding.
  */
 
 import type { CooperativeWorkBudget } from "../state/cooperative-work";
@@ -1725,7 +1726,7 @@ function getSuggestionReplacementText(marker: "/" | "#", candidate: InlineMentio
   }
 
   const normalizedPath = normalizeMentionPath(candidate.path);
-  return /\s/.test(normalizedPath) ? `#[${normalizedPath}]` : `${marker}${normalizedPath}`;
+  return `#[${normalizedPath}]`;
 }
 
 export function buildInlineMentionSuggestions(
@@ -1740,6 +1741,12 @@ export function buildInlineMentionSuggestions(
 
   const token = parseActiveInlineMentionToken(text, caretOffset);
   if (!token) {
+    return [];
+  }
+
+  const completeToken = parseInlineMentionTokens(text).find((candidate) => candidate.start === token.start);
+  const resolution = completeToken ? resolveToken(completeToken, sources) : null;
+  if (resolution && caretOffset <= resolution.end) {
     return [];
   }
 

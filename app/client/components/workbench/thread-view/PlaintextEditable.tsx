@@ -148,6 +148,24 @@ function getInlineMentionSuggestionsPortalStyle (
   };
 }
 
+function InlineMentionSuggestionLabel ({ suggestion }: { suggestion: InlineMentionSuggestion }) {
+  if (suggestion.candidate.kind === "skill") {
+    return suggestion.replacementText;
+  }
+
+  const path = suggestion.candidate.path;
+  const filenameStart = path.lastIndexOf("/") + 1;
+  const extensionStart = path.lastIndexOf(".");
+  const stemEnd = extensionStart > filenameStart ? extensionStart : path.length;
+  return (
+    <>
+      <span className="text-fg/muted">{path.slice(0, filenameStart)}</span>
+      {path.slice(filenameStart, stemEnd)}
+      <span className="text-fg/muted">{path.slice(stemEnd)}</span>
+    </>
+  );
+}
+
 function InlineMentionSuggestionsPopup ({
   activeIndex,
   onSelect,
@@ -194,7 +212,7 @@ function InlineMentionSuggestionsPopup ({
             role="option"
           >
             <span className="min-w-0 truncate font-mono">
-              {suggestion.replacementText}
+              <InlineMentionSuggestionLabel suggestion={suggestion} />
             </span>
             {suggestion.candidate.description ? (
               <span className="truncate text-[0.92em] text-fg/muted">

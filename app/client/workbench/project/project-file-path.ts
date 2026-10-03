@@ -1,20 +1,21 @@
 /*
  * Exports:
- * - ProjectFilePathLocation: optional line and column metadata for displayed project paths. Keywords: project path, line, column.
- * - ProjectFilePathDisplay: derived label, basename, title, and location suffix for a project path pill. Keywords: project path, display, basename.
- * - ProjectFilePathDisambiguationIndex: prepared shortest-path lookup index for project file path labels. Keywords: project path, display, index.
- * - ProjectFilePathDisplayOptions: optional label override, target type, disambiguation paths/key, and location metadata for project path pills. Keywords: project path, label, folder, line, column.
- * - projectFilePathPillClassName: shared rounded pill classes for project path rendering. Keywords: project path, pill, classes.
- * - projectFilePathInteractiveClassName: shared interactive hover/focus classes for clickable project path pills. Keywords: project path, interactive, classes.
- * - projectFilePathStaticClassName: shared border-only classes for non-clickable project path pills. Keywords: project path, folder, non-clickable, classes.
- * - projectFilePathMissingClassName: shared border-only classes for non-clickable missing project path pills. Keywords: project path, missing file, classes.
- * - projectFilePathLabelClassName: shared classes for the visible filename text. Keywords: project path, label, classes.
- * - projectFilePathLocationClassName: shared low-contrast classes for line and column suffixes. Keywords: project path, location, classes.
- * - createProjectFilePathDisambiguationIndexCooperatively: build project path disambiguation in browser-yielding slices. Keywords: project path, scheduler, index.
- * - getProjectFilePathDisplay: derive the visible filename, tooltip path, and location suffix for a project-relative path. Keywords: project path, display, tooltip.
- * - isProjectDirectoryPath: identify tracked directory prefixes from the cached project file path index. Keywords: project path, directory, folder, cache.
- * - readCachedProjectFilePathDisambiguationIndex: return an already-built path disambiguation index without rebuilding. Keywords: project path, cache, index.
- * - writeProjectFilePathDisambiguationIndexCache: store a prepared path disambiguation index in shared caches. Keywords: project path, cache, index.
+ * - projectFilePathBackgroundClassName: shared file-link background tone.
+ * - ProjectFilePathLocation: optional line and column metadata.
+ * - ProjectFilePathDisplay: derived label, basename, title, and location suffix.
+ * - ProjectFilePathDisambiguationIndex: shortest-path lookup index for file labels.
+ * - ProjectFilePathDisplayOptions: label, target, disambiguation, and location inputs.
+ * - projectFilePathPillClassName: shared rounded path pill classes.
+ * - projectFilePathInteractiveClassName: clickable pill hover and focus classes.
+ * - projectFilePathStaticClassName: border-only non-clickable pill classes.
+ * - projectFilePathMissingClassName: non-clickable missing path classes.
+ * - projectFilePathLabelClassName: visible filename text classes.
+ * - projectFilePathLocationClassName: low-contrast line and column classes.
+ * - createProjectFilePathDisambiguationIndexCooperatively: build disambiguation in browser-yielding slices.
+ * - getProjectFilePathDisplay: derive filename, tooltip, and location display.
+ * - isProjectDirectoryPath: identify tracked directory prefixes.
+ * - readCachedProjectFilePathDisambiguationIndex: read a prepared disambiguation index.
+ * - writeProjectFilePathDisambiguationIndexCache: cache a prepared disambiguation index.
  */
 
 import type { CooperativeWorkBudget } from "../state/cooperative-work";
@@ -85,9 +86,12 @@ export interface ProjectFilePathDisplayOptions extends ProjectFilePathLocation {
   targetType?: "directory" | "file";
 }
 
+export const projectFilePathBackgroundClassName = "bg-[color-mix(in_srgb,var(--text)_6%,transparent)]";
+
 export const projectFilePathPillClassName = [
   "inline-flex min-w-0 max-w-full items-baseline gap-[0.04rem] rounded-[0.55rem]",
-  "bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--file-path-fg-bg:color-mix(in_srgb,var(--text)_6%,var(--fg-bg,var(--bg)))] px-[0.48rem] py-[0.14rem]",
+  projectFilePathBackgroundClassName,
+  "[--file-path-fg-bg:color-mix(in_srgb,var(--text)_6%,var(--fg-bg,var(--bg)))] px-[0.48rem] py-[0.14rem]",
   "font-mono text-[0.78em] leading-[1.6] text-text transition-colors",
   "hover:bg-[color-mix(in_srgb,var(--text)_10%,transparent)]",
 ].join(" ");

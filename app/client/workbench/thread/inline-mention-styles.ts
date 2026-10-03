@@ -1,23 +1,23 @@
 /*
  * Exports:
- * - inlineMentionMarkBaseClassName: shared base class for inline skill and file mention marks. Keywords: mention, highlight, classes.
- * - getInlineMentionMarkToneClassName: return skill or file tone classes for inline mention marks. Keywords: mention, tone, skill, file.
- * - getInlineMentionMarkClassName: build complete inline mention mark classes. Keywords: mention, highlight, reusable.
- * - getInlineMentionOverlayClassName: build overlay pseudo-element mention highlight classes. Keywords: plaintext, overlay, highlight.
+ * - inlineMentionMarkBaseClassName: shared wrapping behaviour for mention marks.
+ * - getInlineMentionMarkToneClassName: skill activation or displayed file-link tone.
+ * - getInlineMentionMarkClassName: complete inline mention mark classes.
+ * - getInlineMentionOverlayClassName: plaintext overlay mention classes.
  * - toInlineMentionOverlayHighlights: map resolved mentions to plaintext overlay ranges.
  */
 
 import type { InlineMentionCandidateKind, InlineMentionHighlight } from "./inline-mention-highlights";
+import { projectFilePathBackgroundClassName } from "../project/project-file-path";
 
 export const inlineMentionMarkBaseClassName = [
-  "ring-1 ring-inset",
   "[box-decoration-break:clone] [-webkit-box-decoration-break:clone]",
 ].join(" ");
 
 export function getInlineMentionMarkToneClassName(kind: InlineMentionCandidateKind) {
   return kind === "skill"
-    ? "bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] ring-[color-mix(in_srgb,var(--accent)_24%,transparent)]"
-    : "bg-[color-mix(in_srgb,var(--success)_14%,transparent)] ring-[color-mix(in_srgb,var(--success)_24%,transparent)]";
+    ? "ring-1 ring-inset bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] ring-[color-mix(in_srgb,var(--accent)_24%,transparent)]"
+    : projectFilePathBackgroundClassName;
 }
 
 export function getInlineMentionMarkClassName(kind: InlineMentionCandidateKind) {
@@ -26,11 +26,11 @@ export function getInlineMentionMarkClassName(kind: InlineMentionCandidateKind) 
 
 export function getInlineMentionOverlayClassName(kind: InlineMentionCandidateKind) {
   return [
-    "rounded-[0.28em] ring-1 ring-inset",
-    "[box-decoration-break:clone] [-webkit-box-decoration-break:clone]",
+    getInlineMentionMarkClassName(kind),
+    "rounded-[0.28em]",
     kind === "skill"
-      ? "bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] ring-[color-mix(in_srgb,var(--accent)_24%,transparent)] shadow-[0_0_0_0.12em_color-mix(in_srgb,var(--accent)_14%,transparent)]"
-      : "bg-[color-mix(in_srgb,var(--success)_14%,transparent)] ring-[color-mix(in_srgb,var(--success)_24%,transparent)] shadow-[0_0_0_0.12em_color-mix(in_srgb,var(--success)_14%,transparent)]",
+      ? "shadow-[0_0_0_0.12em_color-mix(in_srgb,var(--accent)_14%,transparent)]"
+      : "shadow-[0_0_0_0.12em_color-mix(in_srgb,var(--text)_6%,transparent)]",
   ].join(" ");
 }
 

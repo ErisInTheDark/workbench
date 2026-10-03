@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 import type { WorkbenchThreadSkillControls } from "workbench-shared/types";
+import { getInlineMentionMarkClassName } from "../../../workbench/thread/inline-mention-styles";
 import { XIcon } from "../workbench-icons";
 
 function RowSeparator () {
@@ -47,7 +48,10 @@ export default function ThreadSkillPills ({
               className={`group/skill relative ${pending ? "opacity-50" : ""}`}
               title={`/${skill.name}, activated by ${skill.source === "agent" ? "the agent" : "you"}`}
             >
-              <span className="inline-flex h-7 items-center rounded-full bg-[color-mix(in_srgb,var(--text)_6%,transparent)] px-2.5 text-[0.76em] font-medium text-fg/muted">
+              <span className={`
+                ${getInlineMentionMarkClassName("skill")}
+                inline-flex h-7 items-center rounded-full px-2.5 text-[0.76em] font-medium text-text
+              `}>
                 <span
                   className={`
                     max-w-40 truncate
@@ -56,7 +60,7 @@ export default function ThreadSkillPills ({
                     coarse-touch:[mask-image:linear-gradient(to_right,black_calc(100%-1.25rem),transparent)]
                   `}
                 >
-                  {skill.name}
+                  /{skill.name}
                 </span>
               </span>
               <button
