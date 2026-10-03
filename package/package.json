@@ -18,6 +18,7 @@
     "wb",
     "WorkbenchBootstrap.mjs",
     "WorkbenchInstallPrompt.mjs",
+    "installer-cube.mjs",
     "SetupCommand.mjs",
     "index.mjs",
     "index.d.ts",

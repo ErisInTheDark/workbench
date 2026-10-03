@@ -5,13 +5,16 @@
 import path from "node:path";
 import os from "node:os";
 import { emitKeypressEvents } from "node:readline";
+import { INSTALLER_CUBE_ROWS, installerCubeWidth, renderInstallerCube } from "./installer-cube.mjs";
 
-const banner = [
-  "   _______________",
-  "  |  WORKBENCH    |",
-  "  |______________|",
-  "    |          |",
-].join("\r\n");
+const WORDMARK = "w o r k b e n c h";
+const FRAME_INTERVAL_MS = 80;
+
+function scheduleFrames(tick) {
+  const timer = setInterval(tick, FRAME_INTERVAL_MS);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
 
 export default class WorkbenchInstallPrompt {
   constructor({
@@ -20,9 +23,13 @@ export default class WorkbenchInstallPrompt {
     platform = process.platform,
     cwd = process.cwd(),
     home = os.homedir(),
+    schedule = scheduleFrames,
+    now = () => performance.now(),
   } = {}) {
     this.input = input;
     this.output = output;
+    this.schedule = schedule;
+    this.now = now;
     this.paths = platform === "win32" ? path.win32 : path.posix;
     this.windows = platform === "win32";
     this.cwd = cwd;
@@ -99,10 +106,24 @@ export default class WorkbenchInstallPrompt {
         else if (key.name === "return") accept(choices[selected]);
       },
       label,
+      choices.length,
     );
   }
 
-  interact(render, handle, label = "") {
+  /** Cube height that fits above the wordmark, label and prompt without scrolling the screen; 0 for none. */
+  cubeRows(label, promptLines) {
+    const columns = this.output.columns || 80;
+    const rows = this.output.rows || 24;
+    const labelLines = label
+      ? label.split("\n").reduce((total, line) => total + Math.max(1, Math.ceil(line.length / columns)), 0)
+      : 0;
+    // Wordmark, blank line, label, prompt. Scrolling would misplace every home-anchored redraw.
+    let cube = Math.min(INSTALLER_CUBE_ROWS.max, rows - 2 - labelLines - promptLines);
+    while (cube >= INSTALLER_CUBE_ROWS.min && installerCubeWidth(cube) > columns) cube--;
+    return cube >= INSTALLER_CUBE_ROWS.min ? cube : 0;
+  }
+
+  interact(render, handle, label = "", promptLines = 1) {
     if (!this.input.isTTY || !this.output.isTTY) {
       return Promise.reject(new Error("Workbench setup needs an interactive terminal; no changes were accepted."));
     }
@@ -114,6 +135,7 @@ export default class WorkbenchInstallPrompt {
     return new Promise((resolve, reject) => {
       let settled = false;
       let screenActive = false;
+      let stopAnimation = null;
       const restoreScreen = () => {
         if (!screenActive) return;
         screenActive = false;
@@ -122,6 +144,8 @@ export default class WorkbenchInstallPrompt {
       const finish = (error, value) => {
         if (settled) return;
         settled = true;
+        stopAnimation?.();
+        stopAnimation = null;
         this.input.removeListener("keypress", onKey);
         this.input.removeListener("end", onEnd);
         this.input.removeListener("error", onError);
@@ -160,8 +184,22 @@ export default class WorkbenchInstallPrompt {
         this.input.resume();
         screenActive = true;
         process.once("exit", restoreScreen);
-        this.output.write(`\u001b[?1049h\u001b[2J\u001b[H${banner}\r\n\r\n${label ? `${label}\r\n` : ""}`);
+        const cubeRows = this.cubeRows(label, promptLines);
+        const started = this.now();
+        const frame = () => renderInstallerCube((this.now() - started) / 1000, cubeRows).join("\r\n");
+        const wordmark = cubeRows
+          ? WORDMARK.padStart(Math.floor((installerCubeWidth(cubeRows) + WORDMARK.length) / 2))
+          : WORDMARK;
+        this.output.write(`\u001b[?1049h\u001b[2J\u001b[H${cubeRows ? `${frame()}\r\n` : ""}${wordmark}\r\n\r\n${label ? `${label}\r\n` : ""}`);
         render();
+        if (cubeRows) {
+          // Save and restore the cursor around each frame so prompt editing and redraws never move.
+          stopAnimation = this.schedule(() => {
+            if (settled) return;
+            try { this.output.write(`\u001b7\u001b[H${frame()}\u001b8`); }
+            catch (error) { finish(error); }
+          });
+        }
       } catch (error) {
         finish(error);
       }

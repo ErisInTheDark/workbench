@@ -18,7 +18,7 @@ test("installation destinations append wb once, respecting directory boundaries"
   assert.equal(windows.destination("C:\\projects\\WORKBENCH\\"), "C:\\projects\\WORKBENCH");
 });
 
-function terminal() {
+function terminal(rows?: number) {
   const input = new PassThrough() as PassThrough & {
     isTTY: boolean;
     isRaw: boolean;
@@ -27,13 +27,54 @@ function terminal() {
   input.isTTY = true;
   input.isRaw = false;
   input.setRawMode = (value) => { input.isRaw = value; };
-  const output = new PassThrough() as PassThrough & { isTTY: boolean; columns: number };
+  const output = new PassThrough() as PassThrough & { isTTY: boolean; columns: number; rows?: number };
   output.isTTY = true;
   output.columns = 100;
+  if (rows !== undefined) output.rows = rows;
   const frames: string[] = [];
   output.on("data", (chunk) => frames.push(chunk.toString()));
-  return { input, output, frames };
+  // Animation ticks are driven by hand; `stopped` records whether the prompt released its schedule.
+  const animation = { ticks: [] as Array<() => void>, stopped: 0 };
+  const schedule = (tick: () => void) => {
+    animation.ticks.push(tick);
+    return () => { animation.stopped++; };
+  };
+  return { input, output, frames, schedule, animation };
 }
+
+test("the cube animates in place and stops whenever the prompt settles", async () => {
+  for (const settle of ["accept", "cancel"] as const) {
+    const io = terminal(40);
+    const prompt = new WorkbenchInstallPrompt(io);
+    const result = prompt.choose("Install?", ["Let's go!", "Cancel"]);
+    assert.equal(io.animation.ticks.length, 1);
+    io.frames.length = 0;
+    io.animation.ticks[0]!();
+    const tick = io.frames.join("");
+    assert.ok(tick.startsWith("\u001b7\u001b[H") && tick.endsWith("\u001b8"), "frames save and restore the prompt cursor");
+    if (settle === "accept") {
+      io.input.emit("keypress", "", { name: "return" });
+      assert.equal(await result, "Let's go!");
+    } else {
+      io.input.emit("keypress", "\u0003", { name: "c", ctrl: true });
+      await assert.rejects(result, { name: "AbortError" });
+    }
+    assert.equal(io.animation.stopped, 1);
+    io.frames.length = 0;
+    io.animation.ticks[0]!();
+    assert.deepEqual(io.frames, [], "a late tick never draws over the restored terminal");
+  }
+});
+
+test("a terminal too short for the cube shows the wordmark without animating", async () => {
+  const io = terminal(12);
+  const prompt = new WorkbenchInstallPrompt(io);
+  const result = prompt.choose("Install?", ["Let's go!", "Cancel"]);
+  assert.equal(io.animation.ticks.length, 0);
+  assert.ok(io.frames.join("").includes("w o r k b e n c h"));
+  io.input.emit("keypress", "", { name: "return" });
+  await result;
+});
 
 test("the automatic suffix never enters the editable input", async () => {
   const io = terminal();
