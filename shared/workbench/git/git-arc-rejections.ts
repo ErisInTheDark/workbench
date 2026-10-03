@@ -1,5 +1,4 @@
 /*
- * Keywords: Git arc, rejection reasons, validation, human messages, diagnostics.
  * Exports:
  * - GitArcRejectionSchema/GitArcRejection: bounded reason-specific rejection facts.
  * - GitArcRejectionError: preserve a semantic rejection alongside agent diagnostics.
@@ -66,7 +65,7 @@ const simpleMessages = {
 export const GitArcRejectionSchema = z.discriminatedUnion("reason", [
   z.object({ reason: z.enum(Object.keys(simpleMessages) as [keyof typeof simpleMessages, ...(keyof typeof simpleMessages)[]]) }).strict(),
   z.object({
-    reason: z.enum(["unclaimedRemoval", "conflictingClaimOperations", "adoptionRequiresUnclaimed", "adoptionRequiresDirty", "uncoveredDirtyClaims", "pathsOutsideClaims", "baselineChanged"]),
+    reason: z.enum(["unclaimedRemoval", "conflictingClaimOperations", "adoptionRequiresUnclaimed", "adoptionRequiresDirty", "uncoveredDirtyClaims", "pathsOutsideClaims", "pathsInPendingProposal", "baselineChanged"]),
     paths: facts,
   }).strict(),
   z.object({ reason: z.literal("proposalNotFound"), proposalId: fact }).strict(),
@@ -94,6 +93,7 @@ const humanMessages = {
   adoptionRequiresDirty: "These files have no unclaimed changes to adopt.",
   uncoveredDirtyClaims: "The revised plan would leave changed files without an owner.",
   pathsOutsideClaims: "The proposal includes files outside this arc's claims.",
+  pathsInPendingProposal: "These files are already in another pending proposal.",
   baselineChanged: "The selected files changed since the arc's baseline.",
   proposalNotFound: "The requested proposal could not be found.",
   publishedCommit: "The commit is already published, so it can't be amended.",

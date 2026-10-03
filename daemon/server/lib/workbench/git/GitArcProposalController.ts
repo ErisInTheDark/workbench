@@ -803,6 +803,7 @@ export default class GitArcProposalController {
     const proposalTree = await repository.writeScopedWorktreeTree(requestedPaths, amendTargetSha ?? liveBaseCommit);
     const livePaths = await repository.listChangedPaths(liveBaseCommit, proposalTree, requestedPaths);
     if (!livePaths.length) throw new GitArcRejectionError({ reason: "noChangesToPropose" }, "The selected arc paths do not contain any working-tree changes to propose.");
+    await this.requireNoPendingOverlap(repository, harness, threadId, proposalIds.filter(id => id !== replaceProposalId), livePaths);
     const paths = amendTargetSha
       ? await repository.listAllChangedPaths(baseCommit, proposalTree)
       : livePaths;
@@ -885,6 +886,30 @@ export default class GitArcProposalController {
       sourceCheckpoint: checkpoint.checkpointCommit,
       title: metadata.title,
     };
+  }
+
+  /** Pending proposals in one thread must stay independently committable, so their live paths never overlap. */
+  private async requireNoPendingOverlap(
+    repository: WorkbenchGitRepository,
+    harness: GitArcHarness,
+    threadId: string,
+    proposalIds: string[],
+    livePaths: string[],
+  ) {
+    for (const proposalId of proposalIds) {
+      const { proposal } = await resolveProposalState(this.resolveThreadIdentity, repository, harness, threadId, proposalId, {
+        includeNewer: false, persistTransitions: false,
+      });
+      if (proposal.metadata.status !== "proposed") continue;
+      const overlapping = livePaths.filter(candidate => (
+        proposal.metadata.livePaths.some(pending => gitArcPathsOverlap(candidate, pending))
+      ));
+      if (!overlapping.length) continue;
+      throw new GitArcRejectionError(
+        { reason: "pathsInPendingProposal", paths: overlapping },
+        `Proposed paths are already in pending proposal ${proposalId}: ${overlapping.join(", ")}. Replace that proposal, rescind it, or propose explicit paths that exclude them.`,
+      );
+    }
   }
 
   private async unclaimedPaths(repository: WorkbenchGitRepository, snapshot: { head: string | null; tree: string }, excludedPaths: string[]) {

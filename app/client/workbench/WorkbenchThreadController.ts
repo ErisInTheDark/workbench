@@ -394,11 +394,11 @@ export default class WorkbenchThreadController {
 
   private syncGitArcProposalObservation(entry: ThreadEntry | null, cwd: string | null) {
     const proposals = entry?.gitArc?.proposals ?? [];
-    if (!this.ports.readGitArcProposal || !cwd || !proposals.length || !entry) {
+    if (!this.ports.readGitArcProposal || !cwd || !entry) {
       this.clearGitArcProposalObservation();
       return;
     }
-    if (!this.stopGitArcProposalRefresh && this.ports.subscribeGitArcProposalRefresh) {
+    if ((proposals.length || this.gitArcProposalDemands.size) && !this.stopGitArcProposalRefresh && this.ports.subscribeGitArcProposalRefresh) {
       this.stopGitArcProposalRefresh = this.ports.subscribeGitArcProposalRefresh(() => {
         this.invalidateGitArcProposalObservation(this.gitArcProposalObservationKey);
         this.reconcile();
@@ -411,10 +411,11 @@ export default class WorkbenchThreadController {
       entry.gitArc?.checkpointCommit ?? "",
       ...proposals.map(({ proposalId, rootId, status }) => `${proposalId}\0${rootId ?? ""}\0${status}`),
     ].join("\0");
+    // The lifecycle lists only actionable proposals; demanded cards still need unavailable, rescinded, or superseded state.
     const proposalRoots = new Map(proposals.map(({ proposalId, rootId }) => [proposalId, rootId]));
     if (key === this.gitArcProposalObservationKey) {
       for (const [proposalId] of this.gitArcProposalDemands) {
-        if (!proposalRoots.has(proposalId) || this.gitArcProposals[proposalId]) continue;
+        if (this.gitArcProposals[proposalId]) continue;
         this.gitArcProposals = { ...this.gitArcProposals, [proposalId]: { status: "loading" } };
         this.readGitArcProposal(entry, cwd, proposalId, proposalRoots.get(proposalId), this.gitArcProposalObservationGeneration, key);
       }
@@ -427,7 +428,6 @@ export default class WorkbenchThreadController {
     const previous = this.gitArcProposals;
     this.gitArcProposals = {};
     for (const [proposalId] of this.gitArcProposalDemands) {
-      if (!proposalRoots.has(proposalId)) continue;
       const current = previous[proposalId];
       this.gitArcProposals[proposalId] = retainLoadedProposals && current?.status === "loaded"
         ? { ...current, refreshing: true }

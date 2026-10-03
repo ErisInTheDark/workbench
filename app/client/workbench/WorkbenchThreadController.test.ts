@@ -327,6 +327,25 @@ test("proposal observation failures stay source-local", async () => {
   f.owner.dispose();
 });
 
+test("demanded proposals outside the actionable lifecycle list still settle", async () => {
+  const f = fixture();
+  f.publish(f.document);
+  const release = f.owner.acquire("view");
+  f.admit();
+  const releaseProposal = f.owner.observeGitArcProposal("left-lifecycle");
+  assert.deepEqual(f.proposalReads.map(({ proposalId }) => proposalId), ["left-lifecycle"]);
+  const unavailable = proposal("left-lifecycle", "unavailable");
+  f.proposalReads[0]!.resolve(unavailable);
+  await new Promise<void>(resolve => setImmediate(resolve));
+
+  assert.deepEqual(f.owner.getSnapshot().gitArcProposals, {
+    "left-lifecycle": { proposal: unavailable, status: "loaded" },
+  });
+  releaseProposal();
+  release();
+  f.owner.dispose();
+});
+
 test("an empty initial read settles as failed and a deliberate retry can admit content", async () => {
   const f = fixture();
   const release = f.owner.acquire("summary");

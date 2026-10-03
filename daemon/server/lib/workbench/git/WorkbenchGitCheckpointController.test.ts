@@ -1168,6 +1168,10 @@ controllerTest("replacement", "replacement plans target prior pending and commit
   await assert.rejects(controller.rescindProposal({
     cwd: source, harness: "codex", proposalId: commitTarget.proposalId, threadId: "partial-thread",
   }), assertCommittedTarget);
+  // The amendment's live paths overlap the pending replacement, so that proposal must leave first.
+  await controller.rescindProposal({
+    cwd: source, harness: "codex", proposalId: continuedReplacement.proposalId, threadId: "partial-thread",
+  });
   const amendment = await controller.createProposal({
     amend: true,
     amendProposalId: commitTarget.proposalId,

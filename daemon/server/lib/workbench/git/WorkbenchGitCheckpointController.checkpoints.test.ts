@@ -10,6 +10,7 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { GitArcStashResultSchema } from "workbench-shared/workbench/git/checkpoint-contracts";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -564,7 +565,7 @@ test("retained claims can propose and commit beneath an inactive future plan", a
   context.after(bundle.dispose);
   const fixture = branchFixture(bundle, "dirtyRelease");
   const repoRoot = fixture.root;
-  const { threadId, dirtyArcCheckpoint } = fixture.state;
+  const { threadId, dirtyArcCheckpoint, proposalId: pendingProposalId } = fixture.state;
   const futurePlan = await addToGitPlan({
     cwd: repoRoot,
     paths: ["unrelated.txt"],
@@ -578,6 +579,7 @@ test("retained claims can propose and commit beneath an inactive future plan", a
   const proposal = await createGitCheckpointProposal({
     cwd: repoRoot,
     description: "",
+    replaceProposalId: pendingProposalId,
     threadId,
     title: "Commit retained work",
   });
@@ -780,8 +782,8 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
     proposalId: fixture.state.originalProposalId,
     threadId: frozenThreadId,
   });
-  assert.equal(superseded.status, "proposed");
-  assert.equal(superseded.supersededByProposalId, null);
+  assert.equal(superseded.status, "superseded");
+  assert.equal(superseded.supersededByProposalId, fixture.state.currentProposalId);
   assert.equal(
     (await controller.findActiveClaim({ cwd: repoRoot, threadId: frozenThreadId }))?.proposalId,
     fixture.state.currentProposalId,
@@ -987,6 +989,31 @@ test("Git checkpoint controller operations", { concurrency: true }, async (conte
   await Promise.all(scheduledCases.map(async ({ name, run }) => (
     await context.test(name, { concurrency: true }, async (childContext) => await run(fixture, childContext))
   )));
+});
+
+test("pending proposals in one thread never share live paths", async (context) => {
+  const fixture = await fixtureCache.copyFresh(CHECKPOINT_OPERATIONS_FIXTURE);
+  context.after(fixture.dispose);
+  const { root: repoRoot } = branchFixture(fixture, "additions");
+  const identity = { cwd: repoRoot, threadId: "thread-split" };
+  const plan = await createGitPlan({ ...identity, intentName: "Split proposals", paths: ["literal1.txt", "unrelated.txt"] });
+  await startGitArc({ ...identity, checkpointCommit: plan.checkpointCommit });
+  await write(repoRoot, "literal1.txt", "first proposal\n");
+  await write(repoRoot, "unrelated.txt", "second proposal\n");
+  const first = await createGitCheckpointProposal({ ...identity, description: "", paths: ["literal1.txt"], title: "First" });
+
+  await assert.rejects(
+    createGitCheckpointProposal({ ...identity, description: "", title: "Everything" }),
+    (error: unknown) => error instanceof GitArcRejectionError
+      && error.rejection.reason === "pathsInPendingProposal"
+      && error.message.includes(first.proposalId),
+  );
+  const second = await createGitCheckpointProposal({ ...identity, description: "", paths: ["unrelated.txt"], title: "Second" });
+  assert.deepEqual(second.paths, ["unrelated.txt"]);
+  const replacement = await createGitCheckpointProposal({
+    ...identity, description: "", paths: ["literal1.txt"], replaceProposalId: first.proposalId, title: "First replacement",
+  });
+  assert.deepEqual(replacement.paths, ["literal1.txt"]);
 });
 
 test("discard drops frozen work without changing the worktree and keeps an inactive successor plan", async (context) => {
