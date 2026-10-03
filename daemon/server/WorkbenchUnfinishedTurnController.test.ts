@@ -16,7 +16,7 @@ const completedByAgent: WorkbenchThreadLifecycle = {
 };
 
 const completion = (status: "completed" | "interrupted" | "failed" = "completed"): WorkbenchProviderObservation => ({
-  activity: null, displayLabel: null, lifecycle: { threadId, event: { kind: "turnCompleted", turnId, status } },
+  turnStarted: null, displayLabel: null, lifecycle: { threadId, event: { kind: "turnCompleted", turnId, status } },
 });
 
 function fixture(options: Partial<WorkbenchUnfinishedTurnOptions> & { current?: WorkbenchThreadLifecycle } = {}) {
@@ -40,7 +40,7 @@ test("only a completed turn that left its thread unfinished is continued", async
   owner.observe("claude", completion("interrupted"), unfinished);
   owner.observe("claude", completion("failed"), unfinished);
   owner.observe("claude", completion(), completedByAgent);
-  owner.observe("claude", { activity: null, displayLabel: null, lifecycle: null }, unfinished);
+  owner.observe("claude", { turnStarted: null, displayLabel: null, lifecycle: null }, unfinished);
   await idle();
   assert.deepEqual(continued, []);
   owner.observe("claude", completion(), unfinished);

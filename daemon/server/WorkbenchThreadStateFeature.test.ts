@@ -9,7 +9,7 @@ import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-
 import type { WorkbenchDurableQuestionnaire, WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { JsonRpcNotification, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import WorkbenchThreadStateFeature, { normalizeProviderSidebarEntry as normalizeSidebar, normalizeSubagentProviderLifecycle } from "./WorkbenchThreadStateFeature";
-import { mapProviderActivityNotification as mapActivity, mapProviderLifecycleNotification as mapLifecycle } from "./CodexProviderObservations";
+import { mapProviderLifecycleNotification as mapLifecycle, mapProviderTurnStartedNotification as mapTurnStarted } from "./CodexProviderObservations";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -25,7 +25,7 @@ const canonicalFixtureLookup = {
 const storedRecordDefaults = {
   gitHistoryCleanedAt: null, mcpGeneration: null, profile: null, settledAt: null, snoozedUntil: null,
 };
-const mapProviderActivityNotification = (notification: JsonRpcNotification) => mapActivity(notification, canonicalFixtureLookup);
+const mapProviderTurnStartedNotification = (notification: JsonRpcNotification) => mapTurnStarted(notification, canonicalFixtureLookup);
 const mapProviderLifecycleNotification = (notification: JsonRpcNotification) => mapLifecycle(notification, canonicalFixtureLookup);
 const normalizeProviderSidebarEntry = (harness: WorkbenchHarness, value: unknown) => normalizeSidebar(harness, value, canonicalFixtureLookup);
 
@@ -285,7 +285,7 @@ test("answered provider evidence publishes context for the canonical thread and 
     await h.feature.controller.applyLifecycle(fixtureIdentityValues.ProjectId.project, "codex", threadId, { kind: "agentStatus", status: "blocked" });
     const resolve = (requestKey: string) => h.feature.observeProviderNotification("codex", {
       lifecycle: { threadId, event: { kind: "inputResolved", requestKey, answered: true } },
-      activity: null, displayLabel: null,
+      turnStarted: null, displayLabel: null,
     });
     await resolve("stale");
     assert.equal(h.contexts.length, 0);
@@ -307,7 +307,7 @@ test("manual questionnaire completion preserves its question and survives a late
     await h.feature.observeProviderNotification("codex", {
       lifecycle: { threadId: fixtureIdentityValues.WorkbenchThreadId.thread, event: {
         kind: "turnCompleted", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), status: "interrupted",
-      } }, activity: null, displayLabel: null,
+      } }, turnStarted: null, displayLabel: null,
     });
     const entry = await h.read();
     assert.ok(entry && entry.entryKind === "thread");
@@ -324,7 +324,7 @@ test("completing an agent-blocked sidebar questionnaire fences late events from 
     await h.feature.observeProviderNotification("codex", {
       lifecycle: { threadId: fixtureIdentityValues.WorkbenchThreadId.thread, event: {
         kind: "turnCompleted", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), status: "interrupted",
-      } }, activity: null, displayLabel: null,
+      } }, turnStarted: null, displayLabel: null,
     });
     assert.equal((await h.read())?.lifecycle.kind, "completed");
   } finally { await h.feature.dispose(); }
@@ -549,7 +549,7 @@ test("provider notification observation returns the persisted lifecycle result",
   assert.deepEqual(await feature.observeProviderNotification("codex", {
     lifecycle: { threadId: fixtureIdentityValues.WorkbenchThreadId.thread, event: {
       kind: "turnCompleted", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn"), status: "completed",
-    } }, activity: null, displayLabel: null,
+    } }, turnStarted: null, displayLabel: null,
   }), {
     event: { kind: "turnCompleted", status: "completed", turnId: "turn" },
     lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
@@ -563,17 +563,13 @@ test("provider notification observation returns the persisted lifecycle result",
   await temporary.dispose();
 });
 
-test("provider activity mapping observes meaningful cross-provider work without token deltas", () => {
-  assert.deepEqual(mapProviderActivityNotification({ method: "turn/started", params: { threadId: "thread", turn: { id: "turn", startedAt: 1_723_456_789 } } }), {
-    kind: "turnStarted", startedAt: 1_723_456_789_000, threadId: "thread",
+test("provider turn-start mapping normalizes the provider start time", () => {
+  assert.deepEqual(mapProviderTurnStartedNotification({ method: "turn/started", params: { threadId: "thread", turn: { id: "turn", startedAt: 1_723_456_789 } } }), {
+    startedAt: 1_723_456_789_000, threadId: "thread",
   });
-  assert.deepEqual(mapProviderActivityNotification({ method: "turn/started", params: { threadId: "thread", turn: { id: "turn" } } }), {
-    kind: "turnStarted", startedAt: null, threadId: "thread",
+  assert.deepEqual(mapProviderTurnStartedNotification({ method: "turn/started", params: { threadId: "thread", turn: { id: "turn" } } }), {
+    startedAt: null, threadId: "thread",
   });
-  assert.deepEqual(mapProviderActivityNotification({ method: "item/completed", params: { threadId: "thread", turnId: "turn" } }), {
-    kind: "activity", threadId: "thread",
-  });
-  assert.equal(mapProviderActivityNotification({ method: "item/agentMessage/delta", params: { threadId: "thread", turnId: "turn" } }), null);
 });
 
 test("creation installs captured settings before first admission and refreshes only on continuation", async () => {

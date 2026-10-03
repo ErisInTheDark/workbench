@@ -2853,3 +2853,21 @@ test("capture-gap settlement closes the existing thread-owned failure interval",
     database.close();
   }
 });
+
+test("settlement reports item activity only for newly admitted thread items", () => {
+  const { database, repository } = createRepository();
+  const message = (id: string, observedAt: number, text = id): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> => ({
+    kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId: fixtureIdentityValues.WorkbenchTurnId.turn,
+    lifecycle: "completed", observedAt,
+    item: { id, type: "agentMessage", text, phase: "commentary", memoryCitation: null, delivery: null, questions: null },
+  });
+  const activity = (settlement: ReturnType<typeof repository.settle>) => settlement.changes?.find(change => change.snapshot.thread.id === "thread")?.itemActivityAt;
+  try {
+    assert.equal(activity(repository.settle([threadObservation(), turnObservation("turn", 0)])), null, "thread and turn rows are not items");
+    assert.equal(activity(repository.settle([message("first", 30), message("second", 20)])), 30);
+    assert.equal(activity(repository.settle([message("first", 90, "revised")])), null, "updating an admitted item is not new activity");
+    assert.equal(activity(repository.settle([message("historical", 10)])), 10, "an imported older item reports its own time");
+  } finally {
+    database.close();
+  }
+});

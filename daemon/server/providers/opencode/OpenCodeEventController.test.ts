@@ -404,7 +404,7 @@ test("streams text directly with canonical reads only at execution boundaries", 
       appendText: input => { deltas.push(input.text); },
     },
     observe: async facts => {
-      if (facts.activity?.kind === "turnStarted") lifecycle.push("started");
+      if (facts.turnStarted) lifecycle.push("started");
       if (facts.lifecycle?.event.kind === "turnCompleted") lifecycle.push(facts.lifecycle.event.status);
     },
   });

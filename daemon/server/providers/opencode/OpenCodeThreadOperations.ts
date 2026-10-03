@@ -868,7 +868,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       const execution = this.execution(nativeThreadId);
       if (execution.turn?.turnId === resolvedOwner.turnId) execution.active = false;
       await this.options.observe({
-        activity: null,
+        turnStarted: null,
         lifecycle: {
           threadId: resolvedOwner.threadId,
           event: { kind: "turnCompleted", turnId: resolvedOwner.turnId, status: "failed" },
@@ -1025,7 +1025,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       || inbox.some(isManagedWorkbenchPrompt)) return;
     await this.options.observe({
       projectId: synced.projectId,
-      activity: null,
+      turnStarted: null,
       displayLabel: null,
       lifecycle: { threadId: synced.threadId, event: { kind: "turnCompleted", turnId, status: "interrupted" } },
     });

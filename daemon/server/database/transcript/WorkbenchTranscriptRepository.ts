@@ -109,6 +109,8 @@ interface SettlementChanges {
   completedItemIds: Set<number>;
   turnIds: Set<string>;
   removedItems: Map<string, Set<string>>;
+  /** Latest observed time of rows this settlement newly admitted, per thread. */
+  itemActivityAt: Map<string, number>;
 }
 
 function earliestTimestamp(left: number | null, right: number | null) {
@@ -159,7 +161,9 @@ export default class WorkbenchTranscriptRepository {
 
   settle(observations: readonly WorkbenchTranscriptObservation[]): WorkbenchTranscriptSettlement {
     const changedThreadIds = new Set<string>();
-    const affected: SettlementChanges = { itemIds: new Set(), completedItemIds: new Set(), turnIds: new Set(), removedItems: new Map() };
+    const affected: SettlementChanges = {
+      itemIds: new Set(), completedItemIds: new Set(), turnIds: new Set(), removedItems: new Map(), itemActivityAt: new Map(),
+    };
     try {
       this.#settlementChanges = affected;
       return this.#database.transaction(() => {
@@ -190,6 +194,7 @@ export default class WorkbenchTranscriptRepository {
           const changedTurns = turns.filter(turn => turn.thread_id === threadId);
           return {
             removedItemIds: [...(affected.removedItems.get(threadId) ?? [])],
+            itemActivityAt: affected.itemActivityAt.get(threadId) ?? null,
             completedItemIds: items.filter(item => item.thread_id === threadId && affected.completedItemIds.has(item.id))
               .map(item => item.public_id),
             snapshot: {
@@ -1495,6 +1500,10 @@ export default class WorkbenchTranscriptRepository {
       }, { id: threadId }));
       if (canonicalIndex) {
         canonicalIndex.thread = { ...thread, updated_at: updatedAt, activity_at: activityAt };
+      }
+      if (this.#settlementChanges) {
+        const admittedAt = this.#settlementChanges.itemActivityAt.get(threadId);
+        this.#settlementChanges.itemActivityAt.set(threadId, Math.max(admittedAt ?? observedAt, observedAt));
       }
     }
     let indexedItem = existing;

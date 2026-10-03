@@ -184,7 +184,7 @@ export default class ClaudeLiveTurn {
     try {
       await this.options.observe({
         projectId: this.options.projectId,
-        activity: { kind: "turnStarted", threadId: this.threadId, startedAt: Date.now() },
+        turnStarted: { threadId: this.threadId, startedAt: Date.now() },
         lifecycle: { threadId: this.threadId, event: { kind: "acceptedIntent", turnId: this.turnId } },
         displayLabel: null,
       });
@@ -353,7 +353,7 @@ export default class ClaudeLiveTurn {
     this.options.usageChanged();
     this.options.settling(status);
     await this.options.observe({
-      projectId: this.options.projectId, activity: null, displayLabel: null,
+      projectId: this.options.projectId, turnStarted: null, displayLabel: null,
       lifecycle: { threadId: this.threadId, event: { kind: "turnCompleted", turnId: this.turnId, status } },
     });
     const turn = await this.options.readTurn();

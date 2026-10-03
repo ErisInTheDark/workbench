@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchTranscriptNotification: compatible public transcript messages.
  * - WorkbenchProviderLifecycleEvent: admitted lifecycle facts consumed by shared state.
- * - WorkbenchProviderObservation: lifecycle, activity and display-label facts from one provider ingress.
+ * - WorkbenchProviderObservation: lifecycle, turn-start and display-label facts from one provider ingress.
  * - isWorkbenchPublicNotification: recognise the public notification envelope at transport edges.
  */
 import type { ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "../identity.ts";
@@ -69,9 +69,7 @@ export type WorkbenchProviderObservation = {
   accountLimits?: WorkbenchRateLimitSnapshot;
   projectId?: ProjectId;
   lifecycle: { event: WorkbenchProviderLifecycleEvent; threadId: WorkbenchThreadId } | null;
-  activity:
-    | { kind: "activity"; threadId: WorkbenchThreadId }
-    | { kind: "turnStarted"; startedAt: number | null; threadId: WorkbenchThreadId }
-    | null;
+  /** Orders the sidebar thread only; activity time is owned by admitted transcript items. */
+  turnStarted: { startedAt: number | null; threadId: WorkbenchThreadId } | null;
   displayLabel: { threadId: WorkbenchThreadId; label: string } | null;
 };

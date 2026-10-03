@@ -1,5 +1,6 @@
 - User-facing sidebar threads and subagent threads have separate state semantics. Never infer subagent changes from sidebar thread requests. Plan subagent changes separately and obtain explicit user agreement.
 - Composer questionnaire snooze interrupts the turn but retains the question. Stop dismisses it, clears snooze, and marks the thread stopped.
 - Settled and archived are placement, not status. Preserve lifecycle presentation.
-- Unpinned settled sidebar threads archive after 14 days without activity, including existing records.
+- Unpinned settled sidebar threads archive 14 days after the later of their last thread item or settling, including existing records.
+- Thread activity time advances only when the canonical transcript admits a new thread item, to that item's observed time. Providers and lifecycle transitions never set it.
 - A dependent-snooze source owns its target set. Target readiness removes one membership. Only an empty set wakes the source.

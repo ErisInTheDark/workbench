@@ -54,7 +54,7 @@ export default class WorkbenchTurnSettlementController {
     const observations = await this.owners.transcripts.storedTurnSettlement(identity.threadId, turnId, Date.now() / 1_000);
     if (observations.length) await this.owners.transcript.record(observations, { source: "workbench" });
     await this.owners.observe(key, {
-      projectId: identity.projectId, activity: null, displayLabel: null,
+      projectId: identity.projectId, turnStarted: null, displayLabel: null,
       lifecycle: {
         threadId: WorkbenchThreadIdSchema.parse(identity.threadId),
         event: { kind: "turnCompleted", turnId: WorkbenchTurnIdSchema.parse(turnId), status: "interrupted" },

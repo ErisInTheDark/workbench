@@ -267,5 +267,7 @@ export interface WorkbenchTranscriptSettlement {
     snapshot: WorkbenchTranscriptSnapshot;
     removedItemIds: string[];
     completedItemIds: string[];
+    /** Latest observed time among thread items this settlement newly admitted; null when none were. */
+    itemActivityAt: number | null;
   }[];
 }

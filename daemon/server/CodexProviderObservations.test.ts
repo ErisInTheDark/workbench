@@ -67,14 +67,12 @@ test("one provider ingress publishes admitted references without rewriting conte
       ...nativeEvent.params, threadId: thread.threadId, turnId,
       item: { ...item, id: itemId, workbenchIdentityKind: "provisional" },
     });
-    assert.deepEqual(publication.observation.activity, { kind: "activity", threadId: thread.threadId });
     assert.equal(publication.observation.projectId, thread.projectId);
     const delta = edge.native({
       method: "item/reasoning/textDelta",
       params: { threadId: native.nativeThreadId, turnId: nativeTurnId, itemId: item.id, contentIndex: 0, delta: "item-12" },
     });
     assert.deepEqual(delta.notification.params, { threadId: thread.threadId, turnId, itemId, contentIndex: 0, delta: "item-12" });
-    assert.equal(delta.observation.activity, null);
     assert.equal(delta.observation.lifecycle, null);
     const title = edge.native({ method: "thread/name/updated", params: { threadId: native.nativeThreadId, threadName: "Renamed" } });
     assert.deepEqual(title.observation.displayLabel, { threadId: thread.threadId, label: "Renamed" });

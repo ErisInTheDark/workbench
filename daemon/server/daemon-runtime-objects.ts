@@ -176,6 +176,9 @@ export interface DaemonTranscriptRegistration {
     context: WorkbenchTranscriptRecordingContext,
   ): Promise<{ changedThreadIds: string[] }>;
   start(): Promise<void>;
+  subscribeItemActivity(
+    listener: (activity: import("./database/transcript/WorkbenchTranscriptController").WorkbenchTranscriptItemActivity) => Promise<void> | void,
+  ): () => void;
   subscribe(subscription: {
     id: string;
     request: { threadId: string; turnIds?: string[]; turnLimit: number };

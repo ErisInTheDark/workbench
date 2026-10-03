@@ -93,20 +93,21 @@ test("expiry reports failures without retrying an unchanged overdue record", asy
   }
 });
 
-test("archival follows activity rather than settlement and reschedules for newer activity", async () => {
+test("archival waits for the later of item activity or settling and reschedules for newer activity", async () => {
   const age = 14 * 24 * 60 * 60 * 1_000;
   const now = age + 100;
-  let record = { ...settled(), activityAt: 100, settledAt: now };
+  let record = { ...settled(), activityAt: 100, settledAt: 50 };
   let delay = -1;
   let scheduled = deferred<void>();
   const controller = new WorkbenchThreadArchiveController({
-    now: () => now, readNextActivity: async () => record.activityAt, expire: async () => {},
+    now: () => now, readNextActivity: async () => Math.max(record.activityAt, record.settledAt ?? 0), expire: async () => {},
     onError: error => { throw error; },
     schedule: (_callback, delayMs) => { delay = delayMs; scheduled.resolve(); return () => {}; },
   });
   try {
     assert.equal(controller.isDue(record), true);
     assert.equal(controller.isDue({ ...record, settledAt: null }), true);
+    assert.equal(controller.isDue({ ...record, settledAt: now }), false, "settling an old thread restarts its archive clock");
     controller.reschedule();
     await scheduled.promise;
     assert.equal(delay, 0);

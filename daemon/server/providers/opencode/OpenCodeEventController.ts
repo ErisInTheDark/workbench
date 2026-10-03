@@ -95,7 +95,7 @@ export default class OpenCodeEventController {
       if (fact.active) {
         this.options.threads.markExecutionStarted(fact.sessionID);
         await this.options.observe({
-          projectId: fact.projectId, activity: null, displayLabel: null,
+          projectId: fact.projectId, turnStarted: null, displayLabel: null,
           lifecycle: { threadId: fact.threadId, event: { kind: "acceptedIntent", turnId } },
         });
         this.broadcastThreadStatus(fact.threadId, { activeFlags: [], type: "active" });
@@ -120,7 +120,7 @@ export default class OpenCodeEventController {
         turnId, status,
       });
       await this.options.observe({
-        projectId: fact.projectId, activity: null, displayLabel: null,
+        projectId: fact.projectId, turnStarted: null, displayLabel: null,
         lifecycle: { threadId: fact.threadId, event: { kind: "turnCompleted", turnId, status } },
       });
       this.broadcastTurn("turn/completed", fact.threadId, { ...fact.turn, status });
@@ -150,7 +150,7 @@ export default class OpenCodeEventController {
         const turn = await this.options.threads.latestTurn(identity.threadId);
         if (!turn) return;
         await this.options.observe({
-          activity: null,
+          turnStarted: null,
           lifecycle: {
             threadId: identity.threadId,
             event: { kind: "acceptedIntent", turnId: WorkbenchTurnIdSchema.parse(turn.id) },
@@ -173,7 +173,7 @@ export default class OpenCodeEventController {
           observedAt: event.created,
         });
         await this.options.observe({
-          activity: { kind: "turnStarted", threadId: active.threadId, startedAt: event.created },
+          turnStarted: { threadId: active.threadId, startedAt: event.created },
           lifecycle: {
             threadId: active.threadId,
             event: { kind: "acceptedIntent", turnId: active.turnId },
@@ -371,7 +371,7 @@ export default class OpenCodeEventController {
           sessionID, eventID: event.id, turnId: WorkbenchTurnIdSchema.parse(turn.id), status, intentVersion,
         });
         await this.options.observe({
-          activity: null,
+          turnStarted: null,
           lifecycle: {
             threadId: identity.threadId,
             event: {

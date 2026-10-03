@@ -710,3 +710,45 @@ test("durable capture gaps do not block historical imports, subscriptions or liv
     await temporary.dispose();
   }
 });
+
+test("committed admissions of new thread items notify item-activity listeners until unsubscribed", async () => {
+  const fixture = createThreadStateTestDatabase();
+  const threadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000002");
+  fixture.admitThread(testProjectIds.project, threadId, "codex", "native-thread", "C:/project");
+  const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
+  const nativeTurn = observationsFor(threadId)[1]!;
+  assert.ok(nativeTurn.kind === "turn");
+  const { turnId } = await fixture.identities.threads.observeTurn({
+    ...nativeTurn, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread"),
+  });
+  repository.settle(observationsFor(threadId).map(observation => observation.kind === "turn"
+    ? { ...observation, turnId, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("native-thread") } : observation));
+  const database = {
+    failure: null,
+    start: async () => ({ tableNames: [], schemaVersion: 1 }),
+    readThreadContextUsage: async (id: string) => repository.readContextUsage(id),
+    readTranscript: async (request: Parameters<typeof repository.read>[0]) => repository.read(request),
+    settleTranscript: async (observations: readonly WorkbenchTranscriptObservation[]) => repository.settle(observations),
+    query: async <Row extends WorkbenchDatabaseRow>(query: WorkbenchDatabaseQuery<Row>): Promise<Row[]> => {
+      const compiled = compileWorkbenchDatabaseStatement(workbenchDatabaseTables, query);
+      return fixture.sqlite.prepare(compiled.sql).all(...compiled.parameters) as Row[];
+    },
+  };
+  const owner = new WorkbenchTranscriptController(database, new WorkbenchTranscriptCaptureGapController({ database }));
+  const message = (id: string, observedAt: number): WorkbenchTranscriptObservation => ({
+    kind: "item", threadId, turnId, lifecycle: "completed", observedAt,
+    item: { id, type: "agentMessage", text: id, phase: "commentary", memoryCitation: null, delivery: null, questions: null },
+  });
+  const received: unknown[] = [];
+  const unsubscribe = owner.subscribeItemActivity(activity => { received.push(activity); });
+  try {
+    await owner.record([message("first", 40)], { source: "provider" });
+    await owner.record([message("first", 50)], { source: "provider" });
+    assert.deepEqual(received, [{ activityAt: 40, projectId: testProjectIds.project, threadId }]);
+    unsubscribe();
+    await owner.record([message("second", 60)], { source: "provider" });
+    assert.equal(received.length, 1);
+  } finally {
+    owner.dispose();
+  }
+});

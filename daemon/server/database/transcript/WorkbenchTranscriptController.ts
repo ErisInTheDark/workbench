@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions and disposal.
+ * - WorkbenchTranscriptItemActivity: one committed admission of new thread items.
+ * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions, item-activity publication and disposal.
  */
 import { logError } from "../../process-helpers.ts";
 import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
@@ -56,6 +57,23 @@ function observationIdentity(observations: readonly WorkbenchTranscriptObservati
     threadId: [...threadIds][0]!,
     turnId: turnIds.size === 1 ? [...turnIds][0]! : null,
   };
+}
+
+export interface WorkbenchTranscriptItemActivity {
+  /** Latest observed time among the newly admitted items. */
+  activityAt: number;
+  projectId: string;
+  threadId: string;
+}
+
+function reportSettlementFailure(error: unknown, threadId: string) {
+  const message = error instanceof Error ? error.message : String(error);
+  logError("workbench-transcript-settlement", `thread=${threadId.slice(0, 80)} failed: ${message.slice(0, 500)}`);
+}
+
+function reportItemActivityFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  logError("workbench-transcript-item-activity", `listener failed: ${message.slice(0, 500)}`);
 }
 
 function reportSubscriptionFailure(error: unknown) {
@@ -122,6 +140,7 @@ export default class WorkbenchTranscriptController {
   readonly #recorder: WorkbenchTranscriptRecorder;
   readonly #subscriptions: WorkbenchTranscriptSubscriptionController;
   readonly #live = new WorkbenchTranscriptLiveController();
+  readonly #itemActivityListeners = new Set<(activity: WorkbenchTranscriptItemActivity) => Promise<void> | void>();
   #liveBoundary: ((operation: () => Promise<void>) => Promise<void>) | null = null;
   #disposed = false;
 
@@ -213,6 +232,7 @@ export default class WorkbenchTranscriptController {
       try {
         settlement = await this.#recorder.record(recoveryObservations);
       } catch (error) {
+        reportSettlementFailure(error, identity.threadId);
         throw await this.#captureGaps.captureFailure({
           error,
           recoverability: "provider",
@@ -230,6 +250,7 @@ export default class WorkbenchTranscriptController {
       settlement = await this.#recorder.record(observations);
     } catch (error) {
       if (context.source === "compatibility") throw error;
+      reportSettlementFailure(error, identity.threadId);
       throw await this.#captureGaps.captureFailure({
         error,
         recoverability: context.source === "provider" ? "provider" : "unrecoverable",
@@ -255,6 +276,12 @@ export default class WorkbenchTranscriptController {
     };
   }
 
+  /** Observe every committed admission of new thread items, from any source. */
+  subscribeItemActivity(listener: (activity: WorkbenchTranscriptItemActivity) => Promise<void> | void) {
+    this.#itemActivityListeners.add(listener);
+    return () => { this.#itemActivityListeners.delete(listener); };
+  }
+
   acceptLiveUpdate(update: TranscriptLiveUpdate) {
     if (!this.#disposed) this.#live.acceptLiveUpdate(update);
   }
@@ -265,6 +292,7 @@ export default class WorkbenchTranscriptController {
     source: WorkbenchTranscriptRecordingContext["source"],
   ) {
     if (!settlement.changes) return;
+    this.#publishItemActivity(settlement.changes);
     try {
       this.#live.settle(settlement.changes, {
         replaceLiveText: source === "provider" && observations.some(observation => observation.kind === "providerTurnScope"),
@@ -272,6 +300,24 @@ export default class WorkbenchTranscriptController {
     } catch (error) {
       // Publication failure must never relabel a successful durable commit as a capture gap.
       reportSubscriptionFailure(error);
+    }
+  }
+
+  #publishItemActivity(changes: NonNullable<WorkbenchTranscriptSettlement["changes"]>) {
+    if (this.#disposed) return;
+    for (const change of changes) {
+      if (change.itemActivityAt === null) continue;
+      const activity = {
+        activityAt: change.itemActivityAt, projectId: change.snapshot.thread.project_id, threadId: change.snapshot.thread.id,
+      };
+      for (const listener of this.#itemActivityListeners) {
+        // Listener failure must never relabel a successful durable commit as a capture gap.
+        try {
+          void Promise.resolve(listener(activity)).catch(reportItemActivityFailure);
+        } catch (error) {
+          reportItemActivityFailure(error);
+        }
+      }
     }
   }
 

@@ -4,7 +4,7 @@
  * - WorkbenchProviderLifecycleObservation: provider event plus its persisted lifecycle result.
  * - normalizeProviderSidebarEntry: normalize provider sidebar rows.
  * - normalizeSubagentProviderLifecycle: resolve subagent lifecycle defaults.
- * - default WorkbenchThreadStateFeature: own reconciliation, SQLite state, workbench-owned titles, thread-owned status commands, and provider notifications.
+ * - default WorkbenchThreadStateFeature: own reconciliation, SQLite state, workbench-owned titles, thread-owned status commands, item-owned activity time, and provider notifications.
  */
 import { normalizeThreadTitle } from "./lib/thread-bootstrap";
 import type { ThreadPayload, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship, WorkbenchThreadCreationProfile } from "workbench-shared/types";
@@ -23,10 +23,11 @@ import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransiti
 import type { WorkbenchGitArcActiveClaim } from "./WorkbenchGitArcFeature";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
-import { ThreadReferenceSchema, TurnReferenceSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 import type WorkbenchAgentContextController from "./WorkbenchAgentContextController";
+import type { DaemonTranscriptRegistration } from "./daemon-runtime-objects";
 import { isPathWithinRoot } from "./lib/project";
 
 interface ProjectRecord { id: ProjectId; rootPath: string }
@@ -61,6 +62,8 @@ function legacyGitArc(claim: WorkbenchGitArcActiveClaim) {
 export interface WorkbenchThreadStateFeatureContext {
   agentContext?: Pick<WorkbenchAgentContextController, "publish">;
   identities: NativeTranscriptIdentityOwners;
+  /** Canonical transcript admissions of new thread items; the only source of thread activity time. */
+  itemActivity?: Pick<DaemonTranscriptRegistration, "subscribeItemActivity">;
   readComposerProfiles?: () => Promise<WorkbenchComposerProfileStorePayload>;
   recordComposerProfileUsage?: (profileId: string, at: number) => Promise<void>;
   recordComposerModelUsage?: (harness: WorkbenchHarness, modelId: string, at: number) => Promise<void>;
@@ -157,6 +160,7 @@ export interface WorkbenchProviderLifecycleObservation {
 export default class WorkbenchThreadStateFeature {
   readonly controller: WorkbenchThreadStateController;
   private paginationQueue: Promise<unknown> = Promise.resolve();
+  private readonly unsubscribeItemActivity: () => void;
 
   private provider(harness: WorkbenchHarness) {
     const key = installedProviderKeys.find(key => key === harness);
@@ -223,10 +227,15 @@ export default class WorkbenchThreadStateFeature {
       },
       threadStateStore: new WorkbenchThreadStateStore(context.database),
     });
+    this.unsubscribeItemActivity = context.itemActivity?.subscribeItemActivity(async (activity) => {
+      await this.controller.observeItemActivity(
+        ProjectIdSchema.parse(activity.projectId), WorkbenchThreadIdSchema.parse(activity.threadId), activity.activityAt,
+      );
+    }) ?? (() => undefined);
   }
 
   async observeProviderNotification(harness: HarnessKind, facts: WorkbenchProviderObservation) {
-    const { projectId, lifecycle: mapped, displayLabel, activity } = facts;
+    const { projectId, lifecycle: mapped, displayLabel, turnStarted } = facts;
     let observation: WorkbenchProviderLifecycleObservation | null = null;
     if (mapped) {
       const lifecycle = projectId
@@ -239,7 +248,7 @@ export default class WorkbenchThreadStateFeature {
       await this.controller.observeDisplayLabel(harness, displayLabel.threadId, displayLabel.label, projectId);
       return observation;
     }
-    if (activity) await this.controller.observeActivity(harness, activity.threadId, activity.kind === "turnStarted" ? activity.startedAt : undefined, projectId);
+    if (turnStarted) await this.controller.observeTurnStarted(harness, turnStarted.threadId, turnStarted.startedAt, projectId);
     return observation;
   }
 
@@ -360,7 +369,10 @@ export default class WorkbenchThreadStateFeature {
     }
   }
 
-  async dispose() { await this.controller.dispose(); }
+  async dispose() {
+    this.unsubscribeItemActivity();
+    await this.controller.dispose();
+  }
 
   private async providerProfileTarget(harness: WorkbenchHarness, thread: ThreadPayload) {
     if (!thread.id || !thread.cwd) throw new Error("Profile preparation requires a provider thread and cwd.");

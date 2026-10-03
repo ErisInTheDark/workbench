@@ -3,7 +3,7 @@
  * - default CodexProviderObservations: translate admitted Codex ingress without a second lifecycle.
  * - CodexProviderPublication: public notification and typed shared-state facts beside retained native input.
  * - mapProviderLifecycleNotification: decode compatible Codex lifecycle events at the provider edge.
- * - mapProviderActivityNotification: decode compatible Codex activity events at the provider edge.
+ * - mapProviderTurnStartedNotification: decode compatible Codex turn starts at the provider edge.
  * - admitCodexTranscriptObservations/mapCodexTranscriptObservation: supply Codex identity evidence to shared admission.
  */
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
@@ -89,17 +89,14 @@ export function mapProviderLifecycleNotification(
     ? { event: { kind: "providerSystemError" }, threadId } : null;
 }
 
-export function mapProviderActivityNotification(
+export function mapProviderTurnStartedNotification(
   notification: JsonRpcNotification, identities: AdmittedIdentities,
-): WorkbenchProviderObservation["activity"] {
-  if (notification.method !== "turn/started" && notification.method !== "item/started" && notification.method !== "item/completed") return null;
+): WorkbenchProviderObservation["turnStarted"] {
+  if (notification.method !== "turn/started") return null;
   const params = record(notification.params);
   const threadId = typeof params?.threadId === "string" && params.threadId.trim()
     ? identities.knownThread(ThreadReferenceSchema.parse(params.threadId)).threadId : null;
-  if (!threadId) return null;
-  return notification.method === "turn/started"
-    ? { kind: "turnStarted", startedAt: timestamp(record(params.turn)?.startedAt), threadId }
-    : { kind: "activity", threadId };
+  return threadId ? { startedAt: timestamp(record(params.turn)?.startedAt), threadId } : null;
 }
 
 export type CodexProviderPublication = {
@@ -143,7 +140,7 @@ export default class CodexProviderObservations {
         ? { accountLimits: WorkbenchRateLimitSnapshotSchema.parse(params?.rateLimits) } : {}),
       ...(identity ? { projectId: identity.projectId } : {}),
       lifecycle: mapProviderLifecycleNotification(notification, this.owners.threads),
-      activity: mapProviderActivityNotification(notification, this.owners.threads),
+      turnStarted: mapProviderTurnStartedNotification(notification, this.owners.threads),
       displayLabel: identity && displayLabel ? { threadId: identity.threadId, label: displayLabel } : null,
     };
   }

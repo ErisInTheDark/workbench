@@ -24,7 +24,8 @@ export default class WorkbenchThreadArchiveController {
   private deadline(record: WorkbenchThreadStateRecord) {
     return record.entryKind === "thread" && record.lifecycle.settled && !record.metadata.archived
       && !record.metadata.pinned
-      ? record.activityAt + SETTLED_ARCHIVE_AGE_MS
+      // Settling is not activity, but it restarts the archive clock.
+      ? Math.max(record.activityAt, record.settledAt ?? 0) + SETTLED_ARCHIVE_AGE_MS
       : null;
   }
 

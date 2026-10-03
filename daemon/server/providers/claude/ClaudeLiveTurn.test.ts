@@ -79,7 +79,7 @@ function fixture(
     // The latest log entry shows whether the signal followed settlement.
     usageChanged: () => { usageSignals.push(log.at(-1) ?? "start"); },
     observe: async facts => {
-      if (facts.activity) log.push(`activity:${facts.activity.kind}`);
+      if (facts.turnStarted) log.push("turnStarted");
       if (!facts.lifecycle) return;
       assert.equal(facts.projectId, projectId, "lifecycle facts must apply before thread state loads the project");
       log.push(`observe:${facts.lifecycle.event.kind}${
@@ -121,7 +121,7 @@ test("a completed turn is accepted before its prompt and releases its process be
   push(result());
   await task;
   assert.deepEqual(log, [
-    "activity:turnStarted", "observe:acceptedIntent", "prompts:0", "status:active", "turn/started",
+    "turnStarted", "observe:acceptedIntent", "prompts:0", "status:active", "turn/started",
     // Settlement is reported before the observation that lets Workbench core continue the turn.
     "release", "settle:completed", "reported:completed", "observe:turnCompleted:completed", "turn/completed", "status:idle",
   ]);

@@ -531,9 +531,10 @@ export default class WorkbenchThreadStateRelationalRepository {
 
   readNextArchiveEligibility(): number | null {
     const row = this.database.prepare(`
-      SELECT MIN(state.activity_at) AS activity_at FROM workbench_thread_states state
+      SELECT MIN(MAX(state.activity_at, COALESCE(retention.settled_at, 0))) AS activity_at FROM workbench_thread_states state
       JOIN workbench_top_level_thread_states top ON top.thread_id = state.thread_id
       JOIN workbench_thread_lifecycle lifecycle ON lifecycle.thread_id = state.thread_id
+      LEFT JOIN workbench_thread_retention retention ON retention.thread_id = state.thread_id
       WHERE top.archived = 0 AND top.pinned = 0 AND lifecycle.settled = 1
     `).get() as { activity_at: number | null };
     return row.activity_at;
@@ -542,8 +543,9 @@ export default class WorkbenchThreadStateRelationalRepository {
   readArchiveEligible(activeBefore: number): Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }> {
     if (!Number.isSafeInteger(activeBefore)) throw new Error("Archive eligibility boundary must be an integer timestamp.");
     const rows = this.database.prepare(`${SELECT_THREAD_STATES}
-      WHERE top.archived = 0 AND top.pinned = 0 AND lifecycle.settled = 1 AND state.activity_at <= ?
-      ORDER BY state.activity_at, state.thread_id
+      WHERE top.archived = 0 AND top.pinned = 0 AND lifecycle.settled = 1
+        AND MAX(state.activity_at, COALESCE(retention.settled_at, 0)) <= ?
+      ORDER BY MAX(state.activity_at, COALESCE(retention.settled_at, 0)), state.thread_id
     `).all(activeBefore) as ThreadStateRow[];
     return this.hydrate(rows).map((record, index) => ({ projectId: rows[index]!.project_id, record }));
   }

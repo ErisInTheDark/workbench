@@ -426,6 +426,10 @@ test("live reads retain parent-status inputs without decoding settled history", 
     assert.deepEqual(repository.readRecords({ selection: "threads", projectId: fixtureIdentityValues.ProjectId["other"], threadIds: [live!] }), []);
     assert.equal(repository.readNextArchiveEligibility(), 2);
     assert.deepEqual(repository.readArchiveEligible(2).map(({ record }) => record.identity.threadId), [settled]);
+    database.prepare("UPDATE workbench_thread_retention SET settled_at = 10 WHERE thread_id = ?").run(settled);
+    assert.equal(repository.readNextArchiveEligibility(), 10, "settling after the last item restarts the archive clock");
+    assert.deepEqual(repository.readArchiveEligible(2), []);
+    database.prepare("UPDATE workbench_thread_retention SET settled_at = 2 WHERE thread_id = ?").run(settled);
     assert.equal(repository.readProjectActivity(fixtureIdentityValues.ProjectId["project"]), 5);
     assert.throws(() => repository.readRecords({ selection: "threads", threadIds: [archived!] }), /unique summary/);
     database.prepare("DELETE FROM workbench_thread_git_observations WHERE thread_id = ?").run(archived);

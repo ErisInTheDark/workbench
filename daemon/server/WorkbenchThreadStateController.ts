@@ -502,7 +502,12 @@ export default class WorkbenchThreadStateController {
     }
   }
 
-  private synchronizeSettlementTimestamps(state: ProjectState) {
+  /**
+   * Stamps settlement times and applies due archival. A record loaded without a settlement time
+   * settled at an unknown moment, so only its item activity can age it into the archive; otherwise
+   * a missing time means it settled just now, which restarts the archive clock.
+   */
+  private synchronizeSettlementTimestamps(state: ProjectState, { loaded = false }: { loaded?: boolean } = {}) {
     const now = this.now();
     let changed = false;
     for (const [key, entry] of state.entries) {
@@ -512,7 +517,7 @@ export default class WorkbenchThreadStateController {
         ? entry.gitHistoryCleanedAt
         : null;
       const timed = { ...entry, gitHistoryCleanedAt, settledAt };
-      const archive = this.archives.isDue(timed);
+      const archive = this.archives.isDue(loaded && entry.settledAt === null ? { ...timed, settledAt: null } : timed);
       if (entry.settledAt === settledAt && entry.gitHistoryCleanedAt === gitHistoryCleanedAt && !archive) continue;
       state.entries.set(key, archive && timed.entryKind === "thread"
         ? { ...timed, metadata: { archived: true, pinned: false, snoozed: false }, snoozedUntil: null }
@@ -828,18 +833,18 @@ export default class WorkbenchThreadStateController {
         && !shouldClearQuestionnaire
         && !shouldSetQuestionnaire
       ) return existing;
-      const activityAt = event.kind === "acceptedIntent" && providerEntry?.entryKind === "thread" ? providerEntry.activityAt : this.now();
+      // Activity time belongs to admitted thread items; lifecycle transitions never move it.
+      const turnOrderAt = this.now();
       const lifecycleEntry = existing.entryKind === "subagent"
-        ? { ...existing, activityAt, lifecycle, ...(event.kind === "acceptedIntent" && profile && !existing.profile ? { profile } : {}) }
+        ? { ...existing, lifecycle, ...(event.kind === "acceptedIntent" && profile && !existing.profile ? { profile } : {}) }
         : {
           ...existing,
-          activityAt,
           lifecycle,
           ...(event.kind === "acceptedIntent" && !existing.profile ? { profile: profile ?? null } : {}),
           metadata: existing.metadata.archived
             ? { archived: true as const, pinned: false as const, snoozed: false as const }
             : { ...existing.metadata, snoozed: shouldUnsnooze ? false : existing.metadata.snoozed },
-          ...(event.kind === "acceptedIntent" ? { orderAt: providerEntry?.entryKind === "thread" ? providerEntry.orderAt ?? activityAt : activityAt } : {}),
+          ...(event.kind === "acceptedIntent" ? { orderAt: providerEntry?.entryKind === "thread" ? providerEntry.orderAt ?? turnOrderAt : turnOrderAt } : {}),
           snoozedUntil: shouldUnsnooze ? null : existing.snoozedUntil,
           ...(event.kind === "acceptedIntent" && providerEntry?.entryKind === "thread" ? {
             title: resolveWorkbenchThreadTitle({ id: threadId, name: existing.title, preview: providerEntry.title }),
@@ -1155,7 +1160,8 @@ export default class WorkbenchThreadStateController {
     });
   }
 
-  async observeActivity(harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnStartedAt?: number | null, selectedProjectId?: ProjectId) {
+  /** A turn start orders the sidebar thread; it is not activity, which only admitted items record. */
+  async observeTurnStarted(harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnStartedAt: number | null, selectedProjectId?: ProjectId) {
     if (selectedProjectId) selectedProjectId = this.canonicalProjectId(selectedProjectId);
     if (selectedProjectId) await this.getProject(selectedProjectId);
     const key = `${harness}:${threadId}`;
@@ -1163,22 +1169,32 @@ export default class WorkbenchThreadStateController {
       if (selectedProjectId && selectedProjectId !== projectId || !state.entries.has(key)) continue;
       await this.enqueue(`${projectId}:thread:${key}`, async () => {
         const entry = state.entries.get(key);
-        if (!entry || entry.entryKind === "draft") return;
-        const activityAt = this.now();
-        const updatesOrder = entry.entryKind === "thread" && turnStartedAt !== undefined;
-        const next = parseWorkbenchThreadStateEntry({
-          ...entry,
-          activityAt,
-          ...(updatesOrder ? { orderAt: turnStartedAt ?? activityAt } : {}),
-        });
-        if (next.entryKind === "draft") return;
+        if (!entry || entry.entryKind !== "thread") return;
+        const orderAt = turnStartedAt ?? this.now();
+        if (entry.orderAt === orderAt) return;
+        const next = parseWorkbenchThreadStateEntry({ ...entry, orderAt });
         state.entries.set(key, next);
-        if (updatesOrder && next.entryKind === "thread") {
-          await this.persist(projectId, state, [key]);
-        }
+        await this.persist(projectId, state, [key]);
         this.publish(projectId, state, next);
       });
     }
+  }
+
+  /** The canonical transcript admitted new thread items; activity only moves forward to their observed time. */
+  async observeItemActivity(projectId: ProjectId, threadId: WorkbenchThreadId, activityAt: number) {
+    projectId = this.canonicalProjectId(projectId);
+    const state = await this.getProject(projectId);
+    const located = [...state.entries.values()].find(entry => entry.entryKind !== "draft" && entry.identity.threadId === threadId);
+    if (!located || located.entryKind === "draft") return;
+    const key = `${located.identity.harness}:${threadId}`;
+    await this.enqueue(`${projectId}:thread:${key}`, async () => {
+      const entry = state.entries.get(key);
+      if (!entry || entry.entryKind === "draft" || entry.activityAt >= activityAt) return;
+      const next = parseWorkbenchThreadStateEntry({ ...entry, activityAt });
+      state.entries.set(key, next);
+      await this.persist(projectId, state, [key]);
+      this.publish(projectId, state, next);
+    });
   }
 
   async observeDisplayLabel(harness: WorkbenchHarness, threadId: WorkbenchThreadId, label: string, selectedProjectId?: ProjectId) {
@@ -1391,7 +1407,7 @@ export default class WorkbenchThreadStateController {
         newThreadProfile: stored.newThreadProfile,
       });
       const originalEntries = new Map(state.entries);
-      const repairedSettlementTimestamps = this.synchronizeSettlementTimestamps(state);
+      const repairedSettlementTimestamps = this.synchronizeSettlementTimestamps(state, { loaded: true });
       this.projects.set(projectId, state);
       await this.pinnedLayout.importProject(projectId, this.naturallyOrderedEntries(state), state.displayOrder);
       if (repairedSettlementTimestamps) await this.persist(projectId, state, this.changedEntryKeys(originalEntries, state), { previousEntries: originalEntries });

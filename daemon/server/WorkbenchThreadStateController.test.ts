@@ -1044,7 +1044,7 @@ test("overdue settlement archives retroactively except pinned threads and restor
     lifecycle: threadId === "missing-time"
       ? { kind: "stopped", reason: "userMarkedStopped", settled: true }
       : { kind: "completed", reason: "providerInactive", settled: true },
-    settledAt: threadId === "missing-time" ? null : threadId === "recent" ? 1 : now,
+    settledAt: threadId === "missing-time" ? null : 1,
   }));
   await persistence.writeProject("project", { drafts: [], records, version: 4 });
   const controller = new WorkbenchThreadStateController({
@@ -1073,6 +1073,13 @@ test("overdue settlement archives retroactively except pinned threads and restor
     assert.ok(restored?.entryKind === "thread");
     assert.equal(restored.metadata.archived, false);
     assert.equal(restored.lifecycle.settled, false);
+    await controller.handleRequest("observer", {
+      method: "workbench/thread-state/settle", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("overdue") },
+    });
+    const resettled = await read("overdue");
+    assert.ok(resettled?.entryKind === "thread");
+    assert.equal(resettled.lifecycle.settled, true);
+    assert.equal(resettled.metadata.archived, false, "settling a thread with old item activity restarts its archive clock");
   } finally { await controller.dispose(); }
 });
 
@@ -1462,7 +1469,7 @@ test("project subscribers receive activity and transient wait state without sock
   const stop = controller.subscribeProjects(projectId => received.push(controller.peekProject(projectId)!));
   controller.subscribeProjects(() => otherUpdates++);
   now = 20;
-  await controller.observeActivity("codex", entry.identity.threadId, undefined, fixtureProjectIds.project);
+  await controller.observeItemActivity(fixtureProjectIds.project, entry.identity.threadId, now);
   assert.equal(received.at(-1)?.entries[0]?.activityAt, now);
   controller.setThreadWaitState("codex", "waiting-thread", ["subagent_wait"]);
   const waiting = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread");
@@ -2498,28 +2505,30 @@ test("accepted intent survives provider discovery lag and remains visible after 
     assert.equal(publishedSnapshots[0].entries.some((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider"), true);
   }
   publishedSnapshots.length = 0;
+  const readProvider = async () => (await controller.getSnapshot(fixtureProjectIds["project"])).entries
+    .find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider");
   now = 50;
-  await controller.observeActivity("codex", fixtureThreadIds["provider"]);
-  let observed = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider");
-  assert.equal(observed?.activityAt, 50);
+  await controller.observeItemActivity(fixtureProjectIds.project, fixtureThreadIds.provider, 48);
+  let observed = await readProvider();
+  assert.equal(observed?.activityAt, 48, "an admitted item moves activity to its observed time");
   assert.equal(observed?.entryKind === "thread" ? observed.orderAt : null, 42);
-  assert.equal("orderAt" in publishedSnapshots.at(-1)!, false);
   now = 60;
-  await controller.observeActivity("codex", fixtureThreadIds["provider"], 55);
-  observed = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider");
-  assert.equal(observed?.activityAt, 60);
+  await controller.observeTurnStarted("codex", fixtureThreadIds["provider"], 55);
+  observed = await readProvider();
+  assert.equal(observed?.activityAt, 48, "a turn start orders the thread without being activity");
   assert.equal(observed?.entryKind === "thread" ? observed.orderAt : null, 55);
   const turnStartUpdate = publishedSnapshots.at(-1)?.entries.find(candidate => candidate.entryKind === "thread"
     && candidate.identity.threadId === "provider");
   assert.equal(turnStartUpdate?.entryKind === "thread" ? turnStartUpdate.orderAt : null, 55);
+  await controller.observeItemActivity(fixtureProjectIds.project, fixtureThreadIds.provider, 45);
+  assert.equal((await readProvider())?.activityAt, 48, "an older admission never moves activity backwards");
   now = 70;
-  await controller.observeActivity("codex", fixtureThreadIds["provider"]);
-  observed = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "provider");
-  assert.equal(observed?.entryKind === "thread" ? observed.orderAt : null, 55);
-  const stored = await readProjectState<{ drafts: unknown[]; records: Array<{ identity: { threadId: string }; orderAt?: number }> }>(root, "project");
+  await controller.observeItemActivity(fixtureProjectIds.project, fixtureThreadIds.provider, 70);
+  const stored = await readProjectState<{ drafts: unknown[]; records: Array<{ activityAt: number; identity: { threadId: string }; orderAt?: number }> }>(root, "project");
   assert.deepEqual(stored.drafts, []);
-  assert.equal(stored.records.some((candidate) => candidate.identity.threadId === "provider"), true);
-  assert.equal(stored.records.find((candidate) => candidate.identity.threadId === "provider")?.orderAt, 55);
+  const storedProvider = stored.records.find((candidate) => candidate.identity.threadId === "provider");
+  assert.equal(storedProvider?.orderAt, 55);
+  assert.equal(storedProvider?.activityAt, 70, "item activity is durable, not only published");
   providerEntries = [{
     activityAt: 999,
     entryKind: "thread",
@@ -2536,8 +2545,10 @@ test("accepted intent survives provider discovery lag and remains visible after 
   assert.equal(laggingEntry?.title, "First user message");
   assert.equal(laggingEntry?.entryKind === "thread" ? laggingEntry.orderAt : null, 55);
   providerEntries = [];
+  now = 90;
   const completedLifecycle = await controller.observeLifecycle("codex", fixtureThreadIds["provider"], { kind: "turnCompleted", status: "completed", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") });
   assert.deepEqual(completedLifecycle, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
+  assert.equal((await readProvider())?.activityAt, 70, "lifecycle transitions never move activity");
   await controller.refresh(fixtureProjectIds["project"]);
   await new Promise((resolve) => setTimeout(resolve, 0));
   const retained = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider");
@@ -2736,7 +2747,7 @@ test("successful user input wakes snoozed threads without changing questionnaire
   entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "pending");
   assert.equal(entry?.entryKind === "thread" ? entry.metadata.snoozed : null, false);
   assert.equal(entry?.entryKind === "thread" ? entry.lifecycle.kind : null, "working");
-  assert.equal(entry?.activityAt, 40);
+  assert.equal(entry?.activityAt, 20, "resolving input is a lifecycle transition, not a thread item");
   assert.equal(entry?.entryKind === "thread" ? entry.orderAt : null, 20);
 
   await controller.dispose();
@@ -2772,13 +2783,13 @@ test("replayed questionnaire lifecycle does not invent fresh thread activity", a
 
   await controller.observeLifecycle("codex", fixtureThreadIds["questionnaire"], { kind: "pendingInput", questionnaire: null, requestKey: "request", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") });
   let observed = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "questionnaire");
-  assert.equal(observed?.activityAt, 20);
+  assert.equal(observed?.activityAt, 10, "the questionnaire item, not its lifecycle, records activity");
   assert.equal(publications.length, 1);
 
   now = 30;
   await controller.observeLifecycle("codex", fixtureThreadIds["questionnaire"], { kind: "pendingInput", questionnaire: null, requestKey: "request", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") });
   observed = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((entry) => entry.entryKind !== "draft" && entry.identity.threadId === "questionnaire");
-  assert.equal(observed?.activityAt, 20);
+  assert.equal(observed?.activityAt, 10);
   assert.equal(publications.length, 1);
 
   await controller.dispose();
