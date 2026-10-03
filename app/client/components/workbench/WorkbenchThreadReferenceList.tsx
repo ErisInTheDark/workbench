@@ -5,7 +5,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadTarget, WorkbenchThreadWaitTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadTarget, WorkbenchThreadWaitTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { createLogicalExistingThreadRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import { ProjectIdSchema, type LogicalProjectId } from "workbench-shared/workbench/identity";

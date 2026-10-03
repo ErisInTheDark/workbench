@@ -6,7 +6,10 @@ import { NativeThreadIdSchema, ProjectIdSchema, ThreadReferenceSchema, Workbench
 import type { DaemonWorkspaceObservation, DaemonWorkspaceQuery } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadIdentityRecord } from "./database/thread-identity/workbench-thread-identity-types";
-import WorkbenchWorkspaceObservationController from "./WorkbenchWorkspaceObservationController";
+import WorkbenchWorkspaceObservationController, { type DaemonObservationChange } from "./WorkbenchWorkspaceObservationController";
+import { applyObservationDelta, describeObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
+import { daemonObservationShape } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 
 type Client = { id: string };
 type Owners = ConstructorParameters<typeof WorkbenchWorkspaceObservationController<Client>>[0];
@@ -18,7 +21,7 @@ const sidebar = (projectId: ProjectId, revision = 1): WorkbenchThreadSidebarSnap
 });
 
 function fixture(context: TestContext, overrides: Partial<Owners> = {}) {
-  const updates: Array<{ client: Client; value: DaemonWorkspaceObservation }> = [];
+  const updates: Array<{ client: Client; value: DaemonWorkspaceObservation; change: DaemonObservationChange; protocol: number }> = [];
   const listeners = new Set<() => void>();
   let projectChanged: (id: ProjectId) => void = () => {};
   let identityChanged: (id: typeof threadId) => void = () => {};
@@ -36,7 +39,10 @@ function fixture(context: TestContext, overrides: Partial<Owners> = {}) {
       subscribeProjects: listener => { projectChanged = listener; return () => {}; },
     },
     projects: { getCurrentUpdate: () => null, observe: () => () => {} },
-    publish: (client, value) => { updates.push({ client, value }); for (const listener of [...listeners]) listener(); },
+    publish: (client, value, change, protocol) => {
+      updates.push({ client, value, change, protocol });
+      for (const listener of [...listeners]) listener();
+    },
     warn: message => warnings.push(message), cooperate: async () => {},
     ...overrides,
   };
@@ -57,6 +63,59 @@ function fixture(context: TestContext, overrides: Partial<Owners> = {}) {
     }),
   };
 }
+
+const thread = (index: number, overrides: Partial<Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>> = {}): WorkbenchThreadSidebarEntry => ({
+  entryKind: "thread", title: `Thread ${index} with a realistic title`, activityAt: 1_000 + index,
+  identity: { harness: "codex", threadId: WorkbenchThreadIdSchema.parse(`${String(index).padStart(8, "0")}-0000-4000-8000-000000000000`) },
+  metadata: { archived: false, pinned: false, snoozed: false },
+  lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false }, waitingOnThreads: [],
+  ...overrides,
+});
+
+test("one thread tick in a 1,000-row project publishes one small delta that names the thread", async context => {
+  let current: WorkbenchThreadSidebarSnapshot = { ...sidebar(a), entries: Array.from({ length: 1_000 }, (_, index) => thread(index)) };
+  const f = fixture(context, { protocol: () => 2 });
+  f.owners.threads.peekProject = () => current;
+  f.owners.threads.readProject = async () => current;
+  const first = f.observe({ kind: "projectThreads", projectIds: [a] });
+  assert.equal(first.phase, "current");
+  assert.equal(f.updates.length, 0, "The first value travels as the observe result, never as a push");
+  current = { ...current, revision: 2,
+    entries: current.entries.map((entry, index) => index === 500 && entry.entryKind === "thread" ? { ...entry, activityAt: 9_999 } : entry) };
+  f.projectChanged(a);
+  await f.wait(value => value.revision > first.revision);
+  const [update] = f.updates;
+  assert.ok(update?.change, "Every change after the first value is a delta");
+  assert.ok(JSON.stringify(update.change.delta).length < 2_048, JSON.stringify(update.change.delta).slice(0, 300));
+  assert.match(describeObservationDelta(update.change.delta), /00000500: activityAt/u);
+  assert.deepEqual({ ...applyObservationDelta(first, update.change.delta, daemonObservationShape("projectThreads")), revision: update.value.revision },
+    update.value);
+});
+
+test("lean rows leave out archived threads and their subagents but count them; protocol 1 keeps full entries", context => {
+  const archived = thread(1, { metadata: { archived: true, pinned: false, snoozed: false } });
+  const child: WorkbenchThreadSidebarEntry = {
+    entryKind: "subagent", title: "child", activityAt: 5, createdAt: 5, updatedAt: 5, cwd: "C:/a", directSubagentIndex: 0,
+    identity: { harness: "codex", threadId: WorkbenchThreadIdSchema.parse("00000002-0000-4000-8000-000000000000") },
+    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false }, name: "child",
+    parentThreadId: archived.entryKind === "thread" ? archived.identity.threadId : threadId,
+    pinned: false, profileId: "", profileName: "", projectId: a,
+  };
+  const project = { ...sidebar(a), entries: [thread(0, { questionnaireHistory: [], previousTitles: [{ title: "old", usedAt: 1 }] }), archived, child] };
+  const lean = fixture(context, { protocol: () => 2 });
+  lean.owners.threads.peekProject = () => project;
+  const value = lean.observe({ kind: "projectThreads", projectIds: [a] });
+  assert.ok(value.kind === "projectThreads");
+  const rows = value.projects[0]?.sidebar;
+  assert.deepEqual(rows?.entries.map(entry => entry.title), ["Thread 0 with a realistic title"]);
+  assert.ok(rows && "archivedCount" in rows && rows.archivedCount === 1);
+  assert.equal("previousTitles" in rows.entries[0]!, false);
+  const legacy = fixture(context);
+  legacy.owners.threads.peekProject = () => project;
+  const full = legacy.observe({ kind: "projectThreads", projectIds: [a] });
+  assert.ok(full.kind === "projectThreads");
+  assert.equal(full.projects[0]?.sidebar?.entries.length, 3);
+});
 
 test("one held project read does not block a different caller's selected project", async context => {
   const f = fixture(context);
@@ -211,7 +270,8 @@ test("canonical project publications refresh an observation opened through a ret
   f.owners.catalogue.getFacts = () => ({ revision: 1, phase: "current", failure: null, locations: null,
     catalogue: { data: [], aliases: [{ alias: b, projectId: a }], rootPath: "" } });
   let reads = 0;
-  f.owners.threads.readProject = async () => sidebar(a, ++reads);
+  // A revision bump alone is not observable; the refreshed read also changes a visible fact.
+  f.owners.threads.readProject = async () => ({ ...sidebar(a, ++reads), freshness: reads > 1 ? "partial" as const : "fresh" as const });
   const observation = f.observe({ kind: "projectThreads", projectIds: [b] });
   await f.wait(value => value.subscriptionId === observation.subscriptionId && value.phase === "current");
   f.projectChanged(a);

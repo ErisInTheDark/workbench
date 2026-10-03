@@ -8,7 +8,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
 import { WORKBENCH_APP_NETWORK_SOCKET_PATH } from "workbench-shared/http/workbench-app-events";
 import { WorkbenchAppRpcRequestSchema, WorkbenchAppRuntimeResponseSchema } from "workbench-shared/http/workbench-app-rpc";
-import type { WorkspaceObservation } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { WorkspaceObservation, WorkspaceObservationDelta } from "workbench-shared/workbench/workspace/workspace-observation";
+import { describeObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 import WorkbenchWorkspaceRequestController from "../workspace/WorkbenchWorkspaceRequestController";
 import type WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
@@ -35,6 +36,7 @@ type Frame =
   | Extract<WorkbenchAppNetworkEvent, { kind: "threadEvent" }>
   | { kind: "voice"; event: VoiceSessionEvent }
   | { kind: "workspace"; observation: WorkspaceObservation }
+  | { kind: "workspaceDelta"; delta: WorkspaceObservationDelta }
   | { kind: "network"; snapshot: ReturnType<WorkbenchNetworkRoutes["snapshotFor"]> }
   | { kind: "presentation"; event: { revision: number } }
   | { kind: "presentation-import"; status: ReturnType<WorkbenchPresentationImportController["snapshot"]> }
@@ -52,9 +54,12 @@ const shortThread = (value: unknown) => typeof value === "string" && value
 function describeFrame(frame: Frame): string {
   switch (frame.kind) {
     case "workspace": {
+      // First values travel as RPC responses; full pushes only go to browsers that did not negotiate deltas.
       const observation = frame.observation as { kind: string; data?: { target?: { threadId?: unknown } } | null };
-      return `workspace ${observation.kind}${shortThread(observation.data?.target?.threadId)}`;
+      return `workspace ${observation.kind}${shortThread(observation.data?.target?.threadId)} reset=legacy-peer`;
     }
+    case "workspaceDelta":
+      return `workspace ${frame.delta.kind} ${describeObservationDelta(frame.delta.delta)}`;
     case "threadEvent": {
       const params = frame.notification.params as { threadId?: unknown } | undefined;
       return `threadEvent ${frame.harness}:${frame.notification.method.slice(0, 80)}${shortThread(params?.threadId)}`;
@@ -67,6 +72,8 @@ function describeFrame(frame: Frame): string {
   }
 }
 
+/** Workspace pushes past this name themselves in the log: the tripwire for snapshot resends. */
+const WORKSPACE_PUSH_WARNING_BYTES = 32 * 1024;
 const MAX_OUTBOUND_FRAME_BYTES = 100 * 1024 * 1024;
 const MAX_BUFFERED_BYTES = 2 * MAX_OUTBOUND_FRAME_BYTES;
 // Match the daemon WebSocket's existing default now that app RPC carries files
@@ -75,7 +82,10 @@ const MAX_INBOUND_FRAME_BYTES = 100 * 1024 * 1024;
 type Json = z.infer<ReturnType<typeof z.json>>;
 
 export default class WorkbenchAppEventSocketController {
-  private readonly server = new WebSocketServer({ noServer: true, maxPayload: MAX_INBOUND_FRAME_BYTES });
+  // Remote and mobile browsers pay for every byte; JSON frames over 1KB compress several-fold.
+  private readonly server = new WebSocketServer({
+    noServer: true, maxPayload: MAX_INBOUND_FRAME_BYTES, perMessageDeflate: { threshold: 1_024 },
+  });
   private readonly connections = new Map<WebSocket, () => void>();
   private readonly pendingRequests = new Set<Promise<void>>();
   private readonly traffic = new Map<string, { count: number; bytes: number }>();
@@ -145,7 +155,11 @@ export default class WorkbenchAppEventSocketController {
         if (error) this.options.logger.error("app",
           `WS network ${kind} send failed: ${boundedSocketError(error)}`);
       });
-      this.recordTraffic("out", "kind" in frame ? describeFrame(frame) : `rpc ${method}`, payloadBytes);
+      const label = "kind" in frame ? describeFrame(frame) : `rpc ${method}`;
+      if ((kind === "workspace" || kind === "workspaceDelta") && payloadBytes > WORKSPACE_PUSH_WARNING_BYTES) {
+        this.options.logger.error("app", `WS oversized workspace push ${payloadBytes}B: ${label}`);
+      }
+      this.recordTraffic("out", label, payloadBytes);
     };
     const bindState = (browserStateId: string | null) => {
       if (stateOwner !== undefined && stateOwner !== browserStateId) throw new Error("App state request changed browser owner.");
@@ -177,6 +191,7 @@ export default class WorkbenchAppEventSocketController {
           },
         },
         publish: observation => send({ kind: "workspace", observation }),
+        publishDelta: delta => send({ kind: "workspaceDelta", delta }),
         publishVoice: event => send({ kind: "voice", event }),
         publishThreadEvent: (notification, harness, daemonId) => send({ kind: "threadEvent", notification, harness, daemonId }),
         publishTranscript: event => send(event),
@@ -256,6 +271,10 @@ export default class WorkbenchAppEventSocketController {
         if (input.method === "workspace/command") {
           if (!workspace) throw new Error("Workspace commands are unavailable.");
           return workspace.command(input.params);
+        }
+        if (input.method === "workspace/hello") {
+          if (!workspace) throw new Error("Workspace queries are unavailable.");
+          return workspace.hello(input.params);
         }
         if (input.method === "workspace/observe") {
           if (!workspace) throw new Error("Workspace queries are unavailable.");

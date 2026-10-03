@@ -312,7 +312,7 @@ test("merged project rows keep priority and lifecycle layers across daemon folde
     ] }] }],
   ]);
   const rows = projectLogicalThreadRows(projectLogicalProjects(snapshot, new Map()), sources, snapshot);
-  const title = (entry: WorkbenchThreadSidebarEntry) => entry.title;
+  const title = (entry: { title: string }) => entry.title;
   assert.deepEqual(rows.map(row => title(row.entry)), [
     "pinned", "claimed", "draft", "attention", "working", "complete", "snoozed", "settled",
   ]);

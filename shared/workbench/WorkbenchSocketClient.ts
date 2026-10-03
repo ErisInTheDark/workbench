@@ -15,7 +15,7 @@ import {
   WORKBENCH_EVENT_STREAM_SEQUENCE_FIELD,
 } from "../workbench/websocket-stream.ts";
 import { isWorkbenchPublicNotification, type WorkbenchTranscriptNotification } from "../workbench/provider/provider-observation.ts";
-import { WORKSPACE_UPDATED_METHOD } from "./workspace/workspace-observation";
+import { WORKSPACE_DELTA_METHOD, WORKSPACE_UPDATED_METHOD } from "./workspace/workspace-observation";
 import type { WorkbenchRpcResponse } from "./workbench-rpc.ts";
 import WorkbenchRpcSocketClient from "./WorkbenchRpcSocketClient.ts";
 
@@ -26,6 +26,7 @@ type WorkbenchNotification = {
     | "workbench/thread-state/reset"
     | "workbench/thread-state/updated"
     | typeof WORKSPACE_UPDATED_METHOD
+    | typeof WORKSPACE_DELTA_METHOD
     | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
     | (typeof workbenchTranscriptNotifications)[keyof typeof workbenchTranscriptNotifications]["method"]
     | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD;
@@ -152,6 +153,7 @@ export default class WorkbenchSocketClient {
       || workbenchMessage.method === "voice/event"
       || workbenchMessage.method === "workbench/thread-state/reset"
       || workbenchMessage.method === WORKSPACE_UPDATED_METHOD
+      || workbenchMessage.method === WORKSPACE_DELTA_METHOD
       || workbenchMessage.method === WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
       || Object.values(workbenchTranscriptNotifications).some(notification => notification.method === workbenchMessage.method)
       || workbenchMessage.method === WORKBENCH_STATS_IMPORT_UPDATED_METHOD) {

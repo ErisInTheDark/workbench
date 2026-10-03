@@ -6,6 +6,7 @@
  * - WorkbenchGitArcLifecycleStateSchema/WorkbenchGitArcLifecycleState: active, stashed, and resolved Git work.
  * - WorkbenchDurableQuestionnaire/WorkbenchQuestionnaireHistoryEntryState: saved pending and answered questions.
  * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
+ * - WorkbenchThreadSidebarEntryVariants: unrefined entry variant schemas for derived row contracts.
  * - WorkbenchThreadWaitTargetSchema/WorkbenchThreadWaitTarget: project-qualified dependent-wait references.
  * - WorkbenchThreadSidebarSnapshot/WorkbenchProjectThreadSidebars: project and aggregate sidebar types.
  * - WorkbenchReloadDirtSnapshotSchema: reload ownership and pending-scope diagnostics.
@@ -49,6 +50,7 @@ import { areDeeplyEqual } from "../deep-equality.ts";
 import { gitArcPathsOverlap } from "../git/git-arc-paths.ts";
 import { ThreadDisplayLayoutSchema } from "./thread-display-layout.ts";
 import { WorkbenchThreadTitleHistoryEntrySchema } from "./thread-title-history.ts";
+import type { WorkbenchThreadSidebarRow } from "./thread-sidebar-row.ts";
 import {
   projectWorkbenchThreadDisplaySection,
   resolveWorkbenchThreadDisplayOrder,
@@ -310,7 +312,7 @@ export const WorkbenchGitArcLifecycleStateSchema = z.discriminatedUnion("phase",
 ]);
 export type WorkbenchGitArcLifecycleState = z.infer<typeof WorkbenchGitArcLifecycleStateSchema>;
 
-export function gitArcPreventsThreadSettlement(gitArc: WorkbenchGitArcLifecycleState | null | undefined) {
+export function gitArcPreventsThreadSettlement<Arc extends Pick<WorkbenchGitArcLifecycleState, "phase" | "claimedPaths">>(gitArc: Arc | null | undefined) {
   return Boolean(gitArc?.claimedPaths.length || gitArc?.phase === "stashed");
 }
 
@@ -401,7 +403,7 @@ const TopLevelEntrySchema = SidebarCommonSchema.extend({
   waitingFor: z.enum(["subagents", "other"]).optional(),
   waitingOnThreads: DefaultedWaitTargetsSchema,
 }).strict();
-const SubagentEntrySchema = SidebarCommonSchema.extend({
+const SubagentEntryBaseSchema = SidebarCommonSchema.extend({
   profile: WorkbenchComposerProfileSelectionSchema.nullable().optional(),
   previousTitles: z.array(WorkbenchThreadTitleHistoryEntrySchema).max(4).default([]).optional(),
   createdAt: z.number().int().nonnegative(),
@@ -422,9 +424,16 @@ const SubagentEntrySchema = SidebarCommonSchema.extend({
   questionnaireHistory: z.array(WorkbenchQuestionnaireHistoryEntrySchema).optional(),
   updatedAt: z.number().int().nonnegative(),
   waitingFor: z.enum(["subagents", "other"]).optional(),
-}).strict().superRefine((value, context) => {
-  if (value.lifecycle.settled && value.pinned) context.addIssue({ code: "custom", message: "Settled subagents cannot remain locked." });
-});
+}).strict();
+const refineSubagent = (value: { lifecycle?: { settled: boolean }; pinned?: boolean }, context: z.RefinementCtx) => {
+  if (value.lifecycle?.settled && value.pinned) context.addIssue({ code: "custom", message: "Settled subagents cannot remain locked." });
+};
+const SubagentEntrySchema = SubagentEntryBaseSchema.superRefine(refineSubagent);
+
+/** Unrefined entry variants, so derived row contracts can omit fields; reapply `refineSubagent` to subagent derivatives. */
+export const WorkbenchThreadSidebarEntryVariants = {
+  draft: DraftEntrySchema, thread: TopLevelEntrySchema, subagent: SubagentEntryBaseSchema, refineSubagent,
+};
 
 export const WorkbenchThreadSidebarEntrySchema = z.discriminatedUnion("entryKind", [DraftEntrySchema, TopLevelEntrySchema, SubagentEntrySchema]);
 export type WorkbenchThreadSidebarEntry = z.infer<typeof WorkbenchThreadSidebarEntrySchema>;
@@ -642,7 +651,11 @@ export function resolveWorkbenchThreadTitle({
   return normalizedPreview && normalizedPreview !== normalizedId ? normalizedPreview : fallback;
 }
 
-export function getThreadSidebarGroup(entry: WorkbenchThreadSidebarEntry): WorkbenchThreadSidebarGroup {
+// List helpers read only row fields; full entries are structurally assignable to lean rows.
+type SidebarRow = WorkbenchThreadSidebarRow;
+type TopLevelSidebarRow = Extract<SidebarRow, { entryKind: "thread" }>;
+
+export function getThreadSidebarGroup(entry: SidebarRow): WorkbenchThreadSidebarGroup {
   if (entry.entryKind !== "subagent" && entry.metadata.archived) return "archived";
   if (entry.entryKind !== "draft" && entry.lifecycle.settled) return "settled";
   if (entry.entryKind !== "subagent" && entry.metadata.snoozed) return "snoozed";
@@ -650,11 +663,11 @@ export function getThreadSidebarGroup(entry: WorkbenchThreadSidebarEntry): Workb
   return pinned ? "pinned" : "main";
 }
 
-export function hasUnarchivedSidebarWork(entries: readonly WorkbenchThreadSidebarEntry[]) {
+export function hasUnarchivedSidebarWork(entries: readonly SidebarRow[]) {
   return entries.some(entry => entry.entryKind !== "subagent" && !entry.metadata.archived);
 }
 
-export function isWorkbenchThreadSettlementAvailable(entry: WorkbenchThreadSidebarEntry) {
+export function isWorkbenchThreadSettlementAvailable(entry: SidebarRow) {
   return entry.entryKind !== "draft"
     && !entry.waitingFor
     && !entry.lifecycle.settled
@@ -662,15 +675,16 @@ export function isWorkbenchThreadSettlementAvailable(entry: WorkbenchThreadSideb
     && !gitArcPreventsThreadSettlement(entry.gitArc);
 }
 
-export function areAllUnsnoozedThreadEntriesSettlementReady(entries: readonly WorkbenchThreadSidebarEntry[]) {
+export function areAllUnsnoozedThreadEntriesSettlementReady(entries: readonly SidebarRow[]) {
   return entries.every((entry) => {
     const group = getThreadSidebarGroup(entry);
     return group === "hidden" || group === "archived" || group === "snoozed" || group === "settled" || isWorkbenchThreadSettlementAvailable(entry);
   });
 }
 
-export function groupWorkbenchThreadSidebarEntries(entries: readonly WorkbenchThreadSidebarEntry[]) {
-  const visibleEntries = entries.filter((entry) => getThreadSidebarGroup(entry) !== "hidden" && entry.entryKind !== "subagent");
+export function groupWorkbenchThreadSidebarEntries<Entry extends SidebarRow>(entries: readonly Entry[]) {
+  const visibleEntries = entries.filter((entry): entry is Exclude<Entry, { entryKind: "subagent" }> =>
+    getThreadSidebarGroup(entry) !== "hidden" && entry.entryKind !== "subagent");
   return {
     archivedEntries: visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === "archived"),
     mainEntries: visibleEntries.filter((entry) => getThreadSidebarGroup(entry) === "main"),
@@ -681,9 +695,9 @@ export function groupWorkbenchThreadSidebarEntries(entries: readonly WorkbenchTh
 }
 
 export interface WorkbenchThreadClaimIntersections {
-  activeEntries: Array<{ entry: WorkbenchTopLevelThreadSidebarEntry; paths: string[] }>;
+  activeEntries: Array<{ entry: TopLevelSidebarRow; paths: string[] }>;
   hasScope: boolean;
-  plannedEntries: Array<{ entry: WorkbenchTopLevelThreadSidebarEntry; paths: string[] }>;
+  plannedEntries: Array<{ entry: TopLevelSidebarRow; paths: string[] }>;
 }
 
 const EMPTY_WORKBENCH_THREAD_CLAIM_INTERSECTIONS: WorkbenchThreadClaimIntersections = {
@@ -692,17 +706,17 @@ const EMPTY_WORKBENCH_THREAD_CLAIM_INTERSECTIONS: WorkbenchThreadClaimIntersecti
   plannedEntries: [],
 };
 
-function orderWorkbenchTopLevelThreadEntries(entries: readonly WorkbenchTopLevelThreadSidebarEntry[]) {
+function orderWorkbenchTopLevelThreadEntries(entries: readonly TopLevelSidebarRow[]) {
   const grouped = groupWorkbenchThreadSidebarEntries(entries);
-  return [...grouped.pinnedEntries, ...grouped.mainEntries, ...grouped.snoozedEntries, ...grouped.settledEntries] as WorkbenchTopLevelThreadSidebarEntry[];
+  return [...grouped.pinnedEntries, ...grouped.mainEntries, ...grouped.snoozedEntries, ...grouped.settledEntries];
 }
 
 export function getWorkbenchThreadClaimIntersections(
-  entries: readonly WorkbenchThreadSidebarEntry[],
+  entries: readonly SidebarRow[],
   identity: { harness: WorkbenchHarnessId; threadId: string },
   scope: "plan" | "stashed",
 ): WorkbenchThreadClaimIntersections {
-  const owner = entries.find((entry): entry is WorkbenchTopLevelThreadSidebarEntry => (
+  const owner = entries.find((entry): entry is TopLevelSidebarRow => (
     entry.entryKind === "thread"
     && entry.identity.harness === identity.harness
     && entry.identity.threadId === identity.threadId
@@ -711,11 +725,11 @@ export function getWorkbenchThreadClaimIntersections(
     ? owner?.gitArc?.phase === "stashed" ? owner.gitArc.stashedPaths : []
     : owner?.gitArcPlan?.scopePaths ?? [];
   if (!scopePaths.length) return EMPTY_WORKBENCH_THREAD_CLAIM_INTERSECTIONS;
-  const candidates = entries.filter((entry): entry is WorkbenchTopLevelThreadSidebarEntry => (
+  const candidates = entries.filter((entry): entry is TopLevelSidebarRow => (
     entry.entryKind === "thread"
     && (entry.identity.harness !== identity.harness || entry.identity.threadId !== identity.threadId)
   ));
-  const intersect = (selectPaths: (entry: WorkbenchTopLevelThreadSidebarEntry) => readonly string[]) => (
+  const intersect = (selectPaths: (entry: TopLevelSidebarRow) => readonly string[]) => (
     orderWorkbenchTopLevelThreadEntries(candidates).flatMap((entry) => {
       const paths = [...new Set(selectPaths(entry).flatMap((candidatePath) => (
         scopePaths.filter((scopePath) => gitArcPathsOverlap(candidatePath, scopePath))
@@ -733,7 +747,7 @@ export function getWorkbenchThreadClaimIntersections(
 
 export function createWorkbenchThreadClaimIntersectionSelector(identity: { harness: WorkbenchHarnessId; threadId: string }, scope: "plan" | "stashed") {
   let selected = EMPTY_WORKBENCH_THREAD_CLAIM_INTERSECTIONS;
-  return (snapshot: WorkbenchThreadSidebarSnapshot | null) => {
+  return <Snapshot extends { entries: readonly SidebarRow[] }>(snapshot: Snapshot | null) => {
     const next = snapshot ? getWorkbenchThreadClaimIntersections(snapshot.entries, identity, scope) : EMPTY_WORKBENCH_THREAD_CLAIM_INTERSECTIONS;
     if (areDeeplyEqual(selected, next)) return selected;
     selected = next;
@@ -766,7 +780,7 @@ export function isWorkbenchThreadStatusProviderOwned(lifecycle: WorkbenchThreadL
   return lifecycle.kind === "working" || (lifecycle.kind === "needsAttention" && lifecycle.reason === "pendingInput");
 }
 
-export function isWorkbenchSidebarThreadCompletionAvailable(entry: WorkbenchThreadSidebarEntry | WorkbenchPinnedThreadSummaryEntry) {
+export function isWorkbenchSidebarThreadCompletionAvailable(entry: SidebarRow | WorkbenchPinnedThreadSummaryEntry) {
   if (entry.entryKind !== "thread" || entry.metadata.archived) return false;
   if (entry.lifecycle.kind === "stopped") return true;
   if (entry.lifecycle.kind !== "needsAttention") return false;

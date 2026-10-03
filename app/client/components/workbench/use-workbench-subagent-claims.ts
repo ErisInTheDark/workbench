@@ -9,7 +9,7 @@
 import { useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 
 import type { ProjectId } from "workbench-shared/workbench/identity";
-import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import WorkbenchClientContext from "./workbench-client-context";
 
 export interface WorkbenchSubagentClaims {

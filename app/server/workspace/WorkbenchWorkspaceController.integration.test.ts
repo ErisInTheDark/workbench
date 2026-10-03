@@ -54,7 +54,8 @@ class Socket extends EventTarget {
     if (frame.method === "workspace/observe") {
       this.requests.push({ id: frame.id, params: DaemonWorkspaceObserveSchema.parse(frame.params) });
       for (const listener of [...this.listeners]) listener();
-    } else this.message({ id: frame.id, result: { accepted: true } });
+    } else if (frame.method === "workspace/hello") this.message({ id: frame.id, result: { protocol: 2 } });
+    else this.message({ id: frame.id, result: { accepted: true } });
   }
   query(kind: DaemonWorkspaceObserve["query"]["kind"]) {
     return new Promise<Query>(resolve => {

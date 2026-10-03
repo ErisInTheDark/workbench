@@ -8,8 +8,8 @@ import type { ComponentType } from "react";
 import {
   getThreadSidebarGroup,
   type WorkbenchPinnedThreadSummaryEntry,
-  type WorkbenchThreadSidebarEntry,
 } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
 import {
   getNeedsAttentionThreadStatusTone,

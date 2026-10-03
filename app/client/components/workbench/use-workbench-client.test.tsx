@@ -112,7 +112,7 @@ function ThreadStateProbe({ projectId }: { projectId: string }) {
   return (
     <output>
       {selected
-        ? `${selected.lifecycle.kind}:${selected.gitArc?.phase}:${selected.gitArcPlan?.intentName}`
+        ? `${selected.lifecycle.kind}:${selected.gitArc?.phase}:${selected.gitArcPlan?.scopePaths.join(",")}`
         : "missing"}
     </output>
   );
@@ -126,7 +126,7 @@ test("thread state hooks resolve the project owner while the route snapshot is n
       client,
     },
   ));
-  assert.match(html, /needsAttention:active:next repair/u);
+  assert.match(html, /needsAttention:active:app\/next\.tsx/u);
 });
 
 test("thread state hooks do not leak another project's entry", () => {

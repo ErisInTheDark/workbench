@@ -11,7 +11,8 @@
  * - isWorkbenchThreadDisplayOrderEmpty: identify layouts that do not need persistence.
  */
 
-import type { WorkbenchThreadSidebarEntry } from "./thread-state.ts";
+// Ordering reads only list-rendering fields, so full entries and lean sidebar rows order identically.
+import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "./thread-sidebar-row.ts";
 import type { FolderId } from "../identity.ts";
 import {
   createThreadDisplayFolder,
@@ -63,9 +64,9 @@ export const WorkbenchThreadDisplayOrderSchema = ThreadDisplayLayoutSchema;
 export type WorkbenchThreadDisplayOrder = ThreadDisplayLayout;
 export type WorkbenchThreadFolder = ThreadDisplayFolder;
 
-export type WorkbenchThreadDisplayItem =
-  | { entry: WorkbenchThreadSidebarEntry; itemKind: "thread" }
-  | { entries: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>[]; folder: WorkbenchThreadFolder; itemKind: "folder" };
+export type WorkbenchThreadDisplayItem<Entry extends WorkbenchThreadSidebarEntry = WorkbenchThreadSidebarEntry> =
+  | { entry: Entry; itemKind: "thread" }
+  | { entries: Exclude<Entry, { entryKind: "subagent" }>[]; folder: WorkbenchThreadFolder; itemKind: "folder" };
 
 export function getWorkbenchThreadDisplayKey(entry: WorkbenchThreadSidebarEntry) {
   return entry.entryKind === "draft"
@@ -139,7 +140,7 @@ export function compareThreadSidebarEntries(left: WorkbenchThreadSidebarEntry, r
   );
 }
 
-export function sortThreadSidebarEntries(entries: readonly WorkbenchThreadSidebarEntry[]) {
+export function sortThreadSidebarEntries<Entry extends WorkbenchThreadSidebarEntry>(entries: readonly Entry[]): Entry[] {
   return [...entries].sort(compareThreadSidebarEntries);
 }
 
@@ -188,8 +189,8 @@ function compareThreadUserSort(
   return indexes.get(getWorkbenchThreadDisplayKey(left))! - indexes.get(getWorkbenchThreadDisplayKey(right))!;
 }
 
-export function resolveWorkbenchThreadDisplayOrder(
-  entries: readonly WorkbenchThreadSidebarEntry[],
+export function resolveWorkbenchThreadDisplayOrder<Entry extends WorkbenchThreadSidebarEntry>(
+  entries: readonly Entry[],
   candidate: unknown,
 ) {
   const naturallyOrderedEntries = sortThreadSidebarEntries(entries);
@@ -211,11 +212,11 @@ export function findWorkbenchThreadFolder(candidate: unknown, threadKey: string)
   return findThreadDisplayFolder(candidate, threadKey);
 }
 
-export function projectWorkbenchThreadDisplaySection(
-  entries: readonly WorkbenchThreadSidebarEntry[],
+export function projectWorkbenchThreadDisplaySection<Entry extends WorkbenchThreadSidebarEntry>(
+  entries: readonly Entry[],
   candidate: unknown,
   section: WorkbenchThreadDisplaySection,
-): WorkbenchThreadDisplayItem[] {
+): WorkbenchThreadDisplayItem<Entry>[] {
   const naturallyOrderedEntries = sortThreadSidebarEntries(entries);
   const projected = projectLayoutEntries(naturallyOrderedEntries);
   return projectThreadDisplayLayoutSection(
@@ -223,7 +224,7 @@ export function projectWorkbenchThreadDisplaySection(
     projected.layoutEntries,
     candidate,
     section,
-  ) as WorkbenchThreadDisplayItem[];
+  ) as WorkbenchThreadDisplayItem<Entry>[];
 }
 
 export function createWorkbenchThreadFolder(

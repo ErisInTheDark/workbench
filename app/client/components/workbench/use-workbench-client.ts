@@ -44,11 +44,13 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type {
   WorkbenchHomeThreadDisplayOrderSnapshot,
   WorkbenchPinnedThreadLayoutSnapshot,
-  WorkbenchProjectThreadSidebars,
   WorkbenchProjectThreadSummaries,
-  WorkbenchThreadSidebarEntry,
-  WorkbenchThreadSidebarSnapshot,
 } from "workbench-shared/workbench/thread/thread-state";
+import type {
+  WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars,
+  WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry,
+  WorkbenchThreadSidebarRowSnapshot as WorkbenchThreadSidebarSnapshot,
+} from "workbench-shared/workbench/thread/thread-sidebar-row";
 import {
   createWorkbenchThreadClaimIntersectionSelector,
   type WorkbenchHarnessId,

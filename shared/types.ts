@@ -179,6 +179,9 @@ import type { WorkbenchReloadDirtSnapshot as SharedWorkbenchReloadDirtSnapshot, 
 import type { ProjectTreeFileCandidate } from "./workbench/project/ProjectTreeFileIndex.ts";
 import type { WorkbenchThreadItemTimelineEntry } from "./workbench/thread/thread-item-timeline.ts";
 import type { WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot, WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchThreadDraft, WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshot, WorkbenchThreadStateRequest } from "./workbench/thread/thread-state.ts";
+import type {
+  WorkbenchProjectThreadRowSidebars, WorkbenchThreadSidebarRow, WorkbenchThreadSidebarRowSnapshot,
+} from "./workbench/thread/thread-sidebar-row.ts";
 import type { WorkbenchFrontendGeneration } from "./frontend-generation.ts";
 
 export type { ProviderKey as WorkbenchHarness } from "./workbench/provider/provider-key.ts";
@@ -754,7 +757,8 @@ export interface WorkbenchLogicalThreadRow {
   location: ProjectLocationReference;
   hostname: string;
   rootPath: string;
-  entry: WorkbenchThreadSidebarEntry;
+  /** Lean row; per-thread detail rides the thread observation. */
+  entry: WorkbenchThreadSidebarRow;
   observedOnly?: boolean;
 }
 
@@ -1138,6 +1142,8 @@ export interface ExplorerSnapshot {
   logicalProjects?: WorkbenchLogicalProject[];
   logicalSummaries?: Record<string, WorkbenchLogicalProjectSummary>;
   logicalThreads?: WorkbenchLogicalThreadRow[];
+  /** Archived threads in the selected projects, whether or not their rows are loaded. */
+  archivedThreadCount?: number;
   root: string;
   rootPath: string;
   roots: WorkbenchProjectRoot[];
@@ -1163,13 +1169,13 @@ export interface ExplorerSnapshot {
 export interface WorkbenchThreadSidebarStore {
   getDraft?: (projectId: ProjectId, draftId: DraftId) => WorkbenchThreadDraft | null;
   getHomeThreadDisplayOrder?: () => WorkbenchHomeThreadDisplayOrderSnapshot;
-  getLocationSnapshot?: (location: ProjectLocationReference) => WorkbenchThreadSidebarSnapshot | null;
+  getLocationSnapshot?: (location: ProjectLocationReference) => WorkbenchThreadSidebarRowSnapshot | null;
   getHomeThreadDisplayOrderSupported?: () => boolean;
   getPinnedThreadLayout?: () => WorkbenchPinnedThreadLayoutSnapshot;
-  getProjectSnapshot: (projectId: ProjectId) => WorkbenchThreadSidebarSnapshot | null;
-  getProjectThreadSidebars?: () => WorkbenchProjectThreadSidebars;
+  getProjectSnapshot: (projectId: ProjectId) => WorkbenchThreadSidebarRowSnapshot | null;
+  getProjectThreadSidebars?: () => WorkbenchProjectThreadRowSidebars;
   getProjectThreadSummaries?: () => WorkbenchProjectThreadSummaries;
-  getSnapshot: () => WorkbenchThreadSidebarSnapshot | null;
+  getSnapshot: () => WorkbenchThreadSidebarRowSnapshot | null;
   subscribe: (listener: () => void) => () => void;
 }
 
@@ -1234,6 +1240,11 @@ export interface WorkbenchControls {
   setThreadTitle: (request: WorkbenchThreadTitleRequest) => Promise<string>;
   threadGoals: WorkbenchThreadGoalControls;
   threadSkills: WorkbenchThreadSkillControls;
+  /**
+   * Archived rows load only while someone shows them: a positive limit observes the newest archived threads
+   * of the selected projects (merged into `logicalThreads`); null releases them.
+   */
+  setArchivedThreadLimit: (limit: number | null) => void;
   submitPendingUserInputRequest: (
     threadId: string,
     response: WorkbenchUserInputResponse,

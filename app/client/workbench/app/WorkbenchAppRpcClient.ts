@@ -16,11 +16,12 @@ function boundedListenerError(error: unknown) {
     .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, 512);
 }
 
-const WorkspaceObservationAddress = z.object({
-  kind: z.literal("workspace"),
-  observation: z.object({ subscriptionId: z.uuid(), generation: z.number().int().nonnegative() }),
-});
-type ObservationAddress = z.infer<typeof WorkspaceObservationAddress>["observation"];
+const address = z.object({ subscriptionId: z.uuid(), generation: z.number().int().nonnegative() });
+const WorkspaceObservationAddress = z.union([
+  z.object({ kind: z.literal("workspace"), observation: address }).transform(value => value.observation),
+  z.object({ kind: z.literal("workspaceDelta"), delta: address }).transform(value => value.delta),
+]);
+type ObservationAddress = z.infer<typeof address>;
 
 export default class WorkbenchAppRpcClient {
   private readonly transport: WorkbenchRpcSocketClient;
@@ -49,7 +50,7 @@ export default class WorkbenchAppRpcClient {
         reportClientSchemaError("Rejected Workbench app RPC event", parsed.error);
         const address = WorkspaceObservationAddress.safeParse(value);
         if (address.success) for (const listener of this.invalidObservationListeners) {
-          try { listener(address.data.observation); }
+          try { listener(address.data); }
           catch (error) { console.error("Workspace failure listener failed:", boundedListenerError(error)); }
         }
         return;

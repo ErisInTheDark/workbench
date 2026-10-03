@@ -12,8 +12,9 @@ import type { DaemonId, LogicalProjectId, ProjectId } from "workbench-shared/wor
 import type { WorkspaceProjectGroups } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { ProjectLocationReference, WorkbenchProjectLocationsPayload } from "workbench-shared/workbench/project/project-location";
 import type {
-  WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries, WorkbenchProjectThreadSummaryCounts,
+  WorkbenchProjectThreadSummaries, WorkbenchProjectThreadSummaryCounts,
 } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarRowSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { createDraftTitle, WorkbenchThreadDraftSchema } from "workbench-shared/workbench/thread/thread-state";
 import { getThreadSidebarGroup } from "workbench-shared/workbench/thread/thread-state";
 import {
@@ -158,7 +159,7 @@ export function projectLogicalThreadDisplayOrder(
 
 export function projectLogicalThreadRows(
   projects: readonly WorkbenchLogicalProject[],
-  sources: ReadonlyMap<DaemonId, WorkbenchProjectThreadSidebars>,
+  sources: ReadonlyMap<DaemonId, { projects: readonly Pick<WorkbenchThreadSidebarRowSnapshot, "projectId" | "entries">[] }>,
   presentation: PresentationSnapshot,
 ): WorkbenchLogicalThreadRow[] {
   const materialized = projects.flatMap(project => projectDisplayLocations(project).flatMap(location =>

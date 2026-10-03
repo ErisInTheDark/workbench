@@ -4,10 +4,10 @@
  */
 import { createHash } from "node:crypto";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import { WorkbenchHomeThreadDisplayOrderSchema } from "workbench-shared/workbench/thread/thread-state";
 import {
-  WorkbenchHomeThreadDisplayOrderSchema,
-  type WorkbenchProjectThreadSidebars,
-} from "workbench-shared/workbench/thread/thread-state";
+  projectSidebarRowSnapshot, type WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars,
+} from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { WorkbenchThreadDisplayOrderSchema } from "workbench-shared/workbench/thread/thread-display-order";
 import type { WorkbenchPresentationManifestPage } from "workbench-shared/workbench/thread/thread-presentation-export";
 import type {
@@ -201,7 +201,7 @@ export default class WorkbenchPresentationImportController {
                 kind: "projectThreads", projectIds: locations.data.map(item => item.project.id),
               });
               if (result.kind !== "projectThreads") throw new Error("Attached project rows are unavailable.");
-              sidebars = { projects: result.projects.flatMap(project => project.sidebar ? [project.sidebar] : []) };
+              sidebars = { projects: result.projects.flatMap(project => project.sidebar ? [projectSidebarRowSnapshot(project.sidebar)] : []) };
             }
             await this.importLayout(target.daemonId, source, daemon, snapshot, sidebars);
             imported++;

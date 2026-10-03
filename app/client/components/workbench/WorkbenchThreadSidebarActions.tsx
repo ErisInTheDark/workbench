@@ -19,12 +19,13 @@ import {
   isWorkbenchThreadStatusProviderOwned,
   isWorkbenchSidebarThreadCompletionAvailable,
   type WorkbenchPinnedThreadSummaryEntry,
-  type WorkbenchProjectThreadSidebars,
   type WorkbenchProjectThreadSummaries,
-  type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadPriority,
   type WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
+import type {
+  WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars, WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry,
+} from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { getNeedsAttentionThreadStatusTone } from "./workbench-thread-status-colors";
 import { getThreadStopIntent } from "./thread-row-actions";
 import {

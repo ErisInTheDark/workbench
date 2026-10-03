@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DaemonIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import type { WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarRowSnapshot as WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import type { WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
 import ThreadSidebarClient from "./ThreadSidebarClient";
 

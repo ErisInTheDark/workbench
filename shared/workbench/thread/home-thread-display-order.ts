@@ -33,8 +33,11 @@ import {
   getThreadSidebarGroup,
   WorkbenchHomeThreadDisplayOrderSchema,
   type WorkbenchHomeThreadDisplayOrder,
-  type WorkbenchThreadSidebarEntry,
 } from "./thread-state.ts";
+import type { WorkbenchThreadSidebarRow } from "./thread-sidebar-row.ts";
+
+// Home ordering reads only list-rendering fields.
+type WorkbenchThreadSidebarEntry = WorkbenchThreadSidebarRow;
 
 type HomeThreadSources = {
   projects: readonly {
@@ -79,7 +82,7 @@ export function normalizeWorkbenchHomeThreadDisplayOrder(candidate: unknown): Wo
   return order;
 }
 
-export function getWorkbenchHomeThreadKey(projectId: string, entry: WorkbenchThreadSidebarEntry) {
+export function getWorkbenchHomeThreadKey(projectId: string, entry: WorkbenchThreadSidebarRow) {
   return getProjectQualifiedThreadDisplayKey(projectId, getWorkbenchThreadDisplayKey(entry));
 }
 

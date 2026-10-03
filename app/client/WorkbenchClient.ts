@@ -25,7 +25,9 @@ import {
   type WorkbenchThreadStateRequest,
 } from "workbench-shared/workbench/thread/thread-state";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema } from "workbench-shared/workbench/project/project-state";
-import type { WorkspaceObservation, WorkspaceProjectReference } from "workbench-shared/workbench/workspace/workspace-observation";
+import {
+  workspaceThreadRowKey, type WorkspaceObservation, type WorkspaceProjectReference,
+} from "workbench-shared/workbench/workspace/workspace-observation";
 import { WorkspaceThreadActionResultSchema } from "workbench-shared/workbench/workspace/workspace-commands";
 import { preferredLogicalLaunchLocation } from "workbench-shared/workbench/project/workbench-project-projection";
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
@@ -150,6 +152,9 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   let rows: QueryHandle<"projectThreads"> | null = null;
   let previousRows: QueryHandle<"projectThreads"> | null = null;
   let rowSelection: WorkspaceProjectReference[] | null | undefined;
+  /** Archived rows are observed only while a view shows them, for the current row selection. */
+  let archived: { handle: QueryHandle<"archivedThreads">; limit: number; selection: WorkspaceProjectReference[] | null } | null = null;
+  let archivedLimit: number | null = null;
   const owners = new Map<string, QueryHandle<"threadOwner">>();
   const renderers = new Map<DaemonId, ThreadClient>();
   const warmedOpenCodeSources = new Map<DaemonId, number>();
@@ -374,6 +379,21 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     rows = next;
     previousRows = retained;
     retirePreviousRows();
+    observeArchived();
+  }
+
+  function observeArchived() {
+    const selection = rowSelection ?? null;
+    if (archivedLimit === null || rowSelection === undefined) {
+      archived?.handle.release();
+      archived = null;
+      return;
+    }
+    if (archived && archived.limit === archivedLimit && areDeeplyEqual(archived.selection, selection)) return;
+    const previous = archived;
+    archived = { limit: archivedLimit, selection,
+      handle: workspace.observe({ kind: "archivedThreads", projects: selection, limit: archivedLimit }, factsChanged) };
+    previous?.handle.release();
   }
 
   function retirePreviousRows() {
@@ -511,15 +531,21 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       const facts = projectFacts();
       const fontSize = state?.records("globalPreference").find(item => item.preference.key === "editorFontSize");
       const rowData = visibleRows();
-      const logicalRows = rowData?.rows.filter(
+      const visibleLogicalRows = rowData?.rows.filter(
         (item): item is WorkbenchLogicalThreadRow => item.logicalProjectId !== null) ?? [];
+      // Archived rows ride their own paged observation; a row present in both is the main list's.
+      const visibleKeys = new Set(visibleLogicalRows.map(workspaceThreadRowKey));
+      const archivedRows = (archived?.handle.getSnapshot().value?.data.rows ?? []).filter(
+        (item): item is WorkbenchLogicalThreadRow => item.logicalProjectId !== null && !visibleKeys.has(workspaceThreadRowKey(item)));
+      const logicalRows = archivedRows.length ? [...visibleLogicalRows, ...archivedRows] : visibleLogicalRows;
+      const archivedThreadCount = rowData?.projects.reduce((total, item) => total + (item.archivedCount ?? 0), 0) ?? 0;
       const snapshot: ExplorerSnapshot = {
         ...project, browseLocation, currentPath: activePath,
         workspaceProjects: facts, workspaceThreads: rowData ?? undefined,
         workspaceProjectGroups: groups.getSnapshot().value?.data,
         workspaceProjectGroupsPhase: groups.getSnapshot().phase,
         logicalProjects: facts?.projects ?? [], logicalSummaries: facts?.summaries ?? {},
-        logicalThreads: logicalRows,
+        logicalThreads: logicalRows, archivedThreadCount,
         subagents: threads.subagents, threads: threads.threads,
         isProjectLoading: !!browseLocation && (!tree?.getSnapshot().value?.data || project.isLoading),
         isThreadsLoading: !!rows && !rows.getSnapshot().value,
@@ -785,6 +811,11 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       load: id => rendererForThread(id).threadSkills.load(id),
       subscribe: (id, listener) => rendererForThread(id).threadSkills.subscribe(id, listener),
     },
+    setArchivedThreadLimit: limit => {
+      archivedLimit = limit === null ? null : Math.min(Math.max(1, Math.floor(limit)), 500);
+      observeArchived();
+      emit();
+    },
     submitPendingUserInputRequest: (id, ...args) => rendererForThread(id).submitPendingUserInputRequest(id, ...args),
     listModels: (...args) => threadClient.listModels(...args),
     refreshRateLimits: () => threadClient.refreshRateLimits(),
@@ -936,6 +967,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       groups.release();
       rows?.release();
       previousRows?.release();
+      archived?.handle.release();
       tree?.release();
       for (const owner of owners.values()) owner.release();
       for (const panel of panels) panel.dispose();

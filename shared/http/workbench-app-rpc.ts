@@ -12,7 +12,7 @@ import { PresentationMutationSchema, type PresentationMutation } from "../state/
 import { WorkbenchAppSettingsUpdateRequestSchema } from "./workbench-app-settings";
 import { DaemonReloadRequestSchema } from "../workbench/daemon-reload";
 import { DaemonIdSchema } from "../workbench/identity";
-import { WorkspaceObserveSchema, WorkspaceReleaseSchema } from "../workbench/workspace/workspace-observation";
+import { WorkspaceHelloSchema, WorkspaceObserveSchema, WorkspaceReleaseSchema } from "../workbench/workspace/workspace-observation";
 import { WorkspaceCommandSchema, WorkspaceTranscriptRequestSchema, WorkspaceThreadMutationSchema, WorkspaceDraftLaunchSchema, WorkspaceLayoutRequestSchema, WorkspaceThreadActionSchema } from "../workbench/workspace/workspace-commands";
 
 export const WorkbenchAppRuntimeResponseSchema = z.object({
@@ -50,6 +50,7 @@ export const WorkbenchAppRpcRequestSchema = z.discriminatedUnion("method", [
   z.object({ id, method: z.literal("workspace/transcript"), params: WorkspaceTranscriptRequestSchema }).strict(),
   z.object({ id, method: z.literal("workspace/thread/mutate"), params: WorkspaceThreadMutationSchema }).strict(),
   z.object({ id, method: z.literal("workspace/layout"), params: WorkspaceLayoutRequestSchema }).strict(),
+  z.object({ id, method: z.literal("workspace/hello"), params: WorkspaceHelloSchema }).strict(),
   z.object({ id, method: z.literal("workspace/observe"), params: WorkspaceObserveSchema }).strict(),
   z.object({ id, method: z.literal("workspace/release"), params: WorkspaceReleaseSchema }).strict(),
   z.object({ id, method: z.literal("workspace/draft/launch"), params: WorkspaceDraftLaunchSchema }).strict(),

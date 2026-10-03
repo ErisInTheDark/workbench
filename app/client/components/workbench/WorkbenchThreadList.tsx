@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchControls, WorkbenchLogicalProject, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
 import { useWorkbenchClientController } from "./workbench-client-context";
@@ -29,7 +29,8 @@ import {
   type WorkbenchThreadDisplayOrder,
   type WorkbenchThreadDisplaySection,
 } from "workbench-shared/workbench/thread/thread-display-order";
-import type { WorkbenchThreadPriority, WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadPriority, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import {
   canMoveWorkbenchThreadRowToSection,
   isWorkbenchThreadRowDragPayload,
@@ -307,7 +308,17 @@ export default function WorkbenchThreadList ({
     return true;
   });
   const displayedSettledThreadCount = displayedHistoryItems.reduce((count, item) => count + itemThreadCount(item), 0);
-  const remainingSettledThreadCount = historyItems.reduce((count, item) => count + itemThreadCount(item), 0) - displayedSettledThreadCount;
+  // Archived rows load in pages; count every archived thread so "Load more" reaches the unloaded ones.
+  const archivedThreadCount = Math.max(list.archivedEntries.length, client.explorer.archivedThreadCount ?? 0);
+  const historyThreadCount = historyItems.reduce((count, item) => count + itemThreadCount(item), 0)
+    - list.archivedEntries.length + archivedThreadCount;
+  const remainingSettledThreadCount = historyThreadCount - displayedSettledThreadCount;
+  const archivedDemand = preferences.settledThreadsOpen && archivedThreadCount ? settledLimit : null;
+  useEffect(() => {
+    if (!controls || archivedDemand === null) return;
+    controls.setArchivedThreadLimit(archivedDemand);
+    return () => controls.setArchivedThreadLimit(null);
+  }, [archivedDemand, controls]);
   const nextSettledThreadCount = Math.min(SETTLED_THREAD_PAGE_SIZE, remainingSettledThreadCount);
   const isDragActive = Boolean(activeDragPayload);
   const visibleRows = (items: WorkbenchHomeThreadDisplayItem[]) => items.flatMap(item => item.itemKind === "folder"
@@ -757,7 +768,7 @@ export default function WorkbenchThreadList ({
             {renderSection(list.snoozedItems, "snoozed")}
           </ThreadDisclosure>
         ) : priorityTarget("snoozed")}
-        {historyItems.length ? (
+        {historyItems.length || archivedThreadCount ? (
           <ThreadDisclosure
             className="mt-2"
             hideChevron={true}

@@ -10,9 +10,13 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import type { WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
 import type {
   WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot,
-  WorkbenchProjectThreadSidebars, WorkbenchProjectThreadSummaries,
-  WorkbenchThreadDraft, WorkbenchThreadSidebarSnapshot,
+  WorkbenchProjectThreadSummaries, WorkbenchThreadDraft,
 } from "workbench-shared/workbench/thread/thread-state";
+import {
+  projectSidebarRow,
+  type WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars,
+  type WorkbenchThreadSidebarRowSnapshot as WorkbenchThreadSidebarSnapshot,
+} from "workbench-shared/workbench/thread/thread-sidebar-row";
 
 export interface ThreadSidebarClientOptions {
   onChange(snapshot: WorkbenchThreadSidebarSnapshot | null): void;
@@ -66,7 +70,8 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     for (const row of rows?.rows ?? []) {
       const key = this.sourceKey(row.location);
       const entries = entriesBySource.get(key) ?? [];
-      entries.push(row.entry);
+      // Protocol 1 apps still send full entries; the store holds only lean rows.
+      entries.push(projectSidebarRow(row.entry));
       entriesBySource.set(key, entries);
     }
     for (const source of rows?.projects ?? []) {
@@ -78,6 +83,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
         entries: entriesBySource.get(key) ?? [],
         freshness: source.phase === "current" ? "fresh" : "partial",
         error: source.failure,
+        archivedCount: source.archivedCount ?? 0,
       };
       sources.set(key, previous && areDeeplyEqual(previous, candidate)
         ? previous : { ...candidate, revision: (previous?.revision ?? 0) + 1 });

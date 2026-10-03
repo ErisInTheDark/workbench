@@ -9,9 +9,9 @@ import {
   isWorkbenchThreadSettlementAvailable,
   isWorkbenchSidebarThreadCompletionAvailable,
   type WorkbenchPinnedThreadSummaryEntry,
-  type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadSidebarGroup,
 } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 
 export type ThreadRowAction = "archive" | "complete" | "discard" | "restore" | "settle" | "snooze" | "wake";
 

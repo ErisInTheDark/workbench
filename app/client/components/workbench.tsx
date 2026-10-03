@@ -66,7 +66,8 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
 import { projectLogicalThreadDisplayOrder } from "workbench-shared/workbench/project/workbench-project-projection";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
-import { createDraftTitle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import { createDraftTitle, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { useWorkbenchAppRpc } from "../workbench/app/WorkbenchAppRpcContext";
 import { WorkbenchNetworkClientContext } from "../workbench/app/WorkbenchNetworkClient";

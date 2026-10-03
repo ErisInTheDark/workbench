@@ -5,9 +5,13 @@
  * - default WorkbenchWorkspaceClient: share typed query interests over the tab's single app connection.
  */
 import {
-  WorkspaceQuerySchema, WorkspaceObservationSchema,
-  type WorkspaceQuery, type WorkspaceObservation, type WorkspaceSourcePhase, type WorkspaceTranscriptState,
+  WorkspaceQuerySchema, WorkspaceObservationSchema, WorkspaceHelloResultSchema,
+  workspaceObservationShape, WORKSPACE_PROTOCOL,
+  type WorkspaceQuery, type WorkspaceObservation, type WorkspaceObservationDelta,
+  type WorkspaceSourcePhase, type WorkspaceTranscriptState,
 } from "workbench-shared/workbench/workspace/workspace-observation";
+import { applyObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
+import { projectSidebarRow } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
@@ -49,7 +53,25 @@ interface Interest {
   query: WorkspaceQuery;
   cancellation: AbortController;
   listeners: Map<object, { callbacks: Set<() => void>; cancellation: AbortController }>;
+  /** Exactly what the app holds; deltas apply only onto this revision. */
+  raw: WorkspaceObservation | null;
+  /** Deltas that arrived before the first value they build on. */
+  early: WorkspaceObservationDelta[];
   snapshot: WorkspaceQuerySnapshot;
+}
+const MAX_EARLY_DELTAS = 32;
+
+/** Protocol 1 apps send full sidebar entries; observers only ever see lean rows. */
+function leanObservation(value: WorkspaceObservation): WorkspaceObservation {
+  if (value.kind !== "projectThreads" && value.kind !== "archivedThreads") return value;
+  let changed = false;
+  const rows = value.data.rows.map(row => {
+    const entry = projectSidebarRow(row.entry);
+    if (entry === row.entry) return row;
+    changed = true;
+    return { ...row, entry };
+  });
+  return changed ? { ...value, data: { ...value.data, rows } } as WorkspaceObservation : value;
 }
 
 export default class WorkbenchWorkspaceClient {
@@ -60,10 +82,14 @@ export default class WorkbenchWorkspaceClient {
   private readonly notificationListeners = new Set<(notification: Notification) => void>();
   private readonly threadObservations = new Map<string, { release(): void }>();
   private readonly facades = new Map<string, WorkbenchDaemonClient>();
+  private negotiatedGeneration: number | null = null;
 
   constructor(readonly rpc: WorkbenchAppRpcClient) {
     this.unsubscribe = [
-      rpc.onEvent(event => { if (event.kind === "workspace") this.accept(event.observation); }),
+      rpc.onEvent(event => {
+        if (event.kind === "workspace") this.accept(event.observation);
+        else if (event.kind === "workspaceDelta") this.acceptDelta(event.delta);
+      }),
       rpc.onInvalidObservation(address => this.rejectObservation(address.subscriptionId, address.generation)),
       rpc.onOpen(() => {
         this.notify({ method: "workbench/transcript/capabilities", params: { protocolVersion: WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION } });
@@ -256,7 +282,7 @@ export default class WorkbenchWorkspaceClient {
     const created = !interest;
     if (!interest) {
       interest = { id: crypto.randomUUID(), query: parsed, cancellation: new AbortController(),
-        listeners: new Map(), snapshot: { phase: "pending", failure: null, value: null } };
+        listeners: new Map(), raw: null, early: [], snapshot: { phase: "pending", failure: null, value: null } };
       this.interests.set(interest.id, interest);
     }
     const token = {};
@@ -320,8 +346,27 @@ export default class WorkbenchWorkspaceClient {
     this.notificationListeners.clear();
   }
 
+  /**
+   * Once per app connection generation, sent ahead of (and pipelined with) observes. The server only sends
+   * deltas to observations opened after it processed this hello; earlier ones keep full values, which this
+   * client accepts either way, so the reply needs no waiting.
+   */
+  private negotiate(generation: number) {
+    if (this.negotiatedGeneration === generation) return;
+    this.negotiatedGeneration = generation;
+    void this.rpc.requestRaw({ method: "workspace/hello", params: { protocol: WORKSPACE_PROTOCOL } }).then(result => {
+      const parsed = WorkspaceHelloResultSchema.safeParse(result);
+      if (!parsed.success) reportClientSchemaError("Rejected workspace hello response", parsed.error);
+    }, (error: unknown) => {
+      if (error instanceof WorkbenchRpcRequestInterruptedError) return;
+      // Older app servers reject the method and keep sending full values.
+      console.warn("Workspace deltas unavailable from this app server; using full values.");
+    });
+  }
+
   private open(interest: Interest) {
     const generation = this.rpc.getSnapshot().generation;
+    this.negotiate(generation);
     void this.rpc.requestRaw({
       method: "workspace/observe",
       params: { subscriptionId: interest.id, generation, query: interest.query },
@@ -354,8 +399,10 @@ export default class WorkbenchWorkspaceClient {
       this.rejectObservation(value.subscriptionId, value.generation);
       return;
     }
+    if (interest.raw?.generation === value.generation && interest.raw.revision >= value.revision) return;
+    interest.raw = value;
+    value = leanObservation(value);
     const previous = interest.snapshot.value;
-    if (previous?.generation === value.generation && previous.revision >= value.revision) return;
     if (previous?.kind === value.kind && value.phase !== "current") {
       if (value.kind === "thread" && previous.kind === "thread" && !value.data) value = { ...value, data: previous.data };
       else if (value.kind === "projectTree" && previous.kind === "projectTree" && !value.data) value = { ...value, data: previous.data };
@@ -365,7 +412,46 @@ export default class WorkbenchWorkspaceClient {
       else if (value.kind === "daemonRuntime" && previous.kind === "daemonRuntime" && !value.data) value = { ...value, data: previous.data };
       else if (value.kind === "network" && previous.kind === "network" && !value.data) value = { ...value, data: previous.data };
     }
-    this.publish(interest, { phase: value.phase, failure: value.failure, value });
+    const raw = interest.raw;
+    for (const delta of interest.early.splice(0)) this.applyDelta(interest, delta);
+    // A replayed delta already published its newer value through `accept`.
+    if (interest.raw === raw || !interest.raw) this.publish(interest, { phase: value.phase, failure: value.failure, value });
+  }
+
+  private acceptDelta(delta: WorkspaceObservationDelta) {
+    const interest = this.interests.get(delta.subscriptionId);
+    if (!interest || !this.rpc.connected || delta.generation !== this.rpc.getSnapshot().generation) return;
+    this.applyDelta(interest, delta);
+  }
+
+  private applyDelta(interest: Interest, delta: WorkspaceObservationDelta) {
+    const raw = interest.raw;
+    // A delta can overtake the observe response that carries its base; hold a few until that value lands.
+    if (!raw) {
+      if (interest.early.length < MAX_EARLY_DELTAS) interest.early.push(delta);
+      else this.resync(interest, "too many deltas arrived before the first value");
+      return;
+    }
+    if (delta.generation === raw.generation && delta.revision <= raw.revision) return;
+    if (raw.generation !== delta.generation || raw.kind !== delta.kind || raw.revision !== delta.baseRevision) {
+      this.resync(interest, `delta for revision ${delta.baseRevision} does not follow revision ${raw?.revision ?? "none"}`);
+      return;
+    }
+    let next: WorkspaceObservation;
+    try {
+      next = { ...applyObservationDelta(raw, delta.delta, workspaceObservationShape(raw.kind)), revision: delta.revision };
+    } catch (error) {
+      this.resync(interest, error instanceof Error ? error.message.slice(0, 300) : "invalid delta");
+      return;
+    }
+    this.accept(next);
+  }
+
+  /** A delta that cannot apply means this copy diverged; re-observing returns the app's current full value. */
+  private resync(interest: Interest, reason: string) {
+    console.warn(`Workspace ${interest.query.kind} observation resync: ${reason}`);
+    interest.raw = null;
+    if (this.rpc.connected) this.open(interest);
   }
 
   private active(interest: Interest) { return !this.disposed && this.interests.get(interest.id) === interest; }

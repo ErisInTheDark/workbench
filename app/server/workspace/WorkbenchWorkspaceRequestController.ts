@@ -3,9 +3,12 @@
  * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests and publication fences.
  */
 import {
-  WorkspaceObserveSchema, WorkspaceReleaseSchema,
-  type WorkspaceObserve, type WorkspaceObservation, type WorkspaceThreadRows,
+  WorkspaceHelloSchema, WorkspaceObserveSchema, WorkspaceReleaseSchema, negotiateWorkspaceProtocol, workspaceObservationShape,
+  type WorkspaceArchivedThreads, type WorkspaceObservationDelta, type WorkspaceObserve, type WorkspaceObservation,
+  type WorkspaceProtocol, type WorkspaceThreadRows,
 } from "workbench-shared/workbench/workspace/workspace-observation";
+import { diffObservationValue } from "workbench-shared/workbench/workspace/observation-patch";
+import { projectSidebarRowSnapshot, type WorkbenchThreadSidebarRowSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -50,7 +53,11 @@ type Observation = ReturnType<WorkbenchDaemonSource["observe"]>;
 type Json = z.infer<ReturnType<typeof z.json>>;
 interface Interest {
   request: WorkspaceObserve;
+  /** Fixed at observe time: only observations opened after `workspace/hello` deliver deltas. */
+  protocol: WorkspaceProtocol;
   value: WorkspaceObservation;
+  /** True while `observe` runs: its return value already carries these changes, so nothing is published. */
+  opening: boolean;
   stop: Array<() => void>;
   sources: Map<DaemonId, { projectIds: ProjectId[]; observation: Observation }>;
   owner: ReturnType<WorkbenchWorkspaceThreads["observe"]> | null;
@@ -66,6 +73,7 @@ interface TranscriptSubscription {
 
 export default class WorkbenchWorkspaceRequestController {
   private readonly interests = new Map<string, Interest>();
+  private protocol: WorkspaceProtocol = 1;
   private readonly pendingRefresh = new Set<Interest>();
   private refreshing = false;
   private closed = false;
@@ -97,6 +105,7 @@ export default class WorkbenchWorkspaceRequestController {
       subscribe(browserStateId: string | null, listener: () => void): () => void;
     };
     publish(value: WorkspaceObservation): void;
+    publishDelta(delta: WorkspaceObservationDelta): void;
     publishVoice(event: VoiceSessionEvent): void;
     publishThreadEvent(notification: WorkbenchClientNotification, harness: WorkbenchHarness, daemonId: DaemonId): void;
     publishTranscript(event: WorkbenchDaemonTranscriptEvent): void;
@@ -420,7 +429,7 @@ export default class WorkbenchWorkspaceRequestController {
     }
     if (existing) this.retire(existing);
     const interest: Interest = {
-      request, stop: [], sources: new Map(), owner: null, thread: null,
+      request, protocol: this.protocol, opening: true, stop: [], sources: new Map(), owner: null, thread: null,
       value: { ...this.initial(request), subscriptionId: request.subscriptionId, generation: request.generation, revision: 0 },
     };
     this.interests.set(request.subscriptionId, interest);
@@ -488,6 +497,9 @@ export default class WorkbenchWorkspaceRequestController {
         interest.stop.push(this.options.workspace.subscribe(refresh),
           this.options.presentation.subscribe(refresh), this.options.workspace.retain());
         break;
+      case "archivedThreads":
+        interest.stop.push(this.options.workspace.subscribe(refresh), this.options.workspace.retain());
+        break;
       case "projectTree": {
         const source = this.options.sources.get(request.query.location.daemonId);
         if (source) interest.thread = {
@@ -507,7 +519,8 @@ export default class WorkbenchWorkspaceRequestController {
         interest.stop.push(this.options.sources.subscribe(refresh));
         break;
     }
-    this.refresh(interest);
+    try { this.refresh(interest); }
+    finally { interest.opening = false; }
     return interest.value;
   }
 
@@ -544,6 +557,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "projects": return { ...base, kind: "projects", data: this.options.workspace.getSnapshot() };
       case "projectGroups": return { ...base, kind: "projectGroups", data: this.options.workspace.getProjectGroups().data };
       case "projectThreads": return { ...base, kind: "projectThreads", data: { rows: [], projects: [] } };
+      case "archivedThreads": return { ...base, kind: "archivedThreads", data: { rows: [], projects: [] } };
       case "threadOwner": return { ...base, kind: "threadOwner", data: { phase: "pending", failure: null } };
       case "thread": return { ...base, kind: "thread", owner: { phase: "pending", failure: null }, data: null };
       case "projectTree": return { ...base, kind: "projectTree", sourceGeneration: 0, data: null };
@@ -606,6 +620,7 @@ export default class WorkbenchWorkspaceRequestController {
         return;
       }
       case "projectThreads": this.projectRows(interest); return;
+      case "archivedThreads": this.projectArchivedRows(interest); return;
       case "projectTree": {
         if (!interest.thread) {
           const source = this.options.sources.get(query.location.daemonId);
@@ -665,11 +680,9 @@ export default class WorkbenchWorkspaceRequestController {
     }
   }
 
-  private projectRows(interest: Interest) {
-    const query = interest.request.query;
-    if (query.kind !== "projectThreads") return;
+  /** Concrete daemon projects behind a project-reference selection (null = every known project). */
+  private rowTargets(selected: Extract<WorkspaceObserve["query"], { kind: "projectThreads" | "archivedThreads" }>["projects"]) {
     const workspace = this.options.workspace.getSnapshot();
-    const selected = query.projects;
     const targets = new Map<DaemonId, Set<ProjectId>>();
     const add = (daemonId: DaemonId, projectId: ProjectId) => {
       const ids = targets.get(daemonId) ?? new Set<ProjectId>();
@@ -685,6 +698,12 @@ export default class WorkbenchWorkspaceRequestController {
     if (!selected) for (const project of workspace.observedProjects) {
       for (const location of project.locations) add(location.location.daemonId, location.location.projectId);
     }
+    return { workspace, targets };
+  }
+
+  /** Keep one daemon observation per source, replaced only when its project set changes. */
+  private observeTargets(interest: Interest, targets: ReadonlyMap<DaemonId, ReadonlySet<ProjectId>>,
+    query: (projectIds: ProjectId[]) => Parameters<WorkbenchDaemonSource["observe"]>[0]) {
     for (const [id, existing] of interest.sources) {
       const projectIds = [...targets.get(id) ?? []].sort();
       if (areDeeplyEqual(projectIds, existing.projectIds)) continue;
@@ -696,19 +715,59 @@ export default class WorkbenchWorkspaceRequestController {
       const source = this.options.sources.get(id);
       if (!source) continue;
       const projectIds = [...ids].sort();
-      interest.sources.set(id, { projectIds,
-        observation: source.observe({ kind: "projectThreads", projectIds }, () => this.refresh(interest)) });
+      interest.sources.set(id, { projectIds, observation: source.observe(query(projectIds), () => this.refresh(interest)) });
     }
-    const sidebars = new Map<DaemonId, WorkbenchProjectThreadSidebars>();
+  }
+
+  private projectArchivedRows(interest: Interest) {
+    const query = interest.request.query;
+    if (query.kind !== "archivedThreads") return;
+    const { workspace, targets } = this.rowTargets(query.projects);
+    this.observeTargets(interest, targets, projectIds => ({ kind: "archivedThreads", projectIds, limit: query.limit }));
+    const rows: WorkspaceArchivedThreads["rows"] = [];
+    const projects: WorkspaceArchivedThreads["projects"] = [];
+    for (const [daemonId, ids] of targets) {
+      const fact = interest.sources.get(daemonId)?.observation.getSnapshot();
+      const archived = fact?.value?.kind === "archivedThreads" ? fact.value.projects : [];
+      for (const projectId of ids) {
+        const project = archived.find(item => item.projectId === projectId);
+        projects.push({ location: { daemonId, projectId },
+          phase: fact?.phase === "current" ? project?.phase ?? "pending" : fact?.phase ?? "pending",
+          failure: project?.failure ?? fact?.failure ?? null, total: project?.total ?? 0 });
+        const logical = workspace.projects.find(item => item.locations.some(location =>
+          location.daemonId === daemonId && location.target.projectId === projectId));
+        const location = logical?.locations.find(item => item.daemonId === daemonId && item.target.projectId === projectId);
+        for (const entry of project?.rows ?? []) {
+          rows.push({ logicalProjectId: logical?.id ?? null, location: { daemonId, projectId },
+            hostname: location?.hostname ?? daemonId, rootPath: location?.rootPath ?? projectId, entry });
+        }
+      }
+    }
+    rows.sort((left, right) => right.entry.activityAt - left.entry.activityAt);
+    const failure = projects.find(project => project.failure)?.failure ?? null;
+    this.update(interest, { kind: "archivedThreads",
+      phase: projects.every(project => project.phase === "current") ? "current" : rows.length ? "stale" : failure ? "failed" : "pending",
+      failure, data: { rows, projects } });
+  }
+
+  private projectRows(interest: Interest) {
+    const query = interest.request.query;
+    if (query.kind !== "projectThreads") return;
+    const { workspace, targets } = this.rowTargets(query.projects);
+    this.observeTargets(interest, targets, projectIds => ({ kind: "projectThreads", projectIds }));
+    const sidebars = new Map<DaemonId, { projects: WorkbenchThreadSidebarRowSnapshot[] }>();
     const projects: WorkspaceThreadRows["projects"] = [];
     for (const [daemonId, ids] of targets) {
       const fact = interest.sources.get(daemonId)?.observation.getSnapshot();
       const rows = fact?.value?.kind === "projectThreads" ? fact.value.projects : [];
-      sidebars.set(daemonId, { projects: rows.flatMap(row => row.sidebar ? [row.sidebar] : []) });
+      // Sources already hold lean rows; the projection is identity-preserving for them.
+      const lean = rows.flatMap(row => row.sidebar ? [projectSidebarRowSnapshot(row.sidebar)] : []);
+      sidebars.set(daemonId, { projects: lean });
       for (const projectId of ids) {
         const row = rows.find(row => row.projectId === projectId);
+        const sidebar = lean.find(item => item.projectId === projectId);
         projects.push({ location: { daemonId, projectId }, phase: fact?.phase === "current" ? row?.phase ?? "pending" : fact?.phase ?? "pending",
-          failure: row?.failure ?? fact?.failure ?? null });
+          failure: row?.failure ?? fact?.failure ?? null, ...(sidebar?.archivedCount ? { archivedCount: sidebar.archivedCount } : {}) });
       }
     }
     const rows: WorkspaceThreadRows["rows"] = projectLogicalThreadRows(workspace.projects, sidebars, this.options.presentation.read())
@@ -734,11 +793,28 @@ export default class WorkbenchWorkspaceRequestController {
 
   private update(interest: Interest, payload: Payload) {
     if (!this.active(interest)) return;
+    const previous = interest.value;
     const next = { ...payload, subscriptionId: interest.request.subscriptionId,
-      generation: interest.request.generation, revision: interest.value.revision };
-    if (areDeeplyEqual(next, interest.value)) return;
-    interest.value = { ...next, revision: next.revision + 1 };
-    this.options.publish(interest.value);
+      generation: interest.request.generation, revision: previous.revision } as WorkspaceObservation;
+    // The keyed diff doubles as the change test: no delta means nothing observable changed.
+    const delta = diffObservationValue(previous, next, workspaceObservationShape(next.kind));
+    if (!delta) return;
+    interest.value = { ...next, revision: previous.revision + 1 };
+    if (interest.opening) return;
+    if (interest.protocol >= 2) {
+      this.options.publishDelta({
+        subscriptionId: interest.value.subscriptionId, generation: interest.value.generation, kind: interest.value.kind,
+        baseRevision: previous.revision, revision: interest.value.revision, delta,
+      });
+    } else {
+      this.options.publish(interest.value);
+    }
+  }
+
+  /** Once per browser connection, before observing: protocol 2 browsers receive keyed deltas after each first value. */
+  hello(input: unknown) {
+    this.protocol = negotiateWorkspaceProtocol(WorkspaceHelloSchema.parse(input).protocol);
+    return { protocol: this.protocol };
   }
 
   private active(interest: Interest) {

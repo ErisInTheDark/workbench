@@ -74,7 +74,8 @@ import {
     createWorkbenchThreadRecoveryId,
     isWorkbenchThreadRecoveryInput,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
-import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchQuestionnaireHistoryEntryState } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarRowSnapshot as WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { applySteerHistoryToThread, isSyntheticSteerHistoryItem } from "workbench-shared/workbench/thread/thread-steer-history";
 import {
     getWorkbenchApprovalSupplementalSteerText,

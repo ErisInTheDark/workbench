@@ -17,11 +17,11 @@ import {
   getWorkbenchHomeThreadKey, projectWorkbenchHomeThreadList,
   type WorkbenchHomeThreadDisplayOrder,
 } from "../workbench/thread/home-thread-display-order.ts";
-import {
-  getThreadSidebarGroup,
-  type WorkbenchProjectThreadSidebars,
-  type WorkbenchThreadSidebarSnapshot,
-} from "../workbench/thread/thread-state.ts";
+import { getThreadSidebarGroup } from "../workbench/thread/thread-state.ts";
+import type {
+  WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars,
+  WorkbenchThreadSidebarRowSnapshot as WorkbenchThreadSidebarSnapshot,
+} from "../workbench/thread/thread-sidebar-row.ts";
 
 type Layout = Extract<PresentationMutation, { kind: "importLayout" }>;
 type Mapping = PresentationSnapshot["sourceMappings"][number];

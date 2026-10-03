@@ -628,7 +628,9 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
         beforeMigration: acknowledgeCheckpoint,
       });
       await new WorkbenchTranscriptTimestampRepair(connection).run(acknowledgeCheckpoint);
-      new WorkbenchThreadStateIntegrity(connection).verify();
+      // Serving writes always enforce foreign keys; only checkpointed restore,
+      // migration and repair steps rewrite data outside that guarantee.
+      if (checkpointRetained) new WorkbenchThreadStateIntegrity(connection).verify();
       await new WorkbenchExternalStorageMigration(connection, path.dirname(request.databasePath)).run();
       if (request.projects) {
         const { discovery } = request.projects;

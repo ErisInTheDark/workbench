@@ -16,6 +16,11 @@
  * - WorkspaceObserveSchema/WorkspaceObserve: replace one named observation's arguments.
  * - WorkspaceReleaseSchema: release only the matching observation generation.
  * - WORKSPACE_OBSERVE_METHOD/WORKSPACE_RELEASE_METHOD/WORKSPACE_UPDATED_METHOD: shared observation protocol.
+ * - WORKSPACE_DELTA_METHOD/WorkspaceObservationDeltaSchema/WorkspaceObservationDelta: keyed delta onto one observation revision.
+ * - WORKSPACE_HELLO_METHOD/WORKSPACE_PROTOCOL/WorkspaceHelloSchema/WorkspaceHelloResultSchema/WorkspaceProtocol/negotiateWorkspaceProtocol: per-connection protocol negotiation.
+ * - WorkspaceThreadRow/workspaceThreadRowKey: one app thread row and its delta identity.
+ * - WorkspaceArchivedThreadsSchema/WorkspaceArchivedThreads: paged archived rows with per-project totals.
+ * - daemonObservationShape/workspaceObservationShape: how each observation kind decomposes into keyed deltas.
  */
 import { z } from "zod";
 import {
@@ -44,10 +49,26 @@ import { WorkbenchSearchRequestSchema } from "../search/workbench-search";
 import { WorkspaceSearchResponseSchema } from "./workspace-commands";
 import { WorkbenchStatsReadRequestSchema } from "../stats/workbench-stats-contract";
 import { WorkbenchStatsObservedResponseSchema } from "../stats/workbench-stats-conformance";
+import { ObservationDeltaSchema, observationShape, type ObservationShape } from "./observation-patch";
+import {
+  WorkbenchThreadSidebarRowSchema, WorkbenchThreadSidebarRowSnapshotSchema, sidebarRowKey,
+} from "../thread/thread-sidebar-row";
 
 export const WORKSPACE_OBSERVE_METHOD = "workspace/observe";
 export const WORKSPACE_RELEASE_METHOD = "workspace/release";
 export const WORKSPACE_UPDATED_METHOD = "workspace/updated";
+export const WORKSPACE_DELTA_METHOD = "workspace/delta";
+export const WORKSPACE_HELLO_METHOD = "workspace/hello";
+
+/**
+ * Once per connection, before observing. Protocol 2 = keyed deltas after each observation's first
+ * value, and lean sidebar rows. Peers that reject the method stay on protocol 1 (full values, full entries).
+ */
+export const WORKSPACE_PROTOCOL = 2;
+export const WorkspaceHelloSchema = z.object({ protocol: z.number().int().positive() }).strict();
+export const WorkspaceHelloResultSchema = z.object({ protocol: z.number().int().positive() }).strict();
+export type WorkspaceProtocol = 1 | 2;
+export const negotiateWorkspaceProtocol = (requested: number): WorkspaceProtocol => requested >= 2 ? 2 : 1;
 
 export const WorkspaceSourcePhaseSchema = z.enum(["pending", "current", "stale", "failed", "unavailable"]);
 export type WorkspaceSourcePhase = z.infer<typeof WorkspaceSourcePhaseSchema>;
@@ -57,6 +78,8 @@ export const WorkspaceTranscriptStateSchema = z.object({
 }).strict();
 export type WorkspaceTranscriptState = z.infer<typeof WorkspaceTranscriptStateSchema>;
 const revision = z.number().int().nonnegative();
+/** Archived rows are paged newest-first; the caller grows `limit` to see more. */
+const archivedLimit = z.number().int().min(1).max(500);
 const envelope = {
   subscriptionId: z.uuid(),
   generation: revision,
@@ -75,6 +98,7 @@ export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("threadIdentity"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("thread"), projectId: ProjectIdSchema, threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("stats"), request: WorkbenchStatsReadRequestSchema }).strict(),
+  z.object({ kind: z.literal("archivedThreads"), projectIds: z.array(ProjectIdSchema), limit: archivedLimit }).strict(),
 ]);
 export type DaemonWorkspaceQuery = z.infer<typeof DaemonWorkspaceQuerySchema>;
 export const DaemonWorkspaceObserveSchema = z.object({
@@ -94,11 +118,20 @@ const statsObservation = {
   data: WorkbenchStatsObservedResponseSchema.nullable(),
 };
 
+// Protocol 2 daemons send lean rows; protocol 1 daemons send full entries, which receivers project to rows.
+const projectRowsSidebar = z.union([WorkbenchThreadSidebarRowSnapshotSchema, WorkbenchThreadSidebarSnapshotSchema]);
 const projectRows = z.object({
   projectId: ProjectIdSchema,
   phase: WorkspaceSourcePhaseSchema,
   failure,
-  sidebar: WorkbenchThreadSidebarSnapshotSchema.nullable(),
+  sidebar: projectRowsSidebar.nullable(),
+}).strict();
+const archivedProject = z.object({
+  projectId: ProjectIdSchema,
+  phase: WorkspaceSourcePhaseSchema,
+  failure,
+  total: z.number().int().nonnegative(),
+  rows: z.array(WorkbenchThreadSidebarRowSchema),
 }).strict();
 
 export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
@@ -133,6 +166,7 @@ export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
     ...envelope, kind: z.literal("thread"), data: WorkbenchThreadObservationSnapshotSchema.nullable(),
   }).strict(),
   z.object({ ...envelope, kind: z.literal("stats"), ...statsObservation }).strict(),
+  z.object({ ...envelope, kind: z.literal("archivedThreads"), projects: z.array(archivedProject) }).strict(),
 ]);
 export type DaemonWorkspaceObservation = z.infer<typeof DaemonWorkspaceObservationSchema>;
 
@@ -162,6 +196,11 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({ kind: z.literal("runtime") }).strict(),
   z.object({ kind: z.literal("stats"), daemonId: DaemonIdSchema, request: WorkbenchStatsReadRequestSchema }).strict(),
+  z.object({
+    kind: z.literal("archivedThreads"),
+    projects: z.array(WorkspaceProjectReferenceSchema).nullable(),
+    limit: archivedLimit,
+  }).strict(),
 ]);
 export type WorkspaceQuery = z.infer<typeof WorkspaceQuerySchema>;
 
@@ -237,22 +276,35 @@ export const WorkspaceProjectGroupsSchema = z.object({
 }).strict();
 export type WorkspaceProjectGroups = z.infer<typeof WorkspaceProjectGroupsSchema>;
 
+// Protocol 2 apps send lean rows; protocol 1 apps send full entries, which the browser projects to rows.
+const WorkspaceThreadRowSchema = z.object({
+  logicalProjectId: LogicalProjectIdSchema.nullable(),
+  location: ProjectLocationReferenceSchema,
+  hostname: z.string(),
+  rootPath: z.string(),
+  entry: z.union([WorkbenchThreadSidebarRowSchema, WorkbenchThreadSidebarEntrySchema]),
+  observedOnly: z.boolean().optional(),
+}).strict();
+const WorkspaceThreadRowProjectSchema = z.object({
+  location: ProjectLocationReferenceSchema,
+  phase: WorkspaceSourcePhaseSchema,
+  failure,
+  archivedCount: z.number().int().nonnegative().optional(),
+}).strict();
 export const WorkspaceThreadRowsSchema = z.object({
-  rows: z.array(z.object({
-    logicalProjectId: LogicalProjectIdSchema.nullable(),
-    location: ProjectLocationReferenceSchema,
-    hostname: z.string(),
-    rootPath: z.string(),
-    entry: WorkbenchThreadSidebarEntrySchema,
-    observedOnly: z.boolean().optional(),
-  }).strict()),
-  projects: z.array(z.object({
-    location: ProjectLocationReferenceSchema,
-    phase: WorkspaceSourcePhaseSchema,
-    failure,
-  }).strict()),
+  rows: z.array(WorkspaceThreadRowSchema),
+  projects: z.array(WorkspaceThreadRowProjectSchema),
 }).strict();
 export type WorkspaceThreadRows = z.infer<typeof WorkspaceThreadRowsSchema>;
+export type WorkspaceThreadRow = WorkspaceThreadRows["rows"][number];
+export const WorkspaceArchivedThreadsSchema = z.object({
+  rows: z.array(WorkspaceThreadRowSchema),
+  projects: z.array(WorkspaceThreadRowProjectSchema.omit({ archivedCount: true }).extend({ total: z.number().int().nonnegative() }).strict()),
+}).strict();
+export type WorkspaceArchivedThreads = z.infer<typeof WorkspaceArchivedThreadsSchema>;
+/** Stable identity of an app thread row across delta hops. */
+export const workspaceThreadRowKey = (row: Pick<WorkspaceThreadRow, "logicalProjectId" | "location" | "entry">) =>
+  `${row.logicalProjectId ?? "observed"}/${row.location.daemonId}/${row.location.projectId}/${sidebarRowKey(row.entry)}`;
 
 export const WorkspaceThreadOwnerSchema = z.discriminatedUnion("phase", [
   z.object({
@@ -305,8 +357,118 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("appState"), data: appState.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("runtime"), data: runtime.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("stats"), ...statsObservation }).strict(),
+  z.object({ ...envelope, kind: z.literal("archivedThreads"), data: WorkspaceArchivedThreadsSchema }).strict(),
 ]);
 export type WorkspaceObservation = z.infer<typeof WorkspaceObservationSchema>;
+
+/** A keyed delta onto exactly `baseRevision` of one observation; gaps force a fresh full value. */
+export const WorkspaceObservationDeltaSchema = z.object({
+  subscriptionId: z.uuid(),
+  generation: revision,
+  kind: z.string().min(1).max(64),
+  baseRevision: revision,
+  revision,
+  delta: ObservationDeltaSchema,
+}).strict();
+export type WorkspaceObservationDelta = z.infer<typeof WorkspaceObservationDeltaSchema>;
+
+// Thread-state revision counters bump on background passes with no visible change; they ride along only with real changes.
+const sidebarRowsShape = observationShape.object({
+  schema: WorkbenchThreadSidebarRowSnapshotSchema, incidental: ["revision"],
+  fields: { entries: observationShape.keyed(sidebarRowKey, WorkbenchThreadSidebarRowSchema) },
+});
+const entriesShape = (schema: z.ZodObject) => observationShape.object({
+  schema, incidental: ["revision"],
+  fields: { entries: observationShape.keyed(sidebarRowKey, WorkbenchThreadSidebarEntrySchema) },
+});
+const catalogueShape = observationShape.object({
+  // The payload schema is a transform, so the whole catalogue is validated after a delta applies.
+  validate: WorkbenchProjectsPayloadSchema,
+  fields: { data: observationShape.keyed((project: { id: string }) => project.id, WorkbenchProjectOptionSchema) },
+});
+const locationsShape = observationShape.object({
+  schema: WorkbenchProjectLocationsPayloadSchema,
+  fields: { data: observationShape.keyed((location: { project: { id: string } }) => location.project.id,
+    WorkbenchProjectLocationsPayloadSchema.shape.data.element) },
+});
+const byProject = <Item extends { projectId: string }>(item: z.ZodType, shape?: ObservationShape) =>
+  observationShape.keyed((value: Item) => value.projectId, item, shape);
+const rowsShape = (schema: z.ZodObject, project: z.ZodType) => observationShape.object({
+  schema,
+  fields: {
+    rows: observationShape.keyed(workspaceThreadRowKey, WorkspaceThreadRowSchema),
+    projects: observationShape.keyed((item: { location: { daemonId: string; projectId: string } }) =>
+      `${item.location.daemonId}/${item.location.projectId}`, project),
+  },
+});
+const threadObservationObject: z.ZodObject = WorkbenchThreadObservationSnapshotSchema;
+
+function memberSchema<Union extends { options: readonly z.ZodObject[] }>(union: Union, kind: string) {
+  const member = union.options.find(option => (option.shape.kind as z.ZodLiteral<string>).value === kind);
+  if (!member) throw new Error(`Unknown observation kind ${kind}.`);
+  return member;
+}
+
+/**
+ * How each observation decomposes for deltas. Kinds without extra fields still diff field-by-field;
+ * keyed collections keep churny lists (rows, entries, projects) at one item per change.
+ */
+const daemonShapes = new Map<string, ObservationShape>();
+const workspaceShapes = new Map<string, ObservationShape>();
+
+export function daemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): ObservationShape {
+  let shape = daemonShapes.get(kind);
+  if (!shape) daemonShapes.set(kind, shape = buildDaemonObservationShape(kind));
+  return shape;
+}
+
+export function workspaceObservationShape(kind: WorkspaceObservation["kind"]): ObservationShape {
+  let shape = workspaceShapes.get(kind);
+  if (!shape) workspaceShapes.set(kind, shape = buildWorkspaceObservationShape(kind));
+  return shape;
+}
+
+function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): ObservationShape {
+  const schema = memberSchema(DaemonWorkspaceObservationSchema, kind);
+  switch (kind) {
+    case "projectThreads": return { schema, fields: {
+      projects: byProject(projectRows, { schema: projectRows, fields: { sidebar: sidebarRowsShape } }),
+    } };
+    case "summaries": return { schema, fields: {
+      projects: byProject(WorkbenchProjectThreadSummarySchema, { schema: WorkbenchProjectThreadSummarySchema, incidental: ["revision"] }),
+    } };
+    case "catalogue": return { schema, fields: { catalogue: catalogueShape, locations: locationsShape } };
+    case "projectPlacement": return { schema, fields: {
+      projects: byProject(z.object({ projectId: ProjectIdSchema, hasUnarchivedWork: z.boolean() }).strict()),
+    } };
+    case "archivedThreads": return { schema, fields: {
+      projects: byProject(archivedProject, { schema: archivedProject, fields: {
+        rows: observationShape.keyed(sidebarRowKey, WorkbenchThreadSidebarRowSchema),
+      } }),
+    } };
+    case "thread": return { schema, fields: { data: entriesShape(threadObservationObject) } };
+    default: return { schema };
+  }
+}
+
+function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): ObservationShape {
+  const schema = memberSchema(WorkspaceObservationSchema, kind);
+  switch (kind) {
+    case "projectThreads": return { schema, fields: { data: rowsShape(WorkspaceThreadRowsSchema, WorkspaceThreadRowProjectSchema) } };
+    case "archivedThreads": return { schema, fields: {
+      data: rowsShape(WorkspaceArchivedThreadsSchema, WorkspaceArchivedThreadsSchema.shape.projects.element),
+    } };
+    case "projects": return { schema, fields: { data: observationShape.object({
+      schema: WorkspaceProjectsSchema,
+      fields: {
+        projects: observationShape.keyed((project: { id: string }) => project.id, logicalProject),
+        summaries: observationShape.record(summary),
+      },
+    }) } };
+    case "thread": return { schema, fields: { data: entriesShape(threadObservationObject) } };
+    default: return { schema };
+  }
+}
 
 export const WorkspaceObserveSchema = z.object({
   subscriptionId: z.uuid(),

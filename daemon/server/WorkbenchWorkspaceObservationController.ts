@@ -1,15 +1,19 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceObservationController: own named, partial observations over daemon fact owners.
+ * - default WorkbenchWorkspaceObservationController: own named, partial observations over daemon fact owners; publish typed keyed deltas after each first value.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
-  DaemonWorkspaceObserveSchema, WorkspaceReleaseSchema,
-  type DaemonWorkspaceObserve, type DaemonWorkspaceObservation,
+  DaemonWorkspaceObserveSchema, WorkspaceReleaseSchema, daemonObservationShape,
+  type DaemonWorkspaceObserve, type DaemonWorkspaceObservation, type WorkspaceProtocol,
 } from "workbench-shared/workbench/workspace/workspace-observation";
+import { diffObservationValue, type ObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
-import { hasUnarchivedSidebarWork, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import {
+  hasUnarchivedSidebarWork, WorkbenchHarnessSchema, type WorkbenchThreadSidebarSnapshot,
+} from "workbench-shared/workbench/thread/thread-state";
+import { projectSidebarRow, projectSidebarRowSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
@@ -24,11 +28,17 @@ type Payload = {
   >;
 }[DaemonWorkspaceObservation["kind"]];
 
+/** `null` change = a full value (first value or restore); otherwise a keyed delta onto `baseRevision`. */
+export type DaemonObservationChange = { baseRevision: number; delta: ObservationDelta } | null;
+
 interface Observation<Client extends object> {
   client: Client;
   connectionId: string;
   request: DaemonWorkspaceObserve;
+  protocol: WorkspaceProtocol;
   value: DaemonWorkspaceObservation;
+  /** True while `observe` runs: its return value already carries these changes, so nothing is published. */
+  opening: boolean;
   cancellation: AbortController;
   dirty: Set<ProjectId>;
   work: Promise<void> | null;
@@ -37,9 +47,24 @@ interface Observation<Client extends object> {
   stats: { invalidate(kind: WorkbenchStatsInvalidation): void; release(): void } | null;
 }
 
+type ProjectListKind = "summaries" | "projectPlacement" | "projectThreads" | "archivedThreads";
+const projectListKinds = new Set<string>(["summaries", "projectPlacement", "projectThreads", "archivedThreads"]);
+
 function failure(error: unknown) {
   return (error instanceof Error ? error.message : "Workspace observation failed.")
     .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, 512);
+}
+
+/** Newest archived top-level threads first; subagents stay with their parent's thread observation. */
+function archivedRows(sidebar: WorkbenchThreadSidebarSnapshot, limit: number) {
+  const archived = sidebar.entries.filter(entry => entry.entryKind === "thread" && entry.metadata.archived)
+    .sort((left, right) => right.activityAt - left.activityAt);
+  return { total: archived.length, rows: archived.slice(0, limit).map(projectSidebarRow) };
+}
+
+function replaceProject<Item extends { projectId: string }>(items: readonly Item[], next: Item) {
+  return items.some(item => item.projectId === next.projectId)
+    ? items.map(item => item.projectId === next.projectId ? next : item) : [...items, next];
 }
 
 export default class WorkbenchWorkspaceObservationController<Client extends object> {
@@ -55,7 +80,10 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       "peekProject" | "readProject" | "peekProjectSummary" | "getProjectThreadSummary" | "subscribeProjects" | "readWorkspaceThread">;
     projects: Pick<WorkbenchProjectSnapshotController, "observe" | "getCurrentUpdate">;
     stats?: Pick<WorkbenchStatsController, "observe">;
-    publish(client: Client, observation: DaemonWorkspaceObservation): void;
+    /** The connection's negotiated protocol; protocol 1 peers get full values and full sidebar entries. */
+    protocol?: (client: Client) => WorkspaceProtocol;
+    /** `protocol` is the observation's own, fixed at observe time, so its value shape and delivery always agree. */
+    publish(client: Client, observation: DaemonWorkspaceObservation, change: DaemonObservationChange, protocol: WorkspaceProtocol): void;
     warn(message: string): void;
     cooperate?: () => Promise<void>;
   }) {
@@ -85,12 +113,20 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       throw new Error("Workspace observation arguments belong to an obsolete generation.");
     }
     if (existing) this.retire(existing);
-    const initial = { ...this.initial(request), revision: initialRevision };
+    const protocol = this.owners.protocol?.(client) ?? 1;
+    const initial = { ...this.initial(request, protocol), revision: initialRevision };
     const observation: Observation<Client> = {
-      client, connectionId, request, value: initial, cancellation: new AbortController(),
+      client, connectionId, request, protocol, value: initial, opening: true, cancellation: new AbortController(),
       dirty: new Set(), work: null, identityRead: null, stopTree: null, stats: null,
     };
     this.observations.set(key, observation);
+    try { this.start(observation); }
+    finally { observation.opening = false; }
+    return observation.value;
+  }
+
+  private start(observation: Observation<Client>) {
+    const request = observation.request;
     switch (request.query.kind) {
       case "runtime": break;
       case "catalogue": break;
@@ -107,6 +143,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       case "summaries":
       case "projectPlacement":
       case "projectThreads":
+      case "archivedThreads":
         this.selectProjects(observation);
         break;
       case "stats":
@@ -117,7 +154,6 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         observation.stats = this.owners.stats.observe(request.query.request, state => this.update(observation, { kind: "stats", ...state }));
         break;
     }
-    return observation.value;
   }
 
   release(connectionId: string, input: { subscriptionId: string; generation: number }) {
@@ -145,7 +181,12 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     for (const observation of this.observations.values()) this.retire(observation);
   }
 
-  private initial(request: DaemonWorkspaceObserve): DaemonWorkspaceObservation {
+  /** Protocol 2 receivers get lean rows without archived threads; protocol 1 keeps full entries. */
+  private sidebar(protocol: WorkspaceProtocol, sidebar: WorkbenchThreadSidebarSnapshot) {
+    return protocol >= 2 ? projectSidebarRowSnapshot(sidebar) : sidebar;
+  }
+
+  private initial(request: DaemonWorkspaceObserve, protocol: WorkspaceProtocol): DaemonWorkspaceObservation {
     const envelope = { subscriptionId: request.subscriptionId, generation: request.generation, revision: 0 };
     const catalogue = this.owners.catalogue.getFacts();
     switch (request.query.kind) {
@@ -166,9 +207,21 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         ...envelope, kind: "projectThreads", phase: "pending", failure: null,
         projects: request.query.projectIds.map(projectId => {
           const sidebar = this.owners.threads.peekProject(projectId);
-          return { projectId, phase: sidebar ? "current" as const : "pending" as const, failure: null, sidebar };
+          return { projectId, phase: sidebar ? "current" as const : "pending" as const, failure: null,
+            sidebar: sidebar ? this.sidebar(protocol, sidebar) : null };
         }),
       };
+      case "archivedThreads": {
+        const limit = request.query.limit;
+        return {
+          ...envelope, kind: "archivedThreads", phase: "pending", failure: null,
+          projects: request.query.projectIds.map(projectId => {
+            const sidebar = this.owners.threads.peekProject(projectId);
+            return sidebar ? { projectId, phase: "current" as const, failure: null, ...archivedRows(sidebar, limit) }
+              : { projectId, phase: "pending" as const, failure: null, total: 0, rows: [] };
+          }),
+        };
+      }
       case "projectTree": {
         const project = this.owners.projects.getCurrentUpdate(request.query.projectId);
         return { ...envelope, kind: "projectTree", phase: project ? "current" : "pending", failure: null, project };
@@ -203,7 +256,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
 
   private selectedProjects(observation: Observation<Client>): readonly ProjectId[] {
     const query = observation.request.query;
-    return query.kind === "projectThreads" ? query.projectIds
+    return query.kind === "projectThreads" || query.kind === "archivedThreads" ? query.projectIds
       : query.kind === "summaries" || query.kind === "projectPlacement"
         ? this.owners.catalogue.getFacts().catalogue?.data.map(project => project.id) ?? []
       : [];
@@ -244,12 +297,24 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       const projects = selected.map(projectId => {
         const sidebar = this.owners.threads.peekProject(projectId);
         const retained = value.projects.find(project => project.projectId === projectId);
-        if (sidebar) return { projectId, phase: "current" as const, failure: null, sidebar };
+        if (sidebar) return { projectId, phase: "current" as const, failure: null, sidebar: this.sidebar(observation.protocol, sidebar) };
         observation.dirty.add(projectId);
         return retained ?? { projectId, phase: "pending" as const, failure: null, sidebar: null };
       });
       this.update(observation, {
         kind: "projectThreads", phase: observation.dirty.size ? "pending" : "current", failure: null, projects,
+      });
+    } else if (value.kind === "archivedThreads" && observation.request.query.kind === "archivedThreads") {
+      const limit = observation.request.query.limit;
+      const projects = selected.map(projectId => {
+        const sidebar = this.owners.threads.peekProject(projectId);
+        const retained = value.projects.find(project => project.projectId === projectId);
+        if (sidebar) return { projectId, phase: "current" as const, failure: null, ...archivedRows(sidebar, limit) };
+        observation.dirty.add(projectId);
+        return retained ?? { projectId, phase: "pending" as const, failure: null, total: 0, rows: [] };
+      });
+      this.update(observation, {
+        kind: "archivedThreads", phase: observation.dirty.size ? "pending" : "current", failure: null, projects,
       });
     }
     this.drive(observation);
@@ -287,6 +352,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
 
   private drive(observation: Observation<Client>) {
     if (observation.work || !observation.dirty.size || !this.active(observation)) return;
+    if (!projectListKinds.has(observation.request.query.kind)) return;
     const work = (async () => {
       while (this.active(observation) && observation.dirty.size) {
         await (this.owners.cooperate?.() ?? new Promise<void>(resolve => setImmediate(resolve)));
@@ -294,77 +360,11 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         const projectId = observation.dirty.values().next().value;
         if (!projectId) return;
         try {
-          if (observation.request.query.kind === "summaries") {
-            const read = await this.owners.threads.getProjectThreadSummary(projectId);
-            if (!this.active(observation)) return;
-            const summary = this.owners.threads.peekProjectSummary(projectId) ?? read;
-            observation.dirty.delete(projectId);
-            if (observation.value.kind !== "summaries" || !this.selectedProjects(observation).includes(projectId)) continue;
-            const value = observation.value;
-            const failures = value.failures.filter(item => item.projectId !== projectId);
-            this.update(observation, {
-              kind: "summaries", phase: observation.dirty.size ? "pending"
-                : failures.length ? "stale" : this.owners.catalogue.getFacts().phase,
-              failure: failures[0]?.message ?? null,
-              projects: [...value.projects.filter(project => project.projectId !== projectId), summary],
-              pendingProjectIds: [...observation.dirty], failures,
-            });
-          } else if (observation.request.query.kind === "projectPlacement") {
-            const read = await this.owners.threads.readProject(projectId);
-            if (!this.active(observation)) return;
-            const sidebar = this.owners.threads.peekProject(projectId) ?? read;
-            observation.dirty.delete(projectId);
-            if (observation.value.kind !== "projectPlacement" || !this.selectedProjects(observation).includes(projectId)) continue;
-            const value = observation.value;
-            const failures = value.failures.filter(item => item.projectId !== projectId);
-            this.update(observation, {
-              kind: "projectPlacement", phase: observation.dirty.size ? "pending"
-                : failures.length ? "stale" : this.owners.catalogue.getFacts().phase,
-              failure: failures[0]?.message ?? null,
-              projects: [...value.projects.filter(project => project.projectId !== projectId),
-                { projectId, hasUnarchivedWork: hasUnarchivedSidebarWork(sidebar.entries) }],
-              pendingProjectIds: [...observation.dirty], failures,
-            });
-          } else if (observation.request.query.kind === "projectThreads") {
-            const read = await this.owners.threads.readProject(projectId);
-            if (!this.active(observation)) return;
-            const sidebar = this.owners.threads.peekProject(projectId) ?? read;
-            observation.dirty.delete(projectId);
-            if (observation.value.kind !== "projectThreads" || !this.selectedProjects(observation).includes(projectId)) continue;
-            const projects = observation.value.projects.map(project => project.projectId === projectId
-              ? { projectId, phase: "current" as const, failure: null, sidebar } : project);
-            const failed = projects.find(project => project.failure);
-            this.update(observation, {
-              kind: "projectThreads", phase: observation.dirty.size ? "pending" : failed ? "stale" : "current",
-              failure: failed?.failure ?? null, projects,
-            });
-          } else return;
+          await this.refreshProject(observation, observation.request.query.kind as ProjectListKind, projectId);
         } catch (error) {
           if (!this.active(observation)) return;
           observation.dirty.delete(projectId);
-          const message = failure(error);
-          this.owners.warn(`Workspace project observation failed: ${message}`);
-          if (observation.value.kind === "summaries") {
-            const value = observation.value;
-            this.update(observation, {
-              kind: "summaries", phase: value.projects.length ? "stale" : "failed", failure: message,
-              projects: value.projects, pendingProjectIds: [...observation.dirty],
-              failures: [...value.failures.filter(item => item.projectId !== projectId), { projectId, message }],
-            });
-          } else if (observation.value.kind === "projectPlacement") {
-            const value = observation.value;
-            this.update(observation, {
-              kind: "projectPlacement", phase: value.projects.length ? "stale" : "failed", failure: message,
-              projects: value.projects, pendingProjectIds: [...observation.dirty],
-              failures: [...value.failures.filter(item => item.projectId !== projectId), { projectId, message }],
-            });
-          } else if (observation.value.kind === "projectThreads") {
-            this.update(observation, {
-              kind: "projectThreads", phase: "stale", failure: message,
-              projects: observation.value.projects.map(project => project.projectId === projectId
-                ? { ...project, phase: project.sidebar ? "stale" as const : "failed" as const, failure: message } : project),
-            });
-          }
+          this.failProject(observation, projectId, failure(error));
         }
       }
     })();
@@ -376,6 +376,89 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       observation.work = null;
       if (this.active(observation)) this.owners.warn(`Workspace observation scheduling failed: ${failure(error)}`);
     });
+  }
+
+  private async refreshProject(observation: Observation<Client>, kind: ProjectListKind, projectId: ProjectId) {
+    if (kind === "summaries") {
+      const read = await this.owners.threads.getProjectThreadSummary(projectId);
+      if (!this.active(observation)) return;
+      const summary = this.owners.threads.peekProjectSummary(projectId) ?? read;
+      observation.dirty.delete(projectId);
+      if (observation.value.kind !== "summaries" || !this.selectedProjects(observation).includes(projectId)) return;
+      const value = observation.value;
+      const failures = value.failures.filter(item => item.projectId !== projectId);
+      this.update(observation, {
+        kind: "summaries", phase: observation.dirty.size ? "pending"
+          : failures.length ? "stale" : this.owners.catalogue.getFacts().phase,
+        failure: failures[0]?.message ?? null,
+        projects: replaceProject(value.projects, summary),
+        pendingProjectIds: [...observation.dirty], failures,
+      });
+      return;
+    }
+    const read = await this.owners.threads.readProject(projectId);
+    if (!this.active(observation)) return;
+    const sidebar = this.owners.threads.peekProject(projectId) ?? read;
+    observation.dirty.delete(projectId);
+    if (!this.selectedProjects(observation).includes(projectId)) return;
+    const value = observation.value;
+    if (value.kind === "projectPlacement") {
+      const failures = value.failures.filter(item => item.projectId !== projectId);
+      this.update(observation, {
+        kind: "projectPlacement", phase: observation.dirty.size ? "pending"
+          : failures.length ? "stale" : this.owners.catalogue.getFacts().phase,
+        failure: failures[0]?.message ?? null,
+        projects: replaceProject(value.projects, { projectId, hasUnarchivedWork: hasUnarchivedSidebarWork(sidebar.entries) }),
+        pendingProjectIds: [...observation.dirty], failures,
+      });
+    } else if (value.kind === "projectThreads") {
+      const projects = value.projects.map(project => project.projectId === projectId
+        ? { projectId, phase: "current" as const, failure: null, sidebar: this.sidebar(observation.protocol, sidebar) } : project);
+      const failed = projects.find(project => project.failure);
+      this.update(observation, {
+        kind: "projectThreads", phase: observation.dirty.size ? "pending" : failed ? "stale" : "current",
+        failure: failed?.failure ?? null, projects,
+      });
+    } else if (value.kind === "archivedThreads" && observation.request.query.kind === "archivedThreads") {
+      const limit = observation.request.query.limit;
+      const projects = value.projects.map(project => project.projectId === projectId
+        ? { projectId, phase: "current" as const, failure: null, ...archivedRows(sidebar, limit) } : project);
+      const failed = projects.find(project => project.failure);
+      this.update(observation, {
+        kind: "archivedThreads", phase: observation.dirty.size ? "pending" : failed ? "stale" : "current",
+        failure: failed?.failure ?? null, projects,
+      });
+    }
+  }
+
+  private failProject(observation: Observation<Client>, projectId: ProjectId, message: string) {
+    this.owners.warn(`Workspace project observation failed: ${message}`);
+    const value = observation.value;
+    if (value.kind === "summaries") {
+      this.update(observation, {
+        kind: "summaries", phase: value.projects.length ? "stale" : "failed", failure: message,
+        projects: value.projects, pendingProjectIds: [...observation.dirty],
+        failures: [...value.failures.filter(item => item.projectId !== projectId), { projectId, message }],
+      });
+    } else if (value.kind === "projectPlacement") {
+      this.update(observation, {
+        kind: "projectPlacement", phase: value.projects.length ? "stale" : "failed", failure: message,
+        projects: value.projects, pendingProjectIds: [...observation.dirty],
+        failures: [...value.failures.filter(item => item.projectId !== projectId), { projectId, message }],
+      });
+    } else if (value.kind === "projectThreads") {
+      this.update(observation, {
+        kind: "projectThreads", phase: "stale", failure: message,
+        projects: value.projects.map(project => project.projectId === projectId
+          ? { ...project, phase: project.sidebar ? "stale" as const : "failed" as const, failure: message } : project),
+      });
+    } else if (value.kind === "archivedThreads") {
+      this.update(observation, {
+        kind: "archivedThreads", phase: "stale", failure: message,
+        projects: value.projects.map(project => project.projectId === projectId
+          ? { ...project, phase: project.rows.length ? "stale" as const : "failed" as const, failure: message } : project),
+      });
+    }
   }
 
   private identityChanged(threadId: WorkbenchThreadId) {
@@ -460,11 +543,15 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
 
   private update(observation: Observation<Client>, payload: Payload) {
     if (!this.active(observation)) return;
+    const previous = observation.value;
     const next = { ...payload, subscriptionId: observation.request.subscriptionId,
-      generation: observation.request.generation, revision: observation.value.revision };
-    if (areDeeplyEqual(observation.value, next)) return;
-    observation.value = { ...next, revision: next.revision + 1 };
-    try { this.owners.publish(observation.client, observation.value); }
+      generation: observation.request.generation, revision: previous.revision } as DaemonWorkspaceObservation;
+    // The keyed diff doubles as the change test: no delta means nothing observable changed.
+    const delta = diffObservationValue(previous, next, daemonObservationShape(next.kind));
+    if (!delta) return;
+    observation.value = { ...next, revision: previous.revision + 1 };
+    if (observation.opening) return;
+    try { this.owners.publish(observation.client, observation.value, { baseRevision: previous.revision, delta }, observation.protocol); }
     catch (error) { this.owners.warn(`Workspace observation delivery failed: ${failure(error)}`); }
   }
 

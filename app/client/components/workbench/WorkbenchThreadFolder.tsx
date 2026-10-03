@@ -18,7 +18,8 @@ import {
   getWorkbenchThreadFolderKey,
   type WorkbenchThreadFolder,
 } from "workbench-shared/workbench/thread/thread-display-order";
-import type { WorkbenchPinnedThreadSummaryEntry, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchPinnedThreadSummaryEntry } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
 import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";

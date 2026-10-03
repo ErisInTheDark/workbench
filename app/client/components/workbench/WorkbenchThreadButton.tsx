@@ -10,7 +10,9 @@ import { useContext, useMemo, type ReactNode } from "react";
 
 import { ProjectIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
 import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
-import type { WorkbenchProjectThreadSidebars, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import type {
+  WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars, WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry,
+} from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import { useWorkbenchProjectThreadSidebars } from "./use-workbench-client";
 import WorkbenchClientContext from "./workbench-client-context";

@@ -1,6 +1,8 @@
 /* No production exports. Protect partial queries, shared demand and stale-result fencing. */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { workspaceObservationShape } from "workbench-shared/workbench/workspace/workspace-observation";
+import { diffObservationValue } from "workbench-shared/workbench/workspace/observation-patch";
 import { createWorkspaceClientFixture } from "./workspace-client-fixture";
 
 const runtime = {
@@ -45,6 +47,34 @@ test("matching interests share work and releasing one does not retire the other"
   assert.equal(second.getSnapshot().value?.data?.reloadDirt.error, "reload failed");
   second.release();
   assert.equal(socket.sent.filter(item => item.method === "workspace/release").length, 1);
+});
+
+test("app deltas update the exact retained value and a gap re-observes instead of guessing", async context => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (message: string) => warnings.push(message));
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const query = fixture.workspace.observe({ kind: "runtime" });
+  const request = await socket.request("workspace/observe");
+  socket.observation(request, runtime, 1, true);
+  await fixture.workspace.waitFor(query);
+  const address = { subscriptionId: request.params.subscriptionId, generation: request.params.generation, kind: "runtime" };
+  const failed = { ...runtime.data, reloadDirt: { ...runtime.data.reloadDirt, error: "reload failed" as string | null } };
+  const delta = (baseRevision: number, from: object, to: object) => ({ kind: "workspaceDelta" as const, delta: {
+    ...address, baseRevision, revision: baseRevision + 1,
+    delta: diffObservationValue({ ...runtime, ...address, revision: baseRevision, data: from },
+      { ...runtime, ...address, revision: baseRevision, data: to }, workspaceObservationShape("runtime"))!,
+  } });
+  socket.event(delta(1, runtime.data, failed));
+  assert.equal(query.getSnapshot().value?.data?.reloadDirt.error, "reload failed");
+  assert.equal(query.getSnapshot().value?.revision, 2);
+  const offset = socket.sent.length;
+  socket.event(delta(5, failed, runtime.data));
+  const reobserved = await socket.request("workspace/observe", offset);
+  assert.equal(reobserved.params.subscriptionId, request.params.subscriptionId);
+  assert.equal(query.getSnapshot().value?.data?.reloadDirt.error, "reload failed");
+  assert.match(warnings.join("\n"), /runtime observation resync/u);
 });
 
 test("replaced interest ignores a delayed acknowledgement and cancels its waiter", async context => {

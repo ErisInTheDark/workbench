@@ -6,7 +6,7 @@ import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirec
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
-import type { WorkspaceObservation } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { WorkspaceObservation, WorkspaceObservationDelta } from "workbench-shared/workbench/workspace/workspace-observation";
 import { DaemonIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchPresentationRepository from "../state/WorkbenchPresentationRepository";
 import WorkbenchPresentationController from "../state/WorkbenchPresentationController";
@@ -42,6 +42,7 @@ async function fixture(context: TestContext, daemons?: { get(daemonId: string): 
   const threads = new WorkbenchWorkspaceThreads({ sources, presentation, warn: message => warnings.push(message) });
   const changes = new Set<() => void>();
   const updates: WorkspaceObservation[] = [];
+  const deltas: WorkspaceObservationDelta[] = [];
   const providerEvents: Array<{ method: string; harness: string; daemonId: string }> = [];
   const listeners = new Set<() => void>();
   let read: () => Promise<WorkbenchClientStateResponse> = async () => state(0);
@@ -54,6 +55,7 @@ async function fixture(context: TestContext, daemons?: { get(daemonId: string): 
       changes.add(listener); return () => { changes.delete(listener); };
     } },
     publish: value => { updates.push(value); for (const listener of [...listeners]) listener(); },
+    publishDelta: delta => { deltas.push(delta); for (const listener of [...listeners]) listener(); },
     publishVoice: () => {},
     publishThreadEvent: (notification, harness, daemonId) => {
       providerEvents.push({ method: notification.method, harness, daemonId });
@@ -65,7 +67,7 @@ async function fixture(context: TestContext, daemons?: { get(daemonId: string): 
     owner.dispose(); threads.dispose(); workspace.dispose(); sources.dispose();
     presentation.close(); await repository.close(); await temporary.dispose();
   });
-  return { owner, updates, providerEvents, warnings, changes,
+  return { owner, updates, deltas, providerEvents, warnings, changes,
     read: (operation: typeof read) => { read = operation; },
     changed: () => { for (const changed of [...changes]) changed(); },
     wait: (predicate: (value: WorkspaceObservation) => boolean) => new Promise<WorkspaceObservation>(resolve => {

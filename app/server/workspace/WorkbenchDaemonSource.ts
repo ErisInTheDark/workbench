@@ -14,11 +14,15 @@ import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import {
-  DaemonWorkspaceQuerySchema, DaemonWorkspaceObservationSchema,
-  WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_UPDATED_METHOD,
+  DaemonWorkspaceQuerySchema, DaemonWorkspaceObservationSchema, WorkspaceHelloResultSchema, WorkspaceObservationDeltaSchema,
+  daemonObservationShape, type WorkspaceObservationDelta,
+  WORKSPACE_DELTA_METHOD, WORKSPACE_HELLO_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_PROTOCOL,
+  WORKSPACE_RELEASE_METHOD, WORKSPACE_UPDATED_METHOD,
   type DaemonWorkspaceQuery, type DaemonWorkspaceObservation,
   type WorkspaceDaemonFact, type WorkspaceSourcePhase, type WorkspaceTranscriptState,
 } from "workbench-shared/workbench/workspace/workspace-observation";
+import { applyObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
+import { projectSidebarRowSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import {
   conformWorkbenchTranscriptUpdated, conformWorkbenchTranscriptStreamed, workbenchTranscriptOperations,
   type WorkbenchTranscriptSubscribeParams, type WorkbenchTranscriptUpdatedParams, type WorkbenchTranscriptStreamedParams,
@@ -63,11 +67,30 @@ interface Interest {
   subscriptionId: string;
   query: DaemonWorkspaceQuery;
   listeners: Map<object, () => void>;
+  /** Exactly what the daemon holds; deltas apply only onto this revision. */
+  raw: DaemonWorkspaceObservation | null;
+  /** `raw` with lean rows and pending data retained, as observers read it. */
   value: DaemonWorkspaceObservation | null;
+  /** Deltas that arrived before the first value they build on. */
+  early: WorkspaceObservationDelta[];
   failure: string | null;
 }
 
 const rpcError = z.object({ code: z.number().int(), message: z.string(), data: z.json().optional() });
+const MAX_EARLY_DELTAS = 32;
+
+/** Protocol 1 daemons send full sidebar entries; observers only ever see lean rows. */
+function leanObservation(value: DaemonWorkspaceObservation): DaemonWorkspaceObservation {
+  if (value.kind !== "projectThreads") return value;
+  let changed = false;
+  const projects = value.projects.map(project => {
+    const sidebar = project.sidebar ? projectSidebarRowSnapshot(project.sidebar) : null;
+    if (sidebar === project.sidebar) return project;
+    changed = true;
+    return { ...project, sidebar };
+  });
+  return changed ? { ...value, projects } : value;
+}
 const observationAddress = z.object({ subscriptionId: z.uuid(), generation: z.number().int().nonnegative() });
 function bounded(error: unknown) {
   return (error instanceof Error ? error.message : "Daemon request failed.")
@@ -83,6 +106,7 @@ export default class WorkbenchDaemonSource {
   private readonly listeners = new Set<() => void>();
   private readonly endpointListeners = new Set<() => void>();
   private readonly unsubscribe: Array<() => void>;
+  private negotiatedGeneration: number | null = null;
   private disposed = false;
 
   constructor(
@@ -114,6 +138,9 @@ export default class WorkbenchDaemonSource {
           interest.failure = null;
           this.openTranscript(interest);
         }
+      }),
+      this.socket.onWorkbenchNotification(notification => {
+        if (notification.method === WORKSPACE_DELTA_METHOD) this.receiveDelta(notification.params);
       }),
       this.socket.onWorkbenchNotification(notification => {
         if (notification.method === "workbench/transcript/updated" || notification.method === "workbench/transcript/streamed") {
@@ -181,6 +208,7 @@ export default class WorkbenchDaemonSource {
     this.descriptor = descriptor;
     if (!descriptor.access) {
       for (const interest of this.interests.values()) {
+        interest.raw = null;
         interest.value = null;
         interest.failure = "This app no longer has access to the daemon.";
       }
@@ -200,7 +228,7 @@ export default class WorkbenchDaemonSource {
     let interest = [...this.interests.values()].find(current => areDeeplyEqual(current.query, query));
     const created = !interest;
     if (!interest) {
-      interest = { subscriptionId: randomUUID(), query, listeners: new Map(), value: null, failure: null,
+      interest = { subscriptionId: randomUUID(), query, listeners: new Map(), raw: null, value: null, early: [], failure: null,
         cancellation: new AbortController() };
       this.interests.set(interest.subscriptionId, interest);
     }
@@ -279,7 +307,8 @@ export default class WorkbenchDaemonSource {
     method: string, params: object = {}, fields: object = {}, options: { signal?: AbortSignal } = {},
   ): Promise<Result> {
     if (!this.available) throw new WorkbenchRpcRequestInterruptedError("The daemon is not connected; request was not sent.", false);
-    const release = method === WORKSPACE_OBSERVE_METHOD || method === WORKSPACE_RELEASE_METHOD
+    // Observation plumbing never creates demand of its own; only observers and leases do.
+    const release = method === WORKSPACE_OBSERVE_METHOD || method === WORKSPACE_RELEASE_METHOD || method === WORKSPACE_HELLO_METHOD
       ? () => {} : this.retain();
     try {
       const response = await this.socket.sendRequest<Result>({ ...fields, method, params }, {
@@ -428,9 +457,31 @@ export default class WorkbenchDaemonSource {
     }
   }
 
+  /**
+   * Once per connection generation, sent ahead of (and pipelined with) observes. The daemon fixes each
+   * observation's protocol when it opens; any opened before this hello lands keep full values, which this
+   * source accepts either way, so the reply needs no waiting.
+   */
+  private negotiate(generation: number) {
+    if (this.negotiatedGeneration === generation) return;
+    this.negotiatedGeneration = generation;
+    void this.request<unknown>(WORKSPACE_HELLO_METHOD, { protocol: WORKSPACE_PROTOCOL }).then(result => {
+      const parsed = WorkspaceHelloResultSchema.safeParse(result);
+      if (!parsed.success) {
+        reportClientSchemaError("Rejected daemon workspace hello", parsed.error);
+        this.options.warn("Daemon workspace hello did not match its contract; observations may use full values.");
+      }
+    }, (error: unknown) => {
+      if (error instanceof WorkbenchRpcRequestInterruptedError) return;
+      // Older daemons reject the method and keep sending full values.
+      this.options.warn(`Daemon workspace deltas unavailable (${bounded(error)}); using full values.`);
+    });
+  }
+
   private openInterest(interest: Interest) {
     const generation = this.socket.getSnapshot().generation;
     interest.failure = null;
+    this.negotiate(generation);
     void this.request<DaemonWorkspaceObservation>(WORKSPACE_OBSERVE_METHOD, {
       subscriptionId: interest.subscriptionId, generation, query: interest.query,
     }, {}, { signal: interest.cancellation.signal }).then(value => {
@@ -462,10 +513,58 @@ export default class WorkbenchDaemonSource {
       this.publishInterest(interest);
       return;
     }
-    if (interest.value?.generation === value.generation && interest.value.revision >= value.revision) return;
-    interest.value = this.retainPendingData(interest.value, value);
+    if (interest.raw?.generation === value.generation && interest.raw.revision >= value.revision) return;
+    interest.raw = value;
+    interest.value = this.retainPendingData(interest.value, leanObservation(value));
     interest.failure = null;
-    this.publishInterest(interest);
+    for (const delta of interest.early.splice(0)) this.applyDelta(interest, delta);
+    // A replayed delta already published its newer value through `accept`.
+    if (interest.raw === value || !interest.raw) this.publishInterest(interest);
+  }
+
+  private receiveDelta(params: unknown) {
+    const parsed = WorkspaceObservationDeltaSchema.safeParse(params);
+    if (!parsed.success) {
+      reportClientSchemaError("Rejected daemon workspace delta", parsed.error);
+      const address = observationAddress.safeParse(params);
+      const interest = address.success ? this.interests.get(address.data.subscriptionId) : null;
+      if (interest) this.resync(interest, "the daemon published an invalid delta");
+      return;
+    }
+    const delta = parsed.data;
+    const interest = this.interests.get(delta.subscriptionId);
+    if (!interest || !this.available || delta.generation !== this.socket.getSnapshot().generation) return;
+    this.applyDelta(interest, delta);
+  }
+
+  private applyDelta(interest: Interest, delta: WorkspaceObservationDelta) {
+    const raw = interest.raw;
+    // A delta can overtake the observe response that carries its base; hold a few until that value lands.
+    if (!raw) {
+      if (interest.early.length < MAX_EARLY_DELTAS) interest.early.push(delta);
+      else this.resync(interest, "too many deltas arrived before the first value");
+      return;
+    }
+    if (delta.generation === raw.generation && delta.revision <= raw.revision) return;
+    if (raw.generation !== delta.generation || raw.kind !== delta.kind || raw.revision !== delta.baseRevision) {
+      this.resync(interest, `delta for revision ${delta.baseRevision} does not follow revision ${raw?.revision ?? "none"}`);
+      return;
+    }
+    let next: DaemonWorkspaceObservation;
+    try {
+      next = { ...applyObservationDelta(raw, delta.delta, daemonObservationShape(raw.kind)), revision: delta.revision };
+    } catch (error) {
+      this.resync(interest, bounded(error));
+      return;
+    }
+    this.accept(next);
+  }
+
+  /** A delta that cannot apply means this copy diverged; re-observing returns the daemon's current full value. */
+  private resync(interest: Interest, reason: string) {
+    this.options.warn(`Daemon ${interest.query.kind} observation resync: ${reason}`);
+    interest.raw = null;
+    if (this.available) this.openInterest(interest);
   }
 
   private retainPendingData(previous: DaemonWorkspaceObservation | null, value: DaemonWorkspaceObservation): DaemonWorkspaceObservation {

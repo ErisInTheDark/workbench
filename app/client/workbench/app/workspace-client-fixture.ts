@@ -27,8 +27,12 @@ export class WorkspaceTestSocket extends EventTarget {
     this.readyState = WebSocket.CLOSED;
     this.dispatchEvent(new Event("close"));
   }
+  /** Protocol answered to `workspace/hello`, as a current app server does; 1 imitates a server without deltas. */
+  helloProtocol = 2;
   send(value: string) {
-    this.sent.push(WorkbenchAppRpcRequestSchema.parse(JSON.parse(value)));
+    const request = WorkbenchAppRpcRequestSchema.parse(JSON.parse(value));
+    this.sent.push(request);
+    if (request.method === "workspace/hello") queueMicrotask(() => this.reply(request, { protocol: this.helloProtocol }));
     for (const listener of [...this.waiting]) listener();
   }
   request<Method extends WorkbenchAppRpcRequest["method"]>(method: Method, after = 0,

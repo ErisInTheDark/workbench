@@ -344,7 +344,11 @@ test("a registered offline folder can open a draft without claiming live explore
   assert.deepEqual(tree.params.query, { kind: "projectTree", location });
 });
 
-test("a multi-folder project does not browse a preferred or arbitrary folder", async context => {
+type ObservedSocket = Awaited<ReturnType<ReturnType<typeof createWorkspaceClientFixture>["open"]>>;
+const browsedProjectIds = (socket: ObservedSocket) => socket.sent.flatMap(item =>
+  item.method === "workspace/observe" && item.params.query.kind === "projectTree" ? [item.params.query.location.projectId] : []);
+
+test("a multi-folder project browses its own folder, never a sibling worktree", async context => {
   const fixture = createWorkspaceClientFixture();
   const socket = await fixture.open();
   const client = WorkbenchClient({ workspace: fixture.workspace });
@@ -361,12 +365,11 @@ test("a multi-folder project does not browse a preferred or arbitrary folder", a
   socket.observation(query, { kind: "projects", phase: "current", failure: null, data });
 
   assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
-  assert.equal(socket.sent.some(item => item.method === "workspace/observe"
-    && item.params.query.kind === "projectTree"), false);
+  assert.deepEqual(new Set(browsedProjectIds(socket)), new Set([location.projectId]),
+    "An omitted folder address implies the project's own folder, never a sibling worktree");
 
   assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId, location))).ok, true);
-  assert.ok(socket.sent.some(item => item.method === "workspace/observe"
-    && item.params.query.kind === "projectTree"));
+  assert.ok(browsedProjectIds(socket).includes(location.projectId));
 });
 
 test("a preferred draft destination does not become a multi-folder browse selection", async context => {
@@ -391,8 +394,7 @@ test("a preferred draft destination does not become a multi-folder browse select
   assert.ok(draft?.isDraft);
   assert.deepEqual(client.draftLocationFor(draft.id), location);
   assert.equal(client.navigation.getSnapshot().route.logical?.location, null);
-  assert.equal(socket.sent.some(item => item.method === "workspace/observe"
-    && item.params.query.kind === "projectTree"), false);
+  assert.ok(!browsedProjectIds(socket).includes(ProjectIdSchema.parse("other-folder")));
 });
 
 test("a thread owner uses its projected folder label", async context => {
@@ -424,8 +426,7 @@ test("a thread owner uses its projected folder label", async context => {
   const opening = client.controls.applyRoute(route);
   const read = await socket.request("workspace/observe", 0, request => request.params.query.kind === "thread");
   assert.equal(client.threadOwnerFor(threadId)?.displayPath, "workbench");
-  assert.equal(socket.sent.some(item => item.method === "workspace/observe"
-    && item.params.query.kind === "projectTree"), false);
+  assert.ok(!browsedProjectIds(socket).includes(ProjectIdSchema.parse("other-folder")));
   await client.controls.applyRoute(createHomeRoute());
   socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
     data: null, owner: { phase: "unavailable", failure: "source read unavailable" } });
