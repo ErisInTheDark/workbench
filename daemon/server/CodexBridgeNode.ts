@@ -298,14 +298,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       }),
       requestRecovery: reason => lifecycle.requestRecovery(reason),
     });
-    let releaseLiveBoundary: (() => void) | undefined;
     return {
       activate: () => {
-        releaseLiveBoundary = transcript.registerLiveBoundary?.(operation => bridge.withTranscriptBoundary(operation));
         parent.attachBridge(bridge, { publish: false });
       },
       deactivate: () => {
-        releaseLiveBoundary?.();
         parent.deactivateBridge(bridge);
       },
       afterCommit: () => {
@@ -356,7 +353,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
       dispose: async () => {
         health.dispose();
-        releaseLiveBoundary?.();
         generation.abort(new Error("Codex bridge node disposed."));
         await recovery;
         bridge.expireForReload();

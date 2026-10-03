@@ -22,22 +22,17 @@ interface ActiveSubscription extends WorkbenchTranscriptSubscription {
   refreshing: boolean;
 }
 
-interface LiveSubscriptionSource {
-  controller: WorkbenchTranscriptLiveController;
-  runOrdered: (operation: () => Promise<void>) => Promise<void>;
-}
-
 export default class WorkbenchTranscriptSubscriptionController {
   readonly #read: (request: WorkbenchTranscriptReadRequest) => Promise<WorkbenchTranscriptSnapshot | null>;
   readonly #reportFailure: (error: unknown) => void;
   readonly #subscriptions = new Map<string, ActiveSubscription>();
-  readonly #live?: LiveSubscriptionSource;
+  readonly #live?: WorkbenchTranscriptLiveController;
   #disposed = false;
 
   constructor(
     read: (request: WorkbenchTranscriptReadRequest) => Promise<WorkbenchTranscriptSnapshot | null>,
     reportFailure: (error: unknown) => void,
-    live?: LiveSubscriptionSource,
+    live?: WorkbenchTranscriptLiveController,
   ) {
     this.#read = read;
     this.#reportFailure = reportFailure;
@@ -65,14 +60,15 @@ export default class WorkbenchTranscriptSubscriptionController {
 
   unsubscribe(id: string) {
     this.#subscriptions.delete(id);
-    this.#live?.controller.close(id);
+    this.#live?.close(id);
   }
 
   settle(changedThreadIds: readonly string[], { snapshots = true } = {}) {
     if (this.#disposed || changedThreadIds.length === 0) return;
     const changed = new Set(changedThreadIds);
     for (const subscription of this.#subscriptions.values()) {
-      if (subscription.publishStream ? this.#live?.controller.hasView(subscription.id) : !snapshots) continue;
+      // Live views, including ones still reading their baseline, receive settlements without a reread.
+      if (subscription.publishStream ? this.#live?.tracks(subscription.id) : !snapshots) continue;
       if (!changed.has(subscription.request.threadId)) continue;
       subscription.dirty = true;
       this.#startRefresh(subscription);
@@ -82,18 +78,23 @@ export default class WorkbenchTranscriptSubscriptionController {
   dispose() {
     this.#disposed = true;
     this.#subscriptions.clear();
-    this.#live?.controller.dispose();
+    this.#live?.dispose();
   }
 
   async #readAndPublish(subscription: ActiveSubscription) {
     if (this.#disposed || this.#subscriptions.get(subscription.id) !== subscription) return;
     if (subscription.publishStream && this.#live) {
-      await this.#live.runOrdered(async () => {
-        if (this.#disposed || this.#subscriptions.get(subscription.id) !== subscription) return;
-        const snapshot = await this.#read(subscription.request);
-        if (this.#disposed || this.#subscriptions.get(subscription.id) !== subscription) return;
-        this.#live!.controller.open(subscription.id, snapshot, subscription.publishStream!);
-      });
+      // Buffer settlements before reading, so the read never waits on (or blocks) provider ingest.
+      this.#live.beginOpen(subscription.id, subscription.request.threadId);
+      let snapshot: WorkbenchTranscriptSnapshot | null;
+      try {
+        snapshot = await this.#read(subscription.request);
+      } catch (error) {
+        if (!this.#disposed && this.#subscriptions.get(subscription.id) === subscription) this.#live.close(subscription.id);
+        throw error;
+      }
+      if (this.#disposed || this.#subscriptions.get(subscription.id) !== subscription) return;
+      if (this.#live.open(subscription.id, snapshot, subscription.publishStream)) subscription.dirty = true;
       return;
     }
     const snapshot = await this.#read(subscription.request);

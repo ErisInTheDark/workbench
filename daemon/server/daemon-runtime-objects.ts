@@ -162,7 +162,6 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
 
 export interface DaemonTranscriptRegistration {
   acceptLiveUpdate?(update: TranscriptLiveUpdate): void;
-  registerLiveBoundary?(boundary: (operation: () => Promise<void>) => Promise<void>): () => void;
   assertReady(): void;
   captureProviderGap(threadId: string, error: unknown): Promise<Error>;
   dispose(): void;

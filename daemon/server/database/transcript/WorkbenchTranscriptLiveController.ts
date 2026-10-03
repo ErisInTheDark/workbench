@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptLiveController: retain active text and patch previews independently of viewers and publish commit-scoped presentation.
+ * - default WorkbenchTranscriptLiveController: retain active text and patch previews independently of viewers, buffer settlements for views still reading their baseline, and publish commit-scoped presentation.
  */
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import {
@@ -28,6 +28,16 @@ import type { WorkbenchTranscriptSettlement } from "./workbench-transcript-types
 
 type Root = WorkbenchTranscriptSnapshot["rows"]["threadItems"][number];
 type Turn = WorkbenchTranscriptSnapshot["turns"][number];
+type SettlementChange = NonNullable<WorkbenchTranscriptSettlement["changes"]>[number];
+interface BufferedSettlement {
+  change: SettlementChange;
+  replaceLiveText: boolean;
+}
+/** A view whose baseline read is in flight; settlements committed meanwhile replay into it on open. */
+interface Opening {
+  threadId: string;
+  settlements: BufferedSettlement[];
+}
 interface View {
   projection: WorkbenchTranscriptProjection;
   items: Map<string, WorkbenchProjectedTranscriptItem>;
@@ -57,6 +67,7 @@ function liveFields(snapshot: WorkbenchTranscriptSnapshot): Map<number, Transcri
 
 export default class WorkbenchTranscriptLiveController {
   readonly #views = new Map<string, View>();
+  readonly #openings = new Map<string, Opening>();
   readonly #fields = new Map<string, Map<string, TranscriptTextUpdate>>();
   readonly #patches = new Map<string, TranscriptPatchUpdate>();
   readonly #toolPatches = new Map<string, Map<string, TranscriptToolPatchUpdate>>();
@@ -68,11 +79,22 @@ export default class WorkbenchTranscriptLiveController {
     this.#reportFailure = reportFailure;
   }
 
+  /**
+   * Start buffering settlements for a view before its baseline read, so the read never has to block provider
+   * ingest. Live text and patches need no buffer: they are retained per thread regardless of viewers.
+   */
+  beginOpen(id: string, threadId: string) {
+    this.close(id);
+    this.#openings.set(id, { threadId, settlements: [] });
+  }
+
+  /** Returns true when an absent baseline was already superseded by a settlement committed during its read. */
   open(id: string, snapshot: WorkbenchTranscriptSnapshot | null, publish: View["publish"]) {
+    const buffered = this.#openings.get(id)?.settlements ?? [];
     this.close(id);
     if (!snapshot) {
       publish({ kind: "absent" });
-      return;
+      return buffered.length > 0;
     }
     this.#settleFields(snapshot, [], []);
     const projected = projectWorkbenchTranscript(snapshot);
@@ -95,18 +117,27 @@ export default class WorkbenchTranscriptLiveController {
     const patch = this.#patches.get(snapshot.thread.id);
     if (patch) this.#publishPatch(view, patch);
     for (const update of this.#toolPatches.get(snapshot.thread.id)?.values() ?? []) this.#publishToolPatch(view, update);
+    // The baseline may predate these commits or already contain them; replay is idempotent either way.
+    for (const { change, replaceLiveText } of buffered) {
+      const completed = this.#settleFields(change.snapshot, change.removedItemIds, change.completedItemIds, replaceLiveText);
+      this.#settleOpenView(view, change, completed);
+    }
+    return false;
   }
 
   close(id: string) {
     this.#views.delete(id);
+    this.#openings.delete(id);
   }
 
-  hasView(id: string) {
-    return this.#views.has(id);
+  /** Open or opening: settlements reach this view without a baseline reread. */
+  tracks(id: string) {
+    return this.#views.has(id) || this.#openings.has(id);
   }
 
   dispose() {
     this.#views.clear();
+    this.#openings.clear();
     this.#fields.clear();
     this.#patches.clear();
     this.#toolPatches.clear();
@@ -171,16 +202,22 @@ export default class WorkbenchTranscriptLiveController {
 
   settle(changes: NonNullable<WorkbenchTranscriptSettlement["changes"]>, { replaceLiveText = false } = {}) {
     for (const change of changes) {
+      for (const opening of this.#openings.values()) {
+        if (opening.threadId === change.snapshot.thread.id) opening.settlements.push({ change, replaceLiveText });
+      }
       const completed = this.#settleFields(change.snapshot, change.removedItemIds, change.completedItemIds, replaceLiveText);
       for (const view of this.#views.values()) {
-        if (view.projection.thread.id !== change.snapshot.thread.id) continue;
-        try {
-          this.#settleView(view, change);
-          for (const update of completed) this.#publishText(view, update);
-        } catch (error) {
-          this.#reportFailure(error);
-        }
+        if (view.projection.thread.id === change.snapshot.thread.id) this.#settleOpenView(view, change, completed);
       }
+    }
+  }
+
+  #settleOpenView(view: View, change: SettlementChange, completed: readonly TranscriptTextUpdate[]) {
+    try {
+      this.#settleView(view, change);
+      for (const update of completed) this.#publishText(view, update);
+    } catch (error) {
+      this.#reportFailure(error);
     }
   }
 
@@ -244,7 +281,7 @@ export default class WorkbenchTranscriptLiveController {
     return completed;
   }
 
-  #settleView(view: View, change: NonNullable<WorkbenchTranscriptSettlement["changes"]>[number]) {
+  #settleView(view: View, change: SettlementChange) {
     const { snapshot, removedItemIds } = change;
     const incoming = projectWorkbenchTranscript(snapshot);
     if (!incoming.success) throw new Error("Committed transcript structure could not be projected.");

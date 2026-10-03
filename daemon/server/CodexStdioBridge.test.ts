@@ -3212,19 +3212,18 @@ test("live transcript recording and reload use only SQL and preserve image asset
       method: "item/started",
       params: { item, startedAtMs: 1_000, threadId: "thread", turnId: "turn" },
     });
-    await bridge.withTranscriptBoundary(async () => {});
+    await bridge.waitForIdle();
     const beforeDelta = sqliteBatches.length;
     await bridge.handleUpstreamMessage({
       method: "item/agentMessage/delta",
       params: { delta: " text", itemId: item.id, threadId: "thread", turnId: "turn" },
     });
-    await bridge.withTranscriptBoundary(async () => {
-      assert.equal(streamed.length, 1, "bootstrap must observe already admitted text");
-      assert.equal(streamed[0]!.text, " text");
-      assert.notEqual(streamed[0]!.threadId, "thread");
-      assert.notEqual(streamed[0]!.itemId, item.id);
-      assert.equal(sqliteBatches.length, beforeDelta, "text must not create a durable settlement");
-    });
+    await bridge.waitForIdle();
+    assert.equal(streamed.length, 1, "admitted text must reach the live transcript");
+    assert.equal(streamed[0]!.text, " text");
+    assert.notEqual(streamed[0]!.threadId, "thread");
+    assert.notEqual(streamed[0]!.itemId, item.id);
+    assert.equal(sqliteBatches.length, beforeDelta, "text must not create a durable settlement");
     await bridge.handleUpstreamMessage({
       method: "item/completed",
       params: { completedAtMs: 2_000, item, threadId: "thread", turnId: "turn" },

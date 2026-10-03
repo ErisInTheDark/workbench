@@ -1,5 +1,6 @@
 /*
- * No exports. Protect independent streaming prefixes, commit-only publication and viewer replacement.
+ * No exports. Protect independent streaming prefixes, commit-only publication, viewer replacement and
+ * baseline reads that neither block ingest nor miss settlements.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -161,14 +162,8 @@ test("text publishes only a field update and durable completion supersedes the t
   }
 });
 
-test("subscription bootstrap shares event order and structural settlement does not reread its window", async () => {
-  const { database, repository, live, record, delta } = fixture();
-  let queue = Promise.resolve();
-  const ordered = (operation: () => Promise<void>) => {
-    const result = queue.then(operation);
-    queue = result;
-    return result;
-  };
+/** A subscription whose baseline is read immediately but returned only when the test releases it. */
+function heldSubscription(live: WorkbenchTranscriptLiveController, read: () => ReturnType<WorkbenchTranscriptRepository["read"]>) {
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   let started!: () => void;
@@ -177,46 +172,92 @@ test("subscription bootstrap shares event order and structural settlement does n
   const failures: unknown[] = [];
   const subscriptions = new WorkbenchTranscriptSubscriptionController(async () => {
     readCount++;
-    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
+    const snapshot = read();
     started();
-    await held;
+    if (readCount === 1) await held;
     return snapshot;
-  }, error => failures.push(error), { controller: live, runOrdered: ordered });
+  }, error => failures.push(error), live);
+  const active = viewer();
+  const subscribed = subscriptions.subscribe({
+    id: "view", request: { threadId: "thread", turnLimit: 1 },
+    publish: () => assert.fail("incremental subscriptions must not publish legacy snapshots"),
+    publishStream: active.publish,
+  });
+  return { subscriptions, active, subscribed, reading, release, failures, reads: () => readCount };
+}
+
+test("text streamed while a baseline read is in flight reaches the view without ordering the read", async () => {
+  const { database, repository, live, record, delta } = fixture();
+  record("prefix");
+  const held = heldSubscription(live, () => repository.read({ threadId: "thread", turnLimit: 1 }));
   try {
-    record("prefix");
-    const active = viewer();
-    const subscribed = subscriptions.subscribe({
-      id: "view", request: { threadId: "thread", turnLimit: 1 },
-      publish: () => assert.fail("incremental subscriptions must not publish legacy snapshots"),
-      publishStream: active.publish,
-    });
-    await reading;
-    const streamed = ordered(async () => { live.acceptText(delta(" suffix")); });
-    release();
-    await subscribed;
-    await streamed;
-    const item = active.read().turns[0]!.items[0]!;
+    await held.reading;
+    live.acceptText(delta(" suffix"));
+    held.release();
+    await held.subscribed;
+    const item = held.active.read().turns[0]!.items[0]!;
     if (item.type === "reasoning") assert.deepEqual(item.summary, ["prefix suffix"]);
-    await ordered(async () => { record("completed", "completed"); subscriptions.settle(["thread"]); });
-    assert.equal(readCount, 1);
-    assert.deepEqual(failures, []);
+    held.subscriptions.settle(["thread"]);
+    record("completed", "completed");
+    assert.equal(held.reads(), 1, "an open view takes settlements without rereading its window");
+    assert.deepEqual(held.failures, []);
   } finally {
-    subscriptions.dispose();
+    held.subscriptions.dispose();
+    database.close();
+  }
+});
+
+test("a settlement committed during the baseline read replays into the opening view without a reread", async () => {
+  const { database, repository, live, record } = fixture();
+  record("prefix");
+  const held = heldSubscription(live, () => repository.read({ threadId: "thread", turnLimit: 1 }));
+  try {
+    await held.reading;
+    // The held baseline still shows "prefix" streaming; completion commits after it was read.
+    held.subscriptions.settle(["thread"]);
+    record("canonical final", "completed");
+    held.release();
+    await held.subscribed;
+    const item = held.active.read().turns[0]!.items[0]!;
+    assert.equal(item.type, "reasoning");
+    if (item.type === "reasoning") assert.deepEqual(item.summary, ["canonical final"]);
+    assert.equal(held.reads(), 1);
+    const reopened = viewer();
+    live.open("other", repository.read({ threadId: "thread", turnLimit: 1 }), reopened.publish);
+    assert.deepEqual(reopened.events.map(event => event.kind), ["structure"], "no stale live text may survive the replay");
+    assert.deepEqual(held.failures, []);
+  } finally {
+    held.subscriptions.dispose();
+    database.close();
+  }
+});
+
+test("an absent baseline superseded during its read rereads instead of staying absent", async () => {
+  const { database, repository, live, record } = fixture();
+  let available = false;
+  const held = heldSubscription(live, () => available ? repository.read({ threadId: "thread", turnLimit: 1 }) : null);
+  try {
+    await held.reading;
+    available = true;
+    held.subscriptions.settle(["thread"]);
+    record("now available");
+    held.release();
+    await held.subscribed;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.ok(held.active.read(), "a commit during an absent read must resolve the baseline");
+    assert.equal(held.reads(), 2);
+  } finally {
+    held.subscriptions.dispose();
     database.close();
   }
 });
 
 test("an absent baseline becomes readable on later settlement without changing selections", async () => {
   const { database, repository, live, record } = fixture();
-  let queue = Promise.resolve();
-  const ordered = (operation: () => Promise<void>) => {
-    queue = queue.then(operation);
-    return queue;
-  };
   let available = false;
   const subscriptions = new WorkbenchTranscriptSubscriptionController(
     async () => available ? repository.read({ threadId: "thread", turnLimit: 1 }) : null,
-    error => assert.fail(String(error)), { controller: live, runOrdered: ordered },
+    error => assert.fail(String(error)), live,
   );
   try {
     const active = viewer();
@@ -229,7 +270,7 @@ test("an absent baseline becomes readable on later settlement without changing s
     available = true;
     record("now available");
     subscriptions.settle(["thread"]);
-    await queue;
+    await new Promise<void>(resolve => setImmediate(resolve));
     assert.ok(active.read(), "a later commit must resolve an absent baseline");
   } finally {
     subscriptions.dispose();

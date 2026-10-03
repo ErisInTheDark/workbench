@@ -2,7 +2,7 @@
  * Exports:
  * - ReloadableNodeModuleLoader: load fresh parent-owned graph definitions.
  * - ReloadableNodeHostOptions: process-owned deadline, clock, logging, and swap ports.
- * - default ReloadableNodeHost: validate topology, lease dependencies, and replace node closures.
+ * - default ReloadableNodeHost: validate topology, lease dependencies, replace node closures, and report retired generations that stay reachable.
  */
 import { createGitignoreMatcher, type GitignoreMatcher } from "../source-pattern-matcher.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -13,6 +13,7 @@ import type {
 } from "./workbench-reload.ts";
 import type ReloadableNode from "./ReloadableNode.ts";
 import ReloadableNodeTransition, { type ReloadableNodeTransitionDeadline } from "./ReloadableNodeTransition.ts";
+import ReloadRetentionTracker from "./ReloadRetentionTracker.ts";
 import type {
   ReloadableNodeBuild,
   ReloadableNodeGraph,
@@ -154,6 +155,9 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   private starting: Promise<void> | null = null;
   private topology: readonly DaemonReloadScope[] = [];
   private readonly topologyScope: DaemonReloadScope;
+  private readonly retention = new ReloadRetentionTracker();
+  private readonly definitionGenerations = new WeakMap<object, number>();
+  private loadedGenerations = 0;
 
   constructor(
     private readonly context: TContext,
@@ -174,6 +178,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       ?? (() => { throw new Error("A reloadable graph topology scope is required."); })();
     const loaded = loader.load();
     const graph = this.validateGraph(this.flattenGraph(loaded));
+    this.admitGeneration(loaded, graph.definitions);
     this.setProcessSources(loaded.sourceMetadata?.processPaths ?? []);
     this.definitions = graph.definitions;
     this.topology = graph.topology;
@@ -368,7 +373,9 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       try {
         const fresh = await transition.step("load graph", () => {
           const loaded = this.loader.reload();
-          return { ...this.validateGraph(this.flattenGraph(loaded)), processPaths: loaded.sourceMetadata?.processPaths ?? [] };
+          const graph = this.validateGraph(this.flattenGraph(loaded));
+          this.admitGeneration(loaded, graph.definitions);
+          return { ...graph, processPaths: loaded.sourceMetadata?.processPaths ?? [] };
         });
         const topologyChanged = this.hasTopologyChanged(fresh.definitions, fresh.topology);
         if (topologyChanged && !scopes.includes(this.topologyScope)) {
@@ -381,6 +388,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         if (selected.size) await this.replaceGraph(fresh.definitions, fresh.topology, selected, transition, fresh.processPaths);
       } finally {
         transition.finish();
+        this.reportRetention();
       }
     });
     const tail = operation.catch(() => undefined).finally(() => {
@@ -388,6 +396,31 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     });
     this.reloadTail = tail;
     return await operation;
+  }
+
+  private admitGeneration(
+    loaded: ReloadableNodeGraph<TContext, TFeatures, TNotification>,
+    definitions: ReadonlyMap<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
+  ) {
+    const generation = this.loadedGenerations++;
+    // `roots` is the graph module's own export, so it lives exactly as long as that module generation.
+    this.retention.trackGeneration(generation, loaded.roots);
+    for (const definition of definitions.values()) this.definitionGenerations.set(definition, generation);
+  }
+
+  private reportRetention() {
+    const used = new Set<number>();
+    const mark = (definition: object) => {
+      const generation = this.definitionGenerations.get(definition);
+      if (generation !== undefined) used.add(generation);
+    };
+    for (const definition of this.definitions.values()) mark(definition);
+    for (const node of this.nodes.values()) mark(node.definition);
+    for (const retirement of this.retirements) for (const node of retirement.nodes) mark(node.definition);
+    for (const rollback of this.pendingRollbacks) for (const node of rollback.nodes) mark(node.definition);
+    this.retention.retireUnusedGenerations(used);
+    const report = this.retention.completeReload();
+    if (report) this.logError(report);
   }
 
   async observeProviderNotification(notification: TNotification, label = "provider notification") {
@@ -984,7 +1017,12 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     })();
     this.retirements.add(retirement);
     void retirement.promise.then(
-      () => { this.retirements.delete(retirement); },
+      () => {
+        this.retirements.delete(retirement);
+        for (const node of nodes) {
+          this.retention.trackRetiredNode(node.definition.id, this.definitionGenerations.get(node.definition) ?? -1, node.instance);
+        }
+      },
       () => { /* Failed owners stay retained for terminal shutdown and diagnostics. */ },
     );
   }

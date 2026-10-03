@@ -2188,10 +2188,6 @@ export default class CodexStdioBridge {
     });
   }
 
-  async withTranscriptBoundary(operation: () => Promise<void>) {
-    await this.captureTranscript("live-subscription-bootstrap", operation, { propagateFailure: true, requireSqlite: true });
-  }
-
   private async captureTranscript(
     label: string,
     task: () => Promise<unknown>,

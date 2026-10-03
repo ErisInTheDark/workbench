@@ -147,7 +147,6 @@ export default class WorkbenchTranscriptController {
   readonly #live = new WorkbenchTranscriptLiveController();
   readonly #itemActivityListeners = new Set<(activity: WorkbenchTranscriptItemActivity) => Promise<void> | void>();
   readonly #compactionListeners = new Set<(threadId: WorkbenchThreadId) => Promise<void> | void>();
-  #liveBoundary: ((operation: () => Promise<void>) => Promise<void>) | null = null;
   #disposed = false;
 
   constructor(
@@ -163,10 +162,7 @@ export default class WorkbenchTranscriptController {
     this.#subscriptions = new WorkbenchTranscriptSubscriptionController(
       (request) => this.read(request),
       reportSubscriptionFailure,
-      {
-        controller: this.#live,
-        runOrdered: operation => this.#liveBoundary ? this.#liveBoundary(operation) : operation(),
-      },
+      this.#live,
     );
   }
 
@@ -274,13 +270,6 @@ export default class WorkbenchTranscriptController {
   async read(request: WorkbenchTranscriptReadRequest) {
     this.#assertActive();
     return this.#database.readTranscript(request);
-  }
-
-  registerLiveBoundary(boundary: (operation: () => Promise<void>) => Promise<void>) {
-    this.#liveBoundary = boundary;
-    return () => {
-      if (this.#liveBoundary === boundary) this.#liveBoundary = null;
-    };
   }
 
   /** Observe every committed admission of new thread items, from any source. */
