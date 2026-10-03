@@ -43,12 +43,11 @@ async function fixture(context: TestContext, snapshot: WorkbenchNetworkSnapshot,
   await client.start();
   const observation = await socket.request("workspace/observe", 0, request => request.params.query.kind === "network");
   let revision = 0;
-  const publish = () => {
+  const publish = async () => {
     const payload = { kind: "network" as const, data: snapshot, phase: "current" as const, failure: null };
-    socket.observation(observation, payload, ++revision);
-    if (revision === 1) socket.observation(observation, payload, revision, true);
+    await socket.observation(observation, payload, ++revision);
   };
-  publish();
+  await publish();
   return { client, socket, observation, publish };
 }
 

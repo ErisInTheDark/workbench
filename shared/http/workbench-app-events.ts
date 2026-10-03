@@ -4,9 +4,7 @@
  * - WorkbenchAppNetworkEventSchema/WorkbenchAppNetworkEvent: validated workspace notifications.
  */
 import { z } from "zod";
-import {
-  WorkspaceObservationDeltaSchema, WorkspaceObservationSchema, WorkspaceTranscriptStateSchema,
-} from "../workbench/workspace/workspace-observation";
+import { WorkspaceObservationDeltaSchema, WorkspaceTranscriptStateSchema } from "../workbench/workspace/workspace-observation";
 import { VoiceSessionEventSchema } from "../workbench/voice/voice-session-contract";
 import { isWorkbenchPublicNotification, type WorkbenchTranscriptNotification } from "../workbench/provider/provider-observation";
 import { ProviderKeySchema } from "../workbench/provider/provider-key";
@@ -33,7 +31,6 @@ export const WorkbenchAppNetworkEventSchema = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({ kind: z.literal("transcriptState"), data: WorkspaceTranscriptStateSchema }).strict(),
   z.object({ kind: z.literal("voice"), event: VoiceSessionEventSchema }).strict(),
-  z.object({ kind: z.literal("workspace"), observation: WorkspaceObservationSchema }).strict(),
   z.object({ kind: z.literal("workspaceDelta"), delta: WorkspaceObservationDeltaSchema }).strict(),
   z.object({ kind: z.literal("presentation-import"), status: WorkbenchPresentationImportStatusSchema }).strict(),
 ]);

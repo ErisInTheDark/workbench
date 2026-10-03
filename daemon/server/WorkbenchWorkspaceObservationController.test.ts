@@ -21,7 +21,7 @@ const sidebar = (projectId: ProjectId, revision = 1): WorkbenchThreadSidebarSnap
 });
 
 function fixture(context: TestContext, overrides: Partial<Owners> = {}) {
-  const updates: Array<{ client: Client; value: DaemonWorkspaceObservation; change: DaemonObservationChange; protocol: number }> = [];
+  const updates: Array<{ client: Client; value: DaemonWorkspaceObservation; change: DaemonObservationChange }> = [];
   const listeners = new Set<() => void>();
   let projectChanged: (id: ProjectId) => void = () => {};
   let identityChanged: (id: typeof threadId) => void = () => {};
@@ -39,8 +39,8 @@ function fixture(context: TestContext, overrides: Partial<Owners> = {}) {
       subscribeProjects: listener => { projectChanged = listener; return () => {}; },
     },
     projects: { getCurrentUpdate: () => null, observe: () => () => {} },
-    publish: (client, value, change, protocol) => {
-      updates.push({ client, value, change, protocol });
+    publish: (client, value, change) => {
+      updates.push({ client, value, change });
       for (const listener of [...listeners]) listener();
     },
     warn: message => warnings.push(message), cooperate: async () => {},
@@ -74,7 +74,7 @@ const thread = (index: number, overrides: Partial<Extract<WorkbenchThreadSidebar
 
 test("one thread tick in a 1,000-row project publishes one small delta that names the thread", async context => {
   let current: WorkbenchThreadSidebarSnapshot = { ...sidebar(a), entries: Array.from({ length: 1_000 }, (_, index) => thread(index)) };
-  const f = fixture(context, { protocol: () => 2 });
+  const f = fixture(context);
   f.owners.threads.peekProject = () => current;
   f.owners.threads.readProject = async () => current;
   const first = f.observe({ kind: "projectThreads", projectIds: [a] });
@@ -92,7 +92,7 @@ test("one thread tick in a 1,000-row project publishes one small delta that name
     update.value);
 });
 
-test("lean rows leave out archived threads and their subagents but count them; protocol 1 keeps full entries", context => {
+test("lean rows leave out archived threads and their subagents but count them", context => {
   const archived = thread(1, { metadata: { archived: true, pinned: false, snoozed: false } });
   const child: WorkbenchThreadSidebarEntry = {
     entryKind: "subagent", title: "child", activityAt: 5, createdAt: 5, updatedAt: 5, cwd: "C:/a", directSubagentIndex: 0,
@@ -102,7 +102,7 @@ test("lean rows leave out archived threads and their subagents but count them; p
     pinned: false, profileId: "", profileName: "", projectId: a,
   };
   const project = { ...sidebar(a), entries: [thread(0, { questionnaireHistory: [], previousTitles: [{ title: "old", usedAt: 1 }] }), archived, child] };
-  const lean = fixture(context, { protocol: () => 2 });
+  const lean = fixture(context);
   lean.owners.threads.peekProject = () => project;
   const value = lean.observe({ kind: "projectThreads", projectIds: [a] });
   assert.ok(value.kind === "projectThreads");
@@ -110,11 +110,21 @@ test("lean rows leave out archived threads and their subagents but count them; p
   assert.deepEqual(rows?.entries.map(entry => entry.title), ["Thread 0 with a realistic title"]);
   assert.ok(rows && "archivedCount" in rows && rows.archivedCount === 1);
   assert.equal("previousTitles" in rows.entries[0]!, false);
-  const legacy = fixture(context);
-  legacy.owners.threads.peekProject = () => project;
-  const full = legacy.observe({ kind: "projectThreads", projectIds: [a] });
-  assert.ok(full.kind === "projectThreads");
-  assert.equal(full.projects[0]?.sidebar?.entries.length, 3);
+});
+
+test("only a client's thread observations make it demand that thread's provider events", async context => {
+  const f = fixture(context);
+  const family = { projectId: a, revision: 1, subscriptionId: randomUUID(), updateKind: "threadObservation" as const, version: 2 as const,
+    error: null, freshness: "fresh" as const, target: { kind: "provider" as const, threadId },
+    entries: [thread(0, { identity: { harness: "codex", threadId } })] };
+  f.owners.identities.findThread = () => ({ threadId, projectId: a, projectRoot: "C:/a", bindings: [] });
+  f.owners.threads.readWorkspaceThread = async () => family;
+  const viewer = { id: "viewer" };
+  f.owner.observe(viewer, "viewer", { subscriptionId: randomUUID(), generation: 1,
+    query: { kind: "thread", projectId: a, threadId: ThreadReferenceSchema.parse(threadId) } });
+  await f.wait(value => value.kind === "thread" && value.phase === "current");
+  assert.ok(f.owner.observedThreadIds(viewer).has(threadId));
+  assert.equal(f.owner.observedThreadIds({ id: "other" }).size, 0);
 });
 
 test("one held project read does not block a different caller's selected project", async context => {

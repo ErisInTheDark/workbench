@@ -73,7 +73,7 @@ async function fixture(context: TestContext, failAttachment = false) {
   const push = (data: WorkbenchClientStateResponse) => socket.observation(query, {
     kind: "appState", phase: "current", failure: null, data,
   }, ++revision);
-  push(await registry.readWorkspaceBrowser(browserStateId, [{ daemonId, attachedLocal: true }]));
+  await push(await registry.readWorkspaceBrowser(browserStateId, [{ daemonId, attachedLocal: true }]));
   return { state, registry, mutations, push,
     intercept: (next: typeof intercept) => { intercept = next; } };
 }

@@ -12,10 +12,9 @@ import type {
   WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot,
   WorkbenchProjectThreadSummaries, WorkbenchThreadDraft,
 } from "workbench-shared/workbench/thread/thread-state";
-import {
-  projectSidebarRow,
-  type WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars,
-  type WorkbenchThreadSidebarRowSnapshot as WorkbenchThreadSidebarSnapshot,
+import type {
+  WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars,
+  WorkbenchThreadSidebarRowSnapshot as WorkbenchThreadSidebarSnapshot,
 } from "workbench-shared/workbench/thread/thread-sidebar-row";
 
 export interface ThreadSidebarClientOptions {
@@ -70,8 +69,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     for (const row of rows?.rows ?? []) {
       const key = this.sourceKey(row.location);
       const entries = entriesBySource.get(key) ?? [];
-      // Protocol 1 apps still send full entries; the store holds only lean rows.
-      entries.push(projectSidebarRow(row.entry));
+      entries.push(row.entry);
       entriesBySource.set(key, entries);
     }
     for (const source of rows?.projects ?? []) {

@@ -8,6 +8,7 @@
  * - projectSidebarRow: strip a full entry (or re-project a row) to its lean row.
  * - projectSidebarRowSnapshot: lean rows for one project's sidebar, excluding archived threads and their subagents.
  * - sidebarRowKey: stable row identity shared by every delta hop.
+ * - coarseActivity: whole-second activity timestamps for observations.
  */
 import { z } from "zod";
 import { WorkbenchThreadSidebarEntryVariants, type WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshotSchema, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
@@ -66,7 +67,11 @@ function leanArc(arc: NonNullable<Exclude<RowSource, { entryKind: "draft" }>["gi
 // Null and absent mean the same for these; storage reads yield null while in-memory rewrites omit them,
 // so rows canonicalise to absent or the same row would flip between the two on every refresh.
 const nullableOptional = ["pendingQuestionnaire", "gitArc", "gitArcPlan"] as const;
-const isLean = (entry: Exclude<RowSource, { entryKind: "draft" }>) => !("questionnaireHistory" in entry)
+/** Observations carry activity to whole seconds, so a burst of agent items inside one second is one tick. */
+export const coarseActivity = (ms: number) => ms - ms % 1_000;
+
+const isLean = (entry: Exclude<RowSource, { entryKind: "draft" }>) => entry.activityAt % 1_000 === 0
+  && !("questionnaireHistory" in entry)
   && !("previousTitles" in entry) && !(entry.gitArc && "intentName" in entry.gitArc)
   && !(entry.gitArcPlan && "intentName" in entry.gitArcPlan)
   && nullableOptional.every(field => !(field in entry) || entry[field] !== null);
@@ -78,6 +83,7 @@ export function projectSidebarRow(entry: RowSource): WorkbenchThreadSidebarRow {
   const { questionnaireHistory: _history, previousTitles: _titles, gitArc, gitArcPlan, pendingQuestionnaire, ...rest } = entry as Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
   return {
     ...rest,
+    activityAt: coarseActivity(rest.activityAt),
     ...(pendingQuestionnaire ? { pendingQuestionnaire } : {}),
     ...(gitArc ? { gitArc: leanArc(gitArc) } : {}),
     ...(gitArcPlan ? { gitArcPlan: { checkpointCommit: gitArcPlan.checkpointCommit, scopePaths: gitArcPlan.scopePaths } } : {}),

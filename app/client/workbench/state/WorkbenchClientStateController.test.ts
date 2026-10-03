@@ -65,7 +65,7 @@ async function fixture(context: TestContext, initial = response(0, {}, "snapshot
   const push = (data: WorkbenchClientStateResponse) => socket.observation(query, {
     kind: "appState", phase: "current", failure: null, data,
   }, ++revision);
-  push(initial);
+  await push(initial);
   return { state, socket, push, query };
 }
 

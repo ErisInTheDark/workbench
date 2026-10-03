@@ -505,8 +505,8 @@ export default class IsolatedWorkbench {
       for (const observer of this.observers) observer();
     });
     client.onEvent(event => {
-      if (event.kind !== "workspace") return;
-      this.events.push({ method: "workspace/updated", params: event.observation });
+      if (event.kind !== "workspaceDelta") return;
+      this.events.push({ method: "workspace/delta", params: event.delta });
       for (const observer of this.observers) observer();
     });
     client.start();
@@ -799,7 +799,7 @@ stream_max_retries = 0
         ["questionnaire/requested", "questionnaire/resolved", "turn/completed", "item/completed", "item/started"]
           .includes(event.method ?? "")
         || event.method === workbenchTranscriptNotifications.streamed.method
-        || event.method === "workspace/updated"), signal);
+        || event.method === "workspace/delta"), signal);
     }
   }
 

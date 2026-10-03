@@ -680,6 +680,10 @@ test("socket reload preserves canonical publications without resolving their ide
     const item: ThreadItem = { type: "reasoning", id: "native-reasoning", summary: ["title"], content: [] };
     const [admitted] = await admitProviderThreadItems(owners, native, [item]);
     controller = create(controller.detachForReload());
+    // Thread-scoped provider events only reach connections observing that thread.
+    controller["transcriptSubscriptions"].set("view", {
+      client, connectionId: "connection", subscriptionId: "view", threadId: parent.threadId, turnLimit: 1,
+    });
     const publication = new CodexProviderObservations(owners).native({ method: "item/reasoning/textDelta",
       params: { threadId: native.nativeThreadId, turnId: native.nativeTurnId, itemId: item.id, delta: "native-parent is text" } });
     await controller.sendJsonToClient(client, { ...publication.notification, workbenchHarness: "codex" });

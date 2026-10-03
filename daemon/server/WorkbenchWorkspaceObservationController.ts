@@ -5,15 +5,15 @@
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   DaemonWorkspaceObserveSchema, WorkspaceReleaseSchema, daemonObservationShape,
-  type DaemonWorkspaceObserve, type DaemonWorkspaceObservation, type WorkspaceProtocol,
+  type DaemonWorkspaceObserve, type DaemonWorkspaceObservation,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { diffObservationValue, type ObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import {
-  hasUnarchivedSidebarWork, WorkbenchHarnessSchema, type WorkbenchThreadSidebarSnapshot,
+  hasUnarchivedSidebarWork, WorkbenchHarnessSchema, type WorkbenchProjectThreadSummary, type WorkbenchThreadSidebarSnapshot,
 } from "workbench-shared/workbench/thread/thread-state";
-import { projectSidebarRow, projectSidebarRowSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
+import { coarseActivity, projectSidebarRow, projectSidebarRowSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
@@ -35,7 +35,6 @@ interface Observation<Client extends object> {
   client: Client;
   connectionId: string;
   request: DaemonWorkspaceObserve;
-  protocol: WorkspaceProtocol;
   value: DaemonWorkspaceObservation;
   /** True while `observe` runs: its return value already carries these changes, so nothing is published. */
   opening: boolean;
@@ -80,10 +79,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       "peekProject" | "readProject" | "peekProjectSummary" | "getProjectThreadSummary" | "subscribeProjects" | "readWorkspaceThread">;
     projects: Pick<WorkbenchProjectSnapshotController, "observe" | "getCurrentUpdate">;
     stats?: Pick<WorkbenchStatsController, "observe">;
-    /** The connection's negotiated protocol; protocol 1 peers get full values and full sidebar entries. */
-    protocol?: (client: Client) => WorkspaceProtocol;
-    /** `protocol` is the observation's own, fixed at observe time, so its value shape and delivery always agree. */
-    publish(client: Client, observation: DaemonWorkspaceObservation, change: DaemonObservationChange, protocol: WorkspaceProtocol): void;
+    publish(client: Client, observation: DaemonWorkspaceObservation, change: DaemonObservationChange): void;
     warn(message: string): void;
     cooperate?: () => Promise<void>;
   }) {
@@ -113,10 +109,9 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       throw new Error("Workspace observation arguments belong to an obsolete generation.");
     }
     if (existing) this.retire(existing);
-    const protocol = this.owners.protocol?.(client) ?? 1;
-    const initial = { ...this.initial(request, protocol), revision: initialRevision };
+    const initial = { ...this.initial(request), revision: initialRevision };
     const observation: Observation<Client> = {
-      client, connectionId, request, protocol, value: initial, opening: true, cancellation: new AbortController(),
+      client, connectionId, request, value: initial, opening: true, cancellation: new AbortController(),
       dirty: new Set(), work: null, identityRead: null, stopTree: null, stats: null,
     };
     this.observations.set(key, observation);
@@ -169,6 +164,20 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     }
   }
 
+  /** Threads this client observes: requested references plus every thread in each observed family. */
+  observedThreadIds(client: Client) {
+    const ids = new Set<string>();
+    for (const observation of this.observations.values()) {
+      if (observation.client !== client || observation.request.query.kind !== "thread") continue;
+      ids.add(observation.request.query.threadId);
+      if (observation.value.kind !== "thread") continue;
+      for (const entry of observation.value.data?.entries ?? []) {
+        if (entry.entryKind !== "draft") ids.add(entry.identity.threadId);
+      }
+    }
+    return ids;
+  }
+
   captureInterests() {
     return [...this.observations.values()].map(({ client, connectionId, request, value }) => ({
       client, connectionId, request, revision: value.revision,
@@ -181,12 +190,22 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     for (const observation of this.observations.values()) this.retire(observation);
   }
 
-  /** Protocol 2 receivers get lean rows without archived threads; protocol 1 keeps full entries. */
-  private sidebar(protocol: WorkspaceProtocol, sidebar: WorkbenchThreadSidebarSnapshot) {
-    return protocol >= 2 ? projectSidebarRowSnapshot(sidebar) : sidebar;
+  /** Observers get lean rows without archived threads. */
+  private sidebar(sidebar: WorkbenchThreadSidebarSnapshot) {
+    return projectSidebarRowSnapshot(sidebar);
   }
 
-  private initial(request: DaemonWorkspaceObserve, protocol: WorkspaceProtocol): DaemonWorkspaceObservation {
+  /** Activity to whole seconds, so a burst of agent items inside one second is one summary tick. */
+  private summary(summary: WorkbenchProjectThreadSummary): WorkbenchProjectThreadSummary {
+    return {
+      ...summary,
+      lastThreadUpdateAt: summary.lastThreadUpdateAt === null ? null : coarseActivity(summary.lastThreadUpdateAt),
+      unsettledThreads: summary.unsettledThreads.map(entry => ({ ...entry, activityAt: coarseActivity(entry.activityAt) })),
+      pinnedThreads: summary.pinnedThreads.map(entry => ({ ...entry, activityAt: coarseActivity(entry.activityAt) })),
+    };
+  }
+
+  private initial(request: DaemonWorkspaceObserve): DaemonWorkspaceObservation {
     const envelope = { subscriptionId: request.subscriptionId, generation: request.generation, revision: 0 };
     const catalogue = this.owners.catalogue.getFacts();
     switch (request.query.kind) {
@@ -208,7 +227,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         projects: request.query.projectIds.map(projectId => {
           const sidebar = this.owners.threads.peekProject(projectId);
           return { projectId, phase: sidebar ? "current" as const : "pending" as const, failure: null,
-            sidebar: sidebar ? this.sidebar(protocol, sidebar) : null };
+            sidebar: sidebar ? this.sidebar(sidebar) : null };
         }),
       };
       case "archivedThreads": {
@@ -269,7 +288,8 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     const value = observation.value;
     if (value.kind === "summaries") {
       const projects = selected.flatMap(id => {
-        const current = this.owners.threads.peekProjectSummary(id)
+        const peeked = this.owners.threads.peekProjectSummary(id);
+        const current = (peeked ? this.summary(peeked) : null)
           ?? value.projects.find(project => project.projectId === id);
         if (!current) observation.dirty.add(id);
         return current ? [current] : [];
@@ -297,7 +317,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       const projects = selected.map(projectId => {
         const sidebar = this.owners.threads.peekProject(projectId);
         const retained = value.projects.find(project => project.projectId === projectId);
-        if (sidebar) return { projectId, phase: "current" as const, failure: null, sidebar: this.sidebar(observation.protocol, sidebar) };
+        if (sidebar) return { projectId, phase: "current" as const, failure: null, sidebar: this.sidebar(sidebar) };
         observation.dirty.add(projectId);
         return retained ?? { projectId, phase: "pending" as const, failure: null, sidebar: null };
       });
@@ -382,7 +402,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     if (kind === "summaries") {
       const read = await this.owners.threads.getProjectThreadSummary(projectId);
       if (!this.active(observation)) return;
-      const summary = this.owners.threads.peekProjectSummary(projectId) ?? read;
+      const summary = this.summary(this.owners.threads.peekProjectSummary(projectId) ?? read);
       observation.dirty.delete(projectId);
       if (observation.value.kind !== "summaries" || !this.selectedProjects(observation).includes(projectId)) return;
       const value = observation.value;
@@ -413,7 +433,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       });
     } else if (value.kind === "projectThreads") {
       const projects = value.projects.map(project => project.projectId === projectId
-        ? { projectId, phase: "current" as const, failure: null, sidebar: this.sidebar(observation.protocol, sidebar) } : project);
+        ? { projectId, phase: "current" as const, failure: null, sidebar: this.sidebar(sidebar) } : project);
       const failed = projects.find(project => project.failure);
       this.update(observation, {
         kind: "projectThreads", phase: observation.dirty.size ? "pending" : failed ? "stale" : "current",
@@ -486,7 +506,8 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
             projectId: query.projectId, subscriptionId: observation.request.subscriptionId,
             target: { kind: "provider", threadId: identity.threadId },
           });
-          this.update(observation, { kind: "thread", phase: "current", failure: null, data });
+          this.update(observation, { kind: "thread", phase: "current", failure: null,
+            data: { ...data, entries: data.entries.map(entry => ({ ...entry, activityAt: coarseActivity(entry.activityAt) })) } });
         } catch (error) {
           if (!this.active(observation)) return;
           const message = failure(error);
@@ -551,7 +572,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     if (!delta) return;
     observation.value = { ...next, revision: previous.revision + 1 };
     if (observation.opening) return;
-    try { this.owners.publish(observation.client, observation.value, { baseRevision: previous.revision, delta }, observation.protocol); }
+    try { this.owners.publish(observation.client, observation.value, { baseRevision: previous.revision, delta }); }
     catch (error) { this.owners.warn(`Workspace observation delivery failed: ${failure(error)}`); }
   }
 

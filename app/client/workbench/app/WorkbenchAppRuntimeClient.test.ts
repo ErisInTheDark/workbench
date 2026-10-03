@@ -14,15 +14,15 @@ test("runtime loading is independent and pushed bundle changes mark this tab sta
   const socket = await fixture.open();
   const query = await socket.request("workspace/observe");
   const data = { frontendGeneration: loaded, reloadDirt: { dirtyScopes: [], pendingScopes: [], error: null } };
-  socket.observation(query, { kind: "runtime", phase: "current", failure: null, data });
+  await socket.observation(query, { kind: "runtime", phase: "current", failure: null, data });
   assert.equal(client.getSnapshot().tabOutOfDate, false);
-  socket.observation(query, { kind: "runtime", phase: "current", failure: null,
+  await socket.observation(query, { kind: "runtime", phase: "current", failure: null,
     data: { ...data, frontendGeneration: { ...loaded, stylesheet: "new-css" } } }, 2);
   assert.equal(client.getSnapshot().tabOutOfDate, true);
-  socket.observation(query, { kind: "runtime", phase: "failed", failure: "runtime read failed", data: null }, 3);
+  await socket.observation(query, { kind: "runtime", phase: "failed", failure: "runtime read failed", data: null }, 3);
   assert.equal(client.getSnapshot().tabOutOfDate, true);
   assert.equal(client.getSnapshot().error, "runtime read failed");
-  socket.observation(query, { kind: "runtime", phase: "current", failure: null, data }, 4);
+  await socket.observation(query, { kind: "runtime", phase: "current", failure: null, data }, 4);
   assert.equal(client.getSnapshot().error, null);
 });
 

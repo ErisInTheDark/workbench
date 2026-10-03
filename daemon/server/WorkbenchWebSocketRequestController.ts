@@ -59,9 +59,9 @@ import { dimWebSocketDetail, formatWebSocketBytes as formatBytes } from "workben
 import { transcriptSnapshotForProtocol } from "./database/transcript/transcript-wire-compatibility";
 import WorkbenchWorkspaceObservationController, { type DaemonObservationChange } from "./WorkbenchWorkspaceObservationController";
 import {
-  DaemonWorkspaceObserveSchema, WorkspaceHelloSchema, WorkspaceReleaseSchema, negotiateWorkspaceProtocol,
-  WORKSPACE_DELTA_METHOD, WORKSPACE_HELLO_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_UPDATED_METHOD,
-  type DaemonWorkspaceObservation, type WorkspaceProtocol,
+  DaemonWorkspaceObserveSchema, WorkspaceReleaseSchema,
+  WORKSPACE_DELTA_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_UPDATED_METHOD,
+  type DaemonWorkspaceObservation,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { describeObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 
@@ -113,8 +113,6 @@ export interface WorkbenchWebSocketRequestControllerState {
   statsObservers?: Array<{ client: BridgeClient; connectionId: string }>;
   transcriptSubscriptions?: WorkbenchWebSocketTranscriptSubscriptionState[];
   workspaceInterests?: ReturnType<WorkbenchWorkspaceObservationController<BridgeClient>["captureInterests"]>;
-  /** Negotiated `workspace/hello` protocol per live client; absent clients are protocol 1. */
-  workspaceProtocols?: Array<{ client: BridgeClient; protocol: WorkspaceProtocol }>;
 }
 
 export interface WorkbenchWebSocketReloadDirtObserverState {
@@ -230,7 +228,6 @@ export default class WorkbenchWebSocketRequestController {
   private readonly workspaceOwners: WorkbenchWebSocketRequestControllerOptions["workspace"];
   private workspace: WorkbenchWorkspaceObservationController<BridgeClient> | null = null;
   private workspaceInterests: NonNullable<WorkbenchWebSocketRequestControllerState["workspaceInterests"]> = [];
-  private readonly workspaceProtocols = new Map<BridgeClient, WorkspaceProtocol>();
   private readonly writeLine: NonNullable<WorkbenchWebSocketRequestControllerOptions["writeLine"]>;
 
   constructor({
@@ -282,7 +279,6 @@ export default class WorkbenchWebSocketRequestController {
     this.stats = stats;
     this.workspaceOwners = workspace;
     this.workspaceInterests = initialState?.workspaceInterests ?? [];
-    for (const { client, protocol } of initialState?.workspaceProtocols ?? []) this.workspaceProtocols.set(client, protocol);
     for (const state of initialState?.pending ?? []) this.restorePending(state);
     for (const observer of initialState?.statsObservers ?? []) this.statsObservers.set(observer.connectionId, observer);
     for (const subscription of initialState?.transcriptSubscriptions ?? []) {
@@ -296,8 +292,7 @@ export default class WorkbenchWebSocketRequestController {
     const workspace = new WorkbenchWorkspaceObservationController<BridgeClient>({
       ...this.workspaceOwners,
       reload: { read: () => this.reload.getReloadDirtSnapshot(), subscribe: listener => this.reload.subscribeReloadDirt(listener) },
-      protocol: client => this.workspaceProtocols.get(client) ?? 1,
-      publish: (client, params, change, protocol) => this.publishWorkspace(client, params, change, protocol),
+      publish: (client, params, change) => this.publishWorkspace(client, params, change),
       warn: message => this.writeLine(`[workspace] ${message}`),
     });
     this.workspace = workspace;
@@ -316,21 +311,34 @@ export default class WorkbenchWebSocketRequestController {
     }
   }
 
-  /** Protocol 2 clients get keyed deltas after each first value; protocol 1 clients keep full values. */
-  private publishWorkspace(client: BridgeClient, value: DaemonWorkspaceObservation, change: DaemonObservationChange,
-    protocol: WorkspaceProtocol) {
-    const deltas = protocol >= 2 && change !== null;
-    const message = deltas
+  /** Every change after an observation's first value travels as a keyed delta. */
+  private publishWorkspace(client: BridgeClient, value: DaemonWorkspaceObservation, change: DaemonObservationChange) {
+    const message = change
       ? { method: WORKSPACE_DELTA_METHOD, params: {
         subscriptionId: value.subscriptionId, generation: value.generation, kind: value.kind,
         baseRevision: change.baseRevision, revision: value.revision, delta: change.delta,
       } }
       : { method: WORKSPACE_UPDATED_METHOD, params: value };
-    const eventDetail = deltas
-      ? `${value.kind} ${describeObservationDelta(change.delta)}`
-      : `${value.kind} reset=${change === null ? "first" : "legacy-peer"}`;
+    const eventDetail = change ? `${value.kind} ${describeObservationDelta(change.delta)}` : `${value.kind} reset=restore`;
     void this.sendJsonToClient(client, message, { eventDetail, warnAboveBytes: WORKSPACE_PUSH_WARNING_BYTES })
       .catch(error => this.reportSendFailure({ method: message.method }, error));
+  }
+
+  /**
+   * Provider events about one thread only go to connections observing it (a workspace thread observation or a
+   * transcript subscription); thread-less events (account, models) go everywhere.
+   */
+  private wantsProviderEvent(client: BridgeClient, envelope: Record<string, unknown> | null) {
+    if (!envelope || !ProviderKeySchema.safeParse(envelope[WORKBENCH_HARNESS_FIELD]).success) return true;
+    const params = asRecord(envelope.params);
+    const thread = asRecord(params?.thread);
+    const threadId = typeof params?.threadId === "string" ? params.threadId
+      : typeof thread?.id === "string" ? thread.id : null;
+    if (!threadId) return true;
+    for (const subscription of this.transcriptSubscriptions.values()) {
+      if (subscription.client === client && subscription.threadId === threadId) return true;
+    }
+    return this.workspace?.observedThreadIds(client).has(threadId) ?? false;
   }
 
   private observeStats() {
@@ -387,8 +395,7 @@ export default class WorkbenchWebSocketRequestController {
     const isRequest = requestId === null || typeof requestId === "number" || typeof requestId === "string";
     const transcriptRequest = decodeWorkbenchTranscriptRequest(method, message.params);
     const daemonRequest = this.daemonRequests.accepts(method);
-    const workspaceRequest = method === WORKSPACE_OBSERVE_METHOD || method === WORKSPACE_RELEASE_METHOD
-      || method === WORKSPACE_HELLO_METHOD;
+    const workspaceRequest = method === WORKSPACE_OBSERVE_METHOD || method === WORKSPACE_RELEASE_METHOD;
     const workbenchRequest = daemonRequest || method.startsWith("voice/") || method === REPO_RUNTIME_READ_METHOD
       || method.startsWith("workbench/thread-state/")
       || workspaceRequest
@@ -416,16 +423,9 @@ export default class WorkbenchWebSocketRequestController {
         try {
           this.startWorkspace();
           if (!this.workspace) throw new Error("Workspace observation support is unavailable.");
-          let result: object;
-          if (method === WORKSPACE_HELLO_METHOD) {
-            const protocol = negotiateWorkspaceProtocol(WorkspaceHelloSchema.parse(message.params).protocol);
-            this.workspaceProtocols.set(client, protocol);
-            result = { protocol };
-          } else {
-            result = method === WORKSPACE_OBSERVE_METHOD
-              ? this.workspace.observe(client, connectionId, DaemonWorkspaceObserveSchema.parse(message.params))
-              : this.workspace.release(connectionId, WorkspaceReleaseSchema.parse(message.params));
-          }
+          const result = method === WORKSPACE_OBSERVE_METHOD
+            ? this.workspace.observe(client, connectionId, DaemonWorkspaceObserveSchema.parse(message.params))
+            : this.workspace.release(connectionId, WorkspaceReleaseSchema.parse(message.params));
           await this.sendJsonToClient(client, { id: requestId, result });
         } catch (error) {
           const invalid = error instanceof z.ZodError;
@@ -568,6 +568,7 @@ export default class WorkbenchWebSocketRequestController {
     this.assertActive();
     const signal = this.generation.signal;
     const envelope = asRecord(message);
+    if (!this.wantsProviderEvent(client, envelope)) return;
     const eventMethod = typeof envelope?.method === "string" ? envelope.method : null;
     const eventHarness = envelope?.[WORKBENCH_HARNESS_FIELD];
     const responseId = readResponseId(message);
@@ -645,7 +646,6 @@ export default class WorkbenchWebSocketRequestController {
     this.statsObservers.delete(connectionId);
     this.unsubscribeTranscriptConnection(connectionId);
     this.workspace?.disconnect(connectionId);
-    this.workspaceProtocols.delete(client);
     this.workspaceInterests = this.workspaceInterests.filter(interest => interest.connectionId !== connectionId);
     const cleanup = await Promise.allSettled([
       this.voice?.controller.disconnect(connectionId),
@@ -673,7 +673,6 @@ export default class WorkbenchWebSocketRequestController {
       statsObservers: [...this.statsObservers.values()],
       transcriptSubscriptions: [...this.transcriptSubscriptions.values()].map((subscription) => ({ ...subscription })),
       workspaceInterests: [...this.workspaceInterests],
-      workspaceProtocols: [...this.workspaceProtocols].map(([client, protocol]) => ({ client, protocol })),
     };
   }
 

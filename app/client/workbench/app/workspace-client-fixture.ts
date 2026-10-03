@@ -5,7 +5,8 @@
  */
 import { WorkbenchAppRpcRequestSchema, type WorkbenchAppRpcRequest } from "workbench-shared/http/workbench-app-rpc";
 import type { WorkbenchAppNetworkEvent } from "workbench-shared/http/workbench-app-events";
-import type { WorkspaceObservation } from "workbench-shared/workbench/workspace/workspace-observation";
+import { workspaceObservationShape, type WorkspaceObservation } from "workbench-shared/workbench/workspace/workspace-observation";
+import { diffObservationValue } from "workbench-shared/workbench/workspace/observation-patch";
 import WorkbenchAppRpcClient from "./WorkbenchAppRpcClient";
 import WorkbenchWorkspaceClient from "./WorkbenchWorkspaceClient";
 
@@ -27,12 +28,8 @@ export class WorkspaceTestSocket extends EventTarget {
     this.readyState = WebSocket.CLOSED;
     this.dispatchEvent(new Event("close"));
   }
-  /** Protocol answered to `workspace/hello`, as a current app server does; 1 imitates a server without deltas. */
-  helloProtocol = 2;
   send(value: string) {
-    const request = WorkbenchAppRpcRequestSchema.parse(JSON.parse(value));
-    this.sent.push(request);
-    if (request.method === "workspace/hello") queueMicrotask(() => this.reply(request, { protocol: this.helloProtocol }));
+    this.sent.push(WorkbenchAppRpcRequestSchema.parse(JSON.parse(value)));
     for (const listener of [...this.waiting]) listener();
   }
   request<Method extends WorkbenchAppRpcRequest["method"]>(method: Method, after = 0,
@@ -55,13 +52,33 @@ export class WorkspaceTestSocket extends EventTarget {
     this.deliver({ id: request.id, error: { code: -32000, message } });
   }
   event(event: WorkbenchAppNetworkEvent) { this.deliver(event); }
-  observation(request: Extract<WorkbenchAppRpcRequest, { method: "workspace/observe" }>,
+  /**
+   * Publishes like the app server: the first value answers the observe request, later values travel as keyed
+   * deltas from the last value sent for that subscription generation. `response` forces an observe reply.
+   */
+  async observation(request: Extract<WorkbenchAppRpcRequest, { method: "workspace/observe" }>,
     payload: ObservationPayload, revision = 1, response = false) {
-    const observation: WorkspaceObservation = { ...payload,
-      subscriptionId: request.params.subscriptionId, generation: request.params.generation, revision };
-    if (response) this.reply(request, observation);
-    else this.event({ kind: "workspace", observation });
+    // Tests mutate payload objects between publications; keep a private copy as the published baseline.
+    const observation: WorkspaceObservation = structuredClone({ ...payload,
+      subscriptionId: request.params.subscriptionId, generation: request.params.generation, revision });
+    const key = `${observation.subscriptionId}/${observation.generation}`;
+    const previous = this.published.get(key);
+    if (response || !previous) {
+      this.reply(request, observation);
+      if (!previous || previous.revision < revision) this.published.set(key, observation);
+      // Responses resolve through promise hops; let the client accept the value before the caller asserts.
+      for (let hop = 0; hop < 20; hop++) await Promise.resolve();
+      return;
+    }
+    const delta = diffObservationValue(previous, { ...observation, revision: previous.revision }, workspaceObservationShape(observation.kind));
+    if (!delta) return;
+    this.published.set(key, observation);
+    this.event({ kind: "workspaceDelta", delta: {
+      subscriptionId: observation.subscriptionId, generation: observation.generation, kind: observation.kind,
+      baseRevision: previous.revision, revision, delta,
+    } });
   }
+  private readonly published = new Map<string, WorkspaceObservation>();
   private deliver(value: object) {
     this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(value) }));
   }

@@ -3,12 +3,12 @@
  * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests and publication fences.
  */
 import {
-  WorkspaceHelloSchema, WorkspaceObserveSchema, WorkspaceReleaseSchema, negotiateWorkspaceProtocol, workspaceObservationShape,
+  WorkspaceObserveSchema, WorkspaceReleaseSchema, workspaceObservationShape,
   type WorkspaceArchivedThreads, type WorkspaceObservationDelta, type WorkspaceObserve, type WorkspaceObservation,
-  type WorkspaceProtocol, type WorkspaceThreadRows,
+  type WorkspaceThreadRows,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { diffObservationValue } from "workbench-shared/workbench/workspace/observation-patch";
-import { projectSidebarRowSnapshot, type WorkbenchThreadSidebarRowSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
+import type { WorkbenchThreadSidebarRowSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -53,8 +53,6 @@ type Observation = ReturnType<WorkbenchDaemonSource["observe"]>;
 type Json = z.infer<ReturnType<typeof z.json>>;
 interface Interest {
   request: WorkspaceObserve;
-  /** Fixed at observe time: only observations opened after `workspace/hello` deliver deltas. */
-  protocol: WorkspaceProtocol;
   value: WorkspaceObservation;
   /** True while `observe` runs: its return value already carries these changes, so nothing is published. */
   opening: boolean;
@@ -73,7 +71,6 @@ interface TranscriptSubscription {
 
 export default class WorkbenchWorkspaceRequestController {
   private readonly interests = new Map<string, Interest>();
-  private protocol: WorkspaceProtocol = 1;
   private readonly pendingRefresh = new Set<Interest>();
   private refreshing = false;
   private closed = false;
@@ -104,7 +101,6 @@ export default class WorkbenchWorkspaceRequestController {
       read(browserStateId: string | null): Promise<Extract<WorkspaceObservation, { kind: "appState" }>["data"]>;
       subscribe(browserStateId: string | null, listener: () => void): () => void;
     };
-    publish(value: WorkspaceObservation): void;
     publishDelta(delta: WorkspaceObservationDelta): void;
     publishVoice(event: VoiceSessionEvent): void;
     publishThreadEvent(notification: WorkbenchClientNotification, harness: WorkbenchHarness, daemonId: DaemonId): void;
@@ -429,7 +425,7 @@ export default class WorkbenchWorkspaceRequestController {
     }
     if (existing) this.retire(existing);
     const interest: Interest = {
-      request, protocol: this.protocol, opening: true, stop: [], sources: new Map(), owner: null, thread: null,
+      request, opening: true, stop: [], sources: new Map(), owner: null, thread: null,
       value: { ...this.initial(request), subscriptionId: request.subscriptionId, generation: request.generation, revision: 0 },
     };
     this.interests.set(request.subscriptionId, interest);
@@ -761,7 +757,7 @@ export default class WorkbenchWorkspaceRequestController {
       const fact = interest.sources.get(daemonId)?.observation.getSnapshot();
       const rows = fact?.value?.kind === "projectThreads" ? fact.value.projects : [];
       // Sources already hold lean rows; the projection is identity-preserving for them.
-      const lean = rows.flatMap(row => row.sidebar ? [projectSidebarRowSnapshot(row.sidebar)] : []);
+      const lean = rows.flatMap(row => row.sidebar ? [row.sidebar] : []);
       sidebars.set(daemonId, { projects: lean });
       for (const projectId of ids) {
         const row = rows.find(row => row.projectId === projectId);
@@ -801,20 +797,10 @@ export default class WorkbenchWorkspaceRequestController {
     if (!delta) return;
     interest.value = { ...next, revision: previous.revision + 1 };
     if (interest.opening) return;
-    if (interest.protocol >= 2) {
-      this.options.publishDelta({
-        subscriptionId: interest.value.subscriptionId, generation: interest.value.generation, kind: interest.value.kind,
-        baseRevision: previous.revision, revision: interest.value.revision, delta,
-      });
-    } else {
-      this.options.publish(interest.value);
-    }
-  }
-
-  /** Once per browser connection, before observing: protocol 2 browsers receive keyed deltas after each first value. */
-  hello(input: unknown) {
-    this.protocol = negotiateWorkspaceProtocol(WorkspaceHelloSchema.parse(input).protocol);
-    return { protocol: this.protocol };
+    this.options.publishDelta({
+      subscriptionId: interest.value.subscriptionId, generation: interest.value.generation, kind: interest.value.kind,
+      baseRevision: previous.revision, revision: interest.value.revision, delta,
+    });
   }
 
   private active(interest: Interest) {

@@ -60,12 +60,13 @@ export type ObservationShape = {
 };
 export type ObservationShapeNode =
   | { kind: "object"; shape: ObservationShape }
-  | { kind: "record"; value: z.ZodType }
+  | { kind: "record"; value: z.ZodType; shape?: ObservationShape }
   | { kind: "keyed"; key: (item: never) => string; item: z.ZodType; shape?: ObservationShape };
 
 export const observationShape = {
   object: (shape: ObservationShape): ObservationShapeNode => ({ kind: "object", shape }),
-  record: (value: z.ZodType): ObservationShapeNode => ({ kind: "record", value }),
+  /** `shape` decomposes each record value (e.g. keyed lists inside it); values are still validated whole. */
+  record: (value: z.ZodType, shape?: ObservationShape): ObservationShapeNode => ({ kind: "record", value, shape }),
   keyed: <Item>(itemKey: (item: Item) => string, item: z.ZodType, shape?: ObservationShape): ObservationShapeNode => ({
     kind: "keyed", key: itemKey as (item: never) => string, item, shape,
   }),
@@ -107,13 +108,15 @@ function diffSelectedFields(previous: Fields, next: Fields, shape: ObservationSh
     if (before === after) continue;
     const node = shape.fields?.[field];
     if (node && isFields(before) && isFields(after) && (node.kind === "object" || node.kind === "record")) {
-      const nested = node.kind === "object" ? diffFields(before, after, node.shape) : diffFields(before, after, {});
+      const nested = node.kind === "object" ? diffFields(before, after, node.shape) : diffFields(before, after, recordShape(node, after));
       if (!empty(nested)) (delta.objects ??= {})[field] = nested;
       continue;
     }
     if (node?.kind === "keyed" && Array.isArray(before) && Array.isArray(after)) {
       const keyed = diffKeyed(before, after, node);
-      if (keyed) (delta.collections ??= {})[field] = keyed;
+      // Duplicate keys cannot be patched by key; such a list is replaced whole rather than failing the publish.
+      if (keyed === "replace") (delta.set ??= {})[field] = json(after);
+      else if (keyed) (delta.collections ??= {})[field] = keyed;
       continue;
     }
     if (!areDeeplyEqual(before, after)) (delta.set ??= {})[field] = json(after);
@@ -121,11 +124,18 @@ function diffSelectedFields(previous: Fields, next: Fields, shape: ObservationSh
   return delta;
 }
 
-function diffKeyed(previous: readonly unknown[], next: readonly unknown[], node: Extract<ObservationShapeNode, { kind: "keyed" }>): KeyedDelta | null {
+/** Every record key decomposes with the record's value shape. */
+function recordShape(node: Extract<ObservationShapeNode, { kind: "record" }>, record: Fields): ObservationShape {
+  if (!node.shape) return {};
+  const shape = node.shape;
+  return { fields: Object.fromEntries(Object.keys(record).map(key => [key, { kind: "object" as const, shape }])) };
+}
+
+function diffKeyed(previous: readonly unknown[], next: readonly unknown[], node: Extract<ObservationShapeNode, { kind: "keyed" }>): KeyedDelta | null | "replace" {
   const keyOf = node.key as (item: unknown) => string;
   const before = new Map(previous.map(item => [keyOf(item), item]));
   const nextKeys = next.map(keyOf);
-  if (new Set(nextKeys).size !== nextKeys.length) throw new Error("Keyed observation collection has duplicate keys.");
+  if (new Set(nextKeys).size !== nextKeys.length || before.size !== previous.length) return "replace";
   const delta: KeyedDelta = {};
   const nextSet = new Set(nextKeys);
   for (const itemKey of before.keys()) if (!nextSet.has(itemKey)) (delta.remove ??= []).push(itemKey);
@@ -208,8 +218,10 @@ function applyFields(target: Fields, delta: ObservationDelta, shape: Observation
     if (!node || node.kind === "keyed") throw new Error(`Observation delta patches unknown object ${path}.${field}.`);
     if (!isFields(current)) throw new Error(`Observation delta patches missing object ${path}.${field}.`);
     if (node.kind === "record") {
-      const record = applyFields(current, { set: nested.set, unset: nested.unset }, {}, `${path}.${field}`);
-      for (const recordKey of Object.keys(nested.set ?? {})) record[recordKey] = parseItem(node.value, record[recordKey], `${path}.${field}`);
+      const record = applyFields(current, nested, recordShape(node, current), `${path}.${field}`);
+      for (const recordKey of [...Object.keys(nested.set ?? {}), ...Object.keys(nested.objects ?? {})]) {
+        record[recordKey] = parseItem(node.value, record[recordKey], `${path}.${field}`);
+      }
       next[field] = record;
     } else {
       const applied = applyFields(current, nested, node.shape, `${path}.${field}`);

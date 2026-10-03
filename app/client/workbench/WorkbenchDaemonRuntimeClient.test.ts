@@ -18,26 +18,26 @@ test("newer runtime facts cannot be replaced by an old response and only success
   assert.deepEqual(request.params.query, { kind: "daemonRuntime", daemonId });
   let completed = 0;
   owner.subscribeServerReloadCompleted(() => { completed++; });
-  const update = (revision: number, pendingScopes: WorkbenchReloadScope[], error: string | null = null, response = false) => {
+  const update = async (revision: number, pendingScopes: WorkbenchReloadScope[], error: string | null = null, response = false) => {
     const data: Extract<WorkspaceObservation, { kind: "daemonRuntime" }>["data"] = {
       dirtyScopes: [{ dependantScopes: [], description: "Core", destructive: false, scope: "server:core" }], pendingScopes, error,
     };
-    socket.observation(request, { kind: "daemonRuntime", daemonId, data, phase: "current", failure: null }, revision, response);
+    await socket.observation(request, { kind: "daemonRuntime", daemonId, data, phase: "current", failure: null }, revision, response);
   };
-  update(2, ["server:core"]);
-  update(1, [], null, true);
+  await update(2, ["server:core"]);
+  await update(1, [], null, true);
   assert.deepEqual(owner.getSnapshot().pendingScopes, ["server:core"]);
-  update(3, [], "reload failed");
-  update(4, ["client:compiler"]);
-  update(5, []);
+  await update(3, [], "reload failed");
+  await update(4, ["client:compiler"]);
+  await update(5, []);
   assert.equal(completed, 0);
-  update(6, ["server:database"]);
-  update(7, []);
+  await update(6, ["server:database"]);
+  await update(7, []);
   assert.equal(completed, 1);
-  update(7, []);
+  await update(7, []);
   assert.equal(completed, 1);
   owner.dispose();
-  update(8, ["server:core"]);
+  await update(8, ["server:core"]);
   assert.deepEqual(owner.getSnapshot().pendingScopes, []);
   assert.equal(socket.readyState, WebSocket.OPEN);
 });

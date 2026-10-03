@@ -79,14 +79,14 @@ test("mounted project navigation keeps its identity while project facts change",
 
   const query = await socket.request("workspace/observe", 0,
     request => request.params.query.kind === "projects");
-  socket.observation(query, { kind: "projects", phase: "current", failure: null, data: facts(true) });
+  await socket.observation(query, { kind: "projects", phase: "current", failure: null, data: facts(true) });
   assert.equal(client.projectNavigator, navigator);
   assert.equal(navigator.href(route), "/bak/@/");
 
   const renamed = facts(true);
   renamed.projects[0] = { ...renamed.projects[0]!, matchKey: "remote://github.com/team/renamed",
     locations: [] };
-  socket.observation(query, { kind: "projects", phase: "current", failure: null, data: renamed }, 2);
+  await socket.observation(query, { kind: "projects", phase: "current", failure: null, data: renamed }, 2);
   assert.equal(client.projectNavigator, navigator);
   assert.equal(navigator.href(route), "/renamed/@/");
 });
@@ -114,7 +114,7 @@ test("project row observations hand off without blanking visible threads", async
   });
   const projects = await socket.request("workspace/observe", 0,
     request => request.params.query.kind === "projects");
-  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data });
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data });
 
   assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
   const firstQuery = await socket.request("workspace/observe", 0, request =>
@@ -128,7 +128,7 @@ test("project row observations hand off without blanking visible threads", async
       lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false },
     },
   } satisfies WorkspaceThreadRows["rows"][number];
-  socket.observation(firstQuery, { kind: "projectThreads", phase: "current", failure: null,
+  await socket.observation(firstQuery, { kind: "projectThreads", phase: "current", failure: null,
     data: { rows: [firstRow], projects: [] } });
   await Promise.resolve();
   assert.deepEqual(snapshots.at(-1)?.logicalThreads?.map(row => row.entry.title), ["first"]);
@@ -138,7 +138,7 @@ test("project row observations hand off without blanking visible threads", async
     [logicalId, secondId]))).ok, true);
   const added = await socket.request("workspace/observe", beforeAdd, request =>
     request.params.query.kind === "projectThreads" && request.params.query.projects?.length === 2);
-  socket.observation(added, { kind: "projectThreads", phase: "pending", failure: null,
+  await socket.observation(added, { kind: "projectThreads", phase: "pending", failure: null,
     data: { rows: [], projects: [] } });
   await Promise.resolve();
   assert.deepEqual(snapshots.at(-1)?.logicalThreads?.map(row => row.entry.title), ["first"]);
@@ -161,7 +161,7 @@ test("project row observations hand off without blanking visible threads", async
     entry: { ...firstRow.entry, title: "second",
       identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse("second") } },
   } satisfies WorkspaceThreadRows["rows"][number];
-  socket.observation(retry, { kind: "projectThreads", phase: "current", failure: null,
+  await socket.observation(retry, { kind: "projectThreads", phase: "current", failure: null,
     data: { rows: [firstRow, secondRow], projects: [] } });
   await socket.request("workspace/release", beforeRetry,
     request => request.params.subscriptionId === firstQuery.params.subscriptionId);
@@ -187,7 +187,7 @@ test("composing from the default project list keeps row demand on every project"
   context.after(() => { client.dispose(); fixture.dispose(); });
   const projects = await socket.request("workspace/observe", 0,
     request => request.params.query.kind === "projects");
-  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
   const offset = socket.sent.length;
   await client.controls.applyRoute(createLogicalThreadRoute(null, logicalId, location, { kind: "new" }));
   const scoped = socket.sent.slice(offset).filter(item => item.method === "workspace/observe"
@@ -204,7 +204,7 @@ test("an older app broadens row demand only when project groups are unavailable"
   context.after(() => { client.dispose(); fixture.dispose(); });
   const projects = await socket.request("workspace/observe", 0,
     request => request.params.query.kind === "projects");
-  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
   assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
   const focused = await socket.request("workspace/observe", 0,
     request => request.params.query.kind === "projectThreads"
@@ -228,7 +228,7 @@ test("a no-remote folder opens a draft while another source and unrelated app qu
   context.after(() => { client.dispose(); fixture.dispose(); });
   const query = socket.sent.find(item => item.method === "workspace/observe" && item.params.query.kind === "projects");
   assert.ok(query?.method === "workspace/observe");
-  socket.observation(query, { kind: "projects", phase: "stale", failure: null, data: facts(true) });
+  await socket.observation(query, { kind: "projects", phase: "stale", failure: null, data: facts(true) });
   const route = createLogicalThreadRoute(null, logicalId, location, { kind: "new" });
   assert.equal((await client.controls.applyRoute(route)).ok, true);
   assert.equal(client.navigation.getSnapshot().route.logical?.projectId, null);
@@ -249,7 +249,7 @@ test("a no-remote folder opens a draft while another source and unrelated app qu
   const next = facts(true);
   next.sources[0]!.generation++;
   const offset = socket.sent.length;
-  socket.observation(query, { kind: "projects", phase: "stale", failure: null, data: next }, 2);
+  await socket.observation(query, { kind: "projects", phase: "stale", failure: null, data: next }, 2);
   assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, draft.id);
   const refreshed = client.controls.listModels("codex");
   const reloaded = await socket.request("workspace/command", offset, request => request.params.method === "models/list"
@@ -267,7 +267,7 @@ test("new-thread views warm opencode on their own daemon before provider selecti
   const client = WorkbenchClient({ workspace: fixture.workspace });
   context.after(() => { client.dispose(); fixture.dispose(); });
   const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
-  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
   assert.equal((await client.controls.applyRoute(createLogicalThreadRoute(logicalId, logicalId, location, { kind: "new" }))).ok, true);
   const warming = await socket.request("workspace/command", 0, request => request.params.method === "models/list"
     && request.params.params?.provider === "opencode");
@@ -279,7 +279,7 @@ test("new-thread views warm opencode on their own daemon before provider selecti
   const beforeReconnect = socket.sent.length;
   const reconnected = facts(true);
   reconnected.sources[0]!.generation++;
-  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: reconnected }, 2);
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: reconnected }, 2);
   const warmingAgain = await socket.request("workspace/command", beforeReconnect,
     request => request.params.method === "models/list" && request.params.params?.provider === "opencode");
   assert.deepEqual(warmingAgain.params.scope, { kind: "installation", daemonId });
@@ -292,7 +292,7 @@ test("observed unsettled opencode threads warm their source but settled and code
   const client = WorkbenchClient({ workspace: fixture.workspace });
   context.after(() => { client.dispose(); fixture.dispose(); });
   const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
-  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
   assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
   const rows = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projectThreads"
     && request.params.query.projects?.length === 1);
@@ -305,14 +305,14 @@ test("observed unsettled opencode threads warm their source but settled and code
       lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false },
     },
   } satisfies WorkspaceThreadRows["rows"][number];
-  socket.observation(rows, { kind: "projectThreads", phase: "current", failure: null,
+  await socket.observation(rows, { kind: "projectThreads", phase: "current", failure: null,
     data: { rows: [base, { ...base, entry: { ...base.entry,
       identity: { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("settled") },
       lifecycle: { kind: "completed", reason: "providerInactive", settled: true } } }], projects: [] } });
   await Promise.resolve();
   assert.equal(socket.sent.some(request => request.method === "workspace/command"
     && request.params.method === "models/list" && request.params.params?.provider === "opencode"), false);
-  socket.observation(rows, { kind: "projectThreads", phase: "current", failure: null,
+  await socket.observation(rows, { kind: "projectThreads", phase: "current", failure: null,
     data: { rows: [{ ...base, entry: { ...base.entry,
       identity: { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("unsettled") } } }], projects: [] } }, 2);
   const warming = await socket.request("workspace/command", 0, request => request.params.method === "models/list"
@@ -331,7 +331,7 @@ test("a registered offline folder can open a draft without claiming live explore
   data.projects[0]!.locations[0]!.project = null;
   data.sources[0]!.connection = "connecting";
   data.catalogues[0]!.phase = "pending";
-  socket.observation(query, { kind: "projects", phase: "stale", failure: null, data });
+  await socket.observation(query, { kind: "projects", phase: "stale", failure: null, data });
   const result = await client.controls.applyRoute(createLogicalThreadRoute(logicalId, logicalId, location, { kind: "new" }));
   assert.equal(result.ok, true);
   const draft = client.threadRuntime.getSnapshot().currentThread;
@@ -362,7 +362,7 @@ test("a multi-folder project browses its own folder, never a sibling worktree", 
     rootPath: "C:/git/web/workbench/.workbench/worktrees/convex-lab",
     displayPath: "+convex-lab", project: { ...project, id: other.projectId, name: "convex-lab" },
   });
-  socket.observation(query, { kind: "projects", phase: "current", failure: null, data });
+  await socket.observation(query, { kind: "projects", phase: "current", failure: null, data });
 
   assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
   assert.deepEqual(new Set(browsedProjectIds(socket)), new Set([location.projectId]),
@@ -385,7 +385,7 @@ test("a preferred draft destination does not become a multi-folder browse select
     rootPath: "C:/git/web/workbench/.workbench/worktrees/convex-lab",
     project: null,
   });
-  socket.observation(query, { kind: "projects", phase: "current", failure: null, data });
+  await socket.observation(query, { kind: "projects", phase: "current", failure: null, data });
 
   assert.equal((await client.controls.applyRoute(
     createLogicalThreadRoute(logicalId, logicalId, null, { kind: "new" }),
@@ -413,13 +413,13 @@ test("a thread owner uses its projected folder label", async context => {
     rootPath: "C:/git/web/workbench/.workbench/worktrees/convex-lab",
     displayPath: "+convex-lab", project: null,
   });
-  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data });
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data });
   const threadId = WorkbenchThreadIdSchema.parse(crypto.randomUUID());
   const route = createLogicalExistingThreadRoute(logicalId,
     { kind: "provider", harness: "codex", threadId }, null);
   assert.equal((await client.controls.applyRoute(route)).pending, true);
   const owner = await socket.request("workspace/observe", 0, request => request.params.query.kind === "threadOwner");
-  socket.observation(owner, { kind: "threadOwner", phase: "current", failure: null, data: {
+  await socket.observation(owner, { kind: "threadOwner", phase: "current", failure: null, data: {
     phase: "current", identity: { threadId, projectId: project.id, harness: "codex" },
     location, logicalProjectId: logicalId,
   } });
@@ -428,7 +428,7 @@ test("a thread owner uses its projected folder label", async context => {
   assert.equal(client.threadOwnerFor(threadId)?.displayPath, "workbench");
   assert.ok(!browsedProjectIds(socket).includes(ProjectIdSchema.parse("other-folder")));
   await client.controls.applyRoute(createHomeRoute());
-  socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
+  await socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
     data: null, owner: { phase: "unavailable", failure: "source read unavailable" } });
   await opening;
   for (const request of socket.sent) {
@@ -450,13 +450,13 @@ test("a resolved existing thread starts its observation while catalogue metadata
   const data = facts(true);
   data.projects[0]!.locations[0]!.project = null;
   data.catalogues[0]!.phase = "pending";
-  socket.observation(projects, { kind: "projects", phase: "stale", failure: null, data });
+  await socket.observation(projects, { kind: "projects", phase: "stale", failure: null, data });
   const threadId = WorkbenchThreadIdSchema.parse(crypto.randomUUID());
   const route = createLogicalExistingThreadRoute(logicalId,
     { kind: "provider", harness: "codex", threadId }, null);
   assert.equal((await client.controls.applyRoute(route)).pending, true);
   const owner = await socket.request("workspace/observe", 0, request => request.params.query.kind === "threadOwner");
-  socket.observation(owner, { kind: "threadOwner", phase: "current", failure: null, data: {
+  await socket.observation(owner, { kind: "threadOwner", phase: "current", failure: null, data: {
     phase: "current", identity: { threadId, projectId: project.id, harness: "codex" },
     location, logicalProjectId: logicalId,
   } });
@@ -464,7 +464,7 @@ test("a resolved existing thread starts its observation while catalogue metadata
   const read = await socket.request("workspace/observe", 0, request => request.params.query.kind === "thread");
   assert.deepEqual(read.params.query, { kind: "thread", threadId });
   await client.controls.applyRoute(createHomeRoute());
-  socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
+  await socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
     data: null, owner: { phase: "unavailable", failure: "source read unavailable" } });
   await opening;
   assert.equal(client.navigation.getSnapshot().route.view, "home");
@@ -492,14 +492,14 @@ test("a thread viewed from another project keeps demand for its owning project r
     locations: [{ target: ownerLocation, daemonId: blockedId, hostname: "remote",
       name: "owner", rootPath: "/owner", project: null }],
   });
-  socket.observation(projects, { kind: "projects", phase: "stale", failure: null, data });
+  await socket.observation(projects, { kind: "projects", phase: "stale", failure: null, data });
   const threadId = WorkbenchThreadIdSchema.parse(crypto.randomUUID());
   const route = createLogicalExistingThreadRoute(logicalId,
     { kind: "provider", harness: "codex", threadId }, null);
   assert.equal((await client.controls.applyRoute(route)).pending, true);
   const owner = await socket.request("workspace/observe", 0, request => request.params.query.kind === "threadOwner");
   const ownerRowOffset = socket.sent.length;
-  socket.observation(owner, { kind: "threadOwner", phase: "current", failure: null, data: {
+  await socket.observation(owner, { kind: "threadOwner", phase: "current", failure: null, data: {
     phase: "current", identity: { threadId, projectId: ownerLocation.projectId, harness: "codex" },
     location: ownerLocation, logicalProjectId: ownerLogicalId,
   } });
@@ -515,7 +515,7 @@ test("a thread viewed from another project keeps demand for its owning project r
   ]);
   const read = await socket.request("workspace/observe", ownerRowOffset, request => request.params.query.kind === "thread");
   await client.controls.applyRoute(createHomeRoute());
-  socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
+  await socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
     data: null, owner: { phase: "unavailable", failure: "source read unavailable" } });
   await opening;
   for (const request of socket.sent) {
@@ -536,7 +536,7 @@ test("source-scoped renderers never reuse another daemon's provider model cache"
   const remoteLocation = { daemonId: blockedId, projectId: project.id };
   data.projects[0]!.locations.push({ target: remoteLocation, daemonId: blockedId, hostname: "remote",
     name: project.name, rootPath: "C:/remote", project: { ...project, rootPath: "C:/remote" } });
-  socket.observation(query, { kind: "projects", phase: "current", failure: null, data });
+  await socket.observation(query, { kind: "projects", phase: "current", failure: null, data });
   client.controls.createThreadDraftAt(location, "codex");
   const first = client.controls.listModels("codex");
   const a = await socket.request("workspace/command", 0, request => request.params.method === "models/list");
@@ -558,12 +558,12 @@ async function openRetainedDraft(context: TestContext) {
   const client = WorkbenchClient({ workspace: fixture.workspace });
   context.after(() => { client.dispose(); fixture.dispose(); });
   const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
-  socket.observation(projects, { kind: "projects", phase: "stale", failure: null, data: facts(true) });
+  await socket.observation(projects, { kind: "projects", phase: "stale", failure: null, data: facts(true) });
   await client.controls.applyRoute(createLogicalThreadRoute(logicalId, logicalId, location, { kind: "new" }));
   const draft = client.threadRuntime.getSnapshot().currentThread;
   assert.ok(draft?.isDraft);
   const presentation = await socket.request("workspace/observe", 0, request => request.params.query.kind === "presentation");
-  socket.observation(presentation, { kind: "presentation", phase: "current", failure: null, data: {
+  await socket.observation(presentation, { kind: "presentation", phase: "current", failure: null, data: {
     revision: 1, projects: [{ id: logicalId, matchKey: "local://bak", label: "bak" }],
     daemons: [{ id: daemonId, hostname: "local" }],
     locations: [{ target: location, logicalProjectId: logicalId, identityKey: "local://bak", name: "bak", rootPath: project.rootPath }],
@@ -586,7 +586,7 @@ test("reopening a saved draft warms opencode on its original daemon", async cont
   const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
   const changed = facts(true);
   changed.sources[0]!.generation++;
-  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: changed }, 2);
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: changed }, 2);
   const offset = socket.sent.length;
   assert.equal((await client.controls.applyRoute(createLogicalThreadRoute(logicalId, logicalId, location, {
     kind: "draft", draftId: DraftIdSchema.parse(draft.id),

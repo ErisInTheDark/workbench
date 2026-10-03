@@ -10,7 +10,8 @@ import { isWorkbenchAgentMcpRuntimeReloadInterruption } from "./lib/workbench/co
 const DEFAULT_PENDING_THRESHOLD_MS = 2_000;
 const PENDING_WARNING_INTERVAL_MS = 2_000;
 const LOG_OMISSION_LABELS = new Set(["wb shell", "wb rg", "wb request user input"]);
-const PENDING_WARNING_OMISSION_LABELS = new Set(["wb git arc wait"]);
+// Commands that wait by design: a "pending" warning every 2s is noise, their completion still logs.
+const PENDING_WARNING_OMISSION_LABELS = new Set(["wb git arc wait", "wb subagent wait"]);
 const ANSI_GREEN = "\u001b[32m";
 const ANSI_RED = "\u001b[31m";
 const ANSI_YELLOW = "\u001b[33m";

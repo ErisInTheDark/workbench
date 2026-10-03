@@ -54,8 +54,13 @@ async function fixture(context: TestContext, daemons?: { get(daemonId: string): 
     appState: { read: () => read(), subscribe: (_id, listener) => {
       changes.add(listener); return () => { changes.delete(listener); };
     } },
-    publish: value => { updates.push(value); for (const listener of [...listeners]) listener(); },
-    publishDelta: delta => { deltas.push(delta); for (const listener of [...listeners]) listener(); },
+    // Deltas are published after the owner records its new value; tests read that full value.
+    publishDelta: delta => {
+      deltas.push(delta);
+      const value = (owner as unknown as { interests: Map<string, { value: WorkspaceObservation }> }).interests.get(delta.subscriptionId)?.value;
+      if (value) updates.push(value);
+      for (const listener of [...listeners]) listener();
+    },
     publishVoice: () => {},
     publishThreadEvent: (notification, harness, daemonId) => {
       providerEvents.push({ method: notification.method, harness, daemonId });

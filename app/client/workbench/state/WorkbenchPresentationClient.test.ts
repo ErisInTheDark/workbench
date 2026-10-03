@@ -30,7 +30,7 @@ test("presentation readiness joins one pushed query and disposal releases pendin
   const first = client.ready();
   const second = client.ready();
   const query = await socket.request("workspace/observe", 0, request => request.params.query.kind === "presentation");
-  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(1) });
+  await socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(1) });
   assert.equal(await first, await second);
   assert.equal(socket.sent.filter(request => request.method === "workspace/observe").length, 1);
 
@@ -50,10 +50,10 @@ test("pushed facts do not refetch and a delayed write response cannot regress th
   const socket = await fixture.open();
   client.start();
   const query = await socket.request("workspace/observe");
-  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(1) });
+  await socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(1) });
   const write = client.putDraft(draft);
   const request = await socket.request("app/presentation/mutate");
-  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(3, true) }, 2);
+  await socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(3, true) }, 2);
   socket.reply(request, snapshot(2, true));
   await write;
   assert.equal(client.snapshot().data?.revision, 3);
@@ -67,10 +67,10 @@ test("own delete receipt remains exact when a newer publication overtakes its ac
   const socket = await fixture.open();
   client.start();
   const query = await socket.request("workspace/observe");
-  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(40, true) });
+  await socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(40, true) });
   const removing = client.removeDraft(draft.id);
   const removal = await socket.request("app/presentation/mutate");
-  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(43) }, 2);
+  await socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(43) }, 2);
   socket.reply(removal, snapshot(42));
   await removing;
   const offset = socket.sent.length;
@@ -89,8 +89,8 @@ test("another client's deletion grants no reopen token and conflicting edits rem
   const socket = await fixture.open();
   client.start();
   const query = await socket.request("workspace/observe");
-  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(10, true) });
-  socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(12) }, 2);
+  await socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(10, true) });
+  await socket.observation(query, { kind: "presentation", phase: "current", failure: null, data: snapshot(12) }, 2);
   const write = client.putDraft(draft);
   const failed = assert.rejects(write, /another browser/);
   const mutation = await socket.request("app/presentation/mutate");

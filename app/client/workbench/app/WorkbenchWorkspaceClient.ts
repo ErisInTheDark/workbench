@@ -5,13 +5,11 @@
  * - default WorkbenchWorkspaceClient: share typed query interests over the tab's single app connection.
  */
 import {
-  WorkspaceQuerySchema, WorkspaceObservationSchema, WorkspaceHelloResultSchema,
-  workspaceObservationShape, WORKSPACE_PROTOCOL,
+  WorkspaceQuerySchema, WorkspaceObservationSchema, workspaceObservationShape,
   type WorkspaceQuery, type WorkspaceObservation, type WorkspaceObservationDelta,
   type WorkspaceSourcePhase, type WorkspaceTranscriptState,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { applyObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
-import { projectSidebarRow } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
@@ -61,18 +59,6 @@ interface Interest {
 }
 const MAX_EARLY_DELTAS = 32;
 
-/** Protocol 1 apps send full sidebar entries; observers only ever see lean rows. */
-function leanObservation(value: WorkspaceObservation): WorkspaceObservation {
-  if (value.kind !== "projectThreads" && value.kind !== "archivedThreads") return value;
-  let changed = false;
-  const rows = value.data.rows.map(row => {
-    const entry = projectSidebarRow(row.entry);
-    if (entry === row.entry) return row;
-    changed = true;
-    return { ...row, entry };
-  });
-  return changed ? { ...value, data: { ...value.data, rows } } as WorkspaceObservation : value;
-}
 
 export default class WorkbenchWorkspaceClient {
   private readonly interests = new Map<string, Interest>();
@@ -82,14 +68,10 @@ export default class WorkbenchWorkspaceClient {
   private readonly notificationListeners = new Set<(notification: Notification) => void>();
   private readonly threadObservations = new Map<string, { release(): void }>();
   private readonly facades = new Map<string, WorkbenchDaemonClient>();
-  private negotiatedGeneration: number | null = null;
 
   constructor(readonly rpc: WorkbenchAppRpcClient) {
     this.unsubscribe = [
-      rpc.onEvent(event => {
-        if (event.kind === "workspace") this.accept(event.observation);
-        else if (event.kind === "workspaceDelta") this.acceptDelta(event.delta);
-      }),
+      rpc.onEvent(event => { if (event.kind === "workspaceDelta") this.acceptDelta(event.delta); }),
       rpc.onInvalidObservation(address => this.rejectObservation(address.subscriptionId, address.generation)),
       rpc.onOpen(() => {
         this.notify({ method: "workbench/transcript/capabilities", params: { protocolVersion: WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION } });
@@ -346,27 +328,8 @@ export default class WorkbenchWorkspaceClient {
     this.notificationListeners.clear();
   }
 
-  /**
-   * Once per app connection generation, sent ahead of (and pipelined with) observes. The server only sends
-   * deltas to observations opened after it processed this hello; earlier ones keep full values, which this
-   * client accepts either way, so the reply needs no waiting.
-   */
-  private negotiate(generation: number) {
-    if (this.negotiatedGeneration === generation) return;
-    this.negotiatedGeneration = generation;
-    void this.rpc.requestRaw({ method: "workspace/hello", params: { protocol: WORKSPACE_PROTOCOL } }).then(result => {
-      const parsed = WorkspaceHelloResultSchema.safeParse(result);
-      if (!parsed.success) reportClientSchemaError("Rejected workspace hello response", parsed.error);
-    }, (error: unknown) => {
-      if (error instanceof WorkbenchRpcRequestInterruptedError) return;
-      // Older app servers reject the method and keep sending full values.
-      console.warn("Workspace deltas unavailable from this app server; using full values.");
-    });
-  }
-
   private open(interest: Interest) {
     const generation = this.rpc.getSnapshot().generation;
-    this.negotiate(generation);
     void this.rpc.requestRaw({
       method: "workspace/observe",
       params: { subscriptionId: interest.id, generation, query: interest.query },
@@ -401,7 +364,6 @@ export default class WorkbenchWorkspaceClient {
     }
     if (interest.raw?.generation === value.generation && interest.raw.revision >= value.revision) return;
     interest.raw = value;
-    value = leanObservation(value);
     const previous = interest.snapshot.value;
     if (previous?.kind === value.kind && value.phase !== "current") {
       if (value.kind === "thread" && previous.kind === "thread" && !value.data) value = { ...value, data: previous.data };

@@ -17,10 +17,8 @@ function boundedListenerError(error: unknown) {
 }
 
 const address = z.object({ subscriptionId: z.uuid(), generation: z.number().int().nonnegative() });
-const WorkspaceObservationAddress = z.union([
-  z.object({ kind: z.literal("workspace"), observation: address }).transform(value => value.observation),
-  z.object({ kind: z.literal("workspaceDelta"), delta: address }).transform(value => value.delta),
-]);
+const WorkspaceObservationAddress = z.object({ kind: z.literal("workspaceDelta"), delta: address })
+  .transform(value => value.delta);
 type ObservationAddress = z.infer<typeof address>;
 
 export default class WorkbenchAppRpcClient {

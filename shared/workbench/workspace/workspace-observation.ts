@@ -17,7 +17,6 @@
  * - WorkspaceReleaseSchema: release only the matching observation generation.
  * - WORKSPACE_OBSERVE_METHOD/WORKSPACE_RELEASE_METHOD/WORKSPACE_UPDATED_METHOD: shared observation protocol.
  * - WORKSPACE_DELTA_METHOD/WorkspaceObservationDeltaSchema/WorkspaceObservationDelta: keyed delta onto one observation revision.
- * - WORKSPACE_HELLO_METHOD/WORKSPACE_PROTOCOL/WorkspaceHelloSchema/WorkspaceHelloResultSchema/WorkspaceProtocol/negotiateWorkspaceProtocol: per-connection protocol negotiation.
  * - WorkspaceThreadRow/workspaceThreadRowKey: one app thread row and its delta identity.
  * - WorkspaceArchivedThreadsSchema/WorkspaceArchivedThreads: paged archived rows with per-project totals.
  * - daemonObservationShape/workspaceObservationShape: how each observation kind decomposes into keyed deltas.
@@ -58,17 +57,6 @@ export const WORKSPACE_OBSERVE_METHOD = "workspace/observe";
 export const WORKSPACE_RELEASE_METHOD = "workspace/release";
 export const WORKSPACE_UPDATED_METHOD = "workspace/updated";
 export const WORKSPACE_DELTA_METHOD = "workspace/delta";
-export const WORKSPACE_HELLO_METHOD = "workspace/hello";
-
-/**
- * Once per connection, before observing. Protocol 2 = keyed deltas after each observation's first
- * value, and lean sidebar rows. Peers that reject the method stay on protocol 1 (full values, full entries).
- */
-export const WORKSPACE_PROTOCOL = 2;
-export const WorkspaceHelloSchema = z.object({ protocol: z.number().int().positive() }).strict();
-export const WorkspaceHelloResultSchema = z.object({ protocol: z.number().int().positive() }).strict();
-export type WorkspaceProtocol = 1 | 2;
-export const negotiateWorkspaceProtocol = (requested: number): WorkspaceProtocol => requested >= 2 ? 2 : 1;
 
 export const WorkspaceSourcePhaseSchema = z.enum(["pending", "current", "stale", "failed", "unavailable"]);
 export type WorkspaceSourcePhase = z.infer<typeof WorkspaceSourcePhaseSchema>;
@@ -118,13 +106,11 @@ const statsObservation = {
   data: WorkbenchStatsObservedResponseSchema.nullable(),
 };
 
-// Protocol 2 daemons send lean rows; protocol 1 daemons send full entries, which receivers project to rows.
-const projectRowsSidebar = z.union([WorkbenchThreadSidebarRowSnapshotSchema, WorkbenchThreadSidebarSnapshotSchema]);
 const projectRows = z.object({
   projectId: ProjectIdSchema,
   phase: WorkspaceSourcePhaseSchema,
   failure,
-  sidebar: projectRowsSidebar.nullable(),
+  sidebar: WorkbenchThreadSidebarRowSnapshotSchema.nullable(),
 }).strict();
 const archivedProject = z.object({
   projectId: ProjectIdSchema,
@@ -276,13 +262,12 @@ export const WorkspaceProjectGroupsSchema = z.object({
 }).strict();
 export type WorkspaceProjectGroups = z.infer<typeof WorkspaceProjectGroupsSchema>;
 
-// Protocol 2 apps send lean rows; protocol 1 apps send full entries, which the browser projects to rows.
 const WorkspaceThreadRowSchema = z.object({
   logicalProjectId: LogicalProjectIdSchema.nullable(),
   location: ProjectLocationReferenceSchema,
   hostname: z.string(),
   rootPath: z.string(),
-  entry: z.union([WorkbenchThreadSidebarRowSchema, WorkbenchThreadSidebarEntrySchema]),
+  entry: WorkbenchThreadSidebarRowSchema,
   observedOnly: z.boolean().optional(),
 }).strict();
 const WorkspaceThreadRowProjectSchema = z.object({
@@ -402,6 +387,11 @@ const rowsShape = (schema: z.ZodObject, project: z.ZodType) => observationShape.
   },
 });
 const threadObservationObject: z.ZodObject = WorkbenchThreadObservationSnapshotSchema;
+type SummaryEntry = { entryKind?: string; draftId?: string; identity?: { harness: string; threadId: string } };
+const summaryEntryKey = (entry: SummaryEntry) => entry.identity
+  ? `${entry.identity.harness}:${entry.identity.threadId}` : `draft:${entry.draftId ?? ""}`;
+const locatedSummaryKey = (item: { location: { daemonId: string; projectId: string }; entry: SummaryEntry }) =>
+  `${item.location.daemonId}/${item.location.projectId}/${summaryEntryKey(item.entry)}`;
 
 function memberSchema<Union extends { options: readonly z.ZodObject[] }>(union: Union, kind: string) {
   const member = union.options.find(option => (option.shape.kind as z.ZodLiteral<string>).value === kind);
@@ -435,7 +425,11 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
       projects: byProject(projectRows, { schema: projectRows, fields: { sidebar: sidebarRowsShape } }),
     } };
     case "summaries": return { schema, fields: {
-      projects: byProject(WorkbenchProjectThreadSummarySchema, { schema: WorkbenchProjectThreadSummarySchema, incidental: ["revision"] }),
+      projects: byProject(WorkbenchProjectThreadSummarySchema, { schema: WorkbenchProjectThreadSummarySchema, incidental: ["revision"],
+        fields: {
+          unsettledThreads: observationShape.keyed(summaryEntryKey, WorkbenchProjectThreadSummaryEntrySchema),
+          pinnedThreads: observationShape.keyed(summaryEntryKey, WorkbenchPinnedThreadSummaryEntrySchema),
+        } }),
     } };
     case "catalogue": return { schema, fields: { catalogue: catalogueShape, locations: locationsShape } };
     case "projectPlacement": return { schema, fields: {
@@ -462,7 +456,10 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
       schema: WorkspaceProjectsSchema,
       fields: {
         projects: observationShape.keyed((project: { id: string }) => project.id, logicalProject),
-        summaries: observationShape.record(summary),
+        summaries: observationShape.record(summary, { fields: {
+          unsettledThreads: observationShape.keyed(locatedSummaryKey, summary.shape.unsettledThreads.element),
+          pinnedThreads: observationShape.keyed(locatedSummaryKey, summary.shape.pinnedThreads.element),
+        } }),
       },
     }) } };
     case "thread": return { schema, fields: { data: entriesShape(threadObservationObject) } };

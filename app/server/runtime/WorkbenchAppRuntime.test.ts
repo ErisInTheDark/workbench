@@ -27,7 +27,11 @@ import AppCompilerNode from "./AppCompilerNode.ts";
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import type { ReloadableNodeBuild } from "workbench-shared/reload/ReloadableNode";
-import { WorkspaceObservationSchema, type WorkspaceQuery } from "workbench-shared/workbench/workspace/workspace-observation";
+import {
+  WorkspaceObservationDeltaSchema, WorkspaceObservationSchema, workspaceObservationShape,
+  type WorkspaceObservation, type WorkspaceQuery,
+} from "workbench-shared/workbench/workspace/workspace-observation";
+import { applyObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 
 const appDirectoryPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const execFileAsync = promisify(execFile);
@@ -46,18 +50,27 @@ function nextSocketFrame(socket: WebSocket, match: (frame: Record<string, unknow
   });
 }
 
+/** Follow one observation like the browser does: the observe result, then keyed deltas, until it settles. */
 async function observeWorkspace(socket: WebSocket, id: number, query: WorkspaceQuery) {
   const subscriptionId = randomUUID();
+  let value: WorkspaceObservation | null = null;
+  let failure: unknown;
   const received = nextSocketFrame(socket, frame => {
-    if (frame.id === id && frame.error) return true;
-    const parsed = WorkspaceObservationSchema.safeParse(frame.result ?? frame.observation);
-    return parsed.success && parsed.data.subscriptionId === subscriptionId
-      && (parsed.data.phase === "current" || parsed.data.phase === "failed");
+    if (frame.id === id) {
+      if (frame.error) { failure = frame.error; return true; }
+      value = WorkspaceObservationSchema.parse(frame.result);
+    } else if (frame.kind === "workspaceDelta" && value) {
+      const delta = WorkspaceObservationDeltaSchema.parse(frame.delta);
+      if (delta.subscriptionId !== subscriptionId) return false;
+      value = { ...applyObservationDelta(value, delta.delta, workspaceObservationShape(value.kind)), revision: delta.revision };
+    }
+    return value !== null && (value.phase === "current" || value.phase === "failed");
   });
   socket.send(JSON.stringify({ id, method: "workspace/observe", params: { subscriptionId, generation: 1, query } }));
-  const frame = await received;
-  assert.equal(frame.error, undefined);
-  const observation = WorkspaceObservationSchema.parse(frame.result ?? frame.observation);
+  await received;
+  assert.equal(failure, undefined);
+  const observation = value as WorkspaceObservation | null;
+  assert.ok(observation);
   assert.equal(observation.phase, "current", observation.failure ?? "Workspace observation failed.");
   return observation;
 }
@@ -369,10 +382,13 @@ test("reloads the database with a fresh repository constructor and no process re
     } }));
     assert.equal((await projectsObserved).error, undefined);
     const state = initial.data;
+    let noticed: WorkspaceObservation = initial;
     const stateNotice = nextSocketFrame(appSocket, frame => {
-      if (frame.kind !== "workspace") return false;
-      const value = WorkspaceObservationSchema.parse(frame.observation);
-      return value.kind === "appState" && (value.data?.revision ?? 0) > state.revision;
+      if (frame.kind !== "workspaceDelta") return false;
+      const delta = WorkspaceObservationDeltaSchema.parse(frame.delta);
+      if (delta.subscriptionId !== initial.subscriptionId) return false;
+      noticed = { ...applyObservationDelta(noticed, delta.delta, workspaceObservationShape(noticed.kind)), revision: delta.revision };
+      return noticed.kind === "appState" && (noticed.data?.revision ?? 0) > state.revision;
     });
     const savedDraft = nextSocketFrame(appSocket, frame => frame.id === 4);
     appSocket.send(JSON.stringify({ id: 4, method: "app/state/mutate", params: {
@@ -385,7 +401,8 @@ test("reloads the database with a fresh repository constructor and no process re
     } }));
     const saveResult = (await savedDraft).result as { revision: number };
     assert.ok(saveResult.revision > state.revision);
-    const noticedState = WorkspaceObservationSchema.parse((await stateNotice).observation);
+    await stateNotice;
+    const noticedState = noticed;
     assert.equal(noticedState.kind === "appState" && noticedState.data?.revision, saveResult.revision);
     await target.writeAppPort(43_211);
 

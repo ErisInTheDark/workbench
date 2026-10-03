@@ -14,15 +14,13 @@ import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import {
-  DaemonWorkspaceQuerySchema, DaemonWorkspaceObservationSchema, WorkspaceHelloResultSchema, WorkspaceObservationDeltaSchema,
+  DaemonWorkspaceQuerySchema, DaemonWorkspaceObservationSchema, WorkspaceObservationDeltaSchema,
   daemonObservationShape, type WorkspaceObservationDelta,
-  WORKSPACE_DELTA_METHOD, WORKSPACE_HELLO_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_PROTOCOL,
-  WORKSPACE_RELEASE_METHOD, WORKSPACE_UPDATED_METHOD,
+  WORKSPACE_DELTA_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_UPDATED_METHOD,
   type DaemonWorkspaceQuery, type DaemonWorkspaceObservation,
   type WorkspaceDaemonFact, type WorkspaceSourcePhase, type WorkspaceTranscriptState,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { applyObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
-import { projectSidebarRowSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import {
   conformWorkbenchTranscriptUpdated, conformWorkbenchTranscriptStreamed, workbenchTranscriptOperations,
   type WorkbenchTranscriptSubscribeParams, type WorkbenchTranscriptUpdatedParams, type WorkbenchTranscriptStreamedParams,
@@ -79,18 +77,6 @@ interface Interest {
 const rpcError = z.object({ code: z.number().int(), message: z.string(), data: z.json().optional() });
 const MAX_EARLY_DELTAS = 32;
 
-/** Protocol 1 daemons send full sidebar entries; observers only ever see lean rows. */
-function leanObservation(value: DaemonWorkspaceObservation): DaemonWorkspaceObservation {
-  if (value.kind !== "projectThreads") return value;
-  let changed = false;
-  const projects = value.projects.map(project => {
-    const sidebar = project.sidebar ? projectSidebarRowSnapshot(project.sidebar) : null;
-    if (sidebar === project.sidebar) return project;
-    changed = true;
-    return { ...project, sidebar };
-  });
-  return changed ? { ...value, projects } : value;
-}
 const observationAddress = z.object({ subscriptionId: z.uuid(), generation: z.number().int().nonnegative() });
 function bounded(error: unknown) {
   return (error instanceof Error ? error.message : "Daemon request failed.")
@@ -106,7 +92,6 @@ export default class WorkbenchDaemonSource {
   private readonly listeners = new Set<() => void>();
   private readonly endpointListeners = new Set<() => void>();
   private readonly unsubscribe: Array<() => void>;
-  private negotiatedGeneration: number | null = null;
   private disposed = false;
 
   constructor(
@@ -308,7 +293,7 @@ export default class WorkbenchDaemonSource {
   ): Promise<Result> {
     if (!this.available) throw new WorkbenchRpcRequestInterruptedError("The daemon is not connected; request was not sent.", false);
     // Observation plumbing never creates demand of its own; only observers and leases do.
-    const release = method === WORKSPACE_OBSERVE_METHOD || method === WORKSPACE_RELEASE_METHOD || method === WORKSPACE_HELLO_METHOD
+    const release = method === WORKSPACE_OBSERVE_METHOD || method === WORKSPACE_RELEASE_METHOD
       ? () => {} : this.retain();
     try {
       const response = await this.socket.sendRequest<Result>({ ...fields, method, params }, {
@@ -457,31 +442,9 @@ export default class WorkbenchDaemonSource {
     }
   }
 
-  /**
-   * Once per connection generation, sent ahead of (and pipelined with) observes. The daemon fixes each
-   * observation's protocol when it opens; any opened before this hello lands keep full values, which this
-   * source accepts either way, so the reply needs no waiting.
-   */
-  private negotiate(generation: number) {
-    if (this.negotiatedGeneration === generation) return;
-    this.negotiatedGeneration = generation;
-    void this.request<unknown>(WORKSPACE_HELLO_METHOD, { protocol: WORKSPACE_PROTOCOL }).then(result => {
-      const parsed = WorkspaceHelloResultSchema.safeParse(result);
-      if (!parsed.success) {
-        reportClientSchemaError("Rejected daemon workspace hello", parsed.error);
-        this.options.warn("Daemon workspace hello did not match its contract; observations may use full values.");
-      }
-    }, (error: unknown) => {
-      if (error instanceof WorkbenchRpcRequestInterruptedError) return;
-      // Older daemons reject the method and keep sending full values.
-      this.options.warn(`Daemon workspace deltas unavailable (${bounded(error)}); using full values.`);
-    });
-  }
-
   private openInterest(interest: Interest) {
     const generation = this.socket.getSnapshot().generation;
     interest.failure = null;
-    this.negotiate(generation);
     void this.request<DaemonWorkspaceObservation>(WORKSPACE_OBSERVE_METHOD, {
       subscriptionId: interest.subscriptionId, generation, query: interest.query,
     }, {}, { signal: interest.cancellation.signal }).then(value => {
@@ -515,7 +478,7 @@ export default class WorkbenchDaemonSource {
     }
     if (interest.raw?.generation === value.generation && interest.raw.revision >= value.revision) return;
     interest.raw = value;
-    interest.value = this.retainPendingData(interest.value, leanObservation(value));
+    interest.value = this.retainPendingData(interest.value, value);
     interest.failure = null;
     for (const delta of interest.early.splice(0)) this.applyDelta(interest, delta);
     // A replayed delta already published its newer value through `accept`.

@@ -409,6 +409,27 @@ function notificationFrame(method: string, params: Record<string, unknown>) {
   return Buffer.from(JSON.stringify({ method, params }));
 }
 
+/** Stand in for a transcript subscription, which is what makes a connection demand a thread's provider events. */
+function observeThread(controller: WorkbenchWebSocketRequestController, client: BridgeClient, threadId: string) {
+  controller["transcriptSubscriptions"].set(`${threadId}-view`, {
+    client, connectionId: "connection-1", subscriptionId: `${threadId}-view`, threadId, turnLimit: 1,
+  });
+}
+
+test("provider events for threads a connection does not observe are not sent; account events always are", async () => {
+  const sent: Array<Record<string, unknown>> = [];
+  const client = createClient((data, callback) => { sent.push(JSON.parse(data) as Record<string, unknown>); callback?.(); });
+  const { controller } = createController({ clock: new FakeClock() });
+  observeThread(controller, client, "watched");
+  for (const threadId of ["watched", "elsewhere"]) {
+    await controller.sendJsonToClient(client, { method: "item/started", params: { threadId, item: {} }, workbenchHarness: "codex" });
+  }
+  await controller.sendJsonToClient(client, { method: "account/rateLimits/updated", params: { rateLimits: {} }, workbenchHarness: "codex" });
+  assert.deepEqual(sent.map(message => [message.method, (message.params as { threadId?: string }).threadId]),
+    [["item/started", "watched"], ["account/rateLimits/updated", undefined]]);
+  controller.dispose();
+});
+
 test("sequences provider events and consumes browser receipts without harness routing", async () => {
   const clock = new FakeClock();
   const sent: Array<Record<string, unknown>> = [];
@@ -419,6 +440,7 @@ test("sequences provider events and consumes browser receipts without harness ro
   const { controller, lines } = createController({
     clock,
   });
+  observeThread(controller, client, "thread");
 
   await controller.sendJsonToClient(client, {
     method: "item/agentMessage/delta",
