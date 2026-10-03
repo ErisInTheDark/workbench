@@ -137,6 +137,90 @@ function streamBaseline(threadId: string): TranscriptStreamUpdate {
   };
 }
 
+test("claude displays only message-tool prose while retaining snapshot and streaming baselines", async context => {
+  for (const harness of ["claude", "codex"] as const) {
+    for (const route of ["snapshot", "stream"] as const) {
+      const states: ThreadTranscriptProjectionState[] = [];
+      const errors: Error[] = [];
+      let receiveSnapshot!: (snapshot: WorkbenchTranscriptSnapshot) => void;
+      let receiveStream!: (update: TranscriptStreamUpdate) => void;
+      let receiveFailure!: (error: Error) => void;
+      const controller = new ThreadTranscriptProjectionController({
+        available: true, turnLimit: 1,
+        onStateChange: state => states.push(state), onError: error => errors.push(error),
+        transcripts: {
+          subscribe: async (_params, snapshot, stream, failure) => {
+            receiveSnapshot = snapshot;
+            receiveStream = stream!;
+            receiveFailure = failure!;
+          },
+          unsubscribe: async () => {},
+        },
+      });
+      context.after(() => controller.dispose());
+      controller.select({ thread: { ...thread("thread"), harness } });
+      await flush();
+      const baseline = streamBaseline("thread");
+      assert.ok(baseline.kind === "structure");
+      const snapshot = baseline.snapshot;
+      snapshot.turns[0] = { ...snapshot.turns[0]!, harness_id: harness };
+      snapshot.rows.threadItemAssistantMessages[0] = { ...snapshot.rows.threadItemAssistantMessages[0]!, phase: "unknown" };
+      snapshot.rows.threadItems.push(
+        { ...snapshot.rows.threadItems[0]!, id: 2, public_id: deliveredItemId, item_position: 1 },
+        { ...snapshot.rows.threadItems[0]!, id: 3, public_id: patchItemId, item_position: 2, type: "reasoning" },
+      );
+      snapshot.rows.itemIdentities.push(
+        { id: deliveredItemId, thread_id: "thread" }, { id: patchItemId, thread_id: "thread" },
+      );
+      snapshot.rows.threadItemAssistantMessages.push({
+        ...snapshot.rows.threadItemAssistantMessages[0]!, item_id: 2, phase: "commentary", text: "intentional",
+      });
+      snapshot.rows.threadItemReasoning.push({ item_id: 3, item_type: "reasoning", state: "streaming" });
+      snapshot.rows.threadReasoningSections.push({ item_id: 3, section_index: 0, text: "internal" });
+      const raw = projectWorkbenchTranscript(snapshot);
+      assert.ok(raw.success);
+      baseline.layout = createTranscriptLayoutPatch(null, createTranscriptLayout(raw.data));
+      const visible = () => {
+        const state = states.at(-1)!;
+        assert.ok(state.status === "ready");
+        return state.projection;
+      };
+      const expected = harness === "claude" ? [deliveredItemId] : [baselineItemId, deliveredItemId, patchItemId];
+      if (route === "snapshot") receiveSnapshot(snapshot);
+      else receiveStream(baseline);
+      assert.deepEqual(visible().turns[0]!.items.map(item => item.id), expected);
+      assert.deepEqual(visible().display.segments.flatMap(segment => segment.items.map(item => item.id)), expected);
+      assert.deepEqual(visible().display.orderedItems.map(entry => entry.itemId), expected);
+      assert.equal(visible().turnHistory[0]!.itemCount, expected.length);
+      if (route === "stream") {
+        for (const [itemId, field, index] of [
+          [baselineItemId, "agentMessageText", null],
+          [patchItemId, "reasoningSummary", 0],
+          [patchItemId, "reasoningContent", 0],
+          [deliveredItemId, "agentMessageText", null],
+        ] as const) {
+          receiveStream({ kind: "text", threadId: "thread", turnId: "turn", itemId, field, index, text: " more", append: true });
+        }
+        const intentional = visible().turns[0]!.items.find(item => item.id === deliveredItemId);
+        assert.ok(intentional?.type === "agentMessage");
+        assert.equal(intentional.text, "intentional more");
+        // Replacing the source baseline must not resurrect hidden items.
+        receiveStream(baseline);
+        assert.deepEqual(visible().turns[0]!.items.map(item => item.id), expected);
+      }
+      assert.deepEqual(errors, []);
+      assert.equal(snapshot.rows.threadItems.length, 3, "source rows remain intact");
+      assert.equal(raw.data.turns[0]!.items.length, 3, "raw projection remains intact");
+      receiveFailure(new Error("source failed"));
+      const failed = states.at(-1)!;
+      assert.ok(failed.status === "failed" && failed.projection);
+      assert.deepEqual(failed.projection.turns[0]!.items.map(item => item.id), expected,
+        "failure publication must not resurrect internal evidence");
+      assert.equal(errors.length, 1);
+    }
+  }
+});
+
 test("a stale source retains its visible transcript and recovers from the next baseline without another view subscription", async context => {
   let publishStream: ((update: TranscriptStreamUpdate) => void) | undefined;
   let publishState: ((state: WorkspaceTranscriptState) => void) | undefined;

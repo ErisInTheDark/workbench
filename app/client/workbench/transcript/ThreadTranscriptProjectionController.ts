@@ -2,7 +2,7 @@
  * Exports:
  * - ThreadTranscriptProjectionSelection: selected window and locally owned input presentation.
  * - ThreadTranscriptProjectionState: SQLite source presentation lifecycle.
- * - default ThreadTranscriptProjectionController: own incremental publication, transient/local presentation, source-local failures and subscriptions.
+ * - default ThreadTranscriptProjectionController: own incremental publication, provider-aware visibility, transient/local presentation, failures and subscriptions.
  */
 import type { ThreadPayload } from "workbench-shared/types";
 import type WorkbenchTranscriptClient from "../database/transcript/WorkbenchTranscriptClient";
@@ -10,6 +10,7 @@ import type {
   WorkbenchTranscriptSnapshot,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import { isThreadItemVisible } from "workbench-shared/workbench/thread/thread-item-visibility";
 import { getWorkbenchTurnAdmission, type WorkbenchAdmissionTurn } from "workbench-shared/workbench/thread/thread-admission";
 import { isWorkbenchSyntheticSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
@@ -363,10 +364,38 @@ export default class ThreadTranscriptProjectionController {
     };
   }
 
+  #visibleProjection(projection: WorkbenchTranscriptProjection | null) {
+    if (projection && this.#selection?.thread.harness === "claude") {
+      // Keep raw baselines for every streamed delta; only published presentation is filtered.
+      const visible = (item: WorkbenchProjectedTranscriptItem) => isThreadItemVisible("claude", item);
+      const turns = projection.turns.map(turn => {
+        const items = turn.items.filter(visible);
+        const ids = new Set(items.map(item => item.id));
+        return { ...turn, items, itemTimeline: turn.itemTimeline.filter(entry => ids.has(entry.itemId)) };
+      });
+      const turnsById = new Map(turns.map(turn => [turn.id, turn]));
+      projection = {
+        ...projection,
+        turns,
+        turnHistory: projection.turnHistory.map(entry => {
+          const turn = turnsById.get(entry.turnId);
+          return turn ? {
+            ...entry, itemCount: turn.items.length, itemIds: turn.items.map(item => item.id), itemTimeline: turn.itemTimeline,
+          } : entry;
+        }),
+        display: {
+          orderedItems: projection.display.orderedItems.filter(entry => visible(entry.payload)),
+          segments: projection.display.segments.map(segment => ({ ...segment, items: segment.items.filter(visible) })),
+        },
+      };
+    }
+    return projection;
+  }
+
   #publishProjection(status: "loading" | "ready" = "ready") {
     let projection: WorkbenchTranscriptProjection | null;
     try {
-      projection = this.#reconcileCurrentProjection();
+      projection = this.#visibleProjection(this.#reconcileCurrentProjection());
     } catch (error) {
       const threadId = this.#selection?.thread.id;
       if (!threadId) return false;
@@ -441,7 +470,7 @@ export default class ThreadTranscriptProjectionController {
       this.#failureMessage = "SQLite transcript data could not be projected.";
       this.#onStateChange({
         message: this.#failureMessage,
-        projection: this.#projection?.value ?? null,
+        projection: this.#visibleProjection(this.#projection?.value ?? null),
         status: "failed",
         threadId: snapshot.thread.id,
       });
@@ -525,6 +554,7 @@ export default class ThreadTranscriptProjectionController {
       }
       const previous = readTranscriptText(item, update.field, update.index);
       const text = writeTranscriptText(item, update);
+      if (!isThreadItemVisible(this.#selection!.thread.harness, item)) return;
       this.#onText(update, text);
       // The first nonempty field creates a rendering leaf; subsequent text only updates that leaf.
       if (!previous.trim() && text.trim()) this.#publishProjection();
@@ -570,7 +600,7 @@ export default class ThreadTranscriptProjectionController {
       this.#failureMessage = `Unable to load the SQLite transcript: ${cause.message}`.slice(0, 500);
       this.#onStateChange({
         message: this.#failureMessage,
-        projection: this.#projection?.value ?? null,
+        projection: this.#visibleProjection(this.#projection?.value ?? null),
         status: "failed",
         threadId: this.#selection.thread.id,
       });

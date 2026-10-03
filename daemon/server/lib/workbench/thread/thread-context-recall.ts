@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadRecallRecord/WorkbenchThreadRecallMatch/WorkbenchThreadRecallSearchResult/WorkbenchThreadRecallExpansion/WorkbenchThreadRecallCursor/SqliteWorkbenchThreadRecallRef: recall contracts.
- * - buildWorkbenchThreadRecallRecords/buildSqliteWorkbenchThreadRecallRecords/selectWorkbenchThreadRecallRecords: project and filter ordered narrative records.
+ * - buildWorkbenchThreadRecallRecords/buildSqliteWorkbenchThreadRecallRecords/selectWorkbenchThreadRecallRecords: project provider-visible narrative records and filter history.
  * - searchWorkbenchThreadRecall/expandWorkbenchThreadRecall: search and page record content.
  * - createWorkbenchThreadRecallCursor/readWorkbenchThreadRecallCursor: encode and decode record-offset cursors.
  * - createSqliteWorkbenchThreadRecallRef/readSqliteWorkbenchThreadRecallRef: encode and decode SQLite record refs.
@@ -32,6 +32,7 @@ import { readWorkbenchAgentMessageInput, readWorkbenchAgentMessageItem } from "w
 import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import { isWorkbenchHiddenSystemSteerInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import { isThreadItemVisible } from "workbench-shared/workbench/thread/thread-item-visibility";
 
 const SEARCH_SNIPPET_CHARACTERS = 500;
 const CURSOR_PREFIX = "recall-v1:";
@@ -223,6 +224,15 @@ function pushNarrativeThreadItemRecords(
 }
 
 export function buildWorkbenchThreadRecallRecords(bundle: WorkbenchThreadContextBundle): WorkbenchThreadRecallRecord[] {
+  bundle = {
+    ...bundle,
+    thread: {
+      ...bundle.thread,
+      turns: bundle.thread.turns.map(turn => ({
+        ...turn, items: turn.items.filter(item => isThreadItemVisible(bundle.thread.harness, item)),
+      })),
+    },
+  };
   const records = buildWorkbenchThreadContextPieces(bundle)
     .map(contextPieceRecord)
     .filter((record): record is WorkbenchThreadRecallRecord => record !== null);
@@ -311,6 +321,7 @@ export function buildSqliteWorkbenchThreadRecallRecords(
     throw new Error(`Unable to project SQLite Thread Recall: ${issue?.code ?? "unknown"} in ${issue?.table ?? "rows"}.`);
   }
   const turnIndexes = new Map(snapshot.turns.map((turn) => [turn.id, turn.turn_index]));
+  const harnessesByTurn = new Map(snapshot.turns.map(turn => [turn.id, turn.harness_id]));
   const userMessageRowsByItemId = new Map(
     snapshot.rows.threadItemUserMessages.map((row) => [row.item_id, row]),
   );
@@ -338,6 +349,7 @@ export function buildSqliteWorkbenchThreadRecallRecords(
     if (turnIndex === undefined) {
       throw new Error(`SQLite Thread Recall item ${root.public_id} references an unknown turn.`);
     }
+    if (!isThreadItemVisible(harnessesByTurn.get(root.turn_id)!, item)) continue;
     const sortKey = createWorkbenchThreadContextSortKey(
       turnIndex,
       root.item_position,

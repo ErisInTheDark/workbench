@@ -24,6 +24,7 @@ import {
   buildWorkbenchThreadRecallRecords,
   buildSqliteWorkbenchThreadRecallRecords,
   expandWorkbenchThreadRecall,
+  createSqliteWorkbenchThreadRecallRef,
   readSqliteWorkbenchThreadRecallRef,
   readWorkbenchThreadRecallCursor,
   searchWorkbenchThreadRecall,
@@ -70,6 +71,64 @@ const ALL_KINDS: WorkbenchThreadRecallKind[] = [
   "user-message",
   "user-steer",
 ];
+
+test("claude recall excludes ordinary output and its plans without removing stored evidence", () => {
+  const accidental = "<plan>\naccidental needle\n</plan>";
+  const items: ThreadItem[] = [
+    { id: "ordinary", type: "agentMessage", phase: null, text: accidental, memoryCitation: null, delivery: null, questions: null },
+    { id: "message-tool", type: "agentMessage", phase: "commentary", text: "intentional message", memoryCitation: null, delivery: null, questions: null },
+    { id: "thinking", type: "reasoning", summary: [], content: ["accidental needle"] },
+    { id: "user", type: "userMessage", clientId: null, content: [{ type: "text", text: "user input", text_elements: [] }] },
+  ];
+  for (const harness of ["claude", "codex"] as const) {
+    const bundle = createBundle();
+    bundle.thread.harness = harness;
+    bundle.thread.turns = [turn("turn-sqlite", items)];
+    bundle.questionnaireEntries = [];
+    bundle.steerEntries = [];
+    const legacy = buildWorkbenchThreadRecallRecords(bundle);
+    const database = new Database(":memory:");
+    try {
+      installWorkbenchDatabaseSchema(database);
+      const repository = new WorkbenchTranscriptRepository(database);
+      repository.settle([sqliteWindow([{
+        activityAt: 10, createdAt: 1, kind: "thread", projectId: fixtureIdentityValues.ProjectId.project,
+        projectRoot: "C:/project", threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"], title: "recall", updatedAt: 10,
+      }, {
+        createdAt: 1, durationMs: 9, endedAt: 10, harnessId: harness, kind: "turn", nativeLocation: "C:/project",
+        nativeThreadId: fixtureIdentityValues.NativeThreadId["native-thread"], nativeTurnId: fixtureIdentityValues.NativeTurnId["native-turn"],
+        startedAt: 1, state: "completed", threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"],
+        turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"], turnIndex: 0,
+      }, ...items.map((item, itemPosition): WorkbenchTranscriptAtomicObservation => ({
+        item, itemPosition, kind: "item", lifecycle: "completed", observedAt: 2,
+        threadId: fixtureIdentityValues.WorkbenchThreadId["thread-sqlite"], turnId: fixtureIdentityValues.WorkbenchTurnId["turn-sqlite"],
+      }))])]);
+      const snapshot = repository.read({ threadId: "thread-sqlite", turnLimit: 1 })!;
+      const sqlite = buildSqliteWorkbenchThreadRecallRecords(snapshot);
+      for (const records of [legacy, sqlite]) {
+        assert.equal(records.some(record => record.text.includes("accidental needle")), harness !== "claude");
+        assert.ok(records.some(record => record.text.includes("intentional message")));
+        assert.ok(records.some(record => record.text.includes("user input")));
+        assert.equal(searchWorkbenchThreadRecall(records, {
+          before: null, kinds: ALL_KINDS, limit: 10, query: "accidental needle",
+        }).totalMatches > 0, harness !== "claude");
+      }
+      if (harness === "claude") {
+        assert.throws(() => expandWorkbenchThreadRecall(legacy, { cursor: null, ref: "agent:ordinary" }));
+        const ordinaryId = snapshot.rows.itemSourceAliases.find(row => row.reference === "ordinary")!.item_identity_id;
+        for (const blockIndex of [null, 0]) {
+          assert.throws(() => expandWorkbenchThreadRecall(sqlite, {
+            cursor: null, ref: createSqliteWorkbenchThreadRecallRef({ itemId: ordinaryId, turnId: "turn-sqlite", blockIndex }),
+          }));
+        }
+      }
+      assert.equal(snapshot.rows.threadItems.length, items.length);
+      assert.equal(bundle.thread.turns[0]!.items.length, items.length);
+    } finally {
+      database.close();
+    }
+  }
+});
 
 test("native incoming agent recall preserves identity and excludes passive outputs in both history owners", () => {
   const message = { message: "cancellation needs cleanup", senderName: "iris", senderThreadId: "child" };
