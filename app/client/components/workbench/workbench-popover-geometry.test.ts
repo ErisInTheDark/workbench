@@ -38,6 +38,20 @@ test("popover fits a small viewport and remains above its trigger when space per
   }
 });
 
+test("auto side favours above unless below is clearly roomier, and never covers its trigger", () => {
+  const viewport = { width: 1000, height: 1000 };
+  const desired = { width: 200, height: 900, side: "auto" as const };
+  const nearlyEven = { left: 400, top: 480, width: 80, height: 30 };
+  const aboveBox = positionWorkbenchPopover(nearlyEven, viewport, desired);
+  assert.ok(aboveBox.top + aboveBox.height <= nearlyEven.top);
+  assert.ok(aboveBox.top >= 12);
+  const nearTop = { left: 400, top: 300, width: 80, height: 30 };
+  const belowBox = positionWorkbenchPopover(nearTop, viewport, desired);
+  assert.ok(belowBox.top >= nearTop.top + nearTop.height);
+  assert.ok(belowBox.top + belowBox.height <= viewport.height - 12);
+  assert.equal(belowBox.left + belowBox.width / 2, nearTop.left + nearTop.width / 2);
+});
+
 test("keyboard and zoom offsets constrain the popup to the visual viewport", () => {
   const box = positionWorkbenchPopover({ left: 900, top: 800, width: 80, height: 30 }, { width: 320, height: 260, left: 600, top: 500 }, { width: 440, height: 560 });
   assert.ok(box.left >= 612 && box.left + box.width <= 908);

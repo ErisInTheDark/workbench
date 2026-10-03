@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchPressDragMenu: anchored menu with press-drag, click, touch and keyboard selection.
+ * - default WorkbenchPressDragMenu: fit-content anchored menu (centred by default, opening above or below by room) with press-drag, click, touch and keyboard selection.
  * - PressDragMenuItem/PressDragMenuGroup: stable action and optional grouped navigation content.
  * - getPressDragGroupItems: items available from a saved-open group.
  */
@@ -32,11 +32,26 @@ export function getPressDragGroupItems (group: PressDragMenuGroup): readonly Pre
   return group.open === false ? [] : group.items;
 }
 
+const menuMaxWidth = 440;
+const menuMaxHeight = 480;
+
+function viewportBounds () {
+  const viewport = window.visualViewport;
+  return {
+    width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight,
+    left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0,
+  };
+}
+
+type MenuPlacement = { style: CSSProperties; below: boolean };
+
 export default function WorkbenchPressDragMenu ({
-  children, label, getItems, items: suppliedItems, groups, groupNavigationLabel = "Menu sections", onOpen, onSelect, onActivate, triggerAppearance = "default", triggerClassName,
+  children, label, getItems, items: suppliedItems, groups, groupNavigationLabel = "Menu sections", onOpen, onSelect, onActivate, triggerAppearance = "default", triggerClassName, align = "center", disabled = false,
 }: {
   children: ReactNode;
   label: string;
+  align?: "center" | "end";
+  disabled?: boolean;
   getItems?: () => readonly PressDragMenuItem[];
   items?: readonly PressDragMenuItem[];
   groups?: readonly PressDragMenuGroup[];
@@ -54,7 +69,7 @@ export default function WorkbenchPressDragMenu ({
   const [menu, setMenu] = useState<{ interaction: PressDragMenuState; items: readonly PressDragMenuItem[] }>({
     interaction: { kind: "closed" }, items: [],
   });
-  const [position, setPosition] = useState<CSSProperties | null>(null);
+  const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   const open = menu.interaction.kind !== "closed";
   const items = useMemo(() => groups?.flatMap(getPressDragGroupItems) ?? suppliedItems ?? menu.items,
     [groups, suppliedItems, menu.items]);
@@ -62,8 +77,21 @@ export default function WorkbenchPressDragMenu ({
   const activeIndex = items.findIndex(item => item.id === activeId);
 
   useLayoutEffect(() => {
-    if (menu.interaction.kind === "open" && position?.visibility !== "hidden") popup.current?.focus({ preventScroll: true });
-  }, [menu.interaction.kind, position?.visibility]);
+    if (menu.interaction.kind === "open" && placement?.style.visibility !== "hidden") popup.current?.focus({ preventScroll: true });
+  }, [menu.interaction.kind, placement?.style.visibility]);
+
+  function place (trigger: HTMLButtonElement, natural: { width: number; height: number }): MenuPlacement {
+    const anchor = trigger.getBoundingClientRect();
+    const viewport = viewportBounds();
+    const bounds = positionWorkbenchPopover(anchor, viewport, { ...natural, align, side: "auto" });
+    return {
+      style: {
+        left: bounds.left, top: bounds.top, maxHeight: bounds.height,
+        width: "max-content", maxWidth: Math.min(menuMaxWidth, viewport.width - 24),
+      },
+      below: bounds.top >= anchor.top + anchor.height,
+    };
+  }
 
   function releaseCapture () {
     if (menu.interaction.kind === "dragging" && trigger.current?.hasPointerCapture(menu.interaction.pointerId)) {
@@ -88,12 +116,8 @@ export default function WorkbenchPressDragMenu ({
     // Pointer capture owns drag input; focus could inherit the editor's focus-visible state.
     if (event.kind === "press") trigger.current.blur();
     const items = groups?.flatMap(getPressDragGroupItems) ?? suppliedItems ?? getItems?.() ?? [];
-    const viewport = window.visualViewport;
-    const bounds = positionWorkbenchPopover(trigger.current.getBoundingClientRect(), {
-      width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight,
-      left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0,
-    }, { width: 440, height: 480, align: "end" });
-    setPosition({ ...bounds, height: "auto", maxHeight: bounds.height, visibility: "hidden" });
+    // Render unplaced and hidden first; the layout effect measures natural size, then places it.
+    setPlacement({ style: { left: 0, top: 0, width: "max-content", maxWidth: Math.min(menuMaxWidth, viewportBounds().width - 24), maxHeight: menuMaxHeight, visibility: "hidden" }, below: false });
     setMenu({ interaction: transitionPressDragMenu(menu.interaction, event).state, items });
     hoveredGroup.current = null;
     if (event.kind === "open") trigger.current.focus({ preventScroll: true });
@@ -143,24 +167,24 @@ export default function WorkbenchPressDragMenu ({
   }
 
   useLayoutEffect(() => {
-    if (!open || !popup.current) return;
-    if ((position?.visibility === "hidden" || suppliedItems || groups) && trigger.current) {
-      const viewport = window.visualViewport;
-      // Live catalogues can arrive after an initially empty menu. Measure its
-      // natural height again rather than retaining that first tiny scroll box.
-      if (suppliedItems || groups) popup.current.style.height = "auto";
-      const rect = popup.current.getBoundingClientRect();
-      const bounds = positionWorkbenchPopover(trigger.current.getBoundingClientRect(), {
-        width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight,
-        left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0,
-      }, { width: rect.width, height: rect.height, align: "end" });
-      setPosition(suppliedItems || groups ? {
-        ...bounds, height: "auto", maxHeight: Math.min(480, (viewport?.height ?? window.innerHeight) - 24),
-      } : bounds);
+    const element = popup.current;
+    if (!open || !element) return;
+    const unplaced = placement?.style.visibility === "hidden";
+    let below = placement?.below ?? false;
+    // Live catalogues can arrive after an initially empty menu, so supplied
+    // items are re-placed from their natural size rather than the first box.
+    if ((unplaced || suppliedItems || groups) && trigger.current) {
+      const next = place(trigger.current, {
+        width: element.getBoundingClientRect().width,
+        height: Math.min(menuMaxHeight, element.scrollHeight),
+      });
+      below = next.below;
+      setPlacement(next);
     }
-    if (!groups || position?.visibility === "hidden") popup.current.scrollTop = popup.current.scrollHeight;
-    if (activeIndex >= 0) popup.current.querySelectorAll<HTMLElement>("[data-menu-row]")[activeIndex]?.scrollIntoView({ block: "nearest" });
-  }, [open, items, position?.visibility]);
+    // Start at the end nearest the trigger.
+    if (!groups || unplaced) element.scrollTop = below ? 0 : element.scrollHeight;
+    if (activeIndex >= 0) element.querySelectorAll<HTMLElement>("[data-menu-row]")[activeIndex]?.scrollIntoView({ block: "nearest" });
+  }, [open, items, placement?.style.visibility]);
 
   useEffect(() => {
     if (!open) return;
@@ -210,6 +234,7 @@ export default function WorkbenchPressDragMenu ({
       aria-haspopup={open || !onActivate ? "menu" : "dialog"}
       aria-expanded={open}
       aria-controls={open ? menuId : undefined}
+      disabled={disabled}
       className={`
         enabled:cursor-pointer relative isolate inline-flex min-w-0 items-center touch-none select-none outline-none transition
         ${triggerAppearance === "default" ? `
@@ -268,7 +293,7 @@ export default function WorkbenchPressDragMenu ({
         if (event.relatedTarget instanceof Node && (popup.current?.contains(event.relatedTarget) || trigger.current?.contains(event.relatedTarget))) return;
         dispatch({ kind: "cancel" });
       }}
-      style={{ ...position, zIndex: 60 }}
+      style={{ ...placement?.style, zIndex: 60 }}
       className={groups ? "scrollbar-hover-reveal grid min-h-0 grid-cols-[2.5rem_minmax(0,1fr)] items-start overflow-y-auto overscroll-contain outline-none" : "overflow-y-auto overscroll-contain outline-none"}
     >
       {groups ? <>

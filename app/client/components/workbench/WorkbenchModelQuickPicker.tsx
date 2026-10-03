@@ -61,6 +61,7 @@ export default function WorkbenchModelQuickPicker ({
   return <WorkbenchPressDragMenu
     label={`Composer model: ${providerLabel} ${modelName}`}
     groupNavigationLabel="Model sections"
+    align="end"
     triggerClassName="text-text"
     groups={menuGroups}
     onOpen={onOpen}

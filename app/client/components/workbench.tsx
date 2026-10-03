@@ -1701,14 +1701,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     && !route.projectId
     && !route.logical?.projectId
     && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft");
-  const rotateHomeDraftProject = useCallback(async () => {
+  const homeDraftProjects = route.logical ? selectedLogicalProjects : selectedPhysicalProjects;
+  const homeDraftProjectId = route.logical?.threadOwnerProjectId ?? threadProjectId;
+  const moveHomeDraftProject = useCallback(async (nextProjectId: string) => {
     if (!controls || !isHomeDraftRoute) return;
-    const recentProjects = route.logical ? selectedLogicalProjects : selectedPhysicalProjects;
-    const currentProjectId = route.logical?.threadOwnerProjectId ?? threadProjectId;
-    if (!currentProjectId || recentProjects.length < 2) return;
-    const currentIndex = recentProjects.findIndex(({ id }) => id === currentProjectId);
-    const nextProject = recentProjects[(currentIndex < 0 ? 0 : currentIndex + 1) % recentProjects.length];
-    if (!nextProject || nextProject.id === currentProjectId) return;
+    const nextProject = homeDraftProjects.find(({ id }) => id === nextProjectId);
+    if (!homeDraftProjectId || !nextProject || nextProject.id === homeDraftProjectId) return;
     setIsProjectRotationPending(true);
     setSelectionError("");
     try {
@@ -1716,7 +1714,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       if (route.logical) {
         const logicalProject = selectedLogicalProjects.find(project => project.id === nextProject.id);
         const destination = logicalProject?.locations.find(item => item.project)?.target;
-        if (!logicalProject || !destination) throw new Error("The next project's daemon folder is unavailable.");
+        if (!logicalProject || !destination) throw new Error("That project's daemon folder is unavailable.");
         const draftSession = activeDraftSessionRef.current;
         if (target?.kind === "draft") {
           if (!draftSession || !await draftSession.flush("retarget")) {
@@ -1749,15 +1747,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     } finally {
       setIsProjectRotationPending(false);
     }
-  }, [controls, isHomeDraftRoute, navigateToRoute, route, selectedLogicalProjects, selectedPhysicalProjects, threadProjectId]);
+  }, [controls, homeDraftProjectId, homeDraftProjects, isHomeDraftRoute, navigateToRoute, route, selectedLogicalProjects, selectedPhysicalProjects, threadProjectId]);
   const homeRotatorProject = route.logical ? logicalThreadProject
     : explorer.projects.find(project => project.id === threadProject?.id);
   const projectRotator = isHomeDraftRoute && homeRotatorProject ? (
     <WorkbenchProjectControl
-      disabled={isProjectRotationPending || (route.logical
-        ? selectedLogicalProjects : selectedPhysicalProjects).length < 2}
-      onRotate={() => { void rotateHomeDraftProject(); }}
+      disabled={isProjectRotationPending || homeDraftProjects.length < 2}
+      onSelect={projectId => { void moveHomeDraftProject(projectId); }}
       project={homeRotatorProject}
+      projects={homeDraftProjects}
     />
   ) : null;
   const isForeignThreadProject = Boolean(threadProjectId && (threadProjectId !== browseProjectId
@@ -2841,7 +2839,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           onSelect={location => {
                             void (async () => {
                               const submittedRoute = route;
-                              const destination = logicalThreadProject.locations.find(item =>
+                              // Observed folders (e.g. unregistered worktrees) are valid launch targets too.
+                              const destination = projectFolderOptions([logicalThreadProject]).find(item =>
                                 item.target.daemonId === location.daemonId && item.target.projectId === location.projectId);
                               if (!destination?.project) throw new Error("That daemon folder is unavailable.");
                               if (!controls || !submittedRoute.logical?.threadOwnerProjectId
