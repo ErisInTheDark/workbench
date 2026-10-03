@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - default ThreadFileChangeItem: render adjacent native and canonical file operations with shared lifecycle rows.
+ * - default ThreadFileChangeItem: render adjacent native and canonical file operations with shared lifecycle rows, growing back-to-back native edits of one file into one row.
  * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes, marking binary diffs without previews.
  * - ThreadFileChangePreviewList: render non-disclosure file-change previews with established row presentation.
  * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts.
  * - ThreadFileChangeListChange: reusable file-change row input.
  * - getThreadFileChangeTotals: cumulative counts using the same precedence as file rows.
+ * - getStitchedNativeRowChange: one row input from stitched native pieces, with accumulated counts and hunks and failure-only evidence.
  */
 "use client";
 
@@ -31,8 +32,8 @@ import { getThreadFileChangeMotionIdentity } from "./ThreadEntryMotionController
 import { ThreadEntryMotion } from "./thread-scroll-viewport-context";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadDurationText from "./ThreadDurationText";
-import ThreadToolCallDetails from "./ThreadToolCallDetails";
-import { formatDynamicToolInvocation, formatMcpToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
+import { formatToolCallOutput } from "./format-thread-tool-call";
+import { stitchFileOperationRows, type StitchedNativeFilePiece, type StitchedNativeFileRow } from "./thread-file-change-stitching";
 
 type FileChangeItem = WorkbenchFileChangeItem;
 type NativeFileItem = NativeFileOperationItem;
@@ -87,6 +88,8 @@ export interface ThreadFileChangeListChange {
   change: FileUpdateChange;
   details?: ReactNode;
   danger?: boolean;
+  /** Pre-parsed diff, used when one row presents several changes; otherwise parsed from `change`. */
+  diff?: ParsedUnifiedDiff;
   detailsAvailable?: boolean;
   showDiff?: boolean;
   presentationLabel?: string;
@@ -287,7 +290,7 @@ function ThreadFileChangeDetails ({
       ) : null}
       {parsedChange.diff.binary ? (
         <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">Binary file. No diff preview.</p>
-      ) : parsedChange.change.diff.trim() ? (
+      ) : parsedChange.diff.hunks.length || parsedChange.change.diff.trim() ? (
         <ThreadCodeDisplay diff={parsedChange.diff} preview variant="diff" />
       ) : (
         <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No diff captured.</p>
@@ -380,7 +383,7 @@ function ThreadFileChangeRows ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const parsedChanges: ParsedFileChange[] = changes.map((entry, index) => {
-    const diff = parseFileChangeDiff(entry.change);
+    const diff = entry.diff ?? parseFileChangeDiff(entry.change);
     return {
       change: entry.change,
       danger: entry.danger ?? false,
@@ -496,23 +499,74 @@ function ThreadFileChangeOutcome ({ item }: { item: FileChangeItem }) {
   );
 }
 
-function NativeFileEvidence({ item }: { item: NativeFileItem }) {
+interface NativeFileEvidenceFacts {
+  durationMs: number | null;
+  failed: boolean;
+  /** Tool output explaining a failure; successful calls never expose their raw invocation or output. */
+  failureOutput: string | null;
+}
+
+function getNativeFileEvidence(items: readonly NativeFileItem[]): NativeFileEvidenceFacts | null {
+  const durations = items.flatMap(item => item.durationMs === null ? [] : [item.durationMs]);
+  const failedItem = items.find(item => getNativeFileOperationOutcome(item) === "failed");
+  const failureOutput = !failedItem ? null : failedItem.type === "dynamicToolCall"
+    ? formatToolCallOutput({ content: failedItem.contentItems })
+    : formatToolCallOutput({ content: failedItem.result?.content, fallback: failedItem.error?.message ?? null });
+  return durations.length || failedItem ? {
+    durationMs: durations.length ? durations.reduce((total, duration) => total + duration, 0) : null,
+    failed: Boolean(failedItem),
+    failureOutput: failureOutput?.trim() || null,
+  } : null;
+}
+
+function NativeFileEvidence({ evidence }: { evidence: NativeFileEvidenceFacts }) {
   return <>
-    {item.durationMs !== null ? <ThreadDurationText durationMs={item.durationMs} /> : null}
-    {getNativeFileOperationOutcome(item) === "failed"
-      ? <p className="m-0 text-fg/muted">Attempted change. Applied counts are unavailable.</p> : null}
-    {item.type === "dynamicToolCall" ? (
-      <ThreadToolCallDetails
-        invocation={formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool })}
-        output={formatToolCallOutput({ content: item.contentItems })}
-      />
-    ) : (
-      <ThreadToolCallDetails
-        invocation={formatMcpToolInvocation({ argumentsValue: item.arguments, server: item.server, tool: item.tool })}
-        output={formatToolCallOutput({ content: item.result?.content, fallback: item.error?.message ?? null })}
-      />
-    )}
+    {evidence.durationMs !== null ? <ThreadDurationText durationMs={evidence.durationMs} /> : null}
+    {evidence.failed ? <p className="m-0 text-fg/muted">Attempted change. Applied counts are unavailable.</p> : null}
+    {evidence.failureOutput ? <ThreadCodeDisplay output={evidence.failureOutput} preview variant="plain" /> : null}
   </>;
+}
+
+function getNativePieceLabel({ entry, item }: StitchedNativeFilePiece) {
+  return entry.presentationLabel ?? getFileChangeLifecycleLabel(entry.change, {
+    status: getNativeFileOperationOutcome(item),
+    workbenchFailureKind: entry.failureKind,
+  });
+}
+
+/** One row for back-to-back pieces: counts and hunks accumulate in order, keyed by the first piece so it grows in place. */
+export function getStitchedNativeRowChange({ pieces }: StitchedNativeFileRow): ThreadFileChangeListChange {
+  const [anchor] = pieces;
+  const live = [...pieces].reverse().find(piece => getNativeFileOperationOutcome(piece.item) === "inProgress");
+  const diffs = pieces.map(piece => parseFileChangeDiff(piece.entry.change));
+  const diff: ParsedUnifiedDiff = diffs.length === 1 ? diffs[0]! : {
+    additions: diffs.reduce((total, part) => total + part.additions, 0),
+    binary: diffs.some(part => part.binary),
+    deletions: diffs.reduce((total, part) => total + part.deletions, 0),
+    headers: diffs[0]!.headers,
+    hunks: diffs.flatMap(part => part.hunks),
+  };
+  const summaryTotals = pieces.reduce((total, piece, index) => {
+    const counts = piece.entry.summaryTotals ?? diffs[index]!;
+    return { additions: total.additions + counts.additions, deletions: total.deletions + counts.deletions };
+  }, { additions: 0, deletions: 0 });
+  const evidence = getNativeFileEvidence(pieces.filter(piece => piece.primary).map(piece => piece.item));
+  const hasDiff = pieces.some(piece => Boolean(piece.entry.change.diff));
+  const settled = pieces.some(piece => getNativeFileOperationOutcome(piece.item) !== "inProgress");
+  return {
+    change: anchor.entry.change,
+    danger: anchor.entry.danger,
+    details: evidence ? <NativeFileEvidence evidence={evidence} /> : undefined,
+    // Stays a disclosure while a later piece streams, so an open diff never collapses mid-growth.
+    detailsAvailable: settled && (hasDiff || Boolean(evidence)),
+    diff,
+    presentationLabel: getNativePieceLabel(live ?? anchor),
+    showDiff: hasDiff,
+    sourceChangeIndex: anchor.entry.sourceChangeIndex,
+    sourceItemId: anchor.entry.sourceItemId,
+    staticMarker: true,
+    summaryTotals,
+  };
 }
 
 export default function ThreadFileChangeItem ({
@@ -535,38 +589,36 @@ export default function ThreadFileChangeItem ({
     && item.status === "inProgress" && !getNativeFileChanges(item).length)) return null;
   return (
     <div className="space-y-1.5 py-2">
-      {items.map((item) => {
-        if (item.type !== "fileChange") {
-          const nativeChanges = getNativeFileChanges(item);
+      {stitchFileOperationRows(items).map((group) => {
+        if (group.kind === "native") {
+          const { item, rows } = group;
+          if (rows.length) {
+            return (
+              <div className="space-y-0.5" key={item.id}>
+                <ThreadFileChangeRows
+                  animateEntries={animateEntries}
+                  changes={rows.map(getStitchedNativeRowChange)}
+                  projectFilePaths={projectFilePaths} projectId={projectId}
+                  projectRootPath={projectRootPath} workspaceRoots={workspaceRoots}
+                />
+              </div>
+            );
+          }
           const outcome = getNativeFileOperationOutcome(item);
-          if (outcome === "inProgress" && !nativeChanges.length) return null;
+          if (outcome === "inProgress") return null;
+          const label = <ThreadSummaryText text={outcome === "failed" ? "Failed file operation" : "File operation completed"} />;
+          const evidence = getNativeFileEvidence([item]);
           return (
-        <div className="space-y-0.5" key={item.id}>
-          <ThreadFileChangeRows
-            animateEntries={animateEntries}
-            changes={nativeChanges.map(({ failureKind, ...entry }, index) => ({
-              ...entry,
-              details: index === 0 ? <NativeFileEvidence item={item} /> : undefined,
-              detailsAvailable: outcome !== "inProgress" && (index === 0 || Boolean(entry.change.diff)),
-              showDiff: Boolean(entry.change.diff),
-              staticMarker: true,
-              presentationLabel: entry.presentationLabel ?? getFileChangeLifecycleLabel(entry.change, {
-                status: outcome,
-                workbenchFailureKind: failureKind,
-              }),
-            }))}
-            projectFilePaths={projectFilePaths} projectId={projectId}
-            projectRootPath={projectRootPath} workspaceRoots={workspaceRoots}
-          />
-          {!nativeChanges.length && outcome !== "inProgress" ? (
-            <ThreadDisclosure summary={<ThreadSummaryText text={outcome === "failed"
-              ? "Failed file operation" : "File operation completed"} />}>
-              <NativeFileEvidence item={item} />
-            </ThreadDisclosure>
-          ) : null}
-        </div>
+            <div className="space-y-0.5" key={item.id}>
+              {evidence ? (
+                <ThreadDisclosure summary={label}><NativeFileEvidence evidence={evidence} /></ThreadDisclosure>
+              ) : (
+                <ThreadDisclosureStaticRow className="!py-0.5" summary={label} summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted" />
+              )}
+            </div>
           );
         }
+        const { item } = group;
         return (
         <div className="space-y-0.5" key={item.id}>
           <ThreadFileChangeRows

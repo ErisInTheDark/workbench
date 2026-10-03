@@ -1,11 +1,12 @@
-/* No production exports. Tests protect live file-change count rows, terminal diff disclosure, unsuccessful outcomes, and adjacent item order. */
+/* No production exports. Tests protect live file-change count rows, terminal diff disclosure, unsuccessful outcomes, adjacent item order, and stitched native rows. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createElement, type ComponentProps } from "react";
+import { createElement, Fragment, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
-import ThreadFileChangeItem, { ThreadFileChangeList, getThreadFileChangeTotals } from "./ThreadFileChangeItem";
+import ThreadFileChangeItem, { ThreadFileChangeList, getStitchedNativeRowChange, getThreadFileChangeTotals } from "./ThreadFileChangeItem";
+import { stitchFileOperationRows } from "./thread-file-change-stitching";
 
 type FileChangeItem = WorkbenchFileChangeItem;
 
@@ -65,6 +66,50 @@ test("native creation changes from a live count row to one final disclosure and 
   assert.match(render([failed]), /Failed to create/);
   assert.doesNotMatch(render([failed]), />\+\d+</);
   assert.deepEqual(getThreadFileChangeTotals([live, completed, failed]), { additions: 2, deletions: 0 });
+});
+
+function claudeEdit(id: string, diff: string, status: "completed" | "failed" | "inProgress" = "completed") {
+  return {
+    id, type: "dynamicToolCall" as const, namespace: "claude", tool: "Edit",
+    arguments: { file_path: "C:/workspace/src/grow.ts", old_string: "secret-old", new_string: "secret-new" },
+    status, success: status === "inProgress" ? null : status === "completed",
+    contentItems: status === "failed" ? [{ type: "inputText" as const, text: "String to replace not found" }] : null,
+    durationMs: null, metadata: { fileChange: { kind: "update", diff } },
+  };
+}
+
+function stitchedRow(...items: ReturnType<typeof claudeEdit>[]) {
+  const [group] = stitchFileOperationRows(items);
+  assert.ok(group?.kind === "native" && group.rows.length === 1);
+  return getStitchedNativeRowChange(group.rows[0]!);
+}
+
+const detailsHtml = (row: ReturnType<typeof getStitchedNativeRowChange>) =>
+  renderToStaticMarkup(createElement(Fragment, null, row.details));
+
+test("back-to-back native edits of one file grow one row with summed counts and stacked hunks", () => {
+  const first = claudeEdit("first", "@@ -1,1 +1,2 @@\n-a\n+b\n+c");
+  const second = claudeEdit("second", "@@ -9,1 +9,1 @@\n-later-old\n+later-new");
+  const html = render([first, second]);
+  assert.equal((html.match(/<details\b/g) ?? []).length, 1);
+  assert.equal((html.match(/Edited/g) ?? []).length, 1);
+  assert.match(html, />\+3</);
+  assert.match(html, />-2</);
+  const row = stitchedRow(first, second);
+  assert.equal(row.sourceItemId, "first");
+  assert.deepEqual(row.diff?.hunks.map(hunk => hunk.newStart), [1, 9]);
+  const growing = stitchedRow(first, claudeEdit("live", "", "inProgress"));
+  assert.equal(growing.presentationLabel, "Editing");
+  assert.equal(growing.detailsAvailable, true);
+});
+
+test("native edit details never expose the raw call, and failures keep their output", () => {
+  assert.equal(stitchedRow(claudeEdit("done", "@@ -1,1 +1,1 @@\n-a\n+b")).details, undefined);
+  const failed = stitchedRow(claudeEdit("failed", "", "failed"));
+  assert.equal(failed.presentationLabel, "Failed to edit");
+  const html = detailsHtml(failed);
+  assert.match(html, /String to replace not found/);
+  assert.doesNotMatch(html, /secret-old|old_string|Edit\(/);
 });
 
 test("in-progress file changes stream count summaries without exposing partial diffs", () => {
