@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - expandVariantGroupsInSource: expand grouped Tailwind classes in browser source with a source map.
+ * - expandVariantGroupsInSource: expand grouped Tailwind classes and normalize bracket whitespace (dropped beside commas) in browser source with a source map.
  */
 import path from "node:path";
 import MagicString from "magic-string";
@@ -80,6 +80,37 @@ function groupOpening(token: string) {
   return -1;
 }
 
+/**
+ * Whitespace becomes Tailwind's `_`, except beside unquoted commas, where it is dropped:
+ * Tailwind infers multi-layer values with `,_` separators as colours rather than images.
+ */
+function normalizeBracketBody(body: string) {
+  const trimmed = body.trim().replace(/^([\w-]+):\s+/u, "$1:");
+  let result = "";
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < trimmed.length; index++) {
+    const char = trimmed[index]!;
+    if (escaped) {
+      escaped = false;
+    } else if (char === "\\") {
+      escaped = true;
+    } else if (quote) {
+      if (char === quote) quote = "";
+    } else if (char === "'" || char === '"') {
+      quote = char;
+    } else if (/\s/u.test(char)) {
+      let end = index;
+      while (end + 1 < trimmed.length && /\s/u.test(trimmed[end + 1]!)) end++;
+      if (result.at(-1) !== "," && trimmed[end + 1] !== ",") result += "_";
+      index = end;
+      continue;
+    }
+    result += quote && /\s/u.test(char) ? "_" : char;
+  }
+  return result;
+}
+
 function normalizeBracketWhitespace(token: string) {
   let brackets = 0;
   let opening = -1;
@@ -107,9 +138,7 @@ function normalizeBracketWhitespace(token: string) {
     }
     if (char === "[" && brackets++ === 0) opening = index;
     else if (char === "]" && brackets > 0 && --brackets === 0) {
-      const body = token.slice(opening + 1, index);
-      const value = body.trim().replace(/^([\w-]+):\s+/u, "$1:").replace(/\s+/gu, "_");
-      result += token.slice(cursor, opening + 1) + value + "]";
+      result += token.slice(cursor, opening + 1) + normalizeBracketBody(token.slice(opening + 1, index)) + "]";
       cursor = index + 1;
     }
   }

@@ -60,7 +60,7 @@ test("grouped classes appear in browser output and generated Tailwind CSS", asyn
   assert.match(stylesheet, /transition:\s*opacity\s+\.3s,\s*transform\s+\.5s/u);
   assert.match(javascript, /hover:bg-red-500 hover:text-white/u);
   assert.match(javascript, /\[&_li_>_details_>_summary\]:flex \[&_li_>_details_>_summary\]:cursor-pointer/u);
-  assert.match(javascript, /\[transition:opacity_\.3s,_transform_\.5s\]/u);
+  assert.match(javascript, /\[transition:opacity_\.3s,transform_\.5s\]/u);
   const sourceMap = JSON.parse(await readFile(path.join(compiler.outputDirectoryPath, "assets", "app.js.map"), "utf8")) as {
     sources: string[];
     sourcesContent: string[];

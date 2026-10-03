@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - threadBubbleControlClassName: shared look for icon buttons in a bubble's hover row.
- * - default ThreadBubbleCopyButton: copy the explicit source Markdown of one aligned user bubble with shared feedback, beside optional extra bubble actions.
+ * - default ThreadBubbleCopyButton: copy the explicit source Markdown of one aligned user bubble with shared feedback, followed by optional extra bubble actions.
  */
 "use client";
 
@@ -24,7 +24,7 @@ export default function ThreadBubbleCopyButton({
   markdown,
   side,
 }: {
-  /** Extra icon buttons shown in the same hover row, before copy. */
+  /** Extra icon buttons shown in the same hover row, after copy. */
   actions?: ReactNode;
   markdown: string;
   side: "left" | "right";
@@ -63,7 +63,6 @@ export default function ThreadBubbleCopyButton({
       ].join(" ")}
       data-thread-bubble-controls={side}
     >
-      {actions}
       {hasMarkdown ? <button
         ref={setButtonRef}
         type="button"
@@ -87,6 +86,7 @@ export default function ThreadBubbleCopyButton({
           <WarningIcon size={16} />
         </span>
       </button> : null}
+      {actions}
     </div>
   );
 }

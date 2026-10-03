@@ -40,8 +40,23 @@ test("turns whitespace inside bracket classes into one class without joining nei
 
   const { code } = expandVariantGroupsInSource(source, "Button.tsx");
 
-  assert.match(code, /px-2 \[transition:opacity_\.3s,_transform_\.5s\] hover:\[mask-type:alpha\] hover:text-white \$\{active/u);
+  assert.match(code, /px-2 \[transition:opacity_\.3s,transform_\.5s\] hover:\[mask-type:alpha\] hover:text-white \$\{active/u);
   assert.match(code, /active \? 'ring-2' : ''/u);
+});
+
+// Tailwind infers a multi-layer value with `,_` separators as a colour, emitting invalid `background-color`.
+test("keeps commas tight so multiline layered values still infer as images", () => {
+  const source = [
+    "const classes = `bg-[",
+    "  radial-gradient(circle at 20% 20%, red, transparent 30%),",
+    "  linear-gradient(135deg, red, blue)",
+    "] before:content-['a, b']`;",
+  ].join("\n");
+
+  const { code } = expandVariantGroupsInSource(source, "Button.tsx");
+
+  assert.match(code, /bg-\[radial-gradient\(circle_at_20%_20%,red,transparent_30%\),linear-gradient\(135deg,red,blue\)\]/u);
+  assert.match(code, /before:content-\['a,_b'\]/u);
 });
 
 test("rejects an incomplete group instead of building an unstyled class", () => {
