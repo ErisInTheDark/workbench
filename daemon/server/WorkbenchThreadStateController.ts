@@ -2082,11 +2082,12 @@ export default class WorkbenchThreadStateController {
       if (entry.entryKind === "thread" && request.method === "workbench/thread-state/archive/set" && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")) next = { ...entry, metadata: request.archived ? { archived: true, pinned: false, snoozed: false } : { archived: false, pinned: false, snoozed: false }, snoozedUntil: null };
       if (request.method === "workbench/thread-state/questionnaire/dismiss") {
         if (entry.pendingQuestionnaire?.requestKey === request.requestKey) {
+          // A pendingInput lifecycle without its question would stay provider-owned forever.
+          const lifecycle = reduceWorkbenchThreadLifecycle(null, { kind: "userStopped" });
           next = entry.entryKind === "thread" ? {
-            ...entry, pendingQuestionnaire: null,
-            lifecycle: reduceWorkbenchThreadLifecycle(null, { kind: "userStopped" }),
+            ...entry, pendingQuestionnaire: null, lifecycle,
             metadata: { ...entry.metadata, snoozed: false }, snoozedUntil: null,
-          } : { ...entry, pendingQuestionnaire: null };
+          } : { ...entry, pendingQuestionnaire: null, lifecycle };
         } else if (entry.pendingQuestionnaire) {
           return { accepted: false, revision: state.revision };
         }

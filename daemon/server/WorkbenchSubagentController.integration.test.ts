@@ -201,6 +201,7 @@ test("creates with the selected profile and delivers attributed initial input", 
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
     subagentStore: new WorkbenchSubagentStore(fixture.database),
+    stopThread: async () => undefined,
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -277,6 +278,7 @@ test("keeps relationship storage independent from lifecycle through create and s
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
     subagentStore: new WorkbenchSubagentStore(fixture.database),
+    stopThread: async () => undefined,
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -318,6 +320,7 @@ test("keeps a created child durable when its first turn fails to start", async (
     resolveProjectFromCwd: createProjectResolver(cwd),
     profileStore,
     subagentStore: new WorkbenchSubagentStore(fixture.database),
+    stopThread: async () => undefined,
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });

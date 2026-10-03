@@ -1170,6 +1170,41 @@ test("questionnaire snooze retains input through interruption, then stop dismiss
   } finally { await controller.dispose(); }
 });
 
+test("stopping a subagent questionnaire leaves the child stopped instead of provider-owned", async () => {
+  const question = {
+    itemId: "c3f0a1d2-5b6e-4f7a-8b9c-0d1e2f3a4b5c", requestKey: "child-request", turnId: null,
+    request: { id: "child-request", title: "Choose", summary: "", submitLabel: "Submit", questions: [
+      { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
+    ] },
+  };
+  const child: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> = {
+    activityAt: 1, createdAt: 1, cwd: "C:/project", directSubagentIndex: 0, entryKind: "subagent",
+    identity: { harness: "codex", threadId: fixtureThreadIds["child"] },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "child-request", settled: false },
+    name: "Child", parentThreadId: fixtureThreadIds["parent"], pinned: false, profileId: "default", profileName: "Default",
+    projectId: fixtureProjectIds["project"], title: "Child", updatedAt: 1,
+    pendingQuestionnaire: question,
+  };
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "subagent-questionnaire-stop", threadStateStore: new MemoryThreadStatePersistence(),
+    getProjectCatalog: projectCatalog,
+    reconcileProject: async (_project, _signal, accept) => { await accept("codex", [child], { complete: true }); return []; },
+  });
+  try {
+    await controller.readProject(fixtureProjectIds["project"]);
+    await controller.refresh(fixtureProjectIds["project"]);
+    const response = await controller.handleRequest("subagent-controller", {
+      method: "workbench/thread-state/questionnaire/dismiss", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: child.identity, requestKey: question.requestKey,
+    });
+    assert.equal(response.error, undefined);
+    const entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries
+      .find(candidate => candidate.entryKind === "subagent" && candidate.identity.threadId === child.identity.threadId);
+    assert.ok(entry?.entryKind === "subagent");
+    assert.equal(entry.lifecycle.kind, "stopped");
+    assert.equal(entry.pendingQuestionnaire ?? null, null);
+  } finally { await controller.dispose(); }
+});
+
 async function seedProjectState(storageRoot: string, projectId: string, document: object) {
   await testPersistence(storageRoot).writeProject(projectId, document);
 }

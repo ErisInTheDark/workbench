@@ -1,4 +1,4 @@
-/* Exports: none. Protect WB action ownership, accepted-message settlement, orphaned stop settlement, undelivered steer resend/dismiss and agent-message redelivery. */
+/* Exports: none. Protect WB action ownership, accepted-message settlement, orphaned stop settlement, parent-agent stop questionnaire dismissal, undelivered steer resend/dismiss and agent-message redelivery. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import WorkbenchThreadActionController, {
@@ -276,6 +276,34 @@ test("stop retains the caller's questionnaire identity instead of selecting a re
   assert.ok("requestKey" in f.mutations[0]);
   assert.equal(f.mutations[0].requestKey, "seen-question");
   assert.deepEqual(f.stopOrder, ["interrupt", "settle", "mutation"]);
+});
+
+function agentStopFixture(turnStatus: "inProgress" | "interrupted") {
+  const f = fixture();
+  const interrupts: object[] = [];
+  f.provider.threads.latestTurn = async () => ({ id: "wb-turn", status: turnStatus }) as never;
+  f.provider.threads.interrupt = async (threadId, turnId, options) => {
+    f.stopOrder.push("interrupt");
+    interrupts.push({ threadId, turnId, options });
+  };
+  f.owners.state.getCanonicalThreadEntry = async () => ({ pendingQuestionnaire: { requestKey: "waiting-question" } }) as never;
+  return { ...f, interrupts };
+}
+
+test("parent-agent stop interrupts the live turn, then dismisses the questionnaire it retained", async () => {
+  const f = agentStopFixture("inProgress");
+  await f.controller.stopThread(WorkbenchThreadIdSchema.parse("wb-thread"));
+  assert.deepEqual(f.interrupts, [{ threadId: "wb-thread", turnId: "wb-turn", options: { preserveGoal: true } }]);
+  assert.deepEqual(f.stopOrder, ["interrupt", "settle", "mutation"]);
+  assert.ok("requestKey" in f.mutations[0]!);
+  assert.equal(f.mutations[0].requestKey, "waiting-question");
+});
+
+test("parent-agent stop dismisses a questionnaire whose turn already ended", async () => {
+  const f = agentStopFixture("interrupted");
+  await f.controller.stopThread(WorkbenchThreadIdSchema.parse("wb-thread"));
+  assert.deepEqual(f.interrupts, []);
+  assert.deepEqual(f.stopOrder, ["mutation"]);
 });
 
 function heldSteer(status: string) {

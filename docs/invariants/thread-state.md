@@ -1,4 +1,5 @@
 - User-facing sidebar threads and subagent threads have separate state semantics. Never infer subagent changes from sidebar thread requests. Plan subagent changes separately and obtain explicit user agreement.
+- Stop is only ever requested by user or parent agent. Interrupt is everything else.
 - Composer questionnaire snooze interrupts the turn but retains the question. Stop dismisses it, clears snooze, and marks the thread stopped.
 - Settled and archived are placement, not status. Preserve lifecycle presentation.
 - Unpinned settled sidebar threads archive 14 days after the later of their last thread item or settling, including existing records.

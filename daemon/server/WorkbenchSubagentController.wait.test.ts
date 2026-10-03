@@ -139,6 +139,7 @@ test("multiplexed wait immediately prefers questionnaires, then inactive turns",
       return identity.threadId;
     },
     provider: () => client,
+    stopThread: async () => { throw new Error("Waits do not stop threads."); },
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd, project: { id: projectId }, root: {} }) as AgentEndpointProjectResolution,
     profileStore: { read: async () => ({ profiles: [] }), mutate: async () => ({ profiles: [] }) },

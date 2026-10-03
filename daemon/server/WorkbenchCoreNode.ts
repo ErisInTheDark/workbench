@@ -276,6 +276,8 @@ function createWorkbenchCoreFeature(
     resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     profileStore,
     persistence: database,
+    // Read lazily: thread actions own stop and are built later in this node.
+    stopThread: threadId => threadActions.stopThread(threadId),
     threadState: {
       getEntry: async (projectId, harness, threadId) => {
         return requireThreadState().controller.getThreadEntry(projectId, harness, threadId);

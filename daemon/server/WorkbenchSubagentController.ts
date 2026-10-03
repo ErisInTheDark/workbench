@@ -52,6 +52,8 @@ export interface WorkbenchSubagentControllerOptions {
   profileStore: Pick<WorkbenchComposerProfileStore, "read" | "mutate">;
   resolveProjectFromCwd: AgentEndpointProjectResolver;
   subagentStore: WorkbenchSubagentControllerStore;
+  /** Stop: interrupt the live turn, dismiss its pending questionnaire and mark the thread stopped. */
+  stopThread(threadId: WorkbenchThreadId): Promise<void>;
   threadState?: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
     mutate(request: WorkbenchThreadStateRequest): Promise<void>;
@@ -102,6 +104,7 @@ export default class WorkbenchSubagentController {
   private readonly profileStore: WorkbenchSubagentControllerOptions["profileStore"];
   private readonly resolveProjectFromCwd: AgentEndpointProjectResolver;
   private readonly subagentStore: WorkbenchSubagentControllerStore;
+  private readonly stopThread: WorkbenchSubagentControllerOptions["stopThread"];
   private readonly threadState: WorkbenchSubagentControllerOptions["threadState"];
   private readonly waiters = new Map<string, AbortController>();
   private active = true;
@@ -117,6 +120,7 @@ export default class WorkbenchSubagentController {
     profileStore,
     resolveProjectFromCwd,
     subagentStore,
+    stopThread,
     threadState,
   }: WorkbenchSubagentControllerOptions) {
     this.provider = provider;
@@ -127,6 +131,7 @@ export default class WorkbenchSubagentController {
     this.profileStore = profileStore;
     this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.subagentStore = subagentStore;
+    this.stopThread = stopThread;
     this.threadState = threadState;
   }
 
@@ -495,11 +500,7 @@ export default class WorkbenchSubagentController {
   private async stop(params: Record<string, unknown>) {
     const records = await this.ownedRecords(params);
     await this.assertUnlocked(records[0]!.projectId, records);
-    for (const record of records) {
-      const threads = this.provider(record.harness).threads;
-      const turn = await threads.latestTurn(record.threadId);
-      if (turn?.status === "inProgress") await threads.interrupt(record.threadId, turn.id, { preserveGoal: true });
-    }
+    for (const record of records) await this.stopThread(record.threadId);
     return {};
   }
 

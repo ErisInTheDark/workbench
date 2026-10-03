@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project and steer-wait owners.
  * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
- * - default WorkbenchThreadActionController: route WB actions without constructing provider packets, interrupt waits on accepted steers, record activated skills, settle orphaned turns on stop, resend or dismiss undelivered steers, and redeliver stranded agent messages into a new turn.
+ * - default WorkbenchThreadActionController: route WB actions without constructing provider packets, interrupt waits on accepted steers, record activated skills, settle orphaned turns on stop, stop threads for parent agents, resend or dismiss undelivered steers, and redeliver stranded agent messages into a new turn.
  */
 import { randomUUID } from "node:crypto";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -262,34 +262,54 @@ export default class WorkbenchThreadActionController {
       : result;
   }
 
+  /** Stop on a parent agent's behalf: interrupt the live turn, then dismiss the questionnaire that interruption retains. */
+  async stopThread(threadId: WorkbenchThreadId) {
+    const target = await this.target(threadId);
+    const turn = await target.provider.threads.latestTurn(target.identity.threadId);
+    // Agent stops keep the thread's goal; composer Stop is the user's call to clear it.
+    if (turn?.status === "inProgress") await this.interruptTurn(target, turn.id, { preserveGoal: true });
+    const entry = await this.owners.state.getCanonicalThreadEntry(target.identity.projectId, target.identity.threadId);
+    const requestKey = entry && entry.entryKind !== "draft" ? entry.pendingQuestionnaire?.requestKey : undefined;
+    if (requestKey) await this.mutateQuestionnaire(target, "dismiss", requestKey, "");
+  }
+
   private async stop(input: WorkbenchThreadStop, connectionId?: string): Promise<{ ok: true }> {
-    const { identity, harness, provider } = await this.target(input.threadId);
+    const target = await this.target(input.threadId);
     if (input.intent === "snooze") {
       if (!input.requestKey) throw new Error("There is no pending questionnaire to snooze.");
-      const response = await this.owners.state.handleRequest(connectionId ?? "", {
-        method: "workbench/thread-state/questionnaire/snooze",
-        projectId: identity.projectId, identity: { harness, threadId: identity.threadId },
-        requestKey: input.requestKey,
-      });
-      if ("error" in response) throw new Error(response.error.message);
-      if (typeof response.result === "object" && response.result !== null && "accepted" in response.result && !response.result.accepted) throw new Error("The pending questionnaire changed before it could be snoozed.");
+      await this.mutateQuestionnaire(target, "snooze", input.requestKey, connectionId ?? "");
       return { ok: true };
     }
-    if (input.turnId) {
-      await provider.threads.interrupt(identity.threadId, input.turnId);
-      // A turn whose runtime died with an earlier daemon has nobody left to settle it.
-      await this.owners.settlement.settleIfOrphaned(identity.threadId, input.turnId);
-    }
-    if (input.requestKey) {
-      const response = await this.owners.state.handleRequest(connectionId ?? "", {
-        method: "workbench/thread-state/questionnaire/dismiss",
-        projectId: identity.projectId, identity: { harness, threadId: identity.threadId },
-        requestKey: input.requestKey,
-      });
-      if ("error" in response) throw new Error(response.error.message);
-      if (typeof response.result === "object" && response.result !== null && "accepted" in response.result && !response.result.accepted) throw new Error("The pending questionnaire changed before it could be dismissed.");
-    }
+    if (input.turnId) await this.interruptTurn(target, input.turnId);
+    if (input.requestKey) await this.mutateQuestionnaire(target, "dismiss", input.requestKey, connectionId ?? "");
     return { ok: true };
+  }
+
+  private async interruptTurn(
+    { identity, provider }: Awaited<ReturnType<WorkbenchThreadActionController["target"]>>,
+    turnId: string,
+    options?: { preserveGoal: true },
+  ) {
+    await provider.threads.interrupt(identity.threadId, turnId, options);
+    // A turn whose runtime died with an earlier daemon has nobody left to settle it.
+    await this.owners.settlement.settleIfOrphaned(identity.threadId, turnId);
+  }
+
+  private async mutateQuestionnaire(
+    { identity, harness }: Awaited<ReturnType<WorkbenchThreadActionController["target"]>>,
+    action: "dismiss" | "snooze",
+    requestKey: string,
+    connectionId: string,
+  ) {
+    const response = await this.owners.state.handleRequest(connectionId, {
+      method: `workbench/thread-state/questionnaire/${action}`,
+      projectId: identity.projectId, identity: { harness, threadId: identity.threadId },
+      requestKey,
+    });
+    if ("error" in response) throw new Error(response.error.message);
+    if (typeof response.result === "object" && response.result !== null && "accepted" in response.result && !response.result.accepted) {
+      throw new Error(`The pending questionnaire changed before it could be ${action === "dismiss" ? "dismissed" : "snoozed"}.`);
+    }
   }
 
   /** Only an undelivered steer can be resent or dismissed; a pending one is still held for delivery. */

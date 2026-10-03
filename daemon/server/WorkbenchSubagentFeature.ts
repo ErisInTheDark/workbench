@@ -23,6 +23,7 @@ export interface WorkbenchSubagentFeatureContext {
   profileStore: WorkbenchComposerProfileStore;
   resolveProjectFromCwd(cwd: string | null | undefined, options?: { endpointName?: string }): Promise<AgentEndpointProjectResolution>;
   persistence: WorkbenchSubagentPersistence;
+  stopThread: WorkbenchSubagentControllerOptions["stopThread"];
   threadState: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
     mutate(request: WorkbenchThreadStateRequest): Promise<void>;
@@ -49,6 +50,7 @@ export default class WorkbenchSubagentFeature {
       profileStore: context.profileStore,
       resolveProjectFromCwd: context.resolveProjectFromCwd,
       subagentStore: this.store,
+      stopThread: context.stopThread,
       threadState: context.threadState,
     });
   }
