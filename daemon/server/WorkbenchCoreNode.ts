@@ -58,7 +58,7 @@ import WorkbenchClaimRenameController from "./stats/WorkbenchClaimRenameControll
 import { reconcileCatalogClaims } from "./stats/reconcile-catalog-claims";
 import { resolveGitDirectory } from "./lib/git";
 import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
-import WorkbenchApprovalController from "./WorkbenchApprovalController";
+import WorkbenchApprovalController, { type WorkbenchApprovalHandoff } from "./WorkbenchApprovalController";
 import WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
@@ -74,6 +74,12 @@ import WorkbenchVoiceNode from "./WorkbenchVoiceNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
 const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
+
+/** What one core generation hands its successor. */
+interface WorkbenchCoreReloadState {
+  projectStartup: WorkbenchProjectStartup;
+  approvals: WorkbenchApprovalHandoff;
+}
 
 function createModules(): DaemonReloadableModules {
   return { project, threadBootstrap, workbenchLibrary, workbenchPromptFiles };
@@ -92,6 +98,7 @@ function createWorkbenchCoreFeature(
   /** A fresh daemon process: no turn a previous process left running is owned here unless its provider says so. */
   coldStart: boolean,
   initialCatalog?: WorkbenchProjectStartup,
+  approvalHandoff?: WorkbenchApprovalHandoff,
 ) {
   const modules = createModules();
   const settings = new WorkbenchServerSettings(database);
@@ -289,7 +296,7 @@ function createWorkbenchCoreFeature(
     },
     recordOutcome: entry => database.recordApprovalOutcome(entry),
     resolveProject: async threadId => (await threadIdentity.resolve({ threadId }))?.projectId ?? null,
-  });
+  }, approvalHandoff);
   const questionnaireResponses = new WorkbenchQuestionnaireResponseController({
     approvals,
     harnesses,
@@ -459,8 +466,12 @@ function createWorkbenchCoreFeature(
   };
   return new WorkbenchCoreFeature({
     hasPendingWork: () => launches.hasPendingWork() || stats.hasPendingWork() || transcriptReconciliation.hasPendingWork(),
-    captureReloadState: () => projectCatalog.captureReloadState(),
+    captureReloadState: (): WorkbenchCoreReloadState => ({
+      projectStartup: projectCatalog.captureReloadState(),
+      approvals: approvals.captureReloadState(),
+    }),
     afterCommit: () => {
+      approvals.activate();
       if (coldStart) void turnSettlement.startColdSweep();
       if (!initialCatalog) return;
       stats.start();
@@ -537,19 +548,23 @@ function createWorkbenchCoreFeature(
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, import("./daemon-runtime-objects").DaemonProviderNotification>()({
   access: "agent",
   children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchBrowseNode, WorkbenchVoiceNode, WorkbenchWebSocketNode],
-  create: (context, { get, run, lease, handoffState, isReplacing, mode }) => createWorkbenchCoreFeature(
-    context,
-    run,
-    lease,
-    get("reloadDirt"),
-    get("database"),
-    get("commandApprovals"),
-    get("transcript"),
-    get("threadIdentity"),
-    get("transcriptIdentity"),
-    mode === "initial",
-    isReplacing("server:database") ? undefined : handoffState as WorkbenchProjectStartup | undefined,
-  ),
+  create: (context, { get, run, lease, handoffState, isReplacing, mode }) => {
+    const reloadState = handoffState as WorkbenchCoreReloadState | undefined;
+    return createWorkbenchCoreFeature(
+      context,
+      run,
+      lease,
+      get("reloadDirt"),
+      get("database"),
+      get("commandApprovals"),
+      get("transcript"),
+      get("threadIdentity"),
+      get("transcriptIdentity"),
+      mode === "initial",
+      isReplacing("server:database") ? undefined : reloadState?.projectStartup,
+      reloadState?.approvals,
+    );
+  },
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,

@@ -1,10 +1,8 @@
 /*
  * Exports:
- * - default ClaudeToolsController: resolve server-owned Claude MCP scopes and run admitted shell commands.
+ * - default ClaudeToolsController: resolve server-owned Claude MCP scopes and run admitted commands; Workbench hosts the shell tool.
  */
 import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
-import WorkbenchToolAdmissionController from "../../WorkbenchToolAdmissionController";
-import { prepareWorkbenchShellExecution } from "../../CodexShellController";
 import type ClaudeThreadOperations from "./ClaudeThreadOperations";
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 
@@ -13,7 +11,7 @@ export default class ClaudeToolsController implements WorkbenchProviderTools {
   readonly transcript: NonNullable<WorkbenchProviderTools["transcript"]>;
 
   constructor(private readonly options: {
-    threads: ClaudeThreadOperations;
+    threads: Pick<ClaudeThreadOperations, "resolveScope">;
     transcript: ClaudeTranscriptAdapter;
     execute: NonNullable<WorkbenchProviderTools["execute"]>;
   }) {
@@ -41,28 +39,6 @@ export default class ClaudeToolsController implements WorkbenchProviderTools {
     signal.throwIfAborted();
     const runtime = this.scope(context);
     return { harness: "claude", threadId: runtime.threadId, cwd: runtime.cwd };
-  }
-
-  async shell(input: Parameters<WorkbenchProviderTools["shell"]>[0],
-    metadata: Parameters<WorkbenchProviderTools["shell"]>[1], signal: AbortSignal,
-    context?: Parameters<WorkbenchProviderTools["shell"]>[3]) {
-    const caller = await this.caller(metadata, signal, context);
-    const prepared = prepareWorkbenchShellExecution(input, caller.cwd);
-    const admission = new WorkbenchToolAdmissionController({
-      caller,
-      resolve: async resolveSignal => ({
-        caller: await this.caller(metadata, resolveSignal, context),
-        writableRoots: [caller.cwd], network: false,
-      }),
-      approve: (request, approveSignal) => this.options.threads.requestShellApproval(request, approveSignal),
-      execute: this.execute,
-    });
-    const result = await admission.execute({
-      ...prepared,
-      ...(context?.itemId ? { itemId: context.itemId } : {}),
-      ...(context?.turnId ? { turnId: context.turnId } : {}),
-    }, signal);
-    return { ...result, cwd: prepared.cwd, shell: prepared.shell };
   }
 
   async describe() {

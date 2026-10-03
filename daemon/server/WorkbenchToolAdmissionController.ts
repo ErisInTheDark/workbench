@@ -1,13 +1,17 @@
 /*
  * Exports:
  * - WorkbenchToolAdmissionOptions: bind authoritative identity, policy, approval and execution owners.
- * - default WorkbenchToolAdmissionController: admit one provider tool call without owning pending interactions.
+ * - default WorkbenchToolAdmissionController: admit one provider tool call without owning pending interactions; `shell` runs the Workbench-hosted shell for escalating providers.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { WorkbenchEscalatingShellInput, WorkbenchShellResult } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { WorkbenchItemId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import type { WorkbenchApprovalDecision, WorkbenchApprovalSubject } from "workbench-shared/workbench/provider/provider-approval";
-import type { WorkbenchAdmittedExecution, WorkbenchProviderCaller, WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+import type {
+  ProviderToolMetadata, ProviderToolRequestContext, WorkbenchAdmittedExecution, WorkbenchProviderCaller, WorkbenchProviderTools,
+} from "workbench-shared/workbench/provider/provider-execution";
+import { prepareWorkbenchShellExecution } from "./CodexShellController";
 import { isPathWithinRoot } from "./lib/project";
 
 export interface WorkbenchToolAdmissionOptions {
@@ -42,6 +46,38 @@ function formatApprovalCommand(argv: readonly string[]) {
 
 export default class WorkbenchToolAdmissionController {
   constructor(private readonly options: WorkbenchToolAdmissionOptions) {}
+
+  /**
+   * The shell tool for providers that escalate through Workbench approval: the provider only names the trusted
+   * caller and runs the admitted command in its sandbox; Workbench owns admission and the approval wait.
+   */
+  static async shell(owners: {
+    tools: Pick<WorkbenchProviderTools, "caller" | "execute">;
+    approve: WorkbenchToolAdmissionOptions["approve"];
+    canonicalize?: WorkbenchToolAdmissionOptions["canonicalize"];
+  }, input: WorkbenchEscalatingShellInput, metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchShellResult> {
+    const { tools } = owners;
+    if (!tools.execute) throw new Error("This provider cannot run Workbench-admitted commands.");
+    const execute = tools.execute.bind(tools);
+    const caller = await tools.caller(metadata, signal, context);
+    const prepared = prepareWorkbenchShellExecution(input, caller.cwd);
+    const admission = new WorkbenchToolAdmissionController({
+      caller,
+      resolve: async resolveSignal => ({
+        caller: await tools.caller(metadata, resolveSignal, context),
+        writableRoots: [caller.cwd], network: false,
+      }),
+      approve: owners.approve,
+      execute,
+      ...(owners.canonicalize ? { canonicalize: owners.canonicalize } : {}),
+    });
+    const result = await admission.execute({
+      ...prepared,
+      ...(context?.itemId ? { itemId: context.itemId } : {}),
+      ...(context?.turnId ? { turnId: context.turnId } : {}),
+    }, signal);
+    return { ...result, cwd: prepared.cwd, shell: prepared.shell };
+  }
 
   async execute(input: {
     command: string[];

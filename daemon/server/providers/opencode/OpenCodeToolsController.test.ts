@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect native path translation, session binding and admitted execution.
+ * No production exports. Tests protect native path translation and session binding; Workbench owns the hosted shell.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -13,7 +13,6 @@ test("native mutation admission checks every resource against the resolved calle
   const controller: WorkbenchProviderTools = new OpenCodeToolsController({
     resolveCaller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("owner"), cwd: "/repo" }),
     execute: async () => { throw new Error("must not execute"); },
-    approve: async () => ({ kind: "decline" }),
   });
   const input = { callerThreadId: null, raw: JSON.stringify({
     sessionID: "native", resources: ["src/old.ts", "src/new.ts", "removed.ts"],
@@ -37,7 +36,6 @@ test("native admission propagates cancellation and never substitutes caller-supp
   const owner = new OpenCodeToolsController({
     resolveCaller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("real-owner"), cwd: "/real" }),
     execute: async () => { throw new Error("must not execute"); },
-    approve: async () => ({ kind: "decline" }),
   });
   const input = { callerThreadId: "forged", raw: JSON.stringify({ sessionID: "native", resources: ["ignored/generated.ts"] }) };
   assert.deepEqual(JSON.parse(await owner.patchClaims(input, async caller => {
@@ -67,7 +65,6 @@ test("transcript capture requires valid child context and resolves authoritative
       return { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("owned"), cwd: "/repo" };
     },
     execute: async () => { throw new Error("not executing"); },
-    approve: async () => ({ kind: "decline" }),
     transcript: {
       start: async (_input, context, caller) => {
         starts++;
@@ -88,67 +85,4 @@ test("transcript capture requires valid child context and resolves authoritative
   } } }, signal);
   assert.deepEqual(sessions, ["native"]);
   assert.equal(starts, 1);
-});
-
-test("binds MCP session identity and runs shell through admitted execution", async () => {
-  const executions: object[] = [];
-  const controller = new OpenCodeToolsController({
-    resolveCaller: async () => ({
-      harness: "opencode",
-        threadId: "00000000-0000-4000-8000-000000000001",
-      cwd: process.cwd(),
-    } as never),
-    execute: async request => {
-      executions.push(request);
-      return { exitCode: 0, stdout: "ok", stderr: "" };
-    },
-    approve: async () => ({ kind: "decline" }),
-  });
-
-  const result = await controller.shell(
-    { command: "echo ok", login: false },
-    { sessionID: "native-session" },
-    new AbortController().signal,
-  );
-  assert.equal(result.stdout, "ok");
-  assert.equal(executions.length, 1);
-  assert.deepEqual((executions[0] as { caller: object }).caller, {
-    harness: "opencode",
-    threadId: "00000000-0000-4000-8000-000000000001",
-    cwd: process.cwd(),
-  });
-  assert.deepEqual((executions[0] as { permissions: object }).permissions, {
-    mode: "restricted",
-    writableRoots: [process.cwd()],
-    network: false,
-  });
-});
-
-test("OpenCode shell escalates only after the Workbench approval gate accepts", async () => {
-  const modes: string[] = [];
-  const commands: string[] = [];
-  let allowed = false;
-  const controller = new OpenCodeToolsController({
-    resolveCaller: async () => ({
-      harness: "opencode",
-      threadId: WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001"),
-      cwd: process.cwd(),
-    }),
-    approve: async request => {
-      commands.push(request.subject.command);
-      return allowed ? { kind: "allowOnce" } : { kind: "decline" };
-    },
-    execute: async request => {
-      modes.push(request.permissions.mode);
-      return { exitCode: 0, stdout: "ok", stderr: "" };
-    },
-  });
-  const input = { command: "echo approved", outside_sandbox: true };
-  const signal = new AbortController().signal;
-  await assert.rejects(controller.shell(input, { sessionID: "native-session" }, signal), /declined/u);
-  assert.deepEqual(modes, []);
-  allowed = true;
-  assert.equal((await controller.shell(input, { sessionID: "native-session" }, signal)).stdout, "ok");
-  assert.deepEqual(modes, ["approved-unrestricted"]);
-  assert.ok(commands[0]?.includes("echo approved"));
 });

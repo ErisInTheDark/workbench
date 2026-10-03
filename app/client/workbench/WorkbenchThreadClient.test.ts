@@ -3292,6 +3292,64 @@ test("Workbench MCP questionnaires submit natively while their Codex turn is act
   assert.equal(socket.requests.some((candidate) => candidate.method === "turn/start"), false);
 }));
 
+test("live-only approvals on unobserved threads load from the pending list when thread state reports them", async () => withClient(async (client, socket) => {
+  const idleEntry: WorkbenchThreadSidebarEntry = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+    lifecycle: { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Thread",
+  };
+  const snapshot = (entries: WorkbenchThreadSidebarEntry[], revision: number): WorkbenchThreadSidebarSnapshot => ({
+    entries, error: null, freshness: "fresh", projectId: fixtureIdentityValues.ProjectId["project"], revision,
+  });
+  await installProjectThreadState(client, snapshot([idleEntry], 1));
+  await waitForCondition(
+    () => socket.requests.some(candidate => candidate.method === "questionnaires/pending/read"),
+    "The initial pending-request sync did not run.",
+  );
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const approval = {
+    harness: "codex",
+    itemId: null,
+    request: { id: "approval:x", questions: [], submitLabel: "Submit", summary: "", title: "Approve command" },
+    requestKey: "approval:x",
+    threadId: "thread",
+    turnId: "turn",
+  };
+  FakeWebSocket.intercept = (target, candidate) => {
+    if (candidate.method !== "questionnaires/pending/read") return false;
+    queueMicrotask(() => target.respond(candidate.id, { data: [approval] }));
+    return true;
+  };
+  // No questionnaire/requested event: the app forwards provider events only for observed threads.
+  await installProjectThreadState(client, snapshot([{
+    ...idleEntry,
+    activityAt: 2,
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "approval:x", settled: false, turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
+  }], 2));
+
+  await waitForCondition(
+    () => client.getSnapshot().pendingUserInputRequestsByThreadId["thread"]?.requestKey === "approval:x",
+    "The reported approval was never loaded.",
+  );
+
+  // Resolved elsewhere: no questionnaire/resolved event reaches this client either.
+  FakeWebSocket.intercept = (target, candidate) => {
+    if (candidate.method !== "questionnaires/pending/read") return false;
+    queueMicrotask(() => target.respond(candidate.id, { data: [] }));
+    return true;
+  };
+  await installProjectThreadState(client, snapshot([{ ...idleEntry, activityAt: 3 }], 3));
+
+  await waitForCondition(
+    () => client.getSnapshot().pendingUserInputRequestsByThreadId["thread"] === undefined,
+    "The resolved approval stayed visible.",
+  );
+}));
+
 async function installRecoveredWorkbenchQuestionnaire(
   client: ReturnType<typeof WorkbenchThreadClient>,
   requestKey = "workbench-mcp:recovered",

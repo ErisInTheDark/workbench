@@ -1,16 +1,13 @@
 /*
  * Exports:
  * - OpenCodeToolsControllerOptions: bind native identity to shared admitted execution.
- * - default OpenCodeToolsController: adapt OpenCode MCP metadata to Workbench tools and Codex sandbox execution.
+ * - default OpenCodeToolsController: adapt OpenCode MCP metadata to Workbench tools and Codex sandbox execution; Workbench hosts the shell tool.
  */
 import path from "node:path";
 import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
 import type { WorkbenchProviderCaller, WorkbenchToolTranscript } from "workbench-shared/workbench/provider/provider-execution";
 import { OpenCodeFileClaimRequestSchema, OpenCodeToolContextSchema, type OpenCodeToolContext } from "./opencode-workbench-rpc";
 import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
-import WorkbenchToolAdmissionController from "../../WorkbenchToolAdmissionController";
-import type { WorkbenchToolAdmissionOptions } from "../../WorkbenchToolAdmissionController";
-import { prepareWorkbenchShellExecution } from "../../CodexShellController";
 
 export interface OpenCodeToolsControllerOptions {
   resolveCaller: (nativeThreadId: string, signal: AbortSignal) => Promise<{
@@ -19,7 +16,6 @@ export interface OpenCodeToolsControllerOptions {
     cwd: string;
   }>;
   execute: NonNullable<WorkbenchProviderTools["execute"]>;
-  approve: WorkbenchToolAdmissionOptions["approve"];
   transcript?: {
     start(input: Parameters<WorkbenchToolTranscript["start"]>[0], context: OpenCodeToolContext, caller: WorkbenchProviderCaller): ReturnType<WorkbenchToolTranscript["start"]>;
     finish: WorkbenchToolTranscript["finish"];
@@ -55,30 +51,6 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
     }
     const nativeThreadId = NativeThreadIdSchema.parse(value.trim());
     return await this.options.resolveCaller(nativeThreadId, signal);
-  }
-
-  async shell(
-    input: object, metadata: Parameters<WorkbenchProviderTools["caller"]>[0], signal: AbortSignal,
-    context?: Parameters<WorkbenchProviderTools["shell"]>[3],
-  ) {
-    const caller = await this.caller(metadata, signal);
-    const prepared = prepareWorkbenchShellExecution(input, caller.cwd);
-    const admission = new WorkbenchToolAdmissionController({
-      caller,
-      resolve: async resolveSignal => ({
-        caller: await this.caller(metadata, resolveSignal),
-        writableRoots: [caller.cwd],
-        network: false,
-      }),
-      approve: this.options.approve,
-      execute: this.options.execute,
-    });
-    const result = await admission.execute({
-      ...prepared,
-      ...(context?.itemId ? { itemId: context.itemId } : {}),
-      ...(context?.turnId ? { turnId: context.turnId } : {}),
-    }, signal);
-    return { ...result, cwd: prepared.cwd, shell: prepared.shell };
   }
 
   async describe() {

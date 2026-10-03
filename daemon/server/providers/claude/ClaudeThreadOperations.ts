@@ -26,13 +26,10 @@ import {
     isWorkbenchQuestionnaireResponsePart,
     WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
-import type WorkbenchApprovalController from "../../WorkbenchApprovalController";
-import WorkbenchLocalApprovalTransport from "../../WorkbenchLocalApprovalTransport";
 import type WorkbenchProjectCatalogController from "../../WorkbenchProjectCatalogController";
 import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireController";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature";
-import type { WorkbenchToolAdmissionOptions } from "../../WorkbenchToolAdmissionController";
 import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
 import { createClaudeFileClaimHooks } from "./claude-file-claim-hook";
 import { claudeEnvironment, claudeExecutable } from "./claude-process-options";
@@ -63,7 +60,6 @@ export interface ClaudeThreadOperationsOptions {
   identities: WorkbenchThreadIdentityController;
   projects: WorkbenchProjectCatalogController;
   questionnaires: WorkbenchQuestionnaireController;
-  approvals: WorkbenchApprovalController;
   reader: WorkbenchTranscriptReader;
   state: WorkbenchThreadStateFeature;
   transcript: ClaudeTranscriptAdapter;
@@ -84,11 +80,9 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
   private readonly live = new Map<WorkbenchThreadId, ClaudeLiveTurn>();
   private readonly scopes = new Map<string, ClaudeLiveTurn>();
   private readonly pending = new Set<Promise<void>>();
-  private readonly approvals: WorkbenchLocalApprovalTransport;
   private readonly usageHydrator: ClaudeUsageHydrator;
 
   constructor(private readonly options: ClaudeThreadOperationsOptions) {
-    this.approvals = new WorkbenchLocalApprovalTransport("claude", () => options.approvals);
     this.usageHydrator = new ClaudeUsageHydrator({
       dataRoot: options.claudeDataRoot ?? ClaudeConfigView.dataRoot(),
       signal: options.signal,
@@ -283,7 +277,6 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       await this.options.transcript.recordQuestionnaire(entry);
       return {};
     },
-    deliverApproval: async input => this.approvals.deliver(input),
   };
 
   async create(input: Parameters<WorkbenchProviderThreads["create"]>[0]) {
@@ -472,15 +465,6 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       warnings.push(warning);
     }
     return { kind: "started" as const, turn, ...(warnings.length ? { warning: warnings.join(" ") } : {}) };
-  }
-
-  async requestShellApproval(
-    request: Parameters<WorkbenchToolAdmissionOptions["approve"]>[0],
-    signal: AbortSignal,
-  ) {
-    return this.approvals.request({
-      threadId: request.caller.threadId, turnId: request.turnId, itemId: request.itemId, subject: request.subject,
-    }, signal);
   }
 
   async messageAgent(input: Parameters<WorkbenchProviderThreads["messageAgent"]>[0]) {

@@ -3,4 +3,6 @@
 - Only accepted response settlement or explicit dismissal clears durable pending state. Caller/tool cancellation, provider request resolution, turn completion, reload, and shutdown only detach live delivery.
 - Questionnaire response routing is daemon-owned. The client submits answer intent without inferring live or detached thread state. Durable pending state clears only after live delivery or managed continuation accepts the answer.
 - Ordinary questionnaire responses append at their daemon-owned acceptance point. Approval responses remain bound to their active approval turn.
+- Approval presentation is live-only; provider events reach clients only for observed threads. Clients re-read pending requests whenever thread state's `pendingInput` request key disagrees with the live request they hold.
+- Workbench owns hosted-shell approval waits; pending approvals hand off across core reloads. Providers own only native approval requests.
 - Questionnaire delivery must not hold the thread mutation queue. Admission needs that queue; accepted history merges into current state without clearing a replacement question.

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchAgentMcpControllerOptions: inject trusted identity resolution, cancellation, and command execution ports.
+ * - WorkbenchAgentMcpControllerOptions: inject trusted identity resolution, cancellation, hosted-shell approval, and command execution ports.
  * - default WorkbenchAgentMcpController: serve typed wb tools with caller identity and generation-scoped cancellation.
  */
 import type http from "node:http";
@@ -33,6 +33,7 @@ import {
   type WorkbenchEscalatingShellInput,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
 import { logError } from "./process-helpers";
+import WorkbenchToolAdmissionController, { type WorkbenchToolAdmissionOptions } from "./WorkbenchToolAdmissionController";
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
   isWorkbenchAgentMcpSteerInterruption,
@@ -46,6 +47,8 @@ type WorkbenchAgentMcpRequestId = number | string;
 
 export interface WorkbenchAgentMcpControllerOptions {
   tools: (provider: string) => WorkbenchProviderTools;
+  /** Workbench approval for outside-sandbox commands on the Workbench-hosted shell. */
+  approveHostedShell?: WorkbenchToolAdmissionOptions["approve"];
   executeCommand: (request: WorkbenchAgentCommandRequest, signal: AbortSignal) => Promise<Response>;
   getReloadScopeCatalog?: () => readonly DaemonReloadScopeDescriptor[];
   /** Read per request so the catalogue follows the virtual repository runtime as it appears or disappears. */
@@ -141,6 +144,7 @@ export default class WorkbenchAgentMcpController {
   private readonly requestRegistry: WorkbenchAgentMcpRequestRegistry;
   private readonly scheduleProgress: NonNullable<WorkbenchAgentMcpControllerOptions["scheduleProgress"]>;
   private readonly tools: WorkbenchAgentMcpControllerOptions["tools"];
+  private readonly approveHostedShell: WorkbenchAgentMcpControllerOptions["approveHostedShell"];
   private readonly runLoggedCommand: NonNullable<WorkbenchAgentMcpControllerOptions["runLoggedCommand"]>;
   private readonly runtimeOwner = {};
 
@@ -151,6 +155,7 @@ export default class WorkbenchAgentMcpController {
     lifecycleLogError = logError,
     daemonOrigin,
     tools,
+    approveHostedShell,
     requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry(),
     scheduleProgress: schedule = scheduleProgress,
     runLoggedCommand = async (_label, _signal, operation) => await operation(),
@@ -163,6 +168,7 @@ export default class WorkbenchAgentMcpController {
     this.requestRegistry = requestRegistry;
     this.scheduleProgress = schedule;
     this.tools = tools;
+    this.approveHostedShell = approveHostedShell;
     this.runLoggedCommand = runLoggedCommand;
   }
 
@@ -284,6 +290,7 @@ export default class WorkbenchAgentMcpController {
       extra.requestId,
       AbortSignal.any([requestSignal, extra.signal]),
       tools,
+      description.shellEscalation,
       extra._meta?.progressToken === undefined
         ? undefined
         : async (progress) => await extra.sendNotification({
@@ -347,12 +354,28 @@ export default class WorkbenchAgentMcpController {
     requestId: WorkbenchAgentMcpRequestId,
     signal: AbortSignal,
     tools: WorkbenchProviderTools,
+    hosted: boolean,
     sendProgress?: (progress: number) => Promise<void>,
   ) {
     return this.observeTool("shell", input, meta, clientScope, signal, tools,
       reference => this.executeShell(input, meta, {
         clientScope, ...(reference ? { itemId: reference.itemId, turnId: reference.turnId } : {}),
-      }, requestId, signal, tools, sendProgress));
+      }, requestId, signal, tools, hosted, sendProgress));
+  }
+
+  /** Escalating providers get the Workbench-hosted shell; others run their native shell. */
+  private async runShell(
+    input: WorkbenchEscalatingShellInput, meta: Record<string, unknown> | undefined, context: ProviderToolRequestContext,
+    signal: AbortSignal, tools: WorkbenchProviderTools, hosted: boolean,
+  ) {
+    const metadata = ProviderToolMetadataSchema.parse(meta ?? {});
+    if (!hosted) {
+      if (!tools.shell) throw new Error("This provider has no native shell.");
+      return await tools.shell(input, metadata, signal, context);
+    }
+    const approve = this.approveHostedShell;
+    if (!approve) throw new Error("Workbench approval is unavailable for the hosted shell.");
+    return await WorkbenchToolAdmissionController.shell({ tools, approve }, input, metadata, signal, context);
   }
 
   private async executeShell(
@@ -362,6 +385,7 @@ export default class WorkbenchAgentMcpController {
     requestId: WorkbenchAgentMcpRequestId,
     signal: AbortSignal,
     tools: WorkbenchProviderTools,
+    hosted: boolean,
     sendProgress?: (progress: number) => Promise<void>,
   ) {
     const { clientScope } = context;
@@ -380,9 +404,7 @@ export default class WorkbenchAgentMcpController {
       const result = await this.runLoggedCommand(
         "wb shell",
         signal,
-        async () => {
-          return await tools.shell(input, ProviderToolMetadataSchema.parse(meta ?? {}), signal, context);
-        },
+        async () => await this.runShell(input, meta, context, signal, tools, hosted),
         (value) => value.exitCode === 0,
       );
       if (signal.aborted) throw signal.reason;

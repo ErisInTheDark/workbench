@@ -793,6 +793,8 @@ function WorkbenchThreadClient(
   const pendingUserInputRequestGenerationsByHarness = new Map<WorkbenchHarness, number>();
   const questionnaireListSyncPromisesByHarness = new Map<WorkbenchHarness, Promise<boolean>>();
   const questionnaireListSyncedHarnesses = new Set<WorkbenchHarness>();
+  /** `harness\0threadId\0reportedKey\0heldKey` disagreements already re-read once; prevents refetch storms for stale state. */
+  const refetchedPendingInputKeys = new Set<string>();
   const providerPendingUserInputRequestsByHarness = new Map<WorkbenchHarness, Map<string, WorkbenchPendingUserInputRequest>>();
   lifecycle.addUnsubscribe(threadObservations.subscribe(() => {
     if (disposed) return;
@@ -997,6 +999,7 @@ function WorkbenchThreadClient(
     }
     questionnaireListSyncPromisesByHarness.clear();
     questionnaireListSyncedHarnesses.clear();
+    refetchedPendingInputKeys.clear();
     providerPendingUserInputRequestsByHarness.clear();
     resolvedDurableQuestionnaireKeysByThreadId.clear();
     if (!retainedKeys.size) {
@@ -1273,6 +1276,45 @@ function WorkbenchThreadClient(
       if (installedProviderKeys.some(key => key === harness) && !questionnaireListSyncedHarnesses.has(harness)) {
         void refreshPendingUserInputRequests(harness);
       }
+    }
+    reconcileLivePendingInput(durableQuestionnaireEntries);
+  }
+
+  /**
+   * Approvals are live-only: thread state names their request key, but requests and resolutions arrive only by
+   * provider event, which the app forwards just for observed threads. Whenever the reported key and the held live
+   * request disagree, re-read the daemon's live list once for that disagreement.
+   */
+  function reconcileLivePendingInput(entries: readonly WorkbenchThreadSidebarEntry[]) {
+    const disagreements = new Map<string, WorkbenchHarness>();
+    for (const entry of entries) {
+      if (entry.entryKind === "draft" || entry.pendingQuestionnaire) continue;
+      const { identity, lifecycle } = entry;
+      const reported = lifecycle.kind === "needsAttention" && lifecycle.reason === "pendingInput" ? lifecycle.requestKey : null;
+      const heldRequest = state.pendingUserInputRequestsByThreadId.get(identity.threadId);
+      const held = heldRequest?.harness === identity.harness ? heldRequest.requestKey : null;
+      if (reported === held) continue;
+      disagreements.set(`${identity.harness}\0${identity.threadId}\0${reported ?? ""}\0${held ?? ""}`, identity.harness);
+    }
+    for (const key of refetchedPendingInputKeys) {
+      if (!disagreements.has(key)) refetchedPendingInputKeys.delete(key);
+    }
+    const harnesses = new Set<WorkbenchHarness>();
+    for (const [key, harness] of disagreements) {
+      if (refetchedPendingInputKeys.has(key) || !installedProviderKeys.some(candidate => candidate === harness)) continue;
+      refetchedPendingInputKeys.add(key);
+      harnesses.add(harness);
+    }
+    for (const harness of harnesses) {
+      const keys = [...disagreements].flatMap(([key, owner]) => owner === harness ? [key] : []);
+      // A read already in flight may predate this request; start a fresh one after it.
+      const inFlight = questionnaireListSyncPromisesByHarness.get(harness);
+      void (inFlight ?? Promise.resolve(false))
+        .then(() => refreshPendingUserInputRequests(harness))
+        .then(refreshed => {
+          // A failed or discarded read leaves these keys retryable on the next observation change.
+          if (!refreshed) for (const key of keys) refetchedPendingInputKeys.delete(key);
+        });
     }
   }
 

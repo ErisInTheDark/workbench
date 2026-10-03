@@ -77,7 +77,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
       resolveCaller: (nativeThreadId, signal) => threads.resolveToolCaller(nativeThreadId, signal),
       execute: shell.executeAdmitted.bind(shell),
-      approve: (request, signal) => threads.requestShellApproval(request, signal),
     });
     return {
       registrations: {

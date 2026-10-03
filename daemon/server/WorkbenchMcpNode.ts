@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchMcpNode: own the wb MCP server and HTTP router after core and topology parents are active.
+ * - default WorkbenchMcpNode: own the wb MCP server, its hosted-shell approval port, and HTTP router after core and topology parents are active.
  */
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
@@ -11,9 +11,11 @@ import WorkbenchTranscriptAssetController from "./WorkbenchTranscriptAssetContro
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 
 const REQUIRED_REGISTRATIONS = [
   "agentCommand",
+  "approvals",
   "toolRevision",
   "database",
   "gitArc",
@@ -37,6 +39,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const repo = build.get("repo");
     const threadIdentity = build.get("threadIdentity");
     const threadState = build.get("threadState");
+    const approvals = build.get("approvals");
     build.get("reloadController");
     const requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry();
     const commandExecutorOwner = {};
@@ -58,6 +61,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         if (!tools) throw new Error(`Provider ${selector} does not support managed tools.`);
         return tools;
       },
+      approveHostedShell: (request, signal) => approvals.request({
+        harness: WorkbenchHarnessSchema.parse(request.caller.harness),
+        threadId: request.caller.threadId, turnId: request.turnId, itemId: request.itemId, subject: request.subject,
+      }, signal),
       executeCommand: async (request, signal) => await requestRegistry.executeCommand(request, signal),
       getReloadScopeCatalog: context.getReloadScopeCatalog,
       virtualReposAvailable: () => repo.isAvailable(),

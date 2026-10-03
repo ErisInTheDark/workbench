@@ -166,7 +166,10 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     patchClaims: (input, check, signal) => this.tool(tools => tools.patchClaims(input, check, signal), "patchClaims"),
     describe: () => this.tool(tools => tools.describe(), "describe"),
     caller: (metadata, signal, context) => this.tool(tools => tools.caller(metadata, signal, context), "caller"),
-    shell: (input, metadata, signal, context) => this.tool(tools => tools.shell(input, metadata, signal, context), "shell"),
+    shell: (input, metadata, signal, context) => this.tool(tools => {
+      if (!tools.shell) throw new Error(`Provider ${this.key} has no native shell; Workbench hosts its shell tool.`);
+      return tools.shell(input, metadata, signal, context);
+    }, "shell"),
   };
 
   readonly browse: NonNullable<WorkbenchProvider["browse"]> = {

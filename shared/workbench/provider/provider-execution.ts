@@ -2,7 +2,7 @@
  * Exports:
  * - ProviderToolMetadataSchema/ProviderToolMetadata: uninterpreted JSON metadata delivered to the selected provider.
  * - WorkbenchProviderCaller: validated WB identity and authoritative working directory.
- * - ProviderToolRequestContext/WorkbenchProviderTools: server-read MCP scope and provider-owned sandbox execution.
+ * - ProviderToolRequestContext/WorkbenchProviderTools: server-read MCP scope, provider caller identity, and provider-owned sandbox execution.
  * - WorkbenchAdmittedExecution: daemon-owned caller and resolved one-command permissions.
  * - WorkbenchPatchClaimCheck: shared claim policy called with validated WB ownership.
  * - ProviderToolResultSchema/ProviderToolResult: complete JSON-safe MCP result evidence.
@@ -76,9 +76,10 @@ export interface WorkbenchProviderTools {
   describe(): Promise<{
     experimental: Record<string, Record<string, JsonValue>>;
     shellDescription: string;
-    /** Expose outside-sandbox escalation through Workbench approval on the shell tool. */
+    /** Workbench hosts the shell tool, escalating through Workbench approval; the provider supplies `caller` and `execute`. */
     shellEscalation: boolean;
   }>;
   caller(metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchProviderCaller>;
-  shell(input: WorkbenchEscalatingShellInput, metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchShellResult>;
+  /** Provider-native shell, required only when `describe().shellEscalation` is false. */
+  shell?(input: WorkbenchEscalatingShellInput, metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchShellResult>;
 }

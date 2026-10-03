@@ -23,8 +23,6 @@ import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchProjectCatalogController from "../../WorkbenchProjectCatalogController";
 import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireController";
-import type WorkbenchApprovalController from "../../WorkbenchApprovalController";
-import WorkbenchLocalApprovalTransport from "../../WorkbenchLocalApprovalTransport";
 import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature";
 import type OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
@@ -35,7 +33,6 @@ import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
 import OpenCodeThreadWindowLoader from "./OpenCodeThreadWindowLoader";
 import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
 import type WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
-import type { WorkbenchToolAdmissionOptions } from "../../WorkbenchToolAdmissionController";
 import { getWorkbenchLifecycleTurnId, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
@@ -71,7 +68,6 @@ export interface OpenCodeThreadOperationsOptions {
     WorkbenchQuestionnaireController,
     "canDeliver" | "deliver" | "interruptRetainingQuestionnaire"
   >;
-  approvals: Pick<WorkbenchApprovalController, "open" | "close">;
   state: Pick<WorkbenchThreadStateFeature, "controller" | "installCreatedProfile">;
   managed: Pick<OpenCodeManagedSessionController, "creation" | "refresh">;
   transcript: OpenCodeTranscriptAdapter;
@@ -169,11 +165,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     },
   };
 
-  private readonly approvals: WorkbenchLocalApprovalTransport;
-
-  constructor(private readonly options: OpenCodeThreadOperationsOptions) {
-    this.approvals = new WorkbenchLocalApprovalTransport("opencode", () => options.approvals);
-  }
+  constructor(private readonly options: OpenCodeThreadOperationsOptions) {}
 
   readonly context: WorkbenchProviderContext = {
     inject: async (input, signal) => {
@@ -189,15 +181,6 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       return "admitted";
     },
   };
-
-  async requestShellApproval(
-    request: Parameters<WorkbenchToolAdmissionOptions["approve"]>[0],
-    signal: AbortSignal,
-  ) {
-    return this.approvals.request({
-      threadId: request.caller.threadId, turnId: request.turnId, itemId: request.itemId, subject: request.subject,
-    }, signal);
-  }
 
   readonly interactions: WorkbenchProviderInteractions = {
     pending: async () => [],
@@ -237,7 +220,6 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       await this.options.transcript.recordQuestionnaire(entry);
       return {};
     },
-    deliverApproval: async input => this.approvals.deliver(input),
   };
 
   async create(input: Parameters<WorkbenchProviderThreads["create"]>[0]) {

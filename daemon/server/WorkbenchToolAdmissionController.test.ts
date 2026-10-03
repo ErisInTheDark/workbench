@@ -1,4 +1,4 @@
-/* No exports. Tests protect restricted defaults, one-call approvals and bound caller ownership. */
+/* No exports. Tests protect restricted defaults, one-call approvals, bound caller ownership and the hosted shell. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
@@ -73,6 +73,49 @@ test("decline and cancellation during approval never dispatch", async () => {
   const cancelled = fixture({ approve: async () => { abort.abort(new Error("cancelled")); return { kind: "allowOnce" }; } });
   await assert.rejects(cancelled.controller.execute({ command: ["write"], outsideSandbox: true }, abort.signal), /cancelled/);
   assert.equal(cancelled.calls.length, 0);
+});
+
+test("hosted shell binds the provider's trusted caller and tool item, and escalates only after approval", async () => {
+  const threadId = WorkbenchThreadIdSchema.parse("12345678-1234-4123-8123-123456789012");
+  const itemId = WorkbenchItemIdSchema.parse("22345678-1234-4123-8123-123456789012");
+  const turnId = WorkbenchTurnIdSchema.parse("32345678-1234-4123-8123-123456789012");
+  const executions: WorkbenchAdmittedExecution[] = [];
+  const approvals: Parameters<WorkbenchToolAdmissionOptions["approve"]>[0][] = [];
+  let allowed = false;
+  const tools = {
+    caller: async (_metadata: object, _signal: AbortSignal, context?: { clientScope: string }) => {
+      if (context?.clientScope !== "trusted") throw new Error("Scope is not active.");
+      return { harness: "claude", threadId, cwd: process.cwd() };
+    },
+    execute: async (request: WorkbenchAdmittedExecution) => {
+      executions.push(request);
+      return { exitCode: 0, stdout: "ok", stderr: "" };
+    },
+  };
+  const owners = {
+    tools,
+    approve: async (request: Parameters<WorkbenchToolAdmissionOptions["approve"]>[0]) => {
+      approvals.push(request);
+      return allowed ? { kind: "allowOnce" as const } : { kind: "decline" as const };
+    },
+    canonicalize: async (value: string) => path.resolve(value),
+  };
+  const signal = new AbortController().signal;
+  const context = { clientScope: "trusted", itemId, turnId };
+  const escalate = { command: "echo approved", outside_sandbox: true };
+
+  await WorkbenchToolAdmissionController.shell(owners, { command: "echo safe" }, { threadId: "forged" }, signal, context);
+  assert.deepEqual(executions[0]?.caller, { harness: "claude", threadId, cwd: process.cwd() });
+  assert.equal(executions[0]?.permissions.mode, "restricted");
+  await assert.rejects(WorkbenchToolAdmissionController.shell(owners, escalate, {}, signal, { clientScope: "forged" }), /not active/u);
+
+  await assert.rejects(WorkbenchToolAdmissionController.shell(owners, escalate, {}, signal, context), /declined/u);
+  assert.equal(executions.length, 1);
+  allowed = true;
+  assert.equal((await WorkbenchToolAdmissionController.shell(owners, escalate, {}, signal, context)).stdout, "ok");
+  assert.equal(executions[1]?.permissions.mode, "approved-unrestricted");
+  assert.ok(approvals[0]?.subject.command.includes("echo approved"));
+  assert.deepEqual([approvals[0]?.caller.threadId, approvals[0]?.itemId, approvals[0]?.turnId], [threadId, itemId, turnId]);
 });
 
 test("identity drift and canonical path escape cannot dispatch", async () => {

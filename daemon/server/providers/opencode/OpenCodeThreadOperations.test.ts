@@ -207,7 +207,6 @@ function operations(
       }),
       refresh: lifecycle.refresh ?? (async () => undefined),
     },
-    approvals: { open: async () => { throw new Error("Unexpected approval"); }, close: () => undefined },
     questionnaires: lifecycle.questionnaires as never ?? {
       canDeliver: () => false,
       deliver: async () => null,
@@ -391,7 +390,6 @@ test("fails a public read when no OpenCode binding exists", async () => {
       }),
       refresh: async () => undefined,
     },
-    approvals: { open: async () => { throw new Error("Unexpected approval"); }, close: () => undefined },
     questionnaires: {
       canDeliver: () => false,
       deliver: async () => null,

@@ -7,7 +7,7 @@ import type { WorkbenchHarness } from "workbench-shared/types";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchApprovalDecision, WorkbenchApprovalOutcomeEntry, WorkbenchApprovalSubject } from "workbench-shared/workbench/provider/provider-approval";
 import { COMMAND_APPROVAL_CONFIRMATION } from "./lib/workbench/command-approval-prefix";
-import WorkbenchApprovalController from "./WorkbenchApprovalController";
+import WorkbenchApprovalController, { type WorkbenchApprovalHandoff } from "./WorkbenchApprovalController";
 
 const threadId = WorkbenchThreadIdSchema.parse("11111111-1111-4111-8111-111111111111");
 const turnId = WorkbenchTurnIdSchema.parse("22222222-2222-4222-8222-222222222222");
@@ -21,7 +21,7 @@ function command(overrides: Partial<Extract<WorkbenchApprovalSubject, { kind: "c
   };
 }
 
-function harness(options: { saved?: boolean; failSave?: boolean; deliverable?: boolean } = {}) {
+function harness(options: { saved?: boolean; failSave?: boolean; deliverable?: boolean; handoff?: WorkbenchApprovalHandoff } = {}) {
   const events: string[] = [];
   const delivered: WorkbenchApprovalDecision[] = [];
   const outcomes: WorkbenchApprovalOutcomeEntry[] = [];
@@ -48,7 +48,7 @@ function harness(options: { saved?: boolean; failSave?: boolean; deliverable?: b
     },
     recordOutcome: async entry => { outcomes.push(entry); },
     resolveProject: async () => projectId,
-  });
+  }, options.handoff);
   const open = (requestKey: string, subject = command()) => controller.open({
     harness: "claude", threadId, turnId, itemId: `item-${requestKey}`, requestKey, subject, allowSession: false,
   });
@@ -134,4 +134,54 @@ test("closing, failed delivery and disposal retract the question; re-opening a h
   disposed.controller.dispose();
   assert.equal(disposed.events.at(-1), "questionnaire/resolved");
   assert.deepEqual(disposed.controller.list(), []);
+});
+
+async function shownHostedRequest(h: ReturnType<typeof harness>, signal = new AbortController().signal) {
+  const decision = h.controller.request({ harness: "claude", threadId, turnId, itemId: "item-hosted", subject: command() }, signal);
+  for (let attempt = 0; attempt < 20 && !h.controller.list().length; attempt++) await Promise.resolve();
+  const shown = h.controller.list()[0];
+  assert.ok(shown, "the hosted approval was not shown");
+  return { decision, requestKey: shown.requestKey };
+}
+
+test("hosted waits settle in-process on response, and cancellation or shutdown rejects and retracts them", async () => {
+  const h = harness();
+  const answered = await shownHostedRequest(h);
+  await h.choose(answered.requestKey, ["Allow once"]);
+  assert.deepEqual(await answered.decision, { kind: "allowOnce" });
+  assert.equal(h.events.includes("deliver"), false, "hosted decisions never route through a provider");
+
+  const abort = new AbortController();
+  const cancelled = await shownHostedRequest(h, abort.signal);
+  abort.abort(new Error("tool call cancelled"));
+  await assert.rejects(cancelled.decision, /tool call cancelled/u);
+  assert.deepEqual(h.controller.list(), []);
+  assert.deepEqual(h.events.slice(-2), ["questionnaire/resolved", "inputResolved"]);
+
+  const stopping = await shownHostedRequest(h);
+  h.controller.dispose();
+  await assert.rejects(stopping.decision, /stopped/u);
+});
+
+test("a core reload hands pending approvals to the committed successor without retracting them", async () => {
+  const previous = harness();
+  const hosted = await shownHostedRequest(previous);
+  await previous.open("native");
+
+  // A discarded reload candidate never takes over.
+  const discarded = harness({ handoff: previous.controller.captureReloadState() });
+  discarded.controller.dispose();
+  assert.equal(previous.controller.list().length, 2);
+
+  const successor = harness({ handoff: previous.controller.captureReloadState() });
+  successor.controller.activate();
+  previous.controller.dispose();
+  assert.equal(previous.events.includes("questionnaire/resolved"), false, "the retiring generation retracts nothing");
+  assert.deepEqual(await successor.open("native"), { kind: "shown" }, "a provider re-open after reload stays idempotent");
+  assert.deepEqual(successor.events, []);
+
+  await successor.choose(hosted.requestKey, ["Decline"]);
+  assert.deepEqual(await hosted.decision, { kind: "decline" });
+  await successor.choose("native", ["Allow once"]);
+  assert.deepEqual(successor.delivered, [{ kind: "allowOnce" }]);
 });
