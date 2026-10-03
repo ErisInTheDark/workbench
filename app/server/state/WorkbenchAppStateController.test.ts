@@ -15,6 +15,10 @@ import { appStateSchema } from "workbench-shared/state/workbench-app-state-schem
 import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
 import { conformWorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state-conformance";
+import { workspaceObservationShape } from "workbench-shared/workbench/workspace/workspace-observation";
+import {
+  applyObservationDelta, diffObservationValue, measureObservationDelta,
+} from "workbench-shared/workbench/workspace/observation-patch";
 
 test("fractional font sizes survive global and project saves, browser conformance and restart", async context => {
   const fixture = await controllerFixture(context);
@@ -208,6 +212,33 @@ async function controllerFixture(context: TestContext) {
   const daemonRegistrationId = await controller.start();
   return { controller, create, daemonRegistrationId, databasePath };
 }
+
+test("one draft write publishes as one keyed row and acknowledges without daemon bindings", async context => {
+  const fixture = await controllerFixture(context);
+  const draft = (threadId: string, text: string) => ({
+    kind: "composerDraft" as const, daemonRegistrationId: fixture.daemonRegistrationId, projectId: "project", threadId,
+    value: { attachments: [], text, updatedAt: 1 },
+  });
+  const observe = (data: WorkbenchClientStateResponse, revision: number) => ({
+    kind: "appState" as const, phase: "current" as const, failure: null, data,
+    subscriptionId: "00000000-0000-4000-8000-000000000001", generation: 1, revision,
+  });
+  try {
+    for (let index = 0; index < 50; index++) {
+      await fixture.controller.mutate({ action: "put", record: draft(`thread-${index}`, "x".repeat(2_000)) });
+    }
+    const before = observe(fixture.controller.read(), 1);
+    const acknowledged = await fixture.controller.mutate({ action: "put", record: draft("thread-7", "edited") });
+    assert.equal(acknowledged.projectAliases, undefined);
+    assert.equal(acknowledged.registrations, undefined);
+    const after = observe(fixture.controller.read(), 1);
+    const shape = workspaceObservationShape("appState");
+    const delta = diffObservationValue(before, after, shape);
+    assert.ok(delta);
+    assert.deepEqual(applyObservationDelta(before, delta, shape), after);
+    assert.ok(measureObservationDelta(delta) < 1_000, `one edited draft must not resend the other 49 (${measureObservationDelta(delta)}B)`);
+  } finally { await fixture.controller.close(); }
+});
 
 test("a failed favourite write rolls back its provider admission and revision", async context => {
   const fixture = await controllerFixture(context);

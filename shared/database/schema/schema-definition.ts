@@ -22,6 +22,7 @@
  * check: declare a table CHECK constraint. Keywords: database, schema, constraint.
  * unique: declare a table UNIQUE constraint. Keywords: database, schema, constraint.
  * primaryKey: declare a composite table primary key. Keywords: database, schema, constraint.
+ * tablePrimaryKeyColumns: list the column names forming a table's primary key.
  * foreignKey: declare a composite foreign key. Keywords: database, schema, constraint.
  * index: declare an ordinary or partial table index. Keywords: database, schema, index.
  * literal: declare a schema-owned SQL literal. Keywords: database, schema, sql.
@@ -380,6 +381,13 @@ export function unique(columns: readonly ColumnReference[]): TableConstraint {
 
 export function primaryKey(columns: readonly ColumnReference[]): TableConstraint {
   return Object.freeze({ kind: "primaryKey", columns: Object.freeze([...columns]) });
+}
+
+/** Column names forming a table's primary key, whether declared per column or as a table constraint. */
+export function tablePrimaryKeyColumns(table: TableDefinition): readonly string[] {
+  const constraint = table.constraints.find(item => item.kind === "primaryKey");
+  if (constraint?.kind === "primaryKey") return constraint.columns.map(columnName);
+  return Object.entries(table.columns).filter(([, column]) => column.runtime.primaryKey).map(([name]) => name);
 }
 
 export function foreignKey(

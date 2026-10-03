@@ -69,7 +69,7 @@ export default class WorkbenchAppStateController {
     return this.#repository.close();
   }
 
-  read(sinceRevision?: number, projection?: BrowserProjection): WorkbenchClientStateResponse {
+  read(sinceRevision?: number, projection?: BrowserProjection, { bindings = true } = {}): WorkbenchClientStateResponse {
     const version = this.#repository.currentVersion();
     const canUseDelta = sinceRevision !== undefined
       && sinceRevision >= version.oldestAvailableRevision
@@ -77,11 +77,13 @@ export default class WorkbenchAppStateController {
     return {
       ...(projection?.attachmentsAsUrls ? { attachmentsAsUrls: true } : {}),
       daemonRegistrationId: this.daemonRegistrationId,
-      registrations: this.#repository.readDaemonRegistrations(),
-      projectAliases: this.#repository.readDaemonRegistrations().map(registration => ({
-        daemonRegistrationId: registration.id,
-        aliases: this.#repository.readProjectAliases(registration.id),
-      })),
+      ...(bindings ? {
+        registrations: this.#repository.readDaemonRegistrations(),
+        projectAliases: this.#repository.readDaemonRegistrations().map(registration => ({
+          daemonRegistrationId: registration.id,
+          aliases: this.#repository.readProjectAliases(registration.id),
+        })),
+      } : {}),
       kind: canUseDelta ? "delta" : "snapshot",
       rows: this.#readRows(canUseDelta ? sinceRevision : -1, projection),
       schemaVersion: appStateSchema.currentVersion,
@@ -118,7 +120,8 @@ export default class WorkbenchAppStateController {
         ? { ...mutation, record: this.#canonicalProject(mutation.record) }
         : { ...mutation, identity: this.#canonicalProject(mutation.identity) };
       const revision = this.#repository.commit((nextRevision) => this.#buildMutation(canonical, nextRevision));
-      return this.read(revision - 1, projection);
+      // Record mutations never change daemon bindings; omitting them keeps each acknowledgement to the written rows.
+      return this.read(revision - 1, projection, { bindings: false });
     });
     this.#mutationQueue = operation.then(() => undefined, () => undefined);
     return operation;

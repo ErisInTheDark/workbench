@@ -1064,6 +1064,32 @@ test("soft TTL expiry serves stale HTTP data while one background refresh runs",
   gate.resolve([createProject("alpha")]);
 });
 
+test("a soft recheck that finds nothing new publishes nothing, while a real change still publishes", async (context) => {
+  const harness = createHarness();
+  context.after(() => harness.controller.dispose());
+  await harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/alpha/src");
+  let published = 0;
+  context.after(harness.controller.subscribe(() => { published++; }));
+  const recheck = async (now: number) => {
+    harness.setNow(now);
+    const gate = deferred<WorkbenchProjectOption[]>();
+    const scanned = harness.discoveryReads;
+    harness.setReader(async () => await gate.promise);
+    await harness.controller.handleHttpRequest({} as http.IncomingMessage, createResponse().response);
+    assert.equal(harness.discoveryReads, scanned + 1);
+    return gate;
+  };
+
+  (await recheck(2_000)).resolve([createProject("alpha")]);
+  for (let hop = 0; hop < 5; hop++) await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(published, 0, "an unchanged recheck must not wake observers");
+
+  (await recheck(4_000)).resolve([createProject("alpha"), createProject("beta")]);
+  for (let hop = 0; hop < 5; hop++) await new Promise<void>(resolve => setImmediate(resolve));
+  assert.ok(published >= 1);
+  assert.ok(harness.controller.getFacts().catalogue?.data.some(project => project.id === "beta"));
+});
+
 test("coalesced failed background refresh logs once and preserves the last-good catalog", async () => {
   const harness = createHarness();
   await harness.controller.resolveAgentEndpointProjectFromCwd("C:/projects/alpha/src");

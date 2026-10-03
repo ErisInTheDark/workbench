@@ -42,6 +42,8 @@ import { WorkbenchThreadIdentityResolutionSchema } from "../thread/workbench-thr
 import { PresentationSnapshotSchema } from "../../state/workbench-presentation-state";
 import type { WorkbenchClientStateResponse } from "../../state/workbench-client-state";
 import { conformWorkbenchClientStateResponse } from "../../state/workbench-client-state-conformance";
+import { appStateClientTables } from "../../state/workbench-app-state-schema";
+import { tablePrimaryKeyColumns } from "../../database/schema/schema-definition";
 import { WorkbenchNetworkSnapshotSchema } from "../../http/workbench-network";
 import { WorkbenchDaemonReloadDirtEnvelopeSchema } from "../daemon-reload";
 import { WorkbenchSearchRequestSchema } from "../search/workbench-search";
@@ -463,8 +465,21 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
       },
     }) } };
     case "thread": return { schema, fields: { data: entriesShape(threadObservationObject) } };
+    case "appState": return { schema, fields: { data: appStateShape() } };
     default: return { schema };
   }
+}
+
+/** App state rows key by their table's primary key, so one draft or preference write ships one row. */
+function appStateShape() {
+  const row = z.record(z.string(), z.json());
+  const rows = Object.fromEntries(Object.entries(appStateClientTables).map(([name, table]) => {
+    const columns = tablePrimaryKeyColumns(table);
+    // Key serialization only; rows compare structurally inside the delta engine.
+    return [name, observationShape.keyed((item: Record<string, unknown>) => JSON.stringify(columns.map(column => item[column])), row)];
+  }));
+  // `revision` is not incidental: a newer snapshot fences acknowledged rows a coalesced read never saw.
+  return observationShape.object({ validate: appState, fields: { rows: observationShape.object({ fields: rows }) } });
 }
 
 export const WorkspaceObserveSchema = z.object({

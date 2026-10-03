@@ -12,6 +12,7 @@ import { discoverProjectIdentities, isPathWithinRoot, normalizeRelativePath, res
 import { discoverWorkbenchProjectIcon } from "./lib/workbench/project/project-icon-discovery";
 import type { WorkbenchProjectCacheRecord, WorkbenchProjectPersistence, WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
 import type { ProjectId } from "workbench-shared/workbench/identity";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { WorkbenchProjectOption, WorkbenchProjectsPayload } from "workbench-shared/types";
 import {
   resolveAgentEndpointProjectFromProjects,
@@ -427,6 +428,11 @@ export default class WorkbenchProjectCatalogController {
     };
   }
 
+  private observableFacts() {
+    const { revision: _revision, ...facts } = this.getFacts();
+    return facts;
+  }
+
   async ensureLoaded() {
     this.assertActive();
     if (this.catalog && this.settings) {
@@ -720,11 +726,13 @@ export default class WorkbenchProjectCatalogController {
           this.cwdResolutions.clear();
           this.catalogGeneration += 1;
         }
+        const before = this.observableFacts();
         this.catalog = catalog;
         this.catalogExpiresAt = this.now() + this.cacheTtlMs;
         this.hardStale = false;
         this.refreshFailure = null;
-        this.publishFacts();
+        // A recheck that found nothing new is not news; observers recompute only on real change.
+        if (!areDeeplyEqual(before, this.observableFacts())) this.publishFacts();
         this.sweepUncheckedIcons();
         return catalog;
       }
@@ -790,11 +798,11 @@ export default class WorkbenchProjectCatalogController {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
     if (this.disposed || !this.listeners.size || this.refreshInFlight) return;
+    // Soft expiry is a quiet recheck: watchers own invalidation, so the catalogue stays current until a scan disagrees.
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null;
-      this.hardStale = true;
-      this.publishFacts();
-      this.refreshInBackground();
+      // startRefresh owns failure reporting for this promise.
+      void this.refreshInBackground();
     }, Math.max(0, this.catalogExpiresAt - this.now()));
     this.refreshTimer.unref?.();
   }
