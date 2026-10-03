@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - SetupCommand (default): owns checkout setup child commands and their failures.
+ * - SetupCommand (default): owns checkout setup child commands, their Windows executable lookup (including Git Bash) and their failures.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -13,9 +13,17 @@ export default class SetupCommand {
     this.environment = environment;
   }
 
+  /** Environment variable by name; Windows names are case-insensitive, but copied env objects are not. */
+  variable(name) {
+    if (process.platform !== "win32") return this.environment[name];
+    const key = Object.keys(this.environment).find(candidate => candidate.toLowerCase() === name.toLowerCase());
+    return key === undefined ? undefined : this.environment[key];
+  }
+
   async resolve(command) {
+    if (process.platform === "win32" && command === "bash") return [await this.resolveBash()];
     if (process.platform !== "win32" || !["npm", "pnpm"].includes(command)) return [command];
-    const directories = [path.dirname(process.execPath), ...(this.environment.PATH || "").split(path.delimiter)];
+    const directories = [path.dirname(process.execPath), ...(this.variable("PATH") || "").split(path.delimiter)];
     for (const directory of directories) {
       if (!directory) continue;
       const executable = path.join(directory, `${command}.exe`);
@@ -37,6 +45,44 @@ export default class SetupCommand {
       }
     }
     throw new Error(`Cannot locate ${command}'s executable or Node entry. Install ${command} and ensure it is on PATH.`);
+  }
+
+  /**
+   * Windows bash that can run Workbench. Git for Windows usually puts only git on PATH, and the
+   * bash.exe Windows does find is often WSL's launcher, which runs scripts inside Linux.
+   */
+  async resolveBash() {
+    const exists = async file => {
+      try { await fs.access(file); return true; }
+      catch (error) { if (error.code === "ENOENT") return false; throw error; }
+    };
+    const directories = (this.variable("PATH") || "").split(path.delimiter).filter(Boolean);
+    const local = this.variable("LOCALAPPDATA");
+    const launchers = [
+      path.join(this.variable("SystemRoot") || "C:\\Windows", "System32"),
+      ...(local ? [path.join(local, "Microsoft", "WindowsApps")] : []),
+    ].map(directory => path.resolve(directory).toLowerCase());
+    let sawLauncher = false;
+    for (const directory of directories) {
+      const bash = path.join(directory, "bash.exe");
+      if (!await exists(bash)) continue;
+      if (launchers.includes(path.resolve(directory).toLowerCase())) sawLauncher = true;
+      else return bash;
+    }
+    // git.exe lives in Git\cmd, Git\bin or Git\mingw64\bin; Git Bash is always Git\bin\bash.exe.
+    for (const directory of directories) {
+      if (!await exists(path.join(directory, "git.exe"))) continue;
+      const parent = path.dirname(directory);
+      const root = path.basename(parent).toLowerCase() === "mingw64" ? path.dirname(parent) : parent;
+      const bash = path.join(root, "bin", "bash.exe");
+      if (await exists(bash)) return bash;
+    }
+    for (const base of [this.variable("ProgramFiles"), local && path.join(local, "Programs")]) {
+      if (!base) continue;
+      const bash = path.join(base, "Git", "bin", "bash.exe");
+      if (await exists(bash)) return bash;
+    }
+    throw new Error(`Workbench needs Git Bash on Windows.${sawLauncher ? " The bash on PATH is WSL's, which cannot run Workbench." : ""} Install Git for Windows, then retry.`);
   }
 
   async run(command, args, { cwd, signal, onOutput, environment = {}, output = this.output, errorOutput = this.errorOutput, interactive = false } = {}) {

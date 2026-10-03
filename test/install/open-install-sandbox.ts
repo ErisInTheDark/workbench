@@ -4,6 +4,7 @@
  */
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import SetupCommand from "../../package/SetupCommand.mjs";
 import InstallSandbox from "./InstallSandbox.ts";
 
 // The root package is CommonJS to tsx, so this entry cannot use top-level await.
@@ -28,9 +29,9 @@ async function main() {
   ].join("\n"));
 
   const windows = process.platform === "win32";
-  // Windows defaults to Git Bash, the same bash wb runs through; skipping rc files keeps the host wb off PATH.
+  // Windows opens the same Git Bash wb resolves; skipping rc files keeps the host wb off PATH.
   const [shell, ...shellArgs] = cmd ? ["cmd", "/k", "prompt [wb-sandbox] $P$G"]
-    : windows ? ["bash", "--noprofile", "--norc", "-i"]
+    : windows ? [...await new SetupCommand({ environment: sandbox.environment }).resolve("bash"), "--noprofile", "--norc", "-i"]
     : [process.env.SHELL || "bash"];
   const child = spawn(shell!, shellArgs, {
     cwd: sandbox.home,
