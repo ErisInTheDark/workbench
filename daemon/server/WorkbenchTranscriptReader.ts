@@ -136,7 +136,8 @@ export default class WorkbenchTranscriptReader {
           const retained = workbenchThreadActions["thread/steers/read"].result.safeParse({ data: [item.safeValue] });
           if (!retained.success) throw new Error("Stored Workbench steer history is invalid.");
           const entry = retained.data.data[0]!;
-          steerEntries.push({ ...entry, itemId: item.id, threadId: snapshot.thread.id, turnId: turn.id });
+          // Audio steers are retained as generic payloads; a dismissed one stays out of history like any other.
+          if (entry.status !== "dismissed") steerEntries.push({ ...entry, itemId: item.id, threadId: snapshot.thread.id, turnId: turn.id });
           continue;
         }
         items.push(item);

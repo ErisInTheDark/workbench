@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CodexThreadOperationOwners: existing bridge, project and identity admission ports.
- * - default CodexThreadOperations: translate WB thread intent into existing Codex admission, read, and interaction owners.
+ * - default CodexThreadOperations: translate WB thread intent into existing Codex admission, read, liveness, and interaction owners.
  */
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn as NativeTurn } from "workbench-shared/codex/generated/app-server/v2/Turn";
@@ -9,6 +9,7 @@ import { createInitializeCapabilities, createInitializeRequest } from "workbench
 import { toThreadPayload, toThreadTurn } from "workbench-shared/codex/thread-adapter";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { WorkbenchThreadHistoryPendingError } from "workbench-shared/workbench/provider/provider-thread";
+import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type {
   ThreadPayload, WorkbenchPendingUserInputRequest,
 } from "workbench-shared/types";
@@ -439,6 +440,11 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
       ...WorkbenchProviderGoalSchema.parse(value),
       threadId: this.owners.identities.threads.knownThread(ThreadReferenceSchema.parse(threadId)).threadId,
     };
+  }
+
+  /** Codex runs at most one turn per thread; a restarted app-server reports threads it no longer runs as inactive. */
+  async isTurnLive(threadId: string, _turnId: string) {
+    return isThreadStatusActive((await this.read(threadId, { background: true })).status);
   }
 
   async interrupt(threadId: string, turnId: string, options?: { preserveGoal?: boolean }) {

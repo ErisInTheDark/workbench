@@ -1,4 +1,4 @@
-/* Exports: none. Protect WB action ownership and accepted-message settlement. */
+/* Exports: none. Protect WB action ownership, accepted-message settlement, orphaned stop settlement and undelivered steer resend/dismiss. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import WorkbenchThreadActionController, {
@@ -37,10 +37,13 @@ function fixture(providerWarning?: string) {
     },
     configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
   };
+  const recorded: object[] = [];
   const owners: WorkbenchThreadActionOwners = {
     approvals: { list: () => [] },
     reconciliation: { reconcile: unused },
     transcripts: { readPage: unused, history: unused },
+    transcript: { record: async observations => { recorded.push(...observations); return undefined as never; } },
+    settlement: { settleIfOrphaned: async () => { stopOrder.push("settle"); return false; } },
     providers: { get: key => { assert.equal(key, "codex"); return provider; } },
     projects: { resolveProjectById: unused },
     identities: { resolveTurn: unused, resolve: async () => ({
@@ -73,7 +76,7 @@ function fixture(providerWarning?: string) {
   };
   return {
     provider, owners,
-    controller: new WorkbenchThreadActionController(owners), messages, connections, warnings, stops, mutations, stopOrder,
+    controller: new WorkbenchThreadActionController(owners), messages, connections, warnings, stops, mutations, stopOrder, recorded,
     failInterrupt: () => { interruptFailure = true; },
     failSettlement: () => { settlementFailure = true; },
     failTitle: () => { titleFailure = true; },
@@ -252,7 +255,51 @@ test("stop retains the caller's questionnaire identity instead of selecting a re
   assert.equal(f.mutations.length, 1);
   assert.ok("requestKey" in f.mutations[0]);
   assert.equal(f.mutations[0].requestKey, "seen-question");
-  assert.deepEqual(f.stopOrder, ["interrupt", "mutation"]);
+  assert.deepEqual(f.stopOrder, ["interrupt", "settle", "mutation"]);
+});
+
+function heldSteer(status: string) {
+  return {
+    itemId: "steer-item", entryKey: "steer-item", threadId: "wb-thread", turnId: "wb-turn", status,
+    input: [{ type: "text", text: "use the DX language features", text_elements: [] }],
+    attemptedAt: 1, resolvedAt: 2, requestId: null, canonicalItemId: null, clientUserMessageId: "old-client", error: null,
+  };
+}
+
+function withSteer(f: ReturnType<typeof fixture>, status: string) {
+  f.owners.transcripts.history = async () => ({ steerEntries: [heldSteer(status)] }) as never;
+}
+
+test("dismissing an undelivered steer records the user's final word, and held steers cannot be dismissed", async () => {
+  const f = fixture();
+  withSteer(f, "interrupted");
+  assert.deepEqual(await f.controller.handle("thread/steer/dismiss", { threadId: "wb-thread", itemId: "steer-item" }), { ok: true });
+  assert.equal(f.recorded.length, 1);
+  assert.deepEqual((f.recorded[0] as { entry: { status: string }; publicItemId: string }).entry.status, "dismissed");
+  assert.equal((f.recorded[0] as { publicItemId: string }).publicItemId, "steer-item");
+  withSteer(f, "pending");
+  await assert.rejects(f.controller.handle("thread/steer/dismiss", { threadId: "wb-thread", itemId: "steer-item" }), /undelivered/);
+  assert.equal(f.recorded.length, 1);
+});
+
+test("resending submits the held input as a fresh message before retiring the undelivered copy", async () => {
+  const f = fixture();
+  f.owners.state.acceptProviderIntent = async () => null;
+  withSteer(f, "failed");
+  const result = await f.controller.handle("thread/steer/resend", { threadId: "wb-thread", itemId: "steer-item" });
+  assert.equal(result.kind, "steered");
+  assert.equal(f.messages.length, 1);
+  const message = f.messages[0] as { intent: string; input: unknown; clientMessageId: string };
+  assert.equal(message.intent, "continue");
+  assert.deepEqual(message.input, heldSteer("failed").input);
+  assert.notEqual(message.clientMessageId, "old-client");
+  assert.equal((f.recorded[0] as { entry: { status: string } }).entry.status, "dismissed");
+
+  const failed = fixture();
+  withSteer(failed, "failed");
+  failed.provider.threads.submit = async () => { throw new Error("provider unavailable"); };
+  await assert.rejects(failed.controller.handle("thread/steer/resend", { threadId: "wb-thread", itemId: "steer-item" }), /provider unavailable/);
+  assert.deepEqual(failed.recorded, []);
 });
 
 test("failed interruption preserves the pending questionnaire", async () => {

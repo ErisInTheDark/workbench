@@ -34,6 +34,7 @@ import resolveThreadComposerProfileSlot from "../../../workbench/thread/thread-c
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { ThreadMessageNotSentError } from "../../../workbench/thread/thread-message-submission";
 import { deriveThreadItemApprovals, ThreadItemApprovalsContext } from "../../../workbench/thread/thread-item-approvals";
+import ThreadSteerActionsContext, { type ThreadSteerActions } from "./ThreadSteerActionsContext";
 import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadLifecycle, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import {
   filterSubagentsByParentThreadId,
@@ -460,6 +461,10 @@ export default memo(function ThreadViewContent ({
     () => deriveThreadItemApprovals(activeThread ? activeApprovalEntries : [], activePendingUserInputRequest),
     [activeApprovalEntries, activePendingUserInputRequest, activeThread],
   );
+  const activeSteerActions = useMemo<ThreadSteerActions>(() => ({
+    resend: itemId => activeThreadController.actions.resendSteer(itemId),
+    dismiss: itemId => activeThreadController.actions.dismissSteer(itemId),
+  }), [activeThreadController.actions]);
   const isDraftThreadView = Boolean(activeThread?.isDraft);
   const currentTurn = activeThread?.turns.at(-1) ?? null;
   const activityTurn = useMemo(() => {
@@ -1150,6 +1155,7 @@ export default memo(function ThreadViewContent ({
                     </div>
                   ) : null}
                   <ThreadItemApprovalsContext.Provider value={activeItemApprovals}>
+                  <ThreadSteerActionsContext.Provider value={activeSteerActions}>
                   <ThreadTranscriptProjection
                     canLoadPreviousTurn={canLoadPreviousTurn}
                     hiddenReasoningStep={null}
@@ -1169,6 +1175,7 @@ export default memo(function ThreadViewContent ({
                     subagents={subagents}
                     workspaceRoots={workspaceFileLinkRoots}
                   />
+                  </ThreadSteerActionsContext.Provider>
                   </ThreadItemApprovalsContext.Provider>
                 </>
               ) : (
@@ -1182,6 +1189,7 @@ export default memo(function ThreadViewContent ({
               )
             ) : (
               <ThreadItemApprovalsContext.Provider value={activeItemApprovals}>
+              <ThreadSteerActionsContext.Provider value={activeSteerActions}>
               <ThreadTranscript
                 browseResultEntries={activeThreadBrowseResultEntries}
                 canLoadPreviousTurn={canLoadPreviousTurn}
@@ -1213,6 +1221,7 @@ export default memo(function ThreadViewContent ({
                 visibleHistoryEntries={visibleHistoryEntries}
                 workspaceRoots={workspaceFileLinkRoots}
               />
+              </ThreadSteerActionsContext.Provider>
               </ThreadItemApprovalsContext.Provider>
             )
           ) : (

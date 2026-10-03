@@ -142,7 +142,9 @@ import getFinishedThreadTailHiddenItemIds from "./thread-finished-tail";
 import projectThreadRenderTurns from "./thread-render-turns";
 import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entries";
 import { getUserMessageCopyMarkdown } from "./bubble-copy";
-import ThreadBubbleCopyButton from "./ThreadBubbleCopyButton";
+import ThreadBubbleCopyButton, { threadBubbleControlClassName } from "./ThreadBubbleCopyButton";
+import ThreadSteerActionsContext from "./ThreadSteerActionsContext";
+import { RefreshCwIcon, XIcon } from "../workbench-icons";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import useThreadPresentedText from "./use-thread-presented-text";
 import {
@@ -459,9 +461,60 @@ function ThreadUserInputLine ({
   }
 }
 
+/** Stored steers the daemon reports undelivered; optimistic browser-only input has nothing to resend or dismiss. */
+function storedUndeliveredSteerIds(items: readonly Extract<ThreadItem, { type: "userMessage" }>[]) {
+  return items.flatMap((item) => {
+    const input = getWorkbenchInputState(item);
+    return input?.kind === "steer" && (input.status === "failed" || input.status === "interrupted") ? [item.id] : [];
+  });
+}
+
+/** Resend or dismiss every undelivered steer in one bubble, in their original order. */
+function UndeliveredSteerActions({ itemIds }: { itemIds: readonly string[] }) {
+  const actions = useContext(ThreadSteerActionsContext);
+  const [busy, setBusy] = useState(false);
+  if (!actions || !itemIds.length) return null;
+  const run = (action: (itemId: string) => Promise<void>) => {
+    setBusy(true);
+    void (async () => {
+      try {
+        for (const itemId of itemIds) await action(itemId);
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+  const label = itemIds.length > 1 ? "steers" : "steer";
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={`Resend ${label}`}
+        className={`${threadBubbleControlClassName} disabled:opacity-50`}
+        disabled={busy}
+        onClick={() => run(actions.resend)}
+        title={`Resend ${label}`}
+      >
+        <RefreshCwIcon size={16} />
+      </button>
+      <button
+        type="button"
+        aria-label={`Dismiss ${label}`}
+        className={`${threadBubbleControlClassName} disabled:opacity-50`}
+        disabled={busy}
+        onClick={() => run(actions.dismiss)}
+        title={`Dismiss ${label}`}
+      >
+        <XIcon size={16} />
+      </button>
+    </>
+  );
+}
+
 function ThreadUserMessageItem ({
   inlineMentionSources,
   item,
+  sourceItems,
   threadCwdPath,
   projectFilePaths,
   projectId,
@@ -472,6 +525,8 @@ function ThreadUserMessageItem ({
 }: {
   inlineMentionSources?: InlineMentionHighlightSources | null;
   item: Extract<ThreadItem, { type: "userMessage" }>;
+  /** The stored messages a merged bubble shows; defaults to `item` itself. */
+  sourceItems?: readonly Extract<ThreadItem, { type: "userMessage" }>[];
   threadCwdPath?: string;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -565,7 +620,13 @@ function ThreadUserMessageItem ({
             )}
           </div>
         </div>
-        <ThreadBubbleCopyButton markdown={copyMarkdown} side="right" />
+        <ThreadBubbleCopyButton
+          actions={steerState === "unsent"
+            ? <UndeliveredSteerActions itemIds={storedUndeliveredSteerIds(sourceItems ?? [item])} />
+            : undefined}
+          markdown={copyMarkdown}
+          side="right"
+        />
       </div>
       <ThreadMessageTimestamp align="right" className="mt-1" timestampSeconds={startedAt} />
     </section>
@@ -1778,6 +1839,7 @@ function ThreadRenderableBlockViewComponent ({
     return (
       <ThreadUserMessageItem
         item={mergeSteerUserMessages(block.items)}
+        sourceItems={block.items}
         inlineMentionSources={inlineMentionSources}
         projectFilePaths={projectFilePaths}
         projectId={projectId}

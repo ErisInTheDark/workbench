@@ -186,6 +186,8 @@ interface WorkbenchThreadClient {
   ) => Promise<ThreadPayload | null>;
   compactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  resendSteer: (threadId: string, itemId: string) => Promise<void>;
+  dismissSteer: (threadId: string, itemId: string) => Promise<void>;
   threadGoals: WorkbenchThreadGoalControls;
   transcripts: WorkbenchTranscriptClient;
   submitPendingUserInputRequest: (
@@ -690,7 +692,7 @@ function WorkbenchThreadClient(
         : target.harness ?? getKnownThreadHarness(threadId) ?? defaultProviderKey;
       controller = new WorkbenchThreadController(projectId, target, {
         controls: {
-          compactThread, stopThread, setCurrentThreadAgent, setCurrentThreadModel,
+          compactThread, stopThread, resendSteer, dismissSteer, setCurrentThreadAgent, setCurrentThreadModel,
           setCurrentThreadReasoningEffort, setCurrentThreadServiceTier, setCurrentThreadComposerSettings,
           submitPendingUserInputRequest,
           updateThreadStateWithAcceptance: request => {
@@ -4297,6 +4299,29 @@ function WorkbenchThreadClient(
     return thread;
   }
 
+  /**
+   * The daemon owns resend and dismissal; the refreshed steer history replaces the undelivered copy.
+   * A rejected action leaves the steer undelivered and tells the user why.
+   */
+  async function runSteerAction(threadId: string, label: string, action: () => Promise<unknown>) {
+    try {
+      await action();
+    } catch (error) {
+      emitStatusMessage(`${label}: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
+      return;
+    }
+    await readCompletedSteerHistory(threadId);
+  }
+
+  async function resendSteer(threadId: string, itemId: string) {
+    messageAdmissionIntentRevision += 1;
+    await runSteerAction(threadId, "The steer could not be resent", () => daemon.threads.steer.resend({ threadId, itemId }));
+  }
+
+  async function dismissSteer(threadId: string, itemId: string) {
+    await runSteerAction(threadId, "The steer could not be dismissed", () => daemon.threads.steer.dismiss({ threadId, itemId }));
+  }
+
   async function submitPendingUserInputRequest(
     threadId: string,
     response: WorkbenchUserInputResponse,
@@ -4689,6 +4714,8 @@ function WorkbenchThreadClient(
     sendThreadMessage,
     compactThread,
     stopThread,
+    resendSteer,
+    dismissSteer,
     threadGoals,
     transcripts,
     submitPendingUserInputRequest,

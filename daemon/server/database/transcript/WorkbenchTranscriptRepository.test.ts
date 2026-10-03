@@ -1303,6 +1303,77 @@ test("interaction bodies reuse admitted identities and positions through steer s
   }
 });
 
+test("held steers persist, never fall back to pending, end undelivered with their turn, and stay dismissed", () => {
+  const { database, repository } = createRepository();
+  try {
+    const turnId = fixtureIdentityValues.WorkbenchTurnId.turn;
+    repository.settle([threadObservation(), { ...turnObservation("turn", 0), state: "inProgress", endedAt: null, durationMs: null }]);
+    const identities = new WorkbenchTranscriptIdentityRepository(database);
+    const held = (entryKey: string): StoredSteerEntry => ({
+      attemptedAt: 3, canonicalItemId: null, clientUserMessageId: `${entryKey}-client`, entryKey, error: null,
+      input: [{ type: "text", text: entryKey, text_elements: [] }], requestId: null, resolvedAt: null,
+      status: "pending", threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId,
+    });
+    const record = (entry: StoredSteerEntry) => {
+      const { itemId } = identities.admit({
+        threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+        sources: [{ turnId, kind: "stable", reference: entry.entryKey }],
+      });
+      repository.settle([{ kind: "steer", entry, observedAt: 4, publicItemId: itemId }]);
+      return itemId;
+    };
+    const state = (itemId: string) => (database.prepare(`
+      SELECT u.delivery_state AS state FROM thread_item_user_messages u
+      JOIN thread_items i ON i.id = u.item_id WHERE i.public_id = ?
+    `).get(itemId) as { state: string }).state;
+
+    const delivered = record(held("delivered"));
+    const undelivered = record(held("undelivered"));
+    assert.equal(state(delivered), "pending");
+    assert.equal(state(undelivered), "pending");
+    record({ ...held("delivered"), status: "sent", resolvedAt: 5 });
+    record(held("delivered"));
+    assert.equal(state(delivered), "delivered");
+
+    repository.settle([{ ...turnObservation("turn", 0), state: "interrupted" }]);
+    assert.equal(state(undelivered), "interrupted");
+    assert.equal(state(delivered), "delivered");
+    record(held("undelivered"));
+    assert.equal(state(undelivered), "interrupted");
+
+    record({ ...held("undelivered"), status: "dismissed", resolvedAt: 6 });
+    record({ ...held("undelivered"), status: "interrupted", resolvedAt: 7 });
+    assert.equal(state(undelivered), "dismissed");
+    const projected = projectWorkbenchTranscriptItems(repository.read({ threadId: "thread", turnLimit: 1 })!.rows);
+    assert.equal(projected.success, true);
+    if (!projected.success) throw new Error("Held steer projection failed.");
+    assert.deepEqual(projected.data.map(({ item }) => item.id), [delivered]);
+  } finally {
+    database.close();
+  }
+});
+
+test("a steer delivered under the provider's own message identity retires its held copy", () => {
+  const { database, repository } = createRepository();
+  try {
+    const turnId = fixtureIdentityValues.WorkbenchTurnId.turn;
+    repository.settle([threadObservation(), { ...turnObservation("turn", 0), state: "inProgress", endedAt: null, durationMs: null }]);
+    const held: StoredSteerEntry = {
+      itemId: "held-steer", attemptedAt: 3, canonicalItemId: null, clientUserMessageId: "client", entryKey: "request",
+      error: null, input: [{ type: "text", text: "delivered later", text_elements: [] }], requestId: "1",
+      resolvedAt: null, status: "pending", threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId,
+    };
+    // Codex-shaped: no public item id, so each status picks its own source identity.
+    repository.settle([{ kind: "steer", entry: held, observedAt: 3 }]);
+    repository.settle([{ kind: "steer", entry: { ...held, status: "sent", canonicalItemId: "native-message", resolvedAt: 4 }, observedAt: 4 }]);
+    repository.settle([{ ...turnObservation("turn", 0), state: "completed" }]);
+    const states = database.prepare("SELECT delivery_state AS state FROM thread_item_user_messages").all();
+    assert.deepEqual(states, [{ state: "delivered" }]);
+  } finally {
+    database.close();
+  }
+});
+
 test("turn usage settlement keeps context while replacing cumulative token updates", () => {
   const { database, repository } = createRepository();
   try {

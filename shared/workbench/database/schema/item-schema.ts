@@ -232,14 +232,40 @@ const threadItemUserMessagesV1 = defineTable("thread_item_user_messages", {
 const threadItemUserMessagesV2 = evolveTable(threadItemUserMessagesV1, {
   add: { input_kind: enumText("initial", "steer").notNull().default("initial") },
 });
+// Steers are held from admission (`pending`) until delivered, undelivered, or dismissed by the user.
+const threadItemUserMessagesV3 = defineTable("thread_item_user_messages", {
+  item_id: integer().primaryKey(),
+  item_type: enumText("userMessage").notNull().default("userMessage"),
+  delivery_state: enumText("pending", "delivered", "interrupted", "failed", "dismissed").notNull(),
+  client_id: text(),
+  error_text: text(),
+  input_kind: enumText("initial", "steer").notNull().default("initial"),
+}, (table) => ({
+  constraints: [
+    check(sql`
+      (${table.delivery_state} = ${literal("failed")} AND ${table.error_text} IS NOT NULL)
+      OR (${table.delivery_state} <> ${literal("failed")} AND ${table.error_text} IS NULL)
+    `),
+    foreignKey([table.item_id, table.item_type], {
+      table: "thread_items",
+      columns: ["id", "type"],
+      onDelete: "CASCADE",
+    }),
+  ],
+}));
 const threadItemUserMessagesHistory = defineTableHistory({
-  current: threadItemUserMessagesV2,
+  current: threadItemUserMessagesV3,
   versions: [
     tableVersion({ schemaVersion: databaseReleases.initialTranscript.version, table: threadItemUserMessagesV1, migration: createTable(threadItemUserMessagesV1) }),
     tableVersion({
       schemaVersion: databaseReleases.userInputKinds.version,
       table: threadItemUserMessagesV2,
       migration: addColumns({ from: threadItemUserMessagesV1, to: threadItemUserMessagesV2, columns: ["input_kind"] }),
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.heldSteers.version,
+      table: threadItemUserMessagesV3,
+      migration: rebuildTable({ from: threadItemUserMessagesV2, to: threadItemUserMessagesV3 }),
     }),
   ],
 });

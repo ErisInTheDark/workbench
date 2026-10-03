@@ -232,6 +232,10 @@ class WorkbenchDaemonClient {
     compact: (params: WorkbenchDaemonParams<"thread/compact">) => this.request("thread/compact", params),
     deleteProvider: (params: WorkbenchDaemonParams<"thread/provider/delete">) => this.request("thread/provider/delete", params),
     stop: (params: WorkbenchDaemonParams<"thread/stop">) => this.request("thread/stop", params),
+    steer: {
+      resend: (params: WorkbenchDaemonParams<"thread/steer/resend">) => this.request("thread/steer/resend", params),
+      dismiss: (params: WorkbenchDaemonParams<"thread/steer/dismiss">) => this.request("thread/steer/dismiss", params),
+    },
     goal: {
       read: (params: WorkbenchDaemonParams<"thread/goal/read">) => this.request("thread/goal/read", params),
       update: (params: WorkbenchDaemonParams<"thread/goal/update">) => this.request("thread/goal/update", params),

@@ -1,4 +1,4 @@
-/* No exports. Protect app socket admission, browser-state isolation and idle grant revocation. */
+/* No exports. Protect app socket admission, browser-state isolation, idle grant revocation and event-named traffic logs. */
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
@@ -103,4 +103,7 @@ test("an idle app socket closes on grant revocation and state mutations cannot s
   await closedAgain;
   assert.equal(listeners.size, 0);
   assert.ok(lines.some(line => line.includes("grant revoked")));
+  // Traffic lines name the request each RPC frame carries, not only its envelope.
+  assert.ok(lines.some(line => line.includes("WS in app:rpc app/state/mutate (count:")));
+  assert.ok(lines.some(line => line.includes("WS out app:rpc app/state/mutate (count:")));
 });

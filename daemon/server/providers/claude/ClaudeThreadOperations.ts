@@ -2,7 +2,7 @@
  * Exports:
  * - ClaudeTurnHandoff: one paused live turn's turn and transcript state for the next bridge generation.
  * - ClaudeThreadOperationsOptions: bind host-owned Claude sessions to Workbench identity, state, lifecycle publication, and managed MCP.
- * - default ClaudeThreadOperations: admit Claude turns and steers, launch them on the harness session host with their configured or model-default context window, pause and restore live turns across bridge reloads, deliver Browse screenshots, hydrate billing usage from session logs, and own native session operations.
+ * - default ClaudeThreadOperations: admit Claude turns and steers, launch them on the harness session host with their configured or model-default context window, pause and restore live turns across bridge reloads, attest turn liveness, hold admitted steers in canonical history, deliver Browse screenshots, hydrate billing usage from session logs, and own native session operations.
  */
 import {
     deleteSession, getSessionInfo, listSessions, query, renameSession,
@@ -344,12 +344,15 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
         throw new Error("Claude steer targeted a different turn.");
       }
       const itemId = WorkbenchItemIdSchema.parse(randomUUID());
-      runtime.steer({
+      const entry = {
         threadId: identity.threadId, turnId: runtime.turnId, itemId, entryKey: itemId,
-        input: toWorkbenchThreadUserInput(input.input), status: "pending", attemptedAt: Date.now(), resolvedAt: null,
+        input: toWorkbenchThreadUserInput(input.input), status: "pending" as const, attemptedAt: Date.now(), resolvedAt: null,
         requestId: null, canonicalItemId: null, clientUserMessageId: input.clientMessageId,
         dispatchSequence: null, error: null,
-      }, content);
+      };
+      // Held in canonical history before delivery, so a dying process cannot take the steer with it.
+      await this.options.transcript.recordSteer(entry);
+      runtime.steer(entry, content);
       return { kind: "steered" as const, turnId: runtime.turnId };
     }
     if (runtime) throw new Error("Claude turn is already active.");
@@ -578,6 +581,12 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const runtime = this.live.get(WorkbenchThreadIdSchema.parse(threadId));
     if (!runtime || runtime.turnId !== turnId) return;
     await runtime.interrupt();
+  }
+
+  /** Live while a runtime drives it, or while this daemon still admits, launches or settles its transcript scope. */
+  async isTurnLive(threadId: string, turnId: string) {
+    return this.live.get(WorkbenchThreadIdSchema.parse(threadId))?.turnId === turnId
+      || this.options.transcript.ownsTurn(WorkbenchTurnIdSchema.parse(turnId));
   }
 
   async materialize(threadId: string, _turnIds: string[], signal?: AbortSignal) {

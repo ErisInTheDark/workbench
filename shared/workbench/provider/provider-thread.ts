@@ -59,5 +59,7 @@ export interface WorkbenchProviderThreads {
   /** Delete the backing provider session, retaining WB identity, state and history. */
   delete?(threadId: string): Promise<void>;
   interrupt(threadId: string, turnId: string, options?: { preserveGoal?: boolean }): Promise<void>;
+  /** Runtime truth only: whether this provider still runs the turn. Workbench settles turns nobody runs. */
+  isTurnLive?(threadId: string, turnId: string): Promise<boolean>;
   materialize(threadId: string, turnIds: string[], signal?: AbortSignal): Promise<void>;
 }

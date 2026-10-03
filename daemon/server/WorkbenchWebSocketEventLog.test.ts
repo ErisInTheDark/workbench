@@ -123,6 +123,32 @@ test("frequent outbound events aggregate for ten seconds while other traffic kee
   logger.dispose();
 });
 
+test("inner event details name and separate traffic that shares one envelope method", () => {
+  const { logger, lines, advance } = fixture();
+  logger.record("out", "workbench", "workspace/updated", 10, "projectThreads");
+  logger.record("out", "workbench", "workspace/updated", 20, "thread thread=0c866bd9");
+  logger.record("out", "workbench", "workspace/updated", 30, "projectThreads");
+  advance(2_000);
+  assert.deepEqual(lines.map(line => line.replace(/ \(.*$/u, "")), [
+    " WS out wb:workspace/updated projectThreads",
+    " WS out wb:workspace/updated thread thread=0c866bd9",
+    " WS out wb:workspace/updated projectThreads",
+  ]);
+  assert.match(lines[2]!, /count: 1, out: 30B/);
+  logger.dispose();
+});
+
+test("frequent outbound events keep their ten-second window when they carry a detail", () => {
+  const { logger, lines, advance } = fixture();
+  logger.record("out", "workbench", "workbench/thread-state/updated", 10, "threadObservation");
+  logger.record("out", "workbench", "workbench/thread-state/updated", 20, "threadObservation");
+  advance(2_000);
+  assert.equal(lines.length, 1);
+  advance(8_000);
+  assert.equal(lines.length, 2);
+  logger.dispose();
+});
+
 test("direction and harness separate matching methods and later traffic opens a fresh window", () => {
   const { logger, lines, advance } = fixture();
   logger.record("in", "codex", "initialized", 10);

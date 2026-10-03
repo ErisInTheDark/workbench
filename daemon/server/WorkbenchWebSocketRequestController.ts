@@ -52,7 +52,10 @@ import WorkbenchWebSocketStreamController, {
   type WorkbenchWebSocketStreamControllerState,
 } from "./WorkbenchWebSocketStreamController";
 import WorkbenchWebSocketEventLog from "./WorkbenchWebSocketEventLog";
-import { dimWebSocketDetail, formatWebSocketBytes as formatBytes, formatWebSocketSendFailure, webSocketMethodLabel as methodLabel } from "./websocket-log-format";
+import {
+  describeWebSocketEvent, dimWebSocketDetail, formatWebSocketBytes as formatBytes, formatWebSocketSendFailure,
+  webSocketMethodLabel as methodLabel,
+} from "./websocket-log-format";
 import { transcriptSnapshotForProtocol } from "./database/transcript/transcript-wire-compatibility";
 import WorkbenchWorkspaceObservationController from "./WorkbenchWorkspaceObservationController";
 import {
@@ -88,6 +91,8 @@ export interface WorkbenchWebSocketDelivery {
   streamEvent: ReturnType<WorkbenchWebSocketStreamController["prepareDelivery"]>;
   eventMethod: string | null;
   eventHarness: WorkbenchHarness | "workbench" | "unknown";
+  /** The event inside the envelope, such as a workspace observation kind and its thread. */
+  eventDetail?: string | null;
   outcome: CompletionOutcome;
   processMs: number;
   jsonMs: number;
@@ -366,7 +371,7 @@ export default class WorkbenchWebSocketRequestController {
       || transcriptRequest !== null;
     const harness = workbenchRequest ? "workbench" : "unknown";
     if (isRequest) this.beginRequest(client, requestId, data.length, methodLabel(harness, method), method);
-    else this.eventLog.record("in", harness, method, data.length);
+    else this.eventLog.record("in", harness, method, data.length, describeWebSocketEvent(message.params));
 
     if (hardReloadPending) {
       if (isRequest) {
@@ -515,7 +520,7 @@ export default class WorkbenchWebSocketRequestController {
     this.assertActive();
     if (delivery.outcome === "send-error" && delivery.streamEvent) this.stream.failDelivery(delivery.streamEvent);
     if (delivery.outcome !== "send-error" && delivery.eventMethod) {
-      this.eventLog.record("out", delivery.eventHarness, delivery.eventMethod, delivery.outBytes);
+      this.eventLog.record("out", delivery.eventHarness, delivery.eventMethod, delivery.outBytes, delivery.eventDetail ?? null);
     }
     const pending = delivery.request ? this.pending.get(delivery.client)?.get(delivery.request.id) : undefined;
     if (pending && pending.identity === delivery.request?.identity) {
@@ -567,8 +572,9 @@ export default class WorkbenchWebSocketRequestController {
             request: pending ? { id: pending.id, identity: pending.identity } : undefined,
             streamEvent,
             eventMethod,
-            eventHarness: ProviderKeySchema.safeParse(eventHarness).success
-              ? eventHarness as WorkbenchHarness : eventMethod?.startsWith("workbench/") ? "workbench" : "unknown",
+            // The daemon tags provider events with their harness; every other event it sends is its own.
+            eventHarness: ProviderKeySchema.safeParse(eventHarness).success ? eventHarness as WorkbenchHarness : "workbench",
+            eventDetail: eventMethod ? describeWebSocketEvent(envelope?.params) : null,
             outcome: error ? "send-error" : responseIsError(message) ? "error" : "ok",
             processMs,
             jsonMs,

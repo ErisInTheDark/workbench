@@ -6,7 +6,7 @@
  * - WorkbenchTranscriptItemProjectionRow: projected item with its durable root.
  * - WorkbenchTranscriptProjectionIssue: bounded relational integrity failure.
  * - WorkbenchTranscriptItemProjectionResult: ordered items or integrity failures.
- * - projectWorkbenchTranscriptItems: reconstruct items from one relational scope.
+ * - projectWorkbenchTranscriptItems: reconstruct visible items from one relational scope; dismissed steers stay hidden.
  * - projectWorkbenchToolOutput: reconstruct typed context for persistence and projection.
  * - projectWorkbenchFileChange: reconstruct attempted changes and owned recovery findings.
  */
@@ -219,6 +219,8 @@ function userMessage(
     }
   });
   const item = { clientId: owner.client_id, content: parts, id: itemId, type: "userMessage" as const };
+  // Dismissed steers are filtered before projection; reaching one here is a broken row.
+  if (owner.delivery_state === "dismissed") return fail("invalidRow", "threadItemUserMessages", itemId);
   return owner.input_kind === "steer"
     ? withWorkbenchInputState(item, {
       kind: "steer",
@@ -625,8 +627,11 @@ export function projectWorkbenchTranscriptItems(
       }
     }
     const indexes = createIndexes(rows, sourceIdsByItemId);
+    // A dismissed steer stays stored as the user's final word, but is never part of visible history.
+    const dismissed = (root: Rows["threadItems"][number]) => root.type === "userMessage" && root.public_id !== null
+      && indexes.userMessages.get(root.public_id)?.[0]?.delivery_state === "dismissed";
     return {
-      data: rows.threadItems.map((root) => {
+      data: rows.threadItems.filter((root) => !dismissed(root)).map((root) => {
         if (root.public_id !== null && identities.get(root.public_id)?.thread_id !== root.thread_id) {
           fail("invalidReference", "itemIdentities", root.public_id);
         }

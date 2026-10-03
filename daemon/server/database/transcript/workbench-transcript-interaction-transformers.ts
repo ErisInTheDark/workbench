@@ -6,7 +6,7 @@
  * - resolveQuestionnaireTranscriptSourceId: retain private questionnaire source lookup.
  * - resolveSteerTranscriptSourceId: retain private steer source lookup.
  * - transformQuestionnaireEntry: convert settled questionnaires and approvals.
- * - transformSteerEntry: convert a settled steer to a typed user-message row.
+ * - transformSteerEntry: convert a held, settled or dismissed steer to a typed user-message row.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
@@ -200,8 +200,7 @@ export function transformQuestionnaireEntry(
 export function transformSteerEntry(
   entry: WorkbenchSteerHistoryEntry,
   itemId: number,
-): WorkbenchInteractionTransform | null {
-  if (entry.status === "pending") return null;
+): WorkbenchInteractionTransform {
   if (entry.input.some((part) => part.type === "audio" || part.type === "localAudio")) {
     return {
       itemType: "unknown",

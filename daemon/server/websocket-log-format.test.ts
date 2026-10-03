@@ -4,7 +4,22 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatWebSocketEventSummary, formatWebSocketSendFailure } from "./websocket-log-format";
+import { describeWebSocketEvent, formatWebSocketEventSummary, formatWebSocketSendFailure } from "./websocket-log-format";
+
+test("envelopes are described by their inner event and subject without payload values", () => {
+  const hidden = "private transcript text";
+  const threadId = "0c866bd9-b723-496e-9477-ba1cee962852";
+  assert.equal(describeWebSocketEvent({
+    subscriptionId: "s", kind: "thread", data: { updateKind: "threadObservation", target: { threadId }, entries: [{ title: hidden }] },
+  }), "thread thread=0c866bd9");
+  assert.equal(describeWebSocketEvent({ kind: "projectThreads", projects: [{ title: hidden }] }), "projectThreads");
+  assert.equal(describeWebSocketEvent({ updateKind: "project", projectId: "5f2b1c9e-0000" }), "project project=5f2b1c9e");
+  assert.equal(describeWebSocketEvent({ threadId, delta: hidden }), `thread=${threadId.slice(0, 8)}`);
+  assert.equal(describeWebSocketEvent({ delta: hidden }), null);
+  assert.equal(describeWebSocketEvent(null), null);
+  const forged = describeWebSocketEvent({ kind: `x\nforged\u001b[31m${"k".repeat(500)}`, threadId: "a\r\nb" })!;
+  assert.ok(!/[\r\n\u001b]/u.test(forged) && forged.length < 80);
+});
 
 test("event traffic bounds labels and prevents forged lines or terminal controls", () => {
   const line = formatWebSocketEventSummary("out", `codex:item/delta\nforged\u001b[31m${"x".repeat(10_000)}`, 84, 512);

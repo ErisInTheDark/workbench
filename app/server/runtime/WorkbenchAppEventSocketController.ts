@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAppEventSocketController: own reloadable app event sockets, grants, delivery and bounded logs.
+ * - default WorkbenchAppEventSocketController: own reloadable app event sockets, grants, delivery and bounded traffic logs named by the event each frame carries.
  */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
@@ -43,6 +43,28 @@ type Frame =
 
 function boundedSocketError(error: Error) {
   return error.message.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, 300);
+}
+
+const shortThread = (value: unknown) => typeof value === "string" && value
+  ? ` thread=${value.replace(/[^\w-]/gu, "").slice(0, 8)}` : "";
+
+/** Traffic logs name the event a frame carries, never its payload values. */
+function describeFrame(frame: Frame): string {
+  switch (frame.kind) {
+    case "workspace": {
+      const observation = frame.observation as { kind: string; data?: { target?: { threadId?: unknown } } | null };
+      return `workspace ${observation.kind}${shortThread(observation.data?.target?.threadId)}`;
+    }
+    case "threadEvent": {
+      const params = frame.notification.params as { threadId?: unknown } | undefined;
+      return `threadEvent ${frame.harness}:${frame.notification.method.slice(0, 80)}${shortThread(params?.threadId)}`;
+    }
+    case "transcriptSnapshot":
+    case "transcriptStream":
+      return `${frame.kind}${shortThread((frame.data as { threadId?: unknown }).threadId)}`;
+    default:
+      return frame.kind;
+  }
 }
 
 const MAX_OUTBOUND_FRAME_BYTES = 100 * 1024 * 1024;
@@ -92,7 +114,11 @@ export default class WorkbenchAppEventSocketController {
     if (this.closed || this.suspended) { connection.close(1012, "App routes reloading"); return; }
     let released = false;
     let stateOwner: string | null | undefined;
-    const send = (frame: Frame | { id: number | null; result?: Json | object; error?: { code: number; message: string; data?: Json } }) => {
+    /** `method` names the request an RPC response answers. */
+    const send = (
+      frame: Frame | { id: number | null; result?: Json | object; error?: { code: number; message: string; data?: Json } },
+      method = "invalid",
+    ) => {
       const kind = "kind" in frame ? frame.kind : "rpc";
       if (connection.readyState !== WebSocket.OPEN) return;
       if (!this.options.routes.admitSocket(request)) {
@@ -119,7 +145,7 @@ export default class WorkbenchAppEventSocketController {
         if (error) this.options.logger.error("app",
           `WS network ${kind} send failed: ${boundedSocketError(error)}`);
       });
-      this.recordTraffic("out", kind, payloadBytes);
+      this.recordTraffic("out", "kind" in frame ? describeFrame(frame) : `rpc ${method}`, payloadBytes);
     };
     const bindState = (browserStateId: string | null) => {
       if (stateOwner !== undefined && stateOwner !== browserStateId) throw new Error("App state request changed browser owner.");
@@ -184,13 +210,14 @@ export default class WorkbenchAppEventSocketController {
       let value: unknown;
       const raw = bytes.toString();
       const receivedBytes = Buffer.byteLength(raw);
-      this.recordTraffic("in", "rpc", receivedBytes);
       try { value = JSON.parse(raw); }
       catch {
+        this.recordTraffic("in", "rpc invalid", receivedBytes);
         send({ id: null, error: { code: -32700, message: "Invalid app request." } });
         return;
       }
       const parsed = WorkbenchAppRpcRequestSchema.safeParse(value);
+      this.recordTraffic("in", parsed.success ? `rpc ${parsed.data.method}` : "rpc invalid", receivedBytes);
       if (!parsed.success) {
         const id = value && typeof value === "object" && "id" in value
           && typeof value.id === "number" && Number.isSafeInteger(value.id) && value.id > 0
@@ -200,7 +227,7 @@ export default class WorkbenchAppEventSocketController {
       }
       const input = parsed.data;
       if (receivedBytes > MAX_INBOUND_FRAME_BYTES) {
-        send({ id: input.id, error: { code: -32000, message: "App request exceeds its size limit." } });
+        send({ id: input.id, error: { code: -32000, message: "App request exceeds its size limit." } }, input.method);
         return;
       }
       const operation = (async () => {
@@ -272,7 +299,7 @@ export default class WorkbenchAppEventSocketController {
         bindState(browserStateId);
         return await this.options.state.mutateBrowser(browserStateId ?? undefined,
           input.params.mutation, true);
-      })().then(result => send({ id: input.id, result }), error => {
+      })().then(result => send({ id: input.id, result }, input.method), error => {
         const message = error instanceof Error ? boundedSocketError(error) : "Unknown app request failure.";
         this.options.logger.error("app", `WS app RPC ${input.method} failed: ${message}`);
         const data = error instanceof WorkbenchDaemonRequestError ? z.json().safeParse(error.data) : null;
@@ -280,7 +307,7 @@ export default class WorkbenchAppEventSocketController {
           ? error.dispatched ? WORKSPACE_COMMAND_UNCERTAIN : WORKSPACE_COMMAND_NOT_SENT
           : error instanceof WorkbenchDaemonRequestError ? error.code : -32000;
         send({ id: input.id, error: { code, message,
-          ...(data?.success ? { data: data.data } : {}) } });
+          ...(data?.success ? { data: data.data } : {}) } }, input.method);
       });
       this.pendingRequests.add(operation);
       void operation.then(() => { this.pendingRequests.delete(operation); });
@@ -307,8 +334,10 @@ export default class WorkbenchAppEventSocketController {
 
   private flushTraffic() {
     for (const [key, { count, bytes }] of this.traffic) {
-      const [direction, kind] = key.split(":");
-      this.options.logger.line("app", ` WS ${direction} app:${kind} (count: ${count}, ${direction}: ${bytes}B)`);
+      const separator = key.indexOf(":");
+      const direction = key.slice(0, separator);
+      const label = key.slice(separator + 1);
+      this.options.logger.line("app", ` WS ${direction} app:${label} (count: ${count}, ${direction}: ${bytes}B)`);
     }
     this.traffic.clear();
   }

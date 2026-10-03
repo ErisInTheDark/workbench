@@ -2,7 +2,7 @@
  * Exports:
  * - claudeTokenBreakdown: convert one Claude usage record into Workbench token accounting.
  * - ClaudeTranscriptTurnState: plain in-flight transcript state of one live turn, handed across bridge reloads.
- * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, live exact commentary-tool message, native tool (with effective Edit/Write diffs and claim denials), steer, screenshot steer, context and billing usage to canonical history, and report compaction start and end to Workbench.
+ * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, live exact commentary-tool message, native tool (with effective Edit/Write diffs and claim denials), steer, screenshot steer, context and billing usage to canonical history, expose which turns this daemon still owns, and report compaction start and end to Workbench.
  */
 import path from "node:path";
 import type {
@@ -399,6 +399,11 @@ export default class ClaudeTranscriptAdapter {
       kind: "turnTokenUsage", threadId, turnId, cumulative: usage.cumulative,
       observedAt: usage.observedAt, usageDataVersion: WORKBENCH_STATS_USAGE_DATA_VERSION,
     }], { source: "provider" });
+  }
+
+  /** True while a live turn in this daemon owns the turn's transcript scope, from admission until settlement. */
+  ownsTurn(turnId: WorkbenchTurnId) {
+    return this.turns.has(turnId);
   }
 
   async settleTurn(turnId: WorkbenchTurnId, state: "completed" | "failed" | "interrupted") {

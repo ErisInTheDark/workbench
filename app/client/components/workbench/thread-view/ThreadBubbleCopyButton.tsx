@@ -1,15 +1,16 @@
 /*
  * Exports:
- * - default ThreadBubbleCopyButton: copy the explicit source Markdown of one aligned user bubble with shared feedback.
+ * - threadBubbleControlClassName: shared look for icon buttons in a bubble's hover row.
+ * - default ThreadBubbleCopyButton: copy the explicit source Markdown of one aligned user bubble with shared feedback, beside optional extra bubble actions.
  */
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 
 import { CheckIcon, CopyIcon, WarningIcon } from "../workbench-icons";
 import { bubbleCopyFeedbackController } from "./bubble-copy";
 
-const controlClassName = [
+export const threadBubbleControlClassName = [
   "group inline-flex size-7 items-center justify-center rounded-full",
   "bg-[color-mix(in_srgb,var(--text)_4%,var(--bg))] [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--bg))] text-fg/muted",
   "transition-[background-color,color] duration-200",
@@ -19,9 +20,12 @@ const controlClassName = [
 ].join(" ");
 
 export default function ThreadBubbleCopyButton({
+  actions,
   markdown,
   side,
 }: {
+  /** Extra icon buttons shown in the same hover row, before copy. */
+  actions?: ReactNode;
   markdown: string;
   side: "left" | "right";
 }) {
@@ -42,7 +46,8 @@ export default function ThreadBubbleCopyButton({
     void bubbleCopyFeedbackController.copy(button, markdown);
   }, [markdown]);
 
-  if (!markdown.trim()) return null;
+  const hasMarkdown = Boolean(markdown.trim());
+  if (!hasMarkdown && !actions) return null;
   return (
     <div
       className={[
@@ -58,11 +63,12 @@ export default function ThreadBubbleCopyButton({
       ].join(" ")}
       data-thread-bubble-controls={side}
     >
-      <button
+      {actions}
+      {hasMarkdown ? <button
         ref={setButtonRef}
         type="button"
         aria-label="Copy message"
-        className={`${controlClassName} data-[thread-bubble-copy-state=copied]:text-success data-[thread-bubble-copy-state=failed]:text-danger`}
+        className={`${threadBubbleControlClassName} data-[thread-bubble-copy-state=copied]:text-success data-[thread-bubble-copy-state=failed]:text-danger`}
         data-thread-bubble-copy-button="true"
         data-thread-bubble-copy-side={side}
         data-thread-bubble-copy-state="idle"
@@ -80,7 +86,7 @@ export default function ThreadBubbleCopyButton({
         <span className="hidden group-data-[thread-bubble-copy-state=failed]:block">
           <WarningIcon size={16} />
         </span>
-      </button>
+      </button> : null}
     </div>
   );
 }

@@ -17,7 +17,8 @@ function unavailable(): never { throw new Error("The thread owner is not ready."
 const unavailableActions: WorkbenchThreadController["actions"] = {
   changeAgent: unavailable, changeModel: unavailable, changeReasoningEffort: unavailable,
   changeServiceTier: unavailable, changeSettings: unavailable, compact: unavailable,
-  stop: unavailable, read: unavailable, submitQuestionnaire: unavailable, snoozeQuestionnaire: unavailable,
+  stop: unavailable, resendSteer: unavailable, dismissSteer: unavailable,
+  read: unavailable, submitQuestionnaire: unavailable, snoozeQuestionnaire: unavailable,
 };
 
 export function useWorkbenchThread(projectId: string, target: WorkbenchThreadTarget | null, explicitClient?: WorkbenchClientController, interest: "summary" | "view" | "route" = "summary") {

@@ -2,15 +2,21 @@
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state and project owners.
  * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
- * - default WorkbenchThreadActionController: route WB actions without constructing provider packets.
+ * - default WorkbenchThreadActionController: route WB actions without constructing provider packets, settle orphaned turns on stop, and resend or dismiss undelivered steers.
  */
+import { randomUUID } from "node:crypto";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import {
   workbenchThreadActions, type WorkbenchThreadActionMap, type WorkbenchThreadCreate,
-  type WorkbenchThreadMessage, type WorkbenchThreadStop,
+  type WorkbenchThreadMessage, type WorkbenchThreadSteerTarget, type WorkbenchThreadStop,
 } from "workbench-shared/workbench/thread/thread-actions";
-import { ThreadReferenceSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import {
+  ThreadReferenceSchema, WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+} from "workbench-shared/workbench/identity";
+import type { DaemonTranscriptRegistration } from "./daemon-runtime-objects";
+import type WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
 import type { WorkbenchThreadLaunchLocation } from "workbench-shared/workbench/thread/thread-launch";
 import type WorkbenchApprovalController from "./WorkbenchApprovalController";
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
@@ -25,6 +31,10 @@ export interface WorkbenchThreadActionOwners {
   approvals: Pick<WorkbenchApprovalController, "list">;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   transcripts: Pick<WorkbenchTranscriptReader, "readPage" | "history">;
+  /** Canonical transcript writes for Workbench-owned steer decisions. */
+  transcript: Pick<DaemonTranscriptRegistration, "record">;
+  /** Settles a stopped turn whose runtime is already gone. */
+  settlement: Pick<WorkbenchTurnSettlementController, "settleIfOrphaned">;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   projects: Pick<WorkbenchProjectCatalogController, "resolveProjectById">;
   identities: Pick<WorkbenchThreadIdentityController, "resolve" | "resolveTurn">;
@@ -153,6 +163,8 @@ export default class WorkbenchThreadActionController {
       await target.provider.goals?.clear(target.identity.threadId);
       return { ok: true };
     },
+    "thread/steer/resend": input => this.resendSteer(input),
+    "thread/steer/dismiss": input => this.dismissSteer(input),
   };
 
   async handle<Method extends keyof WorkbenchThreadActionMap>(method: Method, params: object, connectionId?: string) {
@@ -238,7 +250,11 @@ export default class WorkbenchThreadActionController {
       if (typeof response.result === "object" && response.result !== null && "accepted" in response.result && !response.result.accepted) throw new Error("The pending questionnaire changed before it could be snoozed.");
       return { ok: true };
     }
-    if (input.turnId) await provider.threads.interrupt(identity.threadId, input.turnId);
+    if (input.turnId) {
+      await provider.threads.interrupt(identity.threadId, input.turnId);
+      // A turn whose runtime died with an earlier daemon has nobody left to settle it.
+      await this.owners.settlement.settleIfOrphaned(identity.threadId, input.turnId);
+    }
     if (input.requestKey) {
       const response = await this.owners.state.handleRequest(connectionId ?? "", {
         method: "workbench/thread-state/questionnaire/dismiss",
@@ -249,5 +265,46 @@ export default class WorkbenchThreadActionController {
       if (typeof response.result === "object" && response.result !== null && "accepted" in response.result && !response.result.accepted) throw new Error("The pending questionnaire changed before it could be dismissed.");
     }
     return { ok: true };
+  }
+
+  /** Only an undelivered steer can be resent or dismissed; a pending one is still held for delivery. */
+  private async undeliveredSteer({ threadId, itemId }: WorkbenchThreadSteerTarget) {
+    const { identity } = await this.target(threadId);
+    const entry = (await this.owners.transcripts.history(identity.threadId)).steerEntries
+      .find(candidate => candidate.itemId === itemId);
+    if (!entry) throw new Error("The steer is no longer in this thread's history.");
+    if (entry.status !== "failed" && entry.status !== "interrupted") {
+      throw new Error("Only an undelivered steer can be resent or dismissed.");
+    }
+    return { identity, entry, itemId: WorkbenchItemIdSchema.parse(itemId) };
+  }
+
+  private async recordDismissed(steer: Awaited<ReturnType<WorkbenchThreadActionController["undeliveredSteer"]>>) {
+    const now = Date.now();
+    await this.owners.transcript.record([{
+      kind: "steer",
+      entry: {
+        ...steer.entry, threadId: WorkbenchThreadIdSchema.parse(steer.entry.threadId),
+        turnId: WorkbenchTurnIdSchema.parse(steer.entry.turnId), status: "dismissed", resolvedAt: now, error: null,
+      },
+      publicItemId: steer.itemId,
+      observedAt: now,
+    }], { source: "workbench" });
+  }
+
+  private async dismissSteer(input: WorkbenchThreadSteerTarget) {
+    await this.recordDismissed(await this.undeliveredSteer(input));
+    return { ok: true as const };
+  }
+
+  /** Submit the held input as a fresh message, then retire the undelivered copy it replaces. */
+  private async resendSteer(input: WorkbenchThreadSteerTarget) {
+    const steer = await this.undeliveredSteer(input);
+    const result = await this.message({
+      threadId: steer.identity.threadId, clientMessageId: randomUUID(), intent: "continue",
+      input: WorkbenchUserInputSchema.array().parse(steer.entry.input),
+    });
+    await this.recordDismissed(steer);
+    return result;
   }
 }

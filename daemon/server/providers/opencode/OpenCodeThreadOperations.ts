@@ -2,7 +2,7 @@
  * Exports:
  * - OpenCodeThreadOperationsOptions: provider-local dependencies for native session operations.
  * - OpenCodeNativeActivity: one connection-recovery observation from native session state.
- * - default OpenCodeThreadOperations: translate WB thread intent to the pinned OpenCode client and canonical SQL history.
+ * - default OpenCodeThreadOperations: translate WB thread intent to the pinned OpenCode client and canonical SQL history, and attest session liveness.
  */
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -567,6 +567,13 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   async interrupt(threadId: string, turnId: string) {
     const { binding } = await this.native(threadId);
     await this.interruptSession(threadId, binding.nativeThreadId, WorkbenchTurnIdSchema.parse(turnId));
+  }
+
+  /** The shared OpenCode service can outlive the daemon; its active sessions are the runtime truth. */
+  async isTurnLive(threadId: string, _turnId: string) {
+    const { binding } = await this.native(threadId);
+    const active = await (await this.options.acquire()).session.active({ signal: this.options.signal });
+    return Boolean(active[binding.nativeThreadId]);
   }
 
   async materialize(threadId: string, turnIds: string[], signal?: AbortSignal) {

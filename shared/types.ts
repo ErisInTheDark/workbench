@@ -1041,7 +1041,8 @@ export interface WorkbenchQuestionnaireHistoryEntry {
   resolvedAt: number;
 }
 
-export type WorkbenchSteerHistoryStatus = "pending" | "sent" | "interrupted" | "failed";
+/** `dismissed` is the user's final word on an undelivered steer; dismissed steers are never rendered. */
+export type WorkbenchSteerHistoryStatus = "pending" | "sent" | "interrupted" | "failed" | "dismissed";
 
 export interface WorkbenchSteerHistoryEntry {
   itemId?: string;
@@ -1224,6 +1225,10 @@ export interface WorkbenchControls {
   ) => Promise<ThreadPayload | null>;
   compactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  /** Submit an undelivered steer's input again; the undelivered copy is retired. */
+  resendSteer: (threadId: string, itemId: string) => Promise<void>;
+  /** The user's final word on an undelivered steer: it is hidden for good. */
+  dismissSteer: (threadId: string, itemId: string) => Promise<void>;
   threadAction: (threadId: WorkbenchThreadId, intent: WorkbenchThreadIntent) => Promise<boolean>;
   setThreadTitle: (request: WorkbenchThreadTitleRequest) => Promise<string>;
   threadGoals: WorkbenchThreadGoalControls;

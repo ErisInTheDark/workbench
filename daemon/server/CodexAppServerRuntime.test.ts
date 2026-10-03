@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect pre-gate page-read draining, during-handoff ingress, and failed-reload reopening.
+ * No production exports. Node tests protect pre-gate page-read draining, during-handoff ingress, failed-reload reopening, and stalled-ingress logs.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -233,4 +233,91 @@ test("failed bridge detach reopens page reads before releasing the old runtime",
   assert.deepEqual(events, ["prepare", "detach", "resume"]);
   assert.equal(runtime.isAvailable(), true);
   assert.equal(runtime.isTransitioning(), false);
+});
+
+function stallFixture() {
+  let now = 0;
+  let nextId = 0;
+  const timers = new Map<number, { due: number; callback: () => void }>();
+  const errors: string[] = [];
+  let deliver!: (message: unknown) => void;
+  const runtime = new CodexAppServerRuntime({
+    appServer: { projectRoot: "C:/repo", logError: (_name, message) => { errors.push(message); } },
+    onFatalExit() {},
+  }, {
+    createAppServer(options) {
+      deliver = options.onMessage;
+      return { async stopAsync() {}, async retirePrevious() {} } as unknown as CodexAppServer;
+    },
+    timers: {
+      now: () => now,
+      setTimeout: (callback, delayMs) => {
+        const id = ++nextId;
+        timers.set(id, { due: now + delayMs, callback });
+        return id as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: timer => { timers.delete(timer as unknown as number); },
+    },
+  });
+  const advance = (duration: number) => {
+    const target = now + duration;
+    for (;;) {
+      const next = [...timers.entries()].filter(([, timer]) => timer.due <= target)
+        .sort((left, right) => left[1].due - right[1].due)[0];
+      if (!next) break;
+      now = next[1].due;
+      timers.delete(next[0]);
+      next[1].callback();
+    }
+    now = target;
+  };
+  return { runtime, errors, timers, advance, deliver: (message: unknown) => deliver(message) };
+}
+
+test("a stuck upstream handler is named in the log until it finishes, and healthy traffic logs nothing", async () => {
+  const { runtime, errors, timers, advance, deliver } = stallFixture();
+  const entered = deferred();
+  const release = deferred();
+  const handled = deferred();
+  let calls = 0;
+  runtime.attachBridge({
+    async handleUpstreamMessage() {
+      calls++;
+      if (calls === 1) { handled.resolve(); return; }
+      entered.resolve();
+      await release.promise;
+    },
+  } as unknown as CodexStdioBridge);
+  deliver({ id: 4, result: {} });
+  await handled.promise;
+  await new Promise(resolve => setImmediate(resolve));
+  advance(60_000);
+  assert.deepEqual(errors, []);
+
+  deliver({ id: 7, method: "model/list" });
+  await entered.promise;
+  advance(9_999);
+  assert.deepEqual(errors, []);
+  advance(1);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]!, /upstream request model\/list id=7 handler still pending after 10\.0s/u);
+  advance(30_000);
+  assert.equal(errors.length, 2);
+  release.resolve();
+  await runtime.stop();
+  assert.equal(timers.size, 0);
+});
+
+test("a message held behind a closed handoff gate is named in the log", async () => {
+  const { runtime, errors, advance, deliver } = stallFixture();
+  const bridge = { async handleUpstreamMessage() {} } as unknown as CodexStdioBridge;
+  runtime.attachBridge(bridge);
+  runtime.deactivateBridge(bridge);
+  deliver({ method: "turn/completed" });
+  await Promise.resolve();
+  await Promise.resolve();
+  advance(10_000);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]!, /upstream notification turn\/completed waiting for the bridge handoff gate/u);
+  await runtime.stop();
 });

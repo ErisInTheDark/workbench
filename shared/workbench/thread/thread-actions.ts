@@ -10,6 +10,7 @@
  * - WorkbenchThreadReconcileResultSchema/WorkbenchThreadReconcileResult: recorded recovery outcome, never native content.
  * - WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED/WorkbenchTranscriptRecoveryRequiredError: a valid requested window needs explicit reconciliation.
  * - WorkbenchThreadStopSchema/WorkbenchThreadStop: shared stop versus snooze intent.
+ * - WorkbenchThreadSteerTargetSchema/WorkbenchThreadSteerTarget: one held steer to resend or dismiss.
  * - WorkbenchThreadPayloadSchema: validate the public metadata envelope.
  * - WorkbenchThreadPageResult/WorkbenchThreadPageResultSchema: WB page and domain-history facts.
  * - workbenchThreadActions/WorkbenchThreadActionMap: shared request and result contract registry.
@@ -95,6 +96,10 @@ export const WorkbenchThreadStopSchema = WorkbenchThreadTargetSchema.extend({
   requestKey: z.string().min(1).optional(),
 });
 export type WorkbenchThreadStop = z.infer<typeof WorkbenchThreadStopSchema>;
+export const WorkbenchThreadSteerTargetSchema = WorkbenchThreadTargetSchema.extend({
+  itemId: z.string().min(1),
+});
+export type WorkbenchThreadSteerTarget = z.infer<typeof WorkbenchThreadSteerTargetSchema>;
 
 const threadEnvelope = z.object({
   id: threadId,
@@ -150,7 +155,7 @@ const questionnaireHistory = WorkbenchQuestionnaireHistoryEntrySchema.extend({
 }).passthrough() as z.ZodType<WorkbenchQuestionnaireHistoryEntry>;
 const steerHistory = z.object({
   itemId: z.string().optional(), entryKey: z.string(), threadId, turnId: z.string(),
-  input: z.array(WorkbenchUserInputSchema), status: z.enum(["pending", "sent", "interrupted", "failed"]),
+  input: z.array(WorkbenchUserInputSchema), status: z.enum(["pending", "sent", "interrupted", "failed", "dismissed"]),
   attemptedAt: z.number(), resolvedAt: z.number().nullable(), requestId: z.string().nullable(),
   canonicalItemId: z.string().nullable(), clientUserMessageId: z.string().nullable().optional(),
   dispatchSequence: z.number().nullable().optional(), error: z.string().nullable(),
@@ -178,6 +183,8 @@ export const workbenchThreadActions = {
   "thread/compact": { params: WorkbenchThreadTargetSchema, result: ok },
   "thread/provider/delete": { params: WorkbenchThreadTargetSchema, result: ok },
   "thread/stop": { params: WorkbenchThreadStopSchema, result: ok },
+  "thread/steer/resend": { params: WorkbenchThreadSteerTargetSchema, result: WorkbenchThreadMessageResultSchema },
+  "thread/steer/dismiss": { params: WorkbenchThreadSteerTargetSchema, result: ok },
   "thread/goal/read": { params: WorkbenchThreadTargetSchema, result: goalResult },
   "thread/goal/update": { params: WorkbenchProviderGoalUpdateSchema, result: goalResult },
   "thread/goal/remove": { params: WorkbenchThreadTargetSchema, result: ok },

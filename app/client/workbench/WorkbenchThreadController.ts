@@ -44,7 +44,7 @@ export interface ThreadControllerSnapshot {
   relatedDocuments: Record<string, ThreadPayload>;
 }
 export interface ThreadControllerPorts {
-  controls: Pick<WorkbenchControls, "compactThread" | "stopThread" | "setCurrentThreadAgent" | "setCurrentThreadModel" | "setCurrentThreadReasoningEffort" | "setCurrentThreadServiceTier" | "setCurrentThreadComposerSettings" | "submitPendingUserInputRequest" | "updateThreadStateWithAcceptance">;
+  controls: Pick<WorkbenchControls, "compactThread" | "stopThread" | "resendSteer" | "dismissSteer" | "setCurrentThreadAgent" | "setCurrentThreadModel" | "setCurrentThreadReasoningEffort" | "setCurrentThreadServiceTier" | "setCurrentThreadComposerSettings" | "submitPendingUserInputRequest" | "updateThreadStateWithAcceptance">;
   document?: ThreadDocumentController;
   observations: ThreadObservationController;
   readGitArcProposal?: (input: {
@@ -134,6 +134,8 @@ export default class WorkbenchThreadController {
       const document = source ?? this.snapshot.document;
       return document ? this.ports.controls.stopThread(document) : null;
     },
+    resendSteer: (itemId: string) => this.ports.controls.resendSteer(this.threadId, itemId),
+    dismissSteer: (itemId: string) => this.ports.controls.dismissSteer(this.threadId, itemId),
     read: (_harness?: ThreadPayload["harness"], options?: WorkbenchReadThreadOptions) => this.read(options),
     submitQuestionnaire: (response: Parameters<WorkbenchControls["submitPendingUserInputRequest"]>[1], options?: Parameters<WorkbenchControls["submitPendingUserInputRequest"]>[2]) =>
       this.ports.controls.submitPendingUserInputRequest(this.threadId, response, options),

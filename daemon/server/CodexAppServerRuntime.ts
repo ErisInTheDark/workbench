@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - CodexAppServerRuntimeOptions: inject the stable Codex app-server process for lifecycle tests.
+ * - CodexAppServerRuntimeOptions: inject the stable Codex app-server process and stall-diagnostic timers for tests.
  * - CodexAppServerRuntimePorts: native process configuration and failure notification.
- * - default CodexAppServerRuntime: own stable app-server ingress and two-phase bridge handoff.
+ * - default CodexAppServerRuntime: own stable app-server ingress, two-phase bridge handoff, and stalled-ingress logs.
  */
 import CodexAppServer, { type CodexAppServerOptions } from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
@@ -12,6 +12,25 @@ import type { ReloadableNodeHandoff } from "../../shared/reload/ReloadableNode";
 export interface CodexAppServerRuntimeOptions {
   createAppServer?: (options: CodexAppServerOptions) => CodexAppServer;
   previousAppServer?: CodexAppServer;
+  /** Clock and scheduler for stall diagnostics. */
+  timers?: {
+    now(): number;
+    setTimeout(callback: () => void, delayMs: number): ReturnType<typeof setTimeout>;
+    clearTimeout(timer: ReturnType<typeof setTimeout>): void;
+  };
+}
+
+/** Upstream messages run one at a time, so one stuck message stalls every later Codex response. */
+const STALL_WARNING_MS = 10_000;
+const STALL_REPEAT_MS = 30_000;
+
+function describeUpstreamMessage(message: unknown) {
+  const record = message && typeof message === "object" && !Array.isArray(message) ? message as Record<string, unknown> : null;
+  const bounded = (value: unknown) => String(value).replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, 80);
+  if (typeof record?.method === "string") {
+    return record.id === undefined ? `notification ${bounded(record.method)}` : `request ${bounded(record.method)} id=${bounded(record.id)}`;
+  }
+  return record && "id" in record ? `response id=${bounded(record.id)}` : "message";
 }
 
 export interface CodexAppServerRuntimePorts {
@@ -39,12 +58,17 @@ export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntim
   private messageGeneration = new AbortController();
   private previousRetirement: ReturnType<typeof deferred> | null;
   private previousRetirementAttempt: Promise<void> | null = null;
+  private readonly timers: NonNullable<CodexAppServerRuntimeOptions["timers"]>;
 
   constructor(
     ports: CodexAppServerRuntimePorts,
-    { createAppServer = (options) => new CodexAppServer(options), previousAppServer }: CodexAppServerRuntimeOptions = {},
+    {
+      createAppServer = (options) => new CodexAppServer(options), previousAppServer,
+      timers = { now: Date.now, setTimeout, clearTimeout },
+    }: CodexAppServerRuntimeOptions = {},
   ) {
     this.ports = ports;
+    this.timers = timers;
     this.previousRetirement = previousAppServer ? deferred() : null;
     this.appServer = createAppServer({
       ...ports.appServer,
@@ -171,10 +195,30 @@ export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntim
     if (errors.length) throw new AggregateError(errors, "Codex runtime shutdown failed.");
   }
 
+  /** Log while one stage stays stuck; the returned stop ends the watch. */
+  private watchStall(stage: string) {
+    const startedAt = this.timers.now();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const warn = () => {
+      const seconds = ((this.timers.now() - startedAt) / 1_000).toFixed(1);
+      this.ports.appServer.logError?.("codex-bridge", `${stage} still pending after ${seconds}s; later Codex responses are queued behind it.`);
+      timer = this.timers.setTimeout(warn, STALL_REPEAT_MS);
+    };
+    timer = this.timers.setTimeout(warn, STALL_WARNING_MS);
+    return () => {
+      if (timer !== null) this.timers.clearTimeout(timer);
+      timer = null;
+    };
+  }
+
   private enqueueMessage(message: unknown) {
     if (!this.acceptingMessages) return;
     this.messageTail = this.messageTail.catch(() => undefined).then(async () => {
-      await this.handoffGate?.promise;
+      const label = describeUpstreamMessage(message);
+      if (this.handoffGate) {
+        const stopGateWatch = this.watchStall(`upstream ${label} waiting for the bridge handoff gate`);
+        try { await this.handoffGate.promise; } finally { stopGateWatch(); }
+      }
       if (!this.acceptingMessages) return;
       const bridge = this.bridge;
       if (!bridge) throw new Error("Codex app-server produced a message without an attached bridge owner.");
@@ -191,11 +235,13 @@ export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntim
         }
         throw error;
       });
+      const stopHandlerWatch = this.watchStall(`upstream ${label} handler`);
       try {
         await Promise.race([work, cancelled]);
       } catch (error) {
         if (error !== signal.reason) throw error;
       } finally {
+        stopHandlerWatch();
         signal.removeEventListener("abort", onAbort);
       }
     }).catch((error) => {

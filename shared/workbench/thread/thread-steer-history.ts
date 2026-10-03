@@ -6,7 +6,7 @@
  * - isSyntheticSteerHistoryItem: detect Workbench-injected steer history user messages.
  * - isWorkbenchSyntheticSteerUserMessage: detect Workbench-only steer user messages that must not become durable anchors.
  * - isWorkbenchPendingSteerUserMessage: detect Workbench-only steer messages still queued for the active turn.
- * - applySteerHistoryToThread: strip prior synthetic steer items and reinsert persisted pending/unsent steer history.
+ * - applySteerHistoryToThread: strip prior synthetic steer items and reinsert persisted pending/unsent steer history; dismissed steers stay hidden.
  */
 
 import type { ThreadItem, UserInput } from "./workbench-thread-items.ts";
@@ -93,15 +93,18 @@ function findCanonicalUserMessage(items: ThreadItem[], entry: WorkbenchSteerHist
   });
 }
 
-function shouldRenderSteerHistoryEntry(items: ThreadItem[], entry: WorkbenchSteerHistoryEntry) {
-  if (entry.status === "sent") {
+type RenderableSteerHistoryEntry = WorkbenchSteerHistoryEntry & { status: Exclude<WorkbenchSteerHistoryEntry["status"], "dismissed"> };
+
+/** Sent steers render as their canonical message; dismissed steers never render. */
+function shouldRenderSteerHistoryEntry(items: ThreadItem[], entry: WorkbenchSteerHistoryEntry): entry is RenderableSteerHistoryEntry {
+  if (entry.status === "sent" || entry.status === "dismissed") {
     return false;
   }
 
   return !findCanonicalUserMessage(items, entry);
 }
 
-function createSyntheticSteerHistoryItem(entry: WorkbenchSteerHistoryEntry): UserMessageItem {
+function createSyntheticSteerHistoryItem(entry: RenderableSteerHistoryEntry): UserMessageItem {
   return withWorkbenchInputState({
     content: entry.input.map(cloneUserInput),
     id: resolveSteerHistoryItemId(entry),
@@ -129,7 +132,7 @@ function sortSteerHistoryEntries(entries: WorkbenchSteerHistoryEntry[]) {
 function applySteerHistoryToItems(items: ThreadItem[], entries: WorkbenchSteerHistoryEntry[]) {
   const baseItems = stripSyntheticSteerHistoryItems(items);
   const syntheticItems = sortSteerHistoryEntries(entries)
-    .filter((entry) => shouldRenderSteerHistoryEntry(baseItems, entry))
+    .filter((entry): entry is RenderableSteerHistoryEntry => shouldRenderSteerHistoryEntry(baseItems, entry))
     .map(createSyntheticSteerHistoryItem);
   if (!syntheticItems.length) {
     return baseItems.length === items.length ? items : baseItems;

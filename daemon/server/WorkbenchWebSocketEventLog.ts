@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchWebSocketEventLogOptions: clock, scheduler and log ports.
- * - default WorkbenchWebSocketEventLog: aggregate traffic logs independently per event type and direction.
+ * - default WorkbenchWebSocketEventLog: aggregate traffic logs independently per event type, inner event detail and direction.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { WORKBENCH_EVENT_STREAM_ACK_METHOD } from "workbench-shared/workbench/websocket-stream";
@@ -64,11 +64,16 @@ export default class WorkbenchWebSocketEventLog {
     this.writeLine = writeLine;
   }
 
-  record(direction: "in" | "out", harness: WorkbenchHarness | "unknown" | "workbench", method: string, bytes: number) {
+  /** `detail` names the event inside an envelope; each detail rolls up in its own window. */
+  record(
+    direction: "in" | "out", harness: WorkbenchHarness | "unknown" | "workbench", method: string, bytes: number,
+    detail: string | null = null,
+  ) {
     if (this.state !== "active") return;
-    const label = webSocketMethodLabel(harness, method);
+    const methodLabel = webSocketMethodLabel(harness, method);
+    if (EXCLUDED_EVENTS.has(`${direction}:${methodLabel}`)) return;
+    const label = detail ? `${methodLabel} ${detail}` : methodLabel;
     const key = `${direction}:${label}`;
-    if (EXCLUDED_EVENTS.has(key)) return;
     const now = this.now();
     const window = this.windows.get(key) ?? {
       bytes: 0,
@@ -76,7 +81,7 @@ export default class WorkbenchWebSocketEventLog {
       deadline: now,
       direction,
       label,
-      windowMs: direction === "out" && FREQUENT_OUTBOUND_LABELS.has(label)
+      windowMs: direction === "out" && FREQUENT_OUTBOUND_LABELS.has(methodLabel)
         ? FREQUENT_OUTBOUND_WINDOW_MS
         : DEFAULT_WINDOW_MS,
     };

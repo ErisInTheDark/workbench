@@ -1,4 +1,4 @@
-/* No production exports. Tests protect Claude model-use admission, post-acceptance failure reporting, and launch context windows. */
+/* No production exports. Tests protect Claude model-use admission, post-acceptance failure reporting, launch context windows, and turn liveness attestation. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
@@ -126,3 +126,22 @@ test("Claude launches with the configured window, or the model's default, and re
   assert.deepEqual(configured.launches, ["300000"]);
   assert.equal(configured.windows[0], 300_000);
 });
+
+test("a Claude turn is live only while this daemon runs it or still owns its transcript scope", async () => {
+  let owned = false;
+  const owner = new ClaudeThreadOperations({
+    daemonOrigin: "http://127.0.0.1:1",
+    sessions: new ClaudeSessionHost({ viewsRoot: null }),
+    signal: new AbortController().signal,
+    transcript: { ownsTurn: () => owned },
+  } as never);
+  // A turn whose process died with an earlier daemon: no runtime, no scope.
+  assert.equal(await owner.isTurnLive(threadId, turnId), false);
+  owned = true;
+  assert.equal(await owner.isTurnLive(threadId, turnId), true);
+  owned = false;
+  (Reflect.get(owner, "live") as Map<string, { turnId: string }>).set(threadId, { turnId });
+  assert.equal(await owner.isTurnLive(threadId, turnId), true);
+  assert.equal(await owner.isTurnLive(threadId, WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000009")), false);
+});
+
