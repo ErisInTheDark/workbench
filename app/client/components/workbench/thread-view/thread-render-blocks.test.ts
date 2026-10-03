@@ -207,12 +207,14 @@ test("new transcript items retain unrelated blocks but invalidate an extended gr
   assert.equal(replaced[1], previous[1]);
 });
 
-test("the turn-end marker reply renders nothing while ordinary replies still render", () => {
-  const reply = (id: string, text: string): ThreadItem => ({
-    type: "agentMessage", id, text, phase: "final_answer", memoryCitation: null, delivery: null, questions: null,
+test("turn-end marker replies stay hidden in every message phase without hiding ordinary replies", () => {
+  const reply = (id: string, text: string, phase: Extract<ThreadItem, { type: "agentMessage" }>["phase"]): ThreadItem => ({
+    type: "agentMessage", id, text, phase, memoryCitation: null, delivery: null, questions: null,
   });
-  const blocks = buildRenderableBlocks([reply("answer", "done"), reply("end", "\n<wb:end />\n")]);
-  assert.deepEqual(blocks.flatMap(getRenderableBlockItems).map(item => item.id), ["answer"]);
+  for (const phase of ["final_answer", "commentary", null] as const) {
+    const blocks = buildRenderableBlocks([reply("answer", "done\n<wb:end />", phase), reply("end", "\n<wb:end />\n", phase)]);
+    assert.deepEqual(blocks.flatMap(getRenderableBlockItems).map(item => item.id), ["answer"]);
+  }
 });
 
 test("block timing changes only when one of its own item observations changes", () => {

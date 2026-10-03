@@ -47,7 +47,7 @@ import { isUndeliveredInitialOptimisticInputItem } from "../../../workbench/thre
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import {
-  isVisibleWorkbenchAgentMessageText, isWorkbenchHiddenSystemSteerInput,
+  isVisibleWorkbenchAgentMessageText, isWorkbenchHiddenSystemSteerInput, stripWorkbenchTurnEndMarker,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import {
@@ -676,19 +676,20 @@ function ThreadAgentMessageItem ({
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const text = useThreadPresentedText({
+  const text = stripWorkbenchTurnEndMarker(useThreadPresentedText({
     canonicalText: item.text,
     field: "agentMessageText",
     itemId: item.id,
     source: presentationSource,
     threadId,
     turnId,
-  });
+  }));
+  if (!text.trim()) return null;
   return (
     <section className="py-2">
       <ThreadMarkdown
         inlineMentionSources={inlineMentionSources}
-        markdown={text || "No assistant text captured."}
+        markdown={text}
         threadCwdPath={threadCwdPath}
         projectFilePaths={projectFilePaths}
         projectId={projectId}

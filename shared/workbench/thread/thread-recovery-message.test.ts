@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect recovery identity, classification, and collision behavior.
+ * No production exports. Tests protect recovery identity, classification, collisions, and turn-end display cleanup.
  */
 
 import assert from "node:assert/strict";
@@ -15,6 +15,8 @@ import {
   createWorkbenchThreadRecoveryId,
   createWorkbenchThreadRecoveryInput,
   createWorkbenchUnfinishedTurnInput,
+  isVisibleWorkbenchAgentMessageText,
+  stripWorkbenchTurnEndMarker,
   isWorkbenchHiddenSystemSteerInput,
   isWorkbenchQuestionnaireResponsePart,
   isWorkbenchQuestionnaireResponseInput,
@@ -40,6 +42,21 @@ function userItem(overrides: Partial<Extract<ThreadItem, { type: "userMessage" }
     ...overrides,
   };
 }
+
+test("trailing turn-end markers disappear without hiding the preceding reply", () => {
+  for (const text of ["done<wb:end />", "done\n<wb:end />\n", "done \r\n<wb:end />  "]) {
+    assert.equal(stripWorkbenchTurnEndMarker(text), "done");
+    assert.equal(isVisibleWorkbenchAgentMessageText(text), true);
+  }
+  assert.equal(stripWorkbenchTurnEndMarker("\n<wb:end />\n"), "");
+  assert.equal(isVisibleWorkbenchAgentMessageText("\n<wb:end />\n"), false);
+});
+
+test("turn-end cleanup preserves ordinary text and quoted or non-trailing markers", () => {
+  for (const text of ["  ordinary reply\n", "use `<wb:end />`", "<wb:end /> then continue", "<wb:end", "```\n<wb:end />\n```"]) {
+    assert.equal(stripWorkbenchTurnEndMarker(text), text);
+  }
+});
 
 test("deterministic seeds create stable provider-safe recovery ids", () => {
   assert.equal(createWorkbenchThreadRecoveryId("thread:turn"), createWorkbenchThreadRecoveryId("thread:turn"));

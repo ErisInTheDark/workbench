@@ -2,6 +2,7 @@
  * Exports:
  * - WORKBENCH_THREAD_RECOVERY_MESSAGE/WORKBENCH_UNFINISHED_TURN_MESSAGE/WORKBENCH_THREAD_RECOVERY_ID_PREFIX/WORKBENCH_THREAD_WORKING_STATUS_MESSAGE/WORKBENCH_TURN_END_MARKER: reserved hidden continuation, status, and turn-end contracts.
  * - isVisibleWorkbenchAgentMessageText: recognize agent text that is neither blank nor the reserved turn-end marker.
+ * - stripWorkbenchTurnEndMarker: remove the reserved trailing marker from displayed agent text.
  * - createWorkbenchThreadRecoveryId/createWorkbenchThreadRecoveryInput/createWorkbenchUnfinishedTurnInput/createWorkbenchQuestionnaireResponseInput: construct provider-safe hidden Workbench steers.
  * - stripWorkbenchQuestionnaireResponseInput: remove valid hidden questionnaire parts while preserving visible sibling input.
  * - isWorkbenchThreadRecoveryInput/isWorkbenchUnfinishedTurnInput/isWorkbenchUnfinishedContinuationTurn/isWorkbenchQuestionnaireResponsePart/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize reserved hidden Workbench content and continuation turns.
@@ -21,13 +22,19 @@ const WORKBENCH_RESUME_TAG_WRAPPER = defineTagWrapper("wb:resume", {
 });
 export const WORKBENCH_THREAD_RECOVERY_MESSAGE = "<wb:resume />";
 export const WORKBENCH_THREAD_WORKING_STATUS_MESSAGE = '<wb:thread-status value="working" />';
-/** Claude ends turns with this final because its harness re-prompts after an empty one. */
+/** Claude ends turns with this marker because its harness re-prompts after an empty final. */
 export const WORKBENCH_TURN_END_MARKER = "<wb:end />";
 
-/** Agent text worth showing: not blank and not the turn-end marker. */
+export function stripWorkbenchTurnEndMarker(text: string): string {
+  const trimmed = text.trimEnd();
+  return trimmed.endsWith(WORKBENCH_TURN_END_MARKER)
+    ? trimmed.slice(0, -WORKBENCH_TURN_END_MARKER.length).trimEnd()
+    : text;
+}
+
+/** Agent text worth showing after removing the reserved trailing turn-end marker. */
 export function isVisibleWorkbenchAgentMessageText(text: string) {
-  const trimmed = text.trim();
-  return Boolean(trimmed) && trimmed !== WORKBENCH_TURN_END_MARKER;
+  return Boolean(stripWorkbenchTurnEndMarker(text).trim());
 }
 export const WORKBENCH_UNFINISHED_TURN_MESSAGE = WORKBENCH_RESUME_TAG_WRAPPER.wrap(
   `You inappropriately ended the turn without finishing the task. The correct next action could be: 
