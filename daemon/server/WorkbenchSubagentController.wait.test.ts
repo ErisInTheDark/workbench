@@ -93,7 +93,7 @@ class FakeProvider {
       return thread(threadId, this.cwd, threadId === questionnaireThreadId);
     },
     create: this.unused, list: this.unused, submit: this.unused,
-    messageAgent: this.unused, rename: this.unused, compact: this.unused, interrupt: this.unused,
+    messageAgent: this.unused, rename: this.unused, compact: this.unused, interrupt: this.unused, isTurnLive: this.unused,
     latestTurn: this.unused, admitTurn: this.unused, materialize: this.unused,
     history: { materialize: this.unused },
   };

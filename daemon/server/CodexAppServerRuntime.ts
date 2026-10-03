@@ -105,8 +105,10 @@ export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntim
     if (this.bridge !== bridge) throw new Error("Codex bridge handoff targeted a bridge that its app-server parent does not own.");
     const messages = this.messageTail;
     const expire = () => {
-      this.handoffGate ??= deferred();
       bridge.expireForReload();
+      // Once detached, the runtime's gate and handler generation belong to the replacement bridge.
+      if (this.bridge !== bridge) return;
+      this.handoffGate ??= deferred();
       this.messageGeneration.abort(new Error("Codex upstream handler retired."));
     };
     return {

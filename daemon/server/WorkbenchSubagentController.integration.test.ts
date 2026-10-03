@@ -133,7 +133,7 @@ class FakeProvider {
       this.calls.push({ harness: "codex", method: "interrupt", params: { threadId, turnId }, promptContext: null });
     },
     rename: async () => {}, list: this.unused, admitTurn: this.unused,
-    compact: this.unused, submit: this.unused, materialize: this.unused,
+    compact: this.unused, submit: this.unused, materialize: this.unused, isTurnLive: this.unused,
     history: { materialize: this.unused },
   };
   readonly interactions: NonNullable<WorkbenchProvider["interactions"]> = {

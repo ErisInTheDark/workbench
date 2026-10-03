@@ -79,13 +79,13 @@ function fixture() {
               context,
               singleFile,
               tools,
-              threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
+              threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused },
               configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
                 read: currentRead ?? (async () => [{ model: String(current), defaultTokens: 1000, maximumTokens: 2000 }]),
               } },
             },
             openCodeProvider: {
-              threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, materialize: unused },
+              threads: { reconcile: unused, readLatest: unused, messageAgent: unused, history: { materialize: unused }, admitTurn: unused, latestTurn: unused, create: unused, list: unused, read: unused, submit: unused, rename: unused, compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused },
               configuration: { models: { read: unused }, guidance: { contains: unused }, modelContext: {
                 read: async () => [{ model: "opencode", defaultTokens: 1000, maximumTokens: 2000 }],
               } },

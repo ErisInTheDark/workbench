@@ -1,4 +1,4 @@
-/* No production exports. Tests protect orphaned-turn settlement on stop and on a cold daemon start. */
+/* No production exports. Tests protect orphaned-turn settlement on stop and on a cold daemon start, including stale-lifecycle repair and stalled providers. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
@@ -6,23 +6,24 @@ import WorkbenchTurnSettlementController, { type WorkbenchTurnSettlementOwners }
 
 const projectId = ProjectIdSchema.parse("project");
 
-function fixture({ live = new Set<string>(), canAnswer = true, working = ["zombie", "running"] } = {}) {
+function fixture({
+  live = new Set<string>(), working = ["zombie", "running"], statuses = new Map<string, string>(),
+  isTurnLive = async (threadId: string) => live.has(threadId),
+} = {}) {
   const recorded: unknown[] = [];
   const lifecycles: unknown[] = [];
   const warnings: string[] = [];
   const settlements: string[] = [];
   const owners: WorkbenchTurnSettlementOwners = {
-    providers: { get: () => ({
-      threads: {
-        ...(canAnswer ? { isTurnLive: async (threadId: string) => live.has(threadId) } : {}),
-      },
-    }) as never },
+    providers: { get: () => ({ threads: { isTurnLive } }) as never },
     identities: { resolve: async ({ threadId }) => ({
       projectId, projectRoot: "C:/project", threadId: WorkbenchThreadIdSchema.parse(threadId),
       bindings: [{ harness: "claude", nativeLocation: "C:/project", nativeThreadId: NativeThreadIdSchema.parse(`native-${threadId}`), pending: false, turnIndex: 0 }],
     }) },
     transcripts: {
-      readPage: async ({ threadId }) => ({ thread: { turns: [{ id: `${threadId}-turn`, status: "inProgress" }] } }) as never,
+      readPage: async ({ threadId }) => ({ thread: { turns: [
+        { id: `${threadId}-turn`, status: statuses.get(threadId) ?? "inProgress" },
+      ] } }) as never,
       storedTurnSettlement: async (threadId, turnId) => {
         settlements.push(`${threadId}:${turnId}`);
         return [{ kind: "turn", turnId, state: "interrupted" }] as never;
@@ -36,7 +37,7 @@ function fixture({ live = new Set<string>(), canAnswer = true, working = ["zombi
   return { controller: new WorkbenchTurnSettlementController(owners), owners, recorded, lifecycles, warnings, settlements };
 }
 
-test("stop settles a turn its provider no longer runs, and leaves live or unanswerable turns alone", async () => {
+test("stop settles a turn its provider no longer runs, and leaves live turns alone", async () => {
   const orphan = fixture();
   assert.equal(await orphan.controller.settleIfOrphaned("zombie", "zombie-turn"), true);
   assert.deepEqual(orphan.recorded, [{ kind: "turn", turnId: "zombie-turn", state: "interrupted" }]);
@@ -45,10 +46,6 @@ test("stop settles a turn its provider no longer runs, and leaves live or unansw
   const live = fixture({ live: new Set(["running"]) });
   assert.equal(await live.controller.settleIfOrphaned("running", "running-turn"), false);
   assert.deepEqual([live.recorded, live.lifecycles, live.settlements], [[], [], []]);
-
-  const unanswerable = fixture({ canAnswer: false });
-  assert.equal(await unanswerable.controller.settleIfOrphaned("zombie", "zombie-turn"), false);
-  assert.deepEqual(unanswerable.lifecycles, []);
 });
 
 test("an already-settled turn still has its stale working lifecycle published as interrupted", async () => {
@@ -72,9 +69,32 @@ test("the cold sweep settles only dead working turns, once, and reports per-thre
   assert.deepEqual(f.settlements, ["zombie:zombie-turn"]);
   assert.equal(f.warnings.filter(line => /broken.*history unavailable/u.test(line)).length, 1);
   assert.equal(f.warnings.filter(line => /Settled orphaned turn/u.test(line)).length, 1);
+  assert.equal(f.warnings.filter(line => /checking 3 working thread\(s\)/u.test(line)).length, 1);
+  assert.equal(f.warnings.filter(line => /finished: 1 settled, 0 ended turn\(s\) republished, 1 still running, 1 failed/u.test(line)).length, 1);
 });
 
-test("retirement stops the sweep before its next thread", async () => {
+test("the cold sweep publishes a working thread's already-ended turn with its stored status, without settling it again", async () => {
+  const f = fixture({ working: ["ended", "finished"], statuses: new Map([["ended", "interrupted"], ["finished", "completed"]]) });
+  await f.controller.startColdSweep();
+  assert.deepEqual(f.settlements, []);
+  assert.deepEqual(f.lifecycles, [
+    { threadId: "ended", event: { kind: "turnCompleted", turnId: "ended-turn", status: "interrupted" } },
+    { threadId: "finished", event: { kind: "turnCompleted", turnId: "finished-turn", status: "completed" } },
+  ]);
+});
+
+test("a provider whose liveness check never answers does not hold other threads' settlement back", async () => {
+  const f = fixture({
+    working: ["stalled", "zombie"],
+    isTurnLive: threadId => threadId === "stalled" ? new Promise<boolean>(() => undefined) : Promise.resolve(false),
+  });
+  void f.controller.startColdSweep();
+  for (let turn = 0; turn < 20 && !f.lifecycles.length; turn++) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.settlements, ["zombie:zombie-turn"]);
+  assert.equal(f.lifecycles.length, 1);
+});
+
+test("retirement stops the sweep from settling anything further", async () => {
   const f = fixture({ working: ["zombie", "another"] });
   const read = f.owners.transcripts.readPage;
   f.owners.transcripts.readPage = async input => {
@@ -82,5 +102,5 @@ test("retirement stops the sweep before its next thread", async () => {
     return read(input);
   };
   await f.controller.startColdSweep();
-  assert.deepEqual(f.settlements, ["zombie:zombie-turn"]);
+  assert.deepEqual([f.settlements, f.lifecycles], [[], []]);
 });

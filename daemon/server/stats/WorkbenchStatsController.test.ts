@@ -21,7 +21,7 @@ function providers(read: () => Promise<import("workbench-shared/workbench/provid
     threads: {
       reconcile: unused, readLatest: unused, messageAgent: unused,
       create: unused, list: unused, read: unused, submit: unused,
-      rename: unused, compact: unused, interrupt: unused, materialize: unused, latestTurn: unused, admitTurn: unused,
+      rename: unused, compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused, latestTurn: unused, admitTurn: unused,
       history: { materialize: unused },
     },
     configuration: { models: { read: unused }, modelContext: { read: unused }, guidance: { contains: unused } },

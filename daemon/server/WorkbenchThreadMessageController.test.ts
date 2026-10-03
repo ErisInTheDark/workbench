@@ -67,7 +67,7 @@ function fixture({
         await deliveryGate;
         if (rejectDelivery) throw new Error("delivery rejected");
       },
-      rename: unused, list: unused, submit: unused, compact: unused, interrupt: unused, materialize: unused,
+      rename: unused, list: unused, submit: unused, compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused,
     },
     interactions: {
       pending: async () => activeChild ? [{

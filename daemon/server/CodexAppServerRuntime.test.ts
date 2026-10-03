@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect pre-gate page-read draining, during-handoff ingress, failed-reload reopening, and stalled-ingress logs.
+ * No production exports. Node tests protect pre-gate page-read draining, during-handoff ingress, late retired-handoff expiry, failed-reload reopening, and stalled-ingress logs.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -146,6 +146,36 @@ test("expired handoff keeps queued ingress private until the replacement is comm
     release.resolve();
     await runtime.stop();
   }
+});
+
+test("a retired handoff expiring after its replacement commits cannot close the replacement's ingress", async () => {
+  const { deliver, runtime } = runtimeOwner();
+  const received = deferred();
+  const messages: unknown[] = [];
+  const oldBridge = {
+    async prepareForReload() {},
+    async waitForIdle() {},
+    expireForReload() {},
+    async detachForReload() { return { pendingResponses: new Map() }; },
+    async retireAfterHandoff() {},
+    resumeAfterReloadFailure() {},
+  } as unknown as CodexStdioBridge;
+  const replacement = {
+    async handleUpstreamMessage(message: unknown) { messages.push(message); received.resolve(); },
+  } as unknown as CodexStdioBridge;
+  runtime.attachBridge(oldBridge);
+  const handoff = runtime.beginBridgeHandoff(oldBridge);
+  await handoff.detach();
+  runtime.attachBridge(replacement, { publish: false });
+  runtime.attachBridge(replacement);
+  // Reload grace already expired, so old-node retirement expires the committed handoff late.
+  handoff.expire();
+  await handoff.commit();
+  assert.equal(runtime.isTransitioning(), false);
+  deliver("after retirement");
+  await received.promise;
+  assert.deepEqual(messages, ["after retirement"]);
+  await runtime.stop();
 });
 
 test("a late detach cannot clear a different attached bridge", async () => {

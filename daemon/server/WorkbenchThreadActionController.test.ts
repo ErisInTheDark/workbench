@@ -33,6 +33,7 @@ function fixture(providerWarning?: string) {
         if (interruptFailure) throw new Error("interruption failed");
         stops.push({ threadId, turnId });
       },
+      isTurnLive: unused,
       materialize: unused,
     },
     configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
