@@ -2052,7 +2052,7 @@ export default class WorkbenchThreadStateController {
           : { ...entry, metadata: { archived: false as const, pinned: request.pinned, snoozed: entry.metadata.snoozed } };
       if (entry.entryKind === "thread" && !entry.metadata.archived && request.method === "workbench/thread-state/snooze/set" && !(entry.lifecycle.settled && request.snoozed)) next = { ...entry, metadata: { archived: false, pinned: entry.metadata.pinned, snoozed: request.snoozed }, snoozedUntil: null };
       if (request.method === "workbench/thread-state/settle") {
-        const lifecycle = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "settle" });
+        const lifecycle = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "settle", entryKind: entry.entryKind });
         next = entry.entryKind === "subagent"
           ? { ...entry, lifecycle, pinned: false }
           : { ...entry, lifecycle, metadata: entry.metadata.archived ? entry.metadata : { ...entry.metadata, snoozed: false }, snoozedUntil: null };

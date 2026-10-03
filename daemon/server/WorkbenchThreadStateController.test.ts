@@ -4243,6 +4243,21 @@ test("manual status persists, restores settled threads, and rejects provider-own
   assert.equal(gitArcTransitions, 5);
   entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
   assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, { kind: "completed", reason: "userCompleted", settled: true });
+  await controller.handleRequest("observer", {
+    identity: terminal.identity, method: "workbench/thread-state/status/set", projectId: fixtureProjectIds["project"], status: "stopped",
+  });
+  const stoppedSettle = await controller.handleRequest("observer", {
+    identity: terminal.identity, method: "workbench/thread-state/settle", projectId: fixtureProjectIds["project"],
+  });
+  assert.equal("result" in stoppedSettle ? (stoppedSettle.result as { accepted?: boolean }).accepted : false, true);
+  const stoppedLifecycle = { kind: "stopped", reason: "userMarkedStopped", settled: true };
+  entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, stoppedLifecycle);
+  const publishedStop = published.at(-1)?.entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
+  assert.deepEqual(publishedStop?.entryKind === "thread" ? publishedStop.lifecycle : null, stoppedLifecycle);
+  await controller.refresh(fixtureProjectIds["project"]);
+  entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "terminal");
+  assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, stoppedLifecycle);
   await controller.dispose();
   await temporary.dispose();
 });

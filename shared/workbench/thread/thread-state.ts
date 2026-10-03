@@ -767,7 +767,7 @@ export type WorkbenchLifecycleEvent =
   | { kind: "userNeedsAttention" }
   | { kind: "userCompleted" }
   | { kind: "userStopped" }
-  | { kind: "settle" }
+  | { kind: "settle"; entryKind: "thread" | "subagent" }
   | { kind: "restore" };
 
 export function getWorkbenchLifecycleTurnId(lifecycle: WorkbenchThreadLifecycle | null) {
@@ -860,7 +860,7 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
           : current;
       }
       if (current?.kind !== "completed" && current?.kind !== "stopped") return current!;
-      if (current.kind === "stopped") {
+      if (current.kind === "stopped" && event.entryKind === "subagent") {
         const agent = "agent" in current ? current.agent : undefined;
         return { ...(agent ? { agent } : {}), kind: "completed", reason: "userCompleted", settled: true };
       }

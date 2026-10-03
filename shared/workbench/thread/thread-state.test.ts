@@ -534,7 +534,7 @@ test("lifecycle parsing preserves canonical attention variants and normalizes le
   });
 });
 
-test("exact-turn transitions reject stale completion and manual settlement becomes completed", () => {
+test("exact-turn transitions reject stale completion and stopped settlement preserves lifecycle", () => {
   const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
   assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old"] }), working);
   const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
@@ -547,18 +547,24 @@ test("exact-turn transitions reject stale completion and manual settlement becom
     settled: false,
   });
   assert.equal(reduceWorkbenchThreadLifecycle(blocked, { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] }), blocked);
-  const settled = reduceWorkbenchThreadLifecycle(completed, { kind: "settle" });
+  const settled = reduceWorkbenchThreadLifecycle(completed, { kind: "settle", entryKind: "thread" });
   assert.equal(settled.settled, true);
   assert.deepEqual(reduceWorkbenchThreadLifecycle(settled, { kind: "restore" }), completed);
   const stopped = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
-  assert.deepEqual(reduceWorkbenchThreadLifecycle(stopped, { kind: "settle" }), {
-    kind: "completed",
-    reason: "userCompleted",
-    settled: true,
-  });
+  for (const lifecycle of [stopped, reduceWorkbenchThreadLifecycle(completed, { kind: "userStopped" })]) {
+    const settledStop = reduceWorkbenchThreadLifecycle(lifecycle, { kind: "settle", entryKind: "thread" });
+    assert.deepEqual(settledStop, { ...lifecycle, settled: true });
+    assert.deepEqual(reduceWorkbenchThreadLifecycle(settledStop, { kind: "settle", entryKind: "thread" }), settledStop);
+    assert.deepEqual(reduceWorkbenchThreadLifecycle(settledStop, { kind: "restore" }), lifecycle);
+    const settledSubagent = reduceWorkbenchThreadLifecycle(lifecycle, { kind: "settle", entryKind: "subagent" });
+    assert.deepEqual(settledSubagent, {
+      ...("agent" in lifecycle && lifecycle.agent ? { agent: lifecycle.agent } : {}),
+      kind: "completed", reason: "userCompleted", settled: true,
+    });
+  }
   const attention = reduceWorkbenchThreadLifecycle(completed, { kind: "userNeedsAttention" });
   assert.equal(isWorkbenchThreadStatusProviderOwned(attention), false);
-  assert.deepEqual(reduceWorkbenchThreadLifecycle(attention, { kind: "settle" }), {
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(attention, { kind: "settle", entryKind: "thread" }), {
     kind: "completed",
     reason: "userCompleted",
     settled: true,
@@ -579,7 +585,7 @@ test("exact-turn transitions reject stale completion and manual settlement becom
     reduceWorkbenchThreadLifecycle(pendingInput, { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] }),
     pendingInput,
   );
-  assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "settle" }), pendingInput);
+  assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "settle", entryKind: "thread" }), pendingInput);
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "userNeedsAttention" }), pendingInput);
 });
 
