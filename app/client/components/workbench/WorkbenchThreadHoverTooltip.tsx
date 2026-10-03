@@ -38,15 +38,16 @@ function LoadedThreadTooltip({ harness, projectId, threadId, title }: ThreadIden
   );
 }
 
-export default function WorkbenchThreadHoverTooltip({ children, thread, title }: {
+export default function WorkbenchThreadHoverTooltip({ children, placement, thread, title }: {
   children: ComponentProps<typeof WorkbenchTooltip>["children"];
+  placement?: ComponentProps<typeof WorkbenchTooltip>["placement"];
   /** Null renders the trigger alone, for threads Workbench cannot open. */
   thread: ThreadIdentity | null;
   title: string;
 }) {
   if (!thread) return children;
   return (
-    <WorkbenchTooltip content={<LoadedThreadTooltip {...thread} title={title} />} interactive>
+    <WorkbenchTooltip content={<LoadedThreadTooltip {...thread} title={title} />} interactive placement={placement}>
       {children}
     </WorkbenchTooltip>
   );

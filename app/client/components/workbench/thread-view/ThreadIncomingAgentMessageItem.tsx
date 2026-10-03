@@ -24,7 +24,7 @@ export default function ThreadIncomingAgentMessageItem({
   timestamp?: ReactNode;
 }) {
   return (
-    <ThreadAgentIncomingMessage name={message.senderName} steerState={steerState} subagent={subagent} timestamp={timestamp}>
+    <ThreadAgentIncomingMessage name={message.senderName} senderThreadId={message.senderThreadId} steerState={steerState} subagent={subagent} timestamp={timestamp}>
       <ThreadMarkdown {...markdownProps} markdown={message.message} />
     </ThreadAgentIncomingMessage>
   );

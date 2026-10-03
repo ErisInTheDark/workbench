@@ -4,6 +4,7 @@
  * - ThreadAgentLabelParts: nickname, role, and combined display label.
  * - WorkbenchSubagentCommandDisplayTarget: durable identity for a command selector.
  * - sortWorkbenchSubagents: order children by lifecycle, Lock, and activity.
+ * - SubagentTabOrder/reconcileSubagentTabOrder: stable tab order that only promotes new or unsettled children.
  * - getSubagentTabLayout: partition visible and collapsed child tabs.
  * - getNextSubagentHydrationBatch: select bounded child-body hydration work.
  * - getSubagentThreadIds: derive direct-child thread IDs.
@@ -62,17 +63,54 @@ function lifecycleRank(subagent: WorkbenchSubagentSummary) {
   return 3;
 }
 
+export interface SubagentTabOrder {
+  order: readonly string[];
+  settled: ReadonlySet<string>;
+}
+
+function sameMembers(left: ReadonlySet<string>, right: ReadonlySet<string>) {
+  return left.size === right.size && [...left].every((value) => right.has(value));
+}
+
+/**
+ * Keep tab positions stable across activity: only first sightings and returns from settlement move to the front.
+ * Returns `previous` itself when nothing moved, so callers can keep referential stability.
+ */
+export function reconcileSubagentTabOrder(
+  previous: SubagentTabOrder | null,
+  subagents: readonly WorkbenchSubagentSummary[],
+): SubagentTabOrder {
+  const settled = new Set<string>(subagents.filter((subagent) => subagent.lifecycle?.settled).map(({ threadId }) => threadId));
+  const newestFirst = subagents.slice().sort((left, right) => right.createdAt - left.createdAt || left.threadId.localeCompare(right.threadId));
+  if (!previous) return { order: newestFirst.map(({ threadId }) => threadId), settled };
+  const known = new Set(previous.order);
+  const promoted = newestFirst
+    .filter(({ threadId }) => !known.has(threadId) || (previous.settled.has(threadId) && !settled.has(threadId)))
+    .map(({ threadId }) => threadId);
+  const promotedIds = new Set<string>(promoted);
+  const present = new Set<string>(subagents.map(({ threadId }) => threadId));
+  const order = [...promoted, ...previous.order.filter((threadId) => present.has(threadId) && !promotedIds.has(threadId))];
+  return areDeeplyEqual(previous.order, order) && sameMembers(previous.settled, settled) ? previous : { order, settled };
+}
+
 export function getSubagentTabLayout(
   subagents: readonly WorkbenchSubagentSummary[],
   {
+    order,
     revealedThreadIds = new Set<string>(),
   }: {
+    /** Tab order from `reconcileSubagentTabOrder`; defaults to lifecycle ordering. */
+    order?: readonly string[];
     revealedThreadIds?: ReadonlySet<string>;
   } = {},
 ) {
   const visible: WorkbenchSubagentSummary[] = [];
   const collapsed: WorkbenchSubagentSummary[] = [];
-  for (const subagent of sortWorkbenchSubagents(subagents)) {
+  const position = new Map(order?.map((threadId, index) => [threadId, index]));
+  const ordered = order
+    ? subagents.slice().sort((left, right) => (position.get(left.threadId) ?? -1) - (position.get(right.threadId) ?? -1))
+    : sortWorkbenchSubagents(subagents);
+  for (const subagent of ordered) {
     const isSettled = Boolean(subagent.lifecycle?.settled);
     (isSettled && !revealedThreadIds.has(subagent.threadId) ? collapsed : visible).push(subagent);
   }

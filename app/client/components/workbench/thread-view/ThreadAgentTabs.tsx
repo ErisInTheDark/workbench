@@ -1,13 +1,17 @@
 /*
  * Exports:
- * - default ThreadAgentTabs: render lifecycle-ordered agent tabs, Lock controls, status icons, and settled-history disclosure.
+ * - default ThreadAgentTabs: render stably ordered agent tabs with Lock controls, status icons, thread tooltips, claim badges, and settled-history disclosure.
  */
 import type { MouseEvent } from "react";
 
-import type { ThreadPayload, WorkbenchSubagentSummary } from "workbench-shared/types";
-import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import type { ThreadPayload, WorkbenchHarness, WorkbenchSubagentSummary } from "workbench-shared/types";
+import { ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import ContextMenuCapability from "../ContextMenuCapability";
+import { useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
+import { useWorkbenchComposerDraftPresence } from "../WorkbenchComposerDraftPresenceProvider";
+import WorkbenchThreadEntryBadge from "../WorkbenchThreadEntryBadge";
+import WorkbenchThreadHoverTooltip from "../WorkbenchThreadHoverTooltip";
 import { CompletedThreadIcon, LockIcon, NeedsAttentionThreadIcon, RestoreThreadIcon, SettleThreadIcon, StoppedThreadIcon, UnlockIcon, WorkingThreadIcon } from "../workbench-icons";
 import { getThreadAgentAccentHue } from "../../../workbench/thread/thread-subagents";
 import type { IdentityAccentStyle } from "../../../workbench/identity-accent-color";
@@ -59,6 +63,93 @@ function ThreadLifecycleStatusIcon({ accentChromaPercent, lifecycle, subagent }:
   );
 }
 
+/** One subagent tab with its sidebar-equivalent claim badge and hover tooltip. */
+function SubagentTabLink({
+  harness,
+  href,
+  onSelect,
+  onTogglePin,
+  onToggleSettlement,
+  projectId,
+  selected,
+  tab,
+}: {
+  harness: WorkbenchHarness;
+  href: string | undefined;
+  onSelect: () => void;
+  onTogglePin: () => void;
+  onToggleSettlement: (settled: boolean) => void;
+  projectId: string;
+  selected: boolean;
+  tab: SubagentTab;
+}) {
+  const settled = Boolean(tab.subagent?.lifecycle?.settled);
+  const terminal = tab.subagent?.lifecycle?.kind === "completed" || tab.subagent?.lifecycle?.kind === "stopped";
+  const parsedProjectId = ProjectIdSchema.safeParse(projectId).data ?? null;
+  const threadId = WorkbenchThreadIdSchema.parse(tab.id);
+  const entry = useWorkbenchThreadSidebarEntry(parsedProjectId, harness, threadId);
+  const hasComposerDraft = useWorkbenchComposerDraftPresence(projectId, tab.id);
+  const stashed = entry?.gitArc?.phase === "stashed";
+  const claimedCount = stashed ? 0 : entry?.gitArc?.claimedPaths.length ?? 0;
+  const stashedCount = entry?.gitArc?.phase === "stashed" ? entry.gitArc.stashedPaths.length : 0;
+  const accentChromaPercent = selected ? 90 : 55;
+  return (
+    <ContextMenuCapability
+      menu={{
+        id: `subagent-tab:${tab.id}`,
+        label: "Subagent tab actions",
+        items: [
+          ...(!settled ? [{
+            icon: tab.isPinned ? <UnlockIcon size={16} /> : <LockIcon size={16} />,
+            id: tab.isPinned ? "unlock" : "lock",
+            label: tab.isPinned ? "Unlock subagent" : "Lock subagent",
+            onSelect: onTogglePin,
+          }] : []),
+          ...(settled ? [{
+            icon: <RestoreThreadIcon size={16} />,
+            id: "restore",
+            label: "Restore subagent",
+            onSelect: () => onToggleSettlement(false),
+          }] : terminal ? [{
+            icon: <SettleThreadIcon size={16} />,
+            id: "settle",
+            label: "Settle subagent",
+            onSelect: () => onToggleSettlement(true),
+          }] : []),
+        ],
+      }}
+    >
+      <WorkbenchThreadHoverTooltip
+        placement="top"
+        thread={parsedProjectId ? { harness, projectId: parsedProjectId, threadId } : null}
+        title={tab.subagent?.title ?? tab.subagent?.name ?? "Subagent"}
+      >
+        <a
+          aria-busy={tab.isLoading}
+          aria-label={`${tab.subagent?.name ?? "Subagent"}, ${tab.subagent?.lifecycle?.kind ?? "unknown"}${settled ? ", settled" : ""}${tab.isPinned ? ", locked" : ""}`}
+          className={joinClasses(tabClassName, selected ? selectedTabClassName : unselectedTabClassName)}
+          href={href}
+          onClick={(event) => handleThreadLinkClick(event, onSelect)}
+        >
+          <ThreadLifecycleStatusIcon accentChromaPercent={accentChromaPercent} lifecycle={tab.subagent?.lifecycle ?? null} subagent={tab.subagent} />
+          {tab.isPinned ? <LockIcon className="shrink-0" size={16} /> : null}
+          <ThreadAgentName accentChromaPercent={accentChromaPercent} subagent={tab.subagent} thread={tab.thread} />
+          {tab.suffix ? <span className="text-fg/muted">{tab.suffix}</span> : null}
+          <span className="text-[0.72rem] font-normal text-fg/muted empty:hidden">
+            <WorkbenchThreadEntryBadge claimedCount={claimedCount} hasComposerDraft={hasComposerDraft} stashedCount={stashedCount} />
+          </span>
+          {selected && tab.subagent ? (
+            <SelectedTabUnderline
+              className="border-hue-(--identity-hue)/35"
+              style={{ "--identity-hue": getThreadAgentAccentHue(tab.subagent) }}
+            />
+          ) : null}
+        </a>
+      </WorkbenchThreadHoverTooltip>
+    </ContextMenuCapability>
+  );
+}
+
 export default function ThreadAgentTabs ({
   activeThreadId,
   hasSettledSubagents,
@@ -93,57 +184,19 @@ export default function ThreadAgentTabs ({
   if (!tabs.length && !hasSettledSubagents) return null;
   const unsettledTabs = tabs.filter((tab) => !tab.subagent?.lifecycle?.settled);
   const settledTabs = tabs.filter((tab) => tab.subagent?.lifecycle?.settled);
-  const renderTab = (tab: SubagentTab) => {
-    const settled = Boolean(tab.subagent?.lifecycle?.settled);
-    const terminal = tab.subagent?.lifecycle?.kind === "completed" || tab.subagent?.lifecycle?.kind === "stopped";
-    return (
-    <ContextMenuCapability
+  const renderTab = (tab: SubagentTab) => (
+    <SubagentTabLink
+      harness={tab.subagent?.harness ?? mainThreadHarness}
+      href={getThreadHref(tab.id)}
       key={tab.id}
-      menu={{
-        id: `subagent-tab:${tab.id}`,
-        label: "Subagent tab actions",
-        items: [
-          ...(!settled ? [{
-          icon: tab.isPinned ? <UnlockIcon size={16} /> : <LockIcon size={16} />,
-          id: tab.isPinned ? "unlock" : "lock",
-          label: tab.isPinned ? "Unlock subagent" : "Lock subagent",
-          onSelect: () => onTogglePin(tab.id),
-          }] : []),
-          ...(settled ? [{
-            icon: <RestoreThreadIcon size={16} />,
-            id: "restore",
-            label: "Restore subagent",
-            onSelect: () => onToggleSettlement(tab.id, false),
-          }] : terminal ? [{
-            icon: <SettleThreadIcon size={16} />,
-            id: "settle",
-            label: "Settle subagent",
-            onSelect: () => onToggleSettlement(tab.id, true),
-          }] : []),
-        ],
-      }}
-    >
-      <a
-        aria-busy={tab.isLoading}
-        aria-label={`${tab.subagent?.name ?? "Subagent"}, ${tab.subagent?.lifecycle?.kind ?? "unknown"}${tab.subagent?.lifecycle?.settled ? ", settled" : ""}${tab.isPinned ? ", locked" : ""}`}
-        className={joinClasses(tabClassName, activeThreadId === tab.id ? selectedTabClassName : unselectedTabClassName)}
-        href={getThreadHref(tab.id)}
-        onClick={(event) => handleThreadLinkClick(event, () => onSelectThread(tab.id))}
-      >
-        <ThreadLifecycleStatusIcon accentChromaPercent={activeThreadId === tab.id ? 90 : 55} lifecycle={tab.subagent?.lifecycle ?? null} subagent={tab.subagent} />
-        {tab.isPinned ? <LockIcon className="shrink-0" size={16} /> : null}
-        <ThreadAgentName accentChromaPercent={activeThreadId === tab.id ? 90 : 55} subagent={tab.subagent} thread={tab.thread} />
-        {tab.suffix ? <span className="text-fg/muted">{tab.suffix}</span> : null}
-        {activeThreadId === tab.id && tab.subagent ? (
-          <SelectedTabUnderline
-            className="border-hue-(--identity-hue)/35"
-            style={{ "--identity-hue": getThreadAgentAccentHue(tab.subagent) }}
-          />
-        ) : null}
-      </a>
-    </ContextMenuCapability>
-    );
-  };
+      onSelect={() => onSelectThread(tab.id)}
+      onTogglePin={() => onTogglePin(tab.id)}
+      onToggleSettlement={(settled) => onToggleSettlement(tab.id, settled)}
+      projectId={projectId}
+      selected={activeThreadId === tab.id}
+      tab={tab}
+    />
+  );
   return (
     <>
       <a

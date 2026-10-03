@@ -43,7 +43,9 @@ import {
   getSubagentTabLayout,
   getSubagentThreadIds,
   getThreadAgentTabLabel,
+  reconcileSubagentTabOrder,
   sortWorkbenchSubagents,
+  type SubagentTabOrder,
 } from "../../../workbench/thread/thread-subagents";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
@@ -358,6 +360,15 @@ export default memo(function ThreadViewContent ({
   );
   const subagents = useMemo(() => sortWorkbenchSubagents(knownDirectSubagents), [knownDirectSubagents]);
   const hasSettledSubagents = useMemo(() => subagents.some((subagent) => subagent.lifecycle?.settled), [subagents]);
+  // Display state: tabs keep their slot across activity; only new or unsettled children move to the front.
+  const subagentTabOrderRef = useRef<{ threadId: string; value: SubagentTabOrder } | null>(null);
+  const subagentTabOrder = useMemo(() => reconcileSubagentTabOrder(
+    subagentTabOrderRef.current?.threadId === thread.id ? subagentTabOrderRef.current.value : null,
+    subagents,
+  ), [subagents, thread.id]);
+  useEffect(() => {
+    subagentTabOrderRef.current = { threadId: thread.id, value: subagentTabOrder };
+  }, [subagentTabOrder, thread.id]);
   const subagentTabLayout = useMemo(() => {
     const revealedThreadIds = new Set<string>(
       areSettledSubagentsVisible
@@ -365,8 +376,8 @@ export default memo(function ThreadViewContent ({
         : [],
     );
     if (activeThreadId !== thread.id) revealedThreadIds.add(activeThreadId);
-    return getSubagentTabLayout(subagents, { revealedThreadIds });
-  }, [activeThreadId, areSettledSubagentsVisible, subagents, thread.id]);
+    return getSubagentTabLayout(subagents, { order: subagentTabOrder.order, revealedThreadIds });
+  }, [activeThreadId, areSettledSubagentsVisible, subagentTabOrder, subagents, thread.id]);
   const visibleSubagents = subagentTabLayout.visible;
   const visibleSubagentThreadIds = useMemo(() => getSubagentThreadIds(visibleSubagents), [visibleSubagents]);
   const relatedThreadsById = rootThreadController.state.relatedDocuments;

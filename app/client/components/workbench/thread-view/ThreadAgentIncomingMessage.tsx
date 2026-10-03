@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadAgentIncomingMessage: render an attributed cross-agent message with shared steer decoration and left alignment. Keywords: agent, incoming, message, steer, bubble.
+ * - default ThreadAgentIncomingMessage: render a cross-agent message attributed by a sender thread button, with shared steer decoration and left alignment. Keywords: agent, incoming, message, steer, bubble.
  */
 "use client";
 
@@ -8,17 +8,20 @@ import type { ReactNode } from "react";
 
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 
+import WorkbenchThreadButton from "../WorkbenchThreadButton";
 import ThreadAgentName from "./ThreadAgentName";
 
 export default function ThreadAgentIncomingMessage ({
   children,
   name,
+  senderThreadId,
   subagent,
   steerState,
   timestamp,
 }: {
   children: ReactNode;
   name: string;
+  senderThreadId?: string | null;
   subagent?: WorkbenchSubagentSummary | null;
   steerState: "pending" | "unsent" | null;
   timestamp?: ReactNode;
@@ -32,8 +35,16 @@ export default function ThreadAgentIncomingMessage ({
     >
       <div className={`w-full max-w-[42rem]${decorated ? steerMessageClass : " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] px-4 py-3"}`}>
         <div className={`space-y-2 text-left${decorated ? " rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] px-4 py-3" : ""}`}>
-          <p className="m-0 text-[0.78em] font-medium leading-[1.5] text-fg/muted">
-            <ThreadAgentName subagent={subagent} thread={{ agentNickname: name, agentRole: null }} /> sent a message
+          <p className="m-0 flex flex-wrap items-center gap-x-1.5 text-[0.78em] font-medium leading-[1.5] text-fg/muted">
+            {/* Subagents keep their identity-coloured name as the link; other threads get the compact thread row. */}
+            {senderThreadId ? (
+              <WorkbenchThreadButton
+                fallback={<ThreadAgentName subagent={subagent} thread={{ agentNickname: name, agentRole: null }} />}
+                label={subagent ? <ThreadAgentName subagent={subagent} thread={{ agentNickname: name, agentRole: null }} /> : undefined}
+                threadId={senderThreadId}
+              />
+            ) : <ThreadAgentName subagent={subagent} thread={{ agentNickname: name, agentRole: null }} />}
+            <span>sent a message</span>
           </p>
           {children}
         </div>

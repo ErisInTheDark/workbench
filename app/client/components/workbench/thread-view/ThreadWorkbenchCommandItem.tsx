@@ -260,6 +260,9 @@ export default function ThreadWorkbenchCommandItem({
       <ThreadAgentMessageItem
         fallbackName={target.kind === "parent" ? "parent" : resolved?.fallbackName ?? target.value}
         subagent={resolved?.subagent}
+        target={target.kind === "parent"
+          ? { relation: "parent", threadId }
+          : resolved?.threadId ? { relation: "self", threadId: resolved.threadId } : null}
         thread={resolved?.threadId ? relatedThreadsById[resolved.threadId] : undefined}
       >
         <ThreadMarkdown

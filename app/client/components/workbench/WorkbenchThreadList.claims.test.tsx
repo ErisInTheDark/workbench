@@ -528,7 +528,6 @@ test("thread rows expose explicit context-menu access alongside interactive tool
   assert.match(html, /aria-label="More actions for Menu work"/u);
   assert.match(source, /<WorkbenchTooltip[\s\S]*?enabled=\{showTooltip && !isDragActive\}[\s\S]*?interactive[\s\S]*?<a/u);
   assert.match(source, /data-thread-project-file-link-boundary="true"/u);
-  assert.match(source, /claimedPaths\.map\(\(filePath\)[\s\S]*?<ProjectFilePath/u);
 });
 
 test("selected project pins stay in its thread list and other projects do not leak into combined pins", () => {

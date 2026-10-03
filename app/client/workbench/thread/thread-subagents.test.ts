@@ -20,6 +20,7 @@ import {
   getThreadAgentLabelParts,
   getThreadAgentTabLabel,
   getSubagentTabLayout,
+  reconcileSubagentTabOrder,
   sortWorkbenchSubagents,
 } from "./thread-subagents.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -206,6 +207,27 @@ test("orders lifecycle deterministically and folds only settled children", () =>
   assert.deepEqual(
     getSubagentTabLayout([settled], { revealedThreadIds: new Set(["settled"]) }).visible.map(({ threadId }) => threadId),
     ["settled"],
+  );
+});
+
+test("tab order stays put through activity and only promotes new or unsettled children", () => {
+  const child = (threadId: string, createdAt: number, settled = false): WorkbenchSubagentSummary => ({
+    ...subagent, createdAt, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
+    lifecycle: { kind: "completed", reason: "userCompleted", settled },
+  });
+  const first = reconcileSubagentTabOrder(null, [child("old", 1), child("mid", 2)]);
+  assert.deepEqual(first.order, ["mid", "old"], "first sight orders newest-created first");
+  const busy = [{ ...child("old", 1), lastActivityAt: 99, lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const } }, child("mid", 2)];
+  assert.equal(reconcileSubagentTabOrder(first, busy), first, "activity and lifecycle changes keep the same order object");
+  const added = reconcileSubagentTabOrder(first, [...busy, child("new", 3)]);
+  assert.deepEqual(added.order, ["new", "mid", "old"]);
+  const settledOld = reconcileSubagentTabOrder(added, [child("old", 1, true), child("mid", 2), child("new", 3)]);
+  assert.deepEqual(settledOld.order, ["new", "mid", "old"], "settling does not move a tab");
+  assert.deepEqual(reconcileSubagentTabOrder(settledOld, [child("old", 1), child("mid", 2), child("new", 3)]).order, ["old", "new", "mid"]);
+  assert.deepEqual(reconcileSubagentTabOrder(added, [child("old", 1), child("new", 3)]).order, ["new", "old"]);
+  assert.deepEqual(
+    getSubagentTabLayout([child("old", 1), child("mid", 2, true), child("new", 3)], { order: ["old", "mid", "new"] }).visible.map(({ threadId }) => threadId),
+    ["old", "new"],
   );
 });
 

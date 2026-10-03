@@ -1301,6 +1301,9 @@ function ThreadCommandExecutionDetails ({
       <ThreadSentAgentMessageItem
         fallbackName={messageCommand.target.kind === "parent" ? "parent" : target?.fallbackName ?? messageCommand.target.value}
         subagent={target?.subagent}
+        target={messageCommand.target.kind === "parent"
+          ? { relation: "parent", threadId }
+          : target?.threadId ? { relation: "self", threadId: target.threadId } : null}
         thread={childThread}
       >
         <ThreadMarkdown
