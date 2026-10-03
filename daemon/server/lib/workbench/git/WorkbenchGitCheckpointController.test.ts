@@ -455,10 +455,10 @@ controllerTest("legacy", "v3 plans and legacy activation preserve adoption, drif
     harness: "codex",
     threadId: "nested-adoption-thread",
   });
-  assert.deepEqual(startedNested.scopePaths, ["folder"]);
+  assert.deepEqual(startedNested.scopePaths, ["folder/file.txt"]);
   const startedNestedEntry = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "nested-adoption-thread" });
   assert.equal(startedNestedEntry?.phase, "active");
-  assert.deepEqual(startedNestedEntry?.claimedPaths, ["folder"]);
+  assert.deepEqual(startedNestedEntry?.claimedPaths, ["folder/file.txt"]);
   await assert.rejects(controller.startArc({
     checkpointCommit: "deadbeef",
     cwd: source,

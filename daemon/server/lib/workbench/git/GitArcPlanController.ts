@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcPlanController: own inactive planning and atomic activation.
+ * - default GitArcPlanController: own inactive planning and atomic activation, turning planned folders into their current file claims.
  * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: rejected dirty or ignored paths.
  * - partitionIgnoredGitArcPaths/rejectIgnoredGitArcPaths: ignored ownership validation.
  * - createGitArcNoopResult/GitArcNoopResult: ignored requests that changed no refs.
@@ -10,6 +10,7 @@ import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/che
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { applyGitClaimChanges, type GitArcClaimChanges, type GitArcPlanningDrift } from "workbench-shared/workbench/git/git-arc-state";
 import createGitArcStartDiagnosticError from "./git-arc-start-diagnostics";
+import { expandGitArcClaimPaths } from "./git-arc-claim-expansion";
 import GitArcRegistry, {
   findGitArcCollisions,
   GitArcCollisionError,
@@ -276,7 +277,7 @@ export default class GitArcPlanController {
     const inheritedAdoptions = input.inherit ? baselinePlan?.metadata?.adoptedPaths ?? [] : [];
     const paths = applyGitClaimChanges([...new Set([...existing, ...inheritedAdoptions])], changes);
     const adoptPaths = [...new Set([
-      ...inheritedAdoptions.filter((candidate) => !changes.removePaths.includes(candidate)),
+      ...inheritedAdoptions.filter((candidate) => !changes.removePaths.some((removal) => pathIsCoveredBy(candidate, removal))),
       ...changes.adoptPaths,
     ])];
     const intentName = input.intentName?.trim() || (input.inherit ? current?.intentName : "");
@@ -346,8 +347,9 @@ export default class GitArcPlanController {
       plan.paths,
     );
     if (!plan.paths.length) throw new GitArcRejectionError({ reason: "emptyPlan" }, "An empty Git arc plan cannot start. Add at least one path first.");
+    const claimPaths = await expandGitArcClaimPaths(repository, plan.paths);
 
-    const collisions = findGitArcCollisions(await registry.list(), { harness, threadId: input.threadId }, plan.paths);
+    const collisions = findGitArcCollisions(await registry.list(), { harness, threadId: input.threadId }, claimPaths);
     if (collisions.length) throw new GitArcCollisionError(collisions);
     const permittedDirty = [...plan.adoptPaths, ...(retainedArc?.claimedPaths ?? [])];
     const unexplained = plan.dirtyPaths.filter((candidate) => !permittedDirty.some((scopePath) => pathIsCoveredBy(candidate, scopePath)));
@@ -358,7 +360,7 @@ export default class GitArcPlanController {
       intentName: plan.metadata.intentName,
       kind: "arc",
       registryLifecycle: true,
-      scopePaths: plan.paths,
+      scopePaths: claimPaths,
       version: 3,
     };
     const store = this.store(repository);
@@ -371,7 +373,7 @@ export default class GitArcPlanController {
     );
     const registryMutation = await registry.prepareClaim({
       checkpointCommit: active.checkpointCommit,
-      claimedPaths: plan.paths,
+      claimedPaths: claimPaths,
       harness,
       intentDescription: plan.metadata.intentDescription ?? "",
       intentName: plan.metadata.intentName ?? "Unnamed arc",
@@ -387,16 +389,16 @@ export default class GitArcPlanController {
       ...registryMutation.updates,
     ]);
     return {
-      acquiredClaims: plan.paths,
+      acquiredClaims: claimPaths,
       planningDrift: plan.planningDrift,
-      changes: await repository.buildFileChanges(active.checkpointCommit, plan.tree, plan.paths),
+      changes: await repository.buildFileChanges(active.checkpointCommit, plan.tree, claimPaths),
       checkpointCommit: active.checkpointCommit,
       checkpointRef: active.checkpointRef,
       intentName: plan.metadata.intentName ?? null,
       kind: "arc",
       releasedClaims: current ? liveClaims(current) : [],
       repoRoot: repository.root,
-      scopePaths: plan.paths,
+      scopePaths: claimPaths,
       skippedIgnoredPaths: plan.skippedIgnoredPaths,
     };
   }
@@ -466,10 +468,10 @@ export default class GitArcPlanController {
     const metadata = requirePlanMetadata(plan.metadata);
     if (!metadata.scopePaths.length) throw new GitArcRejectionError({ reason: "emptyPlan" }, "An empty Git arc plan cannot start. Add at least one path first.");
     const partitioned = await partitionIgnoredGitArcPaths(repository, metadata.scopePaths);
-    const paths = partitioned.paths;
-    if (!paths.length && partitioned.skippedIgnoredPaths.length) {
+    if (!partitioned.paths.length && partitioned.skippedIgnoredPaths.length) {
       return createGitArcNoopResult(repository, partitioned.skippedIgnoredPaths);
     }
+    const paths = await expandGitArcClaimPaths(repository, partitioned.paths);
     const adoptedPaths = metadata.adoptedPaths?.length
       ? (await partitionIgnoredGitArcPaths(repository, metadata.adoptedPaths)).paths
       : [];

@@ -90,7 +90,7 @@ Edit active claims with `git_arc_claims({ inherit: true, addPaths, removePaths, 
 
 <tool id="git_arc_stash" /> / `wb git arc stash` saves the whole dirty claim set and releases all live claims. <tool id="git_arc_unstash" /> / `wb git arc unstash` reacquires the whole set and reapplies saved work. Neither accepts paths. Text conflicts are ordinary worktree markers: edit them directly; no Git continue or abort command is required. Unsupported conflicts reject and stay stashed.
 
-After resolution, explicit approved additions/adoptions begin follow-up scope with stored intent, never old claims. Exact removals cannot expose dirty owned work; directory claims are not exclusion patterns. Removing final clean scope resolves lifecycle.
+After resolution, explicit approved additions/adoptions begin follow-up scope with stored intent, never old claims. Exact removals cannot expose dirty owned work. Folder paths are shorthand: activation claims their current files, so claim new files under them separately; removing a folder drops its file claims. Removing final clean scope resolves lifecycle.
 
 Never use claim expansion to excuse vague planning. Never restore, release, unclaim, or discard only to change scope.
 

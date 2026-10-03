@@ -682,7 +682,7 @@ checkpointTest("arc additions preserve claimed baselines while advancing unclaim
     cwd: repoRoot,
     paths: ["literal1.txt"],
     threadId: "thread-one",
-  }), /must exactly match inherited entries: literal1\.txt/u);
+  }), /must match inherited entries or folders containing them: literal1\.txt/u);
 
   await assert.rejects(addToGitArc({
     cwd: repoRoot,

@@ -126,7 +126,7 @@ pathMoverTest("arc move previews read-only, rejects sibling overlap, and applies
   });
   assert.equal(preview.mode, "preview");
   assert.deepEqual(preview.additionalClaims, ["tests/src/one.test.ts"]);
-  assert.deepEqual(preview.scopePaths, ["src"]);
+  assert.deepEqual(preview.scopePaths, ["src/one.test.ts"]);
   assert.deepEqual(await registry.find({ harness: "codex", threadId: "move-thread" }), activeBefore);
   assert.equal(await fs.readFile(path.join(root, "src", "one.test.ts"), "utf8"), "one\n");
 
@@ -169,7 +169,7 @@ pathMoverTest("arc move previews read-only, rejects sibling overlap, and applies
   });
   assert.equal(moved.mode, "applied");
   assert.deepEqual(moved.additionalClaims, ["tests/src/one.test.ts"]);
-  assert.deepEqual(moved.scopePaths, ["src", "tests/src/one.test.ts"]);
+  assert.deepEqual(moved.scopePaths, ["src/one.test.ts", "tests/src/one.test.ts"]);
   assert.equal(await fs.readFile(path.join(root, "tests", "src", "one.test.ts"), "utf8"), "one\n");
   await assert.rejects(fs.access(path.join(root, "src", "one.test.ts")));
   assert.equal((await registry.find({ harness: "codex", threadId: "move-thread" }))?.checkpointCommit, moved.checkpointCommit);

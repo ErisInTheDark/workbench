@@ -9,7 +9,6 @@
  * - WorkspaceGitArcPlanClaimCollisionResult: project-qualified inactive member collision results.
  * Local mechanics: observe mutation claims while the Git transition remains held.
  */
-import fs from "node:fs/promises";
 import path from "node:path";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import type { GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
@@ -218,23 +217,15 @@ export default class WorkbenchWorkspaceGitArcController {
       this.listIgnoredPatchPaths(project, members, absolutePaths),
     ]);
     const roots = [...project.project.roots].sort((left, right) => right.root.length - left.root.length);
-    const directoryClaims = new Set<string>();
     const claimedPaths = lifecycle?.phase === "active" ? lifecycle.claimedPaths : [];
-    for (const claimedPath of claimedPaths) {
-      const parsed = this.parseRootPath(project, claimedPath, project.root.id);
-      try {
-        if ((await fs.stat(parsed.absolute)).isDirectory()) directoryClaims.add(comparable(parsed.absolute));
-      } catch {
-        // Missing claims cover only their exact path.
-      }
-    }
+    // Same rule as arc ownership: an entry covers itself and anything beneath it, whether or not it exists yet.
     const claims = claimedPaths.map((claimedPath) => comparable(this.parseRootPath(project, claimedPath, project.root.id).absolute));
     const uncoveredPaths = absolutePaths.filter((candidate) => {
       const absolute = comparable(candidate);
       const insideWorkspace = roots.some((root) => isInside(absolute, root.root));
       if (!insideWorkspace) return true;
       if (ignoredPaths.has(absolute)) return false;
-      return !claims.some((claim) => absolute === claim || (directoryClaims.has(claim) && isInside(absolute, claim)));
+      return !claims.some((claim) => absolute === claim || isInside(absolute, claim));
     });
     return { allowed: uncoveredPaths.length === 0, uncoveredPaths };
   }

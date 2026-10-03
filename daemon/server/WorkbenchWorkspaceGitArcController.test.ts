@@ -538,7 +538,7 @@ test("active claims and Git ignore rules cover patch paths across workspace root
     intentName: "claim coverage",
     paths: [],
     roots: [
-      { adoptPaths: [], paths: ["src", "future.ts"], rootId: "api" },
+      { adoptPaths: [], paths: ["src", "future.ts", "pending"], rootId: "api" },
       { adoptPaths: [], paths: ["claimed.ts"], rootId: "web" },
     ],
     ...identity,
@@ -553,6 +553,9 @@ test("active claims and Git ignore rules cover patch paths across workspace root
     path.join(apiSource, "nested.ts"),
     path.join(apiSource, "new.ts"),
     path.join(apiRoot, "future.ts"),
+    // A claimed path that does not exist yet still covers files created beneath it.
+    path.join(apiRoot, "pending", "new.rs"),
+    path.join(apiRoot, "pending", "deep", "x.rs"),
     path.join(webRoot, "claimed.ts"),
   ];
   assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, identity.threadId, covered), {
@@ -565,7 +568,7 @@ test("active claims and Git ignore rules cover patch paths across workspace root
       uncoveredPaths: [],
     });
   }
-  const uncovered = [path.join(apiRoot, "sibling.ts"), path.join(webRoot, "destination.ts"), path.join(temporaryRoot, "outside.ts")];
+  const uncovered = [path.join(apiRoot, "sibling.ts"), path.join(apiRoot, "pending.rs"), path.join(webRoot, "destination.ts"), path.join(temporaryRoot, "outside.ts")];
   assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, identity.threadId, uncovered), {
     allowed: false,
     uncoveredPaths: uncovered,
@@ -601,7 +604,7 @@ test("active claims and Git ignore rules cover patch paths across workspace root
   assert.deepEqual(await admit([
     "src/nested.ts", "src/new.ts", "future.ts", "../web/claimed.ts", covered[0]!,
   ]), { allowed: true });
-  for (const resource of ["sibling.ts", "../web/destination.ts", "../outside.ts", uncovered[2]!]) {
+  for (const resource of ["sibling.ts", "pending.rs", "../web/destination.ts", "../outside.ts", uncovered[3]!]) {
     assert.equal((await admit(["src/nested.ts", resource])).allowed, false);
   }
   assert.deepEqual(await admit(["ignored/generated.ts", "untracked.log"]), { allowed: true });

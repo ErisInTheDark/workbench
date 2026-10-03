@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcLifecycleController: own current lifecycle reads and combined active scope transitions.
+ * - default GitArcLifecycleController: own current lifecycle reads and combined active scope transitions, keeping live claims as files.
  */
 import { applyGitClaimChanges, type GitArcClaimChanges, type GitArcMutationResult, type GitArcScopeState } from "workbench-shared/workbench/git/git-arc-state";
 import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
@@ -10,6 +10,7 @@ import GitArcProposalController from "./GitArcProposalController";
 import { GitCheckpointDirtyPathsError, partitionIgnoredGitArcPaths } from "./GitArcPlanController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import { expandGitArcClaimPaths } from "./git-arc-claim-expansion";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import {
   passthroughGitArcThreadIdentityResolver,
@@ -118,9 +119,10 @@ export default class GitArcLifecycleController {
     const additions = await partitionIgnoredGitArcPaths(repository, changes?.addPaths ?? []);
     const adoptions = await partitionIgnoredGitArcPaths(repository, changes?.adoptPaths ?? []);
     const removePaths = changes?.removePaths?.length ? repository.normalizePaths(changes.removePaths) : [];
-    const scopePaths = applyGitClaimChanges(existing, {
+    // Live claims name files; this also converts folder claims stored before that rule.
+    const scopePaths = await expandGitArcClaimPaths(repository, applyGitClaimChanges(existing, {
       inherit: true, addPaths: additions.paths, adoptPaths: adoptions.paths, removePaths,
-    });
+    }));
     const skippedIgnoredPaths = [...new Set([...additions.skippedIgnoredPaths, ...adoptions.skippedIgnoredPaths])];
     const entries = await registry.list();
     const collisions = findGitArcCollisions(entries, { harness, threadId: input.threadId }, scopePaths);

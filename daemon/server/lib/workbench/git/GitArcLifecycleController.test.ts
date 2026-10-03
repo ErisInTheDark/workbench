@@ -10,7 +10,54 @@ import GitArcRegistry from "./GitArcRegistry";
 import GitTestFixtureCache from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
-import { PATH_MOVER_ARC_READY_FIXTURE } from "./WorkbenchGitTestFixtures";
+import { PATH_MOVER_ARC_READY_FIXTURE, PATH_MOVER_BASE_FIXTURE } from "./WorkbenchGitTestFixtures";
+
+test("a started folder claims only its current files, leaving new files and folder removal to the owner", async (context) => {
+  const fixture = await new GitTestFixtureCache().copy(PATH_MOVER_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const controller = new WorkbenchGitCheckpointController();
+  const registry = new GitArcRegistry(await WorkbenchGitRepository.open(fixture.root));
+  const owner = { cwd: fixture.root, harness: "codex" as const, threadId: "folder-owner" };
+  const sibling = { cwd: fixture.root, harness: "codex" as const, threadId: "folder-sibling" };
+
+  const started = await controller.createAndStartPlan({ ...owner, intentName: "own src", paths: ["src"] });
+  assert.deepEqual(started.scopePaths, ["src/one.test.ts"]);
+  assert.deepEqual((await registry.find(owner))?.claimedPaths, ["src/one.test.ts"]);
+
+  await controller.createAndStartPlan({ ...sibling, intentName: "add beside", paths: ["src/new.ts"] });
+  assert.deepEqual((await registry.find(sibling))?.claimedPaths, ["src/new.ts"]);
+  await assert.rejects(
+    controller.editArcClaims({ ...sibling, inherit: true, addPaths: ["src/one.test.ts"] }),
+    /overlap active sibling work/u,
+    "files the folder held at activation stay exclusive",
+  );
+
+  const removed = await controller.editArcClaims({ ...owner, inherit: true, removePaths: ["src"] });
+  assert.deepEqual(removed.scopePaths, []);
+});
+
+test("continuing an arc stored with a folder claim converts it to file claims", async (context) => {
+  const fixture = await new GitTestFixtureCache().copy(PATH_MOVER_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  const head = await repository.currentHead();
+  const legacyCommit = await repository.createCommitFromTree(await repository.resolveTree(head), head, [
+    "workbench-git-checkpoint-v1",
+    JSON.stringify({ amendedFrom: null, intentName: "legacy folder", kind: "arc", scopePaths: ["src"], version: 2 }),
+    "",
+  ].join("\n"));
+  await repository.updateRef(`refs/worktree/agents/legacy-thread/checkpoints/legacy-${legacyCommit.slice(0, 7)}`, legacyCommit);
+  const identity = { cwd: fixture.root, harness: "opencode" as const, threadId: "legacy-thread" };
+  const controller = new WorkbenchGitCheckpointController();
+  await controller.startArc({ ...identity, checkpointCommit: legacyCommit });
+  const registry = new GitArcRegistry(repository);
+  assert.deepEqual((await registry.find(identity))?.claimedPaths, ["src"], "precondition: a stored folder claim");
+
+  const continued = await controller.continueArc(identity);
+  assert.deepEqual(continued.scopePaths, ["src/one.test.ts"]);
+  assert.deepEqual((await registry.find(identity))?.claimedPaths, ["src/one.test.ts"]);
+  assert.deepEqual((await controller.continueArc(identity)).scopePaths, ["src/one.test.ts"], "the converted arc stays consistent");
+});
 
 test("strict addition reads only ownership before rejecting overlap and preserves claim mutation safeguards", async (context) => {
   const fixture = await new GitTestFixtureCache().copy(PATH_MOVER_ARC_READY_FIXTURE);
@@ -49,11 +96,11 @@ test("strict addition reads only ownership before rejecting overlap and preserve
   assert.equal((await registry.read()).blob, before.blob);
 
   const added = await controller.addToArc({ ...identity, paths: ["other"] });
-  assert.deepEqual(added.scopePaths, ["other", "src"]);
-  assert.deepEqual((await registry.find(identity))?.claimedPaths, ["other", "src"]);
+  assert.deepEqual(added.scopePaths, ["other", "src/one.test.ts"]);
+  assert.deepEqual((await registry.find(identity))?.claimedPaths, ["other", "src/one.test.ts"]);
   const unchanged = await lifecycle.claims({ ...identity, inherit: true, addPaths: ["src"] });
   assert.equal(unchanged.unchanged, true);
-  assert.deepEqual(unchanged.scopePaths, ["other", "src"]);
+  assert.deepEqual(unchanged.scopePaths, ["other", "src/one.test.ts"]);
 
   const dirty = path.join(fixture.root, "dirty.txt");
   await fs.writeFile(dirty, "unclaimed work\n", "utf8");

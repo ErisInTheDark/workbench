@@ -117,6 +117,8 @@ export const PATH_MOVER_BASE_FIXTURE = {
 export const PATH_MOVER_ARC_READY_FIXTURE = {
   commits: PATH_MOVER_BASE_FIXTURE.commits,
   name: "path-mover-arc-ready",
+  // Revision 2: starting the `src` plan claims its files, not the folder.
+  revision: 2,
   prepare: async ({ repositoryRoot }) => {
     const controller = new WorkbenchGitCheckpointController();
     const plan = await controller.createPlan({
@@ -323,6 +325,10 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
   ], nested: false }],
   ["GitArcLifecycleController.test.ts", { fixtures: [
     demand(PATH_MOVER_ARC_READY_FIXTURE, 1),
+    demand(PATH_MOVER_BASE_FIXTURE, 2),
+  ], nested: false }],
+  ["git-arc-claim-expansion.test.ts", { fixtures: [
+    demand(PATH_MOVER_BASE_FIXTURE, 2),
   ], nested: false }],
   ["GitArcPlanController.test.ts", { fixtures: [
     demand(THREAD_GIT_BASE_FIXTURE, 3),

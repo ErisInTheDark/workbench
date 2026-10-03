@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchGitCheckpointController: route plan, lifecycle and proposal owners; orchestrate inspection, moves and restoration.
+ * - default WorkbenchGitCheckpointController: route plan, lifecycle and proposal owners; orchestrate inspection, file-claiming moves and restoration.
  * - GitArcNoopResult: ignored-path no-op result.
  * - GitArcLifecycleState: registered lifecycle projection.
  * - GitArcPlanClaimCollisionResult: inactive-plan collision facts.
@@ -32,6 +32,7 @@ import GitArcRegistry, {
 import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
 import { createGitArcDiffPage, type GitArcDiffPage } from "workbench-shared/workbench/git/git-arc-diff-pages";
 import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
+import { expandGitArcClaimPaths, expandGitArcMoveClaimPaths } from "./git-arc-claim-expansion";
 import GitArcPlanController, {
   createGitArcNoopResult,
   GitCheckpointDirtyPathsError,
@@ -1105,14 +1106,16 @@ export default class WorkbenchGitCheckpointController {
 
       const mover = new GitArcPathMover(repository);
       const resolved = await mover.resolve(move);
-      const candidates = [...new Set(resolved.mappings.flatMap(({ destination, source }) => [source, destination]))]
-        .sort((left, right) => left.length - right.length || left.localeCompare(right));
-      const additionalClaims: string[] = [];
-      for (const candidate of candidates) {
-        if ([...metadata.scopePaths, ...additionalClaims].some((scopePath) => pathIsCoveredBy(candidate, scopePath))) continue;
-        additionalClaims.push(candidate);
-      }
-      const scopePaths = [...metadata.scopePaths, ...additionalClaims].sort((left, right) => left.localeCompare(right));
+      // Both sides become file claims; existing folder claims convert alongside them.
+      const candidates = await expandGitArcMoveClaimPaths(repository, resolved.mappings);
+      const additionalClaims = candidates.filter((candidate) => (
+        !metadata.scopePaths.some((scopePath) => pathIsCoveredBy(candidate, scopePath))
+      ));
+      const scopePaths = [...new Set([
+        ...await expandGitArcClaimPaths(repository, metadata.scopePaths),
+        ...candidates.filter((candidate) => metadata.scopePaths.some((scopePath) => pathIsCoveredBy(candidate, scopePath))),
+        ...additionalClaims,
+      ])].sort((left, right) => left.localeCompare(right));
 
       if (move.kind === "regex" && !move.confirm) {
         return {
