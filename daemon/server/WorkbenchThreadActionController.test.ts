@@ -39,8 +39,10 @@ function fixture(providerWarning?: string) {
     configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
   };
   const recorded: object[] = [];
+  const interruptedWaits: string[] = [];
   const owners: WorkbenchThreadActionOwners = {
     approvals: { list: () => [] },
+    interruptSteerWaits: threadId => { interruptedWaits.push(threadId); },
     reconciliation: { reconcile: unused },
     transcripts: { readPage: unused, history: unused },
     transcript: { record: async observations => { recorded.push(...observations); return undefined as never; } },
@@ -79,7 +81,7 @@ function fixture(providerWarning?: string) {
   };
   return {
     provider, owners,
-    controller: new WorkbenchThreadActionController(owners), messages, connections, warnings, stops, mutations, stopOrder, recorded,
+    controller: new WorkbenchThreadActionController(owners), messages, connections, warnings, stops, mutations, stopOrder, recorded, interruptedWaits,
     failInterrupt: () => { interruptFailure = true; },
     failSettlement: () => { settlementFailure = true; },
     failTitle: () => { titleFailure = true; },
@@ -208,6 +210,20 @@ test("new-turn admission passes the first non-empty user text as display fallbac
     threadId: "wb-thread", clientMessageId: "steer", input, intent: "steer", expectedTurnId: "wb-turn",
   });
   assert.deepEqual(fallbacks, ["First user message", undefined]);
+});
+
+test("a steered user message interrupts the thread's steer-interruptible waits for every provider", async () => {
+  const f = fixture();
+  await f.controller.handle("thread/message/submit", {
+    threadId: "native-thread", clientMessageId: "message", input: [], intent: "continue",
+  });
+  assert.deepEqual(f.interruptedWaits, ["wb-thread"]);
+  f.provider.threads.submit = async () => ({ kind: "started", turn: { id: "wb-turn" } as never });
+  f.owners.state.acceptProviderIntent = async () => null;
+  await f.controller.handle("thread/message/submit", {
+    threadId: "wb-thread", clientMessageId: "new", input: [], intent: "newTurn",
+  });
+  assert.deepEqual(f.interruptedWaits, ["wb-thread"], "a new turn has no running wait to interrupt");
 });
 
 test("message admission ignores browser steer classification", async () => {

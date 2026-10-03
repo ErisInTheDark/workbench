@@ -27,7 +27,6 @@ import { NativeThreadIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } 
 import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
-import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 
 function record(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -78,7 +77,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const threadState = build.get("threadState");
     const sqliteReader = new CodexStoredTranscriptAdapter(build.get("transcriptReader"));
     const turnRecovery = build.get("codexRecovery");
-    const requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry();
     let bridge!: CodexStdioBridge;
     let recovery: Promise<void> | null = null;
     let generation = new AbortController();
@@ -214,11 +212,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       identities: { threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") },
       transcriptAssets: build.get("database"),
       providerObservations: new CodexProviderObservations({ threads: build.get("threadIdentity"), items: build.get("transcriptIdentity") }),
-      onAcceptedTurnSteer: nativeThreadId => requestRegistry.interruptThreadWaits(
-        threadIdentity.workbenchIdForNative(
-          threadIdentity.knownNativeBinding("codex", nativeThreadId),
-        ),
-      ),
       onInitialized: build.mode === "initial" ? startRecovery : undefined,
       instructions: codexInstructions,
       createThread: async (request, create, signal) => {

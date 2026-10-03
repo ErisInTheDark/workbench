@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadSubagentWaitItem: render user-controlled wait details with cumulative timing, tabs, outcomes, and failures.
+ * - default ThreadSubagentWaitItem: render user-controlled wait details with cumulative timing, tabs, bottom-pinned live activity, outcomes, and failures.
  */
 "use client";
 
@@ -50,8 +50,10 @@ export default function ThreadSubagentWaitItem ({
   const showFailureExit = outcome === "failed" && exitCode !== null && exitCode !== undefined && exitCode !== 0;
   const showDuration = visibleDurationMs !== null && visibleDurationMs !== undefined;
   if (!selectedEntry) return null;
-  const summary = (
-    <span>
+  // Open tabs already name every subagent, so the open summary drops the list.
+  const tabbed = multiplexed && active && !disclosureContent;
+  const namedSummary = (
+    <span className={tabbed ? "[details[open]>summary_&]:hidden" : undefined}>
       {interruptedBySteer ? "Interrupted by your steer while waiting for "
         : outcome === "inProgress" ? "Waiting for "
         : outcome === "timedOut" ? "Timed out waiting for "
@@ -71,6 +73,12 @@ export default function ThreadSubagentWaitItem ({
           />
         </span>
       ))}
+    </span>
+  );
+  const summary = (
+    <span>
+      {namedSummary}
+      {tabbed ? <span className="hidden [details[open]>summary_&]:inline">Waiting for subagents…</span> : null}
       {showFailureExit || showDuration ? (
         <span className="ml-2 text-[0.84em] text-fg/muted">
           {showFailureExit ? <ThreadSummaryText text={`exit ${exitCode}`} /> : null}
@@ -137,6 +145,7 @@ export default function ThreadSubagentWaitItem ({
           >
             {selectedEntry.content ? (
               <ThreadPreviewFrame
+                anchor="end"
                 contentClassName="px-4 py-3 md:px-12"
                 contentPadding="none"
                 height="22rem"
@@ -149,6 +158,7 @@ export default function ThreadSubagentWaitItem ({
         </>
       ) : active && selectedEntry.content ? (
         <ThreadPreviewFrame
+          anchor="end"
           contentClassName="px-4 py-3 md:px-12"
           contentPadding="none"
           height="22rem"

@@ -8,7 +8,7 @@ import * as threadBootstrap from "./lib/thread-bootstrap";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
-import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "./lib/workbench-library";
@@ -43,6 +43,7 @@ import WorkbenchHarnessController from "./WorkbenchHarnessController";
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
+import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
 import WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
 import WorkbenchUnfinishedTurnController from "./WorkbenchUnfinishedTurnController";
@@ -343,11 +344,16 @@ function createWorkbenchCoreFeature(
     resolveProject: async threadId => (await threadIdentity.resolve({ threadId }))?.projectId ?? null,
   }, approvalHandoff);
   const recordSkillActivations = (threadId: string, paths: readonly string[]) => threadSkills.recordActivations(threadId, paths, "user");
+  // Process-wide registry: waits started under an earlier generation still get interrupted.
+  const interruptSteerWaits = (threadId: WorkbenchThreadId) => {
+    getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId);
+  };
   const unsubscribeCompaction = transcript.subscribeContextCompaction(async threadId => {
     if (lease.isCurrent()) await threadSkills.observeCompaction(threadId);
   });
   const questionnaireResponses = new WorkbenchQuestionnaireResponseController({
     approvals,
+    interruptSteerWaits,
     harnesses,
     providers,
     recordSkillActivations,
@@ -428,6 +434,7 @@ function createWorkbenchCoreFeature(
   });
   const threadActions = new WorkbenchThreadActionController({
     approvals,
+    interruptSteerWaits,
     reconciliation: transcriptReconciliation,
     transcripts: transcriptReader,
     transcript,

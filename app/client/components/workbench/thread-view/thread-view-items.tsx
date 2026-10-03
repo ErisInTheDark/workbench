@@ -15,6 +15,8 @@ import { memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode 
 import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { getCurrentTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
+import { useWorkbenchThread } from "../use-workbench-thread";
+import WorkbenchClientContext from "../workbench-client-context";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchSubagentSummary, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import {
   findWorkbenchThreadItemTimelineEntry,
@@ -916,7 +918,42 @@ function mergeCommandDetailRowsWithBrowseOutput(
   });
 }
 
-function ThreadSubagentCurrentActivityPreview ({
+/** Enough recent context to follow a working child; older turn content stays one tab-click away. */
+const SUBAGENT_ACTIVITY_WINDOW_BLOCKS = 24;
+const NO_BLOCKS: ThreadRenderableBlock[] = [];
+
+interface ThreadSubagentActivityWindowProps {
+  fallbackThread: ThreadPayload | undefined;
+  inlineMentionSources?: InlineMentionHighlightSources | null;
+  knownSkills?: WorkbenchSkillSummary[];
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
+  relatedThreadsById: RelatedThreadsById;
+  subagent: WorkbenchSubagentSummary | null | undefined;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}
+
+/**
+ * Live tail of a child's current turn for wait previews. Holding "view" interest keeps the child's
+ * own owner refreshing it while it works; the parent's related documents are only loaded once.
+ * Transcripts also render without a mounted client, where only the passed document can show.
+ */
+function ThreadSubagentActivityWindow (props: ThreadSubagentActivityWindowProps) {
+  return useContext(WorkbenchClientContext) && props.subagent
+    ? <LiveThreadSubagentActivityWindow {...props} subagent={props.subagent} />
+    : <ThreadSubagentActivityWindowBody {...props} thread={props.fallbackThread} />;
+}
+
+function LiveThreadSubagentActivityWindow (props: ThreadSubagentActivityWindowProps & { subagent: WorkbenchSubagentSummary }) {
+  const { subagent } = props;
+  const live = useWorkbenchThread(props.projectId ?? "", {
+    harness: subagent.harness, kind: "subagent", parentThreadId: subagent.parentThreadId, threadId: subagent.threadId,
+  }, undefined, "view");
+  return <ThreadSubagentActivityWindowBody {...props} thread={live.state.document ?? props.fallbackThread} />;
+}
+
+function ThreadSubagentActivityWindowBody ({
   inlineMentionSources,
   knownSkills,
   projectFilePaths,
@@ -925,24 +962,19 @@ function ThreadSubagentCurrentActivityPreview ({
   relatedThreadsById,
   thread,
   workspaceRoots,
-}: {
-  inlineMentionSources?: InlineMentionHighlightSources | null;
-  knownSkills?: WorkbenchSkillSummary[];
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  relatedThreadsById: RelatedThreadsById;
-  thread: ThreadPayload | undefined;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
+}: ThreadSubagentActivityWindowProps & { thread: ThreadPayload | undefined }) {
   const currentTurn = getCurrentTurn(thread);
+  const turnItems = currentTurn?.items;
+  const cwd = thread?.cwd;
+  const recentBlocks = useMemo(
+    () => turnItems ? buildRenderableBlocks(turnItems, {}, cwd).slice(-SUBAGENT_ACTIVITY_WINDOW_BLOCKS) : NO_BLOCKS,
+    [cwd, turnItems],
+  );
+  const blocks = useStableRenderableBlocks(recentBlocks);
   if (!thread || !currentTurn) {
     return <ThreadContentLoadingSkeleton />;
   }
-
-  const blocks = buildRenderableBlocks(currentTurn.items, {}, thread.cwd);
-  const block = blocks.at(-1) ?? null;
-  if (!block) {
+  if (!blocks.length) {
     return (
       <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">
         No subagent activity was captured yet.
@@ -950,28 +982,34 @@ function ThreadSubagentCurrentActivityPreview ({
     );
   }
 
+  const finalAgentMessageId = getFinalAgentMessageId(currentTurn);
   return (
-    <ThreadRenderableBlockView
-      animateEntries={false}
-      block={block}
-      finalAgentMessageId={getFinalAgentMessageId(currentTurn)}
-      inlineMentionSources={inlineMentionSources}
-      isMostRecentBlock
-      knownSkills={knownSkills}
-      primaryUserBlock={null}
-      projectFilePaths={projectFilePaths}
-      projectId={projectId}
-      projectRootPath={projectRootPath}
-      relatedThreadsById={relatedThreadsById}
-      subagents={[]}
-      threadCwdPath={thread.cwd}
-      threadId={thread.id}
-      turnCompletedAt={currentTurn.completedAt}
-      turnId={currentTurn.id}
-      turnStartedAt={currentTurn.startedAt}
-      turnStatus={currentTurn.status}
-      workspaceRoots={workspaceRoots}
-    />
+    <div className="flex flex-col gap-1">
+      {blocks.map((block) => (
+        <ThreadRenderableBlockView
+          animateEntries={false}
+          block={block}
+          finalAgentMessageId={finalAgentMessageId}
+          inlineMentionSources={inlineMentionSources}
+          isMostRecentBlock={block === blocks.at(-1)}
+          key={getRenderableBlockKey(block)}
+          knownSkills={knownSkills}
+          primaryUserBlock={null}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          relatedThreadsById={relatedThreadsById}
+          subagents={[]}
+          threadCwdPath={thread.cwd}
+          threadId={thread.id}
+          turnCompletedAt={currentTurn.completedAt}
+          turnId={currentTurn.id}
+          turnStartedAt={currentTurn.startedAt}
+          turnStatus={currentTurn.status}
+          workspaceRoots={workspaceRoots}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -1233,14 +1271,15 @@ function ThreadCommandExecutionDetails ({
           const childThread = target.threadId ? relatedThreadsById[target.threadId] : undefined;
           return {
             content: target.threadId ? (
-              <ThreadSubagentCurrentActivityPreview
+              <ThreadSubagentActivityWindow
+                fallbackThread={childThread}
                 inlineMentionSources={inlineMentionSources}
                 knownSkills={knownSkills}
                 projectFilePaths={projectFilePaths}
                 projectId={projectId}
                 projectRootPath={projectRootPath}
                 relatedThreadsById={relatedThreadsById}
-                thread={childThread}
+                subagent={target.subagent}
                 workspaceRoots={workspaceRoots}
               />
             ) : undefined,
@@ -1989,15 +2028,16 @@ function ThreadRenderableBlockViewComponent ({
                 workspaceRoots={workspaceRoots}
               />
             )}
-            renderSubagentActivity={(thread) => (
-              <ThreadSubagentCurrentActivityPreview
+            renderSubagentActivity={({ subagent, thread }) => (
+              <ThreadSubagentActivityWindow
+                fallbackThread={thread}
+                subagent={subagent}
                 inlineMentionSources={inlineMentionSources}
                 knownSkills={knownSkills}
                 projectFilePaths={projectFilePaths}
                 projectId={projectId}
                 projectRootPath={projectRootPath}
                 relatedThreadsById={relatedThreadsById}
-                thread={thread}
                 workspaceRoots={workspaceRoots}
               />
             )}

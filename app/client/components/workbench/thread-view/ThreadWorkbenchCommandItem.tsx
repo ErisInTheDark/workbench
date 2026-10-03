@@ -81,7 +81,7 @@ export default function ThreadWorkbenchCommandItem({
   projectRootPath?: string;
   relatedThreadsById: Record<string, ThreadPayload | undefined>;
   renderRecallRecord: (record: WorkbenchThreadRecallOutputRecord, index: number) => ReactNode;
-  renderSubagentActivity?: (thread: ThreadPayload | undefined) => ReactNode;
+  renderSubagentActivity?: (target: { subagent: WorkbenchSubagentSummary | null | undefined; thread: ThreadPayload | undefined }) => ReactNode;
   route: SpecializedRoute;
   subagents: readonly WorkbenchSubagentSummary[];
   threadCwdPath?: string;
@@ -343,7 +343,10 @@ export default function ThreadWorkbenchCommandItem({
         ) : interruptedBySteer ? undefined : outcome === "failed" ? output : undefined}
         durationMs={item.durationMs}
         entries={targets.map((target) => ({
-          content: renderSubagentActivity?.(target.threadId ? relatedThreadsById[target.threadId] : undefined),
+          content: renderSubagentActivity?.({
+            subagent: target.subagent,
+            thread: target.threadId ? relatedThreadsById[target.threadId] : undefined,
+          }),
           fallbackName: target.fallbackName,
           subagent: target.subagent,
           targetKey: target.targetKey,

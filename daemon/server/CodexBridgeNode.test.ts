@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import CodexBridgeNode from "./CodexBridgeNode";
 import type CodexStdioBridge from "./CodexStdioBridge";
 import type { JsonRpcRequest } from "./bridge-types";
@@ -15,7 +15,6 @@ import CodexLifecycleController from "./CodexLifecycleController";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import WorkbenchTranscriptRepository from "./database/transcript/WorkbenchTranscriptRepository";
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
-import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import WorkbenchAgentContextController from "./WorkbenchAgentContextController";
 
 function deferred() {
@@ -155,16 +154,11 @@ test("legacy Codex subagent messages use the reloadable message owner", async ()
   }
 });
 
-test("managed steering interrupts only the mapped WB thread wait before returning", async () => {
+test("managed steering collects steer context through the bridge's direct admission", async () => {
   const fixture = createThreadStateTestDatabase();
   fixture.admitThread(testProjectIds.project, "saved-thread", "codex", "native-thread", "C:/repo");
   const identity = await fixture.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse("saved-thread") });
   assert.ok(identity);
-  const registry = getProcessWorkbenchAgentMcpRequestRegistry();
-  const wait = registry.register(randomUUID(), 1, { owner: {}, steerInterruptible: true, toolName: "git_arc_wait" });
-  const other = registry.register(randomUUID(), 1, { owner: {}, steerInterruptible: true, toolName: "git_arc_wait" });
-  wait.setWorkbenchThreadId(identity.threadId);
-  other.setWorkbenchThreadId(WorkbenchThreadIdSchema.parse(randomUUID()));
   let bridge!: CodexStdioBridge;
   const turn = { id: "native-turn", items: [], itemsView: "notLoaded", status: "inProgress", error: null, startedAt: 1, completedAt: null, durationMs: null };
   const thread = {
@@ -191,7 +185,6 @@ test("managed steering interrupts only the mapped WB thread wait before returnin
             : request.method === "turn/steer" ? { turnId: turn.id }
               : request.method === "thread/inject_items" ? {} : null;
         assert.ok(result, `Unexpected native operation: ${request.method}`);
-        assert.equal(wait.signal.aborted, false);
         queueMicrotask(() => { void bridge.handleUpstreamMessage({ id: request.id ?? null, result }); });
       } },
       deactivateBridge() {},
@@ -229,11 +222,7 @@ test("managed steering interrupts only the mapped WB thread wait before returnin
     });
     assert.equal(response.error, undefined);
     assert.deepEqual(response.result, { kind: "steered", turnId: turn.id });
-    assert.equal(wait.signal.aborted, true);
-    assert.equal(other.signal.aborted, false);
   } finally {
-    wait.unregister();
-    other.unregister();
     await instance.dispose();
     await bridge.disposeImmediately();
   }

@@ -3646,31 +3646,6 @@ test("native send failure clears pending response and records exact steer failur
   }
 });
 
-test("accepted internal steers do not interrupt MCP waits", async () => {
-  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-internal-steer-test-");
-  const root = temporary.path;
-  let bridge!: InstanceType<typeof CodexStdioBridge>;
-  const appServer = {
-    send(message: JsonRpcRequest) {
-      queueMicrotask(() => { void bridge.handleUpstreamMessage({ id: message.id ?? null, result: { turnId: "turn" } }); });
-    },
-  } as unknown as CodexAppServer;
-  const acceptedSteers: string[] = [];
-  bridge = new CodexStdioBridge({
-    appServer,
-    handleWorkbenchRequest: rejectWorkbenchRequest,
-    onAcceptedTurnSteer(threadId) { acceptedSteers.push(threadId); },
-    onNotification() {},
-    resolveProjectFromCwd: async () => null,
-  });
-  try {
-    assert.equal(await bridge.steerTurnForBrowse("thread", "turn", [{ text: "one", text_elements: [], type: "text" }]), "turn");
-    assert.deepEqual(acceptedSteers, []);
-  } finally {
-    await bridge.dispose();
-    await temporary.dispose();
-  }
-});
 
 test("fresh first turn prepares its stored profile across reload and failed admission without resume", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-fresh-start-");
@@ -4162,7 +4137,6 @@ test("managed admission steers a provider-confirmed active turn without changing
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-managed-steer-");
   const root = temporary.path;
   const upstreamRequests: JsonRpcRequest[] = [];
-  const acceptedSteers: string[] = [];
   let prepared = false;
   let bridge!: InstanceType<typeof CodexStdioBridge>;
   const activeTurn = { ...bridgeThread().turns[0]!, items: [], itemsView: "notLoaded" as const };
@@ -4190,7 +4164,6 @@ test("managed admission steers a provider-confirmed active turn without changing
   bridge = new CodexStdioBridge({
     appServer,
     handleWorkbenchRequest: rejectWorkbenchRequest,
-    onAcceptedTurnSteer: (threadId) => { acceptedSteers.push(threadId); },
     onNotification() {},
     instructions: {
       augment: async (message) => message,
@@ -4237,7 +4210,6 @@ test("managed admission steers a provider-confirmed active turn without changing
       threadId: "thread",
     });
     assert.equal(prepared, false);
-    assert.deepEqual(acceptedSteers, ["thread"]);
     assert.deepEqual(response?.result, { kind: "steered", turnId: "turn" });
 
     const startOnlyOffset = upstreamRequests.length;
@@ -4271,7 +4243,6 @@ test("managed admission steers a provider-confirmed active turn without changing
     assert.deepEqual(upstreamRequests.slice(outputOffset).map(({ method }) => method), ["thread/read", "turn/start"]);
     assert.deepEqual((upstreamRequests.at(-1)?.params as { toolOutput?: object }).toolOutput, toolOutput);
     assert.equal(prepared, false);
-    assert.deepEqual(acceptedSteers, ["thread"], "agent information must not interrupt user-steer waits");
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();

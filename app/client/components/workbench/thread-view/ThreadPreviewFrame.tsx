@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadPreviewFrame: render shared edge-framed previews for bulky thread content.
+ * - default ThreadPreviewFrame: render shared edge-framed previews for bulky thread content, optionally bottom-anchored as a live tail.
  */
 "use client";
 
@@ -12,6 +12,8 @@ type ThreadPreviewFrameEdgeOffset = "left" | "none";
 type ThreadPreviewFrameContentPadding = "none" | "normal";
 
 interface ThreadPreviewFrameProps {
+  /** `end` starts scrolled to the bottom and stays pinned there as content grows, like a live tail. */
+  anchor?: "start" | "end";
   backgroundClassName?: string;
   children: ReactNode;
   className?: string;
@@ -42,6 +44,7 @@ function scaleCssLength (value: string, multiplier: number) {
 }
 
 export default function ThreadPreviewFrame ({
+  anchor = "start",
   backgroundClassName = "before:bg-[linear-gradient(to_right,transparent,#8882_10%,#8882_90%,transparent)]",
   children,
   className,
@@ -90,12 +93,14 @@ export default function ThreadPreviewFrame ({
       <div
         className={joinClasses(
           "scrollbar-hover-reveal min-w-0 max-w-full overflow-y-auto",
+          // A reversed column scrolls from the bottom, so growth keeps the tail in view without JS.
+          anchor === "end" && "flex flex-col-reverse",
           contentPadding === "normal" && "py-2",
           contentClassName,
         )}
         style={contentStyle}
       >
-        {children}
+        {anchor === "end" ? <div className="min-w-0">{children}</div> : children}
       </div>
     </div>
   );
