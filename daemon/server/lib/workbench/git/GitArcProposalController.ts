@@ -783,10 +783,21 @@ export default class GitArcProposalController {
     }
     const liveBaseCommit = headMovement.currentHead;
     if (amend && liveBaseCommit === null) throw new Error("An amend requires an existing HEAD commit.");
-    const amendTargetSha = amendTargetProposal?.metadata.committedSha ?? (amend ? liveBaseCommit : null);
-    if (amendTargetSha) {
-      if (amendTargetProposal) await new GitArcPublishState(repository).requireAmendableCommit(amendTargetSha);
-      else await new GitArcPublishState(repository).requireAmendableCurrentHead();
+    const requestedAmendTarget = amendTargetProposal?.metadata.committedSha ?? (amend ? liveBaseCommit : null);
+    let amendTargetSha: string | null = null;
+    if (requestedAmendTarget) {
+      const publish = new GitArcPublishState(repository);
+      const publishState = amendTargetProposal
+        ? await publish.classifyCommit(requestedAmendTarget)
+        : await publish.classifyCurrentHead();
+      if (publishState.kind === "pushed" && freshTitle?.trim()) {
+        // Pushed targets cannot be amended; keep only the fresh-commit choice so agents never need to pre-check.
+        title = freshTitle;
+        description = freshDescription ?? "";
+      } else {
+        GitArcPublishState.requireUnpushed(publishState, amendTargetProposal ? "Commit" : "Current HEAD");
+        amendTargetSha = requestedAmendTarget;
+      }
     }
     const baseCommit = amendTargetSha ? await repository.resolveParent(amendTargetSha) : liveBaseCommit;
     const proposalTree = await repository.writeScopedWorktreeTree(requestedPaths, amendTargetSha ?? liveBaseCommit);

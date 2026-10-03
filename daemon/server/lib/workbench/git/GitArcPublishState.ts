@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcPublishState: own coalesced remote refresh and conservative amend-target publication checks. Keywords: git, arc, publish, remote, amend.
+ * - default GitArcPublishState: own coalesced remote refresh, publication classification and the unpushed-amend requirement. Keywords: git, arc, publish, remote, amend.
  * - GitArcCommitPublishState: classify whether a commit is safe to amend. Keywords: git, commit, pushed, unpushed.
  */
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -16,6 +16,14 @@ const refreshes = new Map<string, Promise<void>>();
 
 export default class GitArcPublishState {
   constructor(private readonly repository: WorkbenchGitRepository) {}
+
+  /** Reject every state except `unpushed`; `subject` names the target in the published message. */
+  static requireUnpushed(state: GitArcCommitPublishState, subject = "Commit") {
+    if (state.kind === "unpushed") return;
+    if (state.kind === "pushed") throw new GitArcRejectionError({ reason: "publishedCommit", refs: state.refs }, `${subject} is already present on remote refs: ${state.refs.join(", ")}`);
+    if (state.kind === "detached") throw new GitArcRejectionError({ reason: "detachedHead" }, "Detached HEAD is unsafe for an amend.");
+    throw new Error(state.reason);
+  }
 
   private async refreshRemotes() {
     const existing = refreshes.get(this.repository.root);
@@ -54,20 +62,6 @@ export default class GitArcPublishState {
   }
 
   async requireAmendableCommit(commit: string, options: { refresh?: boolean } = {}) {
-    const state = await this.classifyCommit(commit, options);
-    if (state.kind === "unpushed") return;
-    if (state.kind === "pushed") throw new GitArcRejectionError({ reason: "publishedCommit", refs: state.refs }, `Commit is already present on remote refs: ${state.refs.join(", ")}`);
-    if (state.kind === "detached") throw new GitArcRejectionError({ reason: "detachedHead" }, "Detached HEAD is unsafe for an amend.");
-    throw new Error(state.reason);
-  }
-
-  async requireAmendableCurrentHead(options: { refresh?: boolean } = {}) {
-    const state = await this.classifyCurrentHead(options);
-    if (state.kind === "unpushed") return;
-    if (state.kind === "detached") throw new GitArcRejectionError({ reason: "detachedHead" }, "Detached HEAD is unsafe for an amend proposal.");
-    if (state.kind === "pushed") {
-      throw new GitArcRejectionError({ reason: "publishedCommit", refs: state.refs }, `Current HEAD is already present on remote refs: ${state.refs.join(", ")}`);
-    }
-    throw new Error(state.reason);
+    GitArcPublishState.requireUnpushed(await this.classifyCommit(commit, options));
   }
 }

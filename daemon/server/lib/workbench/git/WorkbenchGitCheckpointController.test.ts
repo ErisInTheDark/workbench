@@ -1397,20 +1397,29 @@ controllerTest("retained", "replacement plans retain every dirty claim and relea
 });
 
 
-controllerTest("remote", "remote boundaries reject published amendments, unavailable refreshes and detached HEAD", async (fixture) => {
+controllerTest("remote", "published amend targets become fresh commits; unavailable refreshes and detached HEAD reject", async (fixture) => {
   const { source } = fixture;
   const controller = new WorkbenchGitCheckpointController();
+  const head = await fixture.repository.currentHead();
   await fs.writeFile(path.join(source, "one.txt"), "amend pushed head\n");
-  await assert.rejects(controller.createProposal({
+  const proposal = await controller.createProposal({
     amend: true,
     cwd: source,
     description: "",
-    freshDescription: "",
+    freshDescription: "separate body",
     freshTitle: "commit pushed correction separately",
     harness: "codex",
     threadId: "adopt-thread",
     title: "",
-  }), /already present on remote refs/u);
+  });
+  assert.equal(proposal.baseCommit, head);
+  assert.equal(proposal.title, "commit pushed correction separately");
+  assert.equal(proposal.description, "separate body");
+  const stored = await controller.getProposal({
+    cwd: source, harness: "codex", includeNewer: false, proposalId: proposal.proposalId, threadId: "adopt-thread",
+  });
+  assert.equal(stored.mode, "commit");
+  assert.equal(stored.amendTargetSha, null);
   await checkRemoteFailures(fixture);
 });
 

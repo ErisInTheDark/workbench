@@ -114,7 +114,8 @@ Track all arc outcomes. Reconcile the list with the full selected diff. New prop
 Set `replace: proposalId` to replace one pending proposal. Use <tool id="git_arc_rescind" /> to rescind one. Do not combine replacement and amendment.
 
 <!-- Failure: corrective amends rewrite history; additive amends hide scope. -->
-Compare amendments against their target. Set `amend: proposalId` for a committed proposal or `amend: true` for HEAD. Update title/description for changed scope; omit both to inherit. Content amendments require `freshTitle` and optional `freshDescription` for the separate fresh-commit choice. Targets must be linear and unpushed. Use <tool id="git_arc_reword" /> with `{ proposalId, title, description? }` for a message-only proposal, not an immediate commit.
+<!-- Failure: agents avoided amend proposals or pre-checked HEAD/push state. Amend proposals carry both amend and fresh-commit choices, and Workbench converts impossible amends (e.g. pushed targets) into fresh-commit proposals, so the agent never needs to judge amendability. -->
+**Default to amend proposals for fixes and minor addendums to committed work.** The user owns the amend-or-fresh choice; Workbench handles impossible amends. Set `amend: proposalId` for any committed proposal or `amend: true` for HEAD; do not pre-check targets. Compare amendments against their target. Update title/description for changed scope; omit both to inherit. Content amendments require `freshTitle` and optional `freshDescription` for the fresh-commit choice. Use <tool id="git_arc_reword" /> with `{ proposalId, title, description? }` for a message-only proposal, not an immediate commit.
 
 Proposal acceptance atomically changes branch history, proposal metadata, the accepted receipt ledger, and live claims. It preserves excluded newer work.
 
