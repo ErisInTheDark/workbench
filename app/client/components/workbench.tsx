@@ -2538,7 +2538,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         presentation={workbenchClient.mounted?.presentationClient?.snapshot().data}
                         controls={controls}
                         selectedLocation={browseLocation}
-                        onOpenQualifiedThread={row => openQualifiedThread(row, row.logicalProjectId)}
+                        onOpenQualifiedThread={row => openQualifiedThread(row,
+                          route.selectedProjectIds === null ? null : row.logicalProjectId)}
                         attentionLabelsByThreadId={threadAttentionLabelsById}
                         currentTarget={route.view === "thread" ? route.threadTarget : null}
                         harness={harness}

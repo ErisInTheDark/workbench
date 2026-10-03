@@ -180,6 +180,21 @@ test("project row observations hand off without blanking visible threads", async
   assert.ok(warnings.some(message => message.includes("Workspace query failed")));
 });
 
+test("composing from the default project list keeps row demand on every project", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const projects = await socket.request("workspace/observe", 0,
+    request => request.params.query.kind === "projects");
+  socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
+  const offset = socket.sent.length;
+  await client.controls.applyRoute(createLogicalThreadRoute(null, logicalId, location, { kind: "new" }));
+  const scoped = socket.sent.slice(offset).filter(item => item.method === "workspace/observe"
+    && item.params.query.kind === "projectThreads" && item.params.query.projects !== null);
+  assert.deepEqual(scoped.map(item => item.method === "workspace/observe" && item.params.query), []);
+});
+
 test("an older app broadens row demand only when project groups are unavailable", async context => {
   const warnings: string[] = [];
   context.mock.method(console, "warn", (message: string) => warnings.push(message));

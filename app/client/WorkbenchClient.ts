@@ -400,7 +400,9 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       selectRows(null);
       return;
     }
-    const selectedLogicalIds = [...new Set([
+    // The default project list shows every project; a viewed thread or draft owner never narrows it.
+    const defaultSelection = route.selectedProjectIds === null;
+    const selectedLogicalIds = defaultSelection ? [] : [...new Set([
       ...(route.logical ? route.selectedProjectIds ?? [] : []),
       route.logical?.threadOwnerProjectId,
     ].filter((id): id is NonNullable<typeof id> => Boolean(id)))];
@@ -418,7 +420,9 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         selectedRows.push({ kind: "location", location: ownerFact.location });
       }
     }
-    const explicit = projectNavigator.folderForRoute(route) ?? route.logical?.browseLocation ?? route.logical?.location;
+    const explicit = defaultSelection
+      ? route.folderAddress?.length ? projectNavigator.folderForRoute(route) : null
+      : projectNavigator.folderForRoute(route) ?? route.logical?.browseLocation ?? route.logical?.location;
     selectRows(selectedRows.length ? selectedRows : explicit ? [{ kind: "location", location: explicit }] : null);
   }
 
@@ -616,7 +620,10 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       }
       const project = threadProject(data.location);
       if (!project) return { ok: false, pending: true };
-      selectFolder(browseFolder ?? (route.logical ? browseTarget : location ?? data.location));
+      // With no project selected, a thread browses its own folder.
+      selectFolder(browseFolder ?? (route.logical
+        ? browseTarget ?? (route.selectedProjectIds === null ? data.location : null)
+        : location ?? data.location));
       selectRenderer(data.location);
       draftLocation = null;
       const outcome = await threadClient.openThread(data.identity.threadId, {

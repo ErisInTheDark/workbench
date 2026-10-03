@@ -128,17 +128,15 @@ export default memo(function WorkbenchThreadSidebar({
           currentTarget={currentTarget}
           displayOrder={logicalProject ? undefined : actions.displayOrder}
           entries={logicalProject ? undefined : actions.entries}
-          getThreadHref={(target) => {
-            if (logicalProject) {
-              const row = findRow(logicalProject, logicalThreads, target);
-              if (!row && target.kind !== "new") return undefined;
-              return projectHref(target.kind === "provider" || target.kind === "subagent"
-                ? createLogicalExistingThreadRoute(logicalProject.id, target)
-                : createLogicalThreadRoute(logicalProject.id, logicalProject.id,
-                  row?.location ?? selectedLocation ?? null, target));
-            }
-            return projectHref(createThreadRoute(projectId, target));
-          }}
+          // Logical lists without one selected project use the list's owner-qualified row hrefs.
+          getThreadHref={logicalProject ? (target) => {
+            const row = findRow(logicalProject, logicalThreads, target);
+            if (!row && target.kind !== "new") return undefined;
+            return projectHref(target.kind === "provider" || target.kind === "subagent"
+              ? createLogicalExistingThreadRoute(logicalProject.id, target)
+              : createLogicalThreadRoute(logicalProject.id, logicalProject.id,
+                row?.location ?? selectedLocation ?? null, target));
+          } : logicalProjects ? undefined : (target) => projectHref(createThreadRoute(projectId, target))}
           logicalProjects={logicalProjects ?? (logicalProject ? [logicalProject] : undefined)}
           logicalThreads={logicalThreads}
           onCreateThread={onCreateThread}
