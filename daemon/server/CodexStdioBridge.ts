@@ -2978,7 +2978,13 @@ export default class CodexStdioBridge {
     const readThread = asRecord(readResponse.result)?.thread as ThreadReadResponse["thread"] | undefined;
     if (!readThread || readThread.id !== threadId) return { id: requestId, error: { code: -32000, message: "Codex admission could not read the requested thread." } };
     if (isThreadStatusActive(readThread.status)) {
-      if (asRecord(asRecord(startRequest.params)?.toolOutput)) {
+      const startParams = asRecord(startRequest.params);
+      if (asRecord(startParams?.toolOutput)) {
+        // Collaboration mode settings require the thread's profile model, which inactive admission would otherwise supply.
+        if (startParams?.collaborationMode && this.prepareThreadConfiguration) {
+          ({ startRequest } = await this.prepareThreadConfiguration(readThread, { resumeRequest, startRequest }, signal));
+          signal.throwIfAborted();
+        }
         return await this.dispatchAdmittedTurnStart(requestId, startRequest);
       }
       let activeTurnId = this.readTranscriptActiveTurnId(threadId);

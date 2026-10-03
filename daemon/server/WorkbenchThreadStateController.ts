@@ -1753,16 +1753,20 @@ export default class WorkbenchThreadStateController {
         : parsed.data;
       if (providerEntry.entryKind === "subagent") {
         const lifecycle = providerLifecycle(key, providerEntry, existing);
+        // Idle top-level rows default to settled; only the parent or user can settle a newly owned child.
+        const adopted = existing?.entryKind === "thread";
         install(key, parseWorkbenchThreadStateEntry(existing ? {
           ...providerEntry,
           gitHistoryCleanedAt: existing.gitHistoryCleanedAt,
-          lifecycle: gitArcPreventsThreadSettlement(providerEntry.gitArc) && lifecycle.settled ? { ...lifecycle, settled: false as const } : lifecycle,
+          lifecycle: lifecycle.settled && (adopted || gitArcPreventsThreadSettlement(providerEntry.gitArc))
+            ? { ...lifecycle, settled: false as const }
+            : lifecycle,
           mcpGeneration: existing.mcpGeneration,
           profile: existing.profile,
           ...(existing.pendingQuestionnaire ? { pendingQuestionnaire: existing.pendingQuestionnaire } : {}),
           pinned: existing.entryKind === "subagent" ? existing.pinned : existing.metadata.pinned,
           providerObserved: true,
-          settledAt: existing.settledAt,
+          settledAt: adopted ? null : existing.settledAt,
           snoozedUntil: existing.snoozedUntil,
           ...(existing.questionnaireHistory?.length ? { questionnaireHistory: existing.questionnaireHistory } : {}),
         } : { ...providerEntry, mcpGeneration: null, providerObserved: true }), workbenchTitle);

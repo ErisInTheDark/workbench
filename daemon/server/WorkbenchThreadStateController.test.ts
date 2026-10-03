@@ -3433,6 +3433,30 @@ test("restarted preview refreshes linked profiles, retains deleted snapshots and
   assert.deepEqual((await restarted.prepareComposerProfileTarget(childSlot)).selection, { kind: "custom", settings: selection.settings });
 });
 
+test("adopting an idle settled top-level row as a subagent starts the child unsettled", async (context) => {
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "subagent-adoption", threadStateStore: new MemoryThreadStatePersistence(),
+    getProjectCatalog: projectCatalog, reconcileProject: async () => [], now: () => 1234,
+  });
+  context.after(() => controller.dispose());
+  const identity = { harness: "codex" as const, threadId: fixtureThreadIds["child"] };
+  await controller.ensureProviderEntry(fixtureProjectIds["project"], {
+    activityAt: 1, entryKind: "thread", identity,
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
+    metadata: { archived: false, pinned: false, snoozed: false }, title: "Child",
+  });
+  const adopted = await controller.ensureProviderEntry(fixtureProjectIds["project"], {
+    activityAt: 1, title: "Child", identity,
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    entryKind: "subagent", createdAt: 1, cwd: "C:/project",
+    directSubagentIndex: 0, name: "child", parentThreadId: fixtureThreadIds["existing"], profileId: "named",
+    profileName: "Named", pinned: false, projectId: fixtureProjectIds["project"], updatedAt: 1,
+  });
+  assert.equal(adopted?.entryKind, "subagent");
+  assert.equal(adopted?.lifecycle.settled, false);
+  assert.equal(adopted?.settledAt, null);
+});
+
 test("profile admission publishes only accepted candidates and orders later edits without blocking lifecycle writes", async (context) => {
   const persistence = new MemoryThreadStatePersistence();
   const usage: Array<{ id: string; at: number }> = [];

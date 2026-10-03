@@ -4279,6 +4279,50 @@ test("managed admission steers a provider-confirmed active turn without changing
   }
 });
 
+test("agent output for an active subagent turn carries the profile model in its collaboration mode", async (context) => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-active-subagent-output-");
+  const upstreamRequests: JsonRpcRequest[] = [];
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  const activeTurn = { ...bridgeThread().turns[0]!, items: [], itemsView: "notLoaded" as const };
+  const appServer = {
+    send(message: JsonRpcRequest) {
+      upstreamRequests.push(message);
+      const result = message.method === "thread/read" ? { thread: { ...bridgeThread(), turns: [] } }
+        : message.method === "turn/start" ? { turn: activeTurn } : null;
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage(result
+          ? { id: message.id ?? null, result }
+          : { error: { code: -32000, message: `unexpected ${message.method}` }, id: message.id ?? null });
+      });
+    },
+  } as unknown as CodexAppServer;
+  bridge = new CodexStdioBridge({
+    appServer, handleWorkbenchRequest: rejectWorkbenchRequest, onNotification() {},
+    instructions: new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:1", temporary.path, readNoLocalCapabilities),
+    prepareThreadConfiguration: async (_thread, requests) => ({
+      ...requests,
+      startRequest: requests.startRequest && {
+        ...requests.startRequest,
+        params: { ...requests.startRequest.params as object, collaborationMode: { mode: "plan", settings: { developer_instructions: "", model: "profile-model" } } },
+      },
+    }),
+    resolveProjectFromCwd: async () => null,
+  });
+  context.after(async () => { await bridge.waitForIdle(); await bridge.disposeImmediately(); await temporary.dispose(); });
+  const response = await bridge.handleServerRequest({
+    id: 1, method: "turn/start",
+    params: {
+      input: [], threadId: "thread",
+      toolOutput: { name: "agent_message", namespace: "workbench", output: "parent information" },
+      collaborationMode: { mode: "plan", settings: { developer_instructions: "" } },
+    },
+  });
+  assert.equal(response.error, undefined);
+  const start = upstreamRequests.find((request) => request.method === "turn/start");
+  const params = start?.params as { collaborationMode?: { settings?: { model?: string } } } | undefined;
+  assert.equal(params?.collaborationMode?.settings?.model, "profile-model");
+});
+
 test("managed continuation starts the unchanged input when its active turn ends before steer", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-managed-steer-race-");
   const root = temporary.path;
