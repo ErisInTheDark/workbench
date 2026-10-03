@@ -1,5 +1,5 @@
 /*
- * Exports: none. Tests protect global thread-message admission, relationship semantics and project fencing.
+ * Exports: none. Tests protect global thread-message admission, relationship semantics, caller project fencing and cross-project lock fencing.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -29,6 +29,7 @@ function thread(id: string, cwd: string, active = false, name: string | null = n
 
 function fixture({
   activeChild = false,
+  childCwd = "C:/repo",
   childPinned = false,
   deliveryGate,
   onDelivery,
@@ -36,6 +37,7 @@ function fixture({
   targetCwd = "C:/repo",
 }: {
   activeChild?: boolean;
+  childCwd?: string;
   childPinned?: boolean;
   deliveryGate?: Promise<void>;
   onDelivery?: () => void;
@@ -46,12 +48,13 @@ function fixture({
   const threads = new Map([
     ["reviewer", thread("reviewer", "C:/repo", false, "review cancellation")],
     ["target", thread("target", targetCwd)],
-    ["child", thread("child", "C:/repo", activeChild, "child review")],
+    ["child", thread("child", childCwd, activeChild, "child review")],
   ]);
+  const projectFor = (cwd: string) => identitySchemas.ProjectIdSchema.parse(cwd === "C:/other" ? "other" : "project");
   const relationship: WorkbenchSubagentRelationship = {
-    createdAt: 1, cwd: "C:/repo", directSubagentIndex: 0, harness, name: "luna",
+    createdAt: 1, cwd: childCwd, directSubagentIndex: 0, harness, name: "luna",
     parentThreadId: identitySchemas.WorkbenchThreadIdSchema.parse("reviewer"),
-    profileId: "profile", profileName: "reviewer", projectId,
+    profileId: "profile", profileName: "reviewer", projectId: projectFor(childCwd),
     threadId: identitySchemas.WorkbenchThreadIdSchema.parse("child"), title: "child", updatedAt: 1,
   };
   const unused = async () => { throw new Error("unexpected provider operation"); };
@@ -97,30 +100,32 @@ function fixture({
         return threads.has(canonical) ? identity(canonical) : null;
       },
     },
-    listSubagents: async () => ({ subagents: [relationship] }),
+    listSubagents: async selected => ({ subagents: selected === relationship.projectId ? [relationship] : [] }),
     provider: selected => { assert.equal(selected, harness); return provider; },
     resolveProjectFromCwd: async cwd => ({
       cwd: cwd ?? "",
       project: {
-        id: cwd === "C:/other" ? identitySchemas.ProjectIdSchema.parse("other") : projectId,
+        id: projectFor(cwd ?? ""),
         kind: "git", root: cwd ?? "", rootPath: cwd ?? "", roots: [],
       },
       root: { id: "root", name: "repo", root: cwd ?? "", rootPath: cwd ?? "" },
     }),
     threadState: {
-      getEntry: async (_projectId, _harness, threadId) => threadId === relationship.threadId ? {
-        activityAt: 2, createdAt: 1, cwd: "C:/repo", directSubagentIndex: 0, entryKind: "subagent",
+      getEntry: async (selected, _harness, threadId) => (
+        selected === relationship.projectId && threadId === relationship.threadId
+      ) ? {
+        activityAt: 2, createdAt: 1, cwd: childCwd, directSubagentIndex: 0, entryKind: "subagent",
         identity: { harness, threadId: relationship.threadId },
         lifecycle: { agent: { agentStatus: "working" }, kind: "working", reason: "acceptedIntent", settled: false },
         name: relationship.name, parentThreadId: relationship.parentThreadId, pinned: childPinned,
-        profileId: relationship.profileId, profileName: relationship.profileName, projectId, title: relationship.title, updatedAt: 2,
+        profileId: relationship.profileId, profileName: relationship.profileName, projectId: relationship.projectId, title: relationship.title, updatedAt: 2,
       } : null,
     },
   });
   return { calls, controller };
 }
 
-test("messages an arbitrary same-project thread with caller title attribution", async () => {
+test("messages an arbitrary thread with caller title attribution", async () => {
   const { calls, controller } = fixture();
   await controller.send({
     callerThreadId: "reviewer", cwd: "C:/repo", message: "Please fix the cancellation race.", threadId: "target",
@@ -213,11 +218,34 @@ test("failed direct-child delivery leaves its questionnaire pending", async () =
   await controller.dispose();
 });
 
-test("thread messages reject targets outside the caller cwd project", async () => {
+test("thread messages deliver to targets in another project", async () => {
+  const { calls, controller } = fixture({ targetCwd: "C:/other" });
+  await controller.send({
+    callerThreadId: "reviewer", cwd: "C:/repo", message: "Cross the wall.", threadId: "target",
+  });
+  const delivery = calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
+  assert.equal(delivery.threadId, "target");
+  assert.equal(delivery.cwd, "C:/other");
+  await controller.dispose();
+});
+
+test("locked subagents in another project stay fenced", async () => {
+  const { calls, controller } = fixture({ childCwd: "C:/other", childPinned: true });
+  await assert.rejects(
+    controller.send({
+      callerThreadId: "target", cwd: "C:/repo", message: "Continue.", threadId: "child",
+    }),
+    /locked/u,
+  );
+  assert.equal(calls.length, 0);
+  await controller.dispose();
+});
+
+test("callers outside the request cwd project are rejected", async () => {
   const { controller } = fixture({ targetCwd: "C:/other" });
   await assert.rejects(
     controller.send({
-      callerThreadId: "reviewer", cwd: "C:/repo", message: "Cross the wall.", threadId: "target",
+      callerThreadId: "target", cwd: "C:/repo", message: "Spoofed caller.", threadId: "reviewer",
     }),
     /does not belong/u,
   );

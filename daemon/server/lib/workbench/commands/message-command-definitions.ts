@@ -31,7 +31,7 @@ function messageCommand(legacy: boolean) {
   return defineWorkbenchAgentCommand({
     description: legacy
       ? "Legacy compatibility for messaging a direct child or parent."
-      : "Message one same-project thread, steering an active turn or starting an idle one.",
+      : "Message one Workbench thread, steering an active turn or starting an idle one.",
     helpGroups: legacy ? [] : ["message"],
     hideFromRootHelp: legacy || undefined,
     words: legacy ? ["subagent", "message"] : ["message"],

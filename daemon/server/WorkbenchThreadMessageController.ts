@@ -79,23 +79,24 @@ export default class WorkbenchThreadMessageController {
     return operation.finally(() => this.requests.delete(operation));
   }
 
+  /** Resolves any admitted thread; `requiredProject` fences it to one cwd project. */
   private async resolveThread(
     threadId: string,
-    project: AgentEndpointProjectResolution["project"],
     label: string,
+    requiredProject?: AgentEndpointProjectResolution["project"],
   ) {
     const identity = await this.options.identities.resolve({
-      projectId: project.id,
+      ...(requiredProject ? { projectId: requiredProject.id } : {}),
       threadId: ThreadReferenceSchema.parse(threadId),
     });
-    if (!identity) throw new Error(`${label} has no admitted identity in this project.`);
+    if (!identity) throw new Error(`${label} has no admitted identity${requiredProject ? " in this project" : ""}.`);
     const nativeHarness = identity.bindings[0]?.harness;
     if (!nativeHarness) throw new Error(`${label} has no native execution.`);
     const harness = WorkbenchHarnessSchema.parse(nativeHarness);
     const thread = await this.options.provider(harness).threads.read(identity.threadId);
-    const threadProject = await this.options.resolveProjectFromCwd(thread.cwd, { endpointName: label });
-    if (threadProject.project.id !== project.id) throw new Error(`${label} does not belong to this cwd project.`);
-    return { harness, thread, threadId: identity.threadId };
+    const { project } = await this.options.resolveProjectFromCwd(thread.cwd, { endpointName: label });
+    if (requiredProject && project.id !== requiredProject.id) throw new Error(`${label} does not belong to this cwd project.`);
+    return { harness, projectId: project.id, thread, threadId: identity.threadId };
   }
 
   private async isUnsettled(record: WorkbenchSubagentRelationship) {
@@ -106,7 +107,6 @@ export default class WorkbenchThreadMessageController {
   private async resolveTarget(
     request: WorkbenchThreadMessageRequest,
     callerThreadId: WorkbenchThreadId,
-    project: AgentEndpointProjectResolution["project"],
     relationships: readonly WorkbenchSubagentRelationship[],
   ) {
     if (request.parent) {
@@ -114,7 +114,7 @@ export default class WorkbenchThreadMessageController {
       if (!relationship) {
         throw new Error("The current thread is not a Workbench subagent with a direct parent in this project.");
       }
-      return await this.resolveThread(relationship.parentThreadId, project, "Workbench message parent");
+      return await this.resolveThread(relationship.parentThreadId, "Workbench message parent");
     }
     if (request.name) {
       const matches = relationships.filter(record => (
@@ -129,9 +129,9 @@ export default class WorkbenchThreadMessageController {
         throw new Error(unsettled.length ? "That subagent name is ambiguous." : "That unsettled subagent name was not found.");
       }
       const relationship = unsettled[0]!;
-      return await this.resolveThread(relationship.threadId, project, "Workbench message target");
+      return await this.resolveThread(relationship.threadId, "Workbench message target");
     }
-    return await this.resolveThread(request.threadId!, project, "Workbench message target");
+    return await this.resolveThread(request.threadId!, "Workbench message target");
   }
 
   private async assertUnlocked(
@@ -147,14 +147,16 @@ export default class WorkbenchThreadMessageController {
 
   private async sendOwned(request: WorkbenchThreadMessageRequest) {
     const requestedProject = await this.options.resolveProjectFromCwd(request.cwd, { endpointName: "Workbench message" });
-    const caller = await this.resolveThread(request.callerThreadId, requestedProject.project, "Workbench message caller");
-    const relationshipList = await this.options.listSubagents(requestedProject.project.id);
-    const relationships = relationshipList.subagents;
-    const target = await this.resolveTarget(request, caller.threadId, requestedProject.project, relationships);
+    const caller = await this.resolveThread(request.callerThreadId, "Workbench message caller", requestedProject.project);
+    const relationships = (await this.options.listSubagents(caller.projectId)).subagents;
+    const target = await this.resolveTarget(request, caller.threadId, relationships);
     if (target.threadId === caller.threadId) throw new Error("A thread cannot message itself.");
 
-    const targetRelationship = relationships.find(record => record.threadId === target.threadId) ?? null;
-    await this.assertUnlocked(requestedProject.project.id, targetRelationship);
+    const targetRelationships = target.projectId === caller.projectId
+      ? relationships
+      : (await this.options.listSubagents(target.projectId)).subagents;
+    const targetRelationship = targetRelationships.find(record => record.threadId === target.threadId) ?? null;
+    await this.assertUnlocked(target.projectId, targetRelationship);
 
     const directChild = targetRelationship?.parentThreadId === caller.threadId ? targetRelationship : null;
     const callerRelationship = relationships.find(record => record.threadId === caller.threadId) ?? null;
