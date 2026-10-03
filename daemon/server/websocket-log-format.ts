@@ -1,40 +1,26 @@
 /*
  * Keywords: websocket, diagnostics, routing, bounded logs, payload privacy.
- * Exports:
- * - dimWebSocketDetail: style secondary transport timing.
- * - formatWebSocketBytes: use consistent byte units for requests and event traffic.
+ * Exports (daemon-specific; generic traffic formatting lives in shared/process/websocket-traffic-format):
  * - webSocketMethodLabel: identify a provider or Workbench method consistently.
  * - describeWebSocketEvent: name the event inside an envelope by kind and the thread or project it concerns.
- * - formatWebSocketEventSummary: render bounded event traffic without payloads or request timings.
  * - formatWebSocketSendFailure: report bounded send context without serialising payload bodies.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
+import { boundWebSocketLogText as bounded } from "workbench-shared/process/websocket-traffic-format";
 
-const ANSI_DIM = "\u001b[2m";
 const ANSI_RESET = "\u001b[0m";
 const SHORT_ID_LENGTH = 8;
 
 const record = (value: unknown): Record<string, unknown> | null => (
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
 );
-const bounded = (value: string, limit = 160) => value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "").slice(0, limit);
 const shortId = (value: unknown) => typeof value === "string" && value.trim()
   ? bounded(value.trim(), SHORT_ID_LENGTH) : null;
-
-export function dimWebSocketDetail(value: string) {
-  return `${ANSI_DIM}${value}${ANSI_RESET}`;
-}
 
 export function webSocketMethodLabel(harness: WorkbenchHarness | "unknown" | "workbench", method: string) {
   if (harness !== "workbench") return `${harness}:${method}`;
   return `wb:${method.startsWith("workbench/") ? method.slice("workbench/".length) : method}`;
-}
-
-export function formatWebSocketBytes(value: number) {
-  if (value < 1_024) return `${Math.max(0, Math.round(value))}B`;
-  if (value < 1_024 * 1_024) return `${(value / 1_024).toFixed(1)}KB`;
-  return `${(value / 1_024 / 1_024).toFixed(1)}MB`;
 }
 
 /**
@@ -56,10 +42,6 @@ export function describeWebSocketEvent(params: unknown): string | null {
     project ? `project=${project}` : null,
   ].filter((part): part is string => part !== null);
   return parts.length ? parts.join(" ") : null;
-}
-
-export function formatWebSocketEventSummary(direction: "in" | "out", label: string, count: number, bytes: number) {
-  return ` WS ${direction} ${bounded(label)} ${dimWebSocketDetail(`(count: ${count}, ${direction}: ${formatWebSocketBytes(bytes)})`)}`;
 }
 
 export function formatWebSocketSendFailure(message: unknown, error: unknown) {

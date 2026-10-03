@@ -5,7 +5,8 @@
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { WORKBENCH_EVENT_STREAM_ACK_METHOD } from "workbench-shared/workbench/websocket-stream";
-import { formatWebSocketEventSummary, webSocketMethodLabel } from "./websocket-log-format";
+import { webSocketMethodLabel } from "./websocket-log-format";
+import { formatWebSocketEventSummary } from "workbench-shared/process/websocket-traffic-format";
 
 type Timer = ReturnType<typeof setTimeout>;
 const DEFAULT_WINDOW_MS = 2_000;

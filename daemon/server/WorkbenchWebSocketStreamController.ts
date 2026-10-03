@@ -14,7 +14,7 @@ import {
   type WorkbenchEventStreamHealth,
 } from "workbench-shared/workbench/websocket-stream";
 import type { BridgeClient } from "./bridge-types";
-import { dimWebSocketDetail } from "./websocket-log-format";
+import { dimWebSocketDetail } from "workbench-shared/process/websocket-traffic-format";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
 const BEHIND_THRESHOLD_MS = 2_000;

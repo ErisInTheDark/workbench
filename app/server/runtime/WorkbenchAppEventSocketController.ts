@@ -10,6 +10,7 @@ import { WORKBENCH_APP_NETWORK_SOCKET_PATH } from "workbench-shared/http/workben
 import { WorkbenchAppRpcRequestSchema, WorkbenchAppRuntimeResponseSchema } from "workbench-shared/http/workbench-app-rpc";
 import type { WorkspaceObservation, WorkspaceObservationDelta } from "workbench-shared/workbench/workspace/workspace-observation";
 import { describeObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
+import { formatWebSocketBytes, formatWebSocketEventSummary } from "workbench-shared/process/websocket-traffic-format";
 import WorkbenchWorkspaceRequestController from "../workspace/WorkbenchWorkspaceRequestController";
 import type WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
@@ -157,7 +158,7 @@ export default class WorkbenchAppEventSocketController {
       });
       const label = "kind" in frame ? describeFrame(frame) : `rpc ${method}`;
       if ((kind === "workspace" || kind === "workspaceDelta") && payloadBytes > WORKSPACE_PUSH_WARNING_BYTES) {
-        this.options.logger.error("app", `WS oversized workspace push ${payloadBytes}B: ${label}`);
+        this.options.logger.error("app", `WS oversized workspace push ${formatWebSocketBytes(payloadBytes)}: ${label}`);
       }
       this.recordTraffic("out", label, payloadBytes);
     };
@@ -356,7 +357,7 @@ export default class WorkbenchAppEventSocketController {
       const separator = key.indexOf(":");
       const direction = key.slice(0, separator);
       const label = key.slice(separator + 1);
-      this.options.logger.line("app", ` WS ${direction} app:${label} (count: ${count}, ${direction}: ${bytes}B)`);
+      this.options.logger.line("app", formatWebSocketEventSummary(direction === "in" ? "in" : "out", `app:${label}`, count, bytes));
     }
     this.traffic.clear();
   }

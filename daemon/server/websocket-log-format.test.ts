@@ -4,7 +4,8 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { describeWebSocketEvent, formatWebSocketEventSummary, formatWebSocketSendFailure } from "./websocket-log-format";
+import { describeWebSocketEvent, formatWebSocketSendFailure } from "./websocket-log-format";
+import { formatWebSocketEventSummary } from "workbench-shared/process/websocket-traffic-format";
 
 test("envelopes are described by their inner event and subject without payload values", () => {
   const hidden = "private transcript text";

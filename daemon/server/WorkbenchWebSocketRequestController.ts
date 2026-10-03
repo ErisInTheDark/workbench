@@ -53,9 +53,9 @@ import WorkbenchWebSocketStreamController, {
 } from "./WorkbenchWebSocketStreamController";
 import WorkbenchWebSocketEventLog from "./WorkbenchWebSocketEventLog";
 import {
-  describeWebSocketEvent, dimWebSocketDetail, formatWebSocketBytes as formatBytes, formatWebSocketSendFailure,
-  webSocketMethodLabel as methodLabel,
+  describeWebSocketEvent, formatWebSocketSendFailure, webSocketMethodLabel as methodLabel,
 } from "./websocket-log-format";
+import { dimWebSocketDetail, formatWebSocketBytes as formatBytes } from "workbench-shared/process/websocket-traffic-format";
 import { transcriptSnapshotForProtocol } from "./database/transcript/transcript-wire-compatibility";
 import WorkbenchWorkspaceObservationController, { type DaemonObservationChange } from "./WorkbenchWorkspaceObservationController";
 import {
