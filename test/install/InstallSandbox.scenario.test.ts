@@ -38,6 +38,7 @@ test("a fresh sandboxed install clones the working tree, builds it and hands lat
     prompt: {
       choose: async (question: string) => { prompts.push(question); return "Let's go!"; },
       location: async (_label: string, initial: string) => initial,
+      withHeader: <T>(task: () => Promise<T>) => task(),
     },
   });
 

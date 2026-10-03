@@ -19,14 +19,20 @@ async function fixture(context, options = {}) {
   const calls = [];
   const prompts = [];
   const output = [];
+  const header = { pinned: false };
   const prompt = {
     choose: async question => { prompts.push(question); return "Let's go!"; },
     location: async () => { prompts.push("location"); return checkout; },
+    withHeader: async task => {
+      header.pinned = true;
+      try { return await task(); }
+      finally { header.pinned = false; }
+    },
     ...options.prompt,
   };
   const commands = {
     async run(command, args, config) {
-      calls.push({ command, args, config });
+      calls.push({ command, args, config, pinned: header.pinned });
       if (command === "git" && args[0] === "clone") {
         await fs.mkdir(path.join(checkout, "package"), { recursive: true });
         await fs.mkdir(path.join(checkout, ".git"));
@@ -108,6 +114,9 @@ test("installation records the selected checkout and never clones it again", asy
   assert.ok(runtimeInstall >= 0 && setup > runtimeInstall);
   // Setup prompts need the caller's terminal; piped stdio makes them refuse.
   assert.equal(f.calls.find(call => call.args.includes("--connect"))?.config?.interactive, true);
+  // The header owns the terminal during the build, then must release it before setup prompts.
+  assert.ok(f.calls[setup].pinned && f.calls.find(call => call.args[0] === "clone")?.pinned);
+  assert.equal(f.calls.find(call => call.args.includes("--connect"))?.pinned, false);
   f.calls.length = 0;
   await f.bootstrap.run([]);
   assert.equal(f.calls.filter(call => call.command === "git").length, 0);
@@ -195,7 +204,7 @@ test("an abruptly exited installer cannot leave a permanent installation lock", 
       home: ${JSON.stringify(f.home)},
       packageRoot: ${JSON.stringify(path.join(f.home, "cache", "package"))},
       environment: {},
-      prompt: { choose: async () => "Let's go!", location: async () => root },
+      prompt: { choose: async () => "Let's go!", location: async () => root, withHeader: task => task() },
       commands: { run: async (command, args) => {
         if (command === "git" && args[0] === "clone") {
           await fs.mkdir(path.join(root, "package"), { recursive: true });

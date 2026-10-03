@@ -66,7 +66,49 @@ test("the cube animates in place and stops whenever the prompt settles", async (
   }
 });
 
-test("a terminal too short for the cube shows the wordmark without animating", async () => {
+test("a settled prompt stops reading so later child prompts receive the keys", async () => {
+  for (const settle of ["accept", "cancel"] as const) {
+    // Like a fresh process.stdin: neither flowing nor paused until someone reads it.
+    const io = terminal();
+    assert.equal(io.input.readableFlowing, null);
+    const result = new WorkbenchInstallPrompt(io).choose("Install?", ["Let's go!", "Cancel"]);
+    if (settle === "accept") {
+      io.input.emit("keypress", "", { name: "return" });
+      await result;
+    } else {
+      io.input.emit("keypress", "\u0003", { name: "c", ctrl: true });
+      await assert.rejects(result, { name: "AbortError" });
+    }
+    assert.notEqual(io.input.readableFlowing, true);
+  }
+});
+
+test("a pinned header always releases its scroll region, animation and interrupt handler", async () => {
+  const interruptListeners = process.listenerCount("SIGINT");
+  for (const outcome of ["resolve", "reject"] as const) {
+    const io = terminal(40);
+    const prompt = new WorkbenchInstallPrompt(io);
+    let during = "";
+    const result = prompt.withHeader(async () => {
+      during = io.frames.join("");
+      io.frames.length = 0;
+      if (outcome === "reject") throw new Error("build failed");
+      return "done";
+    });
+    if (outcome === "resolve") assert.equal(await result, "done");
+    else await assert.rejects(result, /build failed/);
+    assert.match(during, /\u001b\[\d+;40r/u, "output scrolls only below the header");
+    assert.ok(during.includes("w o r k b e n c h"));
+    assert.ok(io.frames.join("").includes("\u001b[r"), "the full-screen scroll region is restored");
+    assert.equal(io.animation.stopped, 1);
+    assert.equal(process.listenerCount("SIGINT"), interruptListeners);
+    io.frames.length = 0;
+    io.animation.ticks[0]!();
+    assert.deepEqual(io.frames, [], "a late tick never draws over later output");
+  }
+});
+
+test("a terminal too short for the cube shows the wordmark without animating or pinning", async () => {
   const io = terminal(12);
   const prompt = new WorkbenchInstallPrompt(io);
   const result = prompt.choose("Install?", ["Let's go!", "Cancel"]);
@@ -74,6 +116,10 @@ test("a terminal too short for the cube shows the wordmark without animating", a
   assert.ok(io.frames.join("").includes("w o r k b e n c h"));
   io.input.emit("keypress", "", { name: "return" });
   await result;
+  io.frames.length = 0;
+  assert.equal(await prompt.withHeader(async () => "done"), "done");
+  assert.deepEqual(io.frames, []);
+  assert.equal(io.animation.ticks.length, 0);
 });
 
 test("the automatic suffix never enters the editable input", async () => {

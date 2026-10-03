@@ -149,7 +149,6 @@ export default class WorkbenchBootstrap {
       ? path.join(this.environment.LOCALAPPDATA || path.join(this.home, "AppData", "Local"), "Programs", "inthedark", "wb")
       : path.join(this.home, ".local", "lib", "inthedark", "wb"));
     const root = path.resolve(await this.prompt.location("Install location", defaultRoot));
-    this.write(`Installing Workbench at ${root}\n`);
     await fs.mkdir(path.dirname(this.registry), { recursive: true });
     const lockPath = `${this.registry}.lock.sqlite3`;
     const lock = new DatabaseSync(lockPath);
@@ -173,22 +172,25 @@ export default class WorkbenchBootstrap {
       await this.requireEmptyDestination(root);
       let record = { version: 1, root, phase: "cloning" };
       await this.writeInstallation(record);
-      try {
-        // Install sandboxes substitute a local snapshot; ordinary installs clone the public repository.
-        const repository = this.environment.WORKBENCH_INSTALL_REPOSITORY || "https://github.com/ErisInTheDark/workbench.git";
-        await this.commands.run("git", ["clone", "--progress", "--branch", "main", "--single-branch", repository, root]);
-        if (!await this.checkoutExists(root)) throw new Error("Clone did not produce a Workbench checkout.");
-        record = { ...record, phase: "setup" };
-        await this.writeInstallation(record);
-        await this.commands.run("vp", ["env", "install"], { cwd: root });
-        await this.commands.run("vp", ["node", path.join(root, "package", "setup.mjs"), "--prepare"], { cwd: root });
-      } catch (error) {
-        try { await this.discardIncomplete(record); }
-        catch (cleanupError) {
-          throw new Error(`${error.message} Incomplete checkout was preserved at ${root}: ${cleanupError.message}`, { cause: error });
+      await this.prompt.withHeader(async () => {
+        this.write(`Installing Workbench at ${root}\n`);
+        try {
+          // Install sandboxes substitute a local snapshot; ordinary installs clone the public repository.
+          const repository = this.environment.WORKBENCH_INSTALL_REPOSITORY || "https://github.com/ErisInTheDark/workbench.git";
+          await this.commands.run("git", ["clone", "--progress", "--branch", "main", "--single-branch", repository, root]);
+          if (!await this.checkoutExists(root)) throw new Error("Clone did not produce a Workbench checkout.");
+          record = { ...record, phase: "setup" };
+          await this.writeInstallation(record);
+          await this.commands.run("vp", ["env", "install"], { cwd: root });
+          await this.commands.run("vp", ["node", path.join(root, "package", "setup.mjs"), "--prepare"], { cwd: root });
+        } catch (error) {
+          try { await this.discardIncomplete(record); }
+          catch (cleanupError) {
+            throw new Error(`${error.message} Incomplete checkout was preserved at ${root}: ${cleanupError.message}`, { cause: error });
+          }
+          throw error;
         }
-        throw error;
-      }
+      });
       record = { ...record, phase: "ready" };
       await this.writeInstallation(record);
     } finally {

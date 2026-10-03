@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchInstallPrompt (default): owns dependency-free installer terminal interaction.
+ * - WorkbenchInstallPrompt (default): owns dependency-free installer terminal interaction and the pinned cube header.
  */
 import path from "node:path";
 import os from "node:os";
@@ -9,6 +9,8 @@ import { INSTALLER_CUBE_ROWS, installerCubeWidth, renderInstallerCube } from "./
 
 const WORDMARK = "w o r k b e n c h";
 const FRAME_INTERVAL_MS = 80;
+// Install log rows kept below a pinned header; shorter terminals skip pinning.
+const LOG_ROWS = 8;
 
 function scheduleFrames(tick) {
   const timer = setInterval(tick, FRAME_INTERVAL_MS);
@@ -123,6 +125,55 @@ export default class WorkbenchInstallPrompt {
     return cube >= INSTALLER_CUBE_ROWS.min ? cube : 0;
   }
 
+  /** Animated cube frames, an in-place redraw and the centred wordmark for a header of `cubeRows` (0 for wordmark only). */
+  header(cubeRows) {
+    const started = this.now();
+    const frame = () => renderInstallerCube((this.now() - started) / 1000, cubeRows).join("\r\n");
+    return {
+      frame,
+      // Save and restore the cursor around each frame so prompts and output below never move.
+      draw: () => this.output.write(`\u001b7\u001b[H${frame()}\u001b8`),
+      wordmark: cubeRows
+        ? WORDMARK.padStart(Math.floor((installerCubeWidth(cubeRows) + WORDMARK.length) / 2))
+        : WORDMARK,
+    };
+  }
+
+  /** Runs `task` with the animated header pinned above a scroll region holding its output. */
+  async withHeader(task) {
+    const cubeRows = this.output.isTTY && !this.active ? this.cubeRows("", LOG_ROWS) : 0;
+    if (!cubeRows) return await task();
+    const rows = this.output.rows || 24;
+    const top = cubeRows + 3;
+    const { frame, draw, wordmark } = this.header(cubeRows);
+    let pinned = true;
+    // Resetting the region homes the cursor; save/restore keeps it where the output left off.
+    const release = () => {
+      if (!pinned) return;
+      pinned = false;
+      this.output.write("\u001b7\u001b[r\u001b8");
+    };
+    // Default SIGINT exits without cleanup and would trap the shell inside the region.
+    const interrupt = () => {
+      release();
+      process.exit(130);
+    };
+    process.once("exit", release);
+    process.once("SIGINT", interrupt);
+    let stopAnimation = () => {};
+    try {
+      // Blank lines push earlier shell output into scrollback instead of erasing it.
+      this.output.write(`${"\r\n".repeat(rows)}\u001b[H${frame()}\r\n${wordmark}\r\n\u001b[${top};${rows}r\u001b[${top};1H`);
+      stopAnimation = this.schedule(() => { if (pinned) draw(); });
+      return await task();
+    } finally {
+      stopAnimation();
+      process.removeListener("exit", release);
+      process.removeListener("SIGINT", interrupt);
+      release();
+    }
+  }
+
   interact(render, handle, label = "", promptLines = 1) {
     if (!this.input.isTTY || !this.output.isTTY) {
       return Promise.reject(new Error("Workbench setup needs an interactive terminal; no changes were accepted."));
@@ -130,7 +181,9 @@ export default class WorkbenchInstallPrompt {
     if (this.active) return Promise.reject(new Error("Another setup prompt is active."));
     this.active = true;
     const wasRaw = this.input.isRaw;
-    const wasPaused = this.input.isPaused();
+    // A fresh stdin is neither flowing nor paused; leaving it flowing would let this
+    // process keep reading the console and steal keys from later child prompts.
+    const wasFlowing = this.input.readableFlowing === true;
     emitKeypressEvents(this.input);
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -152,7 +205,7 @@ export default class WorkbenchInstallPrompt {
         process.removeListener("exit", restoreScreen);
         try {
           this.input.setRawMode(Boolean(wasRaw));
-          if (wasPaused) this.input.pause();
+          if (!wasFlowing) this.input.pause();
         } catch (cleanupError) {
           error ??= cleanupError;
         }
@@ -185,18 +238,13 @@ export default class WorkbenchInstallPrompt {
         screenActive = true;
         process.once("exit", restoreScreen);
         const cubeRows = this.cubeRows(label, promptLines);
-        const started = this.now();
-        const frame = () => renderInstallerCube((this.now() - started) / 1000, cubeRows).join("\r\n");
-        const wordmark = cubeRows
-          ? WORDMARK.padStart(Math.floor((installerCubeWidth(cubeRows) + WORDMARK.length) / 2))
-          : WORDMARK;
+        const { frame, draw, wordmark } = this.header(cubeRows);
         this.output.write(`\u001b[?1049h\u001b[2J\u001b[H${cubeRows ? `${frame()}\r\n` : ""}${wordmark}\r\n\r\n${label ? `${label}\r\n` : ""}`);
         render();
         if (cubeRows) {
-          // Save and restore the cursor around each frame so prompt editing and redraws never move.
           stopAnimation = this.schedule(() => {
             if (settled) return;
-            try { this.output.write(`\u001b7\u001b[H${frame()}\u001b8`); }
+            try { draw(); }
             catch (error) { finish(error); }
           });
         }
