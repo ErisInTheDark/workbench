@@ -11,7 +11,7 @@ import { filterWorkbenchInstructionContent, formatWorkbenchInstructionFilterWarn
 import { resolveWorkbenchInstructionToolReference, type WorkbenchInstructionTool } from "./instruction-tool-reference";
 import type { InstructionSourceSpan } from "./instruction-file-generation";
 import { listWorkbenchInstructionMechanics } from "./workbench-instruction-mechanics";
-import { loadFreshWorkbenchPromptAssembly } from "./workbench-prompt-generation";
+import { loadWorkbenchPromptAssembly } from "./workbench-prompt-generation";
 import type { WorkbenchPromptContext } from "./workbench-prompt-types";
 import { isWorkbenchToolVisibleTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
 
@@ -53,7 +53,7 @@ export async function buildWorkbenchManagedThreadInstructions(
   readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>,
 ): Promise<WorkbenchManagedThreadInstructions> {
   const filter = await createManagedThreadFilter(context, readLocalCapabilities);
-  const instructions = await loadFreshWorkbenchPromptAssembly().buildWorkbenchPromptInstructions(context);
+  const instructions = await (await loadWorkbenchPromptAssembly()).buildWorkbenchPromptInstructions(context);
   return {
     baseInstructions: filter(instructions.baseInstructions, "baseInstructions", instructions.baseInstructionSources),
     developerInstructions: filter(instructions.developerInstructions, "developerInstructions"),
@@ -66,7 +66,7 @@ export async function buildWorkbenchManagedThreadActivatedSkills(
 ): Promise<string | null> {
   const filter = await createManagedThreadFilter(context, readLocalCapabilities);
   return filter(
-    await loadFreshWorkbenchPromptAssembly().buildWorkbenchActivatedSkillCatalog(context),
+    await (await loadWorkbenchPromptAssembly()).buildWorkbenchActivatedSkillCatalog(context),
     "input.wb:activated-skills",
   );
 }

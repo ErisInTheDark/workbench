@@ -1,21 +1,13 @@
 /*
  * Exports:
- * - loadFreshWorkbenchPromptAssembly: discard the cached assembly subtree and load one fresh instruction-source generation. Keywords: prompts, instructions, reload.
+ * - loadWorkbenchPromptAssembly: return the current instruction-assembly generation, loading a fresh one only after its source files change.
  */
+import { createSourceTrackedModule } from "workbench-shared/reload/require-cache-generations";
 
-function collectCacheSubtree(moduleId: string, visited = new Set<string>()) {
-  if (visited.has(moduleId)) return visited;
-  const cachedModule = require.cache[moduleId];
-  if (!cachedModule) return visited;
-  visited.add(moduleId);
-  for (const child of cachedModule.children) {
-    if (child?.id && !/[\\/]node_modules[\\/]/u.test(child.id)) collectCacheSubtree(child.id, visited);
-  }
-  return visited;
-}
+const assembly = createSourceTrackedModule<typeof import("./workbench-prompt-assembly")>(
+  require, require.resolve("./workbench-prompt-assembly"),
+);
 
-export function loadFreshWorkbenchPromptAssembly() {
-  const resolvedPath = require.resolve("./workbench-prompt-assembly");
-  for (const moduleId of collectCacheSubtree(resolvedPath)) delete require.cache[moduleId];
-  return require("./workbench-prompt-assembly") as typeof import("./workbench-prompt-assembly");
+export function loadWorkbenchPromptAssembly() {
+  return assembly.load();
 }

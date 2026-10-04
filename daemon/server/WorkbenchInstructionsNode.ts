@@ -21,7 +21,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       registrations: {},
       start: async () => {
         await ensureWorkbenchInstructionSourceFiles();
-        await tombstones.consume(readWorkbenchInstructionTombstones());
+        await tombstones.consume(await readWorkbenchInstructionTombstones());
       },
     };
   },

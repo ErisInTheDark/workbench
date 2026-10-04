@@ -4,11 +4,10 @@
  * - WorkbenchInstructionTombstone: one empty repository marker targeting a retired Workbench Library file. Keywords: instructions, tombstone, retirement.
  * - readWorkbenchInstructionSources: discover and read the complete repository Markdown mirror once. Keywords: instructions, markdown, discovery.
  * - readWorkbenchInstructionTombstones: discover and validate retired instruction markers. Keywords: instructions, tombstone, discovery.
- * - ensureWorkbenchInstructionSourceFiles: refresh generated library files while preserving the user-owned default agent and overrides. Keywords: instructions, emission, freshness.
+ * - ensureWorkbenchInstructionSourceFiles: refresh generated library files on every call (overlapping calls share one pass) while preserving the user-owned default agent and overrides. Keywords: instructions, emission, freshness.
  */
 
 import fs from "node:fs/promises";
-import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { observeReloadInstructionSource } from "../reload-source-observer";
@@ -45,47 +44,46 @@ function normalizeContent(value: string) {
   return `${value.replace(/\r\n?/gu, "\n").trim()}\n`;
 }
 
-function listInstructionPaths(rootPath: string, relativeDirectory = ""): string[] {
+async function listInstructionPaths(rootPath: string, relativeDirectory = ""): Promise<string[]> {
   const directoryPath = path.join(rootPath, relativeDirectory);
-  return readdirSync(directoryPath, { withFileTypes: true })
-    .sort((left, right) => compareText(left.name, right.name))
-    .flatMap((entry) => {
-      const relativePath = path.posix.join(relativeDirectory.replaceAll("\\", "/"), entry.name);
-      if (entry.isDirectory()) return listInstructionPaths(rootPath, relativePath);
-      if (!entry.isFile() || (!entry.name.endsWith(MARKDOWN_SUFFIX) && !entry.name.endsWith(TOMBSTONE_SUFFIX))) return [];
-      if (entry.name.endsWith(OVERRIDE_SUFFIX)) {
-        throw new Error(`Internal Workbench instruction sources cannot define user overrides: ${relativePath}`);
-      }
-      return [relativePath];
-    });
+  const entries = (await fs.readdir(directoryPath, { withFileTypes: true }))
+    .sort((left, right) => compareText(left.name, right.name));
+  const nested = await Promise.all(entries.map(async (entry) => {
+    const relativePath = path.posix.join(relativeDirectory.replaceAll("\\", "/"), entry.name);
+    if (entry.isDirectory()) return await listInstructionPaths(rootPath, relativePath);
+    if (!entry.isFile() || (!entry.name.endsWith(MARKDOWN_SUFFIX) && !entry.name.endsWith(TOMBSTONE_SUFFIX))) return [];
+    if (entry.name.endsWith(OVERRIDE_SUFFIX)) {
+      throw new Error(`Internal Workbench instruction sources cannot define user overrides: ${relativePath}`);
+    }
+    return [relativePath];
+  }));
+  return nested.flat();
 }
 
-export function readWorkbenchInstructionSources(rootPath = getInstructionSourceRoot()): WorkbenchInstructionSourceFile[] {
-  return listInstructionPaths(rootPath)
-    .filter((relativePath) => relativePath.endsWith(MARKDOWN_SUFFIX))
-    .map((relativePath) => {
-      const sourcePath = path.join(rootPath, relativePath);
-      const content = readFileSync(sourcePath, "utf8").replace(/\r\n?/gu, "\n").trim();
-      observeReloadInstructionSource(sourcePath);
-      return { content, relativePath };
-    });
+export async function readWorkbenchInstructionSources(rootPath = getInstructionSourceRoot()): Promise<WorkbenchInstructionSourceFile[]> {
+  const relativePaths = (await listInstructionPaths(rootPath)).filter((relativePath) => relativePath.endsWith(MARKDOWN_SUFFIX));
+  return await Promise.all(relativePaths.map(async (relativePath) => {
+    const sourcePath = path.join(rootPath, relativePath);
+    const content = (await fs.readFile(sourcePath, "utf8")).replace(/\r\n?/gu, "\n").trim();
+    observeReloadInstructionSource(sourcePath);
+    return { content, relativePath };
+  }));
 }
 
-export function readWorkbenchInstructionTombstones(rootPath = getInstructionSourceRoot()): WorkbenchInstructionTombstone[] {
-  return listInstructionPaths(rootPath)
-    .filter((relativePath) => relativePath.endsWith(TOMBSTONE_SUFFIX))
-    .map((markerRelativePath) => {
-      const sourcePath = path.join(rootPath, markerRelativePath);
-      if (readFileSync(sourcePath, "utf8").trim()) {
-        throw new Error(`Instruction tombstone must be empty: ${markerRelativePath}`);
-      }
-      observeReloadInstructionSource(sourcePath);
-      const targetRelativePath = markerRelativePath.slice(0, -".tombstone".length);
-      if (targetRelativePath === DEFAULT_AGENT_PATH || targetRelativePath.endsWith(OVERRIDE_SUFFIX)) {
-        throw new Error(`Instruction tombstone cannot target a user-owned file: ${targetRelativePath}`);
-      }
-      return { markerRelativePath, targetRelativePath };
-    });
+export async function readWorkbenchInstructionTombstones(rootPath = getInstructionSourceRoot()): Promise<WorkbenchInstructionTombstone[]> {
+  const markerPaths = (await listInstructionPaths(rootPath)).filter((relativePath) => relativePath.endsWith(TOMBSTONE_SUFFIX));
+  return await Promise.all(markerPaths.map(async (markerRelativePath) => {
+    const sourcePath = path.join(rootPath, markerRelativePath);
+    if ((await fs.readFile(sourcePath, "utf8")).trim()) {
+      throw new Error(`Instruction tombstone must be empty: ${markerRelativePath}`);
+    }
+    observeReloadInstructionSource(sourcePath);
+    const targetRelativePath = markerRelativePath.slice(0, -".tombstone".length);
+    if (targetRelativePath === DEFAULT_AGENT_PATH || targetRelativePath.endsWith(OVERRIDE_SUFFIX)) {
+      throw new Error(`Instruction tombstone cannot target a user-owned file: ${targetRelativePath}`);
+    }
+    return { markerRelativePath, targetRelativePath };
+  }));
 }
 
 async function readTextFile(filePath: string) {
@@ -120,7 +118,7 @@ async function writeFileIfMissing(relativePath: string, content: string) {
 
 async function refreshWorkbenchInstructionSourceFiles() {
   await fs.mkdir(workbenchLibraryRoot, { recursive: true });
-  const sources = readWorkbenchInstructionSources();
+  const sources = await readWorkbenchInstructionSources();
   await Promise.all(sources.map((source) => (
     source.relativePath === DEFAULT_AGENT_PATH
       ? writeFileIfMissing(source.relativePath, source.content)
@@ -128,12 +126,8 @@ async function refreshWorkbenchInstructionSourceFiles() {
   )));
 }
 
+/** Every call mirrors current sources (edits apply on the next prompt build); only overlapping calls share one pass. */
 export async function ensureWorkbenchInstructionSourceFiles() {
-  sourceRefresh ??= refreshWorkbenchInstructionSourceFiles();
-  try {
-    await sourceRefresh;
-  } catch (error) {
-    sourceRefresh = null;
-    throw error;
-  }
+  sourceRefresh ??= refreshWorkbenchInstructionSourceFiles().finally(() => { sourceRefresh = null; });
+  await sourceRefresh;
 }

@@ -20,11 +20,11 @@ test("instruction discovery separates empty tombstones from mirrored Markdown", 
     await writeFile(path.join(rootPath, "wb", "mechanics", "active.md"), "# active\n", "utf8");
     await writeFile(path.join(rootPath, "wb", "mechanics", "thread-state.md.tombstone"), "\n", "utf8");
 
-    assert.deepEqual(readWorkbenchInstructionSources(rootPath), [{
+    assert.deepEqual(await readWorkbenchInstructionSources(rootPath), [{
       content: "# active",
       relativePath: "wb/mechanics/active.md",
     }]);
-    assert.deepEqual(readWorkbenchInstructionTombstones(rootPath), [{
+    assert.deepEqual(await readWorkbenchInstructionTombstones(rootPath), [{
       markerRelativePath: "wb/mechanics/thread-state.md.tombstone",
       targetRelativePath: "wb/mechanics/thread-state.md",
     }]);
@@ -38,8 +38,8 @@ test("instruction discovery rejects tombstones containing instructions", async (
   const rootPath = temporary.path;
   try {
     await writeFile(path.join(rootPath, "retired.md.tombstone"), "not empty\n", "utf8");
-    assert.throws(
-      () => readWorkbenchInstructionTombstones(rootPath),
+    await assert.rejects(
+      readWorkbenchInstructionTombstones(rootPath),
       /Instruction tombstone must be empty.*retired\.md\.tombstone/u,
     );
   } finally {
@@ -53,8 +53,8 @@ test("instruction tombstones cannot target user-owned instruction files", async 
   try {
     await mkdir(path.join(rootPath, "agents"), { recursive: true });
     await writeFile(path.join(rootPath, "agents", "default.md.tombstone"), "", "utf8");
-    assert.throws(
-      () => readWorkbenchInstructionTombstones(rootPath),
+    await assert.rejects(
+      readWorkbenchInstructionTombstones(rootPath),
       /cannot target a user-owned file.*agents\/default\.md/u,
     );
   } finally {
