@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect file-open policy and concrete owner routing.
+ * No production exports. Protect file-open policy, concrete owner routing, and repo display identity.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -8,7 +8,27 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { createProjectRoute, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 
-import { resolveFileOpenDestination, useFileActions, type FileOpenAction } from "./use-file";
+import { FileActionContext, resolveFileOpenDestination, useFile, useFileActions, type FileOpenAction } from "./use-file";
+
+test("file pills derive repo identity from the absolute target without rewriting opens", () => {
+  const absolutePath = `/data/.cache/repos/mounts/github.com/openai/codex/${"a".repeat(40)}/src/file.ts`;
+  let displayPrefix = "";
+  const targets: Parameters<FileOpenAction>[0][] = [];
+  const action: FileOpenAction = async target => { targets.push(target); return true; };
+  function Harness() {
+    const file = useFile({
+      absolutePath, path: "file.ts", openPath: absolutePath,
+      columnNumber: null, lineNumber: null, displayOptions: {}, projectId: null, targetType: "file",
+    });
+    displayPrefix = file.display.rootPrefix;
+    file.open();
+    return null;
+  }
+  renderToStaticMarkup(createElement(FileActionContext.Provider, { value: action }, createElement(Harness)));
+  assert.equal(displayPrefix, "repo:codex:");
+  assert.equal(targets[0]?.absolutePath, absolutePath);
+  assert.equal(targets[0]?.path, absolutePath);
+});
 
 test("file-open policy preserves absolute and unsupported-file choices", () => {
   assert.equal(resolveFileOpenDestination({ path: "docs/a.md" }, "workbench"), "workbench");

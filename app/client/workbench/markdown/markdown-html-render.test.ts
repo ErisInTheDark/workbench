@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect literal ordered-list ordinals in rich-editor HTML. Keywords: markdown, ordered list, ordinal, HTML.
+ * No production exports. Protect ordered-list ordinals and repo file identity in rich-editor HTML.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -21,4 +21,12 @@ test("unordered-list items do not gain ordered values", () => {
   const html = markdownToHtml("- alpha\n- beta");
 
   assert.doesNotMatch(html, /<li\svalue=/u);
+});
+
+test("repo markdown links show repo identity while preserving their absolute open target", () => {
+  const path = `/data/.cache/repos/mounts/github.com/openai/codex/${"a".repeat(40)}/src/file.ts`;
+  const html = markdownToHtml(`[custom label](${path}:12)`);
+  assert.ok(html.includes("repo:codex:"));
+  assert.ok(html.includes("custom label"));
+  assert.ok(html.includes(`data-project-file-absolute-path="${path}"`));
 });

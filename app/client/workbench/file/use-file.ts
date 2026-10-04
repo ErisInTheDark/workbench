@@ -165,7 +165,7 @@ export function useFile({
 }) {
   const action = useContext(FileActionContext);
   const scope = useContext(FileScopeContext);
-  const display = getProjectFilePathDisplay(path, displayOptions);
+  const display = getProjectFilePathDisplay(path, { ...displayOptions, absolutePath });
   const isFileControl = targetType === "file" && Boolean(projectId?.trim() || absolutePath?.trim());
   const open = useCallback(() => {
     if (!action || !isFileControl) return;

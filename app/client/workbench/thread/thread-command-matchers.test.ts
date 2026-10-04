@@ -44,6 +44,35 @@ const { listWorkbenchAgentCommands } = require("../../../../daemon/server/lib/wo
 const { getWorkbenchAgentCommandToolName } = require("../../../../daemon/server/lib/workbench/commands/workbench-agent-command-definition.ts") as typeof import("../../../../daemon/server/lib/workbench/commands/workbench-agent-command-definition.ts");
 const PROJECT_ROOT = "C:/git/web/workbench";
 
+test("repo warming shares CLI and MCP presentation including refs and failure outcomes", () => {
+  for (const [operand, url, ref] of [
+    ["https://github.com/openai/codex.git", "https://github.com/openai/codex.git", undefined],
+    ["git@github.com:openai/codex.git@feature/one", "git@github.com:openai/codex.git", "feature/one"],
+    ["ssh://git@github.com/openai/codex.git@release", "ssh://git@github.com/openai/codex.git", "release"],
+  ] as const) {
+    const cli = getThreadCommandDisplay({
+      command: `wb git repo "${operand}" --kind branch`, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT,
+    });
+    const mcp = getWorkbenchMcpCommandDisplay({
+      server: "wbex", tool: "git_repo", argumentsValue: { url, ...(ref ? { ref } : {}), kind: "branch" },
+    });
+    assert.ok(mcp);
+    assert.ok(cli.claimedBy);
+    assert.deepEqual(cli.summaryParts, mcp.summaryParts);
+    assert.deepEqual(cli.ongoingSummaryParts, mcp.ongoingSummaryParts);
+    assert.ok(codeOperands(mcp.summaryParts).includes(url));
+    if (ref) assert.ok(codeOperands(mcp.summaryParts).includes(ref));
+    assert.deepEqual(getThreadCommandOutcomeDisplay(cli, "failed").summaryParts,
+      getThreadCommandOutcomeDisplay(mcp, "failed").summaryParts);
+  }
+  for (const command of [
+    "wb git repo --help", "wb git repo", "wb git repo https://host/team/repo@",
+    "wb git repo https://host/team/repo --kind invalid", "wb git repo https://host/team/repo extra",
+  ]) {
+    assert.equal(getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT }).claimedBy, null);
+  }
+});
+
 test("adoption commands retain the source selector in transcript intent", () => {
   assert.deepEqual(parseGitArcCommand("wb git arc adopt --name mira")?.source, { name: "mira" });
   assert.deepEqual(parseGitArcCommand("wb git arc adopt --thread child-id")?.source, { threadId: "child-id" });
@@ -151,6 +180,7 @@ function pathOperands(parts: readonly ThreadCommandDisplayPart[]) {
 
 function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
   switch (name) {
+    case "git_repo": return { url: "https://github.com/openai/codex.git" };
     case "skill": return { name: "react" };
     case "toc": return { file: "AGENTS.md" };
     case "rg": return { args: ["-n", "needle", "webapp"] };

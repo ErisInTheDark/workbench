@@ -4,7 +4,7 @@
  * - ProjectFilePathLocation: optional line and column metadata.
  * - ProjectFilePathDisplay: derived label, basename, title, and location suffix.
  * - ProjectFilePathDisambiguationIndex: shortest-path lookup index for file labels.
- * - ProjectFilePathDisplayOptions: label, target, disambiguation, and location inputs.
+ * - ProjectFilePathDisplayOptions: label, absolute target, disambiguation, and location inputs.
  * - projectFilePathPillClassName: shared rounded path pill classes.
  * - projectFilePathInteractiveClassName: clickable pill hover and focus classes.
  * - projectFilePathStaticClassName: border-only non-clickable pill classes.
@@ -79,6 +79,7 @@ export interface ProjectFilePathDisplay {
 }
 
 export interface ProjectFilePathDisplayOptions extends ProjectFilePathLocation {
+  absolutePath?: string | null;
   disambiguationIndex?: ProjectFilePathDisambiguationIndex | null;
   disambiguationKey?: string;
   disambiguationPaths?: readonly string[];
@@ -606,9 +607,23 @@ function getShortestDisambiguatedProjectFilePath(
   return label;
 }
 
+function parseRepoMountPath(path: string) {
+  if (!/^(?:[a-z]:\/|\/)/iu.test(path)) return null;
+  // Repo mounts pin commits, unlike ordinary folders merely named repos or mounts.
+  const match = /^(.*(?:^|\/)\.cache\/repos\/mounts\/([^/]+(?:\/[^/]+)+?)\/[0-9a-f]{40}(?:[0-9a-f]{24})?)(?:\/(.*))?$/iu.exec(path);
+  if (!match) return null;
+  const name = match[2].split("/").at(-1)!;
+  return {
+    mountPath: match[1],
+    name: name.replace(/~([0-9a-f]{2})/giu, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))),
+    relativePath: match[3] ?? "",
+  };
+}
+
 export function getProjectFilePathDisplay(
   path: string,
   {
+    absolutePath = null,
     label = null,
     disambiguationIndex,
     columnNumber = null,
@@ -619,21 +634,28 @@ export function getProjectFilePathDisplay(
   }: ProjectFilePathDisplayOptions = {},
 ): ProjectFilePathDisplay {
   const normalizedPath = normalizeWorkbenchPath(path);
+  const repoPath = parseRepoMountPath(normalizeWorkbenchPath(absolutePath ?? path));
   const workspacePath = parseWorkspaceQualifiedDisplayPath(normalizedPath);
-  const displayPath = workspacePath?.relativePath || normalizedPath || path;
+  const displayPath = repoPath?.relativePath || workspacePath?.relativePath || normalizedPath || path;
   const pathSegments = displayPath.split("/").filter(Boolean);
   const fileName = pathSegments[pathSegments.length - 1] || displayPath;
-  const displayDisambiguationPaths = targetType === "directory"
-    ? getDirectoryDisambiguationPaths(disambiguationPaths)
+  const repoDisambiguationPaths = repoPath
+    ? disambiguationPaths.flatMap(candidate => {
+      const repoCandidate = parseRepoMountPath(normalizeWorkbenchPath(candidate));
+      return repoCandidate?.mountPath === repoPath.mountPath ? [repoCandidate.relativePath] : [];
+    })
     : disambiguationPaths;
+  const displayDisambiguationPaths = targetType === "directory"
+    ? getDirectoryDisambiguationPaths(repoDisambiguationPaths)
+    : repoDisambiguationPaths;
   const displayLabel = getShortestDisambiguatedProjectFilePath(
     displayPath,
     displayDisambiguationPaths,
-    targetType === "directory" && disambiguationKey ? `directories:${disambiguationKey}` : disambiguationKey,
-    targetType === "directory" ? undefined : disambiguationIndex,
-    workspacePath?.rootId ?? null,
+    repoPath ? undefined : targetType === "directory" && disambiguationKey ? `directories:${disambiguationKey}` : disambiguationKey,
+    repoPath || targetType === "directory" ? undefined : disambiguationIndex,
+    repoPath ? null : workspacePath?.rootId ?? null,
   );
-  const rootPrefix = workspacePath && !label?.startsWith(`${workspacePath.rootId}:`)
+  const rootPrefix = repoPath ? `repo:${repoPath.name}:` : workspacePath && !label?.startsWith(`${workspacePath.rootId}:`)
     ? `${workspacePath.rootId}:`
     : "";
   const locationSuffix = lineNumber === null
@@ -647,6 +669,6 @@ export function getProjectFilePathDisplay(
       : label ?? displayLabel,
     locationSuffix,
     rootPrefix,
-    title: normalizedPath || path,
+    title: repoPath ? normalizeWorkbenchPath(absolutePath ?? path) : normalizedPath || path,
   };
 }

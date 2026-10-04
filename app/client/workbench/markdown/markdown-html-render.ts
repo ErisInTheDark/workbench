@@ -52,7 +52,7 @@ function renderProjectFileLink(url: string, relativePath: string, {
   openPath?: string;
   targetType?: "directory" | "file";
 } = {}) {
-  const display = getProjectFilePathDisplay(relativePath, { columnNumber, label, lineNumber, targetType });
+  const display = getProjectFilePathDisplay(relativePath, { absolutePath, columnNumber, label, lineNumber, targetType });
   const className = [
     projectFilePathPillClassName,
     exists && targetType === "file" ? projectFilePathInteractiveClassName : "",

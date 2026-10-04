@@ -12,6 +12,7 @@
  */
 import type { JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
+import { VirtualRepoWarmRequestSchema } from "workbench-shared/workbench/repo/virtual-repo-contract";
 
 import type { GitArcMoveArguments } from "workbench-shared/workbench/git/git-arc-move-arguments";
 import { CommandMatcher } from "./core";
@@ -58,6 +59,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "git_add",
   "git_unstage",
   "git_commit",
+  "git_repo",
   "git_plan_claims",
   "git_plan_start",
   "git_arc_claims",
@@ -661,6 +663,15 @@ export function getWorkbenchCommandRoute(
       return simple("workbench-git.selection", actionTarget("Removing ", "files from commit selection"), actionTarget("Removed ", "files from commit selection"));
     case "git_commit":
       return simple("workbench-git.commit", actionTarget("Committing ", "selected files"), actionTarget("Committed ", "selected files"));
+    case "git_repo": {
+      const parsed = VirtualRepoWarmRequestSchema.safeParse(argumentsValue);
+      if (!parsed.success) return null;
+      const parts: ThreadCommandDisplayPart[] = [CommandMatcher.Code(parsed.data.url)];
+      if (parsed.data.ref) parts.push(CommandMatcher.Text(" at "), CommandMatcher.Code(parsed.data.ref));
+      return simple("workbench-git.repo",
+        [CommandMatcher.Text("Warming repository "), ...parts],
+        [CommandMatcher.Text("Warmed repository "), ...parts]);
+    }
   }
   return null;
 }
