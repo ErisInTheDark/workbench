@@ -380,10 +380,15 @@ const locationsShape = observationShape.object({
 });
 const byProject = <Item extends { projectId: string }>(item: z.ZodType, shape?: ObservationShape) =>
   observationShape.keyed((value: Item) => value.projectId, item, shape);
+// A row's entry decomposes too, so an activity tick ships its changed fields instead of the whole entry.
+const threadRowShape: ObservationShape = {
+  schema: WorkspaceThreadRowSchema,
+  fields: { entry: observationShape.object({ validate: WorkbenchThreadSidebarRowSchema }) },
+};
 const rowsShape = (schema: z.ZodObject, project: z.ZodType) => observationShape.object({
   schema,
   fields: {
-    rows: observationShape.keyed(workspaceThreadRowKey, WorkspaceThreadRowSchema),
+    rows: observationShape.keyed(workspaceThreadRowKey, WorkspaceThreadRowSchema, threadRowShape),
     projects: observationShape.keyed((item: { location: { daemonId: string; projectId: string } }) =>
       `${item.location.daemonId}/${item.location.projectId}`, project),
   },

@@ -377,3 +377,22 @@ test("composer and questionnaire draft children hydrate with their owning draft"
   )));
   await controller.close();
 });
+
+test("revision deltas carry questionnaire answers and selections only for drafts that changed", async (context) => {
+  const { controller, daemonRegistrationId } = await controllerFixture(context);
+  const questionnaire = (requestKey: string) => ({
+    action: "put" as const,
+    record: {
+      daemonRegistrationId, kind: "questionnaireDraft" as const, projectId: "project", requestKey, threadId: "thread",
+      value: { attachments: [], customValues: { question: requestKey }, selectedValues: { choice: [requestKey] }, updatedAt: 20 },
+    },
+  });
+  await controller.mutate(questionnaire("first"));
+  const unrelated = await controller.mutate({ action: "put", record: { kind: "globalPreference", preference: { key: "theme", value: "winter" } } });
+  assert.deepEqual([unrelated.rows.questionnaireDraftAnswers, unrelated.rows.questionnaireDraftSelections], [[], []]);
+  const second = await controller.mutate(questionnaire("second"));
+  assert.deepEqual(second.rows.questionnaireDraftAnswers.map(row => row.request_key), ["second"]);
+  assert.deepEqual(second.rows.questionnaireDraftSelections.map(row => row.request_key), ["second"]);
+  assert.equal(projectedRecords(controller.read()).filter(record => record.kind === "questionnaireDraft").length, 2);
+  await controller.close();
+});

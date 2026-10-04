@@ -338,6 +338,11 @@ export default class WorkbenchAppStateController {
     );
     const composerDrafts = changed(this.#repository.query(selectRows(appStateClientTables.composerDrafts)));
     const questionnaireDrafts = changed(this.#repository.query(selectRows(appStateClientTables.questionnaireDrafts)));
+    // Children carry no revision; a put rewrites them and bumps their draft, so only changed drafts' children ride along.
+    type QuestionnaireOwner = { daemon_registration_id: string; project_id: string; thread_id: string; request_key: string };
+    const ownerKey = (row: QuestionnaireOwner) => `${row.daemon_registration_id}\0${row.project_id}\0${row.thread_id}\0${row.request_key}`;
+    const changedQuestionnaires = new Set(questionnaireDrafts.map(ownerKey));
+    const questionnaireChildren = <Row extends QuestionnaireOwner>(rows: Row[]) => rows.filter(row => changedQuestionnaires.has(ownerKey(row)));
     const imageUrl = (identity: WorkbenchClientStateAttachmentIdentity, id: string, stored: string) => {
       if (projection?.attachmentsAsUrls
         && (stored === STORED_IMAGE || /^data:image\/(?:png|jpeg|webp|gif);base64,/u.test(stored))) {
@@ -373,7 +378,8 @@ export default class WorkbenchAppStateController {
       projectPreferences: changed(this.#repository.query(selectRows(appStateClientTables.projectPreferences))),
       projectSidebarFolders: changed(this.#repository.query(selectRows(appStateClientTables.projectSidebarFolders))),
       projectSidebarPreferences: changed(this.#repository.query(selectRows(appStateClientTables.projectSidebarPreferences))),
-      questionnaireDraftAnswers: this.#repository.query(selectRows(appStateClientTables.questionnaireDraftAnswers)),
+      questionnaireDraftAnswers: questionnaireChildren(this.#repository.query(selectRows(appStateClientTables.questionnaireDraftAnswers))),
+      // Attachments can hold inline image data, so they are read per changed draft rather than filtered from every row.
       questionnaireDraftAttachments: questionnaireDrafts.flatMap(draft => this.#repository.query(selectRows(
         appStateClientTables.questionnaireDraftAttachments, {
           where: {
@@ -388,7 +394,7 @@ export default class WorkbenchAppStateController {
             projectId: row.project_id, threadId: row.thread_id, requestKey: row.request_key,
           }, row.key, row.url),
         })),
-      questionnaireDraftSelections: this.#repository.query(selectRows(appStateClientTables.questionnaireDraftSelections)),
+      questionnaireDraftSelections: questionnaireChildren(this.#repository.query(selectRows(appStateClientTables.questionnaireDraftSelections))),
       questionnaireDrafts,
     };
   }
