@@ -435,7 +435,7 @@ for (const outcome of ["empty", "rejected"] as const) {
       assert.equal(child.getSnapshot().status, "ready");
       assert.ok(f.owner.getSnapshot().relatedDocuments.child);
     } finally {
-      family();
+      family.release();
       release();
       child.dispose();
       f.owner.dispose();
@@ -723,7 +723,11 @@ test("family views coalesce child hydration and release only their own demand", 
   const first = f.owner.acquireChildren(["child"]);
   const second = f.owner.acquireChildren(["child"]);
   assert.equal(reads, 1);
-  first();
+  // Visible-subagent lists change identity and membership often; a still-listed child keeps its in-flight read.
+  second.update(["child", "other"]);
+  second.update(["child"]);
+  assert.equal(reads, 1);
+  first.release();
   assert.equal(child.hasConsumers, true);
   const loading = child.read();
   accept();
@@ -750,8 +754,9 @@ test("family views coalesce child hydration and release only their own demand", 
   assert.equal(timers.size, 1);
   secondView();
   assert.equal(timers.size, 0);
-  second();
-  assert.equal(child.hasConsumers, false);
+  second.update([]);
+  assert.equal(child.hasConsumers, false, "an unlisted child is released");
+  second.release();
   root();
   f.owner.dispose();
   child.dispose();

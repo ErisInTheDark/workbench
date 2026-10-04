@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - ThreadControllerTarget: project-qualified provider, subagent or draft identity.
+ * - ThreadChildFamily: one surface's demand for subagent hydration; its id set updates in place.
  * - ThreadGitArcProposalObservation: source-local loading, loaded, refreshing, or failed proposal validity.
  * - ThreadControllerSnapshot: one thread surface, with source-local SQLite state.
  * - ThreadControllerPorts: native data, observation and transcript adapter ports.
@@ -24,6 +25,10 @@ import type { ThreadTranscriptProjectionState } from "./transcript/ThreadTranscr
 import ThreadHistoryRetentionController, { type ThreadHistoryRetentionSurface } from "./thread/ThreadHistoryRetentionController";
 
 export type ThreadControllerTarget = Exclude<WorkbenchThreadTarget, { kind: "new" }>;
+export interface ThreadChildFamily {
+  update(ids: readonly string[]): void;
+  release(): void;
+}
 type ThreadEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
 export type ThreadGitArcProposalObservation =
   | { error: string; failure?: GitArcFailure; status: "failed" }
@@ -156,14 +161,31 @@ export default class WorkbenchThreadController {
     return () => { this.listeners.delete(listener); };
   };
 
-  acquireChildren(ids: readonly string[]) {
+  /**
+   * Demand background hydration for a set of subagents. `update` changes the set in place, releasing only children
+   * that left it, so a churning id list never drops a still-listed child mid-read and re-reads it.
+   */
+  acquireChildren(ids: readonly string[]): ThreadChildFamily {
     const token = {};
     this.families.set(token, { ids, children: new Map() });
     this.reconcile();
-    return () => {
-      const family = this.families.get(token);
-      this.families.delete(token);
-      for (const child of family?.children.values() ?? []) child.release();
+    return {
+      update: next => {
+        const family = this.families.get(token);
+        if (!family || areDeeplyEqual(family.ids, next)) return;
+        family.ids = next;
+        for (const [threadId, child] of family.children) {
+          if (next.includes(threadId)) continue;
+          family.children.delete(threadId);
+          child.release();
+        }
+        this.reconcile();
+      },
+      release: () => {
+        const family = this.families.get(token);
+        this.families.delete(token);
+        for (const child of family?.children.values() ?? []) child.release();
+      },
     };
   }
 

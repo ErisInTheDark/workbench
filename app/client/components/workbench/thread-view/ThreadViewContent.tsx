@@ -23,6 +23,7 @@ import {
 } from "../../../workbench/project/project-file-path";
 import type { ProjectTreeFileCandidate } from "workbench-shared/workbench/project/ProjectTreeFileIndex";
 import CooperativeRebuildQueue from "../../../workbench/state/CooperativeRebuildQueue";
+import type { ThreadChildFamily } from "../../../workbench/WorkbenchThreadController";
 import {
   buildInlineMentionCandidates,
   buildInlineMentionCandidatesCooperatively,
@@ -661,7 +662,17 @@ export default memo(function ThreadViewContent ({
     };
   }, [daemon, projectId, activeProvider]);
 
-  useEffect(() => rootThreadController.owner?.acquireChildren(visibleSubagentThreadIds),
+  // One family per owner; id changes update it in place so still-visible children keep their in-flight reads.
+  const subagentFamilyRef = useRef<ThreadChildFamily | null>(null);
+  useEffect(() => {
+    const family = rootThreadController.owner?.acquireChildren([]) ?? null;
+    subagentFamilyRef.current = family;
+    return () => {
+      family?.release();
+      if (subagentFamilyRef.current === family) subagentFamilyRef.current = null;
+    };
+  }, [rootThreadController.owner]);
+  useEffect(() => { subagentFamilyRef.current?.update(visibleSubagentThreadIds); },
     [rootThreadController.owner, visibleSubagentThreadIds]);
 
   useEffect(() => {
