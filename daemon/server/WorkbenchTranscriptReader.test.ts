@@ -170,6 +170,48 @@ test("empty canonical history and retained interaction facts need no provider in
   } finally { database.close(); }
 });
 
+test("turn-scoped history reads only the named turns, and reads the whole thread when one is not materialised", async () => {
+  const database = new Database(":memory:");
+  installWorkbenchDatabaseSchema(database);
+  const repository = new WorkbenchTranscriptRepository(database);
+  const threadId = WorkbenchThreadIdSchema.parse("scoped-history");
+  const turns = ["first", "second"].map(id => WorkbenchTurnIdSchema.parse(id));
+  repository.settle([{
+    kind: "thread", threadId, projectId: testProjectIds.project, projectRoot: "/repo",
+    title: "scoped", createdAt: 1, updatedAt: 3, activityAt: 3,
+  }, ...turns.flatMap((turnId, index) => [{
+    kind: "turn" as const, threadId, turnId, turnIndex: index, harnessId: "codex",
+    nativeLocation: "/repo", nativeThreadId: NativeThreadIdSchema.parse("native"),
+    nativeTurnId: NativeTurnIdSchema.parse(`native-${index}`), state: "completed" as const,
+    createdAt: index + 1, startedAt: index + 1, endedAt: index + 2, durationMs: 1,
+  }, {
+    kind: "steer" as const, observedAt: index + 2,
+    entry: { threadId, turnId, entryKey: `steer-${index}`, input: [{ type: "text" as const, text: `steer ${index}`, text_elements: [] }],
+      status: "interrupted" as const, attemptedAt: index + 1, resolvedAt: index + 2, requestId: null, canonicalItemId: null, error: null },
+  }])]);
+  const reader = new WorkbenchTranscriptReader({
+    readSnapshot: async request => repository.read(request),
+    readContext: async id => repository.readContext(id),
+    readMaterializedTurns: async (id, ids) => repository.readMaterializedTurnIds(id, ids),
+    readContextUsage: async id => repository.readContextUsage(id),
+    readMetadata: async () => ({ entry: null, harness: "codex" }),
+  });
+  try {
+    const scoped = await reader.history(threadId, [turns[1]!]);
+    assert.deepEqual(scoped.scopedTurnIds, [turns[1]]);
+    assert.deepEqual(scoped.steerEntries.map(entry => entry.entryKey), ["steer-1"]);
+
+    const whole = await reader.history(threadId);
+    assert.equal("scopedTurnIds" in whole, false);
+    assert.deepEqual(whole.steerEntries.map(entry => entry.entryKey), ["steer-0", "steer-1"]);
+
+    database.prepare("DELETE FROM thread_turn_materializations WHERE turn_id = ?").run(turns[0]);
+    const fallback = await reader.history(threadId, [turns[0]!]);
+    assert.equal("scopedTurnIds" in fallback, false, "an unmaterialised turn cannot be read alone");
+    assert.deepEqual(fallback.steerEntries.map(entry => entry.entryKey), ["steer-1"]);
+  } finally { database.close(); }
+});
+
 test("canonical pages retain delivered steer state and stored context usage", async (t) => {
   const database = new Database(":memory:");
   installWorkbenchDatabaseSchema(database);

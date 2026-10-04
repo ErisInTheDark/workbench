@@ -2759,7 +2759,7 @@ test("native plan snapshots and notifications stay out while tagged agent markdo
   assert.equal(items[0]?.type === "agentMessage" ? items[0].text : null, "<plan>\n# retained tagged plan\n</plan>");
 }));
 
-test("steer-history reads are latest-wins, retain the last success, and warn once per failure streak", async () => {
+test("steer-history reads coalesce a burst into one trailing turn read, retain the last success, and warn once per failure streak", async () => {
   const statusMessages: string[] = [];
   await withClient(async (client, socket) => {
     const source = activeThread();
@@ -2786,15 +2786,20 @@ test("steer-history reads are latest-wins, retain the last success, and warn onc
 
     trigger("event-1");
     trigger("event-2");
+    trigger("event-2b");
+    await waitForRequest(socket, "thread/steers/read", 0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(historyRequests.length, 1, "a burst waits for the read in flight");
+    socket.fail(historyRequests[0]!.id, "first failure");
     await waitForRequest(socket, "thread/steers/read", 1);
-    socket.respond(historyRequests[1]!.id, { data: [history] });
+    assert.deepEqual(historyRequests[1]!.params?.turnIds, ["turn"], "the trailing read covers only the changed turn");
+    socket.respond(historyRequests[1]!.id, { data: [history], turnIds: ["turn"] });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    socket.fail(historyRequests[0]!.id, "stale failure");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(historyRequests.length, 2);
     assert.ok(client.getSnapshot().currentThread?.turns[0]?.items.some((item) => (
       item.id === history.itemId && getWorkbenchInputState(item)?.status === "pending"
     )));
-    assert.equal(statusMessages.length, 0);
+    assert.equal(statusMessages.length, 1);
 
     trigger("event-3");
     await waitForRequest(socket, "thread/steers/read", 2);
@@ -2804,7 +2809,7 @@ test("steer-history reads are latest-wins, retain the last success, and warn onc
     await waitForRequest(socket, "thread/steers/read", 3);
     socket.fail(historyRequests[3]!.id, "same streak");
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(statusMessages.length, 1);
+    assert.equal(statusMessages.length, 2);
 
     trigger("event-5");
     await waitForRequest(socket, "thread/steers/read", 4);
@@ -2814,11 +2819,11 @@ test("steer-history reads are latest-wins, retain the last success, and warn onc
     await waitForRequest(socket, "thread/steers/read", 5);
     socket.fail(historyRequests[5]!.id, "new streak");
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(statusMessages.length, 2);
+    assert.equal(statusMessages.length, 3);
   }, { onStatusMessage: (message) => statusMessages.push(message) });
 });
 
-test("questionnaire and Browse history reads are latest-wins within one project", async () => withClient(async (client, socket) => {
+test("questionnaire reads coalesce behind the read in flight and Browse reads stay latest-wins", async () => withClient(async (client, socket) => {
   const source = activeThread();
   client.selectThreadPayload(source);
   const questionnaireRequests: SocketRequest[] = [];
@@ -2837,13 +2842,14 @@ test("questionnaire and Browse history reads are latest-wins within one project"
 
   socket.notify("questionnaire/resolved", { requestKey: "one", threadId: "thread" });
   socket.notify("questionnaire/resolved", { requestKey: "two", threadId: "thread" });
-  await waitForRequest(socket, "thread/questionnaires/read", 1);
-  socket.respond(questionnaireRequests[1]!.id, { data: [] });
+  await waitForRequest(socket, "thread/questionnaires/read", 0);
   socket.respond(questionnaireRequests[0]!.id, { data: [{
     insertAfterItemId: null, insertAfterItemIndex: null, itemId: null,
     request: { id: "old", questions: [], submitLabel: "send", summary: "old", title: "old" },
     requestKey: "old", resolvedAt: 1, response: { answers: {} }, threadId: "thread", turnId: "turn",
   }] });
+  await waitForRequest(socket, "thread/questionnaires/read", 1);
+  socket.respond(questionnaireRequests[1]!.id, { data: [] });
 
   socket.notify("browse/result/recorded", { threadId: "thread" });
   socket.notify("browse/result/recorded", { threadId: "thread" });
@@ -2929,11 +2935,12 @@ test("questionnaire history keeps last-known answers through refresh failures an
     assert.equal(hasQuestionnaire(), true);
     assert.equal(statusMessages.length, 1);
 
-    trigger("stale-failure");
-    trigger("newer-success");
+    trigger("streak-failure");
+    trigger("trailing-success");
+    await waitForRequest(socket, "thread/questionnaires/read", 3);
+    socket.fail(requests[3]!.id, "same streak");
     await waitForRequest(socket, "thread/questionnaires/read", 4);
     socket.respond(requests[4]!.id, { data: [questionnaireEntry("turn", "settled")] });
-    socket.fail(requests[3]!.id, "stale failure");
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(hasQuestionnaire(), true);
     assert.equal(statusMessages.length, 1);

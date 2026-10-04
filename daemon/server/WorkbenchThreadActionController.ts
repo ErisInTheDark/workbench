@@ -58,6 +58,11 @@ function stateTarget({ identity, harness }: ActionTarget) {
   return { projectId: identity.projectId, identity: { harness, threadId: identity.threadId } };
 }
 
+/** A history read reports its turns only when it covered just those turns. */
+function historyScope({ scopedTurnIds }: { scopedTurnIds?: readonly string[] }) {
+  return scopedTurnIds ? { turnIds: [...scopedTurnIds] } : {};
+}
+
 type Actions = {
   [Method in keyof WorkbenchThreadActionMap]: (
     input: WorkbenchThreadActionMap[Method]["params"],
@@ -116,16 +121,20 @@ export default class WorkbenchThreadActionController {
       return { data };
     },
     "thread/questionnaires/read": async input => {
-      return { data: (await this.owners.transcripts.history(input.threadId)).questionnaireEntries };
+      const history = await this.owners.transcripts.history(input.threadId, input.turnIds);
+      return { data: history.questionnaireEntries, ...historyScope(history) };
     },
     "thread/steers/read": async input => {
-      return { data: (await this.owners.transcripts.history(input.threadId)).steerEntries };
+      const history = await this.owners.transcripts.history(input.threadId, input.turnIds);
+      return { data: history.steerEntries, ...historyScope(history) };
     },
     "thread/browse/read": async input => {
-      return { data: (await this.owners.transcripts.history(input.threadId)).browseResultEntries };
+      const history = await this.owners.transcripts.history(input.threadId, input.turnIds);
+      return { data: history.browseResultEntries, ...historyScope(history) };
     },
     "thread/approvals/read": async input => {
-      return { data: (await this.owners.transcripts.history(input.threadId)).approvalEntries };
+      const history = await this.owners.transcripts.history(input.threadId, input.turnIds);
+      return { data: history.approvalEntries, ...historyScope(history) };
     },
     "thread/create": input => this.create(input),
     "thread/message/submit": input => this.message(input),

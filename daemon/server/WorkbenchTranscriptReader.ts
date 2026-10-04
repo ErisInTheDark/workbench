@@ -129,7 +129,20 @@ export default class WorkbenchTranscriptReader {
     };
   }
 
-  async history(threadId: string) {
+  /**
+   * Whole-thread history projects every turn, so callers that know which turns changed pass `turnIds`.
+   * `scopedTurnIds` is present only when just those turns were read; a turn that is not materialised falls back to the whole thread.
+   */
+  async history(threadId: string, turnIds?: readonly string[]): Promise<
+    Awaited<ReturnType<WorkbenchTranscriptReader["withApprovals"]>> & { scopedTurnIds?: readonly string[] }
+  > {
+    if (turnIds?.length) {
+      const snapshot = await this.readSnapshot({ threadId, turnIds: [...turnIds], turnLimit: turnIds.length });
+      if (snapshot) {
+        const content = await this.withApprovals(snapshot.thread.id, this.content(snapshot));
+        return { ...content, scopedTurnIds: snapshot.loadedTurnIds };
+      }
+    }
     const snapshot = await this.options.readContext(threadId);
     if (!snapshot) throw new Error("Canonical SQLite transcript history is unavailable.");
     return await this.withApprovals(threadId, this.content(snapshot));

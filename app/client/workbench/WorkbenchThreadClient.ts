@@ -84,6 +84,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptProjectionController";
 import WorkbenchAccountClient from "./WorkbenchAccountClient";
+import ThreadHistoryReads from "./ThreadHistoryReads";
 
 const RATE_LIMIT_REFRESH_TASK_ID = "rate-limit-refresh";
 const RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
@@ -813,9 +814,8 @@ function WorkbenchThreadClient(
   }));
   const resolvedDurableQuestionnaireKeysByThreadId = new Map<string, string>();
   const browseResultReadGenerationByKey = new Map<string, number>();
-  const questionnaireHistoryReadGenerationByKey = new Map<string, number>();
+  const historyReads = new ThreadHistoryReads();
   const questionnaireHistoryWarningKeys = new Set<string>();
-  const steerHistoryReadGenerationByKey = new Map<string, number>();
   const steerHistoryWarningKeys = new Set<string>();
   const messageAdmissionController = ThreadMessageAdmissionController({
     client: { connect: () => workspace.connect(cancellation.signal), submit: input => daemon.threads.message(input) },
@@ -999,9 +999,7 @@ function WorkbenchThreadClient(
       optimisticInputs.deleteThread(key);
     }
     browseResultReadGenerationByKey.clear();
-    questionnaireHistoryReadGenerationByKey.clear();
     questionnaireHistoryWarningKeys.clear();
-    steerHistoryReadGenerationByKey.clear();
     steerHistoryWarningKeys.clear();
     for (const map of [state.questionnaireHistoryByThreadId, state.steerHistoryByThreadId, state.browseResultEntriesByThreadId, state.approvalEntriesByThreadId, state.pendingUserInputRequestsByThreadId]) {
       for (const threadId of map.keys()) if (!retainedThreadIds.has(threadId)) map.delete(threadId);
@@ -2637,70 +2635,71 @@ function WorkbenchThreadClient(
     }
   }
 
-  async function readCompletedQuestionnaireHistory(threadId: string, options: { refreshProjection?: boolean } = {}) {
+  /** A turn-scoped reply replaces only its turns' entries; an unscoped one is the whole thread. */
+  function mergeHistoryReadEntries<TEntry extends { turnId: string }>(
+    threadId: string,
+    existingEntries: TEntry[],
+    response: { data: TEntry[]; turnIds?: string[] },
+  ) {
+    if (!response.turnIds) return response.data;
+    const turnHistory = threadSources.get(getThreadStateKey(getThreadHarness(threadId), threadId))?.turnHistory ?? [];
+    return mergeScopedThreadContextEntries(existingEntries, response.data, response.turnIds, turnHistory);
+  }
+
+  /**
+   * Reads run one at a time per thread (see ThreadHistoryReads), so a reply can never land over a newer one.
+   * `turnId` narrows the read to the turn whose history changed.
+   */
+  async function readCompletedQuestionnaireHistory(threadId: string, options: { refreshProjection?: boolean; turnId?: string } = {}) {
     const key = getThreadStateKey(getThreadHarness(threadId), threadId);
-    const generation = (questionnaireHistoryReadGenerationByKey.get(key) ?? 0) + 1;
-    const projectGeneration = projectContextGeneration;
-    questionnaireHistoryReadGenerationByKey.set(key, generation);
-    try {
-      const response = await daemon.threads.history.questionnaires({ threadId });
-      const entries = response.data ?? [];
-      if (projectGeneration !== projectContextGeneration || questionnaireHistoryReadGenerationByKey.get(key) !== generation) {
-        return state.questionnaireHistoryByThreadId.get(threadId) ?? [];
-      }
-      questionnaireHistoryWarningKeys.delete(key);
-      const changed = setQuestionnaireHistoryEntries(threadId, entries);
-      if (!changed && entries.length) {
-        bumpOverlayRevision(threadId, "questionnaireForceProjectionEpoch");
-      }
-      if ((options.refreshProjection ?? true) && (changed || entries.length)) {
-        refreshFinalVisibleQuestionnaireHistory(threadId);
-      }
-      return entries;
-    } catch {
-      const retainedEntries = state.questionnaireHistoryByThreadId.get(threadId) ?? [];
-      if (projectGeneration !== projectContextGeneration || questionnaireHistoryReadGenerationByKey.get(key) !== generation) {
-        return retainedEntries;
-      }
-      if (!questionnaireHistoryWarningKeys.has(key)) {
+    const refreshProjection = options.refreshProjection ?? true;
+    await historyReads.request(`questionnaires:${key}`, options.turnId ? [options.turnId] : null, async (turnIds) => {
+      const projectGeneration = projectContextGeneration;
+      try {
+        const response = await daemon.threads.history.questionnaires({ threadId, ...(turnIds ? { turnIds } : {}) });
+        if (projectGeneration !== projectContextGeneration) return;
+        questionnaireHistoryWarningKeys.delete(key);
+        const entries = mergeHistoryReadEntries(threadId, state.questionnaireHistoryByThreadId.get(threadId) ?? [], response);
+        const changed = setQuestionnaireHistoryEntries(threadId, entries);
+        if (!changed && entries.length) {
+          bumpOverlayRevision(threadId, "questionnaireForceProjectionEpoch");
+        }
+        if (refreshProjection && (changed || entries.length)) {
+          refreshFinalVisibleQuestionnaireHistory(threadId);
+        }
+      } catch {
+        if (projectGeneration !== projectContextGeneration || questionnaireHistoryWarningKeys.has(key)) return;
         questionnaireHistoryWarningKeys.add(key);
         emitStatusMessage("Unable to refresh questionnaire history; showing the last known answers.");
       }
-      return retainedEntries;
-    }
+    });
+    return state.questionnaireHistoryByThreadId.get(threadId) ?? [];
   }
 
-  async function readCompletedQuestionnaireHistoryForHarness(threadId: string, harness: WorkbenchHarness) {
-    return await readCompletedQuestionnaireHistory(threadId);
-  }
-
-  async function readCompletedSteerHistory(threadId: string, options: { refreshProjection?: boolean } = {}) {
+  async function readCompletedSteerHistory(threadId: string, options: { refreshProjection?: boolean; turnId?: string } = {}) {
     const key = getThreadStateKey(getThreadHarness(threadId), threadId);
-    const generation = (steerHistoryReadGenerationByKey.get(key) ?? 0) + 1;
-    const projectGeneration = projectContextGeneration;
-    steerHistoryReadGenerationByKey.set(key, generation);
-    try {
-      const response = await daemon.threads.history.steers({ threadId });
-      const entries = response.data ?? [];
-      if (projectGeneration !== projectContextGeneration || steerHistoryReadGenerationByKey.get(key) !== generation) {
-        return state.steerHistoryByThreadId.get(threadId) ?? [];
-      }
-      steerHistoryWarningKeys.delete(key);
-      if (setSteerHistoryEntries(threadId, entries) && (options.refreshProjection ?? true)) {
-        refreshFinalVisibleSteerHistory(threadId);
-      }
-      return entries;
-    } catch {
-      const retainedEntries = state.steerHistoryByThreadId.get(threadId) ?? [];
-      if (projectGeneration !== projectContextGeneration || steerHistoryReadGenerationByKey.get(key) !== generation) {
-        return retainedEntries;
-      }
-      if (!steerHistoryWarningKeys.has(key)) {
+    const refreshProjection = options.refreshProjection ?? true;
+    // Delivery retires a held steer wherever it was held, so its turn is reread alongside the turn that changed.
+    const heldTurnIds = (state.steerHistoryByThreadId.get(threadId) ?? [])
+      .filter((entry) => entry.status !== "sent").map((entry) => entry.turnId);
+    const scope = options.turnId ? [options.turnId, ...heldTurnIds] : null;
+    await historyReads.request(`steers:${key}`, scope, async (turnIds) => {
+      const projectGeneration = projectContextGeneration;
+      try {
+        const response = await daemon.threads.history.steers({ threadId, ...(turnIds ? { turnIds } : {}) });
+        if (projectGeneration !== projectContextGeneration) return;
+        steerHistoryWarningKeys.delete(key);
+        const entries = mergeHistoryReadEntries(threadId, state.steerHistoryByThreadId.get(threadId) ?? [], response);
+        if (setSteerHistoryEntries(threadId, entries) && refreshProjection) {
+          refreshFinalVisibleSteerHistory(threadId);
+        }
+      } catch {
+        if (projectGeneration !== projectContextGeneration || steerHistoryWarningKeys.has(key)) return;
         steerHistoryWarningKeys.add(key);
         emitStatusMessage("Unable to refresh steer delivery history; showing the last known state.");
       }
-      return retainedEntries;
-    }
+    });
+    return state.steerHistoryByThreadId.get(threadId) ?? [];
   }
 
   async function readBrowseResultEntries(threadId: string, options: { refreshProjection?: boolean } = {}) {
@@ -4429,7 +4428,7 @@ function WorkbenchThreadClient(
     if (supplementalInput.length || hasActivatedSkills) {
       await readCompletedThreadWorkbenchHistory(threadId);
     } else {
-      await readCompletedQuestionnaireHistoryForHarness(threadId, pendingRequest.harness);
+      await readCompletedQuestionnaireHistory(threadId);
     }
   }
 
@@ -4495,7 +4494,7 @@ function WorkbenchThreadClient(
         emit();
       }
       if (doesNotificationTargetKnownThread(notification, harness)) {
-        void readCompletedQuestionnaireHistoryForHarness(notification.params.threadId, harness);
+        void readCompletedQuestionnaireHistory(notification.params.threadId);
         // A resolved approval may have recorded an outcome on its tool item.
         void readApprovalEntries(notification.params.threadId);
       }
@@ -4533,7 +4532,7 @@ function WorkbenchThreadClient(
     // Held steers sit outside the transcript stream; this push is how an open view learns one arrived mid-turn.
     if (notification.method === "steer/history/changed") {
       if (doesNotificationTargetKnownThread(notification, harness)) {
-        void readCompletedSteerHistory(notification.params.threadId);
+        void readCompletedSteerHistory(notification.params.threadId, { turnId: notification.params.turnId });
       }
       return;
     }
@@ -4551,13 +4550,14 @@ function WorkbenchThreadClient(
       )
       && doesNotificationTargetKnownThread(notification, harness)
     ) {
-      void readCompletedSteerHistory(notification.params.threadId);
+      const turnId = notification.method === "turn/completed" ? notification.params.turn.id : notification.params.turnId;
+      void readCompletedSteerHistory(notification.params.threadId, { turnId });
     }
     if (
       notification.method === "turn/completed"
       && doesNotificationTargetKnownThread(notification, harness)
     ) {
-      void readCompletedQuestionnaireHistoryForHarness(notification.params.threadId, harness);
+      void readCompletedQuestionnaireHistory(notification.params.threadId, { turnId: notification.params.turn.id });
     }
   }
 

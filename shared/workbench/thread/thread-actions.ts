@@ -12,6 +12,7 @@
  * - WorkbenchThreadStopSchema/WorkbenchThreadStop: user stop of a live turn and its seen questionnaire.
  * - WorkbenchThreadInterruptSchema/WorkbenchThreadInterrupt: interrupt that snoozes and keeps a questionnaire.
  * - WorkbenchThreadSteerTargetSchema/WorkbenchThreadSteerTarget: one held steer to resend or dismiss.
+ * - WorkbenchThreadHistoryReadSchema: thread history read, optionally narrowed to some turns.
  * - WorkbenchThreadPayloadSchema: validate the public metadata envelope.
  * - WorkbenchThreadPageResult/WorkbenchThreadPageResultSchema: WB page and domain-history facts.
  * - workbenchThreadActions/WorkbenchThreadActionMap: shared request and result contract registry.
@@ -179,12 +180,21 @@ const browseHistory = z.object({
   state: z.enum(["completed", "failed", "inProgress", "queued"]), threadId, turnId: z.string(),
 }).passthrough() as z.ZodType<WorkbenchBrowseResultEntry>;
 
+/** `turnIds` narrows a history read to those turns; daemons that predate it, or cannot scope, read the whole thread. */
+export const WorkbenchThreadHistoryReadSchema = WorkbenchThreadTargetSchema.extend({
+  turnIds: z.array(z.string().min(1)).min(1).max(50).optional(),
+});
+/** `turnIds` is present only when the data covers just those turns; absent means the whole thread. */
+const historyResult = <Entry extends z.ZodTypeAny>(entry: Entry) => z.object({
+  data: z.array(entry), turnIds: z.array(z.string()).optional(),
+});
+
 export const workbenchThreadActions = {
   "questionnaires/pending/read": { params: z.object({}), result: z.object({ data: z.array(pendingQuestionnaire) }) },
-  "thread/questionnaires/read": { params: WorkbenchThreadTargetSchema, result: z.object({ data: z.array(questionnaireHistory) }) },
-  "thread/steers/read": { params: WorkbenchThreadTargetSchema, result: z.object({ data: z.array(steerHistory) }) },
-  "thread/browse/read": { params: WorkbenchThreadTargetSchema, result: z.object({ data: z.array(browseHistory) }) },
-  "thread/approvals/read": { params: WorkbenchThreadTargetSchema, result: z.object({ data: z.array(approvalOutcome) }) },
+  "thread/questionnaires/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(questionnaireHistory) },
+  "thread/steers/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(steerHistory) },
+  "thread/browse/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(browseHistory) },
+  "thread/approvals/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(approvalOutcome) },
   "thread/create": { params: WorkbenchThreadCreateSchema, result: WorkbenchThreadPayloadSchema },
   "thread/metadata/read": { params: WorkbenchThreadTargetSchema, result: WorkbenchThreadPayloadSchema },
   "thread/page/read": { params: WorkbenchThreadPageSchema, result: WorkbenchThreadPageResultSchema },
