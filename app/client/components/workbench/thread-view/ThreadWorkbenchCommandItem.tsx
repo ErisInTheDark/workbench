@@ -328,9 +328,11 @@ export default function ThreadWorkbenchCommandItem({
     );
   }
   if (subagentCommand.action === "wait" && targets.length) {
+    // An incoming message ends the wait normally; its result text is guidance for the agent, not the user.
+    const waitOutcome = interruptedBySteer ? "completed" : outcome;
     return (
       <ThreadSubagentWaitItem
-        disclosureContent={outcome === "completed" && output.trim() ? (
+        disclosureContent={interruptedBySteer ? undefined : outcome === "completed" && output.trim() ? (
           <ThreadMarkdown
             inlineMentionSources={inlineMentionSources}
             markdown={output.trim()}
@@ -340,7 +342,7 @@ export default function ThreadWorkbenchCommandItem({
             threadCwdPath={threadCwdPath}
             workspaceRoots={workspaceRoots}
           />
-        ) : interruptedBySteer ? undefined : outcome === "failed" ? output : undefined}
+        ) : outcome === "failed" ? output : undefined}
         durationMs={item.durationMs}
         entries={targets.map((target) => ({
           content: renderSubagentActivity?.({
@@ -352,8 +354,7 @@ export default function ThreadWorkbenchCommandItem({
           targetKey: target.targetKey,
           thread: target.threadId ? relatedThreadsById[target.threadId] : undefined,
         }))}
-        outcome={interruptedBySteer ? "failed" : outcome}
-        interruptedBySteer={interruptedBySteer}
+        outcome={waitOutcome}
       />
     );
   }

@@ -151,12 +151,15 @@ test("a typed steer interruption is not shown as a Git failure", () => {
   assert.match(renderSpecialized(oldItem), /data-thread-git-arc-failure="operationRejected"/u);
 });
 
-test("a steered subagent wait is not shown as a failed wait", () => {
-  const item = makeItem("subagent_wait", { names: ["momo"] }, "", "failed");
-  item.result!.structuredContent = { kind: "interruptedBySteer", version: 1 };
-  const html = renderSpecialized(item);
-  assert.match(html, /Interrupted by your steer while waiting for/u);
-  assert.doesNotMatch(html, /Failed waiting for|interruptedBySteer/u);
+test("an interrupted subagent wait reads as a plain completed wait, keeping its agent-facing text out of the row", () => {
+  // Older items failed with no text; newer ones complete with text meant only for the agent.
+  for (const [status, output] of [["failed", ""], ["completed", "Wait interrupted: a new message arrived for this thread."]] as const) {
+    const item = makeItem("subagent_wait", { names: ["momo"] }, output, status);
+    item.result!.structuredContent = { kind: "interruptedBySteer", version: 1 };
+    const html = renderSpecialized(item);
+    assert.match(html, /Waited for /u);
+    assert.doesNotMatch(html, /Failed waiting for|steer|Wait interrupted|interruptedBySteer/u);
+  }
 });
 
 test("damaged typed status preserves valid siblings without parsing text", (context) => {
