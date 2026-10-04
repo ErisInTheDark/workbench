@@ -8,7 +8,7 @@
  * - projectSidebarRow: strip a full entry (or re-project a row) to its lean row.
  * - projectSidebarRowSnapshot: lean rows for one project's sidebar, excluding archived threads and their subagents.
  * - sidebarRowKey: stable row identity shared by every delta hop.
- * - coarseActivity: whole-second activity timestamps for observations.
+ * - coarseActivity: ten-second activity timestamps for observations.
  */
 import { z } from "zod";
 import { WorkbenchThreadSidebarEntryVariants, type WorkbenchThreadSidebarEntry, WorkbenchThreadSidebarSnapshotSchema, type WorkbenchThreadSidebarSnapshot } from "./thread-state";
@@ -68,7 +68,12 @@ function leanArc(arc: NonNullable<Exclude<RowSource, { entryKind: "draft" }>["gi
 // so rows canonicalise to absent or the same row would flip between the two on every refresh.
 const nullableOptional = ["pendingQuestionnaire", "gitArc", "gitArcPlan"] as const;
 /** Observations carry activity to whole seconds, so a burst of agent items inside one second is one tick. */
-export const coarseActivity = (ms: number) => ms - ms % 1_000;
+/**
+ * Labels read "just now" until 45s and then whole minutes, so per-second activity only cost one push per active
+ * thread per second across every observation; ten seconds keeps labels exact at a tenth of the traffic.
+ */
+const ACTIVITY_GRANULARITY_MS = 10_000;
+export const coarseActivity = (ms: number) => ms - ms % ACTIVITY_GRANULARITY_MS;
 
 const isLean = (entry: Exclude<RowSource, { entryKind: "draft" }>) => entry.activityAt % 1_000 === 0
   && !("questionnaireHistory" in entry)

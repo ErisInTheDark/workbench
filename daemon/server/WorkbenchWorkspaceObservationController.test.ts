@@ -81,7 +81,7 @@ test("one thread tick in a 1,000-row project publishes one small delta that name
   assert.equal(first.phase, "current");
   assert.equal(f.updates.length, 0, "The first value travels as the observe result, never as a push");
   current = { ...current, revision: 2,
-    entries: current.entries.map((entry, index) => index === 500 && entry.entryKind === "thread" ? { ...entry, activityAt: 9_999 } : entry) };
+    entries: current.entries.map((entry, index) => index === 500 && entry.entryKind === "thread" ? { ...entry, activityAt: 99_999 } : entry) };
   f.projectChanged(a);
   await f.wait(value => value.revision > first.revision);
   const [update] = f.updates;

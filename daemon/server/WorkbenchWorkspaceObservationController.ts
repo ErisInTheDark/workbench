@@ -195,7 +195,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     return projectSidebarRowSnapshot(sidebar);
   }
 
-  /** Activity to whole seconds, so a burst of agent items inside one second is one summary tick. */
+  /** Activity to ten seconds, so a running agent's stream of items is one summary tick per window. */
   private summary(summary: WorkbenchProjectThreadSummary): WorkbenchProjectThreadSummary {
     return {
       ...summary,
