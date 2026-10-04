@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceThreads: resolve demanded thread ownership from independently arriving daemon facts.
+ * - default WorkbenchWorkspaceThreads: resolve demanded thread ownership from independently arriving daemon facts, keeping released lookups briefly for back-to-back commands.
  */
 import { ThreadReferenceSchema, type DaemonId } from "workbench-shared/workbench/identity";
 import type { WorkspaceThreadOwner } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -14,6 +14,20 @@ interface Interest {
   sources: Map<DaemonId, ReturnType<WorkbenchDaemonSource["observe"]>>;
   listeners: Map<object, () => void>;
   value: WorkspaceThreadOwner;
+  /** Cancels the pending idle retirement while the interest has no holders. */
+  cancelRetire: (() => void) | null;
+}
+
+/**
+ * Every thread-scoped command resolves its owner here. Opening one thread issues several in a row, so a released
+ * lookup stays live briefly instead of costing a daemon observe/release pair per command.
+ */
+const IDLE_RETIRE_MS = 60_000;
+
+function defaultSchedule(run: () => void, delayMs: number) {
+  const timer = setTimeout(run, delayMs);
+  timer.unref?.();
+  return () => clearTimeout(timer);
 }
 
 export default class WorkbenchWorkspaceThreads {
@@ -27,6 +41,7 @@ export default class WorkbenchWorkspaceThreads {
     presentation: WorkbenchPresentationController;
     warn(message: string): void;
     canProject?(): boolean;
+    schedule?: (run: () => void, delayMs: number) => () => void;
   }) {}
 
   start() {
@@ -41,9 +56,11 @@ export default class WorkbenchWorkspaceThreads {
     ThreadReferenceSchema.parse(threadId);
     let interest = this.interests.get(threadId);
     if (!interest) {
-      interest = { sources: new Map(), listeners: new Map(), value: { phase: "pending", failure: null } };
+      interest = { sources: new Map(), listeners: new Map(), value: { phase: "pending", failure: null }, cancelRetire: null };
       this.interests.set(threadId, interest);
     }
+    interest.cancelRetire?.();
+    interest.cancelRetire = null;
     const token = {};
     interest.listeners.set(token, listener);
     const retained = interest;
@@ -52,11 +69,18 @@ export default class WorkbenchWorkspaceThreads {
       getSnapshot: () => retained.value,
       release: () => {
         if (!retained.listeners.delete(token) || retained.listeners.size) return;
-        this.interests.delete(threadId);
-        for (const observation of retained.sources.values()) observation.release();
-        retained.sources.clear();
+        retained.cancelRetire?.();
+        retained.cancelRetire = (this.options.schedule ?? defaultSchedule)(() => this.retire(threadId, retained), IDLE_RETIRE_MS);
       },
     };
+  }
+
+  private retire(threadId: string, interest: Interest) {
+    interest.cancelRetire = null;
+    if (interest.listeners.size || this.interests.get(threadId) !== interest) return;
+    this.interests.delete(threadId);
+    for (const observation of interest.sources.values()) observation.release();
+    interest.sources.clear();
   }
 
   async withThread<Result>(
@@ -92,6 +116,8 @@ export default class WorkbenchWorkspaceThreads {
   dispose() {
     for (const stop of this.unsubscribe.splice(0)) stop();
     for (const interest of this.interests.values()) {
+      interest.cancelRetire?.();
+      interest.cancelRetire = null;
       for (const observation of interest.sources.values()) observation.release();
       interest.listeners.clear();
     }
