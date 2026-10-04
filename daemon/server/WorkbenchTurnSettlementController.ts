@@ -60,9 +60,10 @@ export default class WorkbenchTurnSettlementController {
     const target = await this.resolve(threadId);
     if (!target || this.retired) return;
     const { thread } = await this.owners.transcripts.readPage({ threadId: target.identity.threadId, cursor: null });
-    const index = thread.turns.findIndex(turn => turn.id === turnId);
-    for (const turn of thread.turns.slice(0, Math.max(0, index))) {
-      if (turn.status === "inProgress") await this.settle(target, turn.id);
+    // The latest page loads only the newest turn's body; turn history lists every turn with its status.
+    const index = thread.turnHistory.findIndex(turn => turn.turnId === turnId);
+    for (const turn of thread.turnHistory.slice(0, Math.max(0, index))) {
+      if (turn.status === "inProgress") await this.settle(target, turn.turnId);
     }
   }
 

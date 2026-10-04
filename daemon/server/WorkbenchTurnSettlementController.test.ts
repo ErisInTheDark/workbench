@@ -27,9 +27,14 @@ function fixture({
       bindings: [{ harness: "claude", nativeLocation: "C:/project", nativeThreadId: NativeThreadIdSchema.parse(`native-${threadId}`), pending: false, turnIndex: 0 }],
     }) },
     transcripts: {
-      readPage: async ({ threadId }) => ({ thread: { turns: turns.get(threadId) ?? [
-        { id: `${threadId}-turn`, status: statuses.get(threadId) ?? "inProgress" },
-      ] } }) as never,
+      // Like the real reader: the latest page loads only the newest turn's body; turnHistory lists every turn.
+      readPage: async ({ threadId }) => {
+        const all = turns.get(threadId) ?? [{ id: `${threadId}-turn`, status: statuses.get(threadId) ?? "inProgress" }];
+        return { thread: {
+          turns: all.slice(-1),
+          turnHistory: all.map(turn => ({ turnId: turn.id, status: turn.status })),
+        } } as never;
+      },
       storedTurnSettlement: async (threadId, turnId) => {
         settlements.push(`${threadId}:${turnId}`);
         return [{ kind: "turn", turnId, state: "interrupted" }] as never;
