@@ -1,9 +1,9 @@
 /*
- * No exports. Tests protect runner-owned temp routing, grouped invocations, timeout and cancellation policy, and fixture/test-run disposal order.
+ * No exports. Tests protect runner-owned temp routing, scenario workspace cleanup, grouped invocations, timeout and cancellation policy, and fixture/test-run disposal order.
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import test from "node:test";
@@ -79,6 +79,41 @@ test("routes fixtures and test children through the acquired temp root before di
   assert.equal(childEnvironment?.[WORKBENCH_TEMPORARY_ROOT_ENV], temporaryRootPath);
   assert.equal(childEnvironment?.WORKBENCH_FIXTURE_SENTINEL, "ready");
   assert.deepEqual(disposed, ["fixtures", "run"]);
+});
+
+test("cleans up child-registered scenario workspaces owned by the runner's project, regardless of cwd", async (context) => {
+  const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const fixtures = path.join(projectRoot, ".workbench", "test-runs");
+  await mkdir(fixtures, { recursive: true });
+  const scenarioRoot = await mkdtemp(path.join(fixtures, "wb-scenario-"));
+  context.after(async () => await rm(scenarioRoot, { force: true, recursive: true }));
+  // This test's own runner may provide a registry; the inner runner must own a fresh one.
+  const outerRegistry = process.env.WORKBENCH_TEST_SERVICE_RECORDS;
+  delete process.env.WORKBENCH_TEST_SERVICE_RECORDS;
+  context.after(() => {
+    if (outerRegistry !== undefined) process.env.WORKBENCH_TEST_SERVICE_RECORDS = outerRegistry;
+  });
+  assert.notEqual(process.cwd(), projectRoot, "the ward needs a cwd that differs from the project root");
+
+  const runner = new ProjectTestRunner(projectRoot, {
+    report: () => {},
+    acquireTestRun: async () => ({ dispose: async () => {}, temporaryRootPath: path.join(projectRoot, "test", "runner-temp-root") }),
+    prepareTestFixtures: async () => ({ dispose: async () => {}, environment: {} }),
+    spawnProcess: (_command, _args, options) => {
+      const registry = options.env.WORKBENCH_TEST_SERVICE_RECORDS;
+      const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null }) as ChildProcess;
+      void (async () => {
+        assert.ok(registry);
+        await appendFile(registry, `${JSON.stringify({ kind: "workspace", root: scenarioRoot, source: projectRoot })}\n`);
+        child.emit("exit", 0, null);
+      })();
+      return child;
+    },
+    testConcurrency: 1,
+  });
+
+  assert.deepEqual(await runner.run([fileURLToPath(import.meta.url)]), { exitCode: 0, signal: null });
+  await assert.rejects(stat(scenarioRoot), { code: "ENOENT" });
 });
 
 test("live runners can omit the test timeout without changing the ordinary default", async () => {

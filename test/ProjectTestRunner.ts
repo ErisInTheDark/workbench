@@ -177,7 +177,7 @@ export default class ProjectTestRunner {
     const label = files.length === 1
       ? path.relative(this.projectRoot, files[0]!).replaceAll("\\", "/")
       : `${files.length} test files`;
-    const services = await WorkbenchTestProcessResources.create(true);
+    const services = await WorkbenchTestProcessResources.create(true, this.projectRoot);
     try {
       if (this.signal.aborted) return { exitCode: 130, signal: null };
       const child = this.spawnProcess(process.execPath, [
