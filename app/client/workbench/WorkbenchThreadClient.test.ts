@@ -2612,13 +2612,13 @@ test("thread selection reuses cached rate limits while automatic reads are throt
   await explicitRefresh;
   assert.equal(client.getSnapshot().rateLimits?.limitName, "explicit");
 
-  socket.notify("account/rateLimits/updated", {});
-  await waitForCondition(() => pendingRequests.length === 3, "Expected the account update to bypass the refresh throttle.");
-  respondWithRateLimits(pendingRequests[2]!, "notification");
+  socket.notify("account/rateLimits/updated", { rateLimits: { limitId: "codex", limitName: "notification" } });
   await waitForCondition(
     () => client.getSnapshot().rateLimits?.limitName === "notification",
-    "Expected the account update to replace cached rate limits.",
+    "Expected the account update to merge into cached rate limits.",
   );
+  // The update carries its values, so it never costs another provider read.
+  assert.equal(pendingRequests.length, 2);
 }));
 
 test("project changes retain daemon account limits while connection reset fences late reads", async () => withClient(async (client, socket) => {

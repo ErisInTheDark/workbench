@@ -4517,7 +4517,8 @@ function WorkbenchThreadClient(
     }
 
     if (notification.method === "account/rateLimits/updated") {
-      void account.refresh(harness, "notification");
+      // The update carries the values; rereading would cost a provider round trip per agent token update.
+      void account.applyUpdate(harness, notification.params.rateLimits);
       return;
     }
 

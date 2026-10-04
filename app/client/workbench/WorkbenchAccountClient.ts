@@ -3,7 +3,7 @@
  * - WorkbenchAccountSnapshot: immutable provider model and rate-limit cache projection.
  * - WorkbenchAccountClientOptions: provider account transport and diagnostic ports.
  * - WorkbenchModelReadSupersededError: expected retirement of an obsolete model read.
- * - default WorkbenchAccountClient: own model caches and rate-limit refresh lifecycle by harness.
+ * - default WorkbenchAccountClient: own model caches, rate-limit refresh lifecycle, and sparse provider rate-limit updates by harness.
  */
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 import type {
@@ -207,6 +207,29 @@ export default class WorkbenchAccountClient {
       });
     this.refreshes.set(harness, task);
     await task;
+  }
+
+  /**
+   * Merge a provider's sparse rolling update into the cached snapshot: present values win, nulls mean "not
+   * reported" and keep the last read. Without a matching cached snapshot there is nothing to merge into, so it
+   * falls back to the throttled read.
+   */
+  async applyUpdate(harness: WorkbenchHarness, update: Partial<WorkbenchRateLimitSnapshot>) {
+    const previous = this.rateLimits.get(harness);
+    const base = previous?.snapshot;
+    if (!base || (update.limitId && base.limitId && update.limitId !== base.limitId)) {
+      await this.refreshIfStale(harness);
+      return;
+    }
+    const next = { ...base };
+    for (const [key, value] of Object.entries(update) as [keyof WorkbenchRateLimitSnapshot, unknown][]) {
+      if (value !== null && value !== undefined && key in base) (next as Record<string, unknown>)[key] = value;
+    }
+    if (isRegressive(base, next, this.now())) return;
+    // Take the newest read generation: a read already in flight then yields to this newer update.
+    const generation = this.generations.get(harness) ?? previous!.generation;
+    this.rateLimits.set(harness, { generation, snapshot: next, source: "notification" });
+    this.publish();
   }
 
   reset() {

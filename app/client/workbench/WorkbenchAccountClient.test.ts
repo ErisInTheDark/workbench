@@ -200,6 +200,30 @@ test("notification refreshes replace the published rate-limit snapshot", async (
   assert.equal(publishes, 2);
 });
 
+test("sparse rate-limit updates merge into the cached snapshot without another read", async () => {
+  let readCount = 0;
+  const client = new WorkbenchAccountClient({
+    listModels: async () => [],
+    readRateLimits: async () => {
+      readCount += 1;
+      return { ...rateLimits("plan"), rateLimits: { ...rateLimits("plan").rateLimits, planType: "pro" } };
+    },
+  });
+  // With nothing cached yet, the update can only trigger a read.
+  await client.applyUpdate("codex", { limitId: "codex", primary: { usedPercent: 10, windowDurationMins: 60, resetsAt: 1 } });
+  assert.equal(readCount, 1);
+  await client.applyUpdate("codex", {
+    limitId: "codex", limitName: null, planType: null,
+    primary: { usedPercent: 18, windowDurationMins: 60, resetsAt: 1 },
+  });
+  assert.equal(readCount, 1);
+  const merged = client.getRateLimits("codex");
+  assert.equal(merged?.primary?.usedPercent, 18);
+  // Null metadata in a rolling update keeps what the last read observed.
+  assert.equal(merged?.planType, "pro");
+  assert.equal(merged?.limitName, "plan");
+});
+
 test("independent harness refreshes cannot invalidate each other", async () => {
   const reads = new Map<WorkbenchHarness, ReturnType<typeof deferred<WorkbenchAccountLimits>>>([
     ["codex", deferred<WorkbenchAccountLimits>()],
