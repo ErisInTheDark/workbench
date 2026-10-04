@@ -477,7 +477,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.match(ripgrep.description ?? "", /without shell quoting.*no matches/u);
     const shell = inventory.tools.find(({ name }) => name === "shell");
     assert.ok(shell);
-    assert.deepEqual(Object.keys(shell.inputSchema.properties ?? {}).sort(), ["command", "login", "timeout_ms", "workdir"]);
+    assert.deepEqual(Object.keys(shell.inputSchema.properties ?? {}).sort(), ["command", "expensive", "login", "timeout_ms", "workdir"]);
     assert.deepEqual(Object.keys(shell.outputSchema?.properties ?? {}).sort(), ["cwd", "exitCode", "shell", "stderr", "stdout"]);
     assert.match(shell.description ?? "", /never escalates.*direct shell_command/u);
 

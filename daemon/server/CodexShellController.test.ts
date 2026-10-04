@@ -253,3 +253,26 @@ test("admitted non-Codex calls use their own WB identity and only admitted permi
   assert.deepEqual(approved, ["other"]);
   assert.deepEqual(calls[0]?.env, { CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "other", WORKBENCH_HARNESS: "opencode" });
 });
+
+test("commands marked expensive on every route take a machine-wide slot before reaching the executor; others never wait", async () => {
+  const admitted: string[] = [];
+  const executed: string[] = [];
+  const controller = new WorkbenchShellController({
+    platform: "linux",
+    shellEnvironment: { SHELL: "/bin/bash" },
+    readConfiguration: async () => ({ config: {} }),
+    executor: { execute: async request => { executed.push(request.command.at(-1)!); return { exitCode: 0, stdout: "", stderr: "" }; } },
+    capacity: { run: async (label, _signal, task) => { admitted.push(label); return task(); } },
+  });
+  const signal = new AbortController().signal;
+  await controller.execute({ command: "cargo build --release", expensive: true }, sandboxMeta(process.cwd()), signal, caller);
+  await controller.execute({ command: "cargo build --release" }, sandboxMeta(process.cwd()), signal, caller);
+  await controller.execute({ command: "git status", expensive: true }, sandboxMeta(process.cwd()), signal, caller);
+  await controller.executeAdmitted({
+    caller: { harness: "claude", threadId: WorkbenchThreadIdSchema.parse("other"), cwd: process.cwd() },
+    command: ["pnpm", "test"], cwd: process.cwd(), expensive: true,
+    permissions: { mode: "restricted", writableRoots: [process.cwd()], network: false },
+  }, signal);
+  assert.deepEqual(admitted, ["cargo build --release", "git status", "pnpm test"]);
+  assert.equal(executed.length, 4);
+});

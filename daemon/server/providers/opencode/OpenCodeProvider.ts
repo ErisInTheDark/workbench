@@ -68,6 +68,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const threads = get("openCodeThreadOperations");
     const shell = new CodexShellController({
       executor: get("codexExecutor"),
+      capacity: get("commandCapacity"),
       sandboxAcl: get("codexSandboxAcl"),
       readConfiguration: cwd => get("codexThreadOperations").requestNative("config/read", { cwd, includeLayers: false }),
     });
@@ -117,7 +118,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload the OpenCode provider definition.",
   lifecycle: "atomic",
   provides: ["openCodeProvider"],
-  requires: ["openCodeService", "openCodeModelCatalog", "openCodeThreadOperations", "codexExecutor", "codexSandboxAcl", "codexThreadOperations"],
+  requires: ["openCodeService", "openCodeModelCatalog", "openCodeThreadOperations", "codexExecutor", "codexSandboxAcl", "codexThreadOperations", "commandCapacity"],
   safeAll: true,
   scope: "server:opencode/def",
 });

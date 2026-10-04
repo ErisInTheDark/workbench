@@ -63,6 +63,8 @@ export interface WorkbenchAdmittedExecution {
     | { mode: "restricted"; writableRoots: string[]; network: boolean }
     | { mode: "approved-unrestricted" };
   timeoutMs?: number;
+  /** Queue for a machine-wide expensive-command slot before running. */
+  expensive?: boolean;
 }
 
 export type WorkbenchPatchClaimCheck = (request: {

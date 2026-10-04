@@ -15,6 +15,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const threads = get("claudeThreadOperations");
     const shell = new CodexShellController({
       executor: get("codexExecutor"),
+      capacity: get("commandCapacity"),
       sandboxAcl: get("codexSandboxAcl"),
       readConfiguration: cwd => get("codexThreadOperations").requestNative("config/read", { cwd, includeLayers: false }),
     });
@@ -44,7 +45,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload Claude provider definition.",
   lifecycle: "atomic",
   provides: ["claudeProvider"],
-  requires: ["claudeConfiguration", "claudeThreadOperations", "claudeTranscriptAdapter", "codexExecutor", "codexSandboxAcl", "codexThreadOperations"],
+  requires: ["claudeConfiguration", "claudeThreadOperations", "claudeTranscriptAdapter", "codexExecutor", "codexSandboxAcl", "codexThreadOperations", "commandCapacity"],
   safeAll: true,
   scope: "server:claude/def",
 });

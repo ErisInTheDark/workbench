@@ -15,6 +15,7 @@ import {
   WorkbenchShellInputSchema,
   type WorkbenchShell,
 } from "workbench-shared/workbench/commands/workbench-shell-command";
+import type WorkbenchCommandCapacity from "./WorkbenchCommandCapacity";
 import type { WorkbenchAdmittedExecution } from "workbench-shared/workbench/provider/provider-execution";
 import type CodexExecServer from "./CodexExecServer";
 import type CodexSandboxAclController from "./CodexSandboxAclController";
@@ -82,6 +83,8 @@ export interface CodexShellControllerOptions {
   sandboxAcl?: Pick<CodexSandboxAclController, "checkInBackground">;
   readConfiguration(cwd: string): Promise<unknown>;
   executeApproved?: typeof executeApprovedCommand;
+  /** Machine-wide slots for expensive commands; absent means every command runs immediately. */
+  capacity?: Pick<WorkbenchCommandCapacity, "run">;
   platform?: NodeJS.Platform;
   shellEnvironment?: NodeJS.ProcessEnv;
 }
@@ -181,7 +184,7 @@ export default class CodexShellController {
     this.options.sandboxAcl?.checkInBackground(sandboxCwd, this.runSandboxed);
     const configuration = await this.configuration(commandCwd);
     signal.throwIfAborted();
-    const result = await this.options.executor.execute({
+    const result = await this.admit(request.command, request.expensive === true, signal, () => this.options.executor.execute({
       ...configuration,
       command: shellCommand.command,
       env: {
@@ -194,8 +197,13 @@ export default class CodexShellController {
       workspaceRoots: [sandboxCwd],
       useLegacyLandlock: sandboxState.useLegacyLandlock,
       ...(request.timeout_ms === undefined ? {} : { timeoutMs: request.timeout_ms }),
-    }, signal);
+    }, signal));
     return { ...result, cwd: commandCwd, shell: shellCommand.shell };
+  }
+
+  /** Expensive commands wait for a shared slot before starting, so their own timeout measures only running time. */
+  private admit<Result>(command: string, expensive: boolean, signal: AbortSignal, task: () => Promise<Result>) {
+    return expensive && this.options.capacity ? this.options.capacity.run(command, signal, task) : task();
   }
 
   /** Run argv as the Codex sandbox identity with only `root` writable; ACL repair needs the owner of sandbox-created objects. */
@@ -219,7 +227,11 @@ export default class CodexShellController {
     return { code: result.exitCode, stdout: result.stdout };
   };
 
-  async executeAdmitted(request: WorkbenchAdmittedExecution, signal: AbortSignal) {
+  executeAdmitted(request: WorkbenchAdmittedExecution, signal: AbortSignal) {
+    return this.admit(request.command.join(" "), request.expensive === true, signal, () => this.runAdmitted(request, signal));
+  }
+
+  private async runAdmitted(request: WorkbenchAdmittedExecution, signal: AbortSignal) {
     if (request.permissions.mode !== "approved-unrestricted") this.options.sandboxAcl?.checkInBackground(request.cwd, this.runSandboxed);
     const configuration = await this.configuration(request.cwd);
     signal.throwIfAborted();
@@ -270,5 +282,6 @@ export function prepareWorkbenchShellExecution(
     outsideSandbox: request.outside_sandbox === true,
     ...(request.justification === undefined ? {} : { justification: request.justification }),
     ...(request.timeout_ms === undefined ? {} : { timeoutMs: request.timeout_ms }),
+    ...(request.expensive ? { expensive: true } : {}),
   };
 }

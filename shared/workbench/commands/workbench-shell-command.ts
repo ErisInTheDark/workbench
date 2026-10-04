@@ -5,8 +5,7 @@
  * - WorkbenchShellInputSchema/WorkbenchShellInput: define the sandbox-only MCP shell request.
  * - WorkbenchEscalatingShellInputSchema/WorkbenchEscalatingShellInput: shell request for providers whose escalation goes through Workbench approval.
  * - WorkbenchShellResultSchema/WorkbenchShellResult: define resolved command output and shell evidence shared by the daemon and transcript renderer.
- * - getWorkbenchShellAggregatedOutput: combine stdout and stderr with one boundary rule.
- */
+ * - getWorkbenchShellAggregatedOutput: combine stdout and stderr with one boundary rule. */
 import { z } from "zod";
 
 export const WORKBENCH_SHELL_MCP_TOOL_NAME = "shell";
@@ -18,6 +17,7 @@ export const WorkbenchShellInputSchema = z.object({
   login: z.boolean().optional().describe("Use login-shell semantics. Defaults to true."),
   timeout_ms: z.number().int().nonnegative().optional().describe("Maximum command runtime in milliseconds. Codex's command default applies when omitted."),
   workdir: z.string().min(1).optional().describe("Working directory. Relative paths resolve from the current turn sandbox cwd."),
+  expensive: z.boolean().optional().describe("Set true for builds, test suites and other CPU/RAM-heavy commands: they queue machine-wide instead of all running at once, and queue time does not count against timeout_ms."),
 });
 
 export type WorkbenchShellInput = z.infer<typeof WorkbenchShellInputSchema>;

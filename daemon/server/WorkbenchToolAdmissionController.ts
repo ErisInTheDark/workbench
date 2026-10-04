@@ -85,6 +85,7 @@ export default class WorkbenchToolAdmissionController {
     outsideSandbox?: boolean;
     justification?: string;
     timeoutMs?: number;
+    expensive?: boolean;
     itemId?: WorkbenchItemId;
     turnId?: WorkbenchTurnId;
   }, signal: AbortSignal) {
@@ -136,6 +137,8 @@ export default class WorkbenchToolAdmissionController {
       permissions = { mode: "approved-unrestricted" };
     }
     signal.throwIfAborted();
-    return this.options.execute({ caller, command, cwd, permissions, timeoutMs }, signal);
+    return this.options.execute({
+      caller, command, cwd, permissions, timeoutMs, ...(input.expensive ? { expensive: true } : {}),
+    }, signal);
   }
 }
