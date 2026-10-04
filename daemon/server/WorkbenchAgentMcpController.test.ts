@@ -1116,8 +1116,9 @@ test("thread steer interruption ends declared waits but preserves questionnaires
     assert.deepEqual(waitStates, [{ threadId: workbenchThreadId, toolNames: ["subagent_wait"] }]);
     assert.equal(requestRegistry.interruptThreadWaits(workbenchThreadId), 1);
     const subagentResult = await subagentCall;
-    assert.equal(subagentResult.isError, true);
-    assert.equal(responseText(subagentResult), "");
+    // An incoming message is expected, not a failure: the agent gets plain text it can act on.
+    assert.equal(subagentResult.isError, false);
+    assert.match(responseText(subagentResult), /new message arrived/u);
     assert.deepEqual(subagentResult.structuredContent, { kind: "interruptedBySteer", version: 1 });
     assert.equal(executions.get("thread-title-get")?.signal.aborted, false);
     assert.equal(executions.get("json")?.signal.aborted, false);

@@ -44,6 +44,7 @@ import {
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const LEGACY_MCP_CLIENT_SCOPE = "legacy";
+const STEER_INTERRUPTION_TEXT = "Wait interrupted: a new message arrived for this thread. Read it, then call this tool again if you still need to wait.";
 const MCP_CLIENT_SCOPE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 type WorkbenchAgentMcpRequestId = number | string;
 
@@ -550,7 +551,12 @@ export default class WorkbenchAgentMcpController {
       };
     } catch (error) {
       if (isWorkbenchAgentMcpSteerInterruption(error)) {
-        return { content: [], isError: true, structuredContent: { kind: "interruptedBySteer", version: 1 } };
+        // Expected, not a failure: an empty error result reaches agents as an opaque "Unknown error".
+        return {
+          content: [{ type: "text" as const, text: STEER_INTERRUPTION_TEXT }],
+          isError: false,
+          structuredContent: { kind: "interruptedBySteer", version: 1 },
+        };
       }
       const message = sanitizeError(error) || "Workbench MCP tool call failed.";
       if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);
