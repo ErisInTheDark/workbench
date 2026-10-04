@@ -2,7 +2,9 @@
  * Exports:
  * - CommandItem/CommandSequenceItem/ThreadRenderableBlock/HiddenThreadItemIds: shared render-plan shapes.
  * - IncomingAgentMessageItem: an attributed cross-agent message item.
- * - buildRenderableBlocks: group visible provider items, including adjacent same-state textual steers and incoming agent messages (held ones above held user steers), before rendering.
+ * - buildRenderableBlocks: group visible provider items, including adjacent same-state textual steers and incoming agent messages (held ones above held user steers), and fold settled wait ↔ message ping-pong into one exchange, before rendering.
+ * - SubagentWaitItem: a settled subagent wait as a CLI command or wb MCP call.
+ * - IncomingAgentMessageRun/groupIncomingAgentMessageRuns: bundle every same-sender, same-state incoming message in a group into one bubble.
  * - getUserMessageDeliveryState: classify held (pending or undelivered) user-message input.
  * - isHiddenCommandExecution/hasReasoningSteps: shared visibility decisions.
  * - CommandSequenceRenderSegment/buildCommandSequenceRenderSegments: final command presentation groups.
@@ -16,7 +18,9 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
 import { isWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
-import { readWorkbenchAgentMessageInput, readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread/thread-agent-message";
+import {
+  readWorkbenchAgentMessageInput, readWorkbenchAgentMessageItem, type WorkbenchAgentMessage,
+} from "workbench-shared/workbench/thread/thread-agent-message";
 import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { getWorkbenchInputState, type WorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
@@ -28,26 +32,48 @@ import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/th
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
-  getThreadCommandDisplay, getThreadCommandExecutionOutcome, getGitArcMatcherAction,
+  getThreadCommandDisplay, getThreadCommandExecutionOutcome, getThreadSubagentWaitMcpOutcome, getGitArcMatcherAction,
   getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem,
   isNativeFileOperation, getNativeFileChanges,
   isBrowseCommandMatcherClaim, isThreadContextMatcherClaim,
   isWorkbenchTaskStatusMatcherClaim, isWorkbenchTaskTitleSetMatcherClaim,
   parseWorkbenchMessageCommand, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand, parseWorkbenchThreadRecallCommand,
   type CommandShell,
+  type ThreadCommandExecutionOutcome,
   type WorkbenchThreadRecallOperation,
 } from "../../../workbench/thread/thread-command-matchers";
+import type { WorkbenchSubagentCommandTarget } from "../../../workbench/thread/command-matchers/workbench-cli";
 import { getWorkbenchSubagentCommandTargetKey } from "../../../workbench/thread/thread-subagents";
 import { omitThreadReasoningStep, type ThreadReasoningStepReference } from "./thread-reasoning-display";
 import { isThreadWebSearchPlaceholder } from "./thread-web-search-state";
-import { groupThreadSubagentWaitRenderEntries, type ThreadSubagentWaitRenderEntry, type ThreadSubagentWaitRenderGroup } from "./thread-subagent-wait-groups";
+import {
+  findThreadSubagentWaitExchanges, groupThreadSubagentWaitRenderEntries,
+  type ThreadSubagentWaitExchangeRole, type ThreadSubagentWaitRenderEntry, type ThreadSubagentWaitRenderGroup,
+} from "./thread-subagent-wait-groups";
 
 export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & { shell?: CommandShell };
 export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcpToolCall" }>;
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 export type IncomingAgentMessageItem = UserMessageItem | Extract<ThreadItem, { type: "functionCallOutput" }>;
+/** A settled subagent wait, as a CLI command or a wb MCP call. */
+export type SubagentWaitItem = CommandItem | Extract<ThreadItem, { type: "mcpToolCall" }>;
+export interface IncomingAgentMessageRun {
+  deliveryState: ReturnType<typeof getUserMessageDeliveryState>;
+  items: IncomingAgentMessageItem[];
+  messages: [WorkbenchAgentMessage, ...WorkbenchAgentMessage[]];
+}
 export type ThreadRenderableBlock =
   | { kind: "agentMessageSequence"; items: IncomingAgentMessageItem[]; state: "delivered" | "held" }
+  | {
+    /** Chronological waits and messages, which render as one wait row then one message group. */
+    items: Array<SubagentWaitItem | IncomingAgentMessageItem>;
+    kind: "subagentWaitExchange";
+    messages: IncomingAgentMessageItem[];
+    outcome: ThreadCommandExecutionOutcome;
+    /** Every waited-for target, first-seen order. */
+    targets: WorkbenchSubagentCommandTarget[];
+    waits: SubagentWaitItem[];
+  }
   | { kind: "commandSequence"; items: CommandSequenceItem[] }
   | { kind: "fileChangeSequence"; items: Extract<ThreadItem, { type: "fileChange" | "dynamicToolCall" | "mcpToolCall" }>[] }
   | { kind: "reasoningSequence"; items: Extract<ThreadItem, { type: "reasoning" }>[] }
@@ -159,6 +185,92 @@ function getMergeableSteerState(item: UserMessageItem) {
     : null;
 }
 
+/**
+ * Each sender is its own channel within a group, so all of one sender's messages in one delivery state share a
+ * bubble even when another sender's messages fall between them. Bubbles follow each sender's first message.
+ */
+export function groupIncomingAgentMessageRuns(items: readonly IncomingAgentMessageItem[]): IncomingAgentMessageRun[] {
+  const runs = new Map<string, IncomingAgentMessageRun>();
+  for (const item of items) {
+    const message = readWorkbenchAgentMessageItem(item);
+    if (!message) continue;
+    const deliveryState = item.type === "userMessage" ? getUserMessageDeliveryState(item) : null;
+    const key = `${deliveryState ?? "delivered"}\0${message.senderThreadId}`;
+    const run = runs.get(key);
+    if (run) {
+      run.items.push(item);
+      run.messages.push(message);
+    } else {
+      runs.set(key, { deliveryState, items: [item], messages: [message] });
+    }
+  }
+  return [...runs.values()];
+}
+
+/** A block that is nothing but settled subagent waits, with what it waited for and how the last one ended. */
+function readSettledSubagentWaits(block: ThreadRenderableBlock) {
+  if (block.kind === "item" && block.item.type === "mcpToolCall") {
+    const route = getWorkbenchMcpCommandRoute({ argumentsValue: block.item.arguments, server: block.item.server, tool: block.item.tool });
+    if (route?.kind !== "specialized" || route.operation.kind !== "subagent") return null;
+    const operation = route.operation.operation;
+    const outcome = getThreadSubagentWaitMcpOutcome(block.item);
+    return operation.action === "wait" && operation.targets.length && outcome !== "inProgress"
+      ? { items: [block.item] as SubagentWaitItem[], outcome, targets: operation.targets } : null;
+  }
+  if (block.kind !== "commandSequence" || !block.items.length) return null;
+  const items: SubagentWaitItem[] = [];
+  const targets: WorkbenchSubagentCommandTarget[] = [];
+  let outcome: ThreadCommandExecutionOutcome = "completed";
+  for (const item of block.items) {
+    if (item.type !== "commandExecution") return null;
+    const display = getThreadCommandDisplay({ command: item.command, commandActions: item.commandActions, cwd: item.cwd, shell: item.shell });
+    const command = parseWorkbenchSubagentCommand(display.unwrappedCommand, item.commandActions);
+    outcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
+    if (command?.action !== "wait" || !command.targets.length || outcome === "inProgress") return null;
+    items.push(item);
+    targets.push(...command.targets);
+  }
+  return { items, outcome, targets };
+}
+
+/** Settled waits ping-ponging with delivered messages read as one wait row and one message group. */
+function foldSubagentWaitExchanges(blocks: ThreadRenderableBlock[]): ThreadRenderableBlock[] {
+  const waits = blocks.map(readSettledSubagentWaits);
+  const roles = blocks.map<ThreadSubagentWaitExchangeRole>((block, index) => waits[index] ? "wait"
+    : block.kind === "agentMessageSequence" && block.state === "delivered" ? "messages" : "other");
+  const spans = findThreadSubagentWaitExchanges(roles);
+  if (!spans.length) return blocks;
+  const folded: ThreadRenderableBlock[] = [];
+  let cursor = 0;
+  for (const { end, start } of spans) {
+    folded.push(...blocks.slice(cursor, start));
+    const exchange: Extract<ThreadRenderableBlock, { kind: "subagentWaitExchange" }> = {
+      items: [], kind: "subagentWaitExchange", messages: [], outcome: "completed", targets: [], waits: [],
+    };
+    const targetKeys = new Set<string>();
+    for (let index = start; index < end; index += 1) {
+      const block = blocks[index]!;
+      const wait = waits[index];
+      if (wait) {
+        exchange.waits.push(...wait.items);
+        exchange.items.push(...wait.items);
+        exchange.outcome = wait.outcome;
+        for (const target of wait.targets) {
+          const key = getWorkbenchSubagentCommandTargetKey(target);
+          if (!targetKeys.has(key)) { targetKeys.add(key); exchange.targets.push(target); }
+        }
+      } else if (block.kind === "agentMessageSequence") {
+        exchange.messages.push(...block.items);
+        exchange.items.push(...block.items);
+      }
+    }
+    folded.push(exchange);
+    cursor = end;
+  }
+  folded.push(...blocks.slice(cursor));
+  return folded;
+}
+
 export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadItemIds = {}, fallbackCwd = "."): ThreadRenderableBlock[] {
   const blocks: ThreadRenderableBlock[] = [];
   const capturedGroups = new Set(items.flatMap(item =>
@@ -263,7 +375,7 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     const firstHeldSteer = blocks.findIndex(isHeldUserSteerBlock);
     blocks.splice(firstHeldSteer < 0 ? blocks.length : firstHeldSteer, 0, heldBlock);
   }
-  return blocks;
+  return foldSubagentWaitExchanges(blocks);
 }
 
 type CommandContext = {
@@ -343,7 +455,10 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
 
 export function getWorkedBlockRows(block: ThreadRenderableBlock, context: CommandContext = {}): Array<{ block: ThreadRenderableBlock; eligible: boolean }> {
   if (block.kind !== "commandSequence") {
-    if (block.kind === "userMessageSequence" || block.kind === "agentMessageSequence") return [{ block, eligible: false }];
+    // Exchanges hold delivered messages, which never hide inside a worked summary.
+    if (block.kind === "userMessageSequence" || block.kind === "agentMessageSequence" || block.kind === "subagentWaitExchange") {
+      return [{ block, eligible: false }];
+    }
     if (block.kind === "item" && block.item.type === "functionCallOutput") {
       const output = readWorkbenchToolOutput(block.item);
       if (output?.namespace === "workbench" && output.name === "patch_recovery") return [];

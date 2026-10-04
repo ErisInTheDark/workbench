@@ -9,10 +9,21 @@ import test from "node:test";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 import {
+  findThreadSubagentWaitExchanges,
   getThreadSubagentWaitTiming,
   groupThreadSubagentWaitRenderEntries,
   type ThreadSubagentWaitRenderEntry,
 } from "./thread-subagent-wait-groups";
+
+test("wait exchanges need two settled waits, take trailing messages, and stop at anything else", () => {
+  assert.deepEqual(findThreadSubagentWaitExchanges(["messages", "wait", "messages", "wait", "messages", "other", "wait", "messages"]), [
+    { start: 1, end: 5 },
+  ]);
+  assert.deepEqual(findThreadSubagentWaitExchanges(["wait", "wait", "other", "wait", "messages", "wait"]), [
+    { start: 0, end: 2 }, { start: 3, end: 6 },
+  ]);
+  assert.deepEqual(findThreadSubagentWaitExchanges(["wait", "messages", "other", "wait"]), []);
+});
 
 type CommandItem = Extract<ThreadItem, { type: "commandExecution" }>;
 

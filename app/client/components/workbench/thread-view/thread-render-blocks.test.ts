@@ -6,7 +6,10 @@ import test from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { createWorkbenchAgentMessageOutput, createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
-import { buildRenderableBlocks, getRenderableBlockItems, getWorkedBlockRows, reuseRenderableBlocks, hasSameBlockTimeline, type CommandItem } from "./thread-render-blocks";
+import {
+  buildRenderableBlocks, getRenderableBlockItems, getWorkedBlockRows, groupIncomingAgentMessageRuns,
+  reuseRenderableBlocks, hasSameBlockTimeline, type CommandItem,
+} from "./thread-render-blocks";
 import { partitionWorkedRows } from "./thread-worked-run";
 
 function command(id: string, text = "pwd"): CommandItem {
@@ -113,6 +116,67 @@ test("incoming agent messages group while adjacent and held ones sit directly ab
     ["agent:delivered", ["c"]],
   ]);
   assert.deepEqual(buildRenderableBlocks([incoming("only", "pending")]).map(block => block.kind), ["agentMessageSequence"]);
+});
+
+function note(id: string, senderName: string, status?: "pending" | "failed") {
+  const item = { ...user(id), content: [{
+    text: createWorkbenchAgentMessageText({ message: id, senderName, senderThreadId: senderName.toLowerCase() }),
+    text_elements: [], type: "text" as const,
+  }] };
+  return status ? withWorkbenchInputState(item, { kind: "steer", status }) : item;
+}
+function mcpWait(id: string, names: string[], status: "completed" | "inProgress" = "completed"): ThreadItem {
+  return { ...mcp(id, "subagent_wait", { names }), status } as ThreadItem;
+}
+const blockShape = (block: ReturnType<typeof buildRenderableBlocks>[number]) => [
+  block.kind === "agentMessageSequence" ? `agent:${block.state}` : block.kind,
+  getRenderableBlockItems(block).map(item => item.id),
+];
+
+test("settled MCP waits ping-ponging with delivered messages fold into one exchange naming every target once", () => {
+  const blocks = buildRenderableBlocks([
+    mcpWait("w1", ["Rose", "Iris"]), note("m1", "Daisy"), mcpWait("w2", ["Rose", "Iris", "Daisy"]), note("m2", "Iris"),
+    mcpWait("w3", ["rose", "Iris", "Daisy"]), note("m3", "Rose"),
+    user("boundary"),
+    mcpWait("lone", ["Rose"]), note("lone-reply", "Rose"), mcpWait("live", ["Rose"], "inProgress"),
+  ]);
+  assert.deepEqual(blocks.map(blockShape), [
+    ["subagentWaitExchange", ["w1", "m1", "w2", "m2", "w3", "m3"]],
+    ["item", ["boundary"]],
+    ["item", ["lone"]], ["agent:delivered", ["lone-reply"]], ["item", ["live"]],
+  ]);
+  const exchange = blocks[0]!;
+  assert.ok(exchange.kind === "subagentWaitExchange");
+  assert.deepEqual(exchange.targets.map(target => target.value), ["Rose", "Iris", "Daisy"]);
+  assert.deepEqual(exchange.messages.map(item => item.id), ["m1", "m2", "m3"]);
+  assert.deepEqual(getWorkedBlockRows(exchange).map(row => row.eligible), [false], "exchanged messages never hide in worked runs");
+});
+
+test("CLI waits fold only from blocks that are nothing but waits, and held messages never join an exchange", () => {
+  const cliWait = (id: string, names: string[]) => command(id, `wb subagent wait ${names.map(name => `--name ${name}`).join(" ")}`);
+  const folded = buildRenderableBlocks([cliWait("c1", ["Rose"]), note("m1", "Rose"), cliWait("c2", ["Rose", "Iris"]), note("m2", "Iris")]);
+  assert.deepEqual(folded.map(blockShape), [["subagentWaitExchange", ["c1", "m1", "c2", "m2"]]]);
+
+  const apart = buildRenderableBlocks([
+    cliWait("mixed", ["Rose"]), command("pwd"), note("m1", "Rose"), cliWait("after", ["Rose"]), note("m2", "Rose"),
+  ]);
+  assert.deepEqual(apart.map(blockShape), [
+    ["commandSequence", ["mixed", "pwd"]], ["agent:delivered", ["m1"]], ["commandSequence", ["after"]], ["agent:delivered", ["m2"]],
+  ]);
+
+  const held = buildRenderableBlocks([mcpWait("w1", ["Rose"]), note("held", "Rose", "pending"), mcpWait("w2", ["Rose"])]);
+  assert.deepEqual(held.map(blockShape), [["subagentWaitExchange", ["w1", "w2"]], ["agent:held", ["held"]]]);
+});
+
+test("one sender's messages in one delivery state share a bubble even when another sender interleaves", () => {
+  const runs = groupIncomingAgentMessageRuns([
+    note("d1", "Daisy"), note("i1", "Iris"), note("i2", "Iris"), note("d2", "Daisy"),
+    note("i-held", "Iris", "failed"), note("d-held", "Daisy", "failed"), note("i-held-2", "Iris", "failed"), note("i-pending", "Iris", "pending"),
+  ]);
+  assert.deepEqual(runs.map(run => [run.deliveryState, run.items.map(item => item.id)]), [
+    [null, ["d1", "d2"]], [null, ["i1", "i2"]], ["unsent", ["i-held", "i-held-2"]], ["unsent", ["d-held"]], ["pending", ["i-pending"]],
+  ]);
+  assert.deepEqual(runs[1]!.messages.map(message => message.message), ["i1", "i2"]);
 });
 
 test("ordinary messages and non-message items remain steer grouping boundaries", () => {

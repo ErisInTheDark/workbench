@@ -20,6 +20,7 @@
  * - getThreadCommandDisplay: reuse immutable command contexts, unwrap shell launchers, and describe common command patterns.
  * - getThreadCommandBlockDisplay: aggregate multiple command displays into one grouped summary label.
  * - getThreadCommandExecutionOutcome/getThreadCommandOutcomeDisplay: classify command lifecycle results and select completed or ongoing structured grammar.
+ * - getThreadMcpToolCallOutcome/getThreadSubagentWaitMcpOutcome/isThreadMcpWaitInterruptedBySteer: classify wb MCP call lifecycles, counting a wait ended by an incoming message as completed.
  * - getWorkbenchMcpCommandDisplay/getWorkbenchMcpCommandRoute/getWorkbenchCommandRouteSummaryDisplay: map recorded wb MCP calls and resolved routes into summary or dedicated renderer operations.
  * - ThreadCommandExecutionOutcome: semantic completed, ongoing, timeout, failure, or decline state for command summaries.
  */
@@ -30,6 +31,7 @@ export {
 } from "./command-matchers/native-file-changes";
 
 import type { CommandAction, CommandExecutionStatus, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { readGitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
 import { getClaudeToolDisplay } from "./command-matchers/claude";
 import { getOpenCodeToolDisplay } from "./command-matchers/opencode";
 import {
@@ -666,6 +668,26 @@ export function getThreadCommandExecutionOutcome(
   if (status === "declined") return "declined";
   if (status === "inProgress") return "inProgress";
   return "completed";
+}
+
+export function getThreadMcpToolCallOutcome(
+  item: Pick<Extract<ThreadItem, { type: "mcpToolCall" }>, "error" | "status">,
+): ThreadCommandExecutionOutcome {
+  if (item.status === "inProgress") return "inProgress";
+  return item.status === "failed" || Boolean(item.error) ? "failed" : "completed";
+}
+
+/** A wb MCP wait that an incoming message cut short; its result text is guidance for the agent, not the user. */
+export function isThreadMcpWaitInterruptedBySteer(item: Pick<Extract<ThreadItem, { type: "mcpToolCall" }>, "result">) {
+  const result = readGitArcMcpResult(item.result?.structuredContent ?? null);
+  return result?.kind === "valid" && result.result.kind === "interruptedBySteer";
+}
+
+/** An incoming message ends a wb MCP subagent wait normally, so that wait completed rather than failed. */
+export function getThreadSubagentWaitMcpOutcome(
+  item: Pick<Extract<ThreadItem, { type: "mcpToolCall" }>, "error" | "result" | "status">,
+): ThreadCommandExecutionOutcome {
+  return isThreadMcpWaitInterruptedBySteer(item) ? "completed" : getThreadMcpToolCallOutcome(item);
 }
 
 export function getThreadCommandOutcomeDisplay(

@@ -28,7 +28,7 @@ export default function ThreadToolOutputItem({
   if (item.namespace === "workbench" && item.name === "patch_recovery") return null;
   const message = readWorkbenchAgentMessageItem(item);
   if (message) {
-    return <ThreadIncomingAgentMessageItem {...markdownProps} message={message} subagent={getSubagentSummary(subagents, message.senderThreadId)} timestamp={timestamp} />;
+    return <ThreadIncomingAgentMessageItem {...markdownProps} messages={[message]} subagent={getSubagentSummary(subagents, message.senderThreadId)} timestamp={timestamp} />;
   }
   if (item.namespace === "workbench" && item.name === "screenshot" && Array.isArray(item.output)) {
     const images = item.output.flatMap((part) => part.type === "input_image" ? [part.image_url] : []);

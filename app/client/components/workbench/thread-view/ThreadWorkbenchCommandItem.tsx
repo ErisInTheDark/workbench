@@ -18,7 +18,8 @@ import {
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
   parseGitCheckpointProposalId,
-  type ThreadCommandExecutionOutcome,
+  getThreadMcpToolCallOutcome,
+  getThreadSubagentWaitMcpOutcome,
   type WorkbenchCommandRoute,
 } from "../../../workbench/thread/thread-command-matchers";
 import { resolveWorkbenchSubagentCommandTargets } from "../../../workbench/thread/thread-subagents";
@@ -45,11 +46,6 @@ import { formatToolCallOutput } from "./format-thread-tool-call";
 
 type McpToolCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 type SpecializedRoute = Extract<WorkbenchCommandRoute, { kind: "specialized" }>;
-
-function getMcpOutcome(item: McpToolCallItem): ThreadCommandExecutionOutcome {
-  if (item.status === "inProgress") return "inProgress";
-  return item.status === "failed" || Boolean(item.error) ? "failed" : "completed";
-}
 
 function getMcpOutput(item: McpToolCallItem) {
   return item.error?.message
@@ -89,7 +85,7 @@ export default function ThreadWorkbenchCommandItem({
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const outcome = getMcpOutcome(item);
+  const outcome = getThreadMcpToolCallOutcome(item);
   const output = getMcpOutput(item);
   const operation = route.operation;
   const gitArcPresentation = useContext(ThreadGitArcPresentationContext);
@@ -268,12 +264,11 @@ export default function ThreadWorkbenchCommandItem({
       >
         <ThreadAgentMessageBody
           inlineMentionSources={inlineMentionSources}
-          markdown={messageCommand.message}
+          parts={[{ markdown: messageCommand.message, userVisibleSimpleVersion: messageCommand.userVisibleSimpleVersion }]}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
           threadCwdPath={threadCwdPath}
-          userVisibleSimpleVersion={messageCommand.userVisibleSimpleVersion}
           workspaceRoots={workspaceRoots}
         />
       </ThreadAgentMessageItem>
@@ -331,7 +326,7 @@ export default function ThreadWorkbenchCommandItem({
   }
   if (subagentCommand.action === "wait" && targets.length) {
     // An incoming message ends the wait normally; its result text is guidance for the agent, not the user.
-    const waitOutcome = interruptedBySteer ? "completed" : outcome;
+    const waitOutcome = getThreadSubagentWaitMcpOutcome(item);
     return (
       <ThreadSubagentWaitItem
         disclosureContent={interruptedBySteer ? undefined : outcome === "completed" && output.trim() ? (

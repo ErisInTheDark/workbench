@@ -10,7 +10,7 @@
  */
 "use client";
 
-import { memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 
 import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
@@ -55,6 +55,7 @@ import {
   getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
   getThreadCommandExecutionOutcome,
+  isThreadMcpWaitInterruptedBySteer,
   getThreadCommandOutcomeDisplay,
   getWorkbenchMcpCommandDisplay,
   getWorkbenchMcpCommandRoute,
@@ -151,9 +152,10 @@ import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import useThreadPresentedText from "./use-thread-presented-text";
 import {
   buildRenderableBlocks, buildCommandSequenceRenderSegments, getWorkedBlockRows,
-  getRenderableBlockItems, getRenderableBlockKey, getUserMessageDeliveryState, hasReasoningSteps, hasSameBlockTimeline,
-  isBrowseCommandItem, reuseRenderableBlocks,
-  type CommandItem, type CommandSequenceItem, type HiddenThreadItemIds, type ThreadRenderableBlock,
+  getRenderableBlockItems, getRenderableBlockKey, getUserMessageDeliveryState, groupIncomingAgentMessageRuns,
+  hasReasoningSteps, hasSameBlockTimeline, isBrowseCommandItem, reuseRenderableBlocks,
+  type CommandItem, type CommandSequenceItem, type HiddenThreadItemIds, type IncomingAgentMessageItem,
+  type SubagentWaitItem, type ThreadRenderableBlock,
 } from "./thread-render-blocks";
 import ThreadWorkedRun from "./ThreadWorkedRun";
 import { getThreadFileChangeTotals } from "./ThreadFileChangeItem";
@@ -511,6 +513,103 @@ function UndeliveredSteerActions({ itemIds }: { itemIds: readonly string[] }) {
   );
 }
 
+type ThreadMessageMarkdownProps = Pick<
+  ComponentProps<typeof ThreadMarkdown>,
+  "inlineMentionSources" | "projectFilePaths" | "projectId" | "projectRootPath" | "threadCwdPath" | "workspaceRoots"
+>;
+
+/** One bubble per run of consecutive same-sender messages, stamped with the run's latest message. */
+function ThreadIncomingAgentMessageRuns ({
+  items,
+  itemTimeline,
+  subagents,
+  ...markdownProps
+}: ThreadMessageMarkdownProps & {
+  items: readonly IncomingAgentMessageItem[];
+  itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
+  subagents: readonly WorkbenchSubagentSummary[];
+}) {
+  return (
+    <>
+      {groupIncomingAgentMessageRuns(items).map((run) => {
+        const last = run.items.at(-1)!;
+        const timeline = findWorkbenchThreadItemTimelineEntry(last.id, itemTimeline);
+        const timestampMs = timeline?.firstSeenAt ?? (last.type === "functionCallOutput"
+          ? readWorkbenchToolOutput(last)?.workbenchInjectionAcceptedAt
+          : timeline?.startedAt);
+        const userItems = run.items.filter((item): item is Extract<ThreadItem, { type: "userMessage" }> => item.type === "userMessage");
+        return (
+          <ThreadIncomingAgentMessageItem
+            {...markdownProps}
+            key={run.items[0]!.id}
+            messages={run.messages}
+            steerActions={run.deliveryState === "unsent" ? <UndeliveredSteerActions itemIds={storedUndeliveredSteerIds(userItems)} /> : undefined}
+            steerState={run.deliveryState}
+            subagent={getSubagentSummary(subagents, run.messages[0].senderThreadId)}
+            timestamp={timestampMs === undefined || timestampMs === null
+              ? undefined
+              : <ThreadMessageTimestamp className="mt-1" timestampSeconds={timestampMs / 1_000} />}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+/** Text a settled wait returned for the user; a wait an incoming message cut short returned agent guidance only. */
+function getSubagentWaitResultText(item: SubagentWaitItem) {
+  if (item.type === "commandExecution") {
+    return getThreadCommandExecutionOutcome(item.status, item.exitCode) === "completed" ? item.aggregatedOutput?.trim() || null : null;
+  }
+  if (item.status !== "completed" || item.error || isThreadMcpWaitInterruptedBySteer(item)) return null;
+  return formatToolCallOutput({ content: item.result?.content, fallback: item.result?.structuredContent ?? item.result?._meta })?.trim() || null;
+}
+
+/** Settled waits that ping-ponged with incoming messages: one wait row for every target, then one message group. */
+function ThreadSubagentWaitExchange ({
+  block,
+  itemTimeline,
+  relatedThreadsById,
+  subagents,
+  ...markdownProps
+}: ThreadMessageMarkdownProps & {
+  block: Extract<ThreadRenderableBlock, { kind: "subagentWaitExchange" }>;
+  itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
+  relatedThreadsById: RelatedThreadsById;
+  subagents: readonly WorkbenchSubagentSummary[];
+}) {
+  const entries = block.waits.map((item) => ({ item, outcome: block.outcome, targetKeys: [] }));
+  const timing = getThreadSubagentWaitTiming({ anchor: entries.at(-1)!, entries }, itemTimeline ?? []);
+  const results = block.waits.flatMap((item) => {
+    const text = getSubagentWaitResultText(item);
+    return text ? [{ id: item.id, text }] : [];
+  });
+  return (
+    <>
+      <ThreadSubagentWaitItem
+        disclosureContent={results.length ? (
+          <div className="space-y-3">
+            {results.map((result) => <ThreadMarkdown {...markdownProps} key={result.id} markdown={result.text} />)}
+          </div>
+        ) : undefined}
+        durationMs={timing.durationMs}
+        entries={resolveWorkbenchSubagentCommandTargets(subagents, block.targets).map((target) => ({
+          fallbackName: target.fallbackName,
+          subagent: target.subagent,
+          targetKey: target.targetKey,
+          thread: target.threadId ? relatedThreadsById[target.threadId] : undefined,
+        }))}
+        outcome={block.outcome}
+      />
+      {block.messages.length ? (
+        <ThreadIncomingAgentMessageGroup items={block.messages} state="delivered" subagents={subagents}>
+          <ThreadIncomingAgentMessageRuns {...markdownProps} itemTimeline={itemTimeline} items={block.messages} subagents={subagents} />
+        </ThreadIncomingAgentMessageGroup>
+      ) : null}
+    </>
+  );
+}
+
 function ThreadUserMessageItem ({
   inlineMentionSources,
   item,
@@ -540,7 +639,7 @@ function ThreadUserMessageItem ({
     const steerState = getUserMessageDeliveryState(item);
     return (
       <ThreadIncomingAgentMessageItem
-        message={agentMessage}
+        messages={[agentMessage]}
         steerState={steerState}
         steerActions={steerState === "unsent" ? <UndeliveredSteerActions itemIds={storedUndeliveredSteerIds(sourceItems ?? [item])} /> : undefined}
         subagent={getSubagentSummary(subagents, agentMessage.senderThreadId)}
@@ -1846,34 +1945,34 @@ function ThreadRenderableBlockViewComponent ({
   if (block.kind === "agentMessageSequence") {
     return (
       <ThreadIncomingAgentMessageGroup items={block.items} state={block.state} subagents={subagents}>
-        {block.items.map((item) => (
-          <ThreadRenderableBlockViewComponent
-            animateEntries={animateEntries}
-            block={{ item, kind: "item" }}
-            browseResultEntries={browseResultEntries}
-            finalAgentMessageId={finalAgentMessageId}
-            inlineMentionSources={inlineMentionSources}
-            isMostRecentBlock={false}
-            itemTimeline={itemTimeline}
-            key={item.id}
-            knownSkills={knownSkills}
-            presentationSource={presentationSource}
-            primaryUserBlock={primaryUserBlock}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            relatedThreadsById={relatedThreadsById}
-            subagents={subagents}
-            threadCwdPath={threadCwdPath}
-            threadId={threadId}
-            turnCompletedAt={turnCompletedAt}
-            turnId={turnId}
-            turnStartedAt={turnStartedAt}
-            turnStatus={turnStatus}
-            workspaceRoots={workspaceRoots}
-          />
-        ))}
+        <ThreadIncomingAgentMessageRuns
+          inlineMentionSources={inlineMentionSources}
+          itemTimeline={itemTimeline}
+          items={block.items}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          subagents={subagents}
+          threadCwdPath={threadCwdPath}
+          workspaceRoots={workspaceRoots}
+        />
       </ThreadIncomingAgentMessageGroup>
+    );
+  }
+  if (block.kind === "subagentWaitExchange") {
+    return (
+      <ThreadSubagentWaitExchange
+        block={block}
+        inlineMentionSources={inlineMentionSources}
+        itemTimeline={itemTimeline}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        relatedThreadsById={relatedThreadsById}
+        subagents={subagents}
+        threadCwdPath={threadCwdPath}
+        workspaceRoots={workspaceRoots}
+      />
     );
   }
   if (block.kind === "userMessageSequence") {
@@ -2471,6 +2570,8 @@ function ThreadTurnDetailsComponent ({
               ? `userMessages:${block.items[0]?.id ?? index}`
             : block.kind === "agentMessageSequence"
               ? `agentMessages:${block.state}:${block.items[0]?.id ?? index}`
+            : block.kind === "subagentWaitExchange"
+              ? `waitExchange:${block.items[0]?.id ?? index}`
             : block.kind === "webSearchSequence"
               ? `webSearches:${block.items[0]?.id ?? index}`
               : `item:${block.item.id}`}>

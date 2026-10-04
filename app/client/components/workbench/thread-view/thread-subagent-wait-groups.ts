@@ -2,6 +2,7 @@
  * Exports:
  * - ThreadSubagentWaitRenderEntry/ThreadSubagentWaitRenderGroup: describe parsed wait attempts and their UI-only folded groups. Keywords: thread, subagent, wait, timeout, render.
  * - groupThreadSubagentWaitRenderEntries: fold adjacent same-target timed-out attempts into their final timeout, active, or successful wait anchor. Keywords: subagent, wait, merge, targets.
+ * - ThreadSubagentWaitExchangeRole/findThreadSubagentWaitExchanges: find settled wait ↔ delivered message runs that fold into one exchange.
  * - getThreadSubagentWaitTiming: derive frozen or live cumulative timing from command durations and the canonical item timeline. Keywords: subagent, wait, cumulative, duration, timeline.
  */
 
@@ -113,6 +114,30 @@ export function groupThreadSubagentWaitRenderEntries<Item>(
   return groups;
 }
 
+/** How a rendered row takes part in a wait ↔ incoming-message exchange. */
+export type ThreadSubagentWaitExchangeRole = "wait" | "messages" | "other";
+
+/**
+ * Spans `[start, end)` that fold into one exchange: a settled wait followed by more settled waits and delivered
+ * message groups, holding at least two waits. Messages before the first wait stay out; messages after the last join.
+ */
+export function findThreadSubagentWaitExchanges(roles: readonly ThreadSubagentWaitExchangeRole[]) {
+  const spans: Array<{ end: number; start: number }> = [];
+  let index = 0;
+  while (index < roles.length) {
+    if (roles[index] !== "wait") { index += 1; continue; }
+    let end = index;
+    let waits = 0;
+    while (end < roles.length && roles[end] !== "other") {
+      if (roles[end] === "wait") waits += 1;
+      end += 1;
+    }
+    if (waits >= 2) spans.push({ end, start: index });
+    index = end;
+  }
+  return spans;
+}
+
 function findTimelineEntry(
   itemId: string,
   itemTimeline: readonly WorkbenchThreadItemTimelineEntry[],
@@ -160,7 +185,7 @@ function sumSettledDurations(
 }
 
 export function getThreadSubagentWaitTiming(
-  group: ThreadSubagentWaitRenderGroup<CommandItem>,
+  group: ThreadSubagentWaitRenderGroup<Pick<CommandItem, "durationMs" | "id">>,
   itemTimeline: readonly WorkbenchThreadItemTimelineEntry[],
 ): ThreadSubagentWaitTiming {
   const items = group.entries.map((entry) => entry.item);

@@ -94,7 +94,7 @@ function ThreadMessageBoardBubble({
       <div className="w-fit min-w-0 max-w-[min(100%,36rem)] text-left [overflow-wrap:anywhere]">
         <ThreadSteerDecoration className="space-y-1.5" state={null}>
           {incoming && !message.sender ? null : <p className="m-0 text-[0.78em] font-medium leading-[1.5] text-fg/muted">{label}</p>}
-          <ThreadAgentMessageBody {...markdownProps} markdown={message.markdown} userVisibleSimpleVersion={message.userVisibleSimpleVersion} />
+          <ThreadAgentMessageBody {...markdownProps} parts={[message]} />
         </ThreadSteerDecoration>
       </div>
       <ThreadMessageTimestamp align={incoming ? "right" : "left"} className="mt-1" timestampSeconds={message.timestampSeconds} />
