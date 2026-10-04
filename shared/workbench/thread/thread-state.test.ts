@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isWorkbenchSidebarThreadCompletionAvailable, WorkbenchPinnedThreadSummaryEntrySchema, WorkbenchThreadObservationSnapshotSchema } from "./thread-state.ts";
-import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, hasUnarchivedSidebarWork, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, projectWorkbenchThreadSidebarEntries, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
+import { areAllUnsnoozedThreadEntriesSettlementReady, countDraftPromptTokens, createDraftTitle, createWorkbenchProjectThreadSummary, createWorkbenchThreadClaimIntersectionSelector, getThreadSidebarGroup, getWorkbenchThreadClaimIntersections, gitArcPreventsThreadSettlement, groupWorkbenchThreadSidebarEntries, hasUnarchivedSidebarWork, isWorkbenchThreadSettlementAvailable, isWorkbenchThreadStatusProviderOwned, normalizeWorkbenchTimestampMs, reduceWorkbenchThreadLifecycle, resolveWorkbenchThreadTitle, WorkbenchDurableQuestionnaireSchema, WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema, WorkbenchThreadDraftSchema, WorkbenchThreadLifecycleSchema, WorkbenchThreadStateMutationResultSchema, WorkbenchThreadStateRequestSchema, type WorkbenchThreadSidebarEntry } from "./thread-state.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { projectSidebarRow } from "./thread-sidebar-row";
 
@@ -716,59 +716,7 @@ test("grouping keeps terminal status while settlement moves it to other", () => 
   assert.equal(getThreadSidebarGroup({ ...entry, lifecycle: { ...entry.lifecycle, settled: true } }), "settled");
 });
 
-test("completed parent status derives attention before working without mutating durable lifecycle", () => {
-  const parent: WorkbenchThreadSidebarEntry = {
-    activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["parent"] },
-    lifecycle: { kind: "completed", reason: "providerInactive", settled: true },
-    metadata: { archived: false, pinned: false, snoozed: false }, title: "Parent",
-  };
-  const child = (threadId: string, lifecycle: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>["lifecycle"]): WorkbenchThreadSidebarEntry => ({
-    activityAt: 2, createdAt: 1, cwd: "C:/repo", directSubagentIndex: 0, entryKind: "subagent",
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) }, lifecycle, name: threadId, parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"], pinned: false,
-    profileId: "default", profileName: "Default", projectId: fixtureIdentityValues.ProjectId["project"], title: threadId, updatedAt: 2,
-  });
-  const working = child("working", { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] }, kind: "working", reason: "acceptedIntent", settled: false });
-  const attention = child("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false });
-  const projectedWorking = projectWorkbenchThreadSidebarEntries([parent, working])[0]!;
-  const projectedAttention = projectWorkbenchThreadSidebarEntries([parent, working, attention])[0]!;
-  assert.equal(projectedWorking.entryKind === "draft" ? null : projectedWorking.lifecycle.kind, "working");
-  assert.equal(projectedAttention.entryKind === "draft" ? null : projectedAttention.lifecycle.kind, "needsAttention");
-  assert.equal(parent.lifecycle.kind, "completed");
-  assert.equal(projectWorkbenchThreadSidebarEntries([parent])[0], parent);
-});
-
-test("subagent waits inherit attention before working before waiting while other waits stay waiting", () => {
-  const parent: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["parent"] },
-    lifecycle: { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["parent-turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
-    metadata: { archived: false, pinned: false, snoozed: false }, title: "Parent", waitingFor: "subagents",
-  };
-  const child = (
-    threadId: string,
-    lifecycle: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>["lifecycle"],
-    waitingFor?: "other" | "subagents",
-  ): Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> => ({
-    activityAt: 2, createdAt: 1, cwd: "C:/repo", directSubagentIndex: 0, entryKind: "subagent",
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId) }, lifecycle, name: threadId, parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"], pinned: false,
-    profileId: "default", profileName: "Default", projectId: fixtureIdentityValues.ProjectId["project"], title: threadId, updatedAt: 2,
-    ...(waitingFor ? { waitingFor } : {}),
-  });
-  const waiting = child("waiting", { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["wait-turn"] }, kind: "working", reason: "acceptedIntent", settled: false }, "other");
-  const working = child("working", { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["work-turn"] }, kind: "working", reason: "acceptedIntent", settled: false });
-  const attention = child("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false });
-  const projectedWaiting = projectWorkbenchThreadSidebarEntries([parent, waiting])[0]!;
-  const projectedWorking = projectWorkbenchThreadSidebarEntries([parent, waiting, working])[0]!;
-  const projectedAttention = projectWorkbenchThreadSidebarEntries([parent, waiting, working, attention])[0]!;
-  assert.equal(projectedWaiting.entryKind === "thread" ? projectedWaiting.waitingFor : null, "subagents");
-  assert.equal(projectedWorking.entryKind === "draft" ? null : projectedWorking.lifecycle.kind, "working");
-  assert.equal(projectedWorking.entryKind === "thread" ? projectedWorking.waitingFor : null, undefined);
-  assert.equal(projectedAttention.entryKind === "draft" ? null : projectedAttention.lifecycle.kind, "needsAttention");
-  assert.equal(projectWorkbenchThreadSidebarEntries([{ ...parent, waitingFor: "other" }, working])[0]!.entryKind === "thread"
-    ? (projectWorkbenchThreadSidebarEntries([{ ...parent, waitingFor: "other" }, working])[0] as Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>).waitingFor
-    : null, "other");
-});
-
-test("project summaries count unsettled top-level status after direct-child projection", () => {
+test("project summaries count each top-level thread's own status", () => {
   type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
   const thread = (
     threadId: string,
@@ -795,7 +743,7 @@ test("project summaries count unsettled top-level status after direct-child proj
     updatedAt: "2026-08-26T00:00:00.000Z",
   };
   const parent = thread("parent", { kind: "completed", reason: "providerInactive", settled: true });
-  const child: WorkbenchThreadSidebarEntry = {
+  const child: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> = {
     activityAt: 2,
     createdAt: 1,
     cwd: "C:/repo",
@@ -815,7 +763,8 @@ test("project summaries count unsettled top-level status after direct-child proj
   const summary = createWorkbenchProjectThreadSummary(fixtureIdentityValues.ProjectId["project"], [
     parent,
     child,
-    { ...thread("waiting", { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["wait-turn"] }, kind: "working", reason: "acceptedIntent", settled: false }), waitingFor: "other" },
+    { ...thread("waiting", { agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId["wait-turn"] }, kind: "working", reason: "acceptedIntent", settled: false }), waitingFor: "subagents" },
+    { ...child, identity: { ...child.identity, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("blocked-child") }, parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("waiting"), lifecycle: { agent: { agentStatus: "blocked" }, kind: "needsAttention", reason: "agentBlocked", settled: false } },
     thread("attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }, arc, 1, true),
     thread("active-attention", { kind: "needsAttention", reason: "noActiveTurn", settled: false }),
     thread("stopped", { kind: "stopped", reason: "userMarkedStopped", settled: false }),
@@ -836,19 +785,13 @@ test("project summaries count unsettled top-level status after direct-child proj
       proposedCommit: 1,
       stopped: 1,
       waiting: 1,
-      working: 1,
+      working: 0,
     },
     lastThreadUpdateAt: 4,
     pinnedThreads: [],
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
     revision: 7,
     unsettledThreads: [
-      {
-        activityAt: 1,
-        identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent") },
-        status: "working",
-        title: "parent",
-      },
       {
         activityAt: 1,
         identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("waiting") },

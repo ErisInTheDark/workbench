@@ -27,7 +27,7 @@
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchProjectThreadSidebarsSchema: current project and grouped sidebar facts.
  * - WorkbenchHomeThreadDisplayOrderSnapshotSchema: revisioned home-owned cross-project priority order.
- * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchPinnedThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled and pinned cross-project rows, counts, ordering, and activity with direct-child lifecycle projection.
+ * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchPinnedThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled and pinned cross-project rows, counts, ordering, and activity.
  * - WorkbenchThreadPrioritySchema/WorkbenchThreadPriority: exact pinned, main, and snoozed placement intent.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: current thread-family snapshots and daemon-owned mutations.
  * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness.
@@ -35,7 +35,7 @@
  * - WorkbenchThreadClaimIntersections/getWorkbenchThreadClaimIntersections/createWorkbenchThreadClaimIntersectionSelector: derive and identity-stabilize sibling intersections for plan or stashed claims.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback.
- * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle/projectWorkbenchThreadSidebarEntries: thread-owned status, provider-event fencing, and direct-child status projection.
+ * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle: thread-owned status and provider-event fencing.
  * - isWorkbenchSidebarThreadCompletionAvailable: sidebar-only manual completion, including durable questionnaires without granting subagent authority.
  * - hasWorkbenchThreadDraftContent/countDraftPromptTokens/createDraftTitle: durable draft content, materialization, and title rules.
  */
@@ -889,29 +889,6 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
   }
 }
 
-export function projectWorkbenchThreadSidebarEntries(entries: readonly WorkbenchThreadSidebarEntry[]) {
-  const childrenByParent = new Map<string, Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>[]>();
-  for (const entry of entries) {
-    if (entry.entryKind !== "subagent") continue;
-    childrenByParent.set(entry.parentThreadId, [...childrenByParent.get(entry.parentThreadId) ?? [], entry]);
-  }
-  return entries.map((entry) => {
-    if (
-      entry.entryKind !== "thread"
-      || (entry.lifecycle.kind !== "completed" && entry.waitingFor !== "subagents")
-    ) return entry;
-    const children = childrenByParent.get(entry.identity.threadId) ?? [];
-    const attention = children.find(({ lifecycle }) => !lifecycle.settled && lifecycle.kind === "needsAttention");
-    const working = children.find(({ lifecycle, waitingFor }) => !lifecycle.settled && lifecycle.kind === "working" && !waitingFor);
-    const waiting = children.find(({ lifecycle, waitingFor }) => !lifecycle.settled && lifecycle.kind === "working" && Boolean(waitingFor));
-    const { waitingFor: _waitingFor, ...withoutWaiting } = entry;
-    if (attention) return { ...withoutWaiting, lifecycle: attention.lifecycle };
-    if (working) return { ...withoutWaiting, lifecycle: working.lifecycle };
-    if (waiting) return { ...withoutWaiting, lifecycle: waiting.lifecycle, waitingFor: "subagents" as const };
-    return entry;
-  });
-}
-
 export function createWorkbenchProjectThreadSummary(
   projectId: ProjectId,
   entries: readonly WorkbenchThreadSidebarEntry[],
@@ -928,10 +905,9 @@ export function createWorkbenchProjectThreadSummary(
     waiting: 0,
     working: 0,
   };
-  const projectedEntries = projectWorkbenchThreadSidebarEntries(entries);
   const unsettledThreads: WorkbenchProjectThreadSummaryEntry[] = [];
   const statusByThreadKey = new Map<string, WorkbenchProjectThreadSummaryEntry["status"]>();
-  for (const entry of projectedEntries) {
+  for (const entry of entries) {
     if (entry.entryKind !== "thread" || entry.metadata.archived || entry.lifecycle.settled
       || (entry.metadata.snoozed && entry.lifecycle.kind !== "needsAttention")) continue;
     const status: WorkbenchProjectThreadSummaryEntry["status"] = entry.waitingFor && !entry.metadata.snoozed
@@ -955,7 +931,7 @@ export function createWorkbenchProjectThreadSummary(
       title: entry.title,
     });
   }
-  const resolved = resolveWorkbenchThreadDisplayOrder(projectedEntries, displayOrder);
+  const resolved = resolveWorkbenchThreadDisplayOrder(entries, displayOrder);
   const pinnedThreads = projectWorkbenchThreadDisplaySection(resolved.entries, resolved.displayOrder, "pinned")
     .flatMap((item) => item.itemKind === "folder" ? item.entries : [item.entry])
     .flatMap<WorkbenchPinnedThreadSummaryEntry>((entry) => {

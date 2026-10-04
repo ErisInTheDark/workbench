@@ -56,7 +56,6 @@ import {
   getThreadSidebarGroup,
   isWorkbenchThreadStatusProviderOwned,
   isWorkbenchSidebarThreadCompletionAvailable,
-  projectWorkbenchThreadSidebarEntries,
   reduceWorkbenchThreadLifecycle,
   resolveWorkbenchThreadTitle,
   type WorkbenchLifecycleEvent,
@@ -1567,7 +1566,7 @@ export default class WorkbenchThreadStateController {
         ...(waitingFor || (entry.entryKind === "thread" && entry.snoozedUntil) ? { waitingFor: waitingFor ?? "other" } : {}),
       }];
     });
-    return sortThreadSidebarEntries(projectWorkbenchThreadSidebarEntries(entries)).filter((entry) => getThreadSidebarGroup(entry) !== "hidden");
+    return sortThreadSidebarEntries(entries).filter((entry) => getThreadSidebarGroup(entry) !== "hidden");
   }
 
   private logStorageRepairs(projectId: string, entryId: string, repairedPaths: PropertyKey[][]) {

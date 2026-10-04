@@ -4111,7 +4111,7 @@ test("provider completion auto-completes subagents while top-level turns still n
     const entry = snapshot.entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === threadId);
     return entry?.entryKind === "draft" ? null : entry?.lifecycle.kind;
   };
-  assert.equal(lifecycleOf(await controller.getSnapshot(fixtureProjectIds["project"]), "parent"), "working");
+  assert.equal(lifecycleOf(await controller.getSnapshot(fixtureProjectIds["project"]), "parent"), "completed");
   await controller.observeLifecycle("codex", fixtureThreadIds["child"], { kind: "turnCompleted", status: "completed", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("child-turn") });
   await controller.observeLifecycle("codex", fixtureThreadIds["top"], { kind: "turnCompleted", status: "completed", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("top-turn") });
   const snapshot = await controller.getSnapshot(fixtureProjectIds["project"]);
