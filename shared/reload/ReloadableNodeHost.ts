@@ -2,7 +2,7 @@
  * Exports:
  * - ReloadableNodeModuleLoader: load fresh parent-owned graph definitions.
  * - ReloadableNodeHostOptions: process-owned deadline, clock, logging, and swap ports.
- * - default ReloadableNodeHost: validate topology, lease dependencies, replace node closures, and report retired generations that stay reachable.
+ * - default ReloadableNodeHost: validate topology, lease dependencies, replace node closures with parent-only build views, and report retired generations that stay reachable with the work still holding them.
  */
 import { createGitignoreMatcher, type GitignoreMatcher } from "../source-pattern-matcher.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -100,6 +100,13 @@ interface Retirement<TContext, TFeatures extends object, TNotification> {
 }
 
 const DEFAULT_RUNTIME_DRAIN_TIMEOUT_MS = 30_000;
+function formatDuration(ms: number) {
+  const seconds = Math.floor(ms / 1_000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes}m${seconds % 60}s` : `${Math.floor(minutes / 60)}h${minutes % 60}m`;
+}
+
 function boundedLabel(value: string) {
   const normalized = value.replace(/\s+/gu, " ").trim() || "unnamed operation";
   return normalized.length > 200 ? `${normalized.slice(0, 197).trimEnd()}...` : normalized;
@@ -156,6 +163,11 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   private topology: readonly DaemonReloadScope[] = [];
   private readonly topologyScope: DaemonReloadScope;
   private readonly retention = new ReloadRetentionTracker();
+  /** Weak, so the retention diagnostic can name holders without becoming one. */
+  private readonly retiredNodes = new Set<WeakRef<ActiveNode<TContext, TFeatures, TNotification>>>();
+  private readonly retiredNodeCleanup = new FinalizationRegistry<WeakRef<ActiveNode<TContext, TFeatures, TNotification>>>(
+    reference => { this.retiredNodes.delete(reference); },
+  );
   private readonly definitionGenerations = new WeakMap<object, number>();
   private loadedGenerations = 0;
 
@@ -419,8 +431,22 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     for (const retirement of this.retirements) for (const node of retirement.nodes) mark(node.definition);
     for (const rollback of this.pendingRollbacks) for (const node of rollback.nodes) mark(node.definition);
     this.retention.retireUnusedGenerations(used);
-    const report = this.retention.completeReload();
+    const report = this.retention.completeReload(this.retiredOperationLabels());
     if (report) this.logError(report);
+  }
+
+  /** Work still running on retired nodes: the usual reason a retired generation stays reachable. */
+  private retiredOperationLabels() {
+    const now = this.now();
+    const labels: string[] = [];
+    for (const reference of this.retiredNodes) {
+      const node = reference.deref();
+      if (!node) continue;
+      for (const { label, startedAt } of node.activeOperations.values()) {
+        labels.push(`${node.definition.id}: ${label} (${formatDuration(Math.max(0, now - startedAt))})`);
+      }
+    }
+    return labels;
   }
 
   async observeProviderNotification(notification: TNotification, label = "provider notification") {
@@ -659,19 +685,10 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     for (const nodeId of ordered) {
       const definition = definitions.get(nodeId)!;
       const token = Symbol(`workbench-feature-node:${nodeId}`);
-      const visible = new Map([...dependencies, ...created]);
-      const instance = definition.create(this.context, {
-        getSourceState: () => this.getSourceState(),
-        get: <TKey extends keyof TFeatures>(key: TKey) => {
-          if (!definition.requires.includes(key)) throw new Error(`Reloadable node ${nodeId} read undeclared parent registration ${String(key)}.`);
-          return this.requireFeature(visible, this.validateFeatureOwnership(visible), key);
-        },
-        run: (key, operation, label) => this.run(key, operation, label),
-        handoffState: handoffStates.get(nodeId),
-        isReplacing: (candidateId) => selected.has(candidateId),
-        lease: { isCurrent: () => !this.hardShutdownStarted && !this.isUnavailable(nodeId) && this.nodes.get(nodeId)?.token === token },
-        mode,
-      });
+      const parents = this.parentView(nodeId, definition, created, dependencies);
+      const instance = definition.create(this.context, this.createBuild(
+        nodeId, definition, parents, token, handoffStates.get(nodeId), selected, mode,
+      ));
       created.set(nodeId, {
         activeOperations: new Map(), definition, disposalPhase: null, drainWaiters: [], gate: null,
         instance, runtimeDrainStartedAt: null, token, startController: new AbortController(), drainExpired: false,
@@ -682,6 +699,49 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       }
     }
     return created;
+  }
+
+  /** A node may read only its direct parents, so its view holds nothing a sibling reload could leave behind. */
+  private parentView(
+    nodeId: string,
+    definition: DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>,
+    created: ReadonlyMap<string, ActiveNode<TContext, TFeatures, TNotification>>,
+    retained: ReadonlyMap<string, ActiveNode<TContext, TFeatures, TNotification>>,
+  ) {
+    const parents = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
+    for (const parentId of definition.dependencies) {
+      const parent = created.get(parentId) ?? retained.get(parentId);
+      if (!parent) throw new Error(`Reloadable node ${nodeId} was created before its parent ${parentId}.`);
+      parents.set(parentId, parent);
+    }
+    return parents;
+  }
+
+  /**
+   * Build tools live as long as the node. Keeping them in their own scope means their closures can only
+   * capture this node's parent view and identity, never graph-wide maps from the caller.
+   */
+  private createBuild(
+    nodeId: string,
+    definition: DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>,
+    parents: ReadonlyMap<string, ActiveNode<TContext, TFeatures, TNotification>>,
+    token: symbol,
+    handoffState: unknown,
+    selected: ReadonlySet<string>,
+    mode: ReloadableNodeBuild<TFeatures>["mode"],
+  ): ReloadableNodeBuild<TFeatures> {
+    return {
+      getSourceState: () => this.getSourceState(),
+      get: <TKey extends keyof TFeatures>(key: TKey) => {
+        if (!definition.requires.includes(key)) throw new Error(`Reloadable node ${nodeId} read undeclared parent registration ${String(key)}.`);
+        return this.requireFeature(parents, this.validateFeatureOwnership(parents), key);
+      },
+      run: (key, operation, label) => this.run(key, operation, label),
+      handoffState,
+      isReplacing: (candidateId) => selected.has(candidateId),
+      lease: { isCurrent: () => !this.hardShutdownStarted && !this.isUnavailable(nodeId) && this.nodes.get(nodeId)?.token === token },
+      mode,
+    };
   }
 
   private flattenGraph(graph: ReloadableNodeGraph<TContext, TFeatures, TNotification>) {
@@ -1021,6 +1081,9 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         this.retirements.delete(retirement);
         for (const node of nodes) {
           this.retention.trackRetiredNode(node.definition.id, this.definitionGenerations.get(node.definition) ?? -1, node.instance);
+          const reference = new WeakRef(node);
+          this.retiredNodes.add(reference);
+          this.retiredNodeCleanup.register(node, reference);
         }
       },
       () => { /* Failed owners stay retained for terminal shutdown and diagnostics. */ },

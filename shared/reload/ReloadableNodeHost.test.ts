@@ -1,9 +1,11 @@
 /*
- * No production exports. Tests protect generic node operation access and nested reload draining.
+ * No production exports. Tests protect generic node operation access, nested reload draining, collectable retired nodes, and retention holder reports.
  */
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { test } from "node:test";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import ReloadableNode, { defineReloadableNodeGraph } from "./ReloadableNode";
 import ReloadableNodeHost from "./ReloadableNodeHost";
 import type { ReloadDirtSourceState } from "./ReloadDirtController";
@@ -314,4 +316,83 @@ test("source ownership is published with its successful graph and restored after
     assert.deepEqual(paths(await read()), ["shared/second.ts"]);
     assert.equal(host.getReloadScopesForPaths(["process/shared/failed.ts"]).includes("client:process"), false);
   } finally { release.resolve(); await host.dispose(); }
+});
+
+setFlagsFromString("--expose-gc");
+const collectGarbage = runInNewContext("gc") as () => void;
+
+interface PinObjects { consumer: { read(): number }; unrelated: boolean; value: number }
+
+test("a live node's build keeps no replaced sibling reachable", async () => {
+  let retired: WeakRef<object> | null = null;
+  let siblings = 0;
+  const node = ReloadableNode.define<object, PinObjects, never>();
+  const graph = () => {
+    const consumer = node({
+      scope: "server:consumer", provides: ["consumer"], requires: ["value"], children: [],
+      access: "agent", lifecycle: "atomic", safeAll: true, description: "consumer",
+      // A lazy parent read keeps `build` alive for the node's whole life, as real nodes do.
+      create: (_context, build) => ({ registrations: { consumer: { read: () => build.get("value") } }, start() {}, dispose() {} }),
+    });
+    // The sibling is created before the consumer, so a whole-graph snapshot would include it.
+    return defineReloadableNodeGraph([
+      node({
+        scope: "server:commands", provides: ["unrelated"], requires: [], children: [],
+        access: "agent", lifecycle: "atomic", safeAll: true, description: "sibling",
+        create: () => {
+          const instance = { registrations: { unrelated: true }, start() {}, dispose() {} };
+          if (siblings++ === 0) retired = new WeakRef(instance);
+          return instance;
+        },
+      }),
+      node({
+        scope: "server:value", provides: ["value"], requires: [], children: [consumer],
+        access: "agent", lifecycle: "atomic", safeAll: true, description: "value",
+        create: () => ({ registrations: { value: 1 }, start() {}, dispose() {} }),
+      }),
+    ]);
+  };
+  const host = new ReloadableNodeHost({}, { load: graph, reload: graph }, { topologyScope: "server:topology" });
+  await host.start();
+  try {
+    await host.reload(["server:commands"]);
+    await new Promise<void>(resolve => { setImmediate(resolve); });
+    collectGarbage();
+    await new Promise<void>(resolve => { setImmediate(resolve); });
+    assert.equal(retired!.deref(), undefined);
+    assert.equal(await host.run("consumer", consumer => consumer.read()), 1);
+  } finally { await host.dispose(); }
+});
+
+test("the retention warning names operations still running on retired nodes", async () => {
+  const errors: string[] = [];
+  const graph = () => defineReloadableNodeGraph([ReloadableNode.define<object, { value: number }, never>()({
+    access: "agent", children: [], requires: [], provides: ["value"], scope: "server:value",
+    lifecycle: "atomic", safeAll: true, description: "fixture",
+    create: () => ({ registrations: { value: 1 }, start() {}, dispose() {} }),
+  })]);
+  const host = new ReloadableNodeHost({}, { load: graph, reload: graph }, {
+    topologyScope: "server:topology",
+    logError: message => errors.push(message),
+    // Drain expires at once, so the held operation keeps running on a retired node.
+    createRuntimeDrainDeadline: () => ({ cancel() {}, expired: Promise.resolve() }),
+  });
+  await host.start();
+  const entered = deferred();
+  const release = deferred();
+  const held = host.run("value", async () => { entered.resolve(); await release.promise; }, "held shell");
+  try {
+    await entered.promise;
+    for (let reload = 0; reload < 3; reload += 1) await host.reload(["server:value"]);
+    const report = errors.filter(message => message.includes("still reachable")).at(-1) ?? "";
+    assert.match(report, /Still running on retired nodes: server:value: held shell \(/u);
+    release.resolve();
+    await held;
+    errors.length = 0;
+    for (let reload = 0; reload < 3; reload += 1) await host.reload(["server:value"]);
+    assert.doesNotMatch(errors.join("\n"), /held shell/u);
+  } finally {
+    release.resolve();
+    await host.dispose();
+  }
 });

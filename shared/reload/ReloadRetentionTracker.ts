@@ -39,17 +39,23 @@ export default class ReloadRetentionTracker {
     this.#track(instance, `${id} node (generation ${generation})`, this.#reloads);
   }
 
-  /** Count one completed reload attempt and describe retired targets that outlived the collection grace. */
-  completeReload() {
+  /**
+   * Count one completed reload attempt and describe retired targets that outlived the collection grace,
+   * naming `stillRunning` work on retired nodes as the likely holders.
+   */
+  completeReload(stillRunning: readonly string[] = []) {
     this.#reloads += 1;
     const retained = [...this.#entries.values()].filter(entry =>
       entry.retiredAt !== null && this.#reloads - entry.retiredAt >= REPORT_AFTER_RELOADS);
     if (!retained.length) return null;
     const heap = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
     const labels = retained.slice(0, 6).map(entry => entry.label).join(", ");
+    const holders = stillRunning.length
+      ? ` Still running on retired nodes: ${stillRunning.slice(0, 6).join(", ")}${stillRunning.length > 6 ? ", ..." : ""}.`
+      : " No operations are still running on retired nodes.";
     return `${retained.length} retired reload object(s) still reachable ${REPORT_AFTER_RELOADS}+ reloads after retirement `
       + `(heap ${heap}MB): ${labels}${retained.length > 6 ? ", ..." : ""}. `
-      + "Something outside the live graph still references old modules or node objects.";
+      + `Something outside the live graph still references old modules or node objects.${holders}`;
   }
 
   #track(target: object, label: string, retiredAt: number | null) {
