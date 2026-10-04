@@ -37,15 +37,15 @@ test("thread touch direction translates finger travel into viewport movement", (
   assert.equal(resolveThreadTouchScrollDirection("up", 80, 80), "up");
 });
 
-test("thread scroll proximity becomes near only inside the bottom threshold", () => {
+test("thread scroll proximity becomes near only at the true bottom", () => {
   const metrics = {
     clientHeight: 600,
     scrollHeight: 1_800,
-    scrollTop: 721,
+    scrollTop: 1_199,
   };
-  assert.equal(resolveThreadScrollProximity(metrics, 480), "near");
-  assert.equal(resolveThreadScrollProximity({ ...metrics, scrollTop: 720 }, 480), "far");
-  assert.equal(resolveThreadScrollProximity({ ...metrics, scrollTop: 719 }, 480), "far");
+  assert.equal(resolveThreadScrollProximity(metrics), "near");
+  assert.equal(resolveThreadScrollProximity({ ...metrics, scrollTop: 1_198.9 }), "far");
+  assert.equal(resolveThreadScrollProximity({ ...metrics, scrollTop: 1_100 }), "far");
 });
 
 test("thread end detection uses the normal top-origin boundary", () => {

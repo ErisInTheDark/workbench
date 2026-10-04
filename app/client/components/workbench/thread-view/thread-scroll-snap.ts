@@ -59,11 +59,8 @@ export function resolveThreadTouchScrollDirection(
 
 export function resolveThreadScrollProximity(
   metrics: ThreadScrollMetrics,
-  nearEndDistancePx: number,
 ): ThreadScrollProximity {
-  return getMaximumScrollTop(metrics) - metrics.scrollTop < nearEndDistancePx
-    ? "near"
-    : "far";
+  return isThreadScrollAtEnd(metrics) ? "near" : "far";
 }
 
 export function isThreadScrollAtEnd(

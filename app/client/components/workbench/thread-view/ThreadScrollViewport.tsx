@@ -11,7 +11,6 @@ import {
   useEffect,
   useMemo,
   useRef,
-  type CSSProperties,
   type ForwardedRef,
   type ReactNode,
 } from "react";
@@ -50,13 +49,7 @@ interface ActiveThreadScrollViewportProps extends Omit<ThreadScrollViewportProps
 }
 
 const THREAD_SCROLL_DOWN_KEYS = new Set(["ArrowDown", "End", "PageDown"]);
-const THREAD_SCROLL_NEAR_END_DISTANCE_REM = 6;
 const THREAD_SCROLL_UP_KEYS = new Set(["ArrowUp", "Home", "PageUp"]);
-const THREAD_SCROLL_VIEWPORT_STYLE: CSSProperties & {
-  "--thread-scroll-near-end-distance": string;
-} = {
-  "--thread-scroll-near-end-distance": `${THREAD_SCROLL_NEAR_END_DISTANCE_REM}rem`,
-};
 
 function joinClasses (...values: Array<string | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -94,7 +87,6 @@ function ActiveThreadScrollViewport ({
   const directionRef = useRef<ThreadScrollDirection>("down");
   const endTargetRef = useRef<HTMLElement | null>(null);
   const initialPlacementPendingRef = useRef(true);
-  const nearEndDistancePxRef = useRef(0);
   const pointerScrollActiveRef = useRef(false);
   const pointerScrollMovedRef = useRef(false);
   const previousScrollTopRef = useRef(0);
@@ -112,10 +104,7 @@ function ActiveThreadScrollViewport ({
     const metrics = readScrollMetrics(viewport);
     const reattached = didThreadScrollReattach(wasAtEndRef.current, metrics);
     wasAtEndRef.current = isThreadScrollAtEnd(metrics);
-    const proximity = resolveThreadScrollProximity(
-      metrics,
-      nearEndDistancePxRef.current,
-    );
+    const proximity = resolveThreadScrollProximity(metrics);
     viewport.dataset.threadScrollProximity = proximity;
     if (reattached) bottomListeners.current.forEach(listener => listener());
     return proximity;
@@ -140,11 +129,6 @@ function ActiveThreadScrollViewport ({
   const setViewportRef = useCallback((viewport: HTMLDivElement | null) => {
     viewportRef.current = viewport;
     previousScrollTopRef.current = viewport?.scrollTop ?? 0;
-    nearEndDistancePxRef.current = viewport
-      ? THREAD_SCROLL_NEAR_END_DISTANCE_REM * Number.parseFloat(
-        getComputedStyle(viewport.ownerDocument.documentElement).fontSize,
-      )
-      : 0;
     assignRef(forwardedRef, viewport);
     if (viewport) syncScrollProximity(viewport);
     placeInitialViewportAtEnd();
@@ -309,15 +293,14 @@ function ActiveThreadScrollViewport ({
       className={joinClasses(
         "scrollbar-hover-reveal flex min-h-0 flex-col overflow-x-hidden overflow-y-auto",
         "[--thread-scroll-inline-padding:1.25rem] md:[--thread-scroll-inline-padding:1.5rem]",
-        "[--thread-scroll-snap-distance:var(--thread-scroll-near-end-distance)] [overflow-anchor:none] snap-none",
-        "data-[thread-scroll-direction=down]:[scroll-snap-type: y proximity]",
+        "[--thread-scroll-snap-distance:0px] [overflow-anchor:none] snap-none",
+        "[&[data-thread-scroll-direction=down][data-thread-scroll-proximity=near]]:[scroll-snap-type:y_proximity]",
         "[&[data-thread-scroll-direction=down][data-thread-scroll-proximity=near]]:[--thread-scroll-snap-distance:calc(100dvh-1px)]",
         className,
       )}
       data-thread-scroll-direction="down"
       data-thread-scroll-proximity="far"
       data-thread-scroll-target="true"
-      style={THREAD_SCROLL_VIEWPORT_STYLE}
     >
       <ThreadScrollViewportContext.Provider value={contextValue}>
         <div className={joinClasses("min-h-full shrink-0", contentClassName)}>
