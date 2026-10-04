@@ -460,12 +460,16 @@ function storedUndeliveredSteerIds(items: readonly Extract<ThreadItem, { type: "
 function UndeliveredSteerActions({ itemIds }: { itemIds: readonly string[] }) {
   const actions = useContext(ThreadSteerActionsContext);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   if (!actions || !itemIds.length) return null;
   const run = (action: (itemId: string) => Promise<void>) => {
     setBusy(true);
+    setError(null);
     void (async () => {
       try {
         for (const itemId of itemIds) await action(itemId);
+      } catch (failure) {
+        setError((failure instanceof Error ? failure.message : String(failure)).slice(0, 400));
       } finally {
         setBusy(false);
       }
@@ -494,6 +498,15 @@ function UndeliveredSteerActions({ itemIds }: { itemIds: readonly string[] }) {
       >
         <XIcon size={16} />
       </button>
+      {error ? (
+        <span
+          className="max-w-[18rem] truncate rounded-full bg-[color-mix(in_srgb,var(--text)_4%,var(--bg))] px-2 py-1 text-[0.72em] leading-tight text-danger"
+          role="alert"
+          title={error}
+        >
+          {error}
+        </span>
+      ) : null}
     </>
   );
 }

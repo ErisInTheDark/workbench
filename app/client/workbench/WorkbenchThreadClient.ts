@@ -4354,14 +4354,13 @@ function WorkbenchThreadClient(
 
   /**
    * The daemon owns resend and dismissal; the refreshed steer history replaces the undelivered copy.
-   * A rejected action leaves the steer undelivered and tells the user why.
+   * A rejected action leaves the steer undelivered and rejects with a bounded reason for the bubble to show.
    */
   async function runSteerAction(threadId: string, label: string, action: () => Promise<unknown>) {
     try {
       await action();
     } catch (error) {
-      emitStatusMessage(`${label}: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
-      return;
+      throw new Error(`${label}: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
     }
     await readCompletedSteerHistory(threadId);
   }

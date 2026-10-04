@@ -24,7 +24,7 @@ export default function ThreadBubbleCopyButton({
   markdown,
   side,
 }: {
-  /** Extra icon buttons shown in the same hover row, after copy. */
+  /** Extra icon buttons shown in the same hover row, after copy; a `role="alert"` child keeps the row visible. */
   actions?: ReactNode;
   markdown: string;
   side: "left" | "right";
@@ -59,6 +59,8 @@ export default function ThreadBubbleCopyButton({
           : "group-hover/thread-bubble:translate-x-0.5 group-focus-within/thread-bubble:translate-x-0.5",
         "group-hover/thread-bubble:translate-y-[calc(-50%-0.125rem)] group-hover/thread-bubble:opacity-100 group-hover/thread-bubble:pointer-events-auto",
         "group-focus-within/thread-bubble:translate-y-[calc(-50%-0.125rem)] group-focus-within/thread-bubble:opacity-100 group-focus-within/thread-bubble:pointer-events-auto",
+        // An action failure stays readable after the pointer leaves.
+        "has-[[role=alert]]:(opacity-100 pointer-events-auto)",
         "motion-reduce:!translate-x-0 motion-reduce:!translate-y-[-50%] motion-reduce:transition-opacity",
       ].join(" ")}
       data-thread-bubble-controls={side}

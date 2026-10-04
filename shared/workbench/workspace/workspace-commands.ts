@@ -19,6 +19,7 @@ import { ProjectLocationReferenceSchema } from "../project/project-location";
 import { DaemonIdSchema, ThreadReferenceSchema, LogicalProjectIdSchema, ThreadDisplayKeySchema } from "../identity";
 import { WorkbenchThreadStateRequestSchema, WorkbenchHomeThreadDisplayOrderSchema, type WorkbenchThreadStateRequest } from "../thread/thread-state";
 import { WorkbenchThreadDisplayOrderSchema } from "../thread/thread-display-order";
+import type { WorkbenchThreadActionMap } from "../thread/thread-actions";
 import { WorkbenchMessageContextSchema } from "../provider/provider-input";
 import { WorkbenchSearchResultSchema } from "../search/workbench-search";
 import {
@@ -50,6 +51,8 @@ export const workspaceCommandRoutes = {
   "thread/provider/delete": "thread",
   "thread/stop": "thread",
   "thread/interrupt": "thread",
+  "thread/steer/resend": "thread",
+  "thread/steer/dismiss": "thread",
   "thread/goal/read": "thread",
   "thread/goal/update": "thread",
   "thread/goal/remove": "thread",
@@ -119,6 +122,11 @@ export const workspaceCommandRoutes = {
 } as const satisfies Partial<Record<WorkbenchDaemonMethod, "thread" | "folder" | "installation" | "session">>;
 
 export type WorkspaceCommandMethod = keyof typeof workspaceCommandRoutes;
+// Browser thread actions reach daemons only through this registry; an unrouted action fails before dispatch.
+// The browser never calls `thread/create`: threads start through draft launch.
+type UnroutedThreadAction = Exclude<keyof WorkbenchThreadActionMap, WorkspaceCommandMethod | "thread/create">;
+const threadActionsRouted: [UnroutedThreadAction] extends [never] ? true : UnroutedThreadAction = true;
+void threadActionsRouted;
 const scope = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("thread"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("folder"), location: ProjectLocationReferenceSchema }).strict(),

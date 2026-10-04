@@ -34,6 +34,25 @@ test("native pending history uses dispatch sequence rather than UUID order", () 
   assert.deepEqual(projected.turns[0]?.items.map((item) => item.type === "userMessage" ? item.clientId : null), ["z", "a"]);
 });
 
+test("held steers stay at the thread tail when their admitting turn is older or unloaded", () => {
+  const old = { ...entry("old", 8, "interrupted"), itemId: "old-held", turnId: "old-turn" };
+  const newer = { ...entry("newer", 0, "pending"), itemId: "new-held", attemptedAt: 3 };
+  const source = thread();
+  source.turns.unshift({
+    completedAt: 2, durationMs: 1, error: null, id: "old-turn", items: [], itemsView: "full",
+    startedAt: 1, status: "interrupted",
+  });
+  for (const turns of [source.turns, source.turns.slice(1)]) {
+    const projected = applySteerHistoryToThread({ ...source, turns }, [newer, old]);
+    assert.deepEqual(projected.turns.at(-1)?.items.map(item => item.id), ["old-held", "new-held"]);
+    assert.equal(projected.turns[0]?.id === "old-turn" ? projected.turns[0].items.length : 0, 0);
+  }
+  assert.deepEqual(applySteerHistoryToThread(source, [{ ...old, status: "dismissed" }])
+    .turns.flatMap(turn => turn.items), []);
+  assert.deepEqual(applySteerHistoryToThread(source, [{ ...old, status: "sent" }])
+    .turns.flatMap(turn => turn.items), []);
+});
+
 test("steer settlement updates the admitted item without losing delivered messages", () => {
   const saved = { ...entry("steer", 0, "pending"), itemId: "84d686af-f1aa-4353-bf72-672fa6ba3c3b" };
   const delivered = withWorkbenchInputState({

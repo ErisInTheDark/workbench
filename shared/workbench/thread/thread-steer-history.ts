@@ -6,7 +6,7 @@
  * - isSyntheticSteerHistoryItem: detect Workbench-injected steer history user messages.
  * - isWorkbenchSyntheticSteerUserMessage: detect Workbench-only steer user messages that must not become durable anchors.
  * - isWorkbenchPendingSteerUserMessage: detect Workbench-only steer messages still queued for the active turn.
- * - applySteerHistoryToThread: strip prior synthetic steer items and reinsert persisted pending/unsent steer history; dismissed steers stay hidden.
+ * - applySteerHistoryToThread: strip prior synthetic steer items and show held steers at the loaded thread tail; dismissed steers stay hidden.
  */
 
 import type { ThreadItem, UserInput } from "./workbench-thread-items.ts";
@@ -115,7 +115,8 @@ function createSyntheticSteerHistoryItem(entry: RenderableSteerHistoryEntry): Us
 
 function sortSteerHistoryEntries(entries: WorkbenchSteerHistoryEntry[]) {
   return [...entries].sort((left, right) => {
-    if (left.dispatchSequence !== null && left.dispatchSequence !== undefined
+    if (left.turnId === right.turnId
+      && left.dispatchSequence !== null && left.dispatchSequence !== undefined
       && right.dispatchSequence !== null && right.dispatchSequence !== undefined
       && left.dispatchSequence !== right.dispatchSequence) {
       return left.dispatchSequence - right.dispatchSequence;
@@ -149,14 +150,18 @@ export function applySteerHistoryToThread<Payload extends ThreadPayloadData<stri
   entries: WorkbenchSteerHistoryEntry[],
 ) {
   const entriesByTurnId = new Map<string, WorkbenchSteerHistoryEntry[]>();
+  const tailTurnId = thread.turns.at(-1)?.id;
   for (const entry of entries) {
     if (entry.threadId !== thread.id) {
       continue;
     }
 
-    const turnEntries = entriesByTurnId.get(entry.turnId) ?? [];
+    const displayTurnId = entry.status === "sent" || entry.status === "dismissed"
+      ? entry.turnId
+      : tailTurnId ?? entry.turnId;
+    const turnEntries = entriesByTurnId.get(displayTurnId) ?? [];
     turnEntries.push(entry);
-    entriesByTurnId.set(entry.turnId, turnEntries);
+    entriesByTurnId.set(displayTurnId, turnEntries);
   }
 
   let didChange = false;
