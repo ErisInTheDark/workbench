@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { ProjectIdSchema } from "../identity.ts";
 import { WorkbenchMessageContextSchema, WorkbenchUserInputSchema } from "../provider/provider-input.ts";
-import { WorkbenchComposerProfileSelectionSchema } from "./thread-state.ts";
+import { WorkbenchComposerProfileSelectionSchema } from "./composer-profile-selection.ts";
 
 export const WorkbenchThreadLaunchRequestSchema = z.object({
   launchId: z.uuid(),

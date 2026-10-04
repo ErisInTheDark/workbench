@@ -79,6 +79,15 @@ test("loads project reload definitions without starting their services and selec
   for (const companion of catalog.companions([path.join(root, "daemon/server/daemon-root-node.ts")])) {
     assert.ok(bridgeSelection.files.includes(companion), `Production graph validation omitted: ${companion}`);
   }
+  const threadStateSelection = selector.select(["shared/workbench/thread/thread-state.ts"]);
+  assert.ok(threadStateSelection.files.includes(path.join(root, "shared/workbench/thread/thread-state.test.ts")));
+  assert.ok(threadStateSelection.files.includes(path.join(root, "daemon/server/WorkbenchThreadStateController.test.ts")));
+  for (const gitFixture of ["WorkbenchThreadGit.test.ts", "WorkbenchGitHistoryRewriter.test.ts"]) {
+    assert.ok(!threadStateSelection.files.includes(path.join(root, "daemon/server/lib/workbench/git", gitFixture)),
+      `Unrelated Git fixture selected through thread launch: ${gitFixture}`);
+  }
+  const profileSelection = selector.select(["shared/workbench/thread/composer-profile-selection.ts"]);
+  assert.ok(profileSelection.files.includes(path.join(root, "daemon/server/database/thread-launch/WorkbenchThreadLaunchRepository.test.ts")));
   const skillSelection = selector.select(["daemon/server/lib/workbench/commands/skill-command-definition.ts"]);
   assert.ok(skillSelection.files.includes(path.join(root, "app/client/workbench/thread/thread-command-matchers.test.ts")));
   assert.ok(!skillSelection.files.includes(path.join(root, "app/client/workbench/thread/inline-mention-highlights.skills.test.ts")));

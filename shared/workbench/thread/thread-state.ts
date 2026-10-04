@@ -1,7 +1,6 @@
 /*
  * Exports:
  * - WorkbenchHarnessSchema/WorkbenchHarnessId: stored provider identities, independent of installation.
- * - WorkbenchComposerSettingsState/WorkbenchComposerProfileSelectionState: shared composer settings and selected profile types.
  * - WorkbenchThreadDraft/WorkbenchThreadLifecycle/WorkbenchGitArcPlanState: draft, lifecycle, and inactive-plan types.
  * - WorkbenchGitArcLifecycleStateSchema/WorkbenchGitArcLifecycleState: active, stashed, and resolved Git work.
  * - WorkbenchDurableQuestionnaire/WorkbenchQuestionnaireHistoryEntryState: saved pending and answered questions.
@@ -22,7 +21,8 @@
  * - WorkbenchLifecycleEvent/getWorkbenchLifecycleTurnId: lifecycle inputs and owning turn identity.
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity.
  * - WorkbenchThreadRouteTargetSchema/WorkbenchThreadRouteTarget: parsed route references or already-resolved targets.
- * - WorkbenchComposerProfileSlotSchema/WorkbenchComposerSettingsSchema/WorkbenchComposerProfileSelectionSchema: strict daemon target-profile contracts.
+ * - WorkbenchComposerProfileSlotSchema: strict target slot contract.
+ * - WorkbenchComposerSettingsSchema/WorkbenchComposerProfileSelectionSchema and state types: re-export composer profile contracts.
  * - WorkbenchComposerProfileSlotInputSchema: unresolved thread references accepted at profile RPC ingress.
  * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchProjectThreadSidebarsSchema: current project and grouped sidebar facts.
@@ -45,9 +45,9 @@ import { WorkbenchReloadDirtSnapshotSchema } from "../../reload/workbench-reload
 import { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
 import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchTurnId } from "../identity.ts";
 
-import type { WorkbenchComposerProfileTargetSelection, WorkbenchComposerSettings } from "../../types.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 import { gitArcPathsOverlap } from "../git/git-arc-paths.ts";
+import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerSettingsSchema } from "./composer-profile-selection.ts";
 import { ThreadDisplayLayoutSchema } from "./thread-display-layout.ts";
 import { WorkbenchThreadTitleHistoryEntrySchema } from "./thread-title-history.ts";
 import type { WorkbenchThreadSidebarRow } from "./thread-sidebar-row.ts";
@@ -60,6 +60,12 @@ import {
 
 export { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
 export { WorkbenchReloadDirtSnapshotSchema } from "../../reload/workbench-reload.ts";
+export {
+  WorkbenchComposerProfileSelectionSchema,
+  WorkbenchComposerSettingsSchema,
+  type WorkbenchComposerProfileSelectionState,
+  type WorkbenchComposerSettingsState,
+} from "./composer-profile-selection.ts";
 export type WorkbenchHarnessId = z.infer<typeof WorkbenchHarnessSchema>;
 export const WorkbenchThreadPrioritySchema = z.enum(["pinned", "main", "snoozed"]);
 export type WorkbenchThreadPriority = z.infer<typeof WorkbenchThreadPrioritySchema>;
@@ -101,23 +107,6 @@ export const WorkbenchThreadWaitTargetSchema = z.object({
 export type WorkbenchThreadWaitTarget = z.infer<typeof WorkbenchThreadWaitTargetSchema>;
 const DefaultedWaitTargetsSchema = z.array(WorkbenchThreadWaitTargetSchema).optional()
   .overwrite(value => value ?? []);
-
-export const WorkbenchComposerSettingsSchema = z.object({
-  contextWindowTokens: z.number().int().positive().nullable().optional(),
-  agentPath: z.string().nullable(),
-  agentSource: z.enum(["library", "project"]).nullable(),
-  harness: WorkbenchHarnessSchema,
-  model: z.string(),
-  reasoningEffort: z.string().nullable(),
-  serviceTier: z.literal("fast").nullable(),
-}).strict() as z.ZodType<WorkbenchComposerSettings>;
-export type WorkbenchComposerSettingsState = WorkbenchComposerSettings;
-
-export const WorkbenchComposerProfileSelectionSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("custom"), settings: WorkbenchComposerSettingsSchema }).strict(),
-  z.object({ kind: z.literal("profile"), profileId: z.string().trim().min(1), settings: WorkbenchComposerSettingsSchema }).strict(),
-]) as z.ZodType<WorkbenchComposerProfileTargetSelection>;
-export type WorkbenchComposerProfileSelectionState = WorkbenchComposerProfileTargetSelection;
 
 export const WorkbenchThreadTargetSchema = z.discriminatedUnion("kind", [
   z.object({ folderId: CanonicalUuidSchema.brand<"FolderId">().optional(), kind: z.literal("new") }).strict(),
