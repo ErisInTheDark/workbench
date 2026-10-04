@@ -43,7 +43,6 @@ import WorkbenchHarnessController from "./WorkbenchHarnessController";
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
-import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
 import WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
 import WorkbenchUnfinishedTurnController from "./WorkbenchUnfinishedTurnController";
@@ -353,16 +352,11 @@ function createWorkbenchCoreFeature(
     resolveProject: async threadId => (await threadIdentity.resolve({ threadId }))?.projectId ?? null,
   }, approvalHandoff);
   const recordSkillActivations = (threadId: string, paths: readonly string[]) => threadSkills.recordActivations(threadId, paths, "user");
-  // Process-wide registry: waits started under an earlier generation still get interrupted.
-  const interruptSteerWaits = (threadId: WorkbenchThreadId) => {
-    getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(threadId);
-  };
   const unsubscribeCompaction = transcript.subscribeContextCompaction(async threadId => {
     if (lease.isCurrent()) await threadSkills.observeCompaction(threadId);
   });
   const questionnaireResponses = new WorkbenchQuestionnaireResponseController({
     approvals,
-    interruptSteerWaits,
     harnesses,
     providers,
     recordSkillActivations,
@@ -444,7 +438,6 @@ function createWorkbenchCoreFeature(
   });
   const threadActions = new WorkbenchThreadActionController({
     approvals,
-    interruptSteerWaits,
     reconciliation: transcriptReconciliation,
     transcripts: transcriptReader,
     transcript,

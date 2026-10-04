@@ -6,9 +6,57 @@ import { test } from "node:test";
 import ReloadableNode, { defineReloadableNodeGraph } from "../../shared/reload/ReloadableNode";
 import ReloadableNodeHost from "../../shared/reload/ReloadableNodeHost";
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import WorkbenchProviderHandle from "./WorkbenchProviderHandle";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchToolTranscriptReference } from "workbench-shared/workbench/provider/provider-execution";
+
+test("the shared provider admission gate wakes waits only for accepted steers", async () => {
+  const interrupted: string[] = [];
+  let agentAdmission: "started" | "steered" | "failed" = "steered";
+  let userAdmission: "started" | "steered" | "failed" = "steered";
+  const provider = {
+    threads: {
+      submit: async () => {
+        if (userAdmission === "failed") throw new Error("user admission failed");
+        return userAdmission === "steered"
+          ? { kind: "steered" as const, turnId: "turn" }
+          : { kind: "started" as const, turn: { id: "new-turn" } as never };
+      },
+      messageAgent: async () => {
+        if (agentAdmission === "failed") throw new Error("admission failed");
+        return { kind: agentAdmission, turnId: "turn" };
+      },
+    },
+  } as unknown as WorkbenchProvider;
+  const handle = new WorkbenchProviderHandle("codex", async (_registration, operation) => operation(provider),
+    threadId => { interrupted.push(threadId); });
+  const userMessage = {
+    threadId: "parent", clientMessageId: "user-1", input: [], intent: "continue" as const,
+  };
+  await handle.threads.submit(userMessage);
+  assert.deepEqual(interrupted, ["parent"]);
+
+  userAdmission = "started";
+  await handle.threads.submit(userMessage);
+  userAdmission = "failed";
+  await assert.rejects(handle.threads.submit(userMessage), /user admission failed/u);
+  assert.deepEqual(interrupted, ["parent"]);
+
+  const message = { threadId: "parent", cwd: "C:/repo", message: {
+    message: "review ready", senderName: "luna", senderThreadId: "child",
+  } };
+  await handle.threads.messageAgent(message);
+  assert.deepEqual(interrupted, ["parent", "parent"]);
+
+  agentAdmission = "started";
+  await handle.threads.messageAgent(message);
+  assert.deepEqual(interrupted, ["parent", "parent"]);
+
+  agentAdmission = "failed";
+  await assert.rejects(handle.threads.messageAgent(message), /admission failed/u);
+  assert.deepEqual(interrupted, ["parent", "parent"]);
+});
 
 test("tool capture finishes through the replacement owner with the original pinned identity", async () => {
   const f = fixture();
@@ -106,7 +154,7 @@ function fixture() {
       provides: ["providers"], requires: [], safeAll: true,
       scope: "server:consumer",
       create: (_context, { run }) => ({
-        registrations: { providers: new WorkbenchProviderDispatcher(run) },
+        registrations: { providers: new WorkbenchProviderDispatcher(run, () => undefined) },
         start() {}, dispose() {},
       }),
     }),

@@ -340,10 +340,11 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
       } } : {}),
     }));
     // A started turn reports `turn`; a turn start the bridge folded into the live turn reports `turnId`.
-    const turnId = typeof record(result?.turn)?.id === "string" ? record(result?.turn)!.id as string
+    const startedTurnId = record(result?.turn)?.id;
+    const turnId = typeof startedTurnId === "string" ? startedTurnId
       : typeof result?.turnId === "string" ? result.turnId : null;
     if (!turnId) throw new Error("Codex did not report the turn that admitted the agent message.");
-    return { turnId };
+    return { kind: typeof startedTurnId === "string" ? "started" as const : "steered" as const, turnId };
   }
 
   async admitTurn(threadId: string, turnReference: string) {

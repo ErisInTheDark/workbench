@@ -1,25 +1,34 @@
 /*
  * Exports:
- * - default WorkbenchProviderDispatcher: obtain reload-safe installed provider handles and probe their optional capabilities.
+ * - default WorkbenchProviderDispatcher: obtain reload-safe provider handles with one process-wide steer-wait interruption path.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
 import type { WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchProviderHandle from "./WorkbenchProviderHandle";
+import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
+
+function interruptSteerWaits(threadId: string) {
+  getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(WorkbenchThreadIdSchema.parse(threadId));
+}
 
 export default class WorkbenchProviderDispatcher {
-  constructor(private readonly run: WorkbenchProviderOperation) {}
+  constructor(
+    private readonly run: WorkbenchProviderOperation,
+    private readonly onSteerAdmitted: (threadId: string) => void = interruptSteerWaits,
+  ) {}
 
   get(key: WorkbenchProviderKey): WorkbenchProvider {
-    return new WorkbenchProviderHandle(key, this.run);
+    return new WorkbenchProviderHandle(key, this.run, this.onSteerAdmitted);
   }
 
   hydratesUsage(key: WorkbenchProviderKey) {
-    return new WorkbenchProviderHandle(key, this.run).hydratesUsage();
+    return new WorkbenchProviderHandle(key, this.run, this.onSteerAdmitted).hydratesUsage();
   }
 
   continueUnfinished(key: WorkbenchProviderKey, target: WorkbenchUnfinishedTurnTarget) {
-    return new WorkbenchProviderHandle(key, this.run).continueUnfinishedTurn(target);
+    return new WorkbenchProviderHandle(key, this.run, this.onSteerAdmitted).continueUnfinishedTurn(target);
   }
 }

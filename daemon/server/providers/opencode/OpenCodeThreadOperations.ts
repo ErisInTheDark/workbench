@@ -535,7 +535,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       intent: "continue",
       context: input.context,
     });
-    return { turnId: result.kind === "started" ? result.turn.id : result.turnId };
+    return { kind: result.kind, turnId: result.kind === "started" ? result.turn.id : result.turnId };
   }
 
   async rename(threadId: string, title: string) {

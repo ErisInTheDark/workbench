@@ -498,7 +498,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       input: [{ type: "text", text: createWorkbenchAgentMessageText(input.message), text_elements: [] }],
       intent: "continue", context: input.context,
     });
-    return { turnId: result.kind === "started" ? result.turn.id : result.turnId };
+    return { kind: result.kind, turnId: result.kind === "started" ? result.turn.id : result.turnId };
   }
 
   /** Relaunch the thread's last completed turn context with the hidden unfinished-turn input, once. */

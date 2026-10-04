@@ -138,9 +138,7 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
       record: async entry => { observe("record", entry); return {}; },
     },
   };
-  const interruptedWaits: string[] = [];
   const controller = new WorkbenchQuestionnaireResponseController({
-    interruptSteerWaits: threadId => { interruptedWaits.push(threadId); },
     approvals: {
       owns: (_thread, key) => key === options.liveApprovalKey,
       respond: async input => { observe("approval", input); return { ok: true }; },
@@ -163,7 +161,7 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
     resolveLatestTurn: async () => options.latestTurnId === undefined ? latestTurnId : options.latestTurnId,
     state,
   });
-  return { controller, events, historyTurnId: () => historyTurnId, interruptedWaits, requests, settled: () => settled };
+  return { controller, events, historyTurnId: () => historyTurnId, requests, settled: () => settled };
 }
 
 function request() {
@@ -205,7 +203,6 @@ test("admitted native turns settle questionnaire history under SQLite canonical 
     repository.replace(thread.threadId, { pending, history: [] });
     const unused = async (): Promise<never> => { throw new Error("Unexpected operation."); };
     const controller = new WorkbenchQuestionnaireResponseController({
-      interruptSteerWaits: () => undefined,
       approvals: { owns: () => false, respond: unused },
       providers: { get: () => ({
         configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
@@ -339,7 +336,6 @@ test("detached admission stamps a steered response onto the accepted active turn
   assert.equal(result.route, "admitted");
   const recorded = harness.requests.find(({ method }) => method === "record");
   assert.equal((recorded?.params as { turnId?: string } | undefined)?.turnId, admittedTurnId);
-  assert.deepEqual(harness.interruptedWaits, [threadId], "a steered answer must free the thread's running waits");
 });
 
 test("detached provider admission stamps its response onto the started turn", async () => {
@@ -359,7 +355,6 @@ test("detached provider admission stamps its response onto the started turn", as
   assert.equal(result.route, "admitted");
   assert.equal(harness.historyTurnId(), admittedTurnId);
   assert.equal(harness.requests.some(({ method }) => method === "submit"), true);
-  assert.deepEqual(harness.interruptedWaits, []);
 });
 
 test("provider questionnaire with pending lifecycle but no live waiter admits a continuation", async () => {

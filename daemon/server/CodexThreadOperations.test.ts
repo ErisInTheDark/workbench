@@ -167,6 +167,7 @@ test("agent messages retain tool authority and WB attribution at the native admi
   });
   // The admitting turn comes back in Workbench identity, ready for lifecycle acceptance.
   assert.equal(admitted.turnId, fixture.turnId);
+  assert.equal(admitted.kind, "steered");
   const request = requests[0];
   assert.equal(request.method, "turn/start");
   const params = request.params as { threadId: string; input: object[]; toolOutput: { namespace: string; name: string; output: string } };

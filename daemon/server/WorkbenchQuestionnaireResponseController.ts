@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - WorkbenchQuestionnaireResponseStatePort: atomic durable questionnaire settlement boundary.
- * - WorkbenchQuestionnaireResponseControllerOptions: approval owner, questionnaire waiter, steer-wait interruption, harness, and durable-state ports.
- * - default WorkbenchQuestionnaireResponseController: route one answer to its live approval, live delivery, or managed continuation, recording skills it activates and freeing waits a steered answer interrupts.
+ * - WorkbenchQuestionnaireResponseControllerOptions: approval owner, questionnaire waiter, harness, and durable-state ports.
+ * - default WorkbenchQuestionnaireResponseController: route one answer to its live approval, live delivery, or managed continuation, recording skills it activates.
  */
 import type {
   WorkbenchQuestionnaireRespondRequest,
@@ -59,8 +59,6 @@ export interface WorkbenchQuestionnaireResponseStatePort {
 
 export interface WorkbenchQuestionnaireResponseControllerOptions {
   approvals: Pick<WorkbenchApprovalController, "owns" | "respond">;
-  /** Free the thread's steer-interruptible MCP waits once an answer lands as a steer. */
-  interruptSteerWaits(threadId: WorkbenchThreadId): void;
   harnesses: Pick<WorkbenchHarnessController, "resolveThreadIdentity">;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   resolveLatestTurn(input: {
@@ -239,7 +237,6 @@ export default class WorkbenchQuestionnaireResponseController {
       input: turnInput,
       ...(activatedSkillPaths.length ? { context: { activatedSkillPaths } } : {}),
     });
-    if (result.kind === "steered") this.options.interruptSteerWaits(WorkbenchThreadIdSchema.parse(input.threadId));
     await this.recordSkillActivations(input.threadId, collectActivatedSkillPaths(turnInput, { activatedSkillPaths }));
     return {
       turnId: WorkbenchTurnIdSchema.parse(result.kind === "started" ? result.turn.id : result.turnId),

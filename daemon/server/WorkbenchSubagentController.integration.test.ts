@@ -127,7 +127,7 @@ class FakeProvider {
     messageAgent: async input => {
       this.calls.push({ harness: "codex", method: "messageAgent", params: { ...input }, promptContext: input.context ?? null });
       if (this.failTurnStart) throw new Error("Turn failed to start.");
-      return { turnId: `${input.threadId}-admitted` };
+      return { kind: "started", turnId: `${input.threadId}-admitted` };
     },
     interrupt: async (threadId, turnId, options) => {
       assert.equal(options?.preserveGoal, true);

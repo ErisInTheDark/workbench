@@ -69,7 +69,7 @@ function fixture({
         onDelivery?.();
         await deliveryGate;
         if (rejectDelivery) throw new Error("delivery rejected");
-        return { turnId: `delivered-${input.threadId}` };
+        return { kind: threads.get(input.threadId)?.turns.at(-1)?.status === "inProgress" ? "steered" : "started", turnId: `delivered-${input.threadId}` };
       },
       rename: unused, list: unused, submit: unused, compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused,
     },

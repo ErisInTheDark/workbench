@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WorkbenchThreadActionOwners: shared identity, profile/state, project and steer-wait owners.
+ * - WorkbenchThreadActionOwners: shared identity, profile/state, project and transcript owners.
  * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
- * - default WorkbenchThreadActionController: route WB actions without constructing provider packets, interrupt waits on accepted steers, record activated skills, stop threads (settling orphaned turns and always marking them stopped) for users and parent agents, route questionnaire interrupts to snooze, resend or dismiss undelivered steers, and redeliver stranded agent messages into a new turn.
+ * - default WorkbenchThreadActionController: route WB actions without constructing provider packets, record activated skills, stop threads (settling orphaned turns and always marking them stopped) for users and parent agents, route questionnaire interrupts to snooze, resend or dismiss undelivered steers, and redeliver stranded agent messages into a new turn.
  */
 import { randomUUID } from "node:crypto";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -32,8 +32,6 @@ import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/threa
 
 export interface WorkbenchThreadActionOwners {
   approvals: Pick<WorkbenchApprovalController, "list">;
-  /** Free the thread's steer-interruptible MCP waits once a user message lands as a steer. */
-  interruptSteerWaits(threadId: WorkbenchThreadId): void;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   transcripts: Pick<WorkbenchTranscriptReader, "readPage" | "history">;
   /** Canonical transcript writes for Workbench-owned steer decisions. */
@@ -243,8 +241,6 @@ export default class WorkbenchThreadActionController {
           intent: "continue" as const,
         };
     const result = await provider.threads.submit(providerInput);
-    // A running wait would hold the steer until it returns; every provider's steer frees it here.
-    if (result.kind === "steered") this.owners.interruptSteerWaits(identity.threadId);
     const warnings: string[] = [];
     try {
       await this.owners.recordSkillActivations(identity.threadId, collectActivatedSkillPaths(input.input, input.context));
@@ -388,11 +384,10 @@ export default class WorkbenchThreadActionController {
       .sort((left, right) => left.attemptedAt - right.attemptedAt);
     if (!stranded.length || !await provider.threads.isTurnLive(identity.threadId, turnId)) return;
     for (const entry of stranded) {
-      const result = await provider.threads.submit({
+      await provider.threads.submit({
         threadId: identity.threadId, clientMessageId: randomUUID(), intent: "steer", expectedTurnId: turnId,
         input: WorkbenchUserInputSchema.array().parse(entry.input),
       });
-      if (result.kind === "steered") this.owners.interruptSteerWaits(identity.threadId);
       await this.recordDismissed({ identity, entry, itemId: WorkbenchItemIdSchema.parse(entry.itemId) });
     }
   }
