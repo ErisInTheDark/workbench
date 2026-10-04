@@ -3,6 +3,7 @@
  * - WorkbenchProjectsPayloadSchema: project catalog wire contract with optional icons.
  * - WorkbenchProjectOptionSchema/WorkbenchProjectIconSchema: shared catalogue and icon boundary validation.
  * - WorkbenchProjectAliasSchema: retained project-address mapping.
+ * - WorkbenchProjectTreeNodeSchema/WorkbenchProjectTreeNodeFieldsSchema: one tree node, and either variant's fields for per-node deltas.
  * - WorkbenchProjectSnapshotSchema: project tree and change-summary wire contract.
  * - WorkbenchProjectStateUpdateSchema/WorkbenchProjectStateUpdate: pushed project snapshot update.
  * - WorkbenchProjectStateRequestSchema/WorkbenchProjectStateRequest: refresh, create and delete requests.
@@ -52,10 +53,18 @@ export const WorkbenchProjectsPayloadSchema = z.object({
   rootPath: z.string(),
 }).strict().transform((payload): WorkbenchProjectsPayload => payload);
 
-const TreeNodeSchema: z.ZodType<TreeNode> = z.lazy(() => z.discriminatedUnion("type", [
+export const WorkbenchProjectTreeNodeSchema: z.ZodType<TreeNode> = z.lazy(() => z.discriminatedUnion("type", [
   z.object({ isIgnored: z.boolean().optional(), name: z.string(), path: z.string(), type: z.literal("file") }).strict(),
-  z.object({ children: z.array(TreeNodeSchema), name: z.string(), path: z.string(), type: z.literal("directory") }).strict(),
+  z.object({ children: z.array(WorkbenchProjectTreeNodeSchema), name: z.string(), path: z.string(), type: z.literal("directory") }).strict(),
 ]));
+/** Either node variant's fields, for validating fields a delta patches onto one node. */
+export const WorkbenchProjectTreeNodeFieldsSchema = z.object({
+  children: z.array(WorkbenchProjectTreeNodeSchema).optional(),
+  isIgnored: z.boolean().optional(),
+  name: z.string(),
+  path: z.string(),
+  type: z.enum(["file", "directory"]),
+}).strict();
 
 export const WorkbenchProjectSnapshotSchema = z.object({
   changes: z.record(z.string(), ChangeSummarySchema),
@@ -63,7 +72,7 @@ export const WorkbenchProjectSnapshotSchema = z.object({
   root: z.string(),
   rootPath: z.string(),
   roots: z.array(WorkbenchProjectRootSchema),
-  tree: z.array(TreeNodeSchema),
+  tree: z.array(WorkbenchProjectTreeNodeSchema),
   workbenchStorageRootPath: z.string(),
 }).strict();
 

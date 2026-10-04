@@ -28,6 +28,7 @@ import {
 } from "../identity";
 import {
   WorkbenchProjectStateUpdateSchema, WorkbenchProjectsPayloadSchema, WorkbenchProjectOptionSchema,
+  WorkbenchProjectSnapshotSchema, WorkbenchProjectTreeNodeSchema, WorkbenchProjectTreeNodeFieldsSchema,
 } from "../project/project-state";
 import {
   ProjectLocationReferenceSchema, WorkbenchProjectLocationsPayloadSchema,
@@ -378,6 +379,18 @@ const locationsShape = observationShape.object({
   fields: { data: observationShape.keyed((location: { project: { id: string } }) => location.project.id,
     WorkbenchProjectLocationsPayloadSchema.shape.data.element) },
 });
+// A large project's tree is hundreds of KB while git change counts churn constantly; both decompose, so a count
+// tick ships one record entry and a new file ships one node under its folder.
+const projectTreeNodeShape: ObservationShape = { schema: WorkbenchProjectTreeNodeFieldsSchema };
+const projectTreeNodes = observationShape.keyed((node: { path: string }) => node.path, WorkbenchProjectTreeNodeSchema, projectTreeNodeShape);
+projectTreeNodeShape.fields = { children: projectTreeNodes };
+const projectTreeShape = observationShape.object({
+  schema: WorkbenchProjectStateUpdateSchema,
+  fields: { snapshot: observationShape.object({
+    schema: WorkbenchProjectSnapshotSchema,
+    fields: { changes: observationShape.record(WorkbenchProjectSnapshotSchema.shape.changes.valueType), tree: projectTreeNodes },
+  }) },
+});
 const byProject = <Item extends { projectId: string }>(item: z.ZodType, shape?: ObservationShape) =>
   observationShape.keyed((value: Item) => value.projectId, item, shape);
 // A row's entry decomposes too, so an activity tick ships its changed fields instead of the whole entry.
@@ -448,6 +461,7 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
       } }),
     } };
     case "thread": return { schema, fields: { data: entriesShape(threadObservationObject) } };
+    case "projectTree": return { schema, fields: { project: projectTreeShape } };
     default: return { schema };
   }
 }
@@ -471,6 +485,7 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
     }) } };
     case "thread": return { schema, fields: { data: entriesShape(threadObservationObject) } };
     case "appState": return { schema, fields: { data: appStateShape() } };
+    case "projectTree": return { schema, fields: { data: projectTreeShape } };
     default: return { schema };
   }
 }
