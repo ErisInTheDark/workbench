@@ -11,6 +11,7 @@ import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient.
 import { WorkbenchDaemonIdentitySchema } from "../../shared/http/workbench-daemon-discovery.ts";
 import WorkbenchProcessLease from "../../shared/process/WorkbenchProcessLease.ts";
 import WorkbenchDaemonHost from "./WorkbenchDaemonHost.ts";
+import type WorkbenchLocalDaemon from "../../shared/process/WorkbenchLocalDaemon.ts";
 
 const exec = promisify(execFile);
 
@@ -143,6 +144,13 @@ test("cold service reads and app detach preserve durable identity without waking
   release();
   await normalStop;
   assert.equal(first.service.identity().state, "sleeping");
+  // A verified daemon this host does not own must never block stopping the host itself.
+  const { standalone } = first.service as unknown as { standalone: WorkbenchLocalDaemon };
+  context.mock.method(standalone, "getSnapshot", () => ({ failure: null, endpoint: {
+    version: 1, instanceId: "6e1a6f64-af71-4639-b997-65d8f314b352", pid: 4242, origin: "http://127.0.0.1:32124",
+  } }));
+  await assert.rejects(client.request({ method: "service/daemon/stop", instanceId: first.endpoint.instanceId }), /pid 4242/u);
+  warnings.length = 0;
   await client.request({ method: "service/stop", instanceId: first.endpoint.instanceId });
   await shutdownRequested;
   const detached = new Promise<void>(resolve => { demandChanged = resolve; });

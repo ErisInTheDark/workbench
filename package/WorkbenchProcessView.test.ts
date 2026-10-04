@@ -108,6 +108,37 @@ test("a second Ctrl+C bypasses a pending daemon stop instead of joining its queu
   }
 });
 
+test("a daemon stop that fails arms the emergency halt for the next Ctrl+C", async () => {
+  const input = new Terminal();
+  const attached = event();
+  const failed = event();
+  const calls: string[] = [];
+  const warnings: string[] = [];
+  const view = new WorkbenchProcessView({
+    target: "daemon", input,
+    write: async text => { if (text.includes("Viewing")) attached.resolve(); },
+    warn: message => { warnings.push(message); failed.resolve(); },
+    createFollower: () => ({ start: async () => {}, close: async () => {} }),
+    connect: async () => ({
+      logDirectory: "/unused", logPrefix: "workbench-host",
+      stopDaemon: async () => { calls.push("daemon"); throw new Error("daemon unreachable"); },
+      stopHost: async () => { calls.push("host"); },
+      emergencyStopHost: async () => { calls.push("emergency"); },
+      quitApp: async () => {},
+      close: async () => {},
+    }),
+  });
+  const running = view.run();
+  await attached.promise;
+  await Promise.resolve();
+  input.write("\u0003");
+  await failed.promise;
+  assert.match(warnings.join("\n"), /daemon unreachable[\s\S]*Ctrl\+C again/u);
+  input.write("\u0003");
+  await running;
+  assert.deepEqual(calls, ["daemon", "emergency"]);
+});
+
 test("q cancels a pending viewer wait without pretending to undo an admitted stop", async () => {
   const input = new Terminal();
   const attached = event();

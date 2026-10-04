@@ -309,18 +309,27 @@ export default class WorkbenchService {
         if (!this.options.emergencyStop) throw new Error("Emergency host shutdown is unavailable.");
         return { kind: "ok", id: request.id };
       case "service/daemon/stop":
-      case "service/stop":
+      case "service/stop": {
         if (request.instanceId !== this.instanceId) throw new Error("The viewed host was replaced. Attach again before stopping it.");
         if (request.method === "service/stop" && !this.options.stop) throw new Error("Host shutdown is unavailable.");
-        if (!this.daemon.isSupervising && this.standalone.getSnapshot().endpoint && !this.daemon.snapshot().endpoint
-          && this.daemon.snapshot().state !== "stopped") {
-          throw new Error("This host does not own the running daemon. Stop it from its foreground terminal.");
+        // Stopping the host always works: its exit ends everything it started. Only a daemon stop needs ownership.
+        const unowned = !this.daemon.isSupervising && !this.daemon.snapshot().endpoint && this.daemon.snapshot().state !== "stopped"
+          ? this.standalone.getSnapshot().endpoint : null;
+        if (unowned && request.method === "service/daemon/stop") {
+          throw new Error(`The running daemon (pid ${unowned.pid}) wasn't started by this host, so it can't stop it. Stop the host to halt everything it started.`);
         }
-        await this.runtime.run("database", "intentionally stop daemon", database => {
+        const stopping = this.runtime.run("database", "intentionally stop daemon", database => {
           database.stopDaemon();
           return this.daemon.stop("Daemon intentionally stopped by its local viewer.");
         });
+        if (request.method === "service/daemon/stop") await stopping;
+        else {
+          // A daemon that resists its own kill must not keep the host alive: host exit ends its whole tree.
+          try { await stopping; }
+          catch (error) { this.report(new Error(`Daemon stop failed while stopping the host; host exit ends it instead: ${error instanceof Error ? error.message : String(error)}`)); }
+        }
         break;
+      }
       case "service/daemon/wake":
         await this.daemon.waitForSleep();
         if (this.daemon.snapshot().state === "stopped") {

@@ -20,7 +20,8 @@ export default class WorkbenchProcessView {
   private closed = false;
   private release: (() => void) | null = null;
   private commands = Promise.resolve();
-  private stage: "daemon" | "stopping-daemon" | "host" | "emergency" = "daemon";
+  /** `stop-failed` arms the emergency halt: a stop that fails fast must never leave Ctrl+C retrying it forever. */
+  private stage: "daemon" | "stopping-daemon" | "host" | "stop-failed" | "emergency" = "daemon";
   private stopAbort: AbortController | null = null;
   private readonly lifetime = new AbortController();
 
@@ -45,7 +46,7 @@ export default class WorkbenchProcessView {
       for (const key of bytes.toString()) {
         if (key === "q" || key === "Q") { this.detach(); continue; }
         if (key !== "\u0003" || this.closed) continue;
-        if (this.options.target === "daemon" && this.stage === "stopping-daemon") {
+        if (this.options.target === "daemon" && (this.stage === "stopping-daemon" || this.stage === "stop-failed")) {
           this.stage = "emergency";
           this.stopAbort?.abort(new Error("Viewer escalated to emergency host halt."));
           void connection.emergencyStopHost().then(() => this.detach(), error => {
@@ -74,11 +75,13 @@ export default class WorkbenchProcessView {
             this.detach();
           }
         }).catch(error => {
-          if (this.stage === "stopping-daemon") {
-            this.stage = "daemon";
+          if (this.closed || this.stage === "emergency") return;
+          const message = `Stop failed: ${error instanceof Error ? error.message : String(error)}`;
+          if (this.options.target === "daemon") {
+            this.stage = "stop-failed";
             this.stopAbort = null;
-          }
-          if (!this.closed && this.stage !== "emergency") this.options.warn(`Stop failed: ${error instanceof Error ? error.message : String(error)}`);
+            this.options.warn(`${message}\nCtrl+C again force-halts the host and everything it started; q detaches.`);
+          } else this.options.warn(message);
         });
       }
     };

@@ -323,6 +323,13 @@ export default class WorkbenchDaemonHost {
     } catch (error) {
       const normalized = error instanceof Error ? error : new Error(String(error));
       if (!this.stopping && this.lifecycle.state !== "failed") await this.fail(normalized, this.lifecycle.state !== "ready");
+      // A failure here (e.g. a frozen child outliving its kill) must not leave the host stuck in `failed`
+      // with an orphaned daemon: replacing the crash unit lets the native supervisor's job end the whole tree.
+      if (!this.stopping && this.options.requestRestart) {
+        log.error("host", `daemon supervision failed (${normalized.message.slice(0, 300)}); replacing the host so Windows ends the daemon's whole process tree.`);
+        this.options.requestRestart();
+        return;
+      }
       throw error;
     } finally {
       if (this.activeLog === log) this.activeLog = null;
@@ -357,6 +364,7 @@ export default class WorkbenchDaemonHost {
     this.activeAbort = abort;
     const child = this.spawnDaemon(this.daemonDirectoryPath, this.environment);
     this.activeChild = child;
+    if (child.pid) log.line("host", `daemon process started (pid ${child.pid}).`);
     const exited = childResult(child);
     const watchdog = new DaemonHealthWatchdog(this.idleTimeoutMs, this.now());
     const wake = new WakeSignal();

@@ -232,6 +232,26 @@ test("unexpected supervision failure retires its owned child before rejecting", 
   assert.equal(host.snapshot().state, "failed");
 });
 
+test("a daemon that cannot be retired hands recovery to crash-unit replacement", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-unretirable-");
+  context.after(() => temporary.dispose());
+  const lines: string[] = [];
+  let restarts = 0;
+  const host = new WorkbenchDaemonHost({
+    projectRootPath: temporary.path, environment: {},
+    sleep: async () => { throw new Error("watchdog wait failed"); },
+    loggerFactory: () => fakeLog(lines),
+    spawnDaemon: () => fakeChild(),
+    terminateChild: async () => { throw new Error("Owned process termination did not finish within 5000ms."); },
+    requestRestart: () => { restarts++; },
+  });
+  // The frozen child outlives the host's own kill; only replacing the unit (and its job) ends it.
+  await host.run();
+  assert.equal(restarts, 1);
+  assert.equal(host.snapshot().state, "failed");
+  assert.match(lines.join("\n"), /replacing the host/u);
+});
+
 test("failed retirement cannot be followed by spawning another daemon", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-stop-failure-");
   const root = temporary.path;
