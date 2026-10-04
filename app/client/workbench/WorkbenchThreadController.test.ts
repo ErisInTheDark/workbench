@@ -179,6 +179,22 @@ test("opening reconciles saved history without discarding it when the provider i
   f.owner.dispose();
 });
 
+test("a reconcile that changed nothing does not reread the page it just read", async () => {
+  for (const changed of [false, true]) {
+    const f = fixture();
+    let reads = 0;
+    f.ports.reconcile = async () => changed;
+    f.ports.read = async () => { reads++; f.publish(f.document); return f.document; };
+    const release = f.owner.acquire("route");
+    const opening = f.owner.read();
+    f.admit();
+    assert.equal(await opening, f.document);
+    assert.equal(reads, changed ? 2 : 1);
+    release();
+    f.owner.dispose();
+  }
+});
+
 for (const retire of [false, true]) {
   test(`saved history is readable during recovery and ${retire ? "retirement fences" : "completion triggers"} its reread`, async () => {
     const f = fixture();

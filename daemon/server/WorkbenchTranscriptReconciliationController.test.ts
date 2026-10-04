@@ -1,4 +1,4 @@
-/* No production exports. Protect bounded demand, freshness and recovery retirement. */
+/* No production exports. Protect bounded demand, freshness, change reporting and recovery retirement. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import WorkbenchTranscriptReconciliationController, { type WorkbenchTranscriptReconciliationOptions } from "./WorkbenchTranscriptReconciliationController";
@@ -118,6 +118,29 @@ test("retirement aborts active native work, rejects queued demands and drains th
   await Promise.all([active, queued]);
   assert.equal(calls, 1);
   await assert.rejects(owner.reconcile(input), /retired/);
+});
+
+test("a window reports changed only when a transcript commit for its own thread lands during recovery", async () => {
+  const listeners = new Set<(threadIds: readonly string[]) => void>();
+  let commit: readonly string[] = [];
+  const owner = new WorkbenchTranscriptReconciliationController({
+    ...identityPorts(), readGapIds: async () => [],
+    subscribeSettled: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+    recover: async () => {
+      for (const listener of listeners) listener(commit);
+      return { turnIds: ["turn"], exhausted: false };
+    },
+    warn: assert.fail,
+  });
+  const latest = { threadId: "thread", target: { mode: "latest" as const }, refresh: false };
+  try {
+    assert.equal((await owner.reconcile(latest)).changed, false);
+    commit = ["other"];
+    assert.equal((await owner.reconcile(latest)).changed, false);
+    commit = ["thread"];
+    assert.equal((await owner.reconcile(latest)).changed, true);
+  } finally { await owner.dispose(); }
+  assert.equal(listeners.size, 0);
 });
 
 test("previous recovery follows the preceding turn's native provenance across provider boundaries", async () => {

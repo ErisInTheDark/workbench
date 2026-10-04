@@ -95,7 +95,7 @@ function createWorkbenchCoreFeature(
   reloadDirt: WorkbenchReloadDirtController,
   database: DaemonDatabaseRegistration,
   commandApprovals: DaemonRuntimeObjects["commandApprovals"],
-  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps" | "record" | "subscribeItemActivity" | "subscribeContextCompaction" | "subscribeTurnStarted" | "subscribeHeldSteers">,
+  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps" | "record" | "subscribeItemActivity" | "subscribeContextCompaction" | "subscribeTurnStarted" | "subscribeHeldSteers" | "subscribeSettled">,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
   turnRecovery: DaemonRuntimeObjects["turnRecovery"],
@@ -401,6 +401,7 @@ function createWorkbenchCoreFeature(
     identities: threadIdentity,
     transcripts: transcriptReader,
     readGapIds: async threadId => (await transcript.readRecoveryGaps(WorkbenchThreadIdSchema.parse(threadId))).map(gap => gap.id),
+    subscribeSettled: listener => transcript.subscribeSettled(listener),
     recover: async (input, signal) => {
       const key = installedProviderKeys.find(key => key === input.harness);
       if (!key) throw new Error("Transcript provider is not installed.");

@@ -188,6 +188,7 @@ export interface DaemonTranscriptRegistration {
   subscribeHeldSteers(
     listener: (event: import("./database/transcript/WorkbenchTranscriptController").WorkbenchTranscriptTurnEvent) => Promise<void> | void,
   ): () => void;
+  subscribeSettled(listener: (threadIds: readonly string[]) => void): () => void;
   subscribe(subscription: {
     id: string;
     request: { threadId: string; turnIds?: string[]; turnLimit: number };

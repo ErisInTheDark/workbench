@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchTranscriptReconciliationOptions: canonical resolution, storage and native recovery ports.
- * - default WorkbenchTranscriptReconciliationController: own explicit demanded transcript recovery.
+ * - default WorkbenchTranscriptReconciliationController: own explicit demanded transcript recovery and report whether each window changed its thread.
  */
 import type { WorkbenchThreadReconcile, WorkbenchThreadReconcileResult } from "workbench-shared/workbench/thread/thread-actions";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -12,6 +12,8 @@ export interface WorkbenchTranscriptReconciliationOptions {
   identities: Pick<WorkbenchThreadIdentityController, "resolve">;
   transcripts: Pick<WorkbenchTranscriptReader, "catalog">;
   readGapIds(threadId: string): Promise<string[]>;
+  /** Threads each transcript commit changed; lets a window report whether it changed anything. */
+  subscribeSettled?(listener: (threadIds: readonly string[]) => void): () => void;
   recover(input: WorkbenchThreadReconcile & { harness: string; gapIds: string[] }, signal: AbortSignal): Promise<WorkbenchThreadReconcileResult>;
   warn(message: string): void;
 }
@@ -21,6 +23,8 @@ type Job = {
   target: Target;
   controller: AbortController;
   result: ReturnType<typeof Promise.withResolvers<WorkbenchThreadReconcileResult>>;
+  /** A commit for this thread landed while the window ran. */
+  changed?: boolean;
 };
 
 function sameWindow(left: Target, right: Target) {
@@ -35,8 +39,13 @@ export default class WorkbenchTranscriptReconciliationController {
   private readonly queue: Job[] = [];
   private active: Job | null = null;
   private draining: Promise<void> | null = null;
+  private readonly stopSettled: () => void;
 
-  constructor(private readonly options: WorkbenchTranscriptReconciliationOptions) {}
+  constructor(private readonly options: WorkbenchTranscriptReconciliationOptions) {
+    this.stopSettled = options.subscribeSettled?.(threadIds => {
+      if (this.active && threadIds.includes(this.active.target.threadId)) this.active.changed = true;
+    }) ?? (() => undefined);
+  }
 
   async reconcile(input: WorkbenchThreadReconcile, signal?: AbortSignal): Promise<WorkbenchThreadReconcileResult> {
     this.controller.signal.throwIfAborted();
@@ -108,9 +117,11 @@ export default class WorkbenchTranscriptReconciliationController {
           signal.throwIfAborted();
           const gapIds = await this.options.readGapIds(job.target.threadId);
           signal.throwIfAborted();
+          job.changed = false;
           const result = await this.options.recover({ ...job.target, gapIds }, signal);
           signal.throwIfAborted();
-          job.result.resolve(result);
+          // Without commit observation the outcome is unknown, so callers keep rereading.
+          job.result.resolve(this.options.subscribeSettled ? { ...result, changed: job.changed } : result);
         } catch (error) {
           if (!signal.aborted) {
             const safe = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 160);
@@ -131,6 +142,7 @@ export default class WorkbenchTranscriptReconciliationController {
   }
 
   async dispose() {
+    this.stopSettled();
     this.controller.abort(new Error("Transcript reconciliation retired."));
     for (const job of this.queue.splice(0)) job.result.reject(this.controller.signal.reason);
     await this.draining;

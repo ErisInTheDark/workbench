@@ -59,6 +59,8 @@ export type WorkbenchThreadReconcile = {
 export const WorkbenchThreadReconcileResultSchema = z.object({
   turnIds: z.array(z.string()),
   exhausted: z.boolean().default(false),
+  /** False when no transcript commit for the thread landed during reconciliation; absent (older daemons) means unknown. */
+  changed: z.boolean().optional(),
 });
 export type WorkbenchThreadReconcileResult = z.infer<typeof WorkbenchThreadReconcileResultSchema>;
 const message = {

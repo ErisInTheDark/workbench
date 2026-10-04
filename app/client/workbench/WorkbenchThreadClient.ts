@@ -736,10 +736,12 @@ function WorkbenchThreadClient(
           return () => window.removeEventListener("focus", listener);
         },
         reconcile: async readOptions => {
-          await daemon.threads.reconcile({
+          const result = await daemon.threads.reconcile({
             threadId, target: readOptions.cursor ? { mode: "previous", beforeTurnId: readOptions.cursor } : { mode: "latest" },
             refresh: false,
           });
+          // Only an explicit "nothing changed" skips the reread; older daemons omit the flag.
+          return result.changed !== false;
         },
         read: async (readOptions, beforeCommit, selectionBound, recover) => {
           await beforeCommit();

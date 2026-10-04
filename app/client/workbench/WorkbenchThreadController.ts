@@ -55,7 +55,8 @@ export interface ThreadControllerPorts {
     threadId: string;
   }) => Promise<GitCheckpointProposal>;
   read: (options: WorkbenchReadThreadOptions, beforeCommit: () => Promise<void>, selectionBound: boolean, recover?: () => Promise<void>) => Promise<ThreadPayload | null>;
-  reconcile?: (options: WorkbenchReadThreadOptions) => Promise<void>;
+  /** Resolves `false` when reconciliation changed nothing, so the page just read is already current. */
+  reconcile?: (options: WorkbenchReadThreadOptions) => Promise<boolean | void>;
   releaseHistoricalTurns: (turnIds: readonly string[]) => ThreadPayload | null;
   readNative: () => Pick<ThreadControllerSnapshot, "approvalEntries" | "document" | "pendingQuestionnaire" | "rateLimits">;
   subscribeNative: (listener: () => void) => () => void;
@@ -245,17 +246,18 @@ export default class WorkbenchThreadController {
     const release = retain ? this.acquire("summary") : () => {};
     if (!options.cursor) this.cancelRefresh();
     const generation = this.generation;
-    let recovery: Promise<void> | null = null;
+    let recovery: Promise<boolean | void> | null = null;
     const recover = () => recovery ??= this.ports.reconcile?.(options) ?? Promise.resolve();
-    const read = () => this.ports.read(options, () => this.waitForAdmission(generation), selectionBound, recover);
+    const read = () => this.ports.read(options, () => this.waitForAdmission(generation), selectionBound, async () => { await recover(); });
     const task = read()
       .then(async document => {
         if (generation !== this.generation || this.disposed) return null;
         this.reconcile();
         if (!this.ports.reconcile || recovery || options.readScope === "subagentBackground" || this.target.kind === "draft") return document;
         try {
-          await recover();
+          const changed = await recover();
           if (generation !== this.generation || this.disposed) return null;
+          if (changed === false) return document;
           return await read();
         } catch (error) {
           if (generation !== this.generation || this.disposed) return null;

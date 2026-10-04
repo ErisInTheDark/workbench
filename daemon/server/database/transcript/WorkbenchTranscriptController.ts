@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchTranscriptItemActivity: one committed admission of new thread items.
  * - WorkbenchTranscriptTurnEvent: one thread turn named by a committed observation.
- * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions, item-activity, turn-start, held-steer and live compaction publication, and disposal.
+ * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions, item-activity, settled-thread, turn-start, held-steer and live compaction publication, and disposal.
  */
 import { logError } from "../../process-helpers.ts";
 import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
@@ -172,6 +172,7 @@ export default class WorkbenchTranscriptController {
   readonly #compactionListeners = new Set<(threadId: WorkbenchThreadId) => Promise<void> | void>();
   readonly #turnStartListeners = new Set<(event: WorkbenchTranscriptTurnEvent) => Promise<void> | void>();
   readonly #heldSteerListeners = new Set<(event: WorkbenchTranscriptTurnEvent) => Promise<void> | void>();
+  readonly #settledListeners = new Set<(threadIds: readonly string[]) => void>();
   #disposed = false;
 
   constructor(
@@ -270,6 +271,7 @@ export default class WorkbenchTranscriptController {
         snapshots: requestsSubscriptionRefresh(recoveryObservations, context.source),
       });
       this.#publishSettlement(settlement, recoveryObservations, context.source);
+      this.#publishSettled(settlement.changedThreadIds);
       return settlement;
     }
     let settlement: WorkbenchTranscriptSettlement;
@@ -288,6 +290,7 @@ export default class WorkbenchTranscriptController {
       snapshots: requestsSubscriptionRefresh(observations, context.source),
     });
     this.#publishSettlement(settlement, observations, context.source);
+    this.#publishSettled(settlement.changedThreadIds);
     this.#publishContextCompactions(observations);
     // Compatibility imports replay history; their turns and steers are not live news.
     if (context.source !== "compatibility") this.#publishTurnEvents(observations);
@@ -321,6 +324,20 @@ export default class WorkbenchTranscriptController {
   subscribeHeldSteers(listener: (event: WorkbenchTranscriptTurnEvent) => Promise<void> | void) {
     this.#heldSteerListeners.add(listener);
     return () => { this.#heldSteerListeners.delete(listener); };
+  }
+
+  /** Observe which threads each commit actually changed, from every source including recovery. */
+  subscribeSettled(listener: (threadIds: readonly string[]) => void) {
+    this.#settledListeners.add(listener);
+    return () => { this.#settledListeners.delete(listener); };
+  }
+
+  #publishSettled(threadIds: readonly string[]) {
+    if (this.#disposed || !threadIds.length) return;
+    for (const listener of this.#settledListeners) {
+      try { listener(threadIds); }
+      catch (error) { reportListenerFailure("workbench-transcript-settled")(error); }
+    }
   }
 
   acceptLiveUpdate(update: TranscriptLiveUpdate) {
