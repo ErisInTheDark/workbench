@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect publication after committed identity and synchronous delta lookup without body reads.
+ * No exports. Tests protect publication after committed identity, synchronous delta lookup without body reads, and idle-thread eviction.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -52,6 +52,27 @@ test("structural admission enables every delta without another database lookup",
   assert.throws(() => controller.itemIdForSource(identity.threadId, { ...identity.sources[0]!, turnId: fixtureIdentityValues.WorkbenchTurnId["another-turn"] }), /not been admitted/iu);
   controller.dispose();
   assert.throws(() => controller.itemIdForSource(identity.threadId, identity.sources[0]!), /disposed/iu);
+});
+
+test("threads idle past the window drop out of memory while active threads stay", async () => {
+  let now = 0;
+  const other: WorkbenchTranscriptItemIdentity = { ...identity, threadId: fixtureIdentityValues.WorkbenchThreadId["other-thread"] };
+  const controller = new WorkbenchTranscriptIdentityController({
+    admitTranscriptItemIdentities: async inputs => inputs.map(input => input.threadId === other.threadId ? other : identity),
+    resolveTranscriptItemIdentity: async () => null,
+  }, { now: () => now, idleMs: 1_000 });
+  await controller.admit([identity, other]);
+  now = 900;
+  // A lookup keeps a thread warm.
+  assert.equal(controller.itemIdForSource(identity.threadId, identity.sources[0]!), identity.itemId);
+  now = 1_500;
+  await controller.admit([identity]);
+  assert.equal(controller.findItemIdForSource(other.threadId, other.sources[0]!), undefined);
+  assert.equal(controller.itemIdForSource(identity.threadId, identity.sources[0]!), identity.itemId);
+  // An evicted thread behaves as after a restart: the next admission warms it again.
+  await controller.admit([other]);
+  assert.equal(controller.itemIdForSource(other.threadId, other.sources[0]!), other.itemId);
+  controller.dispose();
 });
 
 test("failed or late identity admission cannot become a live mapping", async () => {
