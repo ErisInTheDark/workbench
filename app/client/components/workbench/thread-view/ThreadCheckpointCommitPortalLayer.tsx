@@ -3,7 +3,7 @@
  * - ThreadCheckpointCommitSourceAnchor/ThreadCheckpointCommitTargetAnchor: mark transcript and terminal placement for one proposal.
  * - ThreadCheckpointCommitAnchorRegistry: notify proposal portals when independently rendered anchors mount or unmount.
  * - moveThreadCheckpointCommitHost: relocate the existing proposal host without remounting its controller.
- * - default ThreadCheckpointCommitPortalLayer: keep one proposal controller mounted while moving its DOM host between anchors.
+ * - default ThreadCheckpointCommitPortalLayer: keep one proposal controller mounted while moving its DOM host between anchors, and expose their commit actions.
  */
 "use client";
 
@@ -13,6 +13,7 @@ import { createPortal } from "react-dom";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { ThreadGitArcProposalSource } from "./thread-git-arc-presentation";
+import ThreadCheckpointCommitActions, { ThreadCheckpointCommitActionsContext } from "./ThreadCheckpointCommitActions";
 import ThreadCheckpointCommitController from "./ThreadCheckpointCommitController";
 
 type ThreadCheckpointCommitPlacement = "source" | "target";
@@ -198,6 +199,7 @@ function ThreadCheckpointCommitPortal({
 }
 
 export default function ThreadCheckpointCommitPortalLayer({
+  commitActions,
   cwd,
   harness,
   hoistedProposalIds,
@@ -209,6 +211,7 @@ export default function ThreadCheckpointCommitPortalLayer({
   threadId,
   workspaceRoots,
 }: {
+  commitActions: ThreadCheckpointCommitActions;
   cwd: string;
   harness: WorkbenchHarness;
   hoistedProposalIds: ReadonlySet<string>;
@@ -224,19 +227,23 @@ export default function ThreadCheckpointCommitPortalLayer({
     () => Array.from(new Set([...proposalSources.keys(), ...lifecycleProposalIds])),
     [lifecycleProposalIds, proposalSources],
   );
-  return proposalIds.map(proposalId => (
-    <ThreadCheckpointCommitPortal
-      cwd={cwd}
-      harness={harness}
-      hoisted={hoistedProposalIds.has(proposalId)}
-      key={proposalId}
-      projectFilePaths={projectFilePaths}
-      projectId={projectId}
-      projectRootPath={projectRootPath}
-      proposalId={proposalId}
-      source={proposalSources.get(proposalId) ?? null}
-      threadId={threadId}
-      workspaceRoots={workspaceRoots}
-    />
-  ));
+  return (
+    <ThreadCheckpointCommitActionsContext.Provider value={commitActions}>
+      {proposalIds.map(proposalId => (
+        <ThreadCheckpointCommitPortal
+          cwd={cwd}
+          harness={harness}
+          hoisted={hoistedProposalIds.has(proposalId)}
+          key={proposalId}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          proposalId={proposalId}
+          source={proposalSources.get(proposalId) ?? null}
+          threadId={threadId}
+          workspaceRoots={workspaceRoots}
+        />
+      ))}
+    </ThreadCheckpointCommitActionsContext.Provider>
+  );
 }

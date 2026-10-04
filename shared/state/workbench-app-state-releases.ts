@@ -27,6 +27,7 @@ const appStateReleases = Object.freeze({
   modelGroupDisclosures: release(17, "e15eecd9879a69bd0b7e2e2975a5c887df96685793b5b6dc4744732604662107"),
   logicalProjectPreferences: release(18, "652efedddbb92a089513cd47dfdfdd1f0f41b3b30bb12c61da9793855c486b1b"),
   removePinPlacement: release(19, "0ce2379f89a9229a19409689417783cf8537313bb6f3159324fb6d2d0d0968ac"),
+  threadGitArcProposalsOpen: release(20, "b5405e56eb9635cb6aa8cece6459f7e7454efe9bd28e1cbf7a0f3ee8c7932029"),
 });
 
 export default appStateReleases;

@@ -4,7 +4,7 @@
  * - readThreadGitArcProposalTranscriptItem/readThreadGitArcMcpProposalTranscriptItem: read CLI or MCP proposal identity and editable message intent.
  * - proposalIntentOwnsMessage: identify proposal intent that provides an explicit editable message.
  * - ThreadGitArcProposalSource/ThreadGitArcProposalPresentation: index proposal controller inputs and latest source turns from loaded transcript turns.
- * - getHoistedThreadGitArc: select useful terminal Git arc work without duplicating Git validity.
+ * - getHoistedThreadGitArc: select useful current Git arc work without duplicating Git validity; running turns hoist pending proposals only.
  * - default getThreadGitArcProposalPresentation: derive proposal presentation facts from loaded transcript turns.
  */
 
@@ -120,19 +120,22 @@ export function getHoistedThreadGitArc({
   proposalObservations: Readonly<Record<string, ThreadGitArcProposalObservation>>;
   proposalTurnIds: ReadonlyMap<string, string>;
 }) {
-  if (!gitArc || currentTurn?.status === "inProgress") return null;
+  if (!gitArc) return null;
+  const running = currentTurn?.status === "inProgress";
   const proposals = gitArc.proposals.flatMap(({ proposalId, status: lifecycleStatus }) => {
     const observation = proposalObservations[proposalId];
     const status = observation?.status === "loaded" ? observation.proposal.status : lifecycleStatus;
-    return status === "proposed" || status === "committed" ? [{ proposalId, status }] : [];
+    // Landed proposals stay inline in a running turn's transcript; only pending ones hoist.
+    return status === "proposed" || (!running && status === "committed") ? [{ proposalId, status }] : [];
   });
   const visibleGitArc = proposals.length === gitArc.proposals.length
     && proposals.every((proposal, index) => proposal.status === gitArc.proposals[index]?.status)
     ? gitArc
     : { ...gitArc, proposals };
   // A stashed arc's files are recoverable terminal work, so the card must stay available
-  // to unstash even when none of its proposals is currently actionable.
-  if (gitArc.claimedPaths.length || gitArc.stashedPaths?.length || gitArc.phase === "stashed") return visibleGitArc;
+  // to unstash even when none of its proposals is currently actionable. Claim resolution
+  // stays terminal-only: a running turn still owns its claims.
+  if (!running && (gitArc.claimedPaths.length || gitArc.stashedPaths?.length || gitArc.phase === "stashed")) return visibleGitArc;
   if (!proposals.length) return null;
   if (proposals.some(({ status }) => status === "proposed")) return visibleGitArc;
   return currentTurn && proposals.some(({ proposalId }) => (

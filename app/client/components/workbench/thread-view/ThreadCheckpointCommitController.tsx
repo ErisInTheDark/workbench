@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadCheckpointCommitControllerProps: identify one proposal controller and its presentation inputs.
- * - default ThreadCheckpointCommitController: demand near-visible proposal state and own edit and commit actions.
+ * - default ThreadCheckpointCommitController: demand near-visible proposal state, own edit and commit actions, and register commit-all readiness when relocatable.
  */
 "use client";
 
@@ -22,8 +22,10 @@ import type {
   ThreadCommandExecutionOutcome,
 } from "../../../workbench/thread/thread-command-matchers";
 import ThreadCheckpointCommitCard, {
+  canCommitCheckpointProposal,
   type CheckpointCommitCardState,
 } from "./ThreadCheckpointCommitCard";
+import { ThreadCheckpointCommitActionsContext } from "./ThreadCheckpointCommitActions";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import { proposalIntentOwnsMessage } from "./thread-git-arc-presentation";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
@@ -94,6 +96,10 @@ function ThreadCheckpointCommitController({
     (intent?.amend ? intent.freshDescription : intent?.description) ?? "",
   );
   const [committing, setCommitting] = useState(false);
+  // Synchronous guard so a card click and commit-all cannot both start the same commit.
+  const committingRef = useRef(false);
+  const loadedModeRef = useRef<"amend" | "commit" | null>(null);
+  const commitActions = useContext(ThreadCheckpointCommitActionsContext);
   const [observationTarget, setObservationTarget] = useState<HTMLElement | null>(null);
   const [state, setState] = useState<CheckpointCommitCardState>(() => proposalObservation
     ? proposalObservation.status === "loaded"
@@ -187,6 +193,7 @@ function ThreadCheckpointCommitController({
       commitTitleHydrated.current = true;
       commitDescriptionHydrated.current = true;
     }
+    loadedModeRef.current = proposal.mode;
     if (proposal.status !== "proposed") setCommitMode(proposal.mode);
     if (!proposal.includeNewerAvailable && includeNewer) setIncludeNewer(false);
     setState({ proposal, status: "loaded" });
@@ -254,7 +261,8 @@ function ThreadCheckpointCommitController({
   }, [includeNewer, includeUnclaimed, isProposalObserved, loadProposal, proposalId]);
 
   const commit = async () => {
-    if (!proposalId || !title.trim() || committing) return;
+    if (!proposalId || !title.trim() || committingRef.current) return false;
+    committingRef.current = true;
     setCommitting(true);
     try {
       const proposal = await daemon.git.arc.proposal.commit(
@@ -269,7 +277,8 @@ function ThreadCheckpointCommitController({
               tree: unclaimedSelection.tree,
             },
           } : {}),
-          ...(state.status === "loaded" && state.proposal.mode === "amend" && commitMode === "commit"
+          // Commit-all can reach later cards while HEAD movement rehydrates them, so use the last loaded mode.
+          ...(loadedModeRef.current === "amend" && commitMode === "commit"
             ? { mode: "commit" as const }
             : {}),
           proposalId,
@@ -285,8 +294,10 @@ function ThreadCheckpointCommitController({
         setCommitTitle(proposal.title);
         setCommitDescription(proposal.description);
       }
+      loadedModeRef.current = proposal.mode;
       setState({ proposal, status: "loaded" });
       setUnclaimedSelection(null);
+      return true;
     } catch (error) {
       const failure = error instanceof GitArcFailureException
         ? error.failure
@@ -297,10 +308,29 @@ function ThreadCheckpointCommitController({
         retryable: true,
         status: "error",
       });
+      return false;
     } finally {
+      committingRef.current = false;
       setCommitting(false);
     }
   };
+  const commitRef = useRef(commit);
+  useEffect(() => { commitRef.current = commit; });
+  const commitReady = state.status === "loaded"
+    && state.proposal.status === "proposed"
+    && canCommitCheckpointProposal({
+      commitMode,
+      committing,
+      description,
+      proposal: state.proposal,
+      selectedUnclaimedCount: unclaimedSelection?.proposalId === proposalId ? unclaimedSelection.changes.length : 0,
+      title,
+    });
+
+  useEffect(() => {
+    if (!commitActions || !proposalId) return;
+    return commitActions.register(proposalId, { commit: () => commitRef.current(), ready: commitReady });
+  }, [commitActions, commitReady, proposalId]);
 
   const changeDescription = (value: string) => {
     if (commitMode === "amend") {

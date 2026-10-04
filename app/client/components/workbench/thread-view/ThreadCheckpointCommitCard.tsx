@@ -1,6 +1,8 @@
 /*
  * Exports:
  * - CheckpointCommitCardState: distinguish static previews, pending enrichment, failures, and loaded proposals.
+ * - getCheckpointProposalDisplayedChanges: choose fresh-commit or proposal changes for the selected mode.
+ * - canCommitCheckpointProposal: decide whether the current message and mode can commit or amend.
  * - default ThreadCheckpointCommitCard: render proposal fields, loading shapes, and edit/commit controls in full or compact layouts.
  */
 "use client";
@@ -28,6 +30,47 @@ export type CheckpointCommitCardState =
   | { proposal: GitCheckpointProposal; status: "loaded" }
   | { status: "pending" }
   | { status: "idle" };
+
+type CheckpointCommitPresentation = "compact-commit" | "compact-preview" | "full";
+
+export function getCheckpointProposalDisplayedChanges(
+  proposal: GitCheckpointProposal | null,
+  commitMode: "amend" | "commit",
+) {
+  return proposal?.mode === "amend" && commitMode === "commit" && proposal.freshChanges
+    ? proposal.freshChanges
+    : proposal?.changes ?? [];
+}
+
+export function canCommitCheckpointProposal({
+  commitMode,
+  committing,
+  description,
+  presentation = "full",
+  proposal,
+  selectedUnclaimedCount,
+  title,
+}: {
+  commitMode: "amend" | "commit";
+  committing: boolean;
+  description: string;
+  presentation?: CheckpointCommitPresentation;
+  proposal: GitCheckpointProposal | null;
+  selectedUnclaimedCount: number;
+  title: string;
+}) {
+  const compact = presentation !== "full";
+  const committedAmendable = proposal?.status === "committed" && proposal.amendability?.status === "available";
+  const messageChanged = proposal?.status === "committed"
+    && (title.trim() !== proposal.title.trim() || description.trim() !== proposal.description.trim());
+  return !committing
+    && Boolean(title.trim())
+    && !(proposal?.status === "proposed" && commitMode === "commit"
+      && !getCheckpointProposalDisplayedChanges(proposal, commitMode).length && !selectedUnclaimedCount)
+    && Boolean(presentation === "compact-commit"
+      ? proposal?.status === "proposed"
+      : !compact && (proposal?.status === "proposed" || (committedAmendable && messageChanged)));
+}
 
 export default function ThreadCheckpointCommitCard({
   commitMode,
@@ -78,7 +121,7 @@ export default function ThreadCheckpointCommitCard({
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
-  presentation?: "compact-commit" | "compact-preview" | "full";
+  presentation?: CheckpointCommitPresentation;
   sourceItemId: string;
   state: CheckpointCommitCardState;
   title: string;
@@ -97,11 +140,7 @@ export default function ThreadCheckpointCommitCard({
   const committedOutsideProposal = proposal?.status === "unavailable"
     && proposal.unavailableReasonCode === "committed-outside-proposal";
   const editable = !compactPreview && (!proposal || proposal.status === "proposed" || committedAmendable);
-  const messageChanged = proposal?.status === "committed"
-    && (title.trim() !== proposal.title.trim() || description.trim() !== proposal.description.trim());
-  const displayedChanges = proposal?.mode === "amend" && commitMode === "commit" && proposal.freshChanges
-    ? proposal.freshChanges
-    : proposal?.changes ?? [];
+  const displayedChanges = getCheckpointProposalDisplayedChanges(proposal, commitMode);
   const additions = displayedChanges.reduce((total, change) => total + change.additions, 0);
   const deletions = displayedChanges.reduce((total, change) => total + change.deletions, 0);
   const fileCount = proposal ? displayedChanges.length : paths.length;
@@ -115,12 +154,15 @@ export default function ThreadCheckpointCommitCard({
   const changeSummary = proposal || paths.length
     ? `${fileCount} changed ${fileCount === 1 ? "file" : "files"}`
     : "Arc changes";
-  const canCommit = !committing
-    && Boolean(title.trim())
-    && !(proposal?.status === "proposed" && commitMode === "commit" && !displayedChanges.length && !selectedUnclaimedPaths.length)
-    && Boolean(compactCanCommit
-      ? proposal?.status === "proposed"
-      : !compact && (proposal?.status === "proposed" || (committedAmendable && messageChanged)));
+  const canCommit = canCommitCheckpointProposal({
+    commitMode,
+    committing,
+    description,
+    presentation,
+    proposal,
+    selectedUnclaimedCount: selectedUnclaimedPaths.length,
+    title,
+  });
   const commitLabel = proposal?.status === "committed" || commitMode === "amend" ? "Amend" : "Commit";
   const failure = state.status === "error"
     ? state.failure ?? createGitArcOperationRejected("proposalCreate", state.error)

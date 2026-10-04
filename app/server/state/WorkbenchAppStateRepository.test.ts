@@ -432,6 +432,30 @@ test("obsolete pin placement is removed across scopes without losing other prefe
   } finally { upgraded.close(); }
 });
 
+test("dead live-activity disclosure is removed while proposal disclosure becomes storable", async (context) => {
+  const databasePath = await temporaryDatabase(context);
+  const old = new Database(databasePath);
+  applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 19 });
+  old.prepare("INSERT INTO global_preferences(key,boolean_value,deleted,revision) VALUES ('threadLiveActivityOpen',1,0,1)").run();
+  old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('theme','winter',0,1)").run();
+  old.close();
+
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  await repository.start();
+  await repository.close();
+
+  const upgraded = new Database(databasePath);
+  try {
+    assert.deepEqual(upgraded.prepare("SELECT key,text_value,revision FROM global_preferences").all(), [
+      { key: "theme", text_value: "winter", revision: 1 },
+    ]);
+    upgraded.prepare("INSERT INTO global_preferences(key,boolean_value,deleted,revision) VALUES ('threadGitArcProposalsOpen',0,0,2)").run();
+    assert.throws(() => upgraded.prepare(
+      "INSERT INTO global_preferences(key,boolean_value,deleted,revision) VALUES ('threadLiveActivityOpen',1,0,3)",
+    ).run(), /CHECK constraint failed/u);
+  } finally { upgraded.close(); }
+});
+
 test("backup creates a complete independent app-state database", async (context) => {
   const sourcePath = await temporaryDatabase(context);
   const backupPath = path.join(path.dirname(sourcePath), "backup.sqlite3");

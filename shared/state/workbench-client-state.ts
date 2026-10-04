@@ -78,7 +78,7 @@ export type WorkbenchGlobalPreference =
       | "sidebarCollapsed"
       | "threadCodeBlockWrap"
       | "threadCodeDetails"
-      | "threadLiveActivityOpen";
+      | "threadGitArcProposalsOpen";
     value: boolean;
   }
   | {
@@ -200,7 +200,7 @@ const preferenceBoolean = z.object({
   key: z.enum([
     "composerSpellCheck", "editorSpellCheck", "projectStatusCountsExpanded", "projectsOpen",
     "reactDevelopmentMode", "reloadNecessaryOpen", "showUnopenableFiles", "sidebarCollapsed",
-    "threadCodeBlockWrap", "threadCodeDetails", "threadLiveActivityOpen", "voiceInputEnabled",
+    "threadCodeBlockWrap", "threadCodeDetails", "threadGitArcProposalsOpen", "voiceInputEnabled",
   ]),
   value: z.boolean(),
 });
@@ -273,7 +273,7 @@ export const WorkbenchClientStateIdentitySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("globalPreference"), key: z.enum([
     "composerSpellCheck", "editorSpellCheck", "projectStatusCountsExpanded", "projectsOpen",
     "reactDevelopmentMode", "reloadNecessaryOpen", "showUnopenableFiles", "sidebarCollapsed",
-    "threadCodeBlockWrap", "threadCodeDetails", "threadLiveActivityOpen", "voiceInputEnabled",
+    "threadCodeBlockWrap", "threadCodeDetails", "threadGitArcProposalsOpen", "voiceInputEnabled",
     "editorFontFamily", "appPort", "editorFontSize", "projectTimeGroupCount", "fileOpenBehavior",
     "harness", "theme", "transcriptProjectionMode",
   ]) }),

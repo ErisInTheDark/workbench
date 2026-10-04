@@ -67,6 +67,7 @@ import type { DraftUpdate } from "./DraftSessionController";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadErrorCard from "./ThreadErrorCard";
 import ThreadGoalControl from "./ThreadGoalControl";
+import ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import ThreadCheckpointCommitPortalLayer from "./ThreadCheckpointCommitPortalLayer";
 import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
@@ -343,6 +344,7 @@ export default memo(function ThreadViewContent ({
   const threadScrollViewport = useThreadScrollViewportContext();
   const rateLimits = activeThreadController.state.rateLimits;
   const [areSettledSubagentsVisible, setAreSettledSubagentsVisible] = useState(false);
+  const [checkpointCommitActions] = useState(() => new ThreadCheckpointCommitActions());
   const [isMessageBoardOpen, setIsMessageBoardOpen] = useState(false);
   useEffect(() => { setIsMessageBoardOpen(false); }, [thread.id]);
   const [previousTurnLoadStates, dispatchPreviousTurnLoad] = useReducer(previousTurnLoadReducer, {});
@@ -1072,16 +1074,16 @@ export default memo(function ThreadViewContent ({
       })}
     />
   ) : null;
-  const terminalGitArc = getHoistedThreadGitArc({
+  const hoistedGitArc = getHoistedThreadGitArc({
     currentTurn,
     gitArc: activeGitArcSelection?.gitArc ?? null,
     proposalObservations: activeThreadController.state.gitArcProposals,
     proposalTurnIds: visibleGitArcProposalPresentation.proposalTurnIds,
   });
   const showPlanConflicts = currentTurn?.status !== "inProgress" || Boolean(activePendingUserInputRequest);
-  const terminalGitArcProposalIds = useMemo(() => terminalGitArc
-    ? new Set(terminalGitArc.proposals.map(({ proposalId }) => proposalId))
-    : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS, [terminalGitArc]);
+  const hoistedGitArcProposalIds = useMemo(() => hoistedGitArc
+    ? new Set(hoistedGitArc.proposals.map(({ proposalId }) => proposalId))
+    : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS, [hoistedGitArc]);
   const transcriptSourceMessage = activeTranscriptSource?.status === "failed"
     ? activeTranscriptSource.message
     : activeTranscriptSource?.status === "absent"
@@ -1168,10 +1170,11 @@ export default memo(function ThreadViewContent ({
           ) : <>
           {activeThread ? (
             <ThreadCheckpointCommitPortalLayer
+              commitActions={checkpointCommitActions}
               cwd={activeThread.cwd}
               harness={activeThread.harness}
-              hoistedProposalIds={terminalGitArcProposalIds}
-              lifecycleProposalIds={terminalGitArc?.proposals.map(({ proposalId }) => proposalId) ?? []}
+              hoistedProposalIds={hoistedGitArcProposalIds}
+              lifecycleProposalIds={hoistedGitArc?.proposals.map(({ proposalId }) => proposalId) ?? []}
               projectFilePaths={projectFilePaths}
               projectId={projectId}
               projectRootPath={projectRootPath}
@@ -1205,7 +1208,7 @@ export default memo(function ThreadViewContent ({
                     canLoadPreviousTurn={canLoadPreviousTurn}
                     hiddenReasoningStep={null}
                     historySentinelRef={setHistorySentinel}
-                    hoistedGitArcProposalIds={terminalGitArcProposalIds}
+                    hoistedGitArcProposalIds={hoistedGitArcProposalIds}
                     inlineMentionSources={inlineMentionSources}
                     knownSkills={workbenchSkills}
                     projectFilePaths={projectFilePaths}
@@ -1261,7 +1264,7 @@ export default memo(function ThreadViewContent ({
                 projectRootPath={projectRootPath}
                 relatedThreadsById={relatedThreadsById}
                 subagents={subagents}
-                terminalGitArcProposalIds={terminalGitArcProposalIds}
+                hoistedGitArcProposalIds={hoistedGitArcProposalIds}
                 thread={renderActiveThread ?? activeThread}
                 visibleHistoryEntries={visibleHistoryEntries}
                 workspaceRoots={workspaceFileLinkRoots}
@@ -1305,14 +1308,16 @@ export default memo(function ThreadViewContent ({
             threadId={activeThread.id}
           />
         ) : null}
-        {terminalGitArc && activeThread && activeGitArcSelection ? (
+        {hoistedGitArc && activeThread && activeGitArcSelection ? (
           <ThreadGitArcLifecycleCard
-            claim={terminalGitArc}
+            claim={hoistedGitArc}
+            commitActions={checkpointCommitActions}
             cwd={activeThread.cwd}
             harness={activeThread.harness}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
+            running={currentTurn?.status === "inProgress"}
             threadId={activeThread.id}
             threadLifecycle={activeGitArcSelection.lifecycle}
             workspaceRoots={workspaceFileLinkRoots}

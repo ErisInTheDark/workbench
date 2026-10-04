@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcLifecycleCard: render ordered proposals and claim resolution for one durable Git arc lifecycle.
+ * - default ThreadGitArcLifecycleCard: render ordered proposals and, once the turn stops, claim resolution for one durable Git arc lifecycle.
  */
 "use client";
 
@@ -19,10 +19,11 @@ import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 import { BinIcon, ResetIcon } from "../workbench-icons";
 import GitArcIcon, { GitArcClaimIcon, GitArcUnclaimedIcon } from "./GitArcIcon";
-import { ThreadCheckpointCommitTargetAnchor } from "./ThreadCheckpointCommitPortalLayer";
+import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
+import ThreadGitArcProposalList from "./ThreadGitArcProposalList";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 
 type LifecycleAction = "discardStash" | "restore" | "restoreAndUnclaim" | "stash" | "unclaim" | "unstash";
@@ -36,21 +37,26 @@ type LifecyclePresentation = Omit<WorkbenchGitArcLifecycleState, "phase" | "prop
 
 export default function ThreadGitArcLifecycleCard ({
   claim,
+  commitActions,
   cwd,
   harness,
   projectFilePaths,
   projectId,
   projectRootPath,
+  running,
   threadId,
   threadLifecycle,
   workspaceRoots,
 }: {
   claim: LifecyclePresentation;
+  commitActions: ThreadCheckpointCommitActions;
   cwd: string;
   harness: WorkbenchHarnessId;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
+  /** A running turn still owns its claims, so only proposals render. */
+  running: boolean;
   threadId: string;
   threadLifecycle: WorkbenchThreadLifecycle;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
@@ -68,7 +74,7 @@ export default function ThreadGitArcLifecycleCard ({
   const stashWouldReplace = Boolean(claim.stashedPaths?.length);
 
   useEffect(() => {
-    if (phase !== "active" || !claim.claimedPaths.length) {
+    if (running || phase !== "active" || !claim.claimedPaths.length) {
       setChangeState("clean");
       return;
     }
@@ -89,7 +95,7 @@ export default function ThreadGitArcLifecycleCard ({
       }
     })();
     return () => controller.abort();
-  }, [claim.checkpointCommit, claim.claimedPaths.length, cwd, daemon, harness, phase, threadId]);
+  }, [claim.checkpointCommit, claim.claimedPaths.length, cwd, daemon, harness, phase, running, threadId]);
 
   const runAction = async (action: LifecycleAction) => {
     if (activeAction) return;
@@ -148,24 +154,17 @@ export default function ThreadGitArcLifecycleCard ({
 
   if (phase === "resolved" && !visibleProposals.length && !claim.stashedPaths?.length) return null;
   const showCombinedAction = activeAction === "restoreAndUnclaim" || (activeAction === null && isShiftPressed);
-  const sections = [
+  const sections = running ? [] : [
     ...(claim.claimedPaths.length ? [{ phase: "active" as const, paths: claim.claimedPaths }] : []),
     ...(claim.stashedPaths?.length ? [{ phase: "stashed" as const, paths: claim.stashedPaths }] : []),
   ];
+  if (!visibleProposals.length && !sections.length) return null;
 
   return (
     <div className="my-2 w-full" data-thread-git-arc-lifecycle="true">
       <section className="w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))]" data-thread-git-arc-lifecycle-card="true">
         {visibleProposals.length ? (
-          visibleProposals.map(({ proposalId }, index) => (
-            <div
-              className={index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]" : undefined}
-              data-thread-git-arc-proposal-separator={index ? "true" : undefined}
-              key={proposalId}
-            >
-              <ThreadCheckpointCommitTargetAnchor proposalId={proposalId} />
-            </div>
-          ))
+          <ThreadGitArcProposalList commitActions={commitActions} proposals={visibleProposals} running={running} />
         ) : null}
         {sections.map(({ phase, paths: lifecyclePaths }, index) => (
           <div
