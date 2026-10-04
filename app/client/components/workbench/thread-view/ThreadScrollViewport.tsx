@@ -40,6 +40,8 @@ interface ThreadScrollViewportProps {
   className?: string;
   contentClassName?: string;
   enabled?: boolean;
+  onScrollIntent?: (direction: ThreadScrollDirection, travelPx: number) => void;
+  onTouchActivityChange?: (active: boolean) => void;
   resetKey: string;
 }
 
@@ -86,6 +88,8 @@ function ActiveThreadScrollViewport ({
   className,
   contentClassName,
   forwardedRef,
+  onScrollIntent,
+  onTouchActivityChange,
 }: ActiveThreadScrollViewportProps) {
   const directionRef = useRef<ThreadScrollDirection>("down");
   const endTargetRef = useRef<HTMLElement | null>(null);
@@ -207,17 +211,24 @@ function ActiveThreadScrollViewport ({
     };
     const handleWheel = (event: WheelEvent) => {
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
-      if (event.deltaY > 0) setScrollDirection("down");
-      if (event.deltaY < 0) setScrollDirection("up");
+      const direction = event.deltaY > 0 ? "down" : event.deltaY < 0 ? "up" : null;
+      if (!direction) return;
+      setScrollDirection(direction);
+      const distance = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? Math.abs(event.deltaY) * 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? Math.abs(event.deltaY) * viewport.clientHeight
+          : Math.abs(event.deltaY);
+      onScrollIntent?.(direction, distance);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       if (isInteractiveScrollKeyTarget(event.target)) return;
       if (THREAD_SCROLL_DOWN_KEYS.has(event.key) || (event.key === " " && !event.shiftKey)) {
         setScrollDirection("down");
+        onScrollIntent?.("down", viewport.clientHeight);
       }
       if (THREAD_SCROLL_UP_KEYS.has(event.key) || (event.key === " " && event.shiftKey)) {
         setScrollDirection("up");
+        onScrollIntent?.("up", viewport.clientHeight);
       }
     };
     const handlePointerDown = (event: PointerEvent) => {
@@ -236,24 +247,31 @@ function ActiveThreadScrollViewport ({
     const handleTouchStart = (event: TouchEvent) => {
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       touchClientYRef.current = event.touches.length === 1 ? event.touches[0].clientY : null;
+      onTouchActivityChange?.(touchClientYRef.current !== null);
     };
     const handleTouchMove = (event: TouchEvent) => {
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       const previousClientY = touchClientYRef.current;
       if (event.touches.length !== 1 || previousClientY === null) {
         touchClientYRef.current = null;
+        onTouchActivityChange?.(false);
         return;
       }
       const currentClientY = event.touches[0].clientY;
-      setScrollDirection(resolveThreadTouchScrollDirection(
+      const direction = resolveThreadTouchScrollDirection(
         directionRef.current,
         previousClientY,
         currentClientY,
-      ));
+      );
+      setScrollDirection(direction);
+      if (currentClientY !== previousClientY) {
+        onScrollIntent?.(direction, Math.abs(currentClientY - previousClientY));
+      }
       touchClientYRef.current = currentClientY;
     };
     const handleTouchEnd = () => {
       touchClientYRef.current = null;
+      onTouchActivityChange?.(false);
     };
 
     viewport.addEventListener("keydown", handleKeyDown);
@@ -283,7 +301,7 @@ function ActiveThreadScrollViewport ({
       viewport.ownerDocument.removeEventListener("pointercancel", handlePointerEnd);
       viewport.ownerDocument.removeEventListener("pointerup", handlePointerEnd);
     };
-  }, [syncScrollProximity]);
+  }, [onScrollIntent, onTouchActivityChange, syncScrollProximity]);
 
   return (
     <div
@@ -320,6 +338,8 @@ const ThreadScrollViewport = forwardRef<HTMLDivElement, ThreadScrollViewportProp
   className,
   contentClassName,
   enabled = true,
+  onScrollIntent,
+  onTouchActivityChange,
   resetKey,
 }, ref) {
   if (!enabled) {
@@ -332,6 +352,8 @@ const ThreadScrollViewport = forwardRef<HTMLDivElement, ThreadScrollViewportProp
       className={className}
       contentClassName={contentClassName}
       forwardedRef={ref}
+      onScrollIntent={onScrollIntent}
+      onTouchActivityChange={onTouchActivityChange}
     >
       {children}
     </ActiveThreadScrollViewport>

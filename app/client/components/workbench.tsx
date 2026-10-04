@@ -126,6 +126,11 @@ import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreePr
 import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
+import {
+    advanceMobileShellHeaderVisibility,
+    type MobileShellHeaderEvent,
+    type MobileShellHeaderVisibility,
+} from "./workbench/mobile-shell-header-visibility";
 import { resolveSelectedProjectIds } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
@@ -208,8 +213,6 @@ import WorkbenchZoomButton from "./workbench/WorkbenchZoomButton";
 
 installBrowserRandomUuidPolyfill();
 
-const MOBILE_SHELL_HEADER_HIDE_THRESHOLD_PX = 24;
-const MOBILE_SHELL_HEADER_SHOW_THRESHOLD_PX = 8;
 const MOSAIC_RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
 const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
   mono: "font-mono",
@@ -566,7 +569,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     ))?.preference.value as WorkbenchHarness | undefined
   ) ?? defaultProviderKey);
   const [isMobile, setIsMobile] = useState(false);
-  const [mobileShellHeaderHeight, setMobileShellHeaderHeight] = useState(0);
   const [isMobileShellHeaderVisible, setIsMobileShellHeaderVisible] = useState(true);
   const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
   const [settingsPageTitle, setSettingsPageTitle] = useState("General");
@@ -605,7 +607,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const statusLineRef = useRef<HTMLParagraphElement>(null);
   const resetDraftButtonRef = useRef<HTMLButtonElement>(null);
   const saveFileButtonRef = useRef<HTMLButtonElement>(null);
-  const shellHeaderRef = useRef<HTMLElement>(null);
   const zoomButtonRef = useRef<HTMLButtonElement>(null);
   const saveConflictDialogRef = useRef<HTMLDivElement>(null);
   const saveConflictSummaryRef = useRef<HTMLParagraphElement>(null);
@@ -618,11 +619,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const resetDraftCancelButtonRef = useRef<HTMLButtonElement>(null);
   const resetDraftHeadButtonRef = useRef<HTMLButtonElement>(null);
   const resetDraftSavedButtonRef = useRef<HTMLButtonElement>(null);
-  const mobileShellHeaderAnimationFrameRef = useRef<number | null>(null);
-  const mobileShellHeaderScrollYRef = useRef(0);
-  const mobileShellHeaderDirectionRef = useRef<"up" | "down" | null>(null);
-  const mobileShellHeaderDirectionTravelRef = useRef(0);
-  const mobileShellHeaderVisibleRef = useRef(true);
+  const mobileShellHeaderVisibilityRef = useRef<MobileShellHeaderVisibility>({
+    visible: true,
+    direction: null,
+    travelPx: 0,
+    lastScroll: null,
+    gestureSinceLastScroll: false,
+    touchPhase: "none",
+  });
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
   const threadViewInstanceKeysByThreadIdRef = useRef(new Map<string, string>());
   const searchActivationRef = useRef<(result: WorkbenchSearchHit) => void>(() => undefined);
@@ -2130,146 +2134,127 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     };
   }, [isDirectThreadSurface, isMobile, mainPaneScrollKey, mobilePane]);
 
+  const applyMobileShellHeaderEvent = useCallback((event: MobileShellHeaderEvent) => {
+    if (!isMobile || !shouldShowShellHeader) return;
+    const next = advanceMobileShellHeaderVisibility(mobileShellHeaderVisibilityRef.current, event);
+    mobileShellHeaderVisibilityRef.current = next;
+    setIsMobileShellHeaderVisible((current) => current === next.visible ? current : next.visible);
+  }, [isMobile, shouldShowShellHeader]);
+
+  const handleThreadScrollIntent = useCallback((direction: "up" | "down", travelPx: number) => {
+    applyMobileShellHeaderEvent({
+      kind: "gesture",
+      direction,
+      travelPx,
+    });
+  }, [applyMobileShellHeaderEvent]);
+  const handleThreadTouchActivity = useCallback((active: boolean) => {
+    applyMobileShellHeaderEvent({ kind: "touch", active });
+  }, [applyMobileShellHeaderEvent]);
+
   useEffect(() => {
-    const header = shellHeaderRef.current;
-    if (!header || typeof window === "undefined") {
-      return;
-    }
-
-    const syncHeaderHeight = () => {
-      setMobileShellHeaderHeight(header.offsetHeight);
+    const scrollTarget = isDirectThreadSurface
+      ? directThreadScrollViewportRef.current
+      : mainPaneRef.current;
+    mobileShellHeaderVisibilityRef.current = {
+      visible: true,
+      direction: null,
+      travelPx: 0,
+      lastScroll: scrollTarget ? {
+        scrollTop: scrollTarget.scrollTop,
+        scrollHeight: scrollTarget.scrollHeight,
+        clientHeight: scrollTarget.clientHeight,
+      } : null,
+      gestureSinceLastScroll: false,
+      touchPhase: "none",
     };
+    setIsMobileShellHeaderVisible(true);
+    if (!isMobile || !shouldShowShellHeader) return;
+    if (!scrollTarget) return;
 
-    syncHeaderHeight();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", syncHeaderHeight);
+    const handleScroll = () => {
+      applyMobileShellHeaderEvent({
+        kind: "scroll",
+        scrollTop: scrollTarget.scrollTop,
+        scrollHeight: scrollTarget.scrollHeight,
+        clientHeight: scrollTarget.clientHeight,
+      });
+    };
+    scrollTarget.addEventListener("scroll", handleScroll, { passive: true });
+
+    if (isDirectThreadSurface) {
       return () => {
-        window.removeEventListener("resize", syncHeaderHeight);
+        scrollTarget.removeEventListener("scroll", handleScroll);
       };
     }
 
-    const observer = new ResizeObserver(syncHeaderHeight);
-    observer.observe(header);
+    let touchClientY: number | null = null;
+    const handleGesture = (direction: "up" | "down", travelPx: number) => {
+      applyMobileShellHeaderEvent({
+        kind: "gesture",
+        direction,
+        travelPx,
+      });
+    };
+    const belongsToMainPane = (target: EventTarget | null) => (
+      !(target instanceof Element) || !target.closest("[data-thread-scroll-target]")
+    );
+    const handleTouchStart = (event: TouchEvent) => {
+      touchClientY = belongsToMainPane(event.target) && event.touches.length === 1
+        ? event.touches[0].clientY : null;
+      if (touchClientY !== null) applyMobileShellHeaderEvent({ kind: "touch", active: true });
+    };
+    const handleTouchMove = (event: TouchEvent) => {
+      if (!belongsToMainPane(event.target) || event.touches.length !== 1 || touchClientY === null) {
+        touchClientY = null;
+        applyMobileShellHeaderEvent({ kind: "touch", active: false });
+        return;
+      }
+      const nextClientY = event.touches[0].clientY;
+      if (nextClientY !== touchClientY) {
+        handleGesture(nextClientY > touchClientY ? "up" : "down", Math.abs(nextClientY - touchClientY));
+      }
+      touchClientY = nextClientY;
+    };
+    const handleTouchEnd = () => {
+      touchClientY = null;
+      applyMobileShellHeaderEvent({ kind: "touch", active: false });
+    };
+    const handleWheel = (event: WheelEvent) => {
+      if (!belongsToMainPane(event.target) || event.deltaY === 0) return;
+      const travelPx = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? Math.abs(event.deltaY) * 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? Math.abs(event.deltaY) * scrollTarget.clientHeight
+          : Math.abs(event.deltaY);
+      handleGesture(event.deltaY > 0 ? "down" : "up", travelPx);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!belongsToMainPane(event.target)) return;
+      if (event.target instanceof HTMLElement
+        && event.target.closest("a,button,input,select,textarea,[contenteditable='true']")) return;
+      if (["ArrowDown", "End", "PageDown"].includes(event.key) || (event.key === " " && !event.shiftKey)) {
+        handleGesture("down", scrollTarget.clientHeight);
+      } else if (["ArrowUp", "Home", "PageUp"].includes(event.key) || (event.key === " " && event.shiftKey)) {
+        handleGesture("up", scrollTarget.clientHeight);
+      }
+    };
+
+    scrollTarget.addEventListener("touchstart", handleTouchStart, { passive: true });
+    scrollTarget.addEventListener("touchmove", handleTouchMove, { passive: true });
+    scrollTarget.addEventListener("touchend", handleTouchEnd, { passive: true });
+    scrollTarget.addEventListener("touchcancel", handleTouchEnd, { passive: true });
+    scrollTarget.addEventListener("wheel", handleWheel, { passive: true });
+    scrollTarget.addEventListener("keydown", handleKeyDown);
     return () => {
-      observer.disconnect();
+      scrollTarget.removeEventListener("scroll", handleScroll);
+      scrollTarget.removeEventListener("touchstart", handleTouchStart);
+      scrollTarget.removeEventListener("touchmove", handleTouchMove);
+      scrollTarget.removeEventListener("touchend", handleTouchEnd);
+      scrollTarget.removeEventListener("touchcancel", handleTouchEnd);
+      scrollTarget.removeEventListener("wheel", handleWheel);
+      scrollTarget.removeEventListener("keydown", handleKeyDown);
     };
-  }, [currentThread?.isDraft, showEmptyState]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const cancelPendingFrame = () => {
-      if (mobileShellHeaderAnimationFrameRef.current === null) {
-        return;
-      }
-
-      window.cancelAnimationFrame(mobileShellHeaderAnimationFrameRef.current);
-      mobileShellHeaderAnimationFrameRef.current = null;
-    };
-
-    const applyHeaderVisibility = (nextVisible: boolean) => {
-      mobileShellHeaderVisibleRef.current = nextVisible;
-      setIsMobileShellHeaderVisible((current) => (current === nextVisible ? current : nextVisible));
-    };
-
-    const getCurrentScrollY = () => {
-      const threadScrollTarget = directThreadScrollViewportRef.current;
-      if (isDirectThreadSurface && threadScrollTarget) {
-        return Math.max(
-          0,
-          threadScrollTarget.scrollHeight - threadScrollTarget.clientHeight + threadScrollTarget.scrollTop,
-        );
-      }
-
-      return isMobile
-        ? mainPaneRef.current?.scrollTop ?? 0
-        : Math.max(window.scrollY, 0);
-    };
-
-    const resetHeaderVisibility = () => {
-      cancelPendingFrame();
-      mobileShellHeaderScrollYRef.current = getCurrentScrollY();
-      mobileShellHeaderDirectionRef.current = null;
-      mobileShellHeaderDirectionTravelRef.current = 0;
-      applyHeaderVisibility(true);
-    };
-
-    if (!isMobile || !shouldShowShellHeader) {
-      resetHeaderVisibility();
-      return cancelPendingFrame;
-    }
-
-    resetHeaderVisibility();
-
-    const updateHeaderVisibility = () => {
-      mobileShellHeaderAnimationFrameRef.current = null;
-
-      const nextScrollY = getCurrentScrollY();
-      const delta = nextScrollY - mobileShellHeaderScrollYRef.current;
-      mobileShellHeaderScrollYRef.current = nextScrollY;
-
-      if (nextScrollY <= mobileShellHeaderHeight) {
-        mobileShellHeaderDirectionRef.current = null;
-        mobileShellHeaderDirectionTravelRef.current = 0;
-        applyHeaderVisibility(true);
-        return;
-      }
-
-      if (Math.abs(delta) < 1) {
-        return;
-      }
-
-      const nextDirection = delta > 0 ? "down" : "up";
-      if (mobileShellHeaderDirectionRef.current !== nextDirection) {
-        mobileShellHeaderDirectionRef.current = nextDirection;
-        mobileShellHeaderDirectionTravelRef.current = Math.abs(delta);
-      } else {
-        mobileShellHeaderDirectionTravelRef.current += Math.abs(delta);
-      }
-
-      if (
-        nextDirection === "down"
-        && mobileShellHeaderVisibleRef.current
-        && mobileShellHeaderDirectionTravelRef.current >= MOBILE_SHELL_HEADER_HIDE_THRESHOLD_PX
-      ) {
-        mobileShellHeaderDirectionTravelRef.current = 0;
-        applyHeaderVisibility(false);
-        return;
-      }
-
-      if (
-        nextDirection === "up"
-        && !mobileShellHeaderVisibleRef.current
-        && mobileShellHeaderDirectionTravelRef.current >= MOBILE_SHELL_HEADER_SHOW_THRESHOLD_PX
-      ) {
-        mobileShellHeaderDirectionTravelRef.current = 0;
-        applyHeaderVisibility(true);
-      }
-    };
-
-    const handleScroll = () => {
-      if (mobileShellHeaderAnimationFrameRef.current !== null) {
-        return;
-      }
-
-      mobileShellHeaderAnimationFrameRef.current = window.requestAnimationFrame(updateHeaderVisibility);
-    };
-
-    const viewport = window.visualViewport;
-    const scrollTarget = isDirectThreadSurface
-      ? directThreadScrollViewportRef.current
-      : isMobile ? mainPaneRef.current : window;
-    scrollTarget?.addEventListener("scroll", handleScroll, { passive: true });
-    viewport?.addEventListener("scroll", handleScroll, { passive: true });
-
-    return () => {
-      scrollTarget?.removeEventListener("scroll", handleScroll);
-      viewport?.removeEventListener("scroll", handleScroll);
-      cancelPendingFrame();
-    };
-  }, [activeFilePath, activeThreadId, isDirectThreadSurface, isMobile, mobileShellHeaderHeight, shouldShowShellHeader]);
+  }, [activeFilePath, applyMobileShellHeaderEvent, isDirectThreadSurface, isMobile,
+    selectedThreadIdForView, shouldShowShellHeader, threadSurfaceKey]);
 
   useEffect(() => {
     if (!showEmptyState || !quickOpenPaths.length) {
@@ -2682,10 +2667,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 className="h-full"
                 contentClassName="flex flex-col"
                 enabled={isDirectThreadSurface}
+                onScrollIntent={handleThreadScrollIntent}
+                onTouchActivityChange={handleThreadTouchActivity}
                 resetKey={`${threadSurfaceKey}:${selectedThreadIdForView || activeThreadId}`}
               >
               <header
-                ref={shellHeaderRef}
                 className={`
               sticky top-0 z-10 transform-gpu py-3 transition-[translate,opacity] duration-200 ease-out will-change-translate motion-reduce:transition-none ${isDirectMobileThreadSurface ? "pl-5 pr-5" : "-mx-5 pl-5 pr-5"} md:-mx-6 md:pr-6 ${isEffectiveDesktopSidebarCollapsed ? "md:pl-20" : "md:pl-11"}
               md:translate-y-0 md:opacity-100
