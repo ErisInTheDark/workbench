@@ -13,7 +13,7 @@ import {
 import { useWorkbenchProjectThreadSummaries } from "./use-workbench-client";
 import { workbenchNewEntryButtonClassName } from "./workbench-class-names";
 import { NewEntryIcon } from "./workbench-explorer";
-import { EllipsisIcon, ProjectIcon } from "./workbench-icons";
+import { EllipsisIcon, HomeIcon, ProjectIcon } from "./workbench-icons";
 import WorkbenchIconButton from "./WorkbenchIconButton";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
@@ -35,6 +35,7 @@ export default function ProjectSidebar ({
   logicalLoading,
   createProjectHref,
   onCreateProject,
+  onHomeClick,
   onProjectLinkClick,
   projects,
 }: {
@@ -50,6 +51,7 @@ export default function ProjectSidebar ({
   logicalLoading?: boolean;
   createProjectHref?: string;
   onCreateProject (event: MouseEvent<HTMLAnchorElement>): void;
+  onHomeClick (event: MouseEvent<HTMLAnchorElement>): void;
   onProjectLinkClick (event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
   projects: readonly WorkbenchProjectOption[];
 }) {
@@ -108,6 +110,17 @@ export default function ProjectSidebar ({
           <div className="flex items-center gap-1">
             {preferences.projectsOpen ? null
               : <WorkbenchThreadStatusCountsButton counts={otherCounts} label="unselected project" scope="project" />}
+            <WorkbenchIconButton
+              as="a"
+              href="/"
+              label="Home"
+              title="Home"
+              display="hover-border"
+              size="small"
+              onClick={onHomeClick}
+            >
+              <HomeIcon size={16} />
+            </WorkbenchIconButton>
             <WorkbenchIconButton
               as="a"
               href={createProjectHref}

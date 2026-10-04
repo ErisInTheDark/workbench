@@ -2407,17 +2407,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
                         <DropTargetBoundary className="scrollbar-hover-reveal flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto pt-3 pb-[calc(0.75rem+min(0.75rem,var(--workbench-safe-area-bottom,0px)))] pr-2">
                 <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto] items-center gap-1 pb-2">
-                  <a
-                    className="min-w-0 truncate rounded-lg pl-5 text-xl font-semibold leading-tight text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                    href="/"
-                    onClick={(event) => {
-                      if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-                      event.preventDefault();
-                      navigateToRoute(createHomeRoute());
-                    }}
-                  >
+                  <span className="min-w-0 truncate pl-5 text-xl font-semibold leading-tight text-text">
                     workbench
-                  </a>
+                  </span>
                   <WorkbenchIconButton
                     label="Open workspace search"
                     display="hover-border"
@@ -2485,6 +2477,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     ].filter(Boolean).join(" ") || null}
                     logicalLoading={workbenchClient.mounted?.presentationClient?.snapshot().phase === "loading"}
                     onProjectLinkClick={selectProjectFromLink}
+                    onHomeClick={event => {
+                      if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+                      event.preventDefault();
+                      navigateToRoute(createHomeRoute());
+                    }}
                     createProjectHref={projectHref(newProjectRoute)}
                     onCreateProject={event => {
                       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
