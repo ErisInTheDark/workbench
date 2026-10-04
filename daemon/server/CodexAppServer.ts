@@ -12,6 +12,7 @@ import {
     killProcessTreeAsync,
     log,
     logError,
+    lowerAgentProcessPriority,
     pipeChildStream,
 } from "./process-helpers";
 
@@ -141,7 +142,7 @@ export default class CodexAppServer {
       args: [...this.args],
     });
 
-    return spawn(spawnDescriptor.command, spawnDescriptor.args, {
+    const child = spawn(spawnDescriptor.command, spawnDescriptor.args, {
       ...createSpawnOptions(this.projectRoot, {
         ...process.env,
         FORCE_COLOR: "0",
@@ -149,6 +150,8 @@ export default class CodexAppServer {
       }, true),
       stdio: ["pipe", "pipe", "pipe"],
     });
+    lowerAgentProcessPriority(child);
+    return child;
   }
 
   private ensureProcess() {

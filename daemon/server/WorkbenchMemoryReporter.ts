@@ -1,9 +1,10 @@
 /*
  * Exports:
  * - WorkbenchMemoryReporterOptions: memory reads, scheduling and logging ports.
- * - default WorkbenchMemoryReporter: log one periodic daemon memory breakdown, including database worker heaps.
+ * - default WorkbenchMemoryReporter: log one periodic daemon memory breakdown, including database worker heaps and machine free memory.
  */
 
+import os from "node:os";
 import { dim, yellow } from "workbench-shared/process/terminal-style";
 
 type WorkerHeap = { used: number; total: number } | null;
@@ -11,6 +12,8 @@ type WorkerHeap = { used: number; total: number } | null;
 export interface WorkbenchMemoryReporterOptions {
   readProcess?: () => Pick<NodeJS.MemoryUsage, "rss" | "heapUsed" | "heapTotal" | "external" | "arrayBuffers">;
   readWorkerHeaps(): Promise<{ writer: WorkerHeap; core: WorkerHeap; transcript: WorkerHeap }>;
+  /** Machine memory, so an incident shows whether RAM ran out rather than leaving it to inference from rss. */
+  readSystem?: () => { free: number; total: number };
   log(message: string): void;
   warn(message: string): void;
   intervalMs?: number;
@@ -21,6 +24,10 @@ const DEFAULT_INTERVAL_MS = 60_000;
 
 function megabytes(bytes: number) {
   return `${Math.round(bytes / 1_048_576)}MB`;
+}
+
+function gigabytes(bytes: number) {
+  return (bytes / 1_073_741_824).toFixed(1);
 }
 
 function heap(value: WorkerHeap) {
@@ -56,8 +63,10 @@ export default class WorkbenchMemoryReporter {
       const memory = (this.options.readProcess ?? process.memoryUsage)();
       const workers = await this.options.readWorkerHeaps();
       if (this.disposed) return;
+      const system = (this.options.readSystem ?? (() => ({ free: os.freemem(), total: os.totalmem() })))();
       this.options.log(
-        ` MEM heap ${Math.round(memory.heapUsed / 1_048_576)}/${megabytes(memory.heapTotal)}, rss ${megabytes(memory.rss)} `
+        ` MEM heap ${Math.round(memory.heapUsed / 1_048_576)}/${megabytes(memory.heapTotal)}, rss ${megabytes(memory.rss)}, `
+        + `system free ${gigabytes(system.free)}/${Math.round(system.total / 1_073_741_824)}GB `
         + dim(`(external ${megabytes(memory.external)}, array buffers ${megabytes(memory.arrayBuffers)}, `
           + `db workers: writer ${heap(workers.writer)}, core ${heap(workers.core)}, transcript ${heap(workers.transcript)})`),
       );

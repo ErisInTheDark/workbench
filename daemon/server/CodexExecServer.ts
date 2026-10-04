@@ -11,7 +11,7 @@ import { z } from "zod";
 import {
   CodexExecMessageSchema, type CodexExecRequest, type CodexExecResult,
 } from "./codex-exec-protocol";
-import { createSpawnOptions, getSpawnDescriptor, killProcessTreeAsync, logError } from "./process-helpers";
+import { createSpawnOptions, getSpawnDescriptor, killProcessTreeAsync, logError, lowerAgentProcessPriority } from "./process-helpers";
 
 const OUTPUT_BYTES = 1024 * 1024;
 const FRAME_BYTES = 4 * 1024 * 1024;
@@ -125,6 +125,8 @@ export default class CodexExecServer {
       ...createSpawnOptions(this.options.cwd, this.options.env ?? process.env, true),
       stdio: ["pipe", "pipe", "pipe"],
     });
+    // Sandboxed agent commands (builds, tests) descend from this executor.
+    lowerAgentProcessPriority(child);
     const session: Session = {
       child, ready: Promise.resolve(), closed: Promise.resolve(),
       requests: new Map(), commands: new Map(),

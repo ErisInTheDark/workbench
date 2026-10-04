@@ -4,8 +4,10 @@
  * - log/logError: tagged stdout and stderr logging for daemon modules.
  * - pipeChildStream/getSpawnDescriptor/createSpawnOptions/killProcessTree/killProcessTreeAsync: platform-safe process helpers for spawned child processes.
  * - ProcessTreeRetirementOptions: platform and termination-command ports for owned process retirement.
+ * - lowerAgentProcessPriority: run a spawned agent process and its later descendants below the daemon's CPU priority.
  */
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions, type SpawnOptionsWithoutStdio } from "node:child_process";
+import os from "node:os";
 import LinuxProcessGroupRetirement from "./LinuxProcessGroupRetirement";
 
 const ASYNC_PROCESS_TREE_KILL_TIMEOUT_MS = 5_000;
@@ -108,6 +110,26 @@ export function killProcessTree(pid: number | undefined) {
     process.kill(-pid, "SIGTERM");
   } catch {
     // Best effort during shutdown.
+  }
+}
+
+/**
+ * Agent work (provider processes and the builds, tests and shells they start) runs below the daemon so a swamped
+ * machine still schedules the daemon and UI first. Children started afterwards inherit the lower priority on Windows
+ * and Linux, so lowering the spawned process right after spawn covers its later tree.
+ */
+export function lowerAgentProcessPriority(
+  child: Pick<ChildProcess, "pid">,
+  warn: (message: string) => void = message => logError("process", message),
+  setPriority: (pid: number, priority: number) => void = os.setPriority,
+) {
+  if (!child.pid) return;
+  try { setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); }
+  catch (error) {
+    // An agent that already exited has no tree left to deprioritise.
+    // Node reports this as ERR_SYSTEM_ERROR with the libuv code in `info`.
+    if (error instanceof Error && "info" in error && (error.info as { code?: string } | undefined)?.code === "ESRCH") return;
+    warn(`Could not lower agent process priority (pid ${child.pid}): ${error instanceof Error ? error.message.slice(0, 200) : "unknown failure"}`);
   }
 }
 

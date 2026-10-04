@@ -4,7 +4,7 @@
  */
 import { spawn } from "node:child_process";
 import type { WorkbenchAdmittedExecution } from "workbench-shared/workbench/provider/provider-execution";
-import { killProcessTreeAsync } from "./process-helpers";
+import { killProcessTreeAsync, lowerAgentProcessPriority } from "./process-helpers";
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 
@@ -29,6 +29,7 @@ export default async function executeApprovedCommand(
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+  lowerAgentProcessPriority(child);
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   let bytes = 0;

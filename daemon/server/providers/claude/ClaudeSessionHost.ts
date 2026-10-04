@@ -14,6 +14,7 @@ import {
   query, type Options, type Query, type SDKMessage, type SDKUserMessage, type SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 import { spawn } from "node:child_process";
+import { lowerAgentProcessPriority } from "../../process-helpers";
 import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import ClaudeConfigView from "./ClaudeConfigView";
 
@@ -47,6 +48,7 @@ export function spawnTrackedClaude(options: SpawnOptions, onExit: (exit: Promise
     cwd: options.cwd, env: options.env, signal: options.signal,
     stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
   });
+  lowerAgentProcessPriority(child);
   onExit(new Promise<void>((resolve, reject) => {
     child.once("error", reject);
     child.once("close", () => resolve());

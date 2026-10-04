@@ -12,6 +12,7 @@ function fixture(readWorkerHeaps: () => Promise<Awaited<ReturnType<ConstructorPa
   const reporter = new WorkbenchMemoryReporter({
     readProcess: () => ({ rss: 1083 * MB, heapUsed: 366 * MB, heapTotal: 412 * MB, external: 41 * MB, arrayBuffers: 12 * MB }),
     readWorkerHeaps,
+    readSystem: () => ({ free: 3.6 * 1024 * MB, total: 28 * 1024 * MB }),
     log: message => logs.push(message),
     warn: message => warnings.push(message),
     schedule: () => ({ stop: () => { stopped = true; } }),
@@ -24,7 +25,7 @@ test("one sample logs process and database worker memory in one line", async () 
   await f.reporter.tick();
   assert.equal(f.logs.length, 1);
   const line = plain(f.logs[0]!);
-  for (const part of ["heap 366/412MB", "rss 1083MB", "external 41MB", "writer 88/120MB", "core 61/80MB", "transcript off"]) {
+  for (const part of ["heap 366/412MB", "rss 1083MB", "external 41MB", "writer 88/120MB", "core 61/80MB", "transcript off", "system free 3.6/28GB"]) {
     assert.ok(line.includes(part), `${part} missing from ${line}`);
   }
 });
