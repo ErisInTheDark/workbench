@@ -2,7 +2,7 @@
  * Exports:
  * - CodexStdioBridgeOptions: app-server, browser, questionnaire, approval, instruction, transcript, and reload boundaries.
  * - CodexStdioBridgeReloadState: bridge state preserved across code-only reload.
- * - default CodexStdioBridge: own request translation, transcript recovery, questionnaires, approval transport, and reload state around a stable app-server.
+ * - default CodexStdioBridge: own request translation, per-thread transcript capture lanes, transcript recovery, questionnaires, approval transport, and reload state around a stable app-server.
  */
 import type { CodexThreadContextReadResponse, CodexThreadPageResponse } from "workbench-shared/codex/thread-context";
 import { randomUUID } from "node:crypto";
@@ -619,7 +619,13 @@ export default class CodexStdioBridge {
   private readonly pendingResponses: Map<number, PendingResponse>;
   private readonly retiringResponses: Map<number, PendingResponse>;
   private readonly requestIdAllocator: RequestIdAllocator;
-  private transcriptQueue: Promise<void> = Promise.resolve();
+  /**
+   * Transcript capture chains keyed by native thread id ("" for thread-less facts). Persistence and live deltas stay
+   * ordered within a thread without one thread's backlog delaying another's.
+   */
+  private readonly transcriptLanes = new Map<string, Promise<void>>();
+  /** Failed-patch analyses: tracked for idle and reload drains, but never on the command queue. */
+  private readonly backgroundTasks = new Set<Promise<void>>();
   private readonly onTranscriptLiveUpdate?: (update: TranscriptLiveUpdate) => void;
   private readonly transcriptTasks = new Set<Promise<void>>();
   private readonly transcriptPendingTasks = new Map<number, { label: string; startedAt: number }>();
@@ -1029,7 +1035,7 @@ export default class CodexStdioBridge {
     this.assertAcceptingWork();
     const signal = AbortSignal.any([callerSignal, this.generation.signal]);
     signal.throwIfAborted();
-    await this.transcriptQueue;
+    await this.settledTranscriptLane(await this.transcriptLaneFor(input.threadId));
     signal.throwIfAborted();
     const reader = this.requireSqliteReader();
     const identity = await this.identities?.threads.resolve({ threadId: ThreadReferenceSchema.parse(input.threadId), harness: "codex" });
@@ -1118,7 +1124,7 @@ export default class CodexStdioBridge {
     }, signal));
     const turns = await loader.recoverThread(thread, async ({ turn, previousCursor }) => {
       signal?.throwIfAborted();
-      await this.captureTranscript(`sqlite-recovery-page:${threadId}:${turn.id}`, async () => {
+      await this.captureTranscript(nativeThreadId, `sqlite-recovery-page:${threadId}:${turn.id}`, async () => {
         const normalized = (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(turn, { assets: this.transcriptAssets, threadId: nativeThreadId }))).value;
         await this.persistTranscript(() => this.recordTranscript([
             createCodexTranscriptProviderThreadObservation(nativeThreadId, context),
@@ -1129,7 +1135,7 @@ export default class CodexStdioBridge {
       }, { requireSqlite: true });
     }, async (catalog) => {
       signal?.throwIfAborted();
-      await this.captureTranscript(`sqlite-recovery-catalog:${threadId}`, async () => {
+      await this.captureTranscript(nativeThreadId, `sqlite-recovery-catalog:${threadId}`, async () => {
         const observations = this.createSqliteProviderWindowObservations({ ...thread, turns: catalog }, context);
         await this.persistTranscript(() => this.recordTranscript(observations, { source: "provider" }));
       }, { requireSqlite: true });
@@ -1140,7 +1146,7 @@ export default class CodexStdioBridge {
     const wholeThread = (identity?.bindings.length ?? 1) === 1
       && (saved?.turns.every(turn => turn.harness_id === "codex"
         && turn.native_thread_id === nativeThreadId && covered.has(turn.native_turn_id ?? "")) ?? true);
-    await this.captureTranscript(`sqlite-recovery-complete:${threadId}`, async () => {
+    await this.captureTranscript(nativeThreadId, `sqlite-recovery-complete:${threadId}`, async () => {
       const catalog = { ...thread, turns };
       const scope = createCodexTranscriptProviderThreadScopeObservation(catalog, context);
       await this.persistTranscript(() => this.recordTranscript([{
@@ -1450,16 +1456,17 @@ export default class CodexStdioBridge {
   private async recordPatchFindings(threadId: string, turnId: string, item: WorkbenchFileChangeItem) {
     this.fileChanges.remember(threadId, turnId, item);
     this.publishNativeNotification({ method: "item/completed", params: { threadId, turnId, item } });
-    await this.captureTranscript("workbench:patch/findings", () => this.persistTranscript(() => this.recordTranscript([
+    await this.captureTranscript(threadId, "workbench:patch/findings", () => this.persistTranscript(() => this.recordTranscript([
       createCodexTranscriptProviderItemObservation({
         threadId, turnId, item, lifecycle: "completed", observedAt: Date.now(),
       })], { source: "workbench" })), { propagateFailure: true });
   }
 
-  private async analyseFailedPatch(threadId: string, turnId: string, item: WorkbenchFileChangeItem) {
+  /** `recorded` settles once the failed item's own capture has landed. */
+  private async analyseFailedPatch(threadId: string, turnId: string, item: WorkbenchFileChangeItem, recorded: Promise<void>) {
     const signal = this.generation.signal;
     try {
-      await this.transcriptQueue;
+      await recorded;
       signal.throwIfAborted();
       const stored = await this.sqliteReader?.readFileChange(threadId, turnId, item.id);
       signal.throwIfAborted();
@@ -1510,7 +1517,7 @@ export default class CodexStdioBridge {
       } : null;
       // Queue synchronously so shutdown's transcript drain includes these facts.
       const patchRecording = finding ? this.recordPatchFindings(threadId, turnId, finding) : null;
-      const contextRecording = this.captureTranscript("upstream-response:thread/inject_items", async () => {
+      const contextRecording = this.captureTranscript(threadId, "upstream-response:thread/inject_items", async () => {
         if (error || patch) return;
         const accepted = (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages({
           ...item, workbenchInjectionAcceptedAt: acceptedAt,
@@ -1694,7 +1701,7 @@ export default class CodexStdioBridge {
   }
 
   private async enqueueCommand<TValue>(task: () => TValue | Promise<TValue>) {
-    const signal = AbortSignal.any([this.generation.signal]);
+    const signal = this.generation.signal;
     signal.throwIfAborted();
     let onAbort!: () => void;
     const cancellation = new Promise<never>((_resolve, reject) => {
@@ -1720,7 +1727,8 @@ export default class CodexStdioBridge {
 
   async waitForIdle() {
     if (this.generation.signal.aborted) {
-      await this.transcriptQueue;
+      await Promise.allSettled(Array.from(this.backgroundTasks));
+      await this.settledTranscriptLane(null);
       await this.waitForTranscriptPersistence();
       return;
     }
@@ -1731,9 +1739,29 @@ export default class CodexStdioBridge {
         break;
       }
     }
+    // Background analyses still queue their findings, so drain them before the transcript lanes.
+    await Promise.allSettled(Array.from(this.backgroundTasks));
     await Promise.allSettled(Array.from(this.transcriptTasks));
-    await this.transcriptQueue.catch(() => undefined);
+    await this.settledTranscriptLane(null);
     await this.waitForTranscriptPersistence();
+  }
+
+  /** Facts already queued on one native thread's transcript lane, or on every lane when `lane` is null. */
+  private settledTranscriptLane(lane: string | null): Promise<void> {
+    if (lane !== null) return this.transcriptLanes.get(lane) ?? Promise.resolve();
+    return Promise.all(this.transcriptLanes.values()).then(() => undefined);
+  }
+
+  /** The native lane for a Workbench or native thread id; null (every lane) when the binding is unknown. */
+  private async transcriptLaneFor(threadId: string) {
+    if (!this.identities) return threadId;
+    const identity = await this.identities.threads.resolve({ threadId: ThreadReferenceSchema.parse(threadId), harness: "codex" });
+    return identity?.bindings.find(binding => binding.harness === "codex")?.nativeThreadId ?? null;
+  }
+
+  private trackBackground(task: Promise<void>) {
+    this.backgroundTasks.add(task);
+    void task.finally(() => this.backgroundTasks.delete(task));
   }
 
   private async persistTranscript<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -1853,9 +1881,9 @@ export default class CodexStdioBridge {
     }
     signal.throwIfAborted();
     if (shouldCaptureTranscript) {
-      void this.captureTranscript(`upstream-response:${pending.upstreamRequest.method ?? "unknown"}`, async () => {
-        const threadId = asString(asRecord(asRecord(message.result)?.thread)?.id)
-          ?? asString(asRecord(pending.upstreamRequest.params)?.threadId);
+      const threadId = asString(asRecord(asRecord(message.result)?.thread)?.id)
+        ?? asString(asRecord(pending.upstreamRequest.params)?.threadId);
+      void this.captureTranscript(threadId, `upstream-response:${pending.upstreamRequest.method ?? "unknown"}`, async () => {
         const normalisedMessage = threadId
           ? (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(message, { assets: this.transcriptAssets, threadId }))).value
           : message;
@@ -1923,7 +1951,7 @@ export default class CodexStdioBridge {
         }
       }
       signal.throwIfAborted();
-      void this.captureTranscript(`upstream-server-request:${message.method}`, async () => {
+      void this.captureTranscript(asString(asRecord(message.params)?.threadId), `upstream-server-request:${message.method}`, async () => {
         await this.persistTranscript(() => this.recordTranscript(observation ? [observation] : [], { source: "provider" }));
       });
       switch (message.method) {
@@ -1963,6 +1991,14 @@ export default class CodexStdioBridge {
       }
       signal.throwIfAborted();
       let syntheticFileChangeNotification: Extract<ServerNotification, { method: "item/completed" }> | null = null;
+      let failedPatch: { threadId: string; turnId: string; item: WorkbenchFileChangeItem } | null = null;
+      // Analysis starts once this notification's own capture is queued, so it reads the recorded failure.
+      const analyseFailedPatchAfterCapture = () => {
+        if (!failedPatch) return;
+        const { threadId, turnId, item } = failedPatch;
+        this.trackBackground(this.analyseFailedPatch(threadId, turnId, item, this.settledTranscriptLane(threadId))
+          .catch((failure) => logError("codex-patch-findings", sanitizeTranscriptErrorMessage(failure))));
+      };
       if (message.method === "turn/started") {
         const threadId = asString(asRecord(message.params)?.threadId)?.trim();
         const turnId = asString(asRecord(message.params)?.turnId)
@@ -1984,8 +2020,7 @@ export default class CodexStdioBridge {
           ));
           if (!recovering && !remembered.workbenchPolicy && !remembered.workbenchFailureKind
             && !remembered.changes.some((change) => change.workbenchAnalysis)) {
-            void this.enqueueCommand(() => this.analyseFailedPatch(threadId, turnId, remembered))
-              .catch((failure) => logError("codex-patch-findings", sanitizeTranscriptErrorMessage(failure)));
+            failedPatch = { threadId, turnId, item: remembered };
           }
         }
       }
@@ -2062,18 +2097,19 @@ export default class CodexStdioBridge {
           if (mapped.method === "item/fileChange/patchUpdated") {
             const changes = (mapped as Extract<ServerNotification, { method: "item/fileChange/patchUpdated" }>).params.changes;
             const update: TranscriptLiveUpdate = { kind: "patch", threadId, turnId, itemId, changes };
-            void this.captureTranscript("live-patch", async () => { this.onTranscriptLiveUpdate?.(update); });
+            void this.captureTranscript(nativeThreadId, "live-patch", async () => { this.onTranscriptLiveUpdate?.(update); });
           } else if (textField) {
             const text = asString(params?.delta);
             const index = textField.index ? asNumber(params?.[textField.index]) : null;
             if (text !== null) {
               const update: TranscriptLiveUpdate = { kind: "text", threadId, turnId, itemId, text, index, field: textField.field, append: true };
-              void this.captureTranscript(`live-text:${message.method}`, async () => { this.onTranscriptLiveUpdate?.(update); });
+              void this.captureTranscript(nativeThreadId, `live-text:${message.method}`, async () => { this.onTranscriptLiveUpdate?.(update); });
             }
           }
         }
       }
       if (!shouldRecordDurableTranscriptNotification(message.method)) {
+        analyseFailedPatchAfterCapture();
         return;
       }
 
@@ -2083,9 +2119,9 @@ export default class CodexStdioBridge {
       const settingsTurnId = settingsThreadId
         ? [...this.transcriptActiveTurns].find(([, threadId]) => threadId === settingsThreadId)?.[0]
         : undefined;
-      void this.captureTranscript(`upstream-notification:${message.method}`, async () => {
-        const threadId = asString(asRecord(message.params)?.threadId)
-          ?? asString(asRecord(asRecord(message.params)?.thread)?.id);
+      const threadId = asString(asRecord(message.params)?.threadId)
+        ?? asString(asRecord(asRecord(message.params)?.thread)?.id);
+      void this.captureTranscript(threadId, `upstream-notification:${message.method}`, async () => {
         const normalisedMessage = threadId
           ? (await this.persistTranscript(() => externalizeCodexTranscriptInlineImages(message, { assets: this.transcriptAssets, threadId }))).value
           : message;
@@ -2112,6 +2148,7 @@ export default class CodexStdioBridge {
           }
           : undefined,
       });
+      analyseFailedPatchAfterCapture();
     }
   }
 
@@ -2144,9 +2181,10 @@ export default class CodexStdioBridge {
     const timestamp = Date.now();
     const diagnostic = createCodexTranscriptDiagnostic({
       lastLoggedAt: this.transcriptLastLogAt,
-      memory: process.memoryUsage(),
+      memory: () => process.memoryUsage(),
       now: timestamp,
-      pending: [...this.transcriptPendingTasks.values()],
+      // Task ids only grow, so the first remaining entry is the oldest.
+      pending: { count: this.transcriptPendingTasks.size, oldest: this.transcriptPendingTasks.values().next().value },
     });
     if (!diagnostic) return;
     this.transcriptLastLogAt = diagnostic.loggedAt;
@@ -2157,7 +2195,7 @@ export default class CodexStdioBridge {
     request: JsonRpcRequest,
     options: { propagateFailure?: boolean } = {},
   ) {
-    return this.captureTranscript("client-request", async () => {
+    return this.captureTranscript(asString(asRecord(request.params)?.threadId), "client-request", async () => {
       const admittedSteer = createSteerHistoryEntryFromRequest(request);
       if (admittedSteer) {
         this.transcriptSteers.set(
@@ -2172,7 +2210,7 @@ export default class CodexStdioBridge {
   }
 
   private captureTranscriptSteerFailure(request: JsonRpcRequest, errorMessage: string) {
-    return this.captureTranscript("client-request-failure:turn/steer", async () => {
+    return this.captureTranscript(asString(asRecord(request.params)?.threadId), "client-request-failure:turn/steer", async () => {
       const requestedSteer = readSteerHistoryRequest(request);
       const key = requestedSteer?.entryKey
         ? transcriptSteerKey(requestedSteer.threadId, requestedSteer.entryKey)
@@ -2188,7 +2226,9 @@ export default class CodexStdioBridge {
     });
   }
 
+  /** Queue one capture on its native thread's lane (`null` for thread-less facts). */
   private async captureTranscript(
+    threadId: string | null,
     label: string,
     task: () => Promise<unknown>,
     options: {
@@ -2201,8 +2241,8 @@ export default class CodexStdioBridge {
     const taskId = this.nextTranscriptTaskId;
     this.nextTranscriptTaskId += 1;
     this.transcriptPendingTasks.set(taskId, { label, startedAt: Date.now() });
-    const transcriptTask = this.transcriptQueue
-      .catch(() => undefined)
+    const lane = threadId ?? "";
+    const transcriptTask = (this.transcriptLanes.get(lane) ?? Promise.resolve())
       .then(async () => {
         try {
           if (options.prepare) {
@@ -2242,7 +2282,10 @@ export default class CodexStdioBridge {
           }
         }
       });
-    this.transcriptQueue = transcriptTask.catch(() => undefined);
+    const tail = transcriptTask.catch(() => undefined);
+    this.transcriptLanes.set(lane, tail);
+    // An idle lane drops out so finished threads leave nothing behind.
+    void tail.then(() => { if (this.transcriptLanes.get(lane) === tail) this.transcriptLanes.delete(lane); });
     this.transcriptTasks.add(transcriptTask);
     this.logTranscriptInstrumentation();
     try {
@@ -2432,7 +2475,7 @@ export default class CodexStdioBridge {
 
   private async settleQuestionnaireHistoryEntry(historyEntry: WorkbenchQuestionnaireHistoryEntry) {
     let warning: string | null = null;
-    await this.captureTranscript("workbench-questionnaire-settlement", async () => {
+    await this.captureTranscript(historyEntry.threadId, "workbench-questionnaire-settlement", async () => {
       try {
         await this.persistTranscript(() => this.recordTranscript([{
             kind: "questionnaire",
@@ -2542,7 +2585,7 @@ export default class CodexStdioBridge {
   ): Promise<CodexThreadContextReadResponse> {
     const reader = this.requireSqliteReader();
     const identityContext = await this.resolveTranscriptThreadContext(metadata, true, signal);
-    await this.transcriptQueue;
+    await this.settledTranscriptLane(metadata.id);
     signal.throwIfAborted();
     const canonicalMetadata = this.identities
       ? mapProviderThread(this.identities, { harness: "codex", nativeLocation: identityContext.nativeLocation }, metadata)
@@ -2608,8 +2651,7 @@ export default class CodexStdioBridge {
     turnIds: readonly string[] | null;
   }) {
     // Settle transcript facts admitted before this request before classifying turns as historical gaps.
-    const admittedTranscriptQueue = this.transcriptQueue;
-    await admittedTranscriptQueue.catch(() => undefined);
+    await this.settledTranscriptLane(await this.transcriptLaneFor(threadId));
     const requestedTurnIds = turnIds ? [...new Set(turnIds)] : null;
     const materializedTurnIds = requestedTurnIds
       ? new Set(await this.readSqliteTranscriptMaterializedTurnIds(threadId, requestedTurnIds))
@@ -2850,7 +2892,7 @@ export default class CodexStdioBridge {
           ?? recording.catalog?.turns.at(-1)?.id
           ?? recording.settlement?.turnId
           ?? "empty";
-        return this.captureTranscript(`provider-turn-window:${recording.thread.id}:${labelTurnId}`, async () => {
+        return this.captureTranscript(recording.thread.id, `provider-turn-window:${recording.thread.id}:${labelTurnId}`, async () => {
           if (recording.source === "workbench") {
             const observations = await this.requireSqliteReader().storedTurnSettlement(
               recording.thread.id, recording.settlement.turnId, recording.settlement.completedAt,
@@ -3195,6 +3237,7 @@ export default class CodexStdioBridge {
     return this.commandQueue !== null || this.transcriptActiveTurns.size > 0
       || this.pendingResponses.size > 0 || this.retiringResponses.size > 0
       || this.pendingUserInputRequests.size > 0 || this.pendingApprovals.size > 0 || this.transcriptTasks.size > 0
+      || this.backgroundTasks.size > 0
       || this.transcriptPersistence.size > 0;
   }
 

@@ -908,6 +908,88 @@ test("ordinary failed patches receive current-file findings without automatic re
   }
 });
 
+async function flushTurns(count = 5) {
+  for (let index = 0; index < count; index += 1) await new Promise<void>(resolve => { setImmediate(resolve); });
+}
+
+test("one thread's held transcript capture does not hold back another thread's live text", async (context) => {
+  // This bridge has no identity owner, so the released thread/started capture reports its admission gap.
+  const failures = captureTestOutput(context, process.stderr, text =>
+    text.startsWith("[codex-transcript] capture failed upstream-notification:thread/started:"));
+  const held = deferred<void>();
+  const live: string[] = [];
+  const project = (cwd: string) => ({
+    cwd, project: { id: fixtureIdentityValues.ProjectId.project, kind: "git" as const, root: cwd, rootPath: cwd, roots: [] },
+    root: { id: "root", name: "repo", root: cwd, rootPath: cwd },
+  });
+  const bridge = new CodexStdioBridge({
+    appServer: { send() {} } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    onTranscriptLiveUpdate(update) { if (update.kind === "text") live.push(`${update.threadId}:${update.text}`); },
+    recordSqliteTranscript: async () => {},
+    resolveProjectFromCwd: async (cwd) => {
+      if (cwd === "C:/slow") await held.promise;
+      return project(cwd ?? "C:/repo");
+    },
+  });
+  try {
+    // The slow thread's capture waits on its project before it can persist anything.
+    await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: { ...bridgeThread(), id: "slow", cwd: "C:/slow", turns: [] } } });
+    await bridge.handleUpstreamMessage({ method: "item/agentMessage/delta", params: { delta: "streamed", itemId: "item", threadId: "fast", turnId: "turn" } });
+    await flushTurns();
+    assert.deepEqual(live, ["fast:streamed"]);
+  } finally {
+    held.resolve();
+    await bridge.waitForIdle();
+    await bridge.dispose();
+  }
+  assert.equal(failures.length, 1);
+});
+
+test("failed-patch analysis does not hold the codex command queue", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-patch-queue-");
+  const root = temporary.path;
+  const sql = await recordingFixture(root);
+  await fs.writeFile(path.join(root, "target"), "new\n");
+  const metadata = { ...bridgeThread(), cwd: root, turns: [] };
+  const releaseRead = deferred<void>();
+  const accountSent = deferred<void>();
+  const bridge = new CodexStdioBridge({
+    ...sql.ports,
+    appServer: { send(message: JsonRpcRequest) {
+      if (message.method === "account/read") {
+        accountSent.resolve();
+        queueMicrotask(() => void bridge.handleUpstreamMessage({ id: message.id, result: { account: null, requiresOpenaiAuth: false } }));
+      } else {
+        // Analysis reads its thread; hold that read to keep the analysis running.
+        void releaseRead.promise.then(() => bridge.handleUpstreamMessage({ id: message.id, result: { thread: metadata } }));
+      }
+    } } as unknown as CodexAppServer, handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+  });
+  try {
+    await bridge.handleUpstreamMessage({ method: "thread/started", params: { thread: metadata } });
+    await bridge.handleUpstreamMessage({ method: "turn/started", params: { threadId: "thread", turn: bridgeThread().turns[0] } });
+    await bridge.handleUpstreamMessage({ method: "item/completed", params: { threadId: "thread", turnId: "turn", item: {
+      id: "patch", type: "fileChange", status: "failed", changes: [
+        { path: "target", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-old\n+new\n" },
+      ],
+    } } });
+    await flushTurns();
+    const request = bridge.handleServerRequest({ id: "account", method: "account/read", params: {} });
+    const outcome = await Promise.race([accountSent.promise.then(() => "dispatched"), flushTurns().then(() => "blocked")]);
+    assert.equal(outcome, "dispatched");
+    releaseRead.resolve();
+    await request;
+  } finally {
+    releaseRead.resolve();
+    await bridge.waitForIdle();
+    await bridge.dispose();
+    await temporary.dispose();
+  }
+});
+
 test("bridge-only reload preserves the initialized app-server generation", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-bridge-capability-");
   const root = temporary.path;

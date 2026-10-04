@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS: shared anomaly check and repeat interval. Keywords: transcript, diagnostics, interval.
- * - CodexTranscriptDiagnosticInput/CodexTranscriptDiagnostic: current queue and memory evidence contracts. Keywords: transcript, backlog, memory.
- * - createCodexTranscriptDiagnostic: emit one compact anomaly only for a large or old pending queue. Keywords: transcript, anomaly, logging.
+ * - CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS: shared anomaly check and repeat interval.
+ * - CodexTranscriptDiagnosticInput/CodexTranscriptDiagnostic: current queue and memory evidence contracts.
+ * - createCodexTranscriptDiagnostic: emit one compact anomaly only for a large or old pending queue, in constant time per call.
  */
 export const CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS = 5_000;
 
@@ -11,9 +11,10 @@ const OLDEST_PENDING_AGE_THRESHOLD_MS = 5_000;
 
 export interface CodexTranscriptDiagnosticInput {
   lastLoggedAt: number | null;
-  memory: Pick<NodeJS.MemoryUsage, "heapTotal" | "heapUsed" | "rss">;
+  /** Read only when a line is emitted; checks run on every capture. */
+  memory: () => Pick<NodeJS.MemoryUsage, "heapTotal" | "heapUsed" | "rss">;
   now: number;
-  pending: ReadonlyArray<{ label: string; startedAt: number }>;
+  pending: { count: number; oldest: { label: string; startedAt: number } | undefined };
 }
 
 export interface CodexTranscriptDiagnostic {
@@ -31,13 +32,14 @@ function formatDuration(value: number) {
 }
 
 export function createCodexTranscriptDiagnostic({ lastLoggedAt, memory, now, pending }: CodexTranscriptDiagnosticInput): CodexTranscriptDiagnostic | null {
-  if (!pending.length) return null;
-  const oldest = pending.reduce((current, candidate) => candidate.startedAt < current.startedAt ? candidate : current);
-  const oldestAgeMs = Math.max(0, now - oldest.startedAt);
-  if (pending.length < BACKLOG_COUNT_THRESHOLD && oldestAgeMs < OLDEST_PENDING_AGE_THRESHOLD_MS) return null;
+  const { count, oldest } = pending;
+  if (!count || !oldest) return null;
   if (lastLoggedAt !== null && now - lastLoggedAt < CODEX_TRANSCRIPT_DIAGNOSTIC_INTERVAL_MS) return null;
+  const oldestAgeMs = Math.max(0, now - oldest.startedAt);
+  if (count < BACKLOG_COUNT_THRESHOLD && oldestAgeMs < OLDEST_PENDING_AGE_THRESHOLD_MS) return null;
+  const usage = memory();
   return {
     loggedAt: now,
-    message: `backlog pending=${pending.length} oldest=${oldest.label} age=${formatDuration(oldestAgeMs)} rss=${formatMegabytes(memory.rss)} heap=${formatMegabytes(memory.heapUsed)}/${formatMegabytes(memory.heapTotal)}`,
+    message: `backlog pending=${count} oldest=${oldest.label} age=${formatDuration(oldestAgeMs)} rss=${formatMegabytes(usage.rss)} heap=${formatMegabytes(usage.heapUsed)}/${formatMegabytes(usage.heapTotal)}`,
   };
 }
