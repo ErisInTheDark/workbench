@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_MESSAGE_COMMANDS: canonical global message command plus reload-safe legacy compatibility.
+ * - WORKBENCH_MESSAGE_COMMANDS: canonical global message command plus reload-safe legacy compatibility; both require a user-visible simple version.
  */
 import { z } from "zod";
 
@@ -16,6 +16,7 @@ const messageInputSchema = z.object({
   name: requiredText.optional(),
   parent: z.boolean().optional(),
   threadId: requiredText.optional(),
+  userVisibleSimpleVersion: requiredText.describe("One or two plain sentences summarising the message for the user, without technical detail."),
 }).strict().superRefine(({ name, parent, threadId }, context) => {
   if ([Boolean(name), Boolean(parent), Boolean(threadId)].filter(Boolean).length !== 1) {
     context.addIssue({ code: "custom", message: "Exactly one of name, parent, or threadId is required." });
@@ -36,20 +37,21 @@ function messageCommand(legacy: boolean) {
     hideFromRootHelp: legacy || undefined,
     words: legacy ? ["subagent", "message"] : ["message"],
     usage: legacy
-      ? "wb subagent message (--id <id> | --name <name> | --parent) --message <message>"
-      : "wb message (--thread <id> | --name <name> | --parent) --message <message>",
+      ? "wb subagent message (--id <id> | --name <name> | --parent) --message <message> --user-visible-simple-version <text>"
+      : "wb message (--thread <id> | --name <name> | --parent) --message <message> --user-visible-simple-version <text>",
     inputSchema: messageInputSchema,
     parseCliArgs(args) {
       const threadFlag = legacy ? "--id" : "--thread";
       const flags = new WorkbenchAgentCommandFlags(args, {
         boolean: ["--parent"],
-        values: [threadFlag, "--name", "--message"],
+        values: [threadFlag, "--name", "--message", "--user-visible-simple-version"],
       });
       return {
         message: flags.required("--message"),
         name: flags.optional("--name") ?? undefined,
         parent: flags.has("--parent") || undefined,
         threadId: flags.optional(threadFlag) ?? undefined,
+        userVisibleSimpleVersion: flags.required("--user-visible-simple-version"),
       };
     },
     buildRequest(input, { callerThreadId, cwd, workbenchOrigin }) {
@@ -61,6 +63,7 @@ function messageCommand(legacy: boolean) {
         ...(input.name ? { name: input.name } : {}),
         ...(input.parent ? { parent: true } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {}),
+        userVisibleSimpleVersion: input.userVisibleSimpleVersion,
         ...(workbenchOrigin ? { workbenchOrigin } : {}),
       });
     },

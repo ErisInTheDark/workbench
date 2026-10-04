@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect attributed cross-agent message creation and parsing from thread inputs. Keywords: agent, message, attribution, test.
+ * No production exports. Tests protect attributed cross-agent message creation, user-visible simple versions, and parsing from thread inputs. Keywords: agent, message, attribution, test.
  */
 
 import assert from "node:assert/strict";
@@ -11,6 +11,7 @@ import {
   readWorkbenchAgentMessageItem,
   readWorkbenchAgentMessageText,
 } from "./thread-agent-message.ts";
+import { unwrapWorkbenchSteerDisplayText } from "./thread-steer-display.ts";
 
 test("agent messages retain sender attribution behind an explanatory prelude", () => {
   const text = createWorkbenchAgentMessageText({
@@ -31,6 +32,23 @@ test("agent messages retain sender attribution behind an explanatory prelude", (
     text_elements: [],
     type: "text",
   }]), readWorkbenchAgentMessageText(text));
+});
+
+test("user-visible simple versions round-trip beside stored summary-less envelopes", () => {
+  const message = {
+    message: "Rerun `wb test` after rebasing.",
+    senderName: "luna",
+    senderThreadId: "child",
+    userVisibleSimpleVersion: "Fix done; \"tests\" need a\nrerun.",
+  };
+  const text = createWorkbenchAgentMessageText(message);
+  assert.deepEqual(readWorkbenchAgentMessageText(text), message);
+  assert.equal(unwrapWorkbenchSteerDisplayText(text).endsWith(message.message), true);
+  assert.equal(unwrapWorkbenchSteerDisplayText(text).includes("<wb:agent-message"), false);
+
+  const stored = "<wb:agent-message from=\"luna\" thread=\"child\">\nolder\n</wb:agent-message>";
+  assert.deepEqual(readWorkbenchAgentMessageText(stored), { message: "older", senderName: "luna", senderThreadId: "child" });
+  assert.equal(unwrapWorkbenchSteerDisplayText(stored), "older");
 });
 
 test("native agent attribution requires the named Workbench output boundary", () => {

@@ -615,7 +615,9 @@ test("dispatches global messages through the direct managed-thread transport", a
   const server = await startController(controller);
   try {
     const response = await fetch(`${server.origin}/daemon/agent-command`, {
-      body: subagentCommandBody(["message", "--thread", "review-target", "--message", "Review feedback."]),
+      body: subagentCommandBody([
+        "message", "--thread", "review-target", "--message", "Review feedback.", "--user-visible-simple-version", "Sent review notes.",
+      ]),
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       method: "POST",
     });
@@ -628,6 +630,7 @@ test("dispatches global messages through the direct managed-thread transport", a
         cwd: process.cwd(),
         message: "Review feedback.",
         threadId: "review-target",
+        userVisibleSimpleVersion: "Sent review notes.",
         workbenchOrigin: "http://127.0.0.1:4500",
       },
     });

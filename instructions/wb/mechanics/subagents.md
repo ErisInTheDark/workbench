@@ -25,10 +25,10 @@ The wait tool is the only way to receive a child's final output. Do not leave ch
 
 ### notes
 
-- Subagents are isolated and do not inherit parent or sibling context. Give each child a self-contained message.
+- Subagents are isolated and do not inherit parent or sibling context. Give each child a self-contained message, including sibling names it may message.
 - Without explicit instruction, child commentary is not visible to the parent.
 - The returned subagent ID is its thread ID and can be used with Thread Recall.
-- A thread may operate only on direct children it owns. Sideways and grandchild access fails closed.
+- A thread may operate only on direct children it owns. Sideways (except sibling messages) and grandchild access fails closed.
 - Do not blindly trust subagent output. The parent owns verification and scope control.
 - When orchestrating reviews, prevent infinite review loops and scope creep. The parent owns the acceptance threshold.
 </available:subagents>

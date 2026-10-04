@@ -16,6 +16,7 @@ export const WorkbenchThreadMessageRequestSchema = z.object({
   name: requiredText.optional(),
   parent: z.literal(true).optional(),
   threadId: ThreadReferenceSchema.optional(),
+  userVisibleSimpleVersion: requiredText,
   workbenchOrigin: requiredText.optional(),
 }).strict().superRefine(({ name, parent, threadId }, context) => {
   if ([Boolean(name), Boolean(parent), Boolean(threadId)].filter(Boolean).length !== 1) {

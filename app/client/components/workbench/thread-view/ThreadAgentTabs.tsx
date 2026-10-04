@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadAgentTabs: render stably ordered agent tabs with Lock controls, status icons, thread tooltips, claim badges, and settled-history disclosure.
+ * - default ThreadAgentTabs: render stably ordered agent tabs with a message board tab, Lock controls, status icons, thread tooltips, claim badges, and settled-history disclosure.
  */
 import type { MouseEvent } from "react";
 
@@ -12,7 +12,7 @@ import { useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
 import { useWorkbenchComposerDraftPresence } from "../WorkbenchComposerDraftPresenceProvider";
 import WorkbenchThreadEntryBadge from "../WorkbenchThreadEntryBadge";
 import WorkbenchThreadHoverTooltip from "../WorkbenchThreadHoverTooltip";
-import { CompletedThreadIcon, LockIcon, NeedsAttentionThreadIcon, RestoreThreadIcon, SettleThreadIcon, StoppedThreadIcon, UnlockIcon, WorkingThreadIcon } from "../workbench-icons";
+import { CompletedThreadIcon, LockIcon, MessagesCircleIcon, NeedsAttentionThreadIcon, RestoreThreadIcon, SettleThreadIcon, StoppedThreadIcon, UnlockIcon, WorkingThreadIcon } from "../workbench-icons";
 import { getThreadAgentAccentHue } from "../../../workbench/thread/thread-subagents";
 import type { IdentityAccentStyle } from "../../../workbench/identity-accent-color";
 import { useWorkbenchThread } from "../use-workbench-thread";
@@ -154,10 +154,12 @@ export default function ThreadAgentTabs ({
   activeThreadId,
   hasSettledSubagents,
   getThreadHref,
+  isMessageBoardOpen,
   isSettledSubagentsVisible,
   isRevealingMore,
   mainThreadHarness,
   mainThreadId,
+  onOpenMessageBoard,
   onToggleSettledSubagents,
   onSelectThread,
   onTogglePin,
@@ -168,10 +170,12 @@ export default function ThreadAgentTabs ({
   activeThreadId: string;
   getThreadHref: (threadId: string) => string | undefined;
   hasSettledSubagents: boolean;
+  isMessageBoardOpen: boolean;
   isSettledSubagentsVisible: boolean;
   isRevealingMore: boolean;
   mainThreadHarness: ThreadPayload["harness"];
   mainThreadId: string;
+  onOpenMessageBoard: () => void;
   onToggleSettledSubagents: () => void;
   onSelectThread: (threadId: string) => void;
   onTogglePin: (threadId: string) => void;
@@ -193,7 +197,7 @@ export default function ThreadAgentTabs ({
       onTogglePin={() => onTogglePin(tab.id)}
       onToggleSettlement={(settled) => onToggleSettlement(tab.id, settled)}
       projectId={projectId}
-      selected={activeThreadId === tab.id}
+      selected={!isMessageBoardOpen && activeThreadId === tab.id}
       tab={tab}
     />
   );
@@ -202,7 +206,7 @@ export default function ThreadAgentTabs ({
       <a
         className={joinClasses(
           tabClassName,
-          activeThreadId === mainThreadId
+          activeThreadId === mainThreadId && !isMessageBoardOpen
             ? selectedTabClassName
             : unselectedTabClassName,
         )}
@@ -211,8 +215,19 @@ export default function ThreadAgentTabs ({
       >
         <ThreadLifecycleStatusIcon lifecycle={mainThreadLifecycle} />
         <span>Main agent</span>
-        {activeThreadId === mainThreadId ? <SelectedTabUnderline className="border-[color-mix(in_srgb,var(--text)_35%,transparent)]" /> : null}
+        {activeThreadId === mainThreadId && !isMessageBoardOpen ? <SelectedTabUnderline className="border-[color-mix(in_srgb,var(--text)_35%,transparent)]" /> : null}
       </a>
+      <button
+        type="button"
+        aria-current={isMessageBoardOpen ? "page" : undefined}
+        aria-label="Subagent message board"
+        title="Subagent message board"
+        className={joinClasses(tabClassName, isMessageBoardOpen ? selectedTabClassName : unselectedTabClassName)}
+        onClick={onOpenMessageBoard}
+      >
+        <MessagesCircleIcon size={16} />
+        {isMessageBoardOpen ? <SelectedTabUnderline className="border-[color-mix(in_srgb,var(--text)_35%,transparent)]" /> : null}
+      </button>
       {unsettledTabs.map(renderTab)}
       {hasSettledSubagents ? (
         <button

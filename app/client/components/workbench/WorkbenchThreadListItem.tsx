@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadListItem: render a thread row or disclosure body with shared status, optional action slot, navigation and context menu.
+ * - default WorkbenchThreadListItem: render a thread row or disclosure body with shared status (optionally led by a label), optional action slot, navigation and context menu.
  * - ThreadTooltipContent: render thread title (optionally after an agent name), status, and active claim paths grouped per coloured, titled subagent, without exposing stashed paths.
  * Status derivation is shared through thread-entry-presentation.
  */
@@ -175,8 +175,10 @@ export default function WorkbenchThreadListItem({
   selected = false,
   secondaryRow,
   showActions = false,
+  showFrame = true,
   showPinPriorityIcon = false,
   showTooltip = true,
+  statusLeading,
   tabIndex,
   tooltipDetails,
   trailing,
@@ -210,8 +212,12 @@ export default function WorkbenchThreadListItem({
   /** Replaces the activity timestamp, such as a figure the surrounding list is ranked by. */
   trailing?: ReactNode;
   showActions?: boolean;
+  /** Draw the status-coloured hover/selected outline; hosts that draw their own status border turn it off. */
+  showFrame?: boolean;
   showPinPriorityIcon?: boolean;
   showTooltip?: boolean;
+  /** Full layout only: shown before the status, such as a coloured subagent name. */
+  statusLeading?: ReactNode;
   tabIndex?: number;
   tooltipDetails?: ReactNode;
 }) {
@@ -303,9 +309,9 @@ export default function WorkbenchThreadListItem({
       data-thread-status-tone={entry.entryKind === "draft" ? "draft" : statusTone}
       role={role === "option" ? "presentation" : undefined}
     >
-      <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 size-full transition-opacity duration-75 ease-out ${statusClassName} ${selected ? "opacity-100" : `opacity-0${isDragActive ? "" : " group-hover/thread-row:opacity-100 group-has-[:focus-visible]/thread-row:opacity-100"}`}`}>
+      {showFrame ? <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 size-full transition-opacity duration-75 ease-out ${statusClassName} ${selected ? "opacity-100" : `opacity-0${isDragActive ? "" : " group-hover/thread-row:opacity-100 group-has-[:focus-visible]/thread-row:opacity-100"}`}`}>
         <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="12.8" fill="color-mix(in srgb, var(--text) 4%, transparent)" stroke="currentColor" strokeWidth="1" strokeOpacity={strokeOpacity} strokeDasharray={hasDashedBorder ? "6 4" : undefined} vectorEffect="non-scaling-stroke" />
-      </svg>
+      </svg> : null}
       {presentation === "row" ? <ContextMenuCapability menu={contextMenu}>
         <WorkbenchTooltip
           content={<ThreadTooltipContent claimedPaths={claimedPaths} dateTime={dateTime} exactTime={exactTime} extraDetails={tooltipDetails} Icon={Icon} projectId={projectId} relativeTime={relativeTime} snoozed={group === "snoozed"} status={tooltipStatus} statusClassName={statusClassName} stashed={stashed} subagentClaims={subagentClaims} title={entry.title} identity={entry.entryKind === "draft" ? undefined : entry.identity} />}
@@ -385,6 +391,7 @@ export default function WorkbenchThreadListItem({
           )}
           statusIcon={<Icon className={statusClassName} size={14} />}
           statusLabel={<span className={`truncate ${statusClassName}`}>{status}</span>}
+          statusLeading={statusLeading}
           timestamp={trailing ?? <time dateTime={dateTime} title={exactTime}>{relativeTime}</time>}
           title={<span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold text-text" : ""}`}>{titleContent}</span>}
         />

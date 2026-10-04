@@ -1090,6 +1090,7 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
 
   const globalMessage = await parseWorkbenchAgentCliCommand([
     "message", "--thread", "review-target", "--message", "Please fix the cancellation race.",
+    "--user-visible-simple-version", "Asked for the race fix.",
   ], options);
   assert.equal(globalMessage.kind, "request");
   assert.deepEqual(globalMessage.request, {
@@ -1098,6 +1099,7 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
       cwd: "C:/workspace",
       message: "Please fix the cancellation race.",
       threadId: "review-target",
+      userVisibleSimpleVersion: "Asked for the race fix.",
       workbenchOrigin: "http://localhost:3000",
     },
     method: "POST",
@@ -1107,6 +1109,7 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
 
   const message = await parseWorkbenchAgentCliCommand([
     "subagent", "message", "--id", "child-thread", "--message", "Continue safely.",
+    "--user-visible-simple-version", "Keep going.",
   ], options);
   assert.equal(message.kind, "request");
   assert.deepEqual(message.request.body, {
@@ -1115,11 +1118,13 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
     cwd: "C:/workspace",
     message: "Continue safely.",
     threadId: "child-thread",
+    userVisibleSimpleVersion: "Keep going.",
     workbenchOrigin: "http://localhost:3000",
   });
 
   const parentMessage = await parseWorkbenchAgentCliCommand([
     "subagent", "message", "--parent", "--message", "Parent-facing progress.",
+    "--user-visible-simple-version", "Progress update.",
   ], options);
   assert.equal(parentMessage.kind, "request");
   assert.deepEqual(parentMessage.request.body, {
@@ -1128,16 +1133,21 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
     cwd: "C:/workspace",
     message: "Parent-facing progress.",
     parent: true,
+    userVisibleSimpleVersion: "Progress update.",
     workbenchOrigin: "http://localhost:3000",
   });
   assert.equal((await parseWorkbenchAgentCliCommand([
     "subagent", "message", "--parent", "--id", "child-thread", "--message", "Ambiguous.",
+    "--user-visible-simple-version", "Ambiguous.",
   ], options)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand([
-    "subagent", "message", "--message", "Missing target.",
+    "subagent", "message", "--message", "Missing target.", "--user-visible-simple-version", "Missing target.",
   ], options)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand([
-    "message", "--thread", "target", "--parent", "--message", "Ambiguous.",
+    "message", "--thread", "target", "--parent", "--message", "Ambiguous.", "--user-visible-simple-version", "Ambiguous.",
+  ], options)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand([
+    "message", "--thread", "target", "--message", "Missing simple version.",
   ], options)).kind, "error");
 
   const wait = await parseWorkbenchAgentCliCommand([

@@ -1,5 +1,5 @@
 /*
- * Exports: none. Tests protect global thread-message admission, relationship semantics, admitted-turn intent acceptance, caller project fencing and cross-project lock fencing.
+ * Exports: none. Tests protect global thread-message admission, user-visible simple version delivery, relationship semantics including sibling names, admitted-turn intent acceptance, caller project fencing and cross-project lock fencing.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -35,6 +35,7 @@ function fixture({
   onDelivery,
   rejectDelivery = false,
   targetCwd = "C:/repo",
+  withSibling = false,
 }: {
   activeChild?: boolean;
   childCwd?: string;
@@ -43,6 +44,7 @@ function fixture({
   onDelivery?: () => void;
   rejectDelivery?: boolean;
   targetCwd?: string;
+  withSibling?: boolean;
 } = {}) {
   const calls: Array<{ method: string; params: object }> = [];
   const threads = new Map([
@@ -101,7 +103,11 @@ function fixture({
         return threads.has(canonical) ? identity(canonical) : null;
       },
     },
-    listSubagents: async selected => ({ subagents: selected === relationship.projectId ? [relationship] : [] }),
+    listSubagents: async selected => ({
+      subagents: selected === relationship.projectId
+        ? [relationship, ...(withSibling ? [{ ...relationship, cwd: targetCwd, name: "nova", threadId: identitySchemas.WorkbenchThreadIdSchema.parse("target") }] : [])]
+        : [],
+    }),
     provider: selected => { assert.equal(selected, harness); return provider; },
     resolveProjectFromCwd: async cwd => ({
       cwd: cwd ?? "",
@@ -132,11 +138,12 @@ function fixture({
 test("messages an arbitrary thread with caller title attribution", async () => {
   const { calls, controller } = fixture();
   await controller.send({
-    callerThreadId: "reviewer", cwd: "C:/repo", message: "Please fix the cancellation race.", threadId: "target",
+    callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Please fix the cancellation race.", threadId: "target",
   });
   const delivery = calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
   assert.deepEqual(delivery.message, {
     message: "Please fix the cancellation race.", senderName: "review cancellation", senderThreadId: "reviewer",
+    userVisibleSimpleVersion: "Summary.",
   });
   assert.equal(calls.some(({ method }) => method === "respond"), false);
   await controller.dispose();
@@ -145,7 +152,7 @@ test("messages an arbitrary thread with caller title attribution", async () => {
 test("relationship shortcuts preserve child and parent attribution", async () => {
   const child = fixture();
   await child.controller.send({
-    callerThreadId: "reviewer", cwd: "C:/repo", message: "Continue safely.", name: "luna",
+    callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Continue safely.", name: "luna",
     workbenchOrigin: "http://localhost:3000",
   });
   const childDelivery = child.calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
@@ -158,20 +165,36 @@ test("relationship shortcuts preserve child and parent attribution", async () =>
 
   const parent = fixture();
   await parent.controller.send({
-    callerThreadId: "child", cwd: "C:/repo", message: "Review ready.", parent: true,
+    callerThreadId: "child", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Review ready.", parent: true,
   });
   const parentDelivery = parent.calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
   assert.equal(parentDelivery.threadId, "reviewer");
   assert.deepEqual(parentDelivery.message, {
-    message: "Review ready.", senderName: "luna", senderThreadId: "child",
+    message: "Review ready.", senderName: "luna", senderThreadId: "child", userVisibleSimpleVersion: "Summary.",
   });
   await parent.controller.dispose();
+});
+
+test("subagents reach unsettled siblings by name without reaching other parents' children", async () => {
+  const sibling = fixture({ withSibling: true });
+  await sibling.controller.send({ callerThreadId: "child", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message: "Peer note.", name: "NOVA" });
+  const delivery = sibling.calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
+  assert.equal(delivery.threadId, "target");
+  assert.equal(delivery.message.senderThreadId, "child");
+  await sibling.controller.dispose();
+
+  const outsider = fixture();
+  await assert.rejects(
+    outsider.controller.send({ callerThreadId: "target", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message: "Hi.", name: "luna" }),
+    /unsettled subagent name was not found/u,
+  );
+  await outsider.controller.dispose();
 });
 
 test("an admitted agent message marks its target working on the admitted turn", async () => {
   for (const activeChild of [false, true]) {
     const { calls, controller } = fixture({ activeChild });
-    await controller.send({ callerThreadId: "reviewer", cwd: "C:/repo", message: "Another pass.", threadId: "child" });
+    await controller.send({ callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Another pass.", threadId: "child" });
     assert.deepEqual(calls.find(({ method }) => method === "acceptIntent")?.params, {
       projectId, harness, threadId: "child", turnId: "delivered-child",
     });
@@ -182,7 +205,7 @@ test("an admitted agent message marks its target working on the admitted turn", 
 test("subagent messages to arbitrary peers use the caller thread title", async () => {
   const { calls, controller } = fixture();
   await controller.send({
-    callerThreadId: "child", cwd: "C:/repo", message: "Peer review ready.", threadId: "target",
+    callerThreadId: "child", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Peer review ready.", threadId: "target",
   });
   const delivery = calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
   assert.equal(delivery.message.senderName, "child review");
@@ -192,7 +215,7 @@ test("subagent messages to arbitrary peers use the caller thread title", async (
 test("message admission emits canonical thread identities", async () => {
   const { calls, controller } = fixture();
   await controller.send({
-    callerThreadId: "native-reviewer", cwd: "C:/repo", message: "Canonical feedback.", threadId: "native-target",
+    callerThreadId: "native-reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Canonical feedback.", threadId: "native-target",
   });
   const delivery = calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
   assert.equal(delivery.threadId, "target");
@@ -203,7 +226,7 @@ test("message admission emits canonical thread identities", async () => {
 test("direct-child messages retain questionnaire ordering and lock fencing", async () => {
   const active = fixture({ activeChild: true });
   await active.controller.send({
-    callerThreadId: "reviewer", cwd: "C:/repo", message: "Continue with the review.", threadId: "child",
+    callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Continue with the review.", threadId: "child",
   });
   assert.deepEqual(active.calls.map(({ method }) => method), ["messageAgent", "acceptIntent", "respond"]);
   const delivery = active.calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
@@ -213,7 +236,7 @@ test("direct-child messages retain questionnaire ordering and lock fencing", asy
   const locked = fixture({ childPinned: true });
   await assert.rejects(
     locked.controller.send({
-      callerThreadId: "reviewer", cwd: "C:/repo", message: "Continue.", threadId: "child",
+      callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Continue.", threadId: "child",
     }),
     /locked/u,
   );
@@ -225,7 +248,7 @@ test("failed direct-child delivery leaves its questionnaire pending", async () =
   const { calls, controller } = fixture({ activeChild: true, rejectDelivery: true });
   await assert.rejects(
     controller.send({
-      callerThreadId: "reviewer", cwd: "C:/repo", message: "Continue.", threadId: "child",
+      callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Continue.", threadId: "child",
     }),
     /delivery rejected/u,
   );
@@ -236,7 +259,7 @@ test("failed direct-child delivery leaves its questionnaire pending", async () =
 test("thread messages deliver to targets in another project", async () => {
   const { calls, controller } = fixture({ targetCwd: "C:/other" });
   await controller.send({
-    callerThreadId: "reviewer", cwd: "C:/repo", message: "Cross the wall.", threadId: "target",
+    callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Cross the wall.", threadId: "target",
   });
   const delivery = calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
   assert.equal(delivery.threadId, "target");
@@ -248,7 +271,7 @@ test("locked subagents in another project stay fenced", async () => {
   const { calls, controller } = fixture({ childCwd: "C:/other", childPinned: true });
   await assert.rejects(
     controller.send({
-      callerThreadId: "target", cwd: "C:/repo", message: "Continue.", threadId: "child",
+      callerThreadId: "target", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Continue.", threadId: "child",
     }),
     /locked/u,
   );
@@ -260,7 +283,7 @@ test("callers outside the request cwd project are rejected", async () => {
   const { controller } = fixture({ targetCwd: "C:/other" });
   await assert.rejects(
     controller.send({
-      callerThreadId: "target", cwd: "C:/repo", message: "Spoofed caller.", threadId: "reviewer",
+      callerThreadId: "target", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Spoofed caller.", threadId: "reviewer",
     }),
     /does not belong/u,
   );
@@ -271,7 +294,7 @@ test("parent targeting rejects callers without a direct relationship", async () 
   const { controller } = fixture();
   await assert.rejects(
     controller.send({
-      callerThreadId: "target", cwd: "C:/repo", message: "Spoofed note.", parent: true,
+      callerThreadId: "target", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Spoofed note.", parent: true,
     }),
     /not a Workbench subagent/u,
   );
@@ -285,7 +308,7 @@ test("message disposal drains admitted delivery and rejects new admission", asyn
   const gate = new Promise<void>(resolve => { release = resolve; });
   const { controller } = fixture({ deliveryGate: gate, onDelivery: entered });
   const request = {
-    callerThreadId: "reviewer", cwd: "C:/repo", message: "Review feedback.", threadId: "target",
+    callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Review feedback.", threadId: "target",
   };
   const delivery = controller.send(request);
   await delivering;
@@ -301,7 +324,7 @@ test("message disposal drains admitted delivery and rejects new admission", asyn
 test("message admission is synchronous with respect to runtime drain", async () => {
   const { controller } = fixture();
   const request = {
-    callerThreadId: "reviewer", cwd: "C:/repo", message: "Review feedback.", threadId: "target",
+    callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Review feedback.", threadId: "target",
   };
   const delivery = controller.send(request);
   const disposal = controller.dispose();

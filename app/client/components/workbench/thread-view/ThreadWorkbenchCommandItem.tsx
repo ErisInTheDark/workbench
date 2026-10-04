@@ -33,6 +33,7 @@ import {
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
+import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
 import ThreadAgentMessageItem from "./ThreadAgentMessageItem";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadStatusCommandItem from "./ThreadStatusCommandItem";
@@ -265,13 +266,14 @@ export default function ThreadWorkbenchCommandItem({
           : resolved?.threadId ? { relation: "self", threadId: resolved.threadId } : null}
         thread={resolved?.threadId ? relatedThreadsById[resolved.threadId] : undefined}
       >
-        <ThreadMarkdown
+        <ThreadAgentMessageBody
           inlineMentionSources={inlineMentionSources}
           markdown={messageCommand.message}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
           threadCwdPath={threadCwdPath}
+          userVisibleSimpleVersion={messageCommand.userVisibleSimpleVersion}
           workspaceRoots={workspaceRoots}
         />
       </ThreadAgentMessageItem>

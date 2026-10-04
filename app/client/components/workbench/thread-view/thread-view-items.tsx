@@ -43,7 +43,6 @@ import {
   getAgentScreenshotSteerImages,
   isAgentScreenshotSteerUserMessage,
 } from "workbench-shared/workbench/thread/thread-steer-markers";
-import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { isUndeliveredInitialOptimisticInputItem } from "../../../workbench/thread/ThreadOptimisticInputStore";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
@@ -115,6 +114,7 @@ import ThreadReasoningItem from "./ThreadReasoningItem";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
 import ThreadSentAgentMessageItem from "./ThreadAgentMessageItem";
+import ThreadIncomingAgentMessageGroup from "./ThreadIncomingAgentMessageGroup";
 import ThreadIncomingAgentMessageItem from "./ThreadIncomingAgentMessageItem";
 import ThreadAgentScreenshotItem from "./ThreadAgentScreenshotItem";
 import ThreadToolOutputItem from "./ThreadToolOutputItem";
@@ -151,7 +151,7 @@ import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import useThreadPresentedText from "./use-thread-presented-text";
 import {
   buildRenderableBlocks, buildCommandSequenceRenderSegments, getWorkedBlockRows,
-  getRenderableBlockItems, getRenderableBlockKey, hasReasoningSteps, hasSameBlockTimeline,
+  getRenderableBlockItems, getRenderableBlockKey, getUserMessageDeliveryState, hasReasoningSteps, hasSameBlockTimeline,
   isBrowseCommandItem, reuseRenderableBlocks,
   type CommandItem, type CommandSequenceItem, type HiddenThreadItemIds, type ThreadRenderableBlock,
 } from "./thread-render-blocks";
@@ -275,21 +275,6 @@ function isWorkbenchControlUserMessage(item: Extract<ThreadItem, { type: "userMe
   return isWorkbenchHiddenSystemSteerInput(item.content);
 }
 
-function getSteerUserMessageState(item: Extract<ThreadItem, { type: "userMessage" }>) {
-  if (isWorkbenchPendingSteerUserMessage(item)) {
-    return "pending";
-  }
-
-  const input = getWorkbenchInputState(item);
-  if (
-    (input?.kind === "steer" || (input?.kind === "optimistic" && input.placement === "steer"))
-    && (input.status === "interrupted" || input.status === "failed")
-  ) {
-    return "unsent";
-  }
-
-  return null;
-}
 
 function isFinalAgentMessageBlock (block: ThreadRenderableBlock, finalAgentMessageId: string | null) {
   return block.kind === "item"
@@ -539,7 +524,7 @@ function ThreadUserMessageItem ({
 }) {
   const agentMessage = readWorkbenchAgentMessageInput(item.content);
   if (agentMessage) {
-    const steerState = getSteerUserMessageState(item);
+    const steerState = getUserMessageDeliveryState(item);
     return (
       <ThreadIncomingAgentMessageItem
         message={agentMessage}
@@ -566,7 +551,7 @@ function ThreadUserMessageItem ({
     );
   }
 
-  const steerState = getSteerUserMessageState(item);
+  const steerState = getUserMessageDeliveryState(item);
   const isPendingInitial = isUndeliveredInitialOptimisticInputItem(item);
   const displayContent = unwrapWorkbenchSteerDisplayInput(item.content);
   const copyMarkdown = getUserMessageCopyMarkdown(displayContent);
@@ -1845,6 +1830,39 @@ function ThreadRenderableBlockViewComponent ({
   turnStatus: Turn["status"];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  if (block.kind === "agentMessageSequence") {
+    return (
+      <ThreadIncomingAgentMessageGroup items={block.items} state={block.state} subagents={subagents}>
+        {block.items.map((item) => (
+          <ThreadRenderableBlockViewComponent
+            animateEntries={animateEntries}
+            block={{ item, kind: "item" }}
+            browseResultEntries={browseResultEntries}
+            finalAgentMessageId={finalAgentMessageId}
+            inlineMentionSources={inlineMentionSources}
+            isMostRecentBlock={false}
+            itemTimeline={itemTimeline}
+            key={item.id}
+            knownSkills={knownSkills}
+            presentationSource={presentationSource}
+            primaryUserBlock={primaryUserBlock}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            subagents={subagents}
+            threadCwdPath={threadCwdPath}
+            threadId={threadId}
+            turnCompletedAt={turnCompletedAt}
+            turnId={turnId}
+            turnStartedAt={turnStartedAt}
+            turnStatus={turnStatus}
+            workspaceRoots={workspaceRoots}
+          />
+        ))}
+      </ThreadIncomingAgentMessageGroup>
+    );
+  }
   if (block.kind === "userMessageSequence") {
     const lastItem = block.items.at(-1)!;
     const timeline = findWorkbenchThreadItemTimelineEntry(lastItem.id, itemTimeline);
@@ -2438,6 +2456,8 @@ function ThreadTurnDetailsComponent ({
             ? `reasoning:${block.items[0]?.id ?? index}`
             : block.kind === "userMessageSequence"
               ? `userMessages:${block.items[0]?.id ?? index}`
+            : block.kind === "agentMessageSequence"
+              ? `agentMessages:${block.state}:${block.items[0]?.id ?? index}`
             : block.kind === "webSearchSequence"
               ? `webSearches:${block.items[0]?.id ?? index}`
               : `item:${block.item.id}`}>

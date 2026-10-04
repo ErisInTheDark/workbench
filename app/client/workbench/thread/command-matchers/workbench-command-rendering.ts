@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchGitArcOperation: Git operation intent and scope deltas.
- * - WorkbenchMessageOperation: global thread-message intent.
+ * - WorkbenchMessageOperation: global thread-message intent with its user-visible simple version.
  * - WorkbenchSubagentOperation: subagent operation intent.
  * - WorkbenchCommandRendering: shared renderer result.
  * - isWorkbenchCommandPresentationName: recognise supported presentation names.
@@ -121,6 +121,7 @@ export interface WorkbenchSubagentOperation {
 export interface WorkbenchMessageOperation {
   message: string | null;
   target: { kind: "name" | "parent" | "thread"; value: string | null };
+  userVisibleSimpleVersion: string | null;
 }
 
 export type WorkbenchSpecializedOperation =
@@ -568,7 +569,7 @@ function renderMessage(args: { [key: string]: JsonValue | undefined }): Workbenc
   }
   return specialized("workbench-cli.message", {
     kind: "message",
-    operation: { message: readString(args.message), target },
+    operation: { message: readString(args.message), target, userVisibleSimpleVersion: readString(args.userVisibleSimpleVersion) },
   });
 }
 

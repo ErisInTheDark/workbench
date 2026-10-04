@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadIncomingAgentMessageItem: shared attributed message body and delivery decoration.
+ * - default ThreadIncomingAgentMessageItem: shared attributed message body (simple version first) and delivery decoration.
  */
 "use client";
 
@@ -8,6 +8,7 @@ import type { ComponentProps, ReactNode } from "react";
 import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 import ThreadAgentIncomingMessage from "./ThreadAgentIncomingMessage";
+import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
 import ThreadMarkdown from "./ThreadMarkdown";
 import type { ThreadSteerState } from "./ThreadSteerDecoration";
 
@@ -35,7 +36,7 @@ export default function ThreadIncomingAgentMessageItem({
       subagent={subagent}
       timestamp={timestamp}
     >
-      <ThreadMarkdown {...markdownProps} markdown={message.message} />
+      <ThreadAgentMessageBody {...markdownProps} markdown={message.message} userVisibleSimpleVersion={message.userVisibleSimpleVersion} />
     </ThreadAgentIncomingMessage>
   );
 }

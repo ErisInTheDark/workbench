@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
+import { createWorkbenchAgentMessageOutput, createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import { buildRenderableBlocks, getRenderableBlockItems, getWorkedBlockRows, reuseRenderableBlocks, hasSameBlockTimeline, type CommandItem } from "./thread-render-blocks";
 import { partitionWorkedRows } from "./thread-worked-run";
 
@@ -87,6 +88,31 @@ test("adjacent textual steers group only while their exact state matches", () =>
     { id: "failed", kind: "item" },
     { id: "interrupted", kind: "item" },
   ]);
+});
+
+test("incoming agent messages group while adjacent and held ones sit directly above held user steers", () => {
+  const sender = { message: "note", senderName: "luna", senderThreadId: "child" };
+  const incoming = (id: string, status?: "pending" | "failed") => {
+    const item = { ...user(id), content: [{ text: createWorkbenchAgentMessageText(sender), text_elements: [], type: "text" as const }] };
+    return status ? withWorkbenchInputState(item, { kind: "steer", status }) : item;
+  };
+  const native: ThreadItem = { ...createWorkbenchAgentMessageOutput(sender), id: "native", type: "functionCallOutput" };
+  const blocks = buildRenderableBlocks([
+    incoming("a"), native, mcp("boundary", "task_get", {}), incoming("b"),
+    incoming("held-pending", "pending"), steer("mine", "pending"), incoming("held-failed", "failed"), incoming("c"),
+  ]);
+  assert.deepEqual(blocks.map(block => [
+    block.kind === "agentMessageSequence" ? `agent:${block.state}` : block.kind,
+    getRenderableBlockItems(block).map(item => item.id),
+  ]), [
+    ["agent:delivered", ["a", "native"]],
+    ["commandSequence", ["boundary"]],
+    ["agent:delivered", ["b"]],
+    ["agent:held", ["held-pending", "held-failed"]],
+    ["item", ["mine"]],
+    ["agent:delivered", ["c"]],
+  ]);
+  assert.deepEqual(buildRenderableBlocks([incoming("only", "pending")]).map(block => block.kind), ["agentMessageSequence"]);
 });
 
 test("ordinary messages and non-message items remain steer grouping boundaries", () => {

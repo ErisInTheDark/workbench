@@ -1,7 +1,9 @@
 /*
  * Exports:
  * - CommandItem/CommandSequenceItem/ThreadRenderableBlock/HiddenThreadItemIds: shared render-plan shapes.
- * - buildRenderableBlocks: group visible provider items, including adjacent same-state textual steers, before rendering.
+ * - IncomingAgentMessageItem: an attributed cross-agent message item.
+ * - buildRenderableBlocks: group visible provider items, including adjacent same-state textual steers and incoming agent messages (held ones above held user steers), before rendering.
+ * - getUserMessageDeliveryState: classify held (pending or undelivered) user-message input.
  * - isHiddenCommandExecution/hasReasoningSteps: shared visibility decisions.
  * - CommandSequenceRenderSegment/buildCommandSequenceRenderSegments: final command presentation groups.
  * - isBrowseCommandItem: identify commands rendered separately as Browse requests.
@@ -14,7 +16,8 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
 import { isWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
-import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
+import { readWorkbenchAgentMessageInput, readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread/thread-agent-message";
+import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { getWorkbenchInputState, type WorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
 import {
@@ -42,7 +45,9 @@ import { groupThreadSubagentWaitRenderEntries, type ThreadSubagentWaitRenderEntr
 export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & { shell?: CommandShell };
 export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcpToolCall" }>;
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
+export type IncomingAgentMessageItem = UserMessageItem | Extract<ThreadItem, { type: "functionCallOutput" }>;
 export type ThreadRenderableBlock =
+  | { kind: "agentMessageSequence"; items: IncomingAgentMessageItem[]; state: "delivered" | "held" }
   | { kind: "commandSequence"; items: CommandSequenceItem[] }
   | { kind: "fileChangeSequence"; items: Extract<ThreadItem, { type: "fileChange" | "dynamicToolCall" | "mcpToolCall" }>[] }
   | { kind: "reasoningSequence"; items: Extract<ThreadItem, { type: "reasoning" }>[] }
@@ -82,7 +87,7 @@ export function reuseRenderableBlocks(
     const nextItems = getRenderableBlockItems(block);
     return oldItems.length === nextItems.length
       && oldItems.every((item, index) => item === nextItems[index])
-      && (old.kind !== "userMessageSequence" || block.kind !== "userMessageSequence" || old.state === block.state)
+      && (!("state" in old) || !("state" in block) || old.state === block.state)
       ? old : block;
   });
 }
@@ -115,6 +120,28 @@ export function hasReasoningSteps(item: Extract<ThreadItem, { type: "reasoning" 
   return item.summary.some(section => section.trim()) || item.content.some(section => section.trim());
 }
 
+/** Held input awaiting delivery (`pending`) or never delivered (`unsent`); null once delivered or for ordinary input. */
+export function getUserMessageDeliveryState(item: UserMessageItem): "pending" | "unsent" | null {
+  if (isWorkbenchPendingSteerUserMessage(item)) return "pending";
+  const input = getWorkbenchInputState(item);
+  if (
+    (input?.kind === "steer" || (input?.kind === "optimistic" && input.placement === "steer"))
+    && (input.status === "interrupted" || input.status === "failed")
+  ) {
+    return "unsent";
+  }
+  return null;
+}
+
+function readIncomingAgentMessageItem(item: ThreadItem): IncomingAgentMessageItem | null {
+  return (item.type === "userMessage" || item.type === "functionCallOutput") && readWorkbenchAgentMessageItem(item) ? item : null;
+}
+
+function isHeldUserSteerBlock(block: ThreadRenderableBlock) {
+  return (block.kind === "item" || block.kind === "userMessageSequence")
+    && getRenderableBlockItems(block).some(item => item.type === "userMessage" && getUserMessageDeliveryState(item) !== null);
+}
+
 function getMergeableSteerState(item: UserMessageItem) {
   const input = getWorkbenchInputState(item);
   const isSteer = input?.kind === "steer"
@@ -143,6 +170,7 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     pending.items.push(item);
   };
   const narrativeKeys = new Set<string>();
+  const heldAgentMessages: IncomingAgentMessageItem[] = [];
   let compacted = false;
   for (const item of items) {
     if (item.type === "plan") continue;
@@ -158,6 +186,18 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     if (item.type === "contextCompaction") compacted = true;
     if (item.type === "agentMessage" && (!isVisibleWorkbenchAgentMessageText(item.text) || hidden.controlAgentMessages)) continue;
     if (item.type === "userMessage" && hidden.controlUserMessages && isWorkbenchHiddenSystemSteerInput(item.content)) continue;
+    const incoming = readIncomingAgentMessageItem(item);
+    if (incoming) {
+      flush();
+      if (incoming.type === "userMessage" && getUserMessageDeliveryState(incoming) !== null) {
+        heldAgentMessages.push(incoming);
+        continue;
+      }
+      const previous = blocks.at(-1);
+      if (previous?.kind === "agentMessageSequence" && previous.state === "delivered") previous.items.push(incoming);
+      else blocks.push({ items: [incoming], kind: "agentMessageSequence", state: "delivered" });
+      continue;
+    }
     if (item.type === "userMessage") {
       const steerState = getMergeableSteerState(item);
       if (steerState) {
@@ -217,6 +257,12 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
       ? { hasCapturedChildren: true } : {}) });
   }
   flush();
+  if (heldAgentMessages.length) {
+    // Held agent messages sit together directly above the user's own held steers.
+    const heldBlock: ThreadRenderableBlock = { items: heldAgentMessages, kind: "agentMessageSequence", state: "held" };
+    const firstHeldSteer = blocks.findIndex(isHeldUserSteerBlock);
+    blocks.splice(firstHeldSteer < 0 ? blocks.length : firstHeldSteer, 0, heldBlock);
+  }
   return blocks;
 }
 
@@ -297,7 +343,7 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
 
 export function getWorkedBlockRows(block: ThreadRenderableBlock, context: CommandContext = {}): Array<{ block: ThreadRenderableBlock; eligible: boolean }> {
   if (block.kind !== "commandSequence") {
-    if (block.kind === "userMessageSequence") return [{ block, eligible: false }];
+    if (block.kind === "userMessageSequence" || block.kind === "agentMessageSequence") return [{ block, eligible: false }];
     if (block.kind === "item" && block.item.type === "functionCallOutput") {
       const output = readWorkbenchToolOutput(block.item);
       if (output?.namespace === "workbench" && output.name === "patch_recovery") return [];

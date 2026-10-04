@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadViewContent: render admitted thread content and source-local transcript state.
+ * - default ThreadViewContent: render admitted thread content and source-local transcript state, or the subagent message board in its place.
  */
 "use client";
 import { useWorkbenchThread } from "../use-workbench-thread";
@@ -72,6 +72,7 @@ import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
 import ThreadLiveActivity from "./ThreadLiveActivity";
+import ThreadMessageBoard from "./ThreadMessageBoard";
 import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-activity";
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
@@ -342,6 +343,8 @@ export default memo(function ThreadViewContent ({
   const threadScrollViewport = useThreadScrollViewportContext();
   const rateLimits = activeThreadController.state.rateLimits;
   const [areSettledSubagentsVisible, setAreSettledSubagentsVisible] = useState(false);
+  const [isMessageBoardOpen, setIsMessageBoardOpen] = useState(false);
+  useEffect(() => { setIsMessageBoardOpen(false); }, [thread.id]);
   const [previousTurnLoadStates, dispatchPreviousTurnLoad] = useReducer(previousTurnLoadReducer, {});
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const threadViewRef = useRef<HTMLDivElement>(null);
@@ -818,8 +821,12 @@ export default memo(function ThreadViewContent ({
   }, []);
 
   const handleSubthreadSelection = useCallback((threadId: string) => {
+    setIsMessageBoardOpen(false);
     onSelectedThreadChange?.(threadId);
   }, [onSelectedThreadChange]);
+  const handleOpenMessageBoard = useCallback(() => {
+    setIsMessageBoardOpen(true);
+  }, []);
   const getSubthreadHref = useCallback((threadId: string) => {
     const target: WorkbenchThreadTarget = threadId === thread.id
       ? { harness: thread.harness, kind: "provider", threadId: ThreadReferenceSchema.parse(thread.id) }
@@ -1043,10 +1050,12 @@ export default memo(function ThreadViewContent ({
       activeThreadId={activeThreadId}
       getThreadHref={getSubthreadHref}
       hasSettledSubagents={hasSettledSubagents}
+      isMessageBoardOpen={isMessageBoardOpen}
       isSettledSubagentsVisible={areSettledSubagentsVisible}
       isRevealingMore={false}
       mainThreadHarness={thread.harness}
       mainThreadId={thread.id}
+      onOpenMessageBoard={handleOpenMessageBoard}
       onToggleSettledSubagents={handleToggleSettledSubagents}
       onSelectThread={handleSubthreadSelection}
       onTogglePin={handleSubagentPinToggle}
@@ -1144,6 +1153,19 @@ export default memo(function ThreadViewContent ({
             : "col-start-1 row-start-1 flex min-w-0 flex-col justify-end"}
         >
           <div>
+          {isMessageBoardOpen ? (
+            <ThreadMessageBoard
+              markdownProps={{
+                inlineMentionSources,
+                projectFilePaths,
+                projectId,
+                projectRootPath,
+                workspaceRoots: workspaceFileLinkRoots,
+              }}
+              projectId={projectId}
+              subagents={subagents}
+            />
+          ) : <>
           {activeThread ? (
             <ThreadCheckpointCommitPortalLayer
               cwd={activeThread.cwd}
@@ -1252,8 +1274,9 @@ export default memo(function ThreadViewContent ({
               <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">Loading subagent thread...</p>
             </div>
           )}
+          </>}
         </div>
-        {activeThread && activityTurn?.status === "inProgress" ? (
+        {activeThread && activityTurn?.status === "inProgress" && !isMessageBoardOpen ? (
           <ThreadLiveActivity
             key={`${activeThread.id}:${activityTurn.id}`}
             activity={liveActivity}

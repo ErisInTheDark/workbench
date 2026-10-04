@@ -14,6 +14,7 @@
  * - ResetIcon: counterclockwise reset arrow.
  * - DraftThreadIcon/ComposerDraftIcon/NeedsAttentionThreadIcon/CompletedThreadIcon/ProposedCommitThreadIcon/WorkingThreadIcon/StoppedThreadIcon: lifecycle and draft glyphs.
  * - ImageIcon: attached-image glyph for draft titles.
+ * - MessagesCircleIcon: overlapping speech bubbles for the subagent message board toggle.
  * - DiscardDraftIcon/SettleThreadIcon/RestoreThreadIcon/UnsnoozeThreadIcon/SnoozedThreadIcon: sidebar action glyphs.
  * - BinIcon: discard glyph.
  * - ZoomInIcon: text-size control.
@@ -507,6 +508,14 @@ export function MessageCircleCheckIcon(props: IconProps) { return <MessageCircle
 export function MessageCircleGitCommitIcon(props: IconProps) { return <MessageCircleIcon {...props} paths={[bubblePath, "M7.5 12h2.9m3.2 0h2.9", "M13.6 12a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0"]} />; }
 export function MessageCircleMoreIcon(props: IconProps) { return <MessageCircleIcon {...props} paths={[bubblePath, "M8 12h.01", "M12 12h.01", "M16 12h.01"]} />; }
 export function MessageCircleXIcon(props: IconProps) { return <MessageCircleIcon {...props} paths={[bubblePath, "m15 9-6 6", "m9 9 6 6"]} />; }
+export function MessagesCircleIcon(props: IconProps) {
+  return (
+    <OutlinedIcon {...props}>
+      <path d="M19.95 10.05a7 7 0 0 1 1.412 7.872 1 1 0 0 0-.058.787l.675 2.089a1 1 0 0 1-1.236 1.168l-2.155-.631a1 1 0 0 0-.745.06 7 7 0 0 1-7.793-1.445" />
+      <path d="M2.696 12.708a1 1 0 0 0-.058-.785 7 7 0 1 1 3.518 3.473 1 1 0 0 0-.744-.061l-2.155.63a1 1 0 0 1-1.236-1.167z" />
+    </OutlinedIcon>
+  );
+}
 export function CheckCheckIcon(props: IconProps) { return <MessageCircleIcon {...props} paths={["M18 6 7 17l-5-5", "m22 10-7.5 7.5L13 16"]} />; }
 export function ArrowUpIcon(props: IconProps) { return <OutlinedIcon {...props}><path d="m5 12 7-7 7 7" /><path d="M12 19V5" /></OutlinedIcon>; }
 export function AlarmClockIcon(props: IconProps) { return <OutlinedIcon {...props}><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /><path d="M6.38 18.7 4 21" /><path d="M17.64 18.67 20 21" /></OutlinedIcon>; }

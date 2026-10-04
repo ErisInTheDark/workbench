@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadMessageControllerOptions: provider, identity, project, relationship and thread-state ports.
- * - default WorkbenchThreadMessageController: own validated cross-thread message admission, admitted-turn intent acceptance, and reload drain.
+ * - default WorkbenchThreadMessageController: own validated cross-thread message admission (child or sibling names, parent, thread ids), admitted-turn intent acceptance, and reload drain.
  */
 import type {
   ThreadPayload,
@@ -119,8 +119,11 @@ export default class WorkbenchThreadMessageController {
       return await this.resolveThread(relationship.parentThreadId, "Workbench message parent");
     }
     if (request.name) {
+      // Subagents reach siblings only by a name their parent gave them; there is no peer lookup.
+      const callerParentThreadId = relationships.find(record => record.threadId === callerThreadId)?.parentThreadId ?? null;
       const matches = relationships.filter(record => (
-        record.parentThreadId === callerThreadId
+        (record.parentThreadId === callerThreadId
+          || (callerParentThreadId !== null && record.parentThreadId === callerParentThreadId && record.threadId !== callerThreadId))
         && record.name.trim().toLocaleLowerCase() === request.name!.toLocaleLowerCase()
       ));
       const unsettled = (await Promise.all(matches.map(async record => ({
@@ -178,6 +181,7 @@ export default class WorkbenchThreadMessageController {
         message: request.message,
         senderName,
         senderThreadId: caller.threadId,
+        userVisibleSimpleVersion: request.userVisibleSimpleVersion,
       },
     };
     // Waiters read lifecycle; without this a re-messaged child still looks finished until provider events land.

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadDisclosure: render a styled details/summary disclosure with controlled or uncontrolled open state.
+ * - default ThreadDisclosure: render a styled details/summary disclosure with controlled or uncontrolled open state and a leading or trailing chevron.
  * - ThreadDisclosureStaticRow: disclosure-aligned static row or optional accessible action with a supplied marker.
  */
 "use client";
@@ -16,6 +16,8 @@ function joinClasses (...values: Array<string | undefined>) {
 
 type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children"> & {
   chevronClassName?: string;
+  /** `end` puts the chevron after the summary, pointing left while closed. */
+  chevronSide?: "start" | "end";
   hideChevron?: boolean;
   onOffscreen?: () => void;
   children?: ReactNode;
@@ -51,6 +53,7 @@ export default function ThreadDisclosure({ onOffscreen, ...props }: ThreadDisclo
 
 function ThreadDisclosureContent ({
   chevronClassName,
+  chevronSide = "start",
   hideChevron = false,
   children,
   className,
@@ -150,7 +153,7 @@ function ThreadDisclosureContent ({
         onClick={handleSummaryClick}
         onKeyDown={handleSummaryKeyDown}
       >
-        {!hideChevron ? <ChevronIcon
+        {!hideChevron && chevronSide === "start" ? <ChevronIcon
           className={joinClasses(
             "transform-[rotate(-90deg)] [details[open]>summary_&]:transform-[rotate(0deg)] transition-transform",
             chevronClassName,
@@ -168,6 +171,13 @@ function ThreadDisclosureContent ({
           </span>
         ) : null}
         <div className={joinClasses("min-w-0 flex-1", summaryContentClassName)}>{summary}</div>
+        {!hideChevron && chevronSide === "end" ? <ChevronIcon
+          className={joinClasses(
+            "transform-[rotate(90deg)] [details[open]>summary_&]:transform-[rotate(0deg)] transition-transform",
+            chevronClassName,
+          )}
+          size={18}
+        /> : null}
       </summary>
       {hasMountedContent || keepMounted ? (
         <div className={joinClasses("min-w-0 max-w-full", contentClassName)}>{renderContent ? renderContent() : children}</div>
