@@ -7,7 +7,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
 import type { WorkspaceObservation, WorkspaceObservationDelta } from "workbench-shared/workbench/workspace/workspace-observation";
-import { DaemonIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchPresentationRepository from "../state/WorkbenchPresentationRepository";
 import WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 import WorkbenchDaemonSources from "./WorkbenchDaemonSources";
@@ -27,7 +27,7 @@ function state(revision: number): WorkbenchClientStateResponse {
 }
 
 /** `daemons` replaces daemon lookup for the request owner only, standing in for connected sources. */
-async function fixture(context: TestContext, daemons?: { get(daemonId: string): object | undefined }) {
+async function fixture(context: TestContext, daemons?: { get(daemonId: string): object | undefined }, owners?: Pick<WorkbenchWorkspaceThreads, "observe">) {
   const temporary = await WorkbenchTemporaryDirectory.create("workspace-request-owner-");
   const directory = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(directory, "presentation.sqlite3") });
@@ -47,7 +47,8 @@ async function fixture(context: TestContext, daemons?: { get(daemonId: string): 
   const listeners = new Set<() => void>();
   let read: () => Promise<WorkbenchClientStateResponse> = async () => state(0);
   const owner = new WorkbenchWorkspaceRequestController({
-    workspace, threads, presentation,
+    workspace, presentation,
+    threads: owners ? Object.assign(Object.create(threads) as typeof threads, owners) : threads,
     sources: daemons ? Object.assign(Object.create(sources) as typeof sources, daemons) : sources,
     network: { read: () => ({ kind: "network", phase: "pending", failure: null, data: null }), subscribe: () => () => {} },
     runtime: { read: () => null, subscribe: () => () => {} },
@@ -199,6 +200,50 @@ test("stats observations relay each daemon revision, including claim freshness, 
   }
   f.owner.release({ subscriptionId, generation: 1 });
   assert.equal(released, 1);
+});
+
+test("a thread row observation publishes only that thread's row from its owner project, then patches it", async context => {
+  const daemonId = DaemonIdSchema.parse(randomUUID());
+  const projectId = ProjectIdSchema.parse("project");
+  const threadId = WorkbenchThreadIdSchema.parse("00000001-0000-4000-8000-000000000000");
+  const otherId = WorkbenchThreadIdSchema.parse("00000002-0000-4000-8000-000000000000");
+  const entry = (id: typeof threadId, title: string) => ({
+    entryKind: "thread" as const, title, activityAt: 10_000, waitingOnThreads: [],
+    identity: { harness: "codex" as const, threadId: id },
+    metadata: { archived: false as const, pinned: false, snoozed: false },
+    lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
+  });
+  let title = "first";
+  let notify = () => {};
+  const observed: object[] = [];
+  const source = {
+    id: daemonId,
+    observe: (query: object, listener: () => void) => {
+      observed.push(query);
+      notify = listener;
+      return { getSnapshot: () => ({ phase: "current", failure: null, value: { kind: "projectThreads", projects: [{
+        projectId, phase: "current", failure: null,
+        sidebar: { projectId, revision: 1, freshness: "fresh", error: null, displayOrder: {}, entries: [entry(otherId, "other"), entry(threadId, title)] },
+      }] } }), release: () => {} };
+    },
+    socket: { onNotification: () => () => {} },
+  };
+  const owner = { phase: "current" as const, identity: { threadId, projectId, harness: "codex" as const }, location: { daemonId, projectId }, logicalProjectId: null };
+  const f = await fixture(context, { get: id => id === daemonId ? source : undefined }, {
+    observe: (id: string) => ({ getSnapshot: () => id === threadId ? owner : { phase: "unavailable" as const, failure: "unknown" }, release: () => {} }),
+  });
+  const initial = f.owner.observe({ subscriptionId: randomUUID(), generation: 1, query: { kind: "threadRow", threadId: ThreadReferenceSchema.parse(threadId) } });
+  assert.deepEqual(observed, [{ kind: "projectThreads", projectIds: [projectId] }]);
+  assert.ok(initial.kind === "threadRow" && initial.phase === "current");
+  assert.equal(initial.data?.entry.entryKind === "thread" && initial.data.entry.title, "first");
+  title = "renamed";
+  notify();
+  const patched = await f.wait(value => value.kind === "threadRow" && value.data?.entry.entryKind === "thread" && value.data.entry.title === "renamed");
+  assert.ok(patched);
+  assert.deepEqual(f.deltas.at(-1)?.delta, { objects: { data: { objects: { entry: { set: { title: "renamed" } } } } } });
+  const unknown = f.owner.observe({ subscriptionId: randomUUID(), generation: 1,
+    query: { kind: "threadRow", threadId: ThreadReferenceSchema.parse("00000003-0000-4000-8000-000000000000") } });
+  assert.ok(unknown.kind === "threadRow" && unknown.data === null && unknown.phase === "unavailable");
 });
 
 test("closing a caller stops invalidations and fences its pending state read", async context => {

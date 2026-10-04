@@ -17,7 +17,7 @@
  * - WorkspaceReleaseSchema: release only the matching observation generation.
  * - WORKSPACE_OBSERVE_METHOD/WORKSPACE_RELEASE_METHOD/WORKSPACE_UPDATED_METHOD: shared observation protocol.
  * - WORKSPACE_DELTA_METHOD/WorkspaceObservationDeltaSchema/WorkspaceObservationDelta: keyed delta onto one observation revision.
- * - WorkspaceThreadRow/workspaceThreadRowKey: one app thread row and its delta identity.
+ * - WorkspaceThreadRow/workspaceThreadRowKey: one app thread row and its delta identity; a `threadRow` query observes one by thread id.
  * - WorkspaceArchivedThreadsSchema/WorkspaceArchivedThreads: paged archived rows with per-project totals.
  * - daemonObservationShape/workspaceObservationShape: how each observation kind decomposes into keyed deltas.
  */
@@ -178,6 +178,7 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("projectTree"), location: ProjectLocationReferenceSchema }).strict(),
   z.object({ kind: z.literal("threadOwner"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("thread"), threadId: ThreadReferenceSchema }).strict(),
+  z.object({ kind: z.literal("threadRow"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("presentation") }).strict(),
   z.object({
     kind: z.literal("appState"), browserStateId: z.uuid().nullable(),
@@ -341,6 +342,7 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
     ...envelope, kind: z.literal("thread"), owner: WorkspaceThreadOwnerSchema,
     data: WorkbenchThreadObservationSnapshotSchema.nullable(),
   }).strict(),
+  z.object({ ...envelope, kind: z.literal("threadRow"), data: WorkspaceThreadRowSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("presentation"), data: PresentationSnapshotSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("appState"), data: appState.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("runtime"), data: runtime.nullable() }).strict(),
@@ -486,6 +488,7 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
     case "thread": return { schema, fields: { data: entriesShape(threadObservationObject) } };
     case "appState": return { schema, fields: { data: appStateShape() } };
     case "projectTree": return { schema, fields: { data: projectTreeShape } };
+    case "threadRow": return { schema, fields: { data: observationShape.object(threadRowShape) } };
     default: return { schema };
   }
 }

@@ -510,6 +510,10 @@ export default class WorkbenchWorkspaceRequestController {
         interest.owner = this.options.threads.observe(request.query.threadId, refresh);
         interest.stop.push(this.options.sources.subscribe(refresh));
         break;
+      case "threadRow":
+        interest.owner = this.options.threads.observe(request.query.threadId, refresh);
+        interest.stop.push(this.options.sources.subscribe(refresh), this.options.workspace.subscribe(refresh));
+        break;
       case "stats":
         // The daemon may connect after the view asks; projection attaches once the source exists.
         interest.stop.push(this.options.sources.subscribe(refresh));
@@ -556,6 +560,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "archivedThreads": return { ...base, kind: "archivedThreads", data: { rows: [], projects: [] } };
       case "threadOwner": return { ...base, kind: "threadOwner", data: { phase: "pending", failure: null } };
       case "thread": return { ...base, kind: "thread", owner: { phase: "pending", failure: null }, data: null };
+      case "threadRow": return { ...base, kind: "threadRow", data: null };
       case "projectTree": return { ...base, kind: "projectTree", sourceGeneration: 0, data: null };
       case "stats": return { ...base, kind: "stats", claimsPhase: "pending", data: null };
       case "appState": return { ...base, kind: "appState", data: null };
@@ -617,6 +622,7 @@ export default class WorkbenchWorkspaceRequestController {
       }
       case "projectThreads": this.projectRows(interest); return;
       case "archivedThreads": this.projectArchivedRows(interest); return;
+      case "threadRow": this.projectThreadRow(interest); return;
       case "projectTree": {
         if (!interest.thread) {
           const source = this.options.sources.get(query.location.daemonId);
@@ -744,6 +750,47 @@ export default class WorkbenchWorkspaceRequestController {
     this.update(interest, { kind: "archivedThreads",
       phase: projects.every(project => project.phase === "current") ? "current" : rows.length ? "stale" : failure ? "failed" : "pending",
       failure, data: { rows, projects } });
+  }
+
+  /**
+   * One thread's lean row, wherever it lives: resolve its owner, then read that row from the owner project's rows.
+   * Thread references (message and subagent buttons) need this independently of which projects a view lists.
+   */
+  private projectThreadRow(interest: Interest) {
+    const query = interest.request.query;
+    if (query.kind !== "threadRow") return;
+    const owner = interest.owner?.getSnapshot() ?? { phase: "pending" as const, failure: null };
+    const key = owner.phase === "current" ? `${owner.location.daemonId}/${owner.location.projectId}` : null;
+    if (interest.thread?.key !== key) {
+      const previous = interest.thread;
+      interest.thread = null;
+      previous?.observation.release();
+      const source = owner.phase === "current" ? this.options.sources.get(owner.location.daemonId) : undefined;
+      // Same query as other single-project row readers, so the daemon source shares one observation.
+      if (owner.phase === "current" && key && source) interest.thread = {
+        key, observation: source.observe({ kind: "projectThreads", projectIds: [owner.location.projectId] }, () => this.refresh(interest)),
+      };
+    }
+    if (owner.phase !== "current") {
+      this.update(interest, { kind: "threadRow", phase: owner.phase === "conflict" ? "failed" : owner.phase,
+        failure: owner.failure, data: null });
+      return;
+    }
+    const fact = interest.thread?.observation.getSnapshot();
+    const project = fact?.value?.kind === "projectThreads"
+      ? fact.value.projects.find(item => item.projectId === owner.location.projectId) : undefined;
+    const entry = project?.sidebar?.entries.find(item => item.entryKind !== "draft" && item.identity.threadId === owner.identity.threadId);
+    const { location } = owner;
+    const logical = this.options.workspace.getSnapshot().projects.find(item => item.locations.some(candidate =>
+      candidate.daemonId === location.daemonId && candidate.target.projectId === location.projectId));
+    const placement = logical?.locations.find(item => item.daemonId === location.daemonId && item.target.projectId === location.projectId);
+    this.update(interest, {
+      kind: "threadRow", phase: fact?.phase ?? "pending", failure: fact?.failure ?? project?.failure ?? null,
+      data: entry ? {
+        logicalProjectId: logical?.id ?? owner.logicalProjectId, location,
+        hostname: placement?.hostname ?? location.daemonId, rootPath: placement?.rootPath ?? location.projectId, entry,
+      } : null,
+    });
   }
 
   private projectRows(interest: Interest) {

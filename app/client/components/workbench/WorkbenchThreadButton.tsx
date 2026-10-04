@@ -1,42 +1,20 @@
 /*
  * Exports:
- * - WorkbenchThreadButtonTarget: a thread by id, or the parent of a subagent thread.
- * - findWorkbenchThreadButtonEntry: resolve a target to a loaded thread or subagent sidebar entry and its project.
- * - default WorkbenchThreadButton: inline compact thread row (status, title, time, tooltip), or a custom label link with the thread tooltip, linking to a thread with a text fallback.
+ * - default WorkbenchThreadButton: inline compact thread row (status, title, time, tooltip), or a custom label link with the thread tooltip, linking to a thread in any project with a text fallback.
  */
 "use client";
 
-import { useContext, useMemo, type ReactNode } from "react";
+import { useContext, type ReactNode } from "react";
 
-import { ProjectIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
 import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
-import type {
-  WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars, WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry,
-} from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
-import { useWorkbenchProjectThreadSidebars } from "./use-workbench-client";
+import { useWorkbenchThreadRow } from "./use-workbench-client";
 import WorkbenchClientContext from "./workbench-client-context";
 import WorkbenchThreadHoverTooltip from "./WorkbenchThreadHoverTooltip";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 
-export type WorkbenchThreadButtonTarget = { threadId: string } | { parentOf: string };
-type ProviderEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
-
-export function findWorkbenchThreadButtonEntry(sidebars: WorkbenchProjectThreadSidebars, target: WorkbenchThreadButtonTarget) {
-  const find = (threadId: string) => {
-    for (const sidebar of sidebars.projects) {
-      const entry = sidebar.entries.find((candidate): candidate is ProviderEntry => candidate.entryKind !== "draft" && candidate.identity.threadId === threadId);
-      if (entry) return { entry, projectId: ProjectIdSchema.parse(sidebar.projectId) as ProjectId };
-    }
-    return null;
-  };
-  if ("threadId" in target) return find(target.threadId);
-  const child = find(target.parentOf);
-  return child?.entry.entryKind === "subagent" ? find(child.entry.parentThreadId) : null;
-}
-
 interface WorkbenchThreadButtonProps {
-  /** Shown while the thread is not in any loaded project sidebar. */
+  /** Shown while the thread's row is loading or unknown. */
   fallback: ReactNode;
   /** Render this label as a link with the thread tooltip instead of the compact row, e.g. a coloured subagent name. */
   label?: ReactNode;
@@ -50,15 +28,17 @@ export default function WorkbenchThreadButton(props: WorkbenchThreadButtonProps)
   return useContext(WorkbenchClientContext) ? <LoadedWorkbenchThreadButton {...props} /> : <>{props.fallback}</>;
 }
 
+/** Resolves its own thread row by id, so references work for threads in any project, listed or not. */
 function LoadedWorkbenchThreadButton({ fallback, label, relation = "self", threadId }: WorkbenchThreadButtonProps) {
-  const sidebars = useWorkbenchProjectThreadSidebars();
   const projectHref = useWorkbenchProjectNavigation();
-  const found = useMemo(
-    () => findWorkbenchThreadButtonEntry(sidebars, relation === "parent" ? { parentOf: threadId } : { threadId }),
-    [relation, sidebars, threadId],
-  );
-  if (!found) return <>{fallback}</>;
-  const { entry, projectId } = found;
+  const child = useWorkbenchThreadRow(relation === "parent" ? threadId : null);
+  const targetId = relation === "parent"
+    ? child?.entry.entryKind === "subagent" ? child.entry.parentThreadId : null
+    : threadId;
+  const row = useWorkbenchThreadRow(targetId);
+  if (!row || row.entry.entryKind === "draft") return <>{fallback}</>;
+  const { entry } = row;
+  const projectId = row.location.projectId;
   const route = createThreadRoute(projectId, entry.entryKind === "subagent"
     ? { harness: entry.identity.harness, kind: "subagent", parentThreadId: entry.parentThreadId, threadId: entry.identity.threadId }
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId });

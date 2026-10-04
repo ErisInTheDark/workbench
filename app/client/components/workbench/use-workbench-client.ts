@@ -7,6 +7,7 @@
  * - useThreadClaimIntersections/useThreadCollisionEntries/useThreadArcEntry: select narrow source-qualified Git arc facts.
  * - useWorkbenchThreadSidebarEntry: read one project-owned thread sidebar entry by identity.
  * - useWorkbenchThreadTitleHistory: read previous titles and apply project-qualified rename/dismiss intent.
+ * - useWorkbenchThreadRow: observe one thread's live lean row from any project by id.
  * - useWorkbenchProjectThreadSidebars: read the aggregate project sidebar projection.
  * - useWorkbenchProjectThreadSummaries: read the aggregate project summary projection.
  * - useWorkbenchHomeThreadDisplayOrder: read global home thread ordering.
@@ -56,6 +57,8 @@ import {
   type WorkbenchHarnessId,
 } from "workbench-shared/workbench/thread/thread-state";
 import ProjectTreeFileIndex from "workbench-shared/workbench/project/ProjectTreeFileIndex";
+import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import type { WorkspaceThreadRow } from "workbench-shared/workbench/workspace/workspace-observation";
 import type WorkbenchClientStateController from "../../workbench/state/WorkbenchClientStateController";
 import type WorkbenchAppRpcClient from "../../workbench/app/WorkbenchAppRpcClient";
 import { getThreadDocumentFromSnapshot } from "../../workbench/thread/thread-document-keys";
@@ -390,6 +393,23 @@ export function useWorkbenchThreadSidebarEntry(
     && entry.identity.harness === harness
     && entry.identity.threadId === threadId
   )) ?? null, [harness, snapshot, threadId]);
+}
+
+/** One thread's live lean row from any project, independent of which rows a view lists; null while loading or unknown. */
+export function useWorkbenchThreadRow(threadId: string | null) {
+  const workspace = useWorkbenchClientController().mounted?.workspace ?? null;
+  const [row, setRow] = useState<WorkspaceThreadRow | null>(null);
+  useEffect(() => {
+    setRow(null);
+    const parsed = threadId ? ThreadReferenceSchema.safeParse(threadId) : null;
+    if (!workspace || !parsed?.success) return;
+    let handle: { getSnapshot(): { value: { data: WorkspaceThreadRow | null } | null }; release(): void } | null = null;
+    const read = () => { if (handle) setRow(handle.getSnapshot().value?.data ?? null); };
+    handle = workspace.observe({ kind: "threadRow", threadId: parsed.data }, read);
+    read();
+    return () => handle?.release();
+  }, [threadId, workspace]);
+  return row;
 }
 
 export function useWorkbenchProjectThreadSidebars(explicitClient?: WorkbenchClientController) {
