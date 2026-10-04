@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WebSocketTrafficBuffer: bounded in-memory record of recent WebSocket frames for `wb socket spy`.
+ * - default WebSocketTrafficBuffer: bounded in-memory record of recent WebSocket frames for `wb debug socket`.
  * - WebSocketTrafficQuerySchema/WebSocketTrafficQuery: search or read one recorded frame.
  * - WebSocketTrafficResultSchema/WebSocketTrafficResult: matching frame summaries or one full payload.
  * - WEBSOCKET_SPY_QUERY_METHOD/WEBSOCKET_SPY_RESULT_METHOD: daemon-to-app spy exchange over the shared socket.

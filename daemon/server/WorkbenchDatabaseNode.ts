@@ -15,7 +15,6 @@ import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController"
 import WorkbenchTranscriptController from "./database/transcript/WorkbenchTranscriptController";
 import WorkbenchTranscriptCaptureGapController from "./database/transcript/WorkbenchTranscriptCaptureGapController";
 import WorkbenchMemoryReporter from "./WorkbenchMemoryReporter";
-import { log, logError } from "./process-helpers";
 import CodexConfigurationNode from "./CodexConfigurationNode";
 import CodexRecoveryNode from "./CodexRecoveryNode";
 import ReloadableNode from "./ReloadableNode";
@@ -68,8 +67,8 @@ export default ReloadableNode.define<
     // The database owns the worker isolates, so their heaps are reported from here.
     const memory = new WorkbenchMemoryReporter({
       readWorkerHeaps: () => database.readWorkerHeaps(),
-      log: message => log("memory", message),
-      warn: message => logError("memory", message),
+      log: line => process.stdout.write(`${line}\n`),
+      warn: line => process.stderr.write(`${line}\n`),
     });
     let shutdownPromise: Promise<void> | null = null;
     let committed = build.mode !== "replacement";

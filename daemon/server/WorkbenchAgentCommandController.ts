@@ -34,6 +34,7 @@ interface WorkbenchAgentDirectPort {
   executeTokenCount?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeTranscriptQuery?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeSocketSpy?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeHeapSnapshot?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeClaimStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFileRemoval?: (body: object, signal: AbortSignal) => Promise<Response>;
   /** Human-only project store access; command parsing already rejected managed callers. */
@@ -383,9 +384,13 @@ export default class WorkbenchAgentCommandController {
       if (!this.direct.executeTranscriptQuery) throw new Error("Transcript queries are not configured.");
       return await this.direct.executeTranscriptQuery(request.body, signal);
     }
-    if (request.path === "/internal/socket-spy" && request.body) {
+    if (request.path === "/internal/debug/socket" && request.body) {
       if (!this.direct.executeSocketSpy) throw new Error("Socket spy is not configured.");
       return await this.direct.executeSocketSpy(request.body, signal);
+    }
+    if (request.path === "/internal/debug/heap" && request.body) {
+      if (!this.direct.executeHeapSnapshot) throw new Error("Heap snapshots are not configured.");
+      return await this.direct.executeHeapSnapshot(request.body, signal);
     }
     if (request.path === "/internal/stats/claims" && request.body) {
       if (!this.direct.executeClaimStats) throw new Error("Claim statistics are not configured.");

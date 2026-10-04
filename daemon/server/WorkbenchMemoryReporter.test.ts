@@ -22,10 +22,16 @@ function fixture(readWorkerHeaps: () => Promise<Awaited<ReturnType<ConstructorPa
 test("one sample logs process and database worker memory in one line", async () => {
   const f = fixture(async () => ({ writer: { used: 88 * MB, total: 120 * MB }, core: { used: 61 * MB, total: 80 * MB }, transcript: null }));
   await f.reporter.tick();
-  assert.deepEqual(f.logs, [
-    "rss 1083MB | heap 366/412MB | external 41MB | arrayBuffers 12MB | db workers: writer 88/120MB, core 61/80MB, transcript off",
-  ]);
+  assert.equal(f.logs.length, 1);
+  const line = plain(f.logs[0]!);
+  for (const part of ["heap 366/412MB", "rss 1083MB", "external 41MB", "writer 88/120MB", "core 61/80MB", "transcript off"]) {
+    assert.ok(line.includes(part), `${part} missing from ${line}`);
+  }
 });
+
+function plain(value: string) {
+  return value.replace(/\u001b\[[0-9;]*m/gu, "");
+}
 
 test("a sample still pending at the next tick is marked instead of stacked", async () => {
   let reads = 0;
@@ -38,7 +44,7 @@ test("a sample still pending at the next tick is marked instead of stacked", asy
   const first = f.reporter.tick();
   await f.reporter.tick();
   assert.equal(reads, 1);
-  assert.deepEqual(f.logs, ["previous sample still pending after 60s"]);
+  assert.deepEqual(f.logs.map(plain), [" MEM sample still pending after 60s"]);
   release();
   await first;
   assert.equal(f.logs.length, 2);
@@ -47,7 +53,8 @@ test("a sample still pending at the next tick is marked instead of stacked", asy
 test("failed samples warn once each and disposal stops the schedule", async () => {
   const f = fixture(async () => { throw new Error("worker gone"); });
   await f.reporter.tick();
-  assert.deepEqual(f.warnings, ["memory sample failed: worker gone"]);
+  assert.equal(f.warnings.length, 1);
+  assert.match(plain(f.warnings[0]!), /MEM sample failed \(worker gone\)/u);
   f.reporter.dispose();
   assert.equal(f.stopped(), true);
   await f.reporter.tick();

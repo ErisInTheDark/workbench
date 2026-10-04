@@ -4,6 +4,8 @@
  * - default WorkbenchMemoryReporter: log one periodic daemon memory breakdown, including database worker heaps.
  */
 
+import { dim, yellow } from "workbench-shared/process/terminal-style";
+
 type WorkerHeap = { used: number; total: number } | null;
 
 export interface WorkbenchMemoryReporterOptions {
@@ -46,7 +48,7 @@ export default class WorkbenchMemoryReporter {
     if (this.disposed) return;
     // A sample that outlives its interval means the event loop or the workers stalled.
     if (this.pendingSince !== null) {
-      this.options.log(`previous sample still pending after ${Math.round(this.intervalMs / 1_000)}s`);
+      this.options.log(` MEM sample ${yellow("still pending")} after ${Math.round(this.intervalMs / 1_000)}s`);
       return;
     }
     this.pendingSince = Date.now();
@@ -55,12 +57,12 @@ export default class WorkbenchMemoryReporter {
       const workers = await this.options.readWorkerHeaps();
       if (this.disposed) return;
       this.options.log(
-        `rss ${megabytes(memory.rss)} | heap ${Math.round(memory.heapUsed / 1_048_576)}/${megabytes(memory.heapTotal)}`
-        + ` | external ${megabytes(memory.external)} | arrayBuffers ${megabytes(memory.arrayBuffers)}`
-        + ` | db workers: writer ${heap(workers.writer)}, core ${heap(workers.core)}, transcript ${heap(workers.transcript)}`,
+        ` MEM heap ${Math.round(memory.heapUsed / 1_048_576)}/${megabytes(memory.heapTotal)}, rss ${megabytes(memory.rss)} `
+        + dim(`(external ${megabytes(memory.external)}, array buffers ${megabytes(memory.arrayBuffers)}, `
+          + `db workers: writer ${heap(workers.writer)}, core ${heap(workers.core)}, transcript ${heap(workers.transcript)})`),
       );
     } catch (error) {
-      if (!this.disposed) this.options.warn(`memory sample failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
+      if (!this.disposed) this.options.warn(` MEM sample failed ${dim(`(${(error instanceof Error ? error.message : String(error)).slice(0, 300)})`)}`);
     } finally {
       this.pendingSince = null;
     }

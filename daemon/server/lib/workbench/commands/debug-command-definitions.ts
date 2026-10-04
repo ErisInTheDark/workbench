@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchSocketSpyRequestSchema: validate one socket spy search or read for daemon and app frame buffers.
  * - formatWorkbenchSocketSpy: render spy answers as scannable text with exact payloads on read.
- * - WORKBENCH_SOCKET_COMMANDS: `wb socket spy`, CLI only.
+ * - WorkbenchHeapSnapshotRequestSchema: the (empty) `wb debug heap` request.
+ * - WORKBENCH_DEBUG_COMMANDS: `wb debug socket` and `wb debug heap`; CLI only, shown and runnable only from the Workbench repo cwd.
  */
 import { z } from "zod";
 
@@ -16,7 +17,7 @@ const target = z.enum(["all", "daemon", "app"]);
 export const WorkbenchSocketSpyRequestSchema = z.object({ target, query: WebSocketTrafficQuerySchema }).strict();
 type SpyRequest = z.infer<typeof WorkbenchSocketSpyRequestSchema>;
 
-const USAGE = "wb socket spy [--process daemon|app] [--grep <text>] [--label <prefix>] [--direction in|out] [--before <seq>] [--limit <n>] | wb socket spy --show <daemon|app>:<seq>";
+const USAGE = "wb debug socket [--process daemon|app] [--grep <text>] [--label <prefix>] [--direction in|out] [--before <seq>] [--limit <n>] | wb debug socket --show <daemon|app>:<seq>";
 
 function parse(args: string[]): SpyRequest {
   const flags = new WorkbenchAgentCommandFlags(args, {
@@ -83,18 +84,41 @@ export function formatWorkbenchSocketSpy(answer: {
   return `${sections.join("\n\n")}\n`;
 }
 
-const spy = defineWorkbenchAgentCommand({
+/** Debug tooling is for working on Workbench itself: CLI only, and only from the Workbench repo cwd. */
+const DEBUG_VISIBILITY = {
+  helpGroups: ["debug"], hideFromMcp: true, hideFromRootHelp: true, managedThreadRootOnly: true,
+} as const;
+
+const socket = defineWorkbenchAgentCommand({
+  ...DEBUG_VISIBILITY,
   description: "Search recent daemon and app WebSocket frames, or print one frame's exact payload.",
   effects: { idempotent: true, openWorld: false, readOnly: true },
-  helpGroups: ["socket"],
-  hideFromMcp: true,
-  words: ["socket", "spy"],
+  words: ["debug", "socket"],
   usage: USAGE,
   inputSchema: WorkbenchSocketSpyRequestSchema,
   parseCliArgs: parse,
   buildRequest(input) {
-    return postWorkbenchAgentCommand("/internal/socket-spy", input);
+    return postWorkbenchAgentCommand("/internal/debug/socket", input);
   },
 });
 
-export const WORKBENCH_SOCKET_COMMANDS = [spy] as const;
+export const WorkbenchHeapSnapshotRequestSchema = z.object({}).strict();
+
+const heap = defineWorkbenchAgentCommand({
+  ...DEBUG_VISIBILITY,
+  description: "Write one heap snapshot of the daemon process (pauses it for a few seconds) and print its path.",
+  effects: { idempotent: false, openWorld: false, readOnly: false },
+  words: ["debug", "heap"],
+  usage: "wb debug heap",
+  inputSchema: WorkbenchHeapSnapshotRequestSchema,
+  parseCliArgs: args => {
+    // Rejects any argument: the command takes none.
+    new WorkbenchAgentCommandFlags(args, {});
+    return {};
+  },
+  buildRequest(input) {
+    return postWorkbenchAgentCommand("/internal/debug/heap", input);
+  },
+});
+
+export const WORKBENCH_DEBUG_COMMANDS = [socket, heap] as const;

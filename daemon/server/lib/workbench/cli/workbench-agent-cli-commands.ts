@@ -212,6 +212,10 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     key: "browse", usage: "wb browse <command> [options]", words: ["browse"],
   },
   {
+    footer: "Debug tools for working on Workbench itself. Heap snapshots pause the daemon for a few seconds.",
+    key: "debug", usage: "wb debug <command> [options]", words: ["debug"],
+  },
+  {
     key: "reload",
     footer: [
       "Group any same-namespace scopes with +.",

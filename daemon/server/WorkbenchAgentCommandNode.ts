@@ -6,7 +6,10 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import { WorkbenchRequestUserInputCommandSchema } from "./lib/workbench/commands/questionnaire-command-definition";
 import { WorkbenchStoreCommandRequestSchema } from "./lib/workbench/commands/store-command-definitions";
-import { WorkbenchSocketSpyRequestSchema, formatWorkbenchSocketSpy } from "./lib/workbench/commands/socket-command-definitions";
+import {
+  WorkbenchHeapSnapshotRequestSchema, WorkbenchSocketSpyRequestSchema, formatWorkbenchSocketSpy,
+} from "./lib/workbench/commands/debug-command-definitions";
+import { writeDaemonHeapSnapshot } from "./daemon-heap-snapshot";
 import WorkbenchThreadRecallController from "./lib/workbench/thread/WorkbenchThreadRecallController";
 import ReloadableNode from "./ReloadableNode";
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
@@ -154,6 +157,15 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         return new Response(formatWorkbenchSocketSpy(answer), {
           headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
         });
+      },
+      executeHeapSnapshot: async (body, signal) => {
+        WorkbenchHeapSnapshotRequestSchema.parse(body);
+        signal.throwIfAborted();
+        const snapshot = await writeDaemonHeapSnapshot(context.dataRootPath);
+        return new Response(
+          `Wrote ${snapshot.path}\n${Math.round(snapshot.bytes / 1_048_576)}MB, daemon paused ${(snapshot.pauseMs / 1_000).toFixed(1)}s.\n`,
+          { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } },
+        );
       },
       executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
       executeFileRemoval: async (body, signal) => await fileRemoval.execute(body, signal),

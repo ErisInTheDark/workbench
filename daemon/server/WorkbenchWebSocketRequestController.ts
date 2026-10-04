@@ -236,7 +236,7 @@ export default class WorkbenchWebSocketRequestController {
   private workspace: WorkbenchWorkspaceObservationController<BridgeClient> | null = null;
   private workspaceInterests: NonNullable<WorkbenchWebSocketRequestControllerState["workspaceInterests"]> = [];
   private readonly writeLine: NonNullable<WorkbenchWebSocketRequestControllerOptions["writeLine"]>;
-  /** Recent frames for `wb socket spy`; memory only and reset with this reloadable owner. */
+  /** Recent frames for `wb debug socket`; memory only and reset with this reloadable owner. */
   private readonly traffic = new WebSocketTrafficBuffer();
   private readonly connectionIds = new Map<BridgeClient, string>();
   private readonly spyQueries = new Map<string, (result: WebSocketTrafficResult) => void>();
@@ -568,7 +568,7 @@ export default class WorkbenchWebSocketRequestController {
   }
 
   /**
-   * Answers `wb socket spy` from this daemon's frames and each connected app server's frames. Apps answer over
+   * Answers `wb debug socket` from this daemon's frames and each connected app server's frames. Apps answer over
    * the socket they already hold. A CLI inspection has no use for an answer after SPY_ANSWER_DEADLINE_MS, so a
    * silent connection (a peer, or an app mid-reload) is reported as unanswered rather than awaited.
    */
