@@ -53,7 +53,8 @@ export interface WorkbenchProviderThreads {
   latestTurn(threadId: string): Promise<Turn | null>;
   admitTurn(threadId: string, turnReference: string): Promise<void>;
   submit(input: WorkbenchThreadMessage): Promise<WorkbenchThreadMessageResult>;
-  messageAgent(input: { threadId: string; cwd: string; message: WorkbenchAgentMessage; context?: WorkbenchMessageContext }): Promise<void>;
+  /** Deliver an attributed agent message; resolves with the Workbench turn that admitted it (started or steered). */
+  messageAgent(input: { threadId: string; cwd: string; message: WorkbenchAgentMessage; context?: WorkbenchMessageContext }): Promise<{ turnId: string }>;
   rename(threadId: string, title: string): Promise<void>;
   compact(threadId: string): Promise<void>;
   /** Delete the backing provider session, retaining WB identity, state and history. */

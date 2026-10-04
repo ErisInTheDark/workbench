@@ -159,12 +159,14 @@ test("Browse screenshots stay passive and records retain native storage referenc
 
 test("agent messages retain tool authority and WB attribution at the native admission edge", async () => {
   const requests: JsonRpcRequest[] = [];
-  const fixture = await threadFixture(async request => { requests.push(request); return {}; });
+  const fixture = await threadFixture(async request => { requests.push(request); return { turnId: "native-turn" }; });
   const message = { message: "continue the review", senderName: "iris", senderThreadId: "wb-parent" };
-  await fixture.operations.messageAgent({
+  const admitted = await fixture.operations.messageAgent({
     threadId: fixture.threadId, cwd: "C:/project", message,
     context: { subagentName: "lily", workflowIds: ["subagent"] },
   });
+  // The admitting turn comes back in Workbench identity, ready for lifecycle acceptance.
+  assert.equal(admitted.turnId, fixture.turnId);
   const request = requests[0];
   assert.equal(request.method, "turn/start");
   const params = request.params as { threadId: string; input: object[]; toolOutput: { namespace: string; name: string; output: string } };

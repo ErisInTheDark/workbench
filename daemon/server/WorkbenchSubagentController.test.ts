@@ -18,6 +18,7 @@ test("subagent disposal drains admitted requests and rejects new admission", asy
   const controller = new WorkbenchSubagentController({
     provider: () => { throw new Error("Profiles do not call providers."); },
     stopThread: async () => { throw new Error("Profiles do not stop threads."); },
+    acceptIntent: async () => { throw new Error("Profiles do not message threads."); },
     onRelationshipCommitted: async () => {},
     identities: {
       resolve: async () => { throw new Error("Profiles do not resolve thread identities."); },
@@ -71,6 +72,7 @@ test("Git adoption names resolve only an unsettled unlocked direct child", async
   const controller = new WorkbenchSubagentController({
     provider: () => { throw new Error("No provider turn is needed."); },
     stopThread: async () => { throw new Error("No thread stop is needed."); },
+    acceptIntent: async () => { throw new Error("No thread message is needed."); },
     onRelationshipCommitted: async () => {},
     identities: {
       knownThread: (threadId: string) => ({ threadId }) as never,

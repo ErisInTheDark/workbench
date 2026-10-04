@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadMessageControllerOptions: provider, identity, project, relationship and thread-state ports.
- * - default WorkbenchThreadMessageController: own validated cross-thread message admission and reload drain.
+ * - default WorkbenchThreadMessageController: own validated cross-thread message admission, admitted-turn intent acceptance, and reload drain.
  */
 import type {
   ThreadPayload,
@@ -41,6 +41,8 @@ export interface WorkbenchThreadMessageControllerOptions {
   resolveProjectFromCwd: AgentEndpointProjectResolver;
   threadState: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
+    /** Mark the target working on the turn that admitted the message, as user messages do. */
+    acceptIntent(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnId: string): Promise<void>;
   };
 }
 
@@ -178,13 +180,17 @@ export default class WorkbenchThreadMessageController {
         senderThreadId: caller.threadId,
       },
     };
+    // Waiters read lifecycle; without this a re-messaged child still looks finished until provider events land.
+    const accept = (admitted: { turnId: string }) => this.options.threadState.acceptIntent(
+      target.projectId, target.harness, target.threadId, admitted.turnId,
+    );
     const turn = currentTurn(target.thread);
     if (turn?.status === "inProgress") {
       const pending = directChild
         ? (await provider.interactions?.pending({ background: true }) ?? [])
           .find(entry => entry.threadId === target.threadId) ?? null
         : null;
-      await provider.threads.messageAgent(input);
+      await accept(await provider.threads.messageAgent(input));
       if (pending) {
         await provider.interactions!.respond({
           requestKey: pending.requestKey,
@@ -197,9 +203,9 @@ export default class WorkbenchThreadMessageController {
       }
       return;
     }
-    await provider.threads.messageAgent({
+    await accept(await provider.threads.messageAgent({
       ...input,
       ...(directChild ? { context: buildSubagentPromptContext(directChild.name, request.workbenchOrigin) } : {}),
-    });
+    }));
   }
 }

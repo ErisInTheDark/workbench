@@ -493,11 +493,12 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
   }
 
   async messageAgent(input: Parameters<WorkbenchProviderThreads["messageAgent"]>[0]) {
-    await this.submit({
+    const result = await this.submit({
       threadId: input.threadId, clientMessageId: randomUUID(),
       input: [{ type: "text", text: createWorkbenchAgentMessageText(input.message), text_elements: [] }],
       intent: "continue", context: input.context,
     });
+    return { turnId: result.kind === "started" ? result.turn.id : result.turnId };
   }
 
   /** Relaunch the thread's last completed turn context with the hidden unfinished-turn input, once. */

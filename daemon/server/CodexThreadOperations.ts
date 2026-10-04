@@ -325,7 +325,7 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
   }
 
   async messageAgent(input: Parameters<WorkbenchProviderThreads["messageAgent"]>[0]) {
-    await this.mapped({
+    const result = record(await this.mapped({
       method: "turn/start",
       params: {
         threadId: input.threadId, cwd: input.cwd, input: [],
@@ -338,7 +338,12 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
       ...(input.context ? { workbenchPromptContext: {
         ...input.context, cwd: input.cwd, threadId: input.threadId, harness: "codex",
       } } : {}),
-    });
+    }));
+    // A started turn reports `turn`; a turn start the bridge folded into the live turn reports `turnId`.
+    const turnId = typeof record(result?.turn)?.id === "string" ? record(result?.turn)!.id as string
+      : typeof result?.turnId === "string" ? result.turnId : null;
+    if (!turnId) throw new Error("Codex did not report the turn that admitted the agent message.");
+    return { turnId };
   }
 
   async admitTurn(threadId: string, turnReference: string) {

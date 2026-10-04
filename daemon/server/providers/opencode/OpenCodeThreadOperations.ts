@@ -528,13 +528,14 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   }
 
   async messageAgent(input: Parameters<WorkbenchProviderThreads["messageAgent"]>[0]) {
-    await this.submit({
+    const result = await this.submit({
       threadId: input.threadId,
       clientMessageId: randomUUID(),
       input: [createWorkbenchTextInput(createWorkbenchAgentMessageText(input.message))],
       intent: "continue",
       context: input.context,
     });
+    return { turnId: result.kind === "started" ? result.turn.id : result.turnId };
   }
 
   async rename(threadId: string, title: string) {

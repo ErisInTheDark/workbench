@@ -1,5 +1,5 @@
 /*
- * Exports: none. Tests protect global thread-message admission, relationship semantics, caller project fencing and cross-project lock fencing.
+ * Exports: none. Tests protect global thread-message admission, relationship semantics, admitted-turn intent acceptance, caller project fencing and cross-project lock fencing.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -69,6 +69,7 @@ function fixture({
         onDelivery?.();
         await deliveryGate;
         if (rejectDelivery) throw new Error("delivery rejected");
+        return { turnId: `delivered-${input.threadId}` };
       },
       rename: unused, list: unused, submit: unused, compact: unused, interrupt: unused, isTurnLive: unused, materialize: unused,
     },
@@ -120,6 +121,9 @@ function fixture({
         name: relationship.name, parentThreadId: relationship.parentThreadId, pinned: childPinned,
         profileId: relationship.profileId, profileName: relationship.profileName, projectId: relationship.projectId, title: relationship.title, updatedAt: 2,
       } : null,
+      acceptIntent: async (selected, selectedHarness, threadId, turnId) => {
+        calls.push({ method: "acceptIntent", params: { projectId: selected, harness: selectedHarness, threadId, turnId } });
+      },
     },
   });
   return { calls, controller };
@@ -164,6 +168,17 @@ test("relationship shortcuts preserve child and parent attribution", async () =>
   await parent.controller.dispose();
 });
 
+test("an admitted agent message marks its target working on the admitted turn", async () => {
+  for (const activeChild of [false, true]) {
+    const { calls, controller } = fixture({ activeChild });
+    await controller.send({ callerThreadId: "reviewer", cwd: "C:/repo", message: "Another pass.", threadId: "child" });
+    assert.deepEqual(calls.find(({ method }) => method === "acceptIntent")?.params, {
+      projectId, harness, threadId: "child", turnId: "delivered-child",
+    });
+    await controller.dispose();
+  }
+});
+
 test("subagent messages to arbitrary peers use the caller thread title", async () => {
   const { calls, controller } = fixture();
   await controller.send({
@@ -190,7 +205,7 @@ test("direct-child messages retain questionnaire ordering and lock fencing", asy
   await active.controller.send({
     callerThreadId: "reviewer", cwd: "C:/repo", message: "Continue with the review.", threadId: "child",
   });
-  assert.deepEqual(active.calls.map(({ method }) => method), ["messageAgent", "respond"]);
+  assert.deepEqual(active.calls.map(({ method }) => method), ["messageAgent", "acceptIntent", "respond"]);
   const delivery = active.calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
   assert.equal(delivery.message.senderName, "parent agent");
   await active.controller.dispose();

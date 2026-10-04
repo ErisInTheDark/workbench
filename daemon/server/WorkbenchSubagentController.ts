@@ -54,6 +54,8 @@ export interface WorkbenchSubagentControllerOptions {
   subagentStore: WorkbenchSubagentControllerStore;
   /** Stop: interrupt the live turn, dismiss its pending questionnaire and mark the thread stopped. */
   stopThread(threadId: WorkbenchThreadId): Promise<void>;
+  /** Mark a child working on the turn that admitted its first message. */
+  acceptIntent(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnId: string): Promise<void>;
   threadState?: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
     mutate(request: WorkbenchThreadStateRequest): Promise<void>;
@@ -105,6 +107,7 @@ export default class WorkbenchSubagentController {
   private readonly resolveProjectFromCwd: AgentEndpointProjectResolver;
   private readonly subagentStore: WorkbenchSubagentControllerStore;
   private readonly stopThread: WorkbenchSubagentControllerOptions["stopThread"];
+  private readonly acceptIntent: WorkbenchSubagentControllerOptions["acceptIntent"];
   private readonly threadState: WorkbenchSubagentControllerOptions["threadState"];
   private readonly waiters = new Map<string, AbortController>();
   private active = true;
@@ -121,6 +124,7 @@ export default class WorkbenchSubagentController {
     resolveProjectFromCwd,
     subagentStore,
     stopThread,
+    acceptIntent,
     threadState,
   }: WorkbenchSubagentControllerOptions) {
     this.provider = provider;
@@ -132,6 +136,7 @@ export default class WorkbenchSubagentController {
     this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.subagentStore = subagentStore;
     this.stopThread = stopThread;
+    this.acceptIntent = acceptIntent;
     this.threadState = threadState;
   }
 
@@ -317,10 +322,11 @@ export default class WorkbenchSubagentController {
         await this.subagentStore.replace(caller.callerThreadId, reservationId, record);
         await this.onRelationshipCommitted(record);
         await threads.rename(childId, title);
-        await threads.messageAgent({
+        const admitted = await threads.messageAgent({
           threadId: childId, cwd: caller.cwd, context: this.buildPromptContext(name, workbenchOrigin),
           message: { message: userMessage, senderName: PARENT_AGENT_NAME, senderThreadId: caller.callerThreadId },
         });
+        await this.acceptIntent(caller.project.id, profile.harness, childId, admitted.turnId);
         result = { threadId: childId };
       } catch (error) {
         try {

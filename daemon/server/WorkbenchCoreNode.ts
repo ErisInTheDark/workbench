@@ -8,7 +8,7 @@ import * as threadBootstrap from "./lib/thread-bootstrap";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
-import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "./lib/workbench-library";
@@ -267,6 +267,10 @@ function createWorkbenchCoreFeature(
     if (!key) throw new Error(`Provider ${harness} is unavailable.`);
     return providers.get(key);
   };
+  // Agent messages flip their target to working on the admitted turn, exactly like user messages.
+  const acceptIntent = async (projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnId: string) => {
+    await requireThreadState().controller.acceptProviderIntent(projectId, harness, threadId, WorkbenchTurnIdSchema.parse(turnId));
+  };
   const subagents = new WorkbenchSubagentFeature({
     identities: threadIdentity,
     provider,
@@ -278,6 +282,7 @@ function createWorkbenchCoreFeature(
     persistence: database,
     // Read lazily: thread actions own stop and are built later in this node.
     stopThread: threadId => threadActions.stopThread(threadId),
+    acceptIntent,
     threadState: {
       getEntry: async (projectId, harness, threadId) => {
         return requireThreadState().controller.getThreadEntry(projectId, harness, threadId);
@@ -298,6 +303,7 @@ function createWorkbenchCoreFeature(
       getEntry: async (projectId, harness, threadId) => (
         await requireThreadState().controller.getThreadEntry(projectId, harness, threadId)
       ),
+      acceptIntent,
     },
   });
   threadState = new WorkbenchThreadStateFeature({
