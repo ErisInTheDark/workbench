@@ -126,6 +126,7 @@ import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreePr
 import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
+import MobilePaneTrack from "./workbench/MobilePaneTrack";
 import {
     advanceMobileShellHeaderVisibility,
     type MobileShellHeaderEvent,
@@ -1500,9 +1501,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     };
   }, [controls, openFileFromExplorer, openThreadFromExplorer]);
 
-  const mobileTrackStyle = isMobile
-    ? { transform: mobilePane === "explorer" ? "translateX(0)" : "translateX(-50%)" }
-    : undefined;
   const createDialogParentLabel = createDialogParentPath || "project";
   const quickOpenPaths = Array.from(new Set([
     ...explorer.locallyModifiedPaths,
@@ -2398,9 +2396,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               <span className="sr-only">Drag to create a new thread panel</span>
             </WorkbenchIconButton>
           ) : null}
-          <div
-            className="mobile-workbench-track flex h-dvh w-[200vw] overflow-hidden transition-transform duration-200 ease-out md:contents md:h-auto md:w-auto md:overflow-visible md:transform-none"
-            style={mobileTrackStyle}
+          <MobilePaneTrack
+            browseProjectId={explorer.currentProjectId}
+            isMobile={isMobile}
+            navigateToRoute={navigateToRoute}
+            pane={mobilePane}
+            route={route}
           >
             <aside className={`flex h-dvh w-screen min-w-0 shrink-0 select-none flex-col overflow-hidden pr-5 md:sticky md:top-0 md:h-screen md:w-auto md:self-start md:pr-6${isEffectiveDesktopSidebarCollapsed ? " md:hidden" : ""}`}>
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
@@ -3438,7 +3439,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 </>
               </WorkbenchDialog>
             </main>
-          </div>
+          </MobilePaneTrack>
 
           <div
             id="floating-toolbar"
