@@ -2,7 +2,7 @@
  * Exports:
  * - OpenCodeThreadOperationsOptions: provider-local dependencies for native session operations.
  * - OpenCodeNativeActivity: one connection-recovery observation from native session state.
- * - default OpenCodeThreadOperations: translate WB thread intent to the pinned OpenCode client and canonical SQL history, carry activated skill bodies in prompts, attest session liveness, and admit fenced unfinished-turn continuations.
+ * - default OpenCodeThreadOperations: own OpenCode thread admission, session interruption, canonical history and fenced continuation.
  */
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -554,9 +554,9 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     await (await this.options.acquire()).session.remove({ sessionID: binding.nativeThreadId });
   }
 
-  async interrupt(threadId: string, turnId: string) {
+  async interrupt(threadId: string) {
     const { binding } = await this.native(threadId);
-    await this.interruptSession(threadId, binding.nativeThreadId, WorkbenchTurnIdSchema.parse(turnId));
+    await this.interruptSession(threadId, binding.nativeThreadId);
   }
 
   /** The shared OpenCode service can outlive the daemon; its active sessions are the runtime truth. */
@@ -988,7 +988,6 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   private async interruptSession(
     threadId: string,
     nativeThreadId: string,
-    suppliedTurnId?: WorkbenchTurnId,
   ) {
     const execution = this.execution(nativeThreadId);
     const interruptedTurnId = execution.active ? execution.turn?.turnId : undefined;
@@ -1004,7 +1003,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     }
     if (execution.intentVersion === intentVersion) intentVersion = ++execution.intentVersion;
     const synced = await this.sync(threadId);
-    const turnId = interruptedTurnId ?? suppliedTurnId ?? synced.latestTurnId;
+    const turnId = interruptedTurnId ?? synced.latestTurnId;
     if (!turnId) return;
     if (execution.intentVersion === intentVersion && execution.turn?.turnId === turnId) {
       execution.active = false;

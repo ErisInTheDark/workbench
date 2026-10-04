@@ -1,4 +1,4 @@
-/* No production exports. Tests protect Claude model-use admission, post-acceptance failure reporting, launch context windows, unfinished-turn continuation, conversation skill delivery, input-time agent context, and turn liveness attestation. */
+/* Exports: none. Protect Claude admission, context, continuation, thread interruption and turn liveness. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -34,7 +34,7 @@ function messageText(content: unknown) {
 
 function fixture({
   failNative = false, failUsage = false, usage, contextWindowTokens, launches = [], windows = [], defaults = [],
-  captured, hold, subagentName,
+  captured, hold, subagentName, interrupt,
 }: {
   failNative?: boolean;
   failUsage?: boolean;
@@ -50,6 +50,7 @@ function fixture({
   /** Keeps launched turns live until it resolves. */
   hold?: Promise<void>;
   subagentName?: string;
+  interrupt?: () => Promise<void>;
 }) {
   let reads = 0;
   const profile = contextWindowTokens === undefined ? selection
@@ -75,7 +76,7 @@ function fixture({
           yield { type: "result", subtype: "success", is_error: false, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage: {} };
         },
         close: () => undefined,
-        interrupt: async () => undefined,
+        interrupt: interrupt ?? (async () => undefined),
       } as never;
     },
   });
@@ -267,4 +268,27 @@ test("a Claude turn is live only while this daemon runs it or still owns its tra
   assert.equal(await owner.isTurnLive(threadId, turnId), true);
   assert.equal(await owner.isTurnLive(threadId, WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000009")), false);
 });
+
+for (const fails of [false, true]) {
+  test(`thread-only Claude interruption ${fails ? "propagates native failure" : "reaches the current runtime"}`, async () => {
+    const release = Promise.withResolvers<void>();
+    let interrupts = 0;
+    const owner = fixture({ usage: [], hold: release.promise, interrupt: async () => {
+      interrupts++;
+      release.resolve();
+      if (fails) throw new Error("native interrupt failed");
+    } });
+    try {
+      await owner.submit({ threadId, clientMessageId: "message", intent: "newTurn",
+        input: [{ type: "text", text: "hello", text_elements: [] }] });
+      if (fails) await assert.rejects(owner.interrupt(threadId), /native interrupt failed/);
+      else await owner.interrupt(threadId);
+      assert.equal(interrupts, 1);
+    } finally {
+      release.resolve();
+      await (Reflect.get(owner, "live") as Map<string, { whenSettled(): Promise<void> }>).get(threadId)?.whenSettled();
+      await owner.dispose();
+    }
+  });
+}
 

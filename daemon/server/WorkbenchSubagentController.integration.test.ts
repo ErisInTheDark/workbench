@@ -1,7 +1,4 @@
-/*
- * Exports:
- * - No production exports; tests protect profile selection, durable relationships, ownership and questionnaire delivery ordering.
- */
+/* Exports: none. Protect profiles, durable relationships, ownership, parent stop and questionnaire delivery. */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
@@ -129,9 +126,9 @@ class FakeProvider {
       if (this.failTurnStart) throw new Error("Turn failed to start.");
       return { kind: "started", turnId: `${input.threadId}-admitted` };
     },
-    interrupt: async (threadId, turnId, options) => {
+    interrupt: async (threadId, options) => {
       assert.equal(options?.preserveGoal, true);
-      this.calls.push({ harness: "codex", method: "interrupt", params: { threadId, turnId }, promptContext: null });
+      this.calls.push({ harness: "codex", method: "interrupt", params: { threadId }, promptContext: null });
     },
     rename: async () => {}, list: this.unused, admitTurn: this.unused,
     compact: this.unused, submit: this.unused, materialize: this.unused, isTurnLive: this.unused,

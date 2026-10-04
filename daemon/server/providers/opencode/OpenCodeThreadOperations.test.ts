@@ -1,6 +1,4 @@
-/*
- * No production exports. Tests protect OpenCode admission, accepted questionnaire history and canonical message pagination.
- */
+/* Exports: none. Protect OpenCode admission, thread interruption, questionnaire history and message pagination. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -1314,8 +1312,8 @@ for (const succeeds of [true, false]) {
       recordSteer: async () => undefined,
     });
     await owner.syncNative(nativeThreadId);
-    if (succeeds) await owner.interrupt(threadId, turnId);
-    else await assert.rejects(owner.interrupt(threadId, turnId), /interrupt rejected/u);
+    if (succeeds) await owner.interrupt(threadId);
+    else await assert.rejects(owner.interrupt(threadId), /interrupt rejected/u);
     await owner.submit({
       threadId, clientMessageId: "after-interrupt", intent: "continue",
       input: [{ type: "text", text: "next message", text_elements: [] }],
@@ -1344,7 +1342,7 @@ test("a late interruption cannot mark a newly admitted execution idle", async ()
     recordSteer: async () => undefined,
   });
   await owner.syncNative(nativeThreadId);
-  const stopping = owner.interrupt(threadId, turnId);
+  const stopping = owner.interrupt(threadId);
   await entered.promise;
   try {
     await owner.submit({ threadId, clientMessageId: "new-turn", intent: "newTurn",
@@ -1358,7 +1356,7 @@ test("a late interruption cannot mark a newly admitted execution idle", async ()
   await owner.settle();
 });
 
-test("session interruption settles the active continuation rather than an older requested turn", async () => {
+test("thread interruption settles its active continuation without a caller turn identity", async () => {
   const continuationTurn = WorkbenchTurnIdSchema.parse("continuation-turn");
   const interrupted: string[] = [];
   const deliveries: string[] = [];
@@ -1376,7 +1374,7 @@ test("session interruption settles the active continuation rather than an older 
     recordSteer: async () => undefined,
   });
   await owner.syncNative(nativeThreadId);
-  await owner.interrupt(threadId, turnId);
+  await owner.interrupt(threadId);
   assert.deepEqual(interrupted, [continuationTurn]);
   await owner.submit({ threadId, clientMessageId: "after-stop", intent: "continue",
     input: [{ type: "text", text: "new work", text_elements: [] }] });
@@ -1423,7 +1421,7 @@ test("successful stop retires its queued root and settles the matching lifecycle
     readPage: async () => ({ thread: { turns: [{ id: turnId, status: "inProgress", items: [] }] } }),
   });
   await owner.syncNative(nativeThreadId);
-  await owner.interrupt(threadId, turnId);
+  await owner.interrupt(threadId);
   assert.deepEqual(cancelled, [nativeTurnId]);
   assert.deepEqual(observed, [{
     projectId: ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003"),
@@ -1474,7 +1472,7 @@ test("stop cancels a compaction steer and records that it was interrupted", asyn
     threadId, clientMessageId: "compaction-steer", intent: "continue",
     input: [{ type: "text", text: "new direction", text_elements: [] }],
   });
-  await owner.interrupt(threadId, turnId);
+  await owner.interrupt(threadId);
   assert.deepEqual(deliveries, ["steer"]);
   assert.deepEqual(cancelled, ["msg_compaction-steer"]);
   assert.deepEqual(statuses, ["pending", "interrupted"]);
@@ -1517,7 +1515,7 @@ test("stop after owner reload retires a steer using its native turn identity", a
     },
   });
   await owner.syncNative(nativeThreadId);
-  await owner.interrupt(threadId, turnId);
+  await owner.interrupt(threadId);
   assert.deepEqual(cancelled, ["msg_waiting-steer"]);
   assert.deepEqual(recorded.map(entry => ({
     turnId: entry.turnId, status: entry.status, clientUserMessageId: entry.clientUserMessageId,
@@ -1553,7 +1551,7 @@ test("a native read begun before interruption loses permission to commit or reac
   hold = true;
   const stale = owner.syncNative(nativeThreadId);
   await entered.promise;
-  try { await owner.interrupt(threadId, turnId); }
+  try { await owner.interrupt(threadId); }
   finally { release.resolve(); }
   await stale;
   assert.equal(commits.at(-1), false);

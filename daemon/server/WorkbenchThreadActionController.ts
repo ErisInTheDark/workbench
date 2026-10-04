@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project and transcript owners.
  * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
- * - default WorkbenchThreadActionController: route WB actions without constructing provider packets, record activated skills, stop threads (settling orphaned turns and always marking them stopped) for users and parent agents, route questionnaire interrupts to snooze, resend or dismiss undelivered steers, and redeliver stranded agent messages into a new turn.
+ * - default WorkbenchThreadActionController: own WB actions, full thread stop, orphan repair, skills, questionnaire snooze and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -273,7 +273,7 @@ export default class WorkbenchThreadActionController {
     const target = await this.target(threadId);
     const turn = await target.provider.threads.latestTurn(target.identity.threadId);
     // Agent stops keep the thread's goal; composer Stop is the user's call to clear it.
-    if (turn?.status === "inProgress") await this.interruptTurn(target, turn.id, { preserveGoal: true });
+    if (turn?.status === "inProgress") await this.interruptThread(target, { preserveGoal: true });
     const entry = await this.owners.state.getCanonicalThreadEntry(target.identity.projectId, target.identity.threadId);
     const requestKey = entry && entry.entryKind !== "draft" ? entry.pendingQuestionnaire?.requestKey : undefined;
     await this.markStopped(target, requestKey, "");
@@ -281,19 +281,19 @@ export default class WorkbenchThreadActionController {
 
   private async stop(input: WorkbenchThreadStop, connectionId?: string): Promise<{ ok: true }> {
     const target = await this.target(input.threadId);
-    if (input.turnId) await this.interruptTurn(target, input.turnId);
+    await this.interruptThread(target);
     await this.markStopped(target, input.requestKey, connectionId ?? "");
     return { ok: true };
   }
 
-  private async interruptTurn(
+  private async interruptThread(
     { identity, provider }: ActionTarget,
-    turnId: string,
     options?: { preserveGoal: true },
   ) {
-    await provider.threads.interrupt(identity.threadId, turnId, options);
+    await provider.threads.interrupt(identity.threadId, options);
     // A turn whose runtime died with an earlier daemon has nobody left to settle it.
-    await this.owners.settlement.settleIfOrphaned(identity.threadId, turnId);
+    const turn = await provider.threads.latestTurn(identity.threadId);
+    if (turn?.status === "inProgress") await this.owners.settlement.settleIfOrphaned(identity.threadId, turn.id);
   }
 
   /** Mark stopped, dismissing the questionnaire the caller saw (or none); rejects if it changed. */

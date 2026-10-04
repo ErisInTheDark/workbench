@@ -74,7 +74,7 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
       if (!provider.threads.delete) throw new Error(`Provider ${this.key} does not support deleting its threads.`);
       return provider.threads.delete(threadId);
     }, `${this.key}: threads.delete`),
-    interrupt: (threadId, turnId, options) => this.run(providerRegistrations[this.key], provider => provider.threads.interrupt(threadId, turnId, options), `${this.key}: threads.interrupt`),
+    interrupt: (threadId, options) => this.run(providerRegistrations[this.key], provider => provider.threads.interrupt(threadId, options), `${this.key}: threads.interrupt`),
     isTurnLive: (threadId, turnId) => this.run(providerRegistrations[this.key], provider => provider.threads.isTurnLive(threadId, turnId), `${this.key}: threads.isTurnLive`),
     materialize: (threadId, turnIds, signal) => this.run(providerRegistrations[this.key], provider => provider.threads.materialize(threadId, turnIds, signal), `${this.key}: threads.materialize`),
   };

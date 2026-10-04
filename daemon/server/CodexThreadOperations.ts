@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CodexThreadOperationOwners: existing bridge, project and identity admission ports.
- * - default CodexThreadOperations: translate WB thread intent into existing Codex admission, read, liveness, and interaction owners.
+ * - default CodexThreadOperations: translate WB thread intent into Codex admission, reads, thread interruption and interactions.
  */
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { Turn as NativeTurn } from "workbench-shared/codex/generated/app-server/v2/Turn";
@@ -453,9 +453,11 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     return isThreadStatusActive((await this.read(threadId, { background: true })).status);
   }
 
-  async interrupt(threadId: string, turnId: string, options?: { preserveGoal?: boolean }) {
+  async interrupt(threadId: string, options?: { preserveGoal?: boolean }) {
     if (!options?.preserveGoal) await this.mapped({ id: 0, method: "thread/goal/clear", params: { threadId } });
-    await this.mapped({ id: 0, method: "turn/interrupt", params: { threadId, turnId } });
+    if (!isThreadStatusActive((await this.read(threadId)).status)) return;
+    // Codex's empty-id path interrupts the current task and acknowledges submission, not final settlement.
+    await this.mapped({ id: 0, method: "turn/interrupt", params: { threadId, turnId: "" } });
   }
 
   async materialize(threadId: string, turnIds: string[], signal?: AbortSignal) {

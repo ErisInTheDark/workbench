@@ -15,7 +15,7 @@ function fixture(providerWarning?: string) {
   const messages: object[] = [];
   const connections: string[] = [];
   const warnings: string[] = [];
-  const stops: Array<{ threadId: string; turnId: string }> = [];
+  const stops: Array<{ threadId: string; options: Parameters<WorkbenchProvider["threads"]["interrupt"]>[1] }> = [];
   const mutations: object[] = [];
   const stopOrder: string[] = [];
   let interruptFailure = false;
@@ -24,15 +24,15 @@ function fixture(providerWarning?: string) {
   const provider: WorkbenchProvider = {
     threads: {
       reconcile: unused, readLatest: unused, messageAgent: unused,
-      latestTurn: unused, admitTurn: unused,
+      latestTurn: async () => ({ id: "wb-turn", status: "inProgress" }) as never, admitTurn: unused,
       history: { materialize: unused },
       create: unused, list: unused, read: unused,
       submit: async input => { messages.push(input); return { kind: "steered", turnId: "wb-turn", ...(providerWarning ? { warning: providerWarning } : {}) }; },
       rename: unused, compact: unused,
-      interrupt: async (threadId, turnId) => {
+      interrupt: async (threadId, options) => {
         stopOrder.push("interrupt");
         if (interruptFailure) throw new Error("interruption failed");
-        stops.push({ threadId, turnId });
+        stops.push({ threadId, options });
       },
       isTurnLive: unused,
       materialize: unused,
@@ -232,13 +232,47 @@ test("accepted provider warnings survive an additional state settlement failure"
   assert.equal(f.messages.length, 1);
 });
 
-test("dismissing a preserved questionnaire does not interrupt provider work", async () => {
+test("questionnaire-only stop interrupts provider work before dismissing the question", async () => {
   const f = fixture();
   await f.controller.handle("thread/stop", {
     threadId: "wb-thread", intent: "stop", requestKey: "preserved-question",
   });
-  assert.deepEqual(f.stops, []);
-  assert.deepEqual(f.stopOrder, ["mutation"]);
+  assert.deepEqual(f.stops, [{ threadId: "wb-thread", options: undefined }]);
+  assert.deepEqual(f.stopOrder, ["interrupt", "settle", "mutation"]);
+});
+
+for (const turn of [null, { id: "wb-turn", status: "interrupted" }]) {
+  test(`stop with ${turn ? "an ended turn" : "no turn"} still requests thread interruption and dismisses its question`, async () => {
+    const f = fixture();
+    f.provider.threads.latestTurn = async () => turn as never;
+    await f.controller.handle("thread/stop", {
+      threadId: "wb-thread", intent: "stop", requestKey: "held-question",
+    });
+    assert.deepEqual(f.stops, [{ threadId: "wb-thread", options: undefined }]);
+    assert.deepEqual(f.stopOrder, ["interrupt", "mutation"]);
+  });
+}
+
+test("repeated stop does not need the previous turn's identity", async () => {
+  const f = fixture();
+  await f.controller.handle("thread/stop", { threadId: "wb-thread", intent: "stop" });
+  f.provider.threads.latestTurn = async () => ({ id: "wb-turn", status: "interrupted" }) as never;
+  await f.controller.handle("thread/stop", { threadId: "wb-thread", intent: "stop" });
+  assert.deepEqual(f.stops, [
+    { threadId: "wb-thread", options: undefined },
+    { threadId: "wb-thread", options: undefined },
+  ]);
+  assert.deepEqual(f.stopOrder, ["interrupt", "settle", "mutation", "interrupt", "mutation"]);
+});
+
+test("failed post-interruption turn lookup does not dismiss the pending questionnaire", async () => {
+  const f = fixture();
+  f.provider.threads.latestTurn = async () => { throw new Error("turn metadata unavailable"); };
+  await assert.rejects(f.controller.handle("thread/stop", {
+    threadId: "wb-thread", intent: "stop", requestKey: "seen-question",
+  }), /turn metadata unavailable/);
+  assert.deepEqual(f.stops, [{ threadId: "wb-thread", options: undefined }]);
+  assert.deepEqual(f.mutations, []);
 });
 
 test("title actions preserve connection authorisation and propagate mutation rejection", async () => {
@@ -253,9 +287,9 @@ test("title actions preserve connection authorisation and propagate mutation rej
 test("stop retains the caller's questionnaire identity instead of selecting a replacement", async () => {
   const f = fixture();
   await f.controller.handle("thread/stop", {
-    threadId: "wb-thread", turnId: "wb-turn", intent: "stop", requestKey: "seen-question",
+    threadId: "wb-thread", turnId: "obsolete-turn", intent: "stop", requestKey: "seen-question",
   });
-  assert.deepEqual(f.stops, [{ threadId: "wb-thread", turnId: "wb-turn" }]);
+  assert.deepEqual(f.stops, [{ threadId: "wb-thread", options: undefined }]);
   assert.equal(f.mutations.length, 1);
   assert.ok("requestKey" in f.mutations[0]);
   assert.equal(f.mutations[0].requestKey, "seen-question");
@@ -282,9 +316,9 @@ function agentStopFixture(turnStatus: "inProgress" | "interrupted") {
   const f = fixture();
   const interrupts: object[] = [];
   f.provider.threads.latestTurn = async () => ({ id: "wb-turn", status: turnStatus }) as never;
-  f.provider.threads.interrupt = async (threadId, turnId, options) => {
+  f.provider.threads.interrupt = async (threadId, options) => {
     f.stopOrder.push("interrupt");
-    interrupts.push({ threadId, turnId, options });
+    interrupts.push({ threadId, options });
   };
   f.owners.state.getCanonicalThreadEntry = async () => ({ pendingQuestionnaire: { requestKey: "waiting-question" } }) as never;
   return { ...f, interrupts };
@@ -293,7 +327,7 @@ function agentStopFixture(turnStatus: "inProgress" | "interrupted") {
 test("parent-agent stop interrupts the live turn, then dismisses the questionnaire it retained", async () => {
   const f = agentStopFixture("inProgress");
   await f.controller.stopThread(WorkbenchThreadIdSchema.parse("wb-thread"));
-  assert.deepEqual(f.interrupts, [{ threadId: "wb-thread", turnId: "wb-turn", options: { preserveGoal: true } }]);
+  assert.deepEqual(f.interrupts, [{ threadId: "wb-thread", options: { preserveGoal: true } }]);
   assert.deepEqual(f.stopOrder, ["interrupt", "settle", "mutation"]);
   assert.ok("requestKey" in f.mutations[0]!);
   assert.equal(f.mutations[0].requestKey, "waiting-question");
@@ -416,7 +450,7 @@ test("failed interruption preserves the pending questionnaire", async () => {
   const f = fixture();
   f.failInterrupt();
   await assert.rejects(f.controller.handle("thread/stop", {
-    threadId: "wb-thread", turnId: "wb-turn", intent: "stop", requestKey: "seen-question",
+    threadId: "wb-thread", intent: "stop", requestKey: "seen-question",
   }), /interruption failed/);
   assert.deepEqual(f.mutations, []);
 });

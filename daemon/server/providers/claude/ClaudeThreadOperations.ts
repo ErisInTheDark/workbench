@@ -3,7 +3,7 @@
  * - ClaudeTurnHandoff: one paused live turn's turn and transcript state for the next bridge generation.
  * - ClaudeInstructionInput: thread facts one managed Claude prompt build reads.
  * - ClaudeThreadOperationsOptions: bind host-owned Claude sessions to Workbench identity, state, lifecycle publication, and managed MCP.
- * - default ClaudeThreadOperations: admit Claude turns and steers with their activated skill bodies and pending agent context, launch them on the harness session host with their configured or model-default context window, pause and restore live turns across bridge reloads, continue unfinished turns with their launch context, attest turn liveness, hold admitted steers in canonical history, deliver Browse screenshots, hydrate billing usage from session logs, and own native session operations.
+ * - default ClaudeThreadOperations: own Claude admission, thread interruption, reload handoff, context, continuation and native sessions.
  */
 import {
     deleteSession, getSessionInfo, listSessions, query, renameSession,
@@ -124,7 +124,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
 
   /** Harness restart or daemon shutdown: interrupt every live turn and publish its settlement. */
   async interruptAll() {
-    await Promise.all([...this.live.values()].map(runtime => this.interrupt(runtime.threadId, runtime.turnId)));
+    await Promise.all([...this.live.values()].map(runtime => runtime.interrupt()));
     await Promise.all(this.pending);
   }
 
@@ -280,7 +280,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       async () => {
         if (!await isCurrent()) return false;
         const runtime = this.live.get(WorkbenchThreadIdSchema.parse(input.threadId));
-        if (runtime) await this.interrupt(input.threadId, runtime.turnId);
+        if (runtime) await runtime.interrupt();
         return isCurrent();
       },
     ),
@@ -599,9 +599,9 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     await deleteSession(binding.nativeThreadId, { dir: binding.nativeLocation });
   }
 
-  async interrupt(threadId: string, turnId: string) {
+  async interrupt(threadId: string) {
     const runtime = this.live.get(WorkbenchThreadIdSchema.parse(threadId));
-    if (!runtime || runtime.turnId !== turnId) return;
+    if (!runtime) return;
     await runtime.interrupt();
   }
 

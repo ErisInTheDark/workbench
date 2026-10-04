@@ -1,6 +1,4 @@
-/*
- * No production exports. Tests protect cold provider dispatch, identity mapping, and questionnaire waiter liveness.
- */
+/* Exports: none. Protect provider dispatch, thread interruption, identity mapping and questionnaire waiter liveness. */
 import assert from "node:assert/strict";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { test } from "node:test";
@@ -66,6 +64,16 @@ async function threadFixture(handle: (request: JsonRpcRequest) => Promise<object
   return { operations, demands, threadId: thread.threadId, turnId };
 }
 
+function threadMetadata(status: Thread["status"]): Thread {
+  return {
+    id: "native-thread", sessionId: "native-thread", extra: null, forkedFromId: null, parentThreadId: null,
+    preview: "", ephemeral: false, section: null, sectionEnteredAt: null, projectId: null, historyMode: "legacy",
+    modelProvider: "openai", model: null, reasoningEffort: null, createdAt: 1, updatedAt: 1, recencyAt: null,
+    status, path: null, cwd: "C:/project", cliVersion: "test", source: "cli", canAcceptDirectInput: true,
+    threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null, turns: [],
+  };
+}
+
 test("passive context resolves canonical identity without ordinary provider admission and propagates rejection", async () => {
   const seen: string[] = [];
   const fixture = await threadFixture(async () => assert.fail("ordinary provider request"), {
@@ -109,9 +117,10 @@ for (const fails of [false, true]) {
         await gate.promise;
         if (fails) throw new Error("goal clear failed");
       }
-      return {};
+      return request.method === "thread/read"
+        ? { thread: threadMetadata({ type: "active", activeFlags: [] }) } : {};
     });
-    const stopping = fixture.operations.interrupt(fixture.threadId, fixture.turnId);
+    const stopping = fixture.operations.interrupt(fixture.threadId);
     await entered.promise;
     assert.deepEqual(requests.map(request => request.method), ["thread/goal/clear"]);
     gate.resolve();
@@ -120,19 +129,45 @@ for (const fails of [false, true]) {
       assert.equal(requests.length, 1);
     } else {
       await stopping;
-      assert.deepEqual(requests.map(request => request.method), ["thread/goal/clear", "turn/interrupt"]);
-      assert.deepEqual(requests[1].params, { threadId: "native-thread", turnId: "native-turn" });
+      assert.deepEqual(requests.map(request => request.method), ["thread/goal/clear", "thread/read", "turn/interrupt"]);
+      assert.deepEqual(requests[2].params, { threadId: "native-thread", turnId: "" });
     }
   });
 }
 
-test("subagent interruption preserves its goal policy while translating identities", async () => {
+test("subagent interruption preserves its goal policy without selecting a turn", async () => {
   const requests: JsonRpcRequest[] = [];
-  const fixture = await threadFixture(async request => { requests.push(request); return {}; });
-  await fixture.operations.interrupt(fixture.threadId, fixture.turnId, { preserveGoal: true });
+  const fixture = await threadFixture(async request => {
+    requests.push(request);
+    return request.method === "thread/read"
+      ? { thread: threadMetadata({ type: "active", activeFlags: [] }) } : {};
+  });
+  await fixture.operations.interrupt(fixture.threadId, { preserveGoal: true });
   assert.deepEqual(requests.map(({ method, params }) => ({ method, params })), [
-    { method: "turn/interrupt", params: { threadId: "native-thread", turnId: "native-turn" } },
+    { method: "thread/read", params: { threadId: "native-thread", includeTurns: false } },
+    { method: "turn/interrupt", params: { threadId: "native-thread", turnId: "" } },
   ]);
+});
+
+test("stopping an inactive Codex thread clears its goal without interrupting a cold runtime", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const fixture = await threadFixture(async request => {
+    requests.push(request);
+    if (request.method === "thread/goal/clear") return {};
+    assert.equal(request.method, "thread/read");
+    return { thread: threadMetadata({ type: "idle" }) };
+  });
+  await fixture.operations.interrupt(fixture.threadId);
+  assert.deepEqual(requests.map(request => request.method), ["thread/goal/clear", "thread/read"]);
+});
+
+test("Codex thread interruption propagates native cancellation failure", async () => {
+  const fixture = await threadFixture(async request => {
+    if (request.method === "thread/read") return { thread: threadMetadata({ type: "active", activeFlags: [] }) };
+    if (request.method === "turn/interrupt") throw new Error("native interrupt failed");
+    return {};
+  });
+  await assert.rejects(fixture.operations.interrupt(fixture.threadId), /native interrupt failed/);
 });
 
 test("Browse screenshots stay passive and records retain native storage references", async () => {
