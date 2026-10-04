@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchDatabaseNode: own SQLite readiness, identity and transcript registrations, replacement and closure.
+ * - default WorkbenchDatabaseNode: own SQLite readiness, identity and transcript registrations, periodic memory breakdown, replacement and closure.
  */
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -14,6 +14,8 @@ import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentity
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchTranscriptController from "./database/transcript/WorkbenchTranscriptController";
 import WorkbenchTranscriptCaptureGapController from "./database/transcript/WorkbenchTranscriptCaptureGapController";
+import WorkbenchMemoryReporter from "./WorkbenchMemoryReporter";
+import { log, logError } from "./process-helpers";
 import CodexConfigurationNode from "./CodexConfigurationNode";
 import CodexRecoveryNode from "./CodexRecoveryNode";
 import ReloadableNode from "./ReloadableNode";
@@ -63,12 +65,19 @@ export default ReloadableNode.define<
       },
     });
     const transcript = new WorkbenchTranscriptController(database, captureGaps);
+    // The database owns the worker isolates, so their heaps are reported from here.
+    const memory = new WorkbenchMemoryReporter({
+      readWorkerHeaps: () => database.readWorkerHeaps(),
+      log: message => log("memory", message),
+      warn: message => logError("memory", message),
+    });
     let shutdownPromise: Promise<void> | null = null;
     let committed = build.mode !== "replacement";
     const shutdown = () => {
       shutdownPromise ??= (async () => {
         const failures: unknown[] = [];
         for (const close of [
+          () => memory.dispose(),
           () => transcript.dispose(),
           () => threadIdentity.dispose(),
           () => transcriptIdentity.dispose(),

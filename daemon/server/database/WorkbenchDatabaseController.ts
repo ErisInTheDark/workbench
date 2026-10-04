@@ -2,7 +2,7 @@
  * WorkbenchDatabaseControllerOptions: construction inputs for the database lifecycle owner.
  * WorkbenchDatabaseRequestFailure: one rolled-back request that leaves the database lifecycle ready.
  * WorkbenchDatabaseFailure: stable controller failure carrying one bounded cause.
- * WorkbenchDatabaseController: owns writer/reader workers and the complete database lifecycle.
+ * WorkbenchDatabaseController: owns writer/reader workers, their heap readings, and the complete database lifecycle.
  */
 import { Worker } from "node:worker_threads";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -853,6 +853,20 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     this.#suspension?.release();
     this.#suspension = null;
     await (this.#termination ??= this.#worker.terminate());
+  }
+
+  /** Each worker's own V8 heap; these sit outside the main thread's heap figures. `null` when a worker is not running. */
+  async readWorkerHeaps() {
+    const read = async (worker: Worker | null) => {
+      if (!worker) return null;
+      const { used_heap_size: used, total_heap_size: total } = await worker.getHeapStatistics();
+      return { used, total };
+    };
+    const [writer, core, transcript] = await Promise.all([
+      read(this.#state === "closed" || this.#state === "failed" ? null : this.#worker),
+      read(this.#reader), read(this.#transcriptReader),
+    ]);
+    return { writer, core, transcript };
   }
 
   async #openReaders() {
