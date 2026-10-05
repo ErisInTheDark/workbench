@@ -210,7 +210,7 @@ export type ControllerFixtureState = Awaited<ReturnType<typeof CONTROLLER_OPERAT
 export const STACK_OPERATIONS_FIXTURE = {
   commits: CONTROLLER_BASE_FIXTURE.commits,
   name: "stack-shared-states",
-  revision: 2,
+  revision: 4,
   prepare: async ({ bundleRoot, repositoryRoot, runGit }) => {
     const controller = new WorkbenchGitCheckpointController();
     const fork = async (name: string, source = repositoryRoot) => {
@@ -254,11 +254,17 @@ export const STACK_OPERATIONS_FIXTURE = {
     await controller.stackArc({ cwd: amended, threadId: "owner", title: "amend layer" });
     const amendedUpper = await propose(amended, "owner", "one.txt", "stacked\n", "stacked");
 
-    // transfer: parent sealed one.txt and still claims both files.
+    // transfer: the child received three.txt on parent layer one; the parent then sealed two.txt in layer two.
     const transfer = await fork("transfer");
-    await controller.createAndStartPlan({ cwd: transfer, threadId: "parent", intentName: "parent work", paths: ["one.txt", "two.txt"] });
-    const parentSealed = await propose(transfer, "parent", "one.txt", "parent sealed\n", "parent");
-    await controller.stackArc({ cwd: transfer, threadId: "parent", title: "parent layer" });
+    await controller.createAndStartPlan({ cwd: transfer, threadId: "parent", intentName: "parent work", paths: ["one.txt", "two.txt", "three.txt"] });
+    const transferLower = await propose(transfer, "parent", "one.txt", "parent one\n", "parent one");
+    await controller.stackArc({ cwd: transfer, threadId: "parent", title: "layer one" });
+    await write(transfer, "three.txt", "child start\n");
+    await (await controller.prepareReleaseToChild({
+      cwd: transfer, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["three.txt"],
+    })).apply();
+    const transferUpper = await propose(transfer, "parent", "two.txt", "parent two\n", "parent two");
+    await controller.stackArc({ cwd: transfer, threadId: "parent", title: "layer two" });
 
     for (const root of [sealed, stacked, broken, amended, transfer]) await runGit(["fsck", "--strict"], { cwd: root });
     return {
@@ -266,7 +272,7 @@ export const STACK_OPERATIONS_FIXTURE = {
       stacked: { root: relative(stacked), lower, upper },
       broken: { root: relative(broken), upper },
       amended: { root: relative(amended), amendment, upper: amendedUpper },
-      transfer: { root: relative(transfer), sealed: parentSealed },
+      transfer: { root: relative(transfer), lower: transferLower, upper: transferUpper },
     };
   },
 } satisfies GitTestFixtureSpec<object>;

@@ -90,17 +90,20 @@ test("accepting a sealed amend rewrites the stack onto the amended history", asy
   assert.equal(await git("log", "-1", "--format=%s", "HEAD~1"), "first amended\n");
 });
 
-test("released claims keep sealed proposals committable and the child builds on the sealed layer", async () => {
+test("released claims keep sealed proposals committable and a child on a lower layer fast-forwards to the parent's top", async () => {
   const { commit, cwd, git, read, state } = branch("transfer");
+  // The child already holds three.txt on layer one; the parent has since sealed layer two.
   await (await controller.prepareReleaseToChild({
-    cwd, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["one.txt"],
+    cwd, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["two.txt"],
   })).apply();
-  assert.equal((await read("parent", state.sealed)).status, "proposed");
-  await fs.writeFile(path.join(cwd, "one.txt"), "child builds on it\n");
-  assert.match((await controller.diff({ cwd, threadId: "child" })).diff, /-parent sealed\n\+child builds on it/u);
-  const child = await controller.createProposal({ cwd, threadId: "child", title: "child", description: "" });
-  assert.equal((await read("child", child.proposalId)).waitingForLayer, "parent layer");
-  await commit("parent", state.sealed, "parent");
+  assert.equal((await read("parent", state.upper)).status, "proposed");
+  await fs.writeFile(path.join(cwd, "two.txt"), "child builds on two\n");
+  assert.match((await controller.diff({ cwd, threadId: "child", paths: ["two.txt"] })).diff, /-parent two\n\+child builds on two/u,
+    "the child measures from the parent's newest layer");
+  const child = await controller.createProposal({ cwd, threadId: "child", paths: ["two.txt"], title: "child", description: "" });
+  assert.equal((await read("child", child.proposalId)).waitingForLayer, "layer one", "it waits on the lowest unlanded layer");
+  await commit("parent", state.lower, "parent one");
+  await commit("parent", state.upper, "parent two");
   await commit("child", child.proposalId, "child");
-  assert.equal(await git("show", "HEAD:one.txt"), "child builds on it\n");
+  assert.equal(await git("show", "HEAD:two.txt"), "child builds on two\n");
 });

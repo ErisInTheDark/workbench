@@ -2,7 +2,7 @@
  * Exports:
  * - GitArcAdoptionInput/GitArcAdoptionResult: complete-source transfer input and receipt.
  * - GitArcSelectedTransferInput: selected live claims released to a child.
- * - default GitArcOwnershipTransferController: prepare atomic claim/stash ownership transfers; children inherit stack baselines and sealed proposals survive.
+ * - default GitArcOwnershipTransferController: prepare atomic claim/stash ownership transfers; children inherit stack baselines (fast-forwarding from the releaser's lower layers) and sealed proposals survive.
  */
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
@@ -92,10 +92,17 @@ export default class GitArcOwnershipTransferController {
     // Children build on the releasing thread's sealed layers so their proposals never re-propose sealed work.
     const sourceTip = selectedPaths && sourceChain.length && await stack.chainHasPending(sourceChain) ? sourceChain.at(-1)!.tipCommit : null;
     const targetPendingTip = targetChain.length && await stack.chainHasPending(targetChain) ? targetChain.at(-1)!.tipCommit : null;
-    if (sourceTip && targetPendingTip && !targetChain.some(({ tipCommit }) => tipCommit === sourceTip)) {
+    const targetAtSourceTip = targetChain.some(({ tipCommit }) => tipCommit === sourceTip);
+    // A child whose top is one of the releasing thread's lower layers has nothing of its own above it, so it
+    // fast-forwards to the releaser's top, unless the skipped layers changed files the child already owns.
+    const skippedIndex = targetPendingTip ? sourceChain.findIndex(({ tipCommit }) => tipCommit === targetPendingTip) : -1;
+    const targetOwned = target ? getGitArcLiveClaimPaths(target) : [];
+    const fastForward = Boolean(sourceTip && targetPendingTip && !targetAtSourceTip && skippedIndex >= 0
+      && !sourceChain.slice(skippedIndex + 1).some(({ scopePaths }) => scopePaths.some(scope => targetOwned.includes(scope))));
+    if (sourceTip && targetPendingTip && !targetAtSourceTip && !fastForward) {
       throw new GitArcRejectionError({ reason: "stackBaseMismatch" }, "The receiving thread builds on a different stack baseline.");
     }
-    const recipientStackTip = sourceTip && !targetPendingTip ? sourceTip : undefined;
+    const recipientStackTip = sourceTip && (!targetPendingTip || fastForward) ? sourceTip : undefined;
     const sourceSealed = new Set(sourceOwn.flatMap(({ layer }) => layer.proposalIds));
     const targetSealed = new Set(targetOwn.flatMap(({ layer }) => layer.proposalIds));
     const sourceLive = origin ? getGitArcLiveClaimPaths(origin) : [];
@@ -106,7 +113,7 @@ export default class GitArcOwnershipTransferController {
     }
     const incoming = selectedPaths ? requested : sourceLive;
     const remaining = sourceLive.filter(value => !incoming.includes(value));
-    const existing = target ? getGitArcLiveClaimPaths(target) : [];
+    const existing = targetOwned;
     if (!incoming.length && (!sourceStash || selectedPaths)) throw new Error("The source thread owns no transferable live claims or saved stash.");
     if (!selectedPaths && sourceStash && callerStash) throw new Error("The calling thread already has a stash. Adoption cannot replace it.");
     const head = await repository.headOrNull();
