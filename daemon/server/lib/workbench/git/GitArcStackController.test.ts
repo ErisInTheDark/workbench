@@ -63,9 +63,13 @@ test("a lower layer that lands differently makes stacked proposals unavailable",
   assert.equal(upper.waitingForLayer, null);
 });
 
-test("unstack reopens an unused top layer so its proposals can be rescinded", async () => {
-  const { cwd, state } = branch("sealed");
+test("claim edits keep sealed proposals alive, and unstack reopens an unused top layer so they can be rescinded", async () => {
+  const { cwd, read, state } = branch("sealed");
   const owner = { cwd, threadId: "owner" };
+  await controller.editArcClaims({ ...owner, inherit: true, addPaths: ["three.txt"] });
+  assert.equal((await read("owner", state.lower)).status, "proposed", "continuing work never retires a sealed layer");
+  assert.deepEqual((await controller.findLifecycleState(owner))?.proposals.map(({ proposalId }) => proposalId), [state.lower],
+    "the sealed proposal stays in the lifecycle list that stack cards render from");
   const reopened = await controller.unstackArc(owner);
   assert.deepEqual([reopened.proposalIds, reopened.stackTip], [[state.lower], null]);
   assert.deepEqual(reopened.layerProposals, [{

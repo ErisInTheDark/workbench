@@ -538,11 +538,15 @@ export default class WorkbenchGitCheckpointController {
     };
     const checkpointCommit = await repository.createCommitFromTree(tree, parent, checkpointMessage(nextMetadata));
     const checkpointRef = await checkpointRefName(repository.root, harness, threadId, checkpointCommit, this.resolveThreadIdentity);
+    // Sealed proposals are the stack's baseline; retiring them would let the next layer seal on bare HEAD.
+    const sealed = await new GitArcStackController(repository, this.resolveThreadIdentity).sealedProposalIds(active);
+    const currentProposalIds = active.proposalIds ?? (active.proposalId ? [active.proposalId] : []);
+    const retainedProposalIds = currentProposalIds.filter(id => sealed.has(id));
     const proposalUpdates = await this.proposals.prepareUnavailableUpdates({
       cwd: repository.root,
       repository,
       harness,
-      proposalIds: active.proposalIds ?? (active.proposalId ? [active.proposalId] : []),
+      proposalIds: currentProposalIds.filter(id => !sealed.has(id)),
       reason: "Implementation continued after this proposal was created.",
       threadId,
     });
@@ -552,8 +556,9 @@ export default class WorkbenchGitCheckpointController {
       harness,
       intentDescription: active.intentDescription,
       intentName: nextMetadata.intentName ?? active.intentName,
-      proposalId: null,
-      proposalIds: [],
+      // Sealed proposals stay listed so stack layers keep rendering and committing in order.
+      proposalId: retainedProposalIds.at(-1) ?? null,
+      proposalIds: retainedProposalIds,
       retainedArc: undefined,
       phase: "active",
       threadId,
