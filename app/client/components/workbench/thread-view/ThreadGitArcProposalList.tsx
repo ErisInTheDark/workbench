@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcProposalList: hoisted proposal anchors, grouped into sealed stack layer disclosures, under a header that collapses (listing each landed commit's message and totals) unless a stopped thread has pending proposals, and offers stack-ordered commit all backed by one bulk proposal summary read.
+ * - default ThreadGitArcProposalList: hoisted proposal anchors, grouped into sealed stack layer disclosures (behind a leading accepted-commits disclosure while work is pending), under a header that collapses (listing each landed commit's message and totals when nothing is pending) unless a stopped thread has pending proposals, and offers stack-ordered commit all backed by one bulk proposal summary read.
  */
 "use client";
 
@@ -12,7 +12,7 @@ import type { GitArcProposalStatus } from "workbench-shared/workbench/git/git-ar
 import type { WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import PrimaryButton from "../PrimaryButton";
-import { GitArcStackIcon } from "../workbench-icons";
+import { CheckCheckIcon, GitArcStackIcon } from "../workbench-icons";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import { ThreadCheckpointCommitTargetAnchor } from "./ThreadCheckpointCommitPortalLayer";
@@ -48,6 +48,14 @@ function formatProposalCounts(committed: number, proposed: number) {
   if (!proposed) return plural(committed, "commit");
   return `${plural(committed, "commit")}, ${plural(proposed, "proposal")}`;
 }
+
+/** Group disclosures (stack layers, accepted commits) share one row line, summary and recessed well. */
+const groupDisclosureProps = {
+  className: "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]",
+  // Open groups inset their proposals in a recessed well; the first card needs no line under the summary.
+  contentClassName: "mx-2 mb-2 overflow-hidden rounded-[0.65rem] bg-fg/4 [&>*:first-child]:border-t-0",
+  summaryClassName: "px-3 py-2 text-[0.76em] leading-[1.45]",
+};
 
 function readProposalsOpen(records: readonly WorkbenchClientStateRecord[]) {
   for (const record of records) {
@@ -136,6 +144,11 @@ export default function ThreadGitArcProposalList({
   const unsealedProposals = proposals.filter(({ proposalId }) => !sealedIds.has(proposalId));
   // Commit all walks the stack bottom-up, then unsealed work built on top of it.
   const proposedIds = [...layerGroups.flatMap(({ pendingIds }) => pendingIds), ...pendingIdsOf(unsealedProposals)];
+  // While work is pending, landed unsealed commits fold into one closed group ahead of it.
+  const acceptedProposals = proposedIds.length ? unsealedProposals.filter(({ status }) => status === "committed") : [];
+  const trailingProposals = acceptedProposals.length
+    ? unsealedProposals.filter(({ status }) => status !== "committed")
+    : unsealedProposals;
   // Only the lowest layer with pending work can commit; higher layers wait on it.
   const lowestPendingGroup = layerGroups.find(({ pendingIds }) => pendingIds.length);
   // Only pending work on a stopped thread demands attention; anything else follows the saved preference.
@@ -200,15 +213,31 @@ export default function ThreadGitArcProposalList({
     </div>
   );
   const anchors = [
+    // Unmounted anchors just park their cards, so a long accepted history costs nothing until opened.
+    ...(acceptedProposals.length ? [(
+      <ThreadDisclosure
+        {...groupDisclosureProps}
+        data-thread-git-arc-accepted-group="true"
+        key="accepted"
+        leading={<CheckCheckIcon size={14} />}
+        leadingLabel="accepted commits"
+        summary={(
+          <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+            <span className="font-medium text-text">Accepted</span>
+            <span className="text-fg/muted">{plural(acceptedProposals.length, "commit")}</span>
+          </span>
+        )}
+      >
+        {acceptedProposals.map(({ proposalId }) => anchor(proposalId))}
+      </ThreadDisclosure>
+    )] : []),
     ...layerGroups.map((group) => {
       const { layer, pendingIds: layerPendingIds, proposals: layerProposals } = group;
       const pending = layerPendingIds.length;
       const lowest = group === lowestPendingGroup;
       return (
         <ThreadDisclosure
-          className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
-          // Open layers inset their proposals in a recessed well; the first card needs no line under the summary.
-          contentClassName="mx-2 mb-2 overflow-hidden rounded-[0.65rem] bg-fg/4 [&>*:first-child]:border-t-0"
+          {...groupDisclosureProps}
           data-thread-git-arc-stack-layer={layer.layerId}
           // Sealed cards stay mounted so commit-all can walk the whole stack while layers are closed.
           keepMounted
@@ -237,13 +266,12 @@ export default function ThreadGitArcProposalList({
               ) : null}
             </span>
           )}
-          summaryClassName="px-3 py-2 text-[0.76em] leading-[1.45]"
         >
           {layerProposals.map(({ proposalId }) => anchor(proposalId))}
         </ThreadDisclosure>
       );
     }),
-    ...unsealedProposals.map(({ proposalId }) => anchor(proposalId)),
+    ...trailingProposals.map(({ proposalId }) => anchor(proposalId)),
   ];
 
   // Commits started from bulk summaries have no loaded card to show their failure, so the list shows it.
@@ -253,8 +281,9 @@ export default function ThreadGitArcProposalList({
     </p>
   ) : null;
 
-  // Closed lists name landed commits only, in card order; pending proposals must not read as commits.
-  const closedRows = [...layerGroups.flatMap(({ proposals: layerProposals }) => layerProposals), ...unsealedProposals]
+  // Closed lists name landed commits only, in card order; pending proposals must not read as commits, and while any
+  // are pending the header count alone stands in for a possibly long accepted history.
+  const closedRows = proposedIds.length ? [] : [...layerGroups.flatMap(({ proposals: layerProposals }) => layerProposals), ...unsealedProposals]
     .filter(({ status }) => status === "committed")
     .map(({ proposalId }) => <ClosedCommitRow key={proposalId} proposalId={proposalId} />);
 
