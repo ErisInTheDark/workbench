@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - workspaceCommandRoutes: semantic operation ownership, shared by app routing and client facades.
+ * - workspaceCommandRoutes: exhaustive command ownership, shared by app routing and client facades.
  * - WorkspaceCommandMethod/WorkspaceCommand/WorkspaceCommandResult: domain-typed workspace commands.
  * - WorkspaceCommandSchema: closed method registry and bounded JSON edge validation before owner validation.
  * - WORKSPACE_COMMAND_NOT_SENT/WORKSPACE_COMMAND_UNCERTAIN: distinguish dispatch outcomes.
@@ -31,6 +31,17 @@ import {
 
 export const WORKSPACE_COMMAND_NOT_SENT = -32012;
 export const WORKSPACE_COMMAND_UNCERTAIN = -32013;
+
+const nonCommandMethods = [
+  // Browser creation uses saved-draft launch, not daemon thread creation.
+  "thread/create", "thread/launch", "thread/launch/read",
+  // App-owned projection reads and exports.
+  "project/locations/read", "git/working-tree/summary",
+  "thread/presentation/export", "thread/presentation/manifest/read",
+  "thread/presentation/attachment/read", "thread/presentation/layout/read",
+  // Browser identity lookup uses the workspace owner observation.
+  "thread/identity/resolve",
+] as const satisfies readonly WorkbenchDaemonMethod[];
 
 export const workspaceCommandRoutes = {
   "project/catalog/read": "installation",
@@ -122,14 +133,12 @@ export const workspaceCommandRoutes = {
   "git/arc/stash": "thread",
   "git/arc/unstash": "thread",
   "git/arc/stash/discard": "thread",
-} as const satisfies Partial<Record<WorkbenchDaemonMethod, "thread" | "folder" | "installation" | "session">>;
+} as const satisfies Record<
+  Exclude<WorkbenchDaemonMethod, typeof nonCommandMethods[number]>,
+  "thread" | "folder" | "installation" | "session"
+>;
 
 export type WorkspaceCommandMethod = keyof typeof workspaceCommandRoutes;
-// Browser thread actions reach daemons only through this registry; an unrouted action fails before dispatch.
-// The browser never calls `thread/create`: threads start through draft launch.
-type UnroutedThreadAction = Exclude<keyof WorkbenchThreadActionMap, WorkspaceCommandMethod | "thread/create">;
-const threadActionsRouted: [UnroutedThreadAction] extends [never] ? true : UnroutedThreadAction = true;
-void threadActionsRouted;
 const scope = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("thread"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("folder"), location: ProjectLocationReferenceSchema }).strict(),
