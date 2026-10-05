@@ -140,14 +140,14 @@ for (const failure of ["rpc", "http.response"]) {
   });
 }
 
-test("managed native command, question, and skill denial preserves ordinary skill use and hosted request identity", async () => {
+test("managed native command, search, question, and skill denial preserves ordinary skill use and hosted request identity", async () => {
   const owner = await fixture();
   const cleanup = await owner.setup();
   try {
-    const tools = Object.fromEntries(["bash", "shell", "question", "skill", "edit", "write", "patch", "execute"].map(name => [name, { description: name }]));
+    const tools = Object.fromEntries(["bash", "glob", "grep", "shell", "question", "skill", "edit", "write", "patch", "execute"].map(name => [name, { description: name }]));
     await owner.hooks.get("context")!({ sessionID: "managed", tools } as never);
     assert.deepEqual(Object.keys(tools), ["edit", "write", "patch", "execute"]);
-    for (const tool of ["bash", "shell", "question", "skill"]) {
+    for (const tool of ["bash", "glob", "grep", "shell", "question", "skill"]) {
       await assert.rejects(owner.hooks.get("execute.before")!({ sessionID: "managed", tool } as never), /unavailable/);
       await owner.hooks.get("execute.before")!({ sessionID: "ordinary", tool } as never);
     }

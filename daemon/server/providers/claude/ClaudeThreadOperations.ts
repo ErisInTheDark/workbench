@@ -425,10 +425,11 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
           settingSources: [],
           skills: [],
           systemPrompt: { type: "custom", prompt: managedPrompt, snapshot: false },
-          tools: ["Read", "Grep", "Edit", "Write"],
+          tools: ["Read", "Edit", "Write"],
           disallowedTools: [
             "Bash", // wb shell (via codex)
             "Glob", // wb rg (via codex)
+            "Grep", // wb rg (via codex)
             "NotebookEdit", "Agent", "Task",
             "Skill", // wb skill
             "AskUserQuestion", // wb request_user_input

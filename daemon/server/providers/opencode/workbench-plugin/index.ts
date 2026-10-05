@@ -23,7 +23,8 @@ const WORKBENCH_PLUGIN_ID = "workbench";
 const WORKBENCH_MCP_NAME = "wb";
 const MANAGED_CODE_MODE_SCOPE =
   "Search and call nested Workbench tools only. Native OpenCode tools such as edit, write, and apply_patch remain direct OpenCode tools outside this catalogue.";
-const MANAGED_DISABLED_NATIVE_TOOLS = new Set(["bash", "question", "shell", "skill"]);
+/** Managed sessions replace these with wb equivalents: shell, rg, skill, request_user_input. */
+const MANAGED_DISABLED_NATIVE_TOOLS = new Set(["bash", "glob", "grep", "question", "shell", "skill"]);
 const OPENCODE_HOSTED_PROVIDERS = new Set(["opencode", "opencode-go"]);
 
 export interface OpenCodeWorkbenchPluginOptions {
