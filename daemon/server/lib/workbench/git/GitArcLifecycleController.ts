@@ -9,7 +9,6 @@ import GitArcRegistry, { findGitArcCollisions, getGitArcLiveClaimPaths, GitArcCo
 import GitArcProposalController from "./GitArcProposalController";
 import { GitCheckpointDirtyPathsError, partitionIgnoredGitArcPaths } from "./GitArcPlanController";
 import GitCheckpointStore from "./GitCheckpointStore";
-import GitArcStackController from "./GitArcStackController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import { expandGitArcClaimPaths } from "./git-arc-claim-expansion";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
@@ -178,17 +177,7 @@ export default class GitArcLifecycleController {
       const cleanAdoptions = adoptions.paths.filter((scope) => !dirtyPaths.some((candidate) => covers(scope, candidate)));
       if (cleanAdoptions.length) throw new GitArcRejectionError({ reason: "adoptionRequiresDirty", paths: cleanAdoptions }, `Adoption requires dirty unclaimed paths: ${cleanAdoptions.join(", ")}`);
     }
-    // Sealed proposals are the stack's baseline; retiring them would let the next layer seal on bare HEAD.
-    const sealed = await new GitArcStackController(repository, this.resolveThreadIdentity).sealedProposalIds(current);
-    const currentProposalIds = current.proposalIds ?? (current.proposalId ? [current.proposalId] : []);
-    const retainedProposalIds = currentProposalIds.filter(id => sealed.has(id));
-    const proposalUpdates = scopePaths.length ? await this.proposals.prepareUnavailableUpdates({
-      cwd: repository.root, harness, threadId: input.threadId,
-      repository,
-      proposalIds: currentProposalIds.filter(id => !sealed.has(id)),
-      reason: "Implementation continued after this proposal was created.",
-    }) : [];
-    if (!result.addedClaims.length && !result.removedClaims.length && !proposalUpdates.length
+    if (!result.addedClaims.length && !result.removedClaims.length
       && head === checkpoint.parent && current.phase !== "resolved") return result;
     const phase = scopePaths.length ? "active" as const : "resolved" as const;
     const nextMetadata: CheckpointMetadata = {
@@ -204,11 +193,9 @@ export default class GitArcLifecycleController {
     const tree = headIdentity?.identity.tree ?? await repository.resolveTree(null);
     const prepared = scopePaths.length ? await store.prepareCheckpoint(harness, input.threadId, tree, head, nextMetadata) : null;
     const checkpointCommit = prepared?.checkpointCommit ?? checkpoint.checkpointCommit;
+    // Proposals are frozen snapshots validated at commit time, so continuing keeps every one listed and committable.
     const registryMutation = await registry.prepareClaim({
       ...current, checkpointCommit, claimedPaths: scopePaths, phase,
-      // Sealed proposals stay listed so stack layers keep rendering and committing in order.
-      proposalId: scopePaths.length ? retainedProposalIds.at(-1) ?? null : current.proposalId,
-      proposalIds: scopePaths.length ? retainedProposalIds : current.proposalIds,
       retainedArc: undefined,
     }, { expectedCheckpointCommit: current.checkpointCommit });
     const outcomeUpdate = await store.prepareOutcome(harness, input.threadId, {
@@ -221,7 +208,6 @@ export default class GitArcLifecycleController {
       version: 1,
     });
     await repository.updateRefs([
-      ...proposalUpdates,
       ...(prepared ? [prepared.update] : []),
       outcomeUpdate,
       ...registryMutation.updates,

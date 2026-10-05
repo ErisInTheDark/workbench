@@ -41,6 +41,8 @@ export const GitArcStatusSchema = z.object({
   /** Own sealed stack layers with pending proposals, bottom first; absent means none. */
   stacked: z.array(z.object({ title: text, pending: z.array(proposalSummary).min(1) }).strict()).optional(),
   accepted: z.array(z.object({ proposalId: text, title: z.string(), commitSha: sha }).strict()),
+  /** Listed proposals that can no longer be committed, with why; absent means none. */
+  unavailable: z.array(z.object({ proposalId: text, title: z.string(), reason: text }).strict()).optional(),
   dirtyClaims: filePaths,
   cleanClaims: filePaths,
   stashedClaims: filePaths,
@@ -116,6 +118,10 @@ export function formatGitArcStatus(input: GitArcStatus, full: readonly GitArcSta
   }
   if (status.pending.length) lines.push(`Proposals pending: ${status.pending.map(p => `${quote(p.proposalId)} ${quote(p.title)}`).join(", ")}`);
   if (status.accepted.length) lines.push(`Proposals accepted: ${status.accepted.map(p => `${quote(p.proposalId)} ${quote(p.title)} as ${p.commitSha}`).join(", ")}`);
+  if (status.unavailable?.length) {
+    // Title and reason are always JSON strings so the reason boundary stays unambiguous.
+    lines.push(`Proposals unavailable: ${status.unavailable.map(p => `${quote(p.proposalId)} ${JSON.stringify(p.title)} because ${JSON.stringify(p.reason)}`).join(", ")}`);
+  }
   for (const [label, paths, selector] of [
     ["Dirty claims", status.dirtyClaims, "dirty"],
     ["Clean claims", status.cleanClaims, "clean"],
@@ -170,7 +176,7 @@ export function parseGitArcStatus(output: string) {
         result.recovery.push(evidence);
         evidence = undefined;
       }
-      if (["Proposals pending", "Proposals accepted", "Dirty claims", "Clean claims", "Stashed claims", "Unclaimed dirt", "Claim-loss baseline unavailable", "Arc stashed"].includes(label)) {
+      if (["Proposals pending", "Proposals accepted", "Proposals unavailable", "Dirty claims", "Clean claims", "Stashed claims", "Unclaimed dirt", "Claim-loss baseline unavailable", "Arc stashed"].includes(label)) {
         if (seen.has(label)) throw new Error("Duplicate status group.");
         seen.add(label);
       }
@@ -187,6 +193,13 @@ export function parseGitArcStatus(output: string) {
             const at = entry.lastIndexOf(" as ");
             if (at < 0) throw new Error("Invalid acceptance summary.");
             return { ...readProposal(entry.slice(0, at)), commitSha: entry.slice(at + 4) };
+          });
+          break;
+        case "Proposals unavailable":
+          result.unavailable = splitList(value).map(entry => {
+            const match = /^(\S+) ("(?:[^"\\]|\\.)*") because ("(?:[^"\\]|\\.)*")$/u.exec(entry);
+            if (!match) throw new Error("Invalid unavailable summary.");
+            return { proposalId: unquote(match[1]!), title: unquote(match[2]!), reason: unquote(match[3]!) };
           });
           break;
         case "Dirty claims": result.dirtyClaims = parseSummary(value); break;

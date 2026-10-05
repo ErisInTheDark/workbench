@@ -9,7 +9,6 @@ import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-stora
 import type { GitArcStashResult } from "./WorkbenchGitCheckpointController";
 import GitArcRegistry, { findGitArcCollisions, getGitArcLiveClaimPaths, GitArcCollisionError, type GitArcPreparedOperation } from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
-import GitArcProposalController from "./GitArcProposalController";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitArcStackController from "./GitArcStackController";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
@@ -37,7 +36,6 @@ export default class GitArcStashController {
     const registry = new GitArcRegistry(repository, this.resolveThreadIdentity);
     const checkpoints = new GitCheckpointStore(repository, this.resolveThreadIdentity);
     const snapshots = new GitArcClaimLossStore(repository, this.resolveThreadIdentity);
-    const proposals = new GitArcProposalController(undefined, this.resolveThreadIdentity);
     const current = await registry.find(identity);
     // Stash baselines are real HEAD; pending stack layers would leave sealed work unclaimed or block unstash.
     if (action !== "discard" && await new GitArcStackController(repository, this.resolveThreadIdentity).pendingTip(current)) {
@@ -148,11 +146,8 @@ export default class GitArcStashController {
         const mutation = await registry.prepareOwners([{
           identity, expectedCheckpointCommit: current?.checkpointCommit ?? null, next,
         }]);
-        const invalidated = live.length ? await proposals.prepareUnavailableUpdates({
-          ...input, harness, repository, proposalIds: arc?.proposalIds ?? [],
-          reason: "Saved work was restored into a different live claim set.",
-        }) : [];
-        updates = [...mutation.updates, prepared.update, ...invalidated];
+        // Saved paths never overlap live claims, so live proposals keep their committable snapshots.
+        updates = [...mutation.updates, prepared.update];
         deletes = saved.legacy ? [] : await snapshots.prepareDeleteAdopted(identity, saved.paths);
         targetTree = merged.tree;
         result = {

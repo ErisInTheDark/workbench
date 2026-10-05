@@ -84,7 +84,7 @@ Acceptance releases clean claims. Continuation uses the narrowed live set and re
 
 Edit active claims with <tool id="git_arc_claims" /> and `{ inherit: true, addPaths?, removePaths?, adoptPaths? }`. **Includes continuation checks and accepted-outcome reconciliation; do not continue first.** Omit unused arrays. CLI: `wb git arc claims --inherit -- added.ts -removed.ts '*adopted.ts'`.
 
-<tool id="git_arc_adopt" /> transfers a source's complete live claims and stash. Use `threadId` only on explicit user instruction, or `name` for an owned subagent when needed. Preserve caller claims and worktree; plans/proposals stay with source. Reject stash transfer if caller has one.
+<tool id="git_arc_adopt" /> transfers a source's complete live claims and stash. Use `threadId` only on explicit user instruction, or `name` for an owned subagent when needed. Preserve caller claims, proposals and worktree; plans stay with source; source proposals covering moved files become unavailable and are reported. Reject stash transfer if caller has one.
 
 <tool id="git_arc_stash" /> saves all claimed work and releases live claims. <tool id="git_arc_unstash" /> restores it alongside current claims. Neither accepts paths. Preserve pending plans and frozen merge base; reject stash replacement. Text conflicts are editable worktree markers, not a Git operation; no Git continue/abort is required. Unsupported conflicts reject and preserve stash.
 

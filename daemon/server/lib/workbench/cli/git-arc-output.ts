@@ -83,6 +83,7 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
       ...(action === "stash" || action === "adopt" ? { stashedPaths: paths(payload, "stashedPaths") } : {}),
       ...(action === "unstash" ? { conflictedPaths: paths(payload, "conflictedPaths") } : {}),
       acceptedProposals: sources.flatMap((member) => rows(member, "acceptedProposals").map((accepted) => ({ proposalId: string(accepted, "proposalId"), commitSha: string(accepted, "commitSha") }))),
+      invalidatedProposals: sources.flatMap((member) => rows(member, "invalidatedProposals").map((invalidated) => ({ proposalId: string(invalidated, "proposalId"), reason: string(invalidated, "reason") }))),
       planningDrift,
       memberRefs: members.flatMap((member) => {
         const memberRef = string(member, action === "propose" ? "sourceCheckpoint" : "checkpointCommit");

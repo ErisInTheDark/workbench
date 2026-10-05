@@ -29,6 +29,7 @@ test("status round-trips proposal identities and recovery counts without section
     ...empty,
     pending: [{ proposalId: "pending", title: "commas, quotes \" and\nDirty claims: fake" }],
     accepted: [{ proposalId: "accepted", title: "words as words", commitSha: "a".repeat(40) }],
+    unavailable: [{ proposalId: "gone", title: "because, reasons", reason: "Moved \"away\", because\nProposals pending: fake" }],
     recovery: [{
       kind: "lost",
       paths: ["comma, file"], headMovement: "incompatible", commits: [{

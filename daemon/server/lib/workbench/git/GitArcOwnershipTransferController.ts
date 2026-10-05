@@ -6,6 +6,7 @@
  */
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
+import type { GitArcInvalidatedProposal } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { GitArcReleaseResult } from "./WorkbenchGitCheckpointController";
 import GitArcRegistry, { getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
@@ -39,6 +40,8 @@ export interface GitArcAdoptionResult {
   claimedPaths: string[];
   additionalClaims: string[];
   stashedPaths: string[];
+  /** Source proposals that lost their owner's claims; reported so they never vanish silently. */
+  invalidatedProposals: GitArcInvalidatedProposal[];
 }
 
 function liveArc(entry: GitArcRegistryEntry | null) {
@@ -85,7 +88,6 @@ export default class GitArcOwnershipTransferController {
     const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
     const [sourceChain, targetChain] = await Promise.all([stack.readChain(origin?.stackTip), stack.readChain(target?.stackTip)]);
     const sourceOwn = stack.ownLayers(sourceChain, source);
-    const targetOwn = stack.ownLayers(targetChain, caller);
     if (!selectedPaths && sourceOwn.length && await stack.chainHasPending(sourceOwn)) {
       throw new GitArcRejectionError({ reason: "stackedSource" }, "The source thread owns pending stack layers. They must be committed before adoption.");
     }
@@ -104,7 +106,6 @@ export default class GitArcOwnershipTransferController {
     }
     const recipientStackTip = sourceTip && (!targetPendingTip || fastForward) ? sourceTip : undefined;
     const sourceSealed = new Set(sourceOwn.flatMap(({ layer }) => layer.proposalIds));
-    const targetSealed = new Set(targetOwn.flatMap(({ layer }) => layer.proposalIds));
     const sourceLive = origin ? getGitArcLiveClaimPaths(origin) : [];
     const requested = selectedPaths?.length ? repository.normalizePaths(selectedPaths) : [];
     if (selectedPaths && (!requested.length || new Set(requested).size !== selectedPaths.length
@@ -219,23 +220,20 @@ export default class GitArcOwnershipTransferController {
       { identity: source, expectedCheckpointCommit: origin?.checkpointCommit ?? null, next: nextSource },
     ]);
     updates.push(...mutation.updates);
-    // Sealed proposals no longer depend on live claims, so ownership moves leave them committable.
-    const invalidations = [
-      {
-        identity: source,
-        ids: [...new Set([...(sourceArc?.proposalIds ?? origin?.proposalIds ?? []), ...(!selectedPaths ? sourceStash?.proposalIds ?? [] : [])])]
-          .filter(id => !sourceSealed.has(id)),
-      },
-      ...(incoming.length ? [{ identity: caller, ids: (callerArc?.proposalIds ?? []).filter(id => !targetSealed.has(id)) }] : []),
-    ];
-    for (const { identity, ids } of invalidations) {
-      updates.push(...await proposals.prepareUnavailableUpdates({
-        cwd: repository.root, ...identity, repository, proposalIds: ids,
+    // Only the source loses files. Its pending proposals covering moved files can no longer be committed by their owner;
+    // sealed proposals and every caller proposal are frozen snapshots that stay committable.
+    const sourceOpen = [...new Set([...(sourceArc?.proposalIds ?? origin?.proposalIds ?? []), ...(!selectedPaths ? sourceStash?.proposalIds ?? [] : [])])]
+      .filter(id => !sourceSealed.has(id));
+    const { updates: invalidationUpdates, invalidatedProposals } = await proposals.prepareUnavailableUpdates({
+      cwd: repository.root, ...source, repository,
+      proposalIds: selectedPaths
+        ? await proposals.proposalsCoveringPaths(repository, source.harness, source.threadId, sourceOpen, incoming)
+        : sourceOpen,
       reason: selectedPaths
         ? "Selected claims were released to a subagent."
         : "Claim ownership was transferred to a coordinating thread.",
-      }));
-    }
+    });
+    updates.push(...invalidationUpdates);
     const checkpoint = prepared ?? stashCheckpoint ?? await store.readCheckpoint(harness, caller.threadId, checkpointCommit);
     const result: GitArcAdoptionResult = {
       checkpointCommit: plan?.checkpointCommit ?? checkpointCommit,
@@ -244,6 +242,7 @@ export default class GitArcOwnershipTransferController {
       phase: claimedPaths.length ? plan ? "plan" : "active" : "stashed",
       repoRoot: repository.root, scopePaths: plan?.metadata?.scopePaths ?? claimedPaths,
       claimedPaths, additionalClaims: incoming, stashedPaths: sourceStash?.paths ?? callerStash?.paths ?? [],
+      invalidatedProposals,
     };
     const sourcePlan = origin?.phase === "plan"
       ? await store.readCheckpoint(sourceHarness, source.threadId, origin.checkpointCommit) : null;
@@ -256,6 +255,7 @@ export default class GitArcOwnershipTransferController {
       phase: origin?.phase === "plan" ? "plan" : remaining.length ? "active" : "resolved",
       repoRoot: repository.root, scopePaths: remaining, claimedPaths: remaining, releasedClaims: incoming,
       ...(sourcePlan ? { plannedPaths: sourcePlan.metadata?.scopePaths ?? [] } : {}),
+      invalidatedProposals,
     };
     return {
       operation: {

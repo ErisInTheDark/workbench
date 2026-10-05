@@ -21,16 +21,20 @@ async function start(controller: WorkbenchGitCheckpointController, cwd: string, 
   return await controller.createAndStartPlan({ cwd, threadId, paths, intentName: "change files" });
 }
 
-test("whole-source adoption keeps caller claims and source dirty work without changing files", async context => {
+test("whole-source adoption keeps caller claims, pending proposals and source dirty work without changing files", async context => {
   const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
   context.after(() => fixture.dispose());
   const cwd = fixture.root;
   const controller = new WorkbenchGitCheckpointController() as AdoptionOwner;
   await start(controller, cwd, "parent", ["one.txt"]);
   await start(controller, cwd, "child", ["two.txt"]);
+  await fs.writeFile(path.join(cwd, "one.txt"), "parent proposed\n");
   await fs.writeFile(path.join(cwd, "two.txt"), "child change\n");
+  const proposal = await controller.createProposal({ cwd, description: "", threadId: "parent", title: "parent work" });
   assert.equal(typeof controller.adoptArc, "function", "the Git owner must support whole-source adoption");
   await controller.adoptArc({ cwd, threadId: "parent", source: { harness: "codex", threadId: "child" } });
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).pending.map(({ proposalId }) => proposalId),
+    [proposal.proposalId], "adoption leaves the caller's proposed snapshot committable");
   assert.deepEqual((await controller.readScope({ cwd, threadId: "parent" }))?.claimedPaths, ["one.txt", "two.txt"]);
   assert.deepEqual((await controller.readScope({ cwd, threadId: "child" }))?.claimedPaths ?? [], []);
   assert.equal(await fs.readFile(path.join(cwd, "two.txt"), "utf8"), "child change\n");
@@ -116,7 +120,12 @@ test("a caller's ordinary stash survives adoption of live child claims", async c
   const saved = await controller.readStatus({ cwd, threadId: "parent" });
   assert.deepEqual(saved.dirtyClaims, ["two.txt"]);
   assert.deepEqual(saved.stashedClaims, ["one.txt"]);
+  const proposal = await controller.createProposal({ cwd, description: "", threadId: "parent", title: "live work" });
   await controller.unstashArc({ cwd, threadId: "parent" });
+  // Unstash only writes disjoint saved paths, so the live proposal's snapshot stays committable.
+  assert.equal((await controller.getProposal({
+    cwd, includeNewer: false, proposalId: proposal.proposalId, threadId: "parent",
+  })).status, "proposed");
   assert.deepEqual((await controller.readScope({ cwd, threadId: "parent" }))?.claimedPaths, ["one.txt", "two.txt"]);
   assert.equal(await fs.readFile(path.join(cwd, "one.txt"), "utf8"), "parent saved\n");
   assert.equal(await fs.readFile(path.join(cwd, "two.txt"), "utf8"), "child live\n");
@@ -132,12 +141,21 @@ test("selected release returns dirty claims to a resolved child without exposing
   await start(controller, cwd, "parent", ["one.txt", "two.txt"]);
   await fs.writeFile(path.join(cwd, "one.txt"), "child receives this dirty work\n");
   await fs.writeFile(path.join(cwd, "two.txt"), "parent keeps this dirty work\n");
+  const moved = await controller.createProposal({ cwd, description: "", paths: ["one.txt"], threadId: "parent", title: "moved" });
+  const kept = await controller.createProposal({ cwd, description: "", paths: ["two.txt"], threadId: "parent", title: "kept" });
   const repository = await WorkbenchGitRepository.open(cwd);
   const index = await repository.writeIndexTree();
   const operation = await controller.prepareReleaseToChild({
     cwd, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["one.txt"],
   });
-  assert.deepEqual((await operation.apply()).releasedClaims, ["one.txt"]);
+  const released = await operation.apply();
+  assert.deepEqual(released.releasedClaims, ["one.txt"]);
+  // Only the proposal covering moved files loses its owner, and it is reported rather than silently dropped.
+  const reason = "Selected claims were released to a subagent.";
+  assert.deepEqual(released.invalidatedProposals, [{ proposalId: moved.proposalId, reason }]);
+  const parentStatus = await controller.readStatus({ cwd, threadId: "parent" });
+  assert.deepEqual(parentStatus.pending.map(({ proposalId }) => proposalId), [kept.proposalId]);
+  assert.deepEqual(parentStatus.unavailable, [{ proposalId: moved.proposalId, title: "moved", reason }]);
   assert.deepEqual((await controller.readScope({ cwd, threadId: "parent" }))?.claimedPaths, ["two.txt"]);
   assert.deepEqual((await controller.readScope({ cwd, threadId: "child" }))?.claimedPaths, ["one.txt"]);
   assert.deepEqual((await controller.compare({ cwd, threadId: "parent" })).changes.map(change => change.path), ["two.txt"]);

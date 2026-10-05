@@ -726,15 +726,12 @@ async function checkContinuation(repoRoot: string, threadId: string, originalChe
   const extended = await addToGitArc({ cwd: repoRoot, paths: ["unrelated.txt"], threadId });
   assert.deepEqual(extended.scopePaths, ["selected.txt", "unrelated.txt"]);
   assert.notEqual(extended.checkpointCommit, originalCheckpoint);
-  const firstUnavailable = await readGitCheckpointProposal({
-    cwd: repoRoot,
-    includeNewer: false,
-    proposalId: firstProposalId,
-    threadId,
-  });
-  assert.equal(firstUnavailable.status, "unavailable");
-  assert.match(firstUnavailable.unavailableReason ?? "", /Implementation continued/u);
-  assert.equal((await controller.findActiveClaim({ cwd: repoRoot, threadId }))?.proposalId, null);
+  // Ownership changes leave proposed snapshots untouched, so they stay committable.
+  const readStatus = async (proposalId: string) => (await readGitCheckpointProposal({
+    cwd: repoRoot, includeNewer: false, proposalId, threadId,
+  })).status;
+  assert.equal(await readStatus(firstProposalId), "proposed");
+  assert.equal((await controller.findActiveClaim({ cwd: repoRoot, threadId }))?.proposalId, firstProposalId);
   const followed = await controller.continueArc({
     checkpointCommit: originalCheckpoint,
     cwd: repoRoot,
@@ -743,26 +740,28 @@ async function checkContinuation(repoRoot: string, threadId: string, originalChe
   assert.equal(followed.checkpointCommit, extended.checkpointCommit);
 
   await write(repoRoot, "unrelated.txt", "follow-up implementation\n");
+  // Proposing everything again would swallow the pending proposal's work, so it rejects loudly instead.
+  await assert.rejects(createGitCheckpointProposal({
+    cwd: repoRoot, description: "", threadId, title: "Everything again",
+  }), /already in pending proposal.*selected\.txt.*Stack it/u);
   const secondProposal = await createGitCheckpointProposal({
     cwd: repoRoot,
     description: "",
+    paths: ["unrelated.txt"],
     threadId,
     title: "Second proposal",
   });
+  // Nothing changed ownership, so continuing keeps the same checkpoint instead of minting one.
   const revised = await continueGitArc({ checkpointCommit: extended.checkpointCommit, cwd: repoRoot, threadId });
   assert.deepEqual(revised.scopePaths, extended.scopePaths);
-  assert.notEqual(revised.checkpointCommit, extended.checkpointCommit);
-  const secondUnavailable = await readGitCheckpointProposal({
-    cwd: repoRoot,
-    includeNewer: false,
-    proposalId: secondProposal.proposalId,
-    threadId,
-  });
-  assert.equal(secondUnavailable.status, "unavailable");
-  assert.match(secondUnavailable.unavailableReason ?? "", /Implementation continued/u);
+  assert.equal(revised.checkpointCommit, extended.checkpointCommit);
+  assert.equal(await readStatus(firstProposalId), "proposed");
+  assert.equal(await readStatus(secondProposal.proposalId), "proposed");
   const active = await controller.findActiveClaim({ cwd: repoRoot, threadId });
   assert.equal(active?.checkpointCommit, revised.checkpointCommit);
-  assert.equal(active?.proposalId, null);
+  assert.deepEqual(active?.proposalIds, [firstProposalId, secondProposal.proposalId]);
+  assert.deepEqual((await controller.readStatus({ cwd: repoRoot, threadId })).pending.map(({ proposalId }) => proposalId),
+    [firstProposalId, secondProposal.proposalId]);
 }
 
 checkpointTest("proposal file sets stay frozen while newer selected edits remain optional", 8, async (bundle) => {

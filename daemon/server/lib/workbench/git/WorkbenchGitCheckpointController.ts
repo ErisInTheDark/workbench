@@ -63,6 +63,7 @@ import GitArcStashController from "./GitArcStashController";
 import GitArcOwnershipTransferController, { type GitArcAdoptionInput, type GitArcSelectedTransferInput } from "./GitArcOwnershipTransferController";
 import { collectGitArcDrift } from "./git-arc-drift";
 import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
+import type { GitArcInvalidatedProposal } from "workbench-shared/workbench/git/git-arc-receipts";
 import WorkbenchGitRepository, { type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
 import {
   type ArcOutcome,
@@ -131,6 +132,8 @@ export interface GitCheckpointCreateResult {
 
 export interface GitArcReleaseResult extends GitCheckpointCreateResult {
   claimedPaths?: string[];
+  /** Proposals of the releasing thread that lost their files to the receiver. */
+  invalidatedProposals?: GitArcInvalidatedProposal[];
   plannedPaths?: string[];
   releasedClaims: string[];
   unchanged?: boolean;
@@ -538,27 +541,15 @@ export default class WorkbenchGitCheckpointController {
     };
     const checkpointCommit = await repository.createCommitFromTree(tree, parent, checkpointMessage(nextMetadata));
     const checkpointRef = await checkpointRefName(repository.root, harness, threadId, checkpointCommit, this.resolveThreadIdentity);
-    // Sealed proposals are the stack's baseline; retiring them would let the next layer seal on bare HEAD.
-    const sealed = await new GitArcStackController(repository, this.resolveThreadIdentity).sealedProposalIds(active);
-    const currentProposalIds = active.proposalIds ?? (active.proposalId ? [active.proposalId] : []);
-    const retainedProposalIds = currentProposalIds.filter(id => sealed.has(id));
-    const proposalUpdates = await this.proposals.prepareUnavailableUpdates({
-      cwd: repository.root,
-      repository,
-      harness,
-      proposalIds: currentProposalIds.filter(id => !sealed.has(id)),
-      reason: "Implementation continued after this proposal was created.",
-      threadId,
-    });
     const registryMutation = await registry.prepareClaim({
       checkpointCommit,
       claimedPaths: scopePaths,
       harness,
       intentDescription: active.intentDescription,
       intentName: nextMetadata.intentName ?? active.intentName,
-      // Sealed proposals stay listed so stack layers keep rendering and committing in order.
-      proposalId: retainedProposalIds.at(-1) ?? null,
-      proposalIds: retainedProposalIds,
+      // Proposals are frozen snapshots validated at commit time, so moves keep every one listed and committable.
+      proposalId: active.proposalId,
+      proposalIds: active.proposalIds,
       retainedArc: undefined,
       phase: "active",
       threadId,
@@ -572,7 +563,6 @@ export default class WorkbenchGitCheckpointController {
       version: 1,
     }, this.resolveThreadIdentity);
     const publish = async () => await repository.updateRefs([
-      ...proposalUpdates,
       { newValue: checkpointCommit, oldValue: "0".repeat(40), ref: checkpointRef },
       outcomeUpdate,
       ...registryMutation.updates,
@@ -1334,7 +1324,7 @@ export default class WorkbenchGitCheckpointController {
       }));
       await repository.restorePaths(restoreSource, sourcePaths);
       if (releasingArc) {
-        const proposalUpdates = await this.proposals.prepareUnavailableUpdates({
+        const { updates: proposalUpdates } = await this.proposals.prepareUnavailableUpdates({
           cwd: releasingArc.repository.root,
           harness,
           proposalIds: releasingArc.active.proposalIds ?? [],

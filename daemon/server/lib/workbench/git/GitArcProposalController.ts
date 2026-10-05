@@ -616,6 +616,7 @@ export default class GitArcProposalController {
     const pending: Array<{ proposalId: string; title: string }> = [];
     const stackedPending = new Map<string, Array<{ proposalId: string; title: string }>>();
     const accepted: Array<{ proposalId: string; title: string; commitSha: string }> = [];
+    const unavailable: Array<{ proposalId: string; title: string; reason: string }> = [];
     for (const proposalId of proposalIds) {
       const { proposal } = await resolveProposalState(this.resolveThreadIdentity, repository, harness, input.threadId, proposalId, {
         includeNewer: false, persistTransitions: false, snapshot,
@@ -629,12 +630,15 @@ export default class GitArcProposalController {
       if (metadata.status === "committed" && metadata.committedSha) {
         accepted.push({ proposalId, title: metadata.title, commitSha: metadata.committedSha });
       }
+      if (metadata.status === "unavailable") {
+        unavailable.push({ proposalId, title: metadata.title, reason: metadata.unavailableReason || "This proposal can no longer be committed." });
+      }
     }
     const stacked = layers.flatMap(({ layer, tipCommit }) => {
       const layerPending = stackedPending.get(tipCommit);
       return layerPending?.length ? [{ title: layer.title, pending: layerPending }] : [];
     });
-    return { pending, accepted, ...(stacked.length ? { stacked } : {}) };
+    return { pending, accepted, ...(stacked.length ? { stacked } : {}), ...(unavailable.length ? { unavailable } : {}) };
   }
 
   async listLifecycleStates({ cwd }: { cwd: string }): Promise<GitArcLifecycleState[]> {
@@ -965,17 +969,21 @@ export default class GitArcProposalController {
     commitMessage(metadata.title, metadata.description);
     const proposalCommit = await repository.createCommitFromTree(proposalTree, baseCommit, proposalMessage(metadata));
     await buildProposalFileChanges(this.proposalDiffs, repository, metadata, proposalTree);
+    // A replacement takes its target's place, so superseded proposals never linger in the thread's list.
+    const nextProposalIds = replaceProposalId && proposalIds.includes(replaceProposalId)
+      ? proposalIds.map(id => id === replaceProposalId ? proposalId : id)
+      : [...proposalIds, proposalId];
     const registryMutation = await registry.prepareSet({
       ...active,
       ...(active.phase === "plan" ? {
         retainedArc: {
           ...arc,
           phase: "active" as const,
-          proposalIds: [...proposalIds, proposalId],
+          proposalIds: nextProposalIds,
         },
       } : {
         proposalId,
-        proposalIds: [...proposalIds, proposalId],
+        proposalIds: nextProposalIds,
       }),
     }, active.checkpointCommit);
     let supersededProposalUpdate: GitRefUpdate | null = null;
@@ -1034,7 +1042,7 @@ export default class GitArcProposalController {
       if (!overlapping.length) continue;
       throw new GitArcRejectionError(
         { reason: "pathsInPendingProposal", paths: overlapping },
-        `Proposed paths are already in pending proposal ${proposalId}: ${overlapping.join(", ")}. Replace that proposal, rescind it, or propose explicit paths that exclude them.`,
+        `Proposed paths are already in pending proposal ${proposalId}: ${overlapping.join(", ")}. Stack it to build on it, replace it, rescind it, or propose explicit paths that exclude them.`,
       );
     }
   }
@@ -1509,7 +1517,7 @@ export default class GitArcProposalController {
     const repository = existingRepository ?? await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
     const store = this.store(repository);
-    const updates = await Promise.all(proposalIds.map(async (proposalId): Promise<GitRefUpdate | null> => {
+    const invalidations = await Promise.all(proposalIds.map(async (proposalId) => {
       const proposal = await store.readProposal(harness, threadId, proposalId);
       if (proposal.metadata.status !== "proposed") return null;
       const stateCommit = await repository.createCommitFromTree(
@@ -1517,9 +1525,25 @@ export default class GitArcProposalController {
         proposal.metadata.baseCommit,
         proposalMessage({ ...proposal.metadata, status: "unavailable", unavailableReason: reason }),
       );
-      return { newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef };
+      const update: GitRefUpdate = { newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef };
+      return { proposalId, update };
     }));
-    return updates.filter((update): update is GitRefUpdate => update !== null);
+    const applied = invalidations.filter(entry => entry !== null);
+    // Callers report invalidated proposals so they never vanish silently.
+    return {
+      updates: applied.map(({ update }) => update),
+      invalidatedProposals: applied.map(({ proposalId }) => ({ proposalId, reason })),
+    };
+  }
+
+  /** Pending proposals whose live paths intersect the given paths. */
+  async proposalsCoveringPaths(repository: WorkbenchGitRepository, harness: string, threadId: string, proposalIds: string[], paths: string[]) {
+    const store = this.store(repository);
+    const covering = await Promise.all(proposalIds.map(async (proposalId) => {
+      const proposal = await store.readProposal(normalizeHarness(harness), threadId, proposalId);
+      return proposal.metadata.livePaths.some(live => paths.some(candidate => gitArcPathsOverlap(live, candidate))) ? proposalId : null;
+    }));
+    return covering.filter(id => id !== null);
   }
 
   private async requireProposableArc(input: ArcIdentityInput) {

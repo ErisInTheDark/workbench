@@ -2,6 +2,7 @@
  * Exports:
  * - GitArcAction/GitArcReceipt: describe persisted arc action presentation data.
  * - GitArcStackedProposalSchema/GitArcStackedProposal: sealed proposal message and per-file totals captured at stacking.
+ * - GitArcInvalidatedProposalSchema/GitArcInvalidatedProposal: proposal an operation made unavailable, with its reason.
  * - GitArcReceiptSchema/projectGitArcReceipt/parseGitArcReceipt: validate compact presentation facts and decode current or historical text.
  * - formatGitArcTextReceipt: emit one labelled plain-text result without duplicated JSON.
  * - escapeGitArcValue/readGitArcValue: preserve literal values without permitting output-section injection.
@@ -25,6 +26,10 @@ export const GitArcStackedProposalSchema = z.object({
 }).strict();
 export type GitArcStackedProposal = z.infer<typeof GitArcStackedProposalSchema>;
 
+/** One proposal an operation made unavailable, with the reason its owner can no longer commit it. */
+export const GitArcInvalidatedProposalSchema = z.object({ proposalId: z.string().min(1), reason: z.string().min(1) }).strict();
+export type GitArcInvalidatedProposal = z.infer<typeof GitArcInvalidatedProposalSchema>;
+
 export const GitArcReceiptSchema = z.object({
   action: z.enum(["add", "adopt", "claims", "scope", "compare", "continue", "diff", "mv", "plan", "propose", "release", "remove", "restore", "stack", "stash", "start", "unstack", "unstash"]),
   /** Stack layer title sealed or reopened by stack/unstack. */
@@ -42,6 +47,7 @@ export const GitArcReceiptSchema = z.object({
   adoptedPaths: z.array(z.string().min(1)).optional(),
   removedClaims: z.array(z.string().min(1)).optional(),
   acceptedProposals: z.array(z.object({ proposalId: z.string().min(1), commitSha: z.string().min(1) })).optional(),
+  invalidatedProposals: z.array(GitArcInvalidatedProposalSchema).optional(),
   planningDrift: z.array(z.object({ previousRef: z.string().min(1), paths: z.array(z.string().min(1)) })).optional(),
   unchanged: z.boolean().optional(),
   intentName: z.string().min(1).nullable(),
@@ -100,6 +106,7 @@ export function projectGitArcReceipt(input: GitArcReceipt): GitArcReceipt {
     ...(receipt.unchanged ? { unchanged: true } : {}),
     ...(visible(receipt.memberRefs) ? { memberRefs: receipt.memberRefs } : {}),
     ...(visible(receipt.acceptedProposals) ? { acceptedProposals: receipt.acceptedProposals } : {}),
+    ...(visible(receipt.invalidatedProposals) ? { invalidatedProposals: receipt.invalidatedProposals } : {}),
     ...(receipt.planningDrift?.some((drift) => drift.paths.length)
       ? { planningDrift: receipt.planningDrift.filter((drift) => drift.paths.length) } : {}),
     ...(receipt.mode ? { mode: receipt.mode } : {}),
@@ -171,6 +178,12 @@ export function formatGitArcTextReceipt(input: GitArcReceipt) {
   if (receipt.acceptedProposals?.length) {
     lines.push(`accepted ${receipt.acceptedProposals.length}`);
     for (const accepted of receipt.acceptedProposals) lines.push(`${escapeGitArcValue(accepted.proposalId)}\t${accepted.commitSha}`);
+  }
+  if (receipt.invalidatedProposals?.length) {
+    lines.push(`invalidated ${receipt.invalidatedProposals.length}`);
+    for (const invalidated of receipt.invalidatedProposals) {
+      lines.push(`${escapeGitArcValue(invalidated.proposalId)}\t${escapeGitArcValue(invalidated.reason)}`);
+    }
   }
   for (const drift of receipt.planningDrift ?? []) {
     if (!drift.paths.length) continue;
@@ -257,8 +270,9 @@ function parseTextReceipt(output: string) {
       if (!previousRef) throw new Error("Missing previous plan ref.");
       drift.push({ previousRef, paths: take(count(value)).map(readGitArcValue) });
       previousRef = null;
-    } else if (key === "members" || key === "accepted" || key === "mappings" || key === "proposals") {
-      result[key === "members" ? "memberRefs" : key === "accepted" ? "acceptedProposals" : key] = take(count(value)).map((row) => {
+    } else if (key === "members" || key === "accepted" || key === "mappings" || key === "proposals" || key === "invalidated") {
+      const field = key === "members" ? "memberRefs" : key === "accepted" ? "acceptedProposals" : key === "invalidated" ? "invalidatedProposals" : key;
+      result[field] = take(count(value)).map((row) => {
         const parts = row.split("\t");
         if (parts.length !== 2) throw new Error("Invalid arc pair.");
         const first = readGitArcValue(parts[0]!);
@@ -266,6 +280,7 @@ function parseTextReceipt(output: string) {
         return key === "members" ? { rootId: first, ref: second }
           : key === "accepted" ? { proposalId: first, commitSha: second }
           : key === "proposals" ? { proposalId: first, status: second }
+          : key === "invalidated" ? { proposalId: first, reason: second }
           : { source: first, destination: second };
       });
     } else throw new Error("Unknown arc section.");

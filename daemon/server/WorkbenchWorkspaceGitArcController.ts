@@ -391,6 +391,7 @@ export default class WorkbenchWorkspaceGitArcController {
             else stacked.push({ title: layer.title, pending: [...layer.pending] });
           }
           result.accepted.push(...status.accepted);
+          if (status.unavailable?.length) (result.unavailable ??= []).push(...status.unavailable);
           result.dirtyClaims.push(...qualify(status.dirtyClaims));
           result.cleanClaims.push(...qualify(status.cleanClaims));
           result.stashedClaims.push(...qualify(status.stashedClaims));

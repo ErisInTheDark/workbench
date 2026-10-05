@@ -1115,12 +1115,10 @@ controllerTest("replacement", "replacement plans target prior pending and commit
     threadId: "partial-thread",
   });
   assert.deepEqual(successor.skippedIgnoredPaths, ["ignored/generated.ts"]);
-  const unavailable = await controller.getProposal({
+  const stillPending = await controller.getProposal({
     cwd: source, harness: "codex", includeNewer: false, proposalId: replacement.proposalId, threadId: "partial-thread",
   });
-  assert.equal(unavailable.status, "unavailable");
-  assert.equal(unavailable.committedSha, null);
-  assert.equal(unavailable.unavailableReason, "Implementation continued after this proposal was created.");
+  assert.equal(stillPending.status, "proposed");
   const continuedReplacement = await controller.createProposal({
     cwd: source,
     description: "",

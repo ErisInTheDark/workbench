@@ -1,4 +1,4 @@
-- Git arc commit proposals only become invalid if HEAD movement intersects with the proposal's changed files.
+- Git arc commit proposals only become invalid if HEAD movement intersects their changed files, their owner loses claims covering them, or restore discards the owner's claimed work. Continuing, claim edits, moves and unstash never invalidate them. Status lists every unavailable proposal with its reason; ownership transfer receipts also list those they invalidate.
 - A thread's pending proposals never share live paths. Propose rejects overlap unless it replaces that proposal.
 - Content amend proposals against pushed targets become fresh-commit proposals using `freshTitle`; detached HEAD and unknown remote state still reject.
 - Git arc read endpoints do not fetch remotes or update refs. They derive presentation state from local repository state. Mutations revalidate before changing refs or history.
