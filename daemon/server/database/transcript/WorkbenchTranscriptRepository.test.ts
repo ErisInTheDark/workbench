@@ -677,7 +677,7 @@ test("canonical window relational reads stay bounded as item count grows", () =>
   );
 });
 
-test("source ids stay thread-scoped while repeated same-thread items keep their earliest turn owner", () => {
+test("source ids stay thread-scoped while repeated same-thread items keep their admitted turn owner", () => {
   const { database, repository } = createRepository();
   const item = (threadId: string, turnId: string, text: string): WorkbenchTranscriptAtomicObservation => ({
     kind: "item",
@@ -702,14 +702,14 @@ test("source ids stay thread-scoped while repeated same-thread items keep their 
       turnObservation("later", 1),
     ]);
     repository.settle([item("thread", "later", "arrived latest-first")]);
-    repository.settle([item("thread", "earlier", "repaired to first owner")]);
+    repository.settle([item("thread", "earlier", "observed in an earlier native turn")]);
     repository.settle([item("thread", "later", "repeated later")]);
 
     const snapshot = repository.read({ threadId: "thread", turnLimit: 2 });
     assert.ok(snapshot);
     assert.deepEqual(
       rootsWithReferences(snapshot).map(({ reference, item_position, turn_id }) => [reference, turn_id, item_position]),
-      [["carried", "earlier", 0]],
+      [["carried", "later", 0]],
     );
 
     repository.settle([
@@ -1928,8 +1928,10 @@ for (const targetHasBody of [false, true]) {
 }
 
 for (const scenario of [
-  { current: ["before", "after"], expected: ["before", "missing", "after"] },
-  { current: ["before", "local", "after"], expected: ["before", "local", "after", "missing"] },
+  { current: ["before", "after"], evidence: ["before", "missing", "after"], expected: ["before", "missing", "after"] },
+  { current: ["before", "local", "after"], evidence: ["before", "missing", "after"], expected: ["before", "local", "after", "missing"] },
+  { current: ["after"], evidence: ["first", "second", "after"], expected: ["first", "second", "after"] },
+  { current: ["before", "after"], evidence: ["before", "first", "second", "after"], expected: ["before", "first", "second", "after"] },
 ]) {
   test(`recovery inserts missing items only into a confirmed canonical gap (${scenario.current.join(", ")})`, () => {
     const { database, repository } = createRepository();
@@ -1943,15 +1945,21 @@ for (const scenario of [
     });
     try {
       repository.settle([threadObservation(), observedTurn, ...scenario.current.map(message)]);
+      const before = repository.read({ threadId: "thread", turnLimit: 1 })!;
       const recovery = providerTurnScope([
-        observedTurn, ...["before", "missing", "after"].map(message),
+        observedTurn, ...scenario.evidence.map(message),
       ], ["turn"]);
+      const invalid: WorkbenchTranscriptAtomicObservation = {
+        kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+        turnId: fixtureIdentityValues.WorkbenchTurnId.turn, lifecycle: "completed", observedAt: 4,
+        item: { id: scenario.current[0]!, type: "contextCompaction" },
+      };
+      assert.throws(() => repository.settle([recovery, invalid]));
+      assert.deepEqual(repository.read({ threadId: "thread", turnLimit: 1 }), before);
       repository.settle([recovery]);
       repository.settle([recovery]);
-      const items = repository.read({ threadId: "thread", turnLimit: 1 })!.rows.threadItems;
       assert.deepEqual(rootsWithReferences(repository.read({ threadId: "thread", turnLimit: 1 })!)
         .map(({ reference }) => reference), scenario.expected);
-      assert.deepEqual(items.map(({ item_position }) => item_position), scenario.expected.map((_, index) => index));
     } finally {
       database.close();
     }
@@ -2735,7 +2743,7 @@ function compaction(
   };
 }
 
-function compactionEcho(lifecycle: "streaming" | "completed", reference: string, observedAt: number): WorkbenchTranscriptObservation {
+function compactionEcho(lifecycle: "streaming" | "completed", reference: string, observedAt: number): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> {
   return {
     kind: "item", lifecycle, observedAt,
     threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
@@ -2756,6 +2764,53 @@ function readCompactions(repository: WorkbenchTranscriptRepository) {
       startedAt: timeline?.startedAt ?? null, completedAt: timeline?.completedAt ?? null,
     }];
   }));
+}
+
+for (const [outcome, reference] of [
+  ["completed", "native-compaction"], ["failed", "native-compaction"],
+  ["completed", "item-99"], ["failed", "item-99"],
+] as const) {
+  test(`recovery preserves a ${outcome} compaction's slot and measured state across repository recreation (${reference})`, () => {
+    const { database, repository } = createRepository();
+    const message = (id: string): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> => ({
+      kind: "item", lifecycle: "completed", observedAt: 170,
+      threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+      turnId: fixtureIdentityValues.WorkbenchTurnId.live,
+      item: { id, type: "reasoning", summary: [id], content: [] },
+    });
+    try {
+      repository.settle([
+        threadObservation(), liveTurn("live", 0), message("before"),
+        compaction("started", 100, { reference }),
+        compaction(outcome, 150, { reference }),
+        message("after"),
+      ]);
+      const initial = repository.read({ threadId: "thread", turnLimit: 1 })!;
+      const expectedOrder = initial.rows.threadItems.map(item => item.public_id);
+      const expectedState = readCompactions(repository);
+      repository.settle([{
+        ...compactionEcho("completed", reference, 200),
+        item: withWorkbenchThreadItemIdentity({ type: "contextCompaction", id: reference }, "provisional"),
+      }]);
+      assert.deepEqual(repository.read({ threadId: "thread", turnLimit: 1 })!.rows.threadItems.map(item => item.public_id), expectedOrder);
+      assert.deepEqual(readCompactions(repository), expectedState);
+      for (const lifecycle of ["streaming", "completed", "completed"] as const) {
+        const reopened = new WorkbenchTranscriptRepository(database);
+        reopened.settle([providerTurnScope([
+          liveTurn("live", 0), message("after"),
+          compactionEcho(lifecycle, reference, 200),
+          message("before"),
+        ], ["live"])]);
+        assert.deepEqual(reopened.read({ threadId: "thread", turnLimit: 1 })!.rows.threadItems.map(item => item.public_id), expectedOrder);
+        assert.deepEqual(readCompactions(reopened), expectedState);
+      }
+      repository.settle([providerTurnScope([liveTurn("live", 0), message("before"), message("missing"), message("after")], ["live"])]);
+      const recovered = repository.read({ threadId: "thread", turnLimit: 1 })!;
+      assert.deepEqual(recovered.rows.threadItems.slice(0, expectedOrder.length).map(item => item.public_id), expectedOrder);
+      assert.equal(rootsWithReferences(recovered).at(-1)?.reference, "missing");
+      assert.deepEqual(readCompactions(repository), expectedState);
+    } finally { database.close(); }
+  });
 }
 
 test("a reported compaction is in progress from its start and settles with its measured interval", () => {

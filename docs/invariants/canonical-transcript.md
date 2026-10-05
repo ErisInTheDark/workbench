@@ -5,6 +5,7 @@
 - Held steers live outside `thread_items`. A steer enters the transcript only at delivery, as a new item at the delivery point.
 - Use turn indexes to order turns.
 - Use item positions to order items within one turn.
+- Workbench owns transcript order. Provider reconciliation may admit missing items or merge proven same-fact identities, never reorder admitted items or infer Workbench-owned identity from snapshot position.
 - Use item ids, not reusable request keys, as transcript item identity.
 - Do not give augmentation tables a second history order.
 - Store Workbench-owned domain state in typed tables.

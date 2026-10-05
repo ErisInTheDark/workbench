@@ -268,6 +268,8 @@ function normalizeTextSegment(value: string) {
 
 function getTurnItemDedupeKey(item: ThreadItem) {
   switch (item.type) {
+    case "contextCompaction":
+      return `contextCompaction:${item.id}`;
     case "functionCallOutput":
       return `functionCallOutput:${item.id}`;
     case "hookPrompt":
@@ -352,10 +354,6 @@ export function reconcileCompleteThreadItems(
   const incomingItemIds = new Set(incoming.map(({ id }) => id));
   const usedCurrentItemIds = new Set<string>();
   const results = new Map<string, ReconciledCompleteThreadItem>();
-  const currentCompactions = current.filter((
-    item,
-  ): item is Extract<ThreadItem, { type: "contextCompaction" }> => item.type === "contextCompaction");
-  let incomingCompactionIndex = 0;
 
   const emit = (item: ThreadItem, incomingItemId: string, aliases: string[] = []) => {
     const previous = results.get(item.id);
@@ -408,23 +406,11 @@ export function reconcileCompleteThreadItems(
     if (exactCurrentItem) {
       usedCurrentItemIds.add(exactCurrentItem.id);
       emit(mergeSameIdItem(exactCurrentItem, incomingItem, options), incomingItem.id);
-      if (incomingItem.type === "contextCompaction") incomingCompactionIndex += 1;
       continue;
     }
 
     if (incomingItem.type === "reasoning" && isProvisionalItem(incomingItem) && !hasReasoningContent(incomingItem)) {
       continue;
-    }
-
-    if (incomingItem.type === "contextCompaction") {
-      const currentItem = currentCompactions[incomingCompactionIndex];
-      incomingCompactionIndex += 1;
-      if (currentItem && !usedCurrentItemIds.has(currentItem.id)) {
-        usedCurrentItemIds.add(currentItem.id);
-        const item = preferCanonicalEquivalentItem(currentItem, incomingItem);
-        emit(item, incomingItem.id, [item.id === currentItem.id ? incomingItem.id : currentItem.id]);
-        continue;
-      }
     }
 
     const equivalentCurrentItem = findEquivalentCurrentItem(current, incomingItem, usedCurrentItemIds, incomingItemIds);
@@ -441,36 +427,6 @@ export function reconcileCompleteThreadItems(
   }
 
   return [...results.values()];
-}
-
-function mergeContextCompactionDedupeItem(
-  existingItem: Extract<ThreadItem, { type: "contextCompaction" }>,
-  incomingItem: Extract<ThreadItem, { type: "contextCompaction" }>,
-) {
-  return !isProvisionalItem(incomingItem) || isProvisionalItem(existingItem)
-    ? incomingItem
-    : existingItem;
-}
-
-function findContextCompactionDedupeIndex(items: ThreadItem[], incomingItem: Extract<ThreadItem, { type: "contextCompaction" }>) {
-  const previousItem = items.at(-1);
-  if (previousItem?.type === "contextCompaction") {
-    return items.length - 1;
-  }
-
-  const incomingIdIsGeneric = isProvisionalItem(incomingItem);
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item?.type !== "contextCompaction") {
-      continue;
-    }
-
-    if (isProvisionalItem(item) !== incomingIdIsGeneric) {
-      return index;
-    }
-  }
-
-  return -1;
 }
 
 function shouldPreferReasoningOwner(
@@ -553,24 +509,6 @@ export function normalizeThreadItems(items: ThreadItem[], options: NormalizeThre
       continue;
     }
 
-    if (item.type === "contextCompaction") {
-      const existingIndex = findContextCompactionDedupeIndex(dedupedItems, item);
-      if (existingIndex === -1) {
-        dedupedItems.push(item);
-        continue;
-      }
-
-      const existingItem = dedupedItems[existingIndex];
-      if (existingItem?.type !== "contextCompaction") {
-        dedupedItems.push(item);
-        continue;
-      }
-
-      changed = true;
-      dedupedItems[existingIndex] = mergeContextCompactionDedupeItem(existingItem, item);
-      continue;
-    }
-
     if (item.type === "userMessage") {
       const existingIndex = dedupedItems.findIndex((candidate) => (
         candidate.type === "userMessage"
@@ -591,6 +529,11 @@ export function normalizeThreadItems(items: ThreadItem[], options: NormalizeThre
       }
       dedupedItems.splice(existingIndex, 1);
       dedupedItems.push(mergedItem);
+      dedupedIndexesByKey.clear();
+      for (const [index, candidate] of dedupedItems.entries()) {
+        const key = getTurnItemDedupeKey(candidate);
+        if (key !== null) dedupedIndexesByKey.set(key, index);
+      }
       continue;
     }
 
@@ -610,7 +553,9 @@ export function normalizeThreadItems(items: ThreadItem[], options: NormalizeThre
     changed = true;
     dedupedItems[existingIndex] = options.mergeDuplicateItems
       ? options.mergeDuplicateItems(dedupedItems[existingIndex]!, item)
-      : dedupedItems[existingIndex]!;
+      : item.type === "contextCompaction"
+        ? mergeThreadItem(item, dedupedItems[existingIndex]!)
+        : dedupedItems[existingIndex]!;
   }
 
   const normalizedItems: ThreadItem[] = [];

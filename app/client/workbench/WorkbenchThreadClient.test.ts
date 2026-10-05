@@ -2091,15 +2091,9 @@ test("live compaction notifications preserve distinct markers and complete one o
     turnId: "turn",
   });
   current = client.getSnapshot().currentThread;
-  assert.deepEqual(current?.turns[0]?.items.map((item) => item.id), ["compaction-one", "between", "compaction-two"]);
-  assert.deepEqual(current?.turnHistory[0]?.itemTimeline, [{
-    aliases: ["item-99"],
-    completedAt: 250,
-    firstSeenAt: 100,
-    itemId: "compaction-two",
-    lastSeenAt: 250,
-    startedAt: 100,
-  }]);
+  assert.deepEqual(current?.turns[0]?.items.map((item) => item.id), ["compaction-one", "between", "compaction-two", "item-99"]);
+  assert.equal(current?.turnHistory[0]?.itemTimeline?.find(item => item.itemId === "compaction-two")?.completedAt, 200);
+  assert.equal(current?.turnHistory[0]?.itemTimeline?.find(item => item.itemId === "item-99")?.completedAt, 250);
   const opaqueSnapshotId = "5ce58db5-d6fc-48ba-aa84-336ce4bd3580";
   socket.notify("item/completed", {
     completedAtMs: 300,
@@ -2108,9 +2102,9 @@ test("live compaction notifications preserve distinct markers and complete one o
     turnId: "turn",
   });
   current = client.getSnapshot().currentThread;
-  assert.deepEqual(current?.turns[0]?.items.map((item) => item.id), ["compaction-one", "between", "compaction-two"]);
-  assert.deepEqual(current?.turnHistory[0]?.itemTimeline?.[0]?.aliases, ["item-99", opaqueSnapshotId]);
-  assert.equal(current?.turnHistory[0]?.itemTimeline?.[0]?.completedAt, 300);
+  assert.deepEqual(current?.turns[0]?.items.map((item) => item.id), ["compaction-one", "between", "compaction-two", "item-99", opaqueSnapshotId]);
+  assert.equal(current?.turnHistory[0]?.itemTimeline?.find(item => item.itemId === "compaction-two")?.completedAt, 200);
+  assert.equal(current?.turnHistory[0]?.itemTimeline?.find(item => item.itemId === opaqueSnapshotId)?.completedAt, 300);
 }));
 
 test("status and token owners survive canonical updates, authoritative nulls, and compact acknowledgement", async () => withClient(async (client, socket) => {

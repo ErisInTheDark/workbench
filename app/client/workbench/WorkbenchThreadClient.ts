@@ -3151,15 +3151,6 @@ function WorkbenchThreadClient(
     return updateTurnItems(threadKey, turnId, (items) => {
       const itemIndex = items.findIndex((item) => item.id === compactedIncomingItem.id);
       if (itemIndex === -1) {
-        const contextCompactionItemIndex = findContextCompactionLifecycleItemIndex(items, compactedIncomingItem);
-        if (contextCompactionItemIndex !== -1) {
-          return items.map((item, index) => (
-            index === contextCompactionItemIndex
-              ? mergeContextCompactionLifecycleItem(compactedIncomingItem, item)
-              : item
-          ));
-        }
-
         let matchedClientItem: ThreadItem | null = null;
         const nextItems = items.filter((item) => {
           const itemKey = getThreadItemKey(turnId, item.id);
@@ -3194,13 +3185,7 @@ function WorkbenchThreadClient(
         return null;
       }
 
-      const exactItem = turn.items.find((item) => item.id === incomingItem.id);
-      const lifecycleItem = exactItem ?? (() => {
-        const index = findContextCompactionLifecycleItemIndex(turn.items, incomingItem);
-        return index === -1 ? null : turn.items[index] ?? null;
-      })();
-      const itemId = lifecycleItem?.id ?? incomingItem.id;
-      const aliases = itemId === incomingItem.id ? undefined : [incomingItem.id];
+      const itemId = incomingItem.id;
       let updated = false;
       const turnHistory = thread.turnHistory.map((entry) => {
         if (entry.turnId !== turnId) {
@@ -3208,7 +3193,6 @@ function WorkbenchThreadClient(
         }
 
         const itemTimeline = upsertWorkbenchThreadItemTimelineEntry(entry.itemTimeline, {
-          ...(aliases ? { aliases } : {}),
           completedAt: method === "item/completed" ? timestamp : null,
           firstSeenAt: timestamp,
           itemId,
@@ -3221,41 +3205,6 @@ function WorkbenchThreadClient(
 
       return updated ? { ...thread, turnHistory } : null;
     }, { pruneStreamingDuplicates: false });
-  }
-
-  function mergeContextCompactionLifecycleItem(incomingItem: ThreadItem, existingItem: ThreadItem) {
-    if (incomingItem.type !== "contextCompaction" || existingItem.type !== "contextCompaction") {
-      return incomingItem;
-    }
-
-    if (getWorkbenchThreadItemIdentityKind(incomingItem) === "provisional" && getWorkbenchThreadItemIdentityKind(existingItem) !== "provisional") {
-      return existingItem;
-    }
-
-    return incomingItem;
-  }
-
-  function findContextCompactionLifecycleItemIndex(items: ThreadItem[], incomingItem: ThreadItem) {
-    if (incomingItem.type !== "contextCompaction") {
-      return -1;
-    }
-
-    const compactionIndexes = items
-      .map((item, index) => item.type === "contextCompaction" ? index : -1)
-      .filter((index) => index !== -1);
-    if (!compactionIndexes.length) {
-      return -1;
-    }
-
-    const incomingIdIsGeneric = getWorkbenchThreadItemIdentityKind(incomingItem) === "provisional";
-    const preferredIndex = incomingIdIsGeneric
-      ? compactionIndexes.findLast((index) => getWorkbenchThreadItemIdentityKind(items[index]!) !== "provisional")
-      : compactionIndexes.findLast((index) => getWorkbenchThreadItemIdentityKind(items[index]!) === "provisional");
-    if (preferredIndex !== undefined) {
-      return preferredIndex;
-    }
-
-    return -1;
   }
 
   function createStreamingAgentMessageItem(itemId: string): Extract<ThreadItem, { type: "agentMessage" }> {

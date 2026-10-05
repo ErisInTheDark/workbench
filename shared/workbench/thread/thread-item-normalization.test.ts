@@ -22,6 +22,28 @@ function user(id: string, clientId: string | null, text = "same"): Extract<Threa
   return { clientId, content: [{ text, text_elements: [], type: "text" }], id, type: "userMessage" };
 }
 
+test("compaction observations dedupe only by identity, never adjacency", () => {
+  const first = { id: "first", type: "contextCompaction" } as const;
+  const second = withWorkbenchThreadItemIdentity({ id: "second", type: "contextCompaction" }, "provisional");
+  assert.deepEqual(normalizeThreadItems([first, second, first]).map(item => item.id), ["first", "second"]);
+});
+
+test("provider reconciliation cannot identify a compaction by snapshot ordinal", () => {
+  const first = { id: "first", type: "contextCompaction" } as const;
+  const second = withWorkbenchThreadItemIdentity({ id: "second", type: "contextCompaction" }, "provisional");
+  assert.deepEqual(reconcileCompleteThreadItems([first], [second]).map(entry => ({
+    id: entry.item.id, aliases: entry.aliases,
+  })), [{ id: "second", aliases: [] }]);
+});
+
+test("a same-id compaction update keeps its slot when user-message aliases collapse", () => {
+  const compaction = { id: "compaction", type: "contextCompaction" } as const;
+  const provisional = withWorkbenchThreadItemIdentity(user("provisional", "client"), "provisional");
+  const canonical = user("canonical", "client");
+  assert.deepEqual(normalizeThreadItems([provisional, compaction, canonical, compaction]).map(item => item.id),
+    ["compaction", "canonical"]);
+});
+
 test("normalization excludes native plans without altering tagged agent markdown", () => {
   const taggedMarkdown = "<plan>\n# retained plan\n\nkeep this exact markdown\n</plan>";
   const items: ThreadItem[] = [
