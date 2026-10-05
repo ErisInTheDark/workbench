@@ -49,6 +49,30 @@ function execFileWithInput(command: string, args: string[], input: string, optio
 }
 const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
 
+test("message wait admits mixed sender targets through CLI and MCP with a stable invocation identity", async () => {
+  const context = { callerHarness: "codex", callerThreadId: "caller", cwd: "C:/workspace", workbenchOrigin: null };
+  const parsed = await parseWorkbenchAgentCliCommand([
+    "message", "wait", "--thread", "first", "--name", "luna", "--thread", "second",
+  ], context);
+  assert.equal(parsed.kind, "request");
+  assert.equal(parsed.request.path, "/api/message/wait");
+  assert.deepEqual(parsed.request.body?.threadIds, ["first", "second"]);
+  assert.deepEqual(parsed.request.body?.names, ["luna"]);
+  assert.equal(parsed.request.body?.callerThreadId, "caller");
+  assert.equal(typeof parsed.request.body?.waitId, "string");
+  const definition = listWorkbenchAgentCommands().find(command => command.words.join(" ") === "message wait");
+  assert.ok(definition);
+  const mcp = await definition.buildRequestFromJson({ threadIds: ["first", "second"], names: ["luna"] }, context);
+  assert.equal(mcp.path, parsed.request.path);
+  assert.deepEqual(mcp.body?.threadIds, parsed.request.body?.threadIds);
+  assert.deepEqual(mcp.body?.names, parsed.request.body?.names);
+  assert.notEqual(mcp.body?.waitId, parsed.request.body?.waitId);
+  assert.equal((await parseWorkbenchAgentCliCommand(["message", "wait"], context)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["message", "wait", "--thread", "first"], {
+    ...context, callerThreadId: null,
+  })).kind, "error");
+});
+
 test("wb git repo does not exist unless the virtual repository runtime is available", async () => {
   const absent = await parseWorkbenchAgentCliCommand(["git", "repo", "https://github.com/team/project.git"], { cwd: "C:/workspace" });
   assert.equal(absent.kind, "error");

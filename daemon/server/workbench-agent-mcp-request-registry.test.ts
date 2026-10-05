@@ -128,6 +128,23 @@ test("thread wait observation derives every active interruptible tool from live 
   ]);
 });
 
+test("agent-message interruption excludes message waits but user steers still interrupt them", () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const threadId = WorkbenchThreadIdSchema.parse("caller");
+  const messageWait = registry.register("client", "message", { owner: {}, toolName: "message_wait", steerInterruptible: true });
+  const subagentWait = registry.register("client", "subagent", { owner: {}, toolName: "subagent_wait", steerInterruptible: true });
+  messageWait.setWorkbenchThreadId(threadId);
+  subagentWait.setWorkbenchThreadId(threadId);
+  assert.equal(registry.interruptThreadWaits(threadId, "agent message", ["message_wait"]), 1);
+  assert.equal(messageWait.signal.aborted, false);
+  assert.equal(subagentWait.signal.aborted, true);
+  assert.equal(registry.interruptThreadWaits(threadId), 1);
+  assert.equal(isWorkbenchAgentMcpSteerInterruption(messageWait.signal.reason), true);
+  messageWait.unregister();
+  subagentWait.unregister();
+  registry.dispose();
+});
+
 test("command executor replacement retries one built request without surfacing reload", async () => {
   const registry = new WorkbenchAgentMcpRequestRegistry();
   const oldOwner = {};

@@ -10,20 +10,26 @@ import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchProviderHandle from "./WorkbenchProviderHandle";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
+import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
 
-function interruptSteerWaits(threadId: string) {
-  getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(WorkbenchThreadIdSchema.parse(threadId));
+function interruptSteerWaits(threadId: string, senderThreadId?: string) {
+  getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(
+    WorkbenchThreadIdSchema.parse(threadId),
+    senderThreadId ? "Workbench MCP wait was interrupted by an agent message." : undefined,
+    senderThreadId ? ["message_wait"] : [],
+  );
 }
 
 export default class WorkbenchProviderDispatcher {
   constructor(
     private readonly run: WorkbenchProviderOperation,
-    private readonly onSteerAdmitted: (threadId: string) => void = interruptSteerWaits,
+    private readonly onSteerAdmitted: (threadId: string, senderThreadId?: string) => void = interruptSteerWaits,
     private readonly messageAdmission?: WorkbenchThreadAutoCompactController["run"],
+    private readonly onAgentMessageAdmitted?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void> | void,
   ) {}
 
   get(key: WorkbenchProviderKey): WorkbenchProvider {
-    return new WorkbenchProviderHandle(key, this.run, this.onSteerAdmitted, this.messageAdmission);
+    return new WorkbenchProviderHandle(key, this.run, this.onSteerAdmitted, this.messageAdmission, this.onAgentMessageAdmitted);
   }
 
   hydratesUsage(key: WorkbenchProviderKey) {

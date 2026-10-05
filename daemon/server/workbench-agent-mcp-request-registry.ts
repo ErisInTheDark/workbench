@@ -215,6 +215,19 @@ export class WorkbenchAgentMcpRequestRegistry {
   }
 
   async executeCommand(request: WorkbenchAgentCommandRequest, callerSignal: AbortSignal) {
+    const lifetime = new AbortController();
+    Object.defineProperty(request, "lifetimeSignal", {
+      configurable: true,
+      value: AbortSignal.any([callerSignal, lifetime.signal]),
+    });
+    try {
+      return await this.executeCommandGenerations(request, callerSignal);
+    } finally {
+      lifetime.abort(new Error("Workbench command invocation ended."));
+    }
+  }
+
+  private async executeCommandGenerations(request: WorkbenchAgentCommandRequest, callerSignal: AbortSignal) {
     while (true) {
       callerSignal.throwIfAborted();
       const generation = this.state.commandGeneration;
@@ -338,12 +351,17 @@ export class WorkbenchAgentMcpRequestRegistry {
     return true;
   }
 
-  interruptThreadWaits(threadId: WorkbenchThreadId, reason = "Workbench MCP wait was interrupted by a user steer.") {
+  interruptThreadWaits(
+    threadId: WorkbenchThreadId,
+    reason = "Workbench MCP wait was interrupted by a user steer.",
+    excludedToolNames: readonly string[] = [],
+  ) {
     const workbenchThreadId = WorkbenchThreadIdSchema.parse(threadId);
     let interrupted = 0;
     for (const requests of this.state.requestsByClient.values()) {
       for (const entry of requests.values()) {
-        if (!entry.steerInterruptible || entry.workbenchThreadId !== workbenchThreadId || entry.controller.signal.aborted) continue;
+        if (!entry.steerInterruptible || entry.workbenchThreadId !== workbenchThreadId
+          || entry.controller.signal.aborted || excludedToolNames.includes(entry.toolName)) continue;
         entry.controller.abort(createWorkbenchAgentMcpSteerInterruption(reason));
         interrupted += 1;
       }

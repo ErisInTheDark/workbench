@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadMessageRequestSchema/WorkbenchThreadMessageRequest: validated global thread-message transport.
+ * - WorkbenchMessageWaitTargetsSchema/WorkbenchMessageWaitRequestSchema/WorkbenchMessageWaitRequest: validated sender selection and message-wait transport.
  */
 import { z } from "zod";
 
@@ -25,3 +26,18 @@ export const WorkbenchThreadMessageRequestSchema = z.object({
 });
 
 export type WorkbenchThreadMessageRequest = z.infer<typeof WorkbenchThreadMessageRequestSchema>;
+
+export const WorkbenchMessageWaitTargetsSchema = z.object({
+  names: z.array(requiredText).optional(),
+  threadIds: z.array(ThreadReferenceSchema).optional(),
+}).strict().refine(({ names = [], threadIds = [] }) => names.length + threadIds.length > 0, {
+  message: "At least one sender name or thread ID is required.",
+});
+
+export const WorkbenchMessageWaitRequestSchema = WorkbenchMessageWaitTargetsSchema.safeExtend({
+  callerThreadId: ThreadReferenceSchema,
+  cwd: requiredText,
+  waitId: requiredText,
+});
+
+export type WorkbenchMessageWaitRequest = z.infer<typeof WorkbenchMessageWaitRequestSchema>;

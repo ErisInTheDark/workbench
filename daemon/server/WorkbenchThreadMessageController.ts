@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadMessageControllerOptions: provider, identity, project, relationship and thread-state ports.
- * - default WorkbenchThreadMessageController: own cross-thread message admission, parent-owned questionnaire settlement, admitted-turn intent acceptance, and reload drain.
+ * - default WorkbenchThreadMessageController: own message admission, sender lookup, message waits, questionnaire settlement, and reload drain.
  */
 import type {
   WorkbenchHarness,
@@ -20,6 +20,7 @@ import { isWorkbenchMcpQuestionnaireRequestKey } from "workbench-shared/workbenc
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import {
   WorkbenchThreadMessageRequestSchema,
+  WorkbenchMessageWaitRequestSchema,
   type WorkbenchThreadMessageRequest,
 } from "workbench-shared/workbench/thread/thread-message";
 import type {
@@ -31,6 +32,8 @@ import type WorkbenchProvider from "./WorkbenchProvider";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import type { WorkbenchQuestionnaireResponseStatePort } from "./WorkbenchQuestionnaireResponseController";
+import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
+import WorkbenchMessageWaitController, { type WorkbenchMessageWaitHandoff } from "./WorkbenchMessageWaitController";
 
 const PARENT_AGENT_NAME = "parent agent";
 
@@ -64,8 +67,34 @@ function buildSubagentPromptContext(name: string, workbenchOrigin: string | unde
 export default class WorkbenchThreadMessageController {
   private active = true;
   private readonly requests = new Set<Promise<void>>();
+  private readonly waits: WorkbenchMessageWaitController;
 
-  constructor(private readonly options: WorkbenchThreadMessageControllerOptions) {}
+  constructor(private readonly options: WorkbenchThreadMessageControllerOptions, handoff?: WorkbenchMessageWaitHandoff) {
+    this.waits = new WorkbenchMessageWaitController(handoff);
+  }
+
+  captureReloadState() { return this.waits.captureReloadState(); }
+
+  receive(threadId: string, message: WorkbenchAgentMessage) { this.waits.receive(threadId, message); }
+
+  async wait(value: object, signal: AbortSignal, invocationSignal = signal) {
+    const request = WorkbenchMessageWaitRequestSchema.parse(value);
+    signal.throwIfAborted();
+    const requestedProject = await this.options.resolveProjectFromCwd(request.cwd, { endpointName: "Workbench message wait" });
+    const caller = await this.resolveThread(request.callerThreadId, "Workbench message wait caller", requestedProject.project);
+    let senderThreadIds: WorkbenchThreadId[] = [];
+    if (!this.waits.hasWait(request.waitId)) {
+      const relationships = (await this.options.listSubagents(caller.projectId)).subagents;
+      const targets = await Promise.all([
+        ...(request.threadIds ?? []).map(threadId => this.resolveTarget({ threadId }, caller.threadId, relationships)),
+        ...(request.names ?? []).map(name => this.resolveTarget({ name }, caller.threadId, relationships)),
+      ]);
+      senderThreadIds = [...new Set(targets.map(target => target.threadId))];
+      if (senderThreadIds.includes(caller.threadId)) throw new Error("A thread cannot wait for a message from itself.");
+    }
+    if (!this.active) throw new Error("Thread message controller is draining for runtime reload.");
+    return await this.waits.wait({ waitId: request.waitId, callerThreadId: caller.threadId, senderThreadIds }, signal, invocationSignal);
+  }
 
   beginRuntimeDrain() {
     this.active = false;
@@ -73,6 +102,7 @@ export default class WorkbenchThreadMessageController {
 
   async dispose() {
     this.beginRuntimeDrain();
+    this.waits.dispose();
     await Promise.all(this.requests);
   }
 
@@ -110,7 +140,7 @@ export default class WorkbenchThreadMessageController {
   }
 
   private async resolveTarget(
-    request: WorkbenchThreadMessageRequest,
+    request: Pick<WorkbenchThreadMessageRequest, "name" | "parent" | "threadId">,
     callerThreadId: WorkbenchThreadId,
     relationships: readonly WorkbenchSubagentRelationship[],
   ) {

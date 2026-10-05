@@ -67,6 +67,7 @@ import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSet
 import WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadMessageController from "./WorkbenchThreadMessageController";
+import type { WorkbenchMessageWaitHandoff } from "./WorkbenchMessageWaitController";
 import WorkbenchThreadLaunchController from "./WorkbenchThreadLaunchController";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
@@ -82,6 +83,7 @@ const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
 interface WorkbenchCoreReloadState {
   projectStartup: WorkbenchProjectStartup;
   approvals: WorkbenchApprovalHandoff;
+  messageWaits: WorkbenchMessageWaitHandoff;
 }
 
 function createModules(): DaemonReloadableModules {
@@ -103,6 +105,7 @@ function createWorkbenchCoreFeature(
   coldStart: boolean,
   initialCatalog?: WorkbenchProjectStartup,
   approvalHandoff?: WorkbenchApprovalHandoff,
+  messageWaitHandoff?: WorkbenchMessageWaitHandoff,
 ) {
   const modules = createModules();
   const settings = new WorkbenchServerSettings(database);
@@ -135,7 +138,8 @@ function createWorkbenchCoreFeature(
     },
     now: Date.now,
   });
-  const providers = new WorkbenchProviderDispatcher(run, undefined, autoCompact.run.bind(autoCompact));
+  const providers = new WorkbenchProviderDispatcher(run, undefined, autoCompact.run.bind(autoCompact),
+    (threadId, message) => run("messages", owner => { owner.receive(threadId, message); }, "agent message admission"));
   const threadSkillTarget = async (threadId: string) => {
     const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
     const harness = installedProviderKeys.find(key => key === identity?.bindings[0]?.harness);
@@ -338,7 +342,7 @@ function createWorkbenchCoreFeature(
         requireThreadState().controller.resolvePendingQuestionnaire(input, deliver)
       ),
     },
-  });
+  }, messageWaitHandoff);
   threadState = new WorkbenchThreadStateFeature({
     agentContext,
     providers,
@@ -598,6 +602,7 @@ function createWorkbenchCoreFeature(
     captureReloadState: (): WorkbenchCoreReloadState => ({
       projectStartup: projectCatalog.captureReloadState(),
       approvals: approvals.captureReloadState(),
+      messageWaits: messages.captureReloadState(),
     }),
     afterCommit: () => {
       approvals.activate();
@@ -698,6 +703,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       mode === "initial",
       isReplacing("server:database") ? undefined : reloadState?.projectStartup,
       reloadState?.approvals,
+      reloadState?.messageWaits,
     );
   },
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",

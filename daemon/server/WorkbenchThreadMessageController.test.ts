@@ -13,12 +13,53 @@ import type WorkbenchProvider from "./WorkbenchProvider";
 import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import type { WorkbenchQuestionnaireResponseStatePort } from "./WorkbenchQuestionnaireResponseController";
 import WorkbenchThreadMessageController from "./WorkbenchThreadMessageController";
+import type { WorkbenchMessageWaitHandoff } from "./WorkbenchMessageWaitController";
 import WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 
 const projectId = identitySchemas.ProjectIdSchema.parse("40fbf424-a0a0-4f05-b518-28b17d05fdd0");
 const harness = "codex" satisfies WorkbenchHarness;
+
+test("message waits reject unresolved sender names, unknown IDs, self aliases and a mismatched caller cwd", async () => {
+  const { controller } = fixture();
+  const request = { callerThreadId: "reviewer", cwd: "C:/repo", waitId: "lookup" };
+  const signal = new AbortController().signal;
+  await assert.rejects(controller.wait({ ...request, names: ["missing"] }, signal), /not found/u);
+  await assert.rejects(controller.wait({ ...request, threadIds: ["missing"] }, signal), /no admitted identity/u);
+  await assert.rejects(controller.wait({ ...request, threadIds: ["native-reviewer"] }, signal), /itself/u);
+  await assert.rejects(controller.wait({ ...request, cwd: "C:/other", names: ["luna"] }, signal), /cwd project/u);
+  await assert.rejects(controller.wait({ ...request, names: [], threadIds: [] }, signal), /At least one sender/u);
+  await controller.dispose();
+});
+
+test("message waits resolve sender names and native aliases without imposing the caller's project on senders", async () => {
+  for (const targets of [
+    { names: ["luna"], threadIds: ["native-child", "child"] },
+    { threadIds: ["native-target"] },
+    { names: ["nova"] },
+  ]) {
+    const armed = Promise.withResolvers<void>();
+    type WaitState = Parameters<WorkbenchMessageWaitHandoff["waits"]["set"]>[1];
+    const waits = new class extends Map<string, WaitState> {
+      override set(key: string, value: WaitState) {
+        super.set(key, value);
+        armed.resolve();
+        return this;
+      }
+    }();
+    const { controller } = fixture({ targetCwd: "C:/other", withSibling: true, waitHandoff: { waits } });
+    const waited = controller.wait({
+      ...targets, callerThreadId: "native-reviewer", cwd: "C:/repo", waitId: "canonical-senders",
+    }, new AbortController().signal);
+    await armed.promise;
+    const senderThreadId = targets.names?.[0] === "luna" ? "child" : "target";
+    const reply = { senderThreadId, senderName: "sender", message: "canonical reply" };
+    controller.receive("reviewer", reply);
+    assert.deepEqual(await waited, reply);
+    await controller.dispose();
+  }
+});
 
 function thread(id: string, cwd: string, active = false, name: string | null = null): ThreadPayload {
   return {
@@ -47,6 +88,7 @@ function fixture({
   rejectDelivery = false,
   targetCwd = "C:/repo",
   withSibling = false,
+  waitHandoff,
 }: {
   activeChild?: boolean;
   childCwd?: string;
@@ -60,6 +102,7 @@ function fixture({
   rejectDelivery?: boolean;
   targetCwd?: string;
   withSibling?: boolean;
+  waitHandoff?: WorkbenchMessageWaitHandoff;
 } = {}) {
   const calls: Array<{ method: string; params: object }> = [];
   const threads = new Map([
@@ -172,7 +215,7 @@ function fixture({
         ? questionnaireState.resolvePendingQuestionnaire.bind(questionnaireState)
         : (async () => null) satisfies WorkbenchQuestionnaireResponseStatePort["resolvePendingQuestionnaire"],
     },
-  });
+  }, waitHandoff);
   return { calls, controller };
 }
 

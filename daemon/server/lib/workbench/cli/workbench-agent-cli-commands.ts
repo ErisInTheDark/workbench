@@ -88,7 +88,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "tokens", "tokens instructions", "tokens project",
   "transcript projects", "transcript threads", "transcript turns", "transcript search", "transcript read", "transcript show", "transcript stats",
   "stats claims",
-  "message",
+  "message", "message wait",
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop",
   "task set", "task get", "task completed", "task blocked",
   "thread recall", "thread recall search", "thread recall expand",
@@ -99,8 +99,8 @@ const ROOT_HELP_COMMAND_ORDER = [
 
 const HELP_GROUPS: readonly HelpGroupDefinition[] = [
   {
-    commandOrder: ["message"],
-    key: "message", usage: "wb message (--thread <id> | --name <name> | --parent) --message <message>", words: ["message"],
+    commandOrder: ["message", "message wait"],
+    key: "message", usage: "wb message [wait] [options]", words: ["message"],
   },
   {
     key: "transcript", usage: "wb transcript <projects|threads|turns|search|read|show|stats> [options]", words: ["transcript"],

@@ -4,7 +4,8 @@
  * - WorkbenchSubagentCommand/WorkbenchSubagentCommandTarget/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, and ordered id/name targets.
  * - WorkbenchTaskTitleCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse task title actions and identify standalone title-set displays.
  * - WorkbenchTaskStatusCommand/parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse task completion actions and identify standalone successful displays.
- * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, task, token, subagent, and reload commands.
+ * - WorkbenchSubagentCommandAction: supported subagent command actions.
+ * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, task, token, message, subagent, and reload commands.
  */
 import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
 
@@ -384,6 +385,18 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     match: ({ stage, summaryParts }) => summaryParts.length || !/^wb(?:\.cmd)?\s+dirt(?:\s|$)/iu.test(stage.text.trim())
       ? null
       : hiddenCommandResult("Checking reload dirt", "Checked reload dirt"),
+  }),
+  CommandMatcher({
+    id: "workbench-cli.message-wait",
+    match: ({ stage, summaryParts }) => {
+      const command = stage.text.trim();
+      if (summaryParts.length || !/^wb(?:\.cmd)?\s+message\s+wait(?:\s|$)/iu.test(command)
+        || hasBooleanFlag(command, "help")) return null;
+      const names = readFlagValues(command, "name");
+      const threadIds = readFlagValues(command, "thread");
+      if (!names.length && !threadIds.length) return null;
+      return getWorkbenchCommandRendering("message_wait", { names, threadIds })?.result ?? null;
+    },
   }),
   CommandMatcher({
     id: "workbench-cli.message",

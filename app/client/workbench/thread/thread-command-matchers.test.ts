@@ -189,6 +189,7 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     case "task_set": return { title: "Render typed wb tools" };
     case "task_completed":
     case "task_blocked": return {};
+    case "message_wait":
     case "subagent_wait":
     case "subagent_stop":
     case "subagent_settle": return { names: ["Lumi"] };
@@ -412,6 +413,21 @@ test("non-wb and unknown MCP tools keep generic rendering", () => {
   assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "other", tool: "git_arc_compare" }), null);
   assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wb", tool: "future_command" }), null);
   assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wbex", tool: "future_command" }), null);
+});
+
+test("message wait CLI and MCP presentation preserve the same mixed sender selection", () => {
+  const cli = getThreadCommandDisplay({
+    command: "wb message wait --thread first --name Lumi --thread second",
+    commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT,
+  });
+  const mcp = getWorkbenchMcpCommandDisplay({
+    argumentsValue: { names: ["Lumi"], threadIds: ["first", "second"] },
+    server: "wb", tool: "message_wait",
+  });
+  assert.ok(mcp);
+  assert.equal(cli.claimedBy, mcp.claimedBy);
+  assert.deepEqual(cli.summaryParts, mcp.summaryParts);
+  assert.deepEqual(cli.ongoingSummaryParts, mcp.ongoingSummaryParts);
 });
 
 test("wb shell MCP evidence derives ordinary command execution presentation", () => {

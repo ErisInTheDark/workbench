@@ -12,6 +12,62 @@ import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchToolTranscriptReference } from "workbench-shared/workbench/provider/provider-execution";
 import WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+import WorkbenchMessageWaitController from "./WorkbenchMessageWaitController";
+import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
+import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-agent-command-registry";
+import { getWorkbenchAgentCommandToolName } from "./lib/workbench/commands/workbench-agent-command-definition";
+
+test("accepted agent messages match their sender without interrupting message waits, while user steers still interrupt", async () => {
+  const definition = listWorkbenchAgentCommands().find(command => getWorkbenchAgentCommandToolName(command) === "message_wait");
+  assert.ok(definition);
+  for (const harness of ["codex", "claude", "opencode"] as const) {
+    const threadId = WorkbenchThreadIdSchema.parse(`message-caller-${harness}`);
+    const registry = getProcessWorkbenchAgentMcpRequestRegistry();
+    const registration = registry.register(`message-test-${harness}`, "wait", {
+      owner: {}, toolName: getWorkbenchAgentCommandToolName(definition), steerInterruptible: definition.mcpSteerInterruptible,
+    });
+    registration.setWorkbenchThreadId(threadId);
+    const owner = new WorkbenchMessageWaitController();
+    let rejectMessage = false;
+    const provider = { threads: {
+      messageAgent: async () => {
+        if (rejectMessage) throw new Error("rejected admission");
+        return { kind: "steered", turnId: "turn" };
+      },
+      submit: async () => ({ kind: "steered", turnId: "turn" }),
+    } } as unknown as WorkbenchProvider;
+    const dispatcher = new WorkbenchProviderDispatcher(async (_definition, operation) => operation(provider),
+      undefined, undefined, (target, message) => { owner.receive(target, message); });
+    const handle = dispatcher.get(harness);
+    const waiter = owner.wait({
+      waitId: "filtered", callerThreadId: threadId, senderThreadIds: [WorkbenchThreadIdSchema.parse("selected")],
+    }, registration.signal);
+    const send = (senderThreadId: string, text: string) => handle.threads.messageAgent({
+      threadId, cwd: "C:/repo", message: { senderThreadId, senderName: "luna", message: text },
+    });
+    try {
+      rejectMessage = true;
+      await assert.rejects(send("selected", "rejected reply"), /rejected admission/u);
+      rejectMessage = false;
+      await send("unselected", "unrelated reply");
+      assert.equal(registration.signal.aborted, false);
+      await send("selected", "accepted reply");
+      assert.equal((await waiter).message, "accepted reply");
+      assert.equal(registration.signal.aborted, false);
+      const second = owner.wait({
+        waitId: "user-steer", callerThreadId: threadId, senderThreadIds: [WorkbenchThreadIdSchema.parse("selected")],
+      }, registration.signal);
+      const interrupted = assert.rejects(second);
+      await handle.threads.submit({ threadId, clientMessageId: "user", input: [], intent: "continue" });
+      assert.equal(registration.signal.aborted, true);
+      await interrupted;
+      assert.equal(owner.hasWait("user-steer"), false);
+    } finally {
+      registration.unregister();
+      owner.dispose();
+    }
+  }
+});
 
 test("user and agent messages on every provider share compact-before-start admission and steer safely after overlap", async () => {
   for (const harness of ["codex", "claude", "opencode"] as const) {

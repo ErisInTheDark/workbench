@@ -1,8 +1,10 @@
 /*
  * Exports:
- * - WORKBENCH_MESSAGE_COMMANDS: canonical global message command plus reload-safe legacy compatibility; both require a user-visible simple version.
+ * - WORKBENCH_MESSAGE_COMMANDS: attributed message sending, sender-filtered long waits, and legacy send compatibility.
  */
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
+import { WorkbenchMessageWaitTargetsSchema } from "workbench-shared/workbench/thread/thread-message";
 
 import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import {
@@ -70,4 +72,29 @@ function messageCommand(legacy: boolean) {
   });
 }
 
-export const WORKBENCH_MESSAGE_COMMANDS = [messageCommand(false), messageCommand(true)] as const;
+const wait = defineWorkbenchAgentCommand({
+  description: "Wait for the first new message from any selected thread ID or subagent name. Workbench Long Wait; user steers interrupt it.",
+  effects: { idempotent: true, readOnly: true },
+  helpGroups: ["message"],
+  mcpCodeModeEligible: true,
+  mcpRuntimeDrainPolicy: "preserve-across-reload",
+  mcpSteerInterruptible: true,
+  words: ["message", "wait"],
+  usage: "wb message wait (--thread <id> | --name <name>) [...]",
+  inputSchema: WorkbenchMessageWaitTargetsSchema,
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { repeatable: ["--thread", "--name"] });
+    return { names: flags.repeated("--name"), threadIds: flags.repeated("--thread") };
+  },
+  buildRequest(input, { callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/message/wait", {
+      callerThreadId: requireCallerThreadId(callerThreadId),
+      cwd,
+      waitId: randomUUID(),
+      ...(input.names?.length ? { names: input.names } : {}),
+      ...(input.threadIds?.length ? { threadIds: input.threadIds } : {}),
+    });
+  },
+});
+
+export const WORKBENCH_MESSAGE_COMMANDS = [messageCommand(false), wait, messageCommand(true)] as const;

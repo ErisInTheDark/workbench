@@ -120,6 +120,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
     });
     const agentCommand = new WorkbenchAgentCommandController(context.localDaemonOrigin, {
+      executeMessageWaitRequest: async (body, signal, lifetimeSignal) => {
+        const message = await messages.wait(body, signal, lifetimeSignal);
+        return new Response(`Agent message from ${message.senderName} (${message.senderThreadId})\n\n${message.message}\n`, {
+          headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+        });
+      },
       patchClaims: (harness, input, signal) => provider(harness).tools.patchClaims(
         input, ({ cwd, harness, paths, threadId }) => gitArc.checkActiveClaimPaths(cwd, harness, threadId, paths), signal,
       ),

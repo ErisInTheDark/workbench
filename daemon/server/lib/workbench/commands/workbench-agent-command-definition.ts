@@ -59,6 +59,8 @@ export interface WorkbenchAgentCommandRequest {
   path: string;
   responseKind: WorkbenchAgentCommandResponseKind;
   waitForReload?: boolean;
+  /** Original invocation lifetime, distinct from a replaceable command-generation signal. Never transported. */
+  lifetimeSignal?: AbortSignal;
 }
 
 export interface WorkbenchAgentCommandContext {

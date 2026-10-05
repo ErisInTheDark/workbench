@@ -639,6 +639,52 @@ test("dispatches global messages through the direct managed-thread transport", a
   }
 });
 
+test("native message waits return their owner's reply and cancel on caller disconnect", async () => {
+  const started = deferred<AbortSignal>();
+  const aborted = deferred<Error>();
+  let block = false;
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      executeMessageWaitRequest: async (_body, signal) => {
+        if (!block) return new Response("reply from the selected sender\n");
+        started.resolve(signal);
+        return await new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            aborted.resolve(signal.reason);
+            reject(signal.reason);
+          }, { once: true });
+        });
+      },
+    },
+    async () => { throw new Error("unexpected internal fetch"); },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
+  );
+  const server = await startController(controller);
+  try {
+    const body = subagentCommandBody(["message", "wait", "--thread", "sender", "--name", "luna"]);
+    const response = await fetch(`${server.origin}/daemon/agent-command`, {
+      body, method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "reply from the selected sender\n");
+    block = true;
+    const request = http.request(`${server.origin}/daemon/agent-command`, {
+      method: "POST", headers: {
+        "Content-Length": Buffer.byteLength(body), "Content-Type": "application/x-www-form-urlencoded",
+      },
+    });
+    request.on("error", () => undefined);
+    request.end(body);
+    await started.promise;
+    request.destroy();
+    assert.match((await aborted.promise).message, /disconnected/u);
+  } finally {
+    await server.close();
+  }
+});
+
 test("dispatches thread refresh through the direct managed-thread transport", async () => {
   let receivedRequest: { method?: string; params?: unknown } | null = null;
   const controller = new WorkbenchAgentCommandController(

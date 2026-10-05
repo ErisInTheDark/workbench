@@ -23,6 +23,7 @@ import WorkbenchAgentCommandLiveScenarioController from "./WorkbenchAgentCommand
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const RELOAD_POLL_INTERVAL_MS = 250;
 interface WorkbenchAgentDirectPort {
+  executeMessageWaitRequest?: (body: object, signal: AbortSignal, lifetimeSignal?: AbortSignal) => Promise<Response>;
   executeSkillRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   resolveCaller?: (threadId: string, cwd: string, harness: string) => Promise<{ threadId: WorkbenchThreadId; nativeThreadId: NativeThreadId; harness: WorkbenchHarness }>;
   patchClaims?: (harness: string, input: { raw: string; callerThreadId: string | null }, signal: AbortSignal) => Promise<string>;
@@ -335,6 +336,9 @@ export default class WorkbenchAgentCommandController {
     const body = Buffer.from(request.body ? JSON.stringify(request.body) : "");
     if (request.path === "/api/subagents" && request.body) {
       return await this.dispatchSubagentRequest(request.body, signal);
+    }
+    if (request.path === "/api/message/wait" && request.body && this.direct.executeMessageWaitRequest) {
+      return await this.direct.executeMessageWaitRequest(request.body, signal, request.lifetimeSignal);
     }
     if (request.path === "/api/message" && request.body) {
       return await this.dispatchMessageRequest(request.body, signal);

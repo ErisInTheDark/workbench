@@ -41,6 +41,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "tokens_project",
   "request_user_input",
   "message",
+  "message_wait",
   "subagent_list",
   "subagent_profiles",
   "subagent_create",
@@ -598,6 +599,14 @@ export function getWorkbenchCommandRoute(
   if (name.startsWith("subagent_")) return renderSubagent(name, args);
   if (name.startsWith("browse_")) return renderBrowse(name, args);
   switch (name) {
+    case "message_wait": {
+      const senders = [...readStringArray(args.names), ...readStringArray(args.threadIds)];
+      return simple(
+        "workbench-cli.message-wait",
+        actionTarget("Waiting for a message from ", senders.join(", ") || "selected senders"),
+        actionTarget("Waited for a message from ", senders.join(", ") || "selected senders"),
+      );
+    }
     case "skill":
       return renderSkillLoad(readString(args.name), context);
     case "git_arc_wait":
