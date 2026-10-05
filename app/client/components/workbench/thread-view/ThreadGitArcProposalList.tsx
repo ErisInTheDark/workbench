@@ -208,7 +208,7 @@ export default function ThreadGitArcProposalList({
         <ThreadDisclosure
           className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
           // Open layers inset their proposals in a recessed well; the first card needs no line under the summary.
-          contentClassName="mx-2 mb-2 overflow-hidden rounded-[0.65rem] bg-fg-alpha/4 [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--app-bg-solid))] [&>*:first-child]:border-t-0"
+          contentClassName="mx-2 mb-2 overflow-hidden rounded-[0.65rem] bg-fg/4 [&>*:first-child]:border-t-0"
           data-thread-git-arc-stack-layer={layer.layerId}
           // Sealed cards stay mounted so commit-all can walk the whole stack while layers are closed.
           keepMounted

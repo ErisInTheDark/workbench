@@ -188,10 +188,10 @@ export default function ThreadCheckpointCommitCard({
       aria-label="Checkpoint commit proposal"
       aria-busy={pending || undefined}
       className={compact
-        ? "w-full px-0 py-0 [--checkpoint-card-bg:var(--fg-bg,var(--bg))]"
+        ? "w-full px-0 py-0"
         : embedded
-          ? "w-full px-3 py-2.5 [--checkpoint-card-bg:var(--fg-bg,var(--bg))]"
-          : "my-2 w-full rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--checkpoint-card-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))] [--fg-bg:var(--checkpoint-card-bg)] px-3 py-2.5"}
+          ? "w-full px-3 py-2.5"
+          : "my-2 w-full rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-fg/2 px-3 py-2.5"}
       data-thread-checkpoint-card="true"
       data-thread-checkpoint-card-embedded={embedded ? "true" : undefined}
       data-thread-checkpoint-card-presentation={presentation}
@@ -285,7 +285,7 @@ export default function ThreadCheckpointCommitCard({
           />
         ) : <ThreadDisclosure
           className="mt-1.5 py-0.5"
-          contentClassName="mt-1 rounded-[0.65rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--checkpoint-card-bg))] px-2"
+          contentClassName="mt-1 rounded-[0.65rem] bg-fg/4 px-2"
           summary={(
             <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <span className="inline-flex min-w-0 items-baseline gap-2">

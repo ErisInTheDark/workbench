@@ -246,7 +246,7 @@ function ThreadQuestionnaireTranscriptPreview ({
               {pair.promptText}
             </div>
           ) : null}
-          <div className="group/thread-bubble relative ml-auto w-fit max-w-[min(42rem,86%)] rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] px-4 py-3 text-left leading-[1.55] text-text">
+          <div className="group/thread-bubble relative ml-auto w-fit max-w-[min(42rem,86%)] rounded-[1.15rem] bg-fg/6 px-4 py-3 text-left leading-[1.55] text-text">
             <ThreadMarkdown
               className="text-[0.98em] leading-[1.55] [&_h3]:mb-[0.2em] [&_h3]:text-[1.15em] [&_p]:leading-[1.55]"
               inlineMentionSources={inlineMentionSources}
@@ -384,7 +384,7 @@ function ThreadQuestionnaireToolCallItem ({
       summaryClassName="items-start text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <>
-        <div className="rounded-[1.15rem] bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--app-bg-solid))] p-3">
+        <div className="rounded-[1.15rem] bg-fg/4 p-3">
           {request ? (
             <ThreadUserInputRequest
               mode="history"

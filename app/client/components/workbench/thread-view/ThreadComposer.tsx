@@ -554,8 +554,8 @@ export default function ThreadComposer ({
       className={joinClasses(
         "inline-flex size-10 items-center justify-center rounded-full border transition",
         showQuestionnairePanel
-          ? "border-[color-mix(in srgb, var(--text) 18%, transparent)] bg-[color-mix(in srgb, var(--text) 8%, transparent)] text-text"
-          : "border-[color-mix(in srgb, var(--text) 12%, transparent)] bg-[color-mix(in srgb, var(--bg) 96%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 96%, var(--composer-surface-bg))] text-fg/muted hover:text-text",
+          ? "border-[color-mix(in srgb, var(--text) 18%, transparent)] bg-fg/8 text-text"
+          : "border-[color-mix(in srgb, var(--text) 12%, transparent)] bg-[color-mix(in srgb, var(--bg) 96%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 96%, var(--app-bg-solid))] text-fg/muted hover:text-text",
       )}
       onClick={() => {
         setIsQuestionnaireActionsHovered(false);
@@ -595,8 +595,8 @@ export default function ThreadComposer ({
         onSubmit={handleSubmit}
       >
         <div className={effectiveSurface === "card"
-          ? "rounded-[1.15rem] bg-[color-mix(in srgb, var(--text) 4%, transparent)] [--composer-surface-bg: color-mix(in srgb, var(--text) 4%, var(--app-bg-solid))] [--fg-bg: var(--composer-surface-bg)] p-3"
-          : "[--composer-surface-bg:var(--app-bg-solid)] [--fg-bg:var(--composer-surface-bg)] p-0"}>
+          ? "rounded-[1.15rem] bg-fg/4 p-3"
+          : "p-0"}>
           {header ? (
             <div className="mb-3 px-1">
               {header}
@@ -830,7 +830,7 @@ export default function ThreadComposer ({
             </span>
           ))}
           {hiddenAttachmentCount ? (
-            <span className="inline-flex size-10 items-center justify-center rounded-[0.75rem] bg-[color-mix(in srgb, var(--text) 6%, transparent)] [--fg-bg: color-mix(in srgb, var(--text) 6%, var(--composer-surface-bg))] text-[0.76em] font-medium text-fg/muted">
+            <span className="inline-flex size-10 items-center justify-center rounded-[0.75rem] bg-fg/6 text-[0.76em] font-medium text-fg/muted">
               +{hiddenAttachmentCount}
             </span>
           ) : null}

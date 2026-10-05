@@ -86,7 +86,7 @@ export default function ThreadLiveActivity({
       <ThreadMeasuredContent onHidden={() => setIsOpen(false)}>
         <ThreadDisclosure
           hideChevron
-          className="group/live overflow-hidden rounded-[0.8rem] border border-transparent open:border-fg-alpha/16 open:bg-fg-alpha/3"
+          className="group/live overflow-hidden rounded-[0.8rem] border border-transparent open:border-fg-alpha/16 open:bg-fg/3"
           contentClassName="flex h-[min(100vh,24rem)] flex-col"
           open={isOpen}
           onToggle={event => setIsOpen(event.currentTarget.open)}

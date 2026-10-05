@@ -49,7 +49,7 @@ export default function WorkbenchModeRow<T extends string>({
   return (
     <div
       aria-label={ariaLabel}
-      className="inline-flex max-w-full items-center gap-0.5 rounded-full bg-[color-mix(in_srgb,var(--text)_5%,transparent)] [--mode-row-fg-bg:color-mix(in_srgb,var(--text)_5%,var(--fg-bg,var(--bg)))] [color:color-mix(in_srgb,var(--text)_var(--muted-strength),var(--mode-row-fg-bg))] p-1"
+      className="inline-flex max-w-full items-center gap-0.5 rounded-full bg-fg/5 text-fg/muted p-1"
       role="radiogroup"
     >
       {options.map((option, index) => {

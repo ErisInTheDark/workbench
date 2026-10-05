@@ -16,8 +16,7 @@ function isInteractiveTarget(currentTarget: HTMLElement, target: EventTarget | n
 }
 
 const stickySurfaceClassName = `
-  group/composer relative grid rounded-[1.15rem] bg-fg-alpha/4 backdrop-blur-[8px] p-3
-  [--fg-bg: color-mix(in srgb, var(--text) 4%, var(--app-bg-solid))]
+  group/composer relative grid rounded-[1.15rem] bg-fg/4 backdrop-blur-[8px] p-3
   [transition:
     border-color var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
     padding var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)

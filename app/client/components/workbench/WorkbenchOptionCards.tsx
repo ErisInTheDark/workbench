@@ -74,7 +74,6 @@ export function WorkbenchOptionCard ({
   const compactInline = presentation === "compact-inline";
   const compactPresentation = presentation !== "card";
   const isComposed = !isHistoryMode && Boolean(actions || labelEditor || children || inlineContent);
-  const selectedBackdropClassName = isChecked ? "[--fg-bg:var(--option-card-bg)]" : "";
   const optionCardClassName = joinClasses(
     compactInline
       ? "flex w-full min-w-0 items-center gap-2 border-0 bg-transparent px-0 py-1 text-left transition"
@@ -115,7 +114,6 @@ export function WorkbenchOptionCard ({
       <span className={joinClasses(
         compactPresentation ? "flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden" : "min-w-0",
         compactPresentation && wrapLabel && "flex-wrap",
-        selectedBackdropClassName,
       )}>
         <span className={joinClasses(
           compactPresentation
@@ -150,7 +148,6 @@ export function WorkbenchOptionCard ({
         "flex w-full min-w-0 gap-2",
         Boolean(inlineContent) && "flex-wrap",
         density === "tight" ? "items-center" : "items-start",
-        selectedBackdropClassName,
       )}>
         {labelEditor ? <div className={`flex min-w-0 flex-1 gap-3 ${density === "tight" ? "items-center" : "items-start"}`}>
           <button
@@ -177,7 +174,7 @@ export function WorkbenchOptionCard ({
         {inlineContent ? <div className="flex min-w-0 flex-wrap items-center gap-2">{inlineContent}</div> : null}
         {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
       </div>
-      {children ? <div className={joinClasses(`w-full min-w-0 ${showMarker ? "pl-7" : ""}`, selectedBackdropClassName)}>{children}</div> : null}
+      {children ? <div className={`w-full min-w-0 ${showMarker ? "pl-7" : ""}`}>{children}</div> : null}
     </div>;
   }
 

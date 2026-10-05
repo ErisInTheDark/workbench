@@ -159,13 +159,13 @@ export default function ThreadGoalControl ({
         <section
           id={panelId}
           aria-label="Thread goal"
-          className="mt-3 rounded-2xl bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--goal-panel-bg:color-mix(in_srgb,var(--text)_4%,var(--app-bg-solid))] [--fg-bg:var(--goal-panel-bg)] px-4 py-3.5"
+          className="mt-3 rounded-2xl bg-fg/4 px-4 py-3.5"
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <h3 className="m-0 text-[0.82em] font-semibold text-text">Goal</h3>
               {exceptionalStatus ? (
-                <span className="rounded-full bg-[color-mix(in_srgb,var(--text)_7%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_7%,var(--goal-panel-bg))] px-2 py-1 text-[0.68em] font-medium text-fg/muted">
+                <span className="rounded-full bg-fg/7 px-2 py-1 text-[0.68em] font-medium text-fg/muted">
                   {exceptionalStatus}
                 </span>
               ) : null}
@@ -184,7 +184,7 @@ export default function ThreadGoalControl ({
           {isEditing ? (
             <div className="mt-3">
                 <label className="text-[0.72em] font-medium text-fg/muted" htmlFor={`${panelId}-objective`}>Objective</label>
-                <div className="mt-2 rounded-xl border border-[color-mix(in_srgb,var(--text)_8%,transparent)] bg-[color-mix(in_srgb,var(--bg)_84%,transparent)] [--editable-fg-bg:color-mix(in_srgb,var(--bg)_84%,var(--goal-panel-bg))] px-3 py-2.5 focus-within:border-[color-mix(in_srgb,var(--text)_18%,transparent)]">
+                <div className="mt-2 rounded-xl border border-[color-mix(in_srgb,var(--text)_8%,transparent)] bg-[color-mix(in_srgb,var(--bg)_84%,transparent)] [--fg-bg:color-mix(in_srgb,var(--bg)_84%,var(--app-bg-solid))] px-3 py-2.5 focus-within:border-[color-mix(in_srgb,var(--text)_18%,transparent)]">
                   <PlaintextEditable
                     id={`${panelId}-objective`}
                     ariaLabel="Goal objective"

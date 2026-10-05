@@ -36,6 +36,9 @@ test("modifier-only utilities compile opaque foreground mixes", async () => {
   assert.match(css, /\.bg-fg\\\/muted[\s\S]*?var\(--muted-strength\)/u);
   assert.match(css, /\.text-fg\\\/muted-soft[\s\S]*?calc\(var\(--muted-strength\) \* 0\.6\)/u);
   assert.match(css, /\.hover\\:bg-fg\\\/6:hover[\s\S]*?color-mix\([\s\S]*?calc\(6 \* 1%\)/u);
+  // Backgrounds paint translucently and declare their opaque equivalent, so descendants mix against the new surface.
+  assert.match(css, /\.hover\\:bg-fg\\\/6:hover[\s\S]*?background-color: color-mix\(in srgb, var\(--text\) calc\(6 \* 1%\), transparent\)/u);
+  assert.match(css, /\.hover\\:bg-fg\\\/6:hover[\s\S]*?--fg-bg: color-mix\(in srgb, var\(--text\) calc\(6 \* 1%\), var\(--app-bg-solid\)\)/u);
   assert.match(css, /var\(--fg-bg, var\(--bg\)\)/u);
   assert.match(css, /:hover/u);
   assert.doesNotMatch(css, /nope|text-fg-value/u);
@@ -52,7 +55,6 @@ test("alpha foreground utilities keep transparent colours available by property 
     "border-fg-alpha/16",
     "fill-fg-alpha/16",
     "stroke-fg-alpha/16",
-    "bg-fg-alpha/16",
     "fg-alpha/16",
     "fg-alpha/muted",
     "fg-alpha/nope",
@@ -63,7 +65,6 @@ test("alpha foreground utilities keep transparent colours available by property 
     ["border-fg-alpha", "border-color"],
     ["fill-fg-alpha", "fill"],
     ["stroke-fg-alpha", "stroke"],
-    ["bg-fg-alpha", "background-color"],
     ["fg-alpha", "--fg"],
   ]) {
     assert.match(css, new RegExp(`\\.${utility}\\\\/16[\\s\\S]*?${property}: color-mix\\(in srgb, var\\(--text\\) calc\\(16 \\* 1%\\), transparent\\)`, "u"));

@@ -234,7 +234,7 @@ function renderThreadInlineNodes (
       case "inlineComment":
         return (
           <span
-            className="rounded-[0.35rem] bg-[color-mix(in srgb, var(--text) 6%, transparent)] [--comment-fg-bg: color-mix(in srgb, var(--text) 6%, var(--fg-bg, var(--bg)))] px-[0.34em] py-[0.08em] text-[color: color-mix(in srgb, var(--text) 60%, var(--comment-fg-bg))]"
+            className="rounded-[0.35rem] bg-fg/6 px-[0.34em] py-[0.08em] text-fg/60"
             data-inline-comment="true"
             key={key}
           >
@@ -764,7 +764,7 @@ function renderThreadBlock (
     case "comment":
       return (
         <p
-          className={`${BLOCK_SPACING_CLASS} mx-0 rounded-[0.6rem] bg-[color-mix(in srgb, var(--text) 6%, transparent)] [--comment-fg-bg: color-mix(in srgb, var(--text) 6%, var(--fg-bg, var(--bg)))] px-[0.75rem] py-[0.55rem] text-[0.9em] text-[color: color-mix(in srgb, var(--text) 60%, var(--comment-fg-bg))]`}
+          className={`${BLOCK_SPACING_CLASS} mx-0 rounded-[0.6rem] bg-fg/6 px-[0.75rem] py-[0.55rem] text-[0.9em] text-fg/60`}
           data-block-comment="true"
           key={keyPrefix}
         >

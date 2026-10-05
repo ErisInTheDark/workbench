@@ -195,7 +195,7 @@ export default function ThreadMessageBoardTopic({
     <div className="group/topic relative">
       <ThreadDisclosure
         className="overflow-hidden rounded-[0.8rem]"
-        contentClassName="bg-[color-mix(in_srgb,var(--text)_4%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_4%,var(--app-bg-solid))]"
+        contentClassName="bg-fg/4"
         hideChevron
         onToggle={(event) => setIsOpen(event.currentTarget.open)}
         open={isOpen}

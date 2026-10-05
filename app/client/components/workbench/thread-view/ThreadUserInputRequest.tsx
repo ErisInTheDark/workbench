@@ -556,7 +556,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           <PlaintextEditable
                             id={`${request.id}:${question.id}:custom`}
                             ariaLabel={`${headerText} answer`}
-                            className={`${threadPlaintextEditableClassName} min-h-[2.45rem] w-full rounded-lg bg-[color-mix(in srgb, var(--text) 4%, transparent)] [--editable-fg-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))] px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none`}
+                            className={`${threadPlaintextEditableClassName} min-h-[2.45rem] w-full rounded-lg bg-fg/4 px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none`}
                             readOnly
                             spellCheck={false}
                             highlights={customValueHighlights}
@@ -579,7 +579,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                             id={`${request.id}:${question.id}:custom`}
                             ariaLabel={`${headerText} answer`}
                             autoFocus={isSoleFreeformQuestion || isQuickResponseCustomInputRequested}
-                            className={`${threadPlaintextEditableClassName} min-h-8 w-full rounded-lg bg-[color-mix(in srgb, var(--text) 4%, transparent)] [--editable-fg-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))] px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none`}
+                            className={`${threadPlaintextEditableClassName} min-h-8 w-full rounded-lg bg-fg/4 px-2.5 py-1.5 text-[0.82em] leading-[1.45] text-text outline-none`}
                             placeholder={isSoleFreeformQuestion ? "Write a response" : undefined}
                             spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
                             highlights={customValueHighlights}
@@ -609,19 +609,8 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           className={joinClasses(
                             `${threadPlaintextEditableClassName} min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition`,
                             customValue || isSoleFreeformQuestion
-                              ? "bg-[color-mix(in srgb, var(--text) 4%, transparent)] [--editable-fg-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))] py-3 mt-1 mb-3"
-                              : `
-                              hover:(
-                                bg-[color-mix(in srgb, var(--text) 4%, transparent)]
-                                [--editable-fg-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))]
-                                py-3 mb-3
-                              )
-                              focus-visible:(
-                                bg-[color-mix(in srgb, var(--text) 4%, transparent)]
-                                [--editable-fg-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))]
-                                py-3 mt-1 mb-3
-                              )
-                            `,
+                              ? "bg-fg/4 py-3 mt-1 mb-3"
+                              : "hover:(bg-fg/4 py-3 mb-3) focus-visible:(bg-fg/4 py-3 mt-1 mb-3)",
                           )}
                           placeholder={isSoleFreeformQuestion ? "Write a response" : undefined}
                           spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}

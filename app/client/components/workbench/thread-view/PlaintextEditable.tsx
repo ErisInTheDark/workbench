@@ -33,8 +33,7 @@ export const threadPlaintextEditableClassName = `
   block whitespace-pre-wrap wrap-anywhere [word-break: break-word]
   coarse-touch:text-[max(1rem,1em)]
   data-[empty=true]:before:(
-    content-[attr(data-placeholder)] pointer-events-none
-    text-[color: color-mix(in srgb, var(--text) var(--muted-strength), var(--editable-fg-bg, var(--fg-bg, var(--bg))))]
+    content-[attr(data-placeholder)] pointer-events-none text-fg/muted
   )
 `;
 

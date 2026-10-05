@@ -65,8 +65,8 @@ function ClaimedPathsPanel({ label, paths, projectId, title }: { label?: ReactNo
     </span>
   );
   return (
-    <div className="scrollbar-hover-reveal flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-[color-mix(in srgb, var(--text) 4%, transparent)] [--thread-files-bg: color-mix(in srgb, var(--text) 4%, var(--fg-bg, var(--bg)))] p-2">
-      <div className="contents [--fg-bg:var(--thread-files-bg)]">
+    <div className="scrollbar-hover-reveal flex max-h-56 min-h-0 flex-wrap content-start items-center gap-1 overflow-y-auto rounded-[0.65rem] bg-fg/4 p-2">
+      <div className="contents">
         {label ? (
           <div className="flex w-full min-w-0 items-center gap-1 text-[0.76rem]">
             {flag}

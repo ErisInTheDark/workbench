@@ -35,13 +35,16 @@
   stroke: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--fg-bg, var(--bg)));
 }
 
+/*
+ * Backgrounds paint translucently and declare the opaque colour they produce as --fg-bg, so foreground mixes inside
+ * resolve against this surface. The declared colour is measured over the app background, not the parent surface:
+ * an element cannot derive --fg-bg from its own --fg-bg, and nested tints are a percent or two apart at most.
+ */
 @utility bg-fg-* {
-  background-color: color-mix(
-    in srgb,
-    --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%),
-    var(--fg-bg, var(--bg))
-  );
-  background-color: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--fg-bg, var(--bg)));
+  background-color: color-mix(in srgb, --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%), transparent);
+  background-color: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), transparent);
+  --fg-bg: color-mix(in srgb, --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%), var(--app-bg-solid));
+  --fg-bg: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), var(--app-bg-solid));
 }
 
 /* Alpha utilities keep the foreground translucent instead of blending it into --fg-bg. */
@@ -63,11 +66,6 @@
 @utility stroke-fg-alpha-* {
   stroke: color-mix(in srgb, --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%), transparent);
   stroke: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), transparent);
-}
-
-@utility bg-fg-alpha-* {
-  background-color: color-mix(in srgb, --value(--default(var(--text))) calc(--modifier(number, [number]) * 1%), transparent);
-  background-color: color-mix(in srgb, --value(--default(var(--text))) --modifier(--opacity-*), transparent);
 }
 
 @utility fg-alpha-* {

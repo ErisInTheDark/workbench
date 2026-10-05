@@ -79,10 +79,10 @@ export default function WorkbenchThreadTooltipDetails({
       {pendingRequest || questionnaireLoading ? (
         <section
           aria-label="Pending questionnaire"
-          className="rounded-[0.8rem] bg-[color-mix(in_srgb,var(--text)_3%,transparent)] [--thread-tooltip-panel-bg:color-mix(in_srgb,var(--text)_3%,var(--fg-bg,var(--bg)))] p-2"
+          className="rounded-[0.8rem] bg-fg/3 p-2"
           data-thread-tooltip-questionnaire={questionnaireLoading ? "loading" : questionnaireIsLive ? "live" : "preview"}
         >
-          <div className="[--fg-bg:var(--thread-tooltip-panel-bg)]">
+          <div>
             {!pendingRequest ? (
               <ThreadUserInputRequest mode="loading" presentation="compact" />
             ) : questionnaireIsLive ? (
@@ -119,10 +119,10 @@ export default function WorkbenchThreadTooltipDetails({
       {proposalId ? (
         <section
           aria-label="Proposed commit"
-          className="rounded-[0.8rem] bg-[color-mix(in_srgb,var(--text)_3%,transparent)] [--thread-tooltip-panel-bg:color-mix(in_srgb,var(--text)_3%,var(--fg-bg,var(--bg)))] p-2"
+          className="rounded-[0.8rem] bg-fg/3 p-2"
           data-thread-tooltip-proposal={materialized || !cwd ? "preview" : "commit"}
         >
-          <div className="[--fg-bg:var(--thread-tooltip-panel-bg)]">
+          <div>
             <ThreadCheckpointCommitItem
               commandOutcome="completed"
               cwd={cwd}

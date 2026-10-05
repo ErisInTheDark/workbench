@@ -378,7 +378,7 @@ export default function ThreadGitArcItem ({
 
   return (
     <article
-      className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))] px-2.5 py-1.5"
+      className="my-1.5 w-full rounded-[0.45rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-fg/2 px-2.5 py-1.5"
       data-thread-git-arc-card={commandIntent.action}
       onClick={openClosedCard}
     >

@@ -11,7 +11,7 @@ import WorkbenchSpinningBorder from "../WorkbenchSpinningBorder";
 
 export type ThreadSteerState = "pending" | "unsent" | null;
 
-const surfaceClassName = "bg-[color-mix(in_srgb,var(--text)_6%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))]";
+const surfaceClassName = "bg-fg/6";
 
 /** One owner for steer delivery visuals, shared by user steers and incoming agent messages. */
 export default function ThreadSteerDecoration({

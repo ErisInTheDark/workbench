@@ -351,7 +351,7 @@ export default function WorkbenchFilePanel ({
               [& ol]:list-decimal
               [& blockquote]:text-fg/muted
               [& a]:(text-inherit decoration-accent decoration-[0.08em])
-              [& code]:(font-mono text-[0.94em] bg-fg-alpha/7 rounded-[0.35rem] px-[0.34em] py-[0.08em])
+              [& code]:(font-mono text-[0.94em] bg-fg/7 rounded-[0.35rem] px-[0.34em] py-[0.08em])
               [& pre]:(overflow-x-auto whitespace-pre-wrap)
               [& pre[data-language]:not([data-language=""])]:before:(
                 content-[attr(data-language)] block
@@ -369,16 +369,14 @@ export default function WorkbenchFilePanel ({
               [& p:has(+ [data-block-comment=true])]:mb-[-0.1rem]
               [& [data-block-comment=true] + :where(br, [data-single-break=true])]:mb-0
               [& :is([data-block-comment=true], [data-inline-comment=true])]:(
-                [--comment-fg-bg: color-mix(in srgb, var(--text) 6%, var(--fg-bg, var(--bg)))]
-                bg-fg-alpha/6
-                text-[color: color-mix(in srgb, var(--text) 60%, var(--comment-fg-bg))]
+                bg-fg/6 text-fg/60
               )
               [& [data-block-comment=true]]:(
                 rounded-[0.45rem] px-3 py-[0.45rem] my-0 -mx-3
                 whitespace-pre-wrap font-sans text-[0.85em]
               )
               [& [data-inline-comment=true]]:(rounded-[0.35rem] px-[0.34em] py-[0.08em])
-              [& :is([data-block-comment=true], [data-inline-comment=true])[data-revision-hover-active=true]]:bg-fg-alpha/12
+              [& :is([data-block-comment=true], [data-inline-comment=true])[data-revision-hover-active=true]]:bg-fg/12
               [& li > details]:block
               [& li > details > summary]:(flex [list-style: none] cursor-pointer)
               [& li > details > summary > span]:cursor-text
