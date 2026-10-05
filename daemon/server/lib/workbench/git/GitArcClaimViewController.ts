@@ -1,8 +1,9 @@
 /*
  * Exports:
- * - GitArcClaimViewInput: owner, hold-own choice and optional mirror directory/paths.
+ * - GitArcClaimViewInput: owner and hold-own choice for a build view.
  * - default GitArcClaimViewController: write the worktree as one owner builds it (every other live owner's dirty claims at
- *   their arc baselines) and mirror selected paths into an ignored directory, rewriting only files whose content differs.
+ *   their arc baselines, swapped through one index) and mirror selected paths of a view into an ignored directory,
+ *   rewriting only files whose content differs (stat-cached per directory).
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -21,9 +22,6 @@ export interface GitArcClaimViewInput {
   cwd: string;
   harness: GitArcHarness;
   holdOwn: boolean;
-  /** Absolute gitignored directory inside the repository; omitted views only report their tree. */
-  into?: string;
-  paths: string[];
   threadId: string;
 }
 
@@ -32,8 +30,19 @@ interface MirroredFile {
   mode: string;
 }
 
+interface MirroredStat {
+  blob: string;
+  mtimeMs: number;
+  size: number;
+}
+
 /** One mirror at a time per directory; parallel builds of one owner must not interleave writes. */
 const mirrorTails = new Map<string, Promise<void>>();
+/**
+ * Blob ids of files this daemon generation wrote or hashed, per mirror directory. A file whose size and mtime still
+ * match skips re-hashing; mirrors belong to Workbench, so an outside edit keeping both is not worth a full re-hash.
+ */
+const mirrorStats = new Map<string, Map<string, MirroredStat>>();
 
 async function exclusive<T>(key: string, work: () => Promise<T>) {
   const prior = mirrorTails.get(key) ?? Promise.resolve();
@@ -76,39 +85,49 @@ export default class GitArcClaimViewController {
     private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
   ) {}
 
+  /** Build the view from the live worktree and registry; callers hold the repository's read gate around this only. */
   async readClaimView(input: GitArcClaimViewInput): Promise<GitArcClaimView> {
     return await GitObjectReadSession.run(async () => {
       const repository = await WorkbenchGitRepository.open(input.cwd);
-      const mirror = input.into ? await this.resolveMirror(repository, input.into) : null;
       const store = new GitCheckpointStore(repository, this.resolveThreadIdentity);
       const caller = normalizeThreadId(input.threadId);
       const [snapshot, entries] = await Promise.all([
         repository.writeWorktreeSnapshot(),
         new GitArcRegistry(repository, this.resolveThreadIdentity).list(),
       ]);
-      let tree = snapshot.tree;
-      const held: GitArcClaimView["held"] = [];
-      for (const entry of entries) {
-        if (!input.holdOwn && entry.harness === input.harness && entry.threadId === caller) continue;
+      const owners = (await Promise.all(entries.map(async (entry) => {
+        if (!input.holdOwn && entry.harness === input.harness && entry.threadId === caller) return null;
         const claimed = getGitArcLiveClaimPaths(entry);
         const arc = entry.phase === "plan" ? entry.retainedArc : entry;
-        if (!claimed.length || !arc) continue;
+        if (!claimed.length || !arc) return null;
         const checkpoint = await store.readCheckpoint(entry.harness as GitArcHarness, entry.threadId, arc.checkpointCommit);
         // The same stack-aware baseline `arc diff` measures this owner's work from.
         const baseline = await this.proposals.logicalBaseline({
           checkpointCommit: checkpoint.checkpointCommit, checkpointParent: checkpoint.parent,
-          cwd: repository.root, harness: entry.harness, repository, threadId: entry.threadId,
+          cwd: repository.root, entry, harness: entry.harness, repository, threadId: entry.threadId,
         });
-        const paths = await repository.listChangedPaths(baseline, snapshot.tree, claimed);
-        if (!paths.length) continue;
-        tree = await repository.writeTreeWithPathsFromSource(tree, baseline, paths);
-        held.push({ paths, threadId: entry.threadId });
-      }
-      const view = { head: snapshot.head, held, repoRoot: repository.root, tree };
-      if (!mirror) return view;
+        return { baseline, claimed, threadId: entry.threadId };
+      }))).filter(owner => owner !== null);
+      // Swapped paths are exactly the claimed paths that differ from each owner's baseline.
+      const { changedPaths, tree } = await repository.writeTreeWithPathSources(
+        snapshot.tree, owners.map(({ baseline, claimed }) => ({ paths: claimed, source: baseline })),
+      );
+      const held = owners.flatMap(({ threadId }, index) => changedPaths[index]!.length ? [{ paths: changedPaths[index]!, threadId }] : []);
+      return { head: snapshot.head, held, repoRoot: repository.root, tree };
+    });
+  }
+
+  /**
+   * Mirror a view tree's `paths` into an ignored directory. Trees are immutable and the directory is outside Git's
+   * reach, so this runs after the read gate is released; mirrors into one directory still run one at a time.
+   */
+  async mirrorClaimView(input: { into: string; paths: string[]; repoRoot: string; tree: string }) {
+    return await GitObjectReadSession.run(async () => {
+      const repository = await WorkbenchGitRepository.open(input.repoRoot);
+      const mirror = await this.resolveMirror(repository, input.into);
       const scopes = input.paths.length ? repository.normalizePaths(input.paths) : [];
       const key = process.platform === "win32" ? mirror.toLowerCase() : mirror;
-      return { ...view, ...await exclusive(key, async () => await this.mirror(repository, tree, mirror, scopes)) };
+      return await exclusive(key, async () => await this.mirror(repository, input.tree, mirror, key, scopes));
     });
   }
 
@@ -135,7 +154,9 @@ export default class GitArcClaimViewController {
    * Make `directory` hold exactly the tree's files under `scopes`, leaving matching files (and their mtimes) alone.
    * Files outside the scopes belong to other mirror calls and stay untouched.
    */
-  private async mirror(repository: WorkbenchGitRepository, tree: string, directory: string, scopes: string[]) {
+  private async mirror(repository: WorkbenchGitRepository, tree: string, directory: string, key: string, scopes: string[]) {
+    const stats = mirrorStats.get(key) ?? new Map<string, MirroredStat>();
+    mirrorStats.set(key, stats);
     const wanted = new Map<string, MirroredFile>();
     const listing = await repository.run([
       "ls-tree", "-r", "-z", "--full-tree", tree, "--", ...scopes.map(scope => repository.literalPathspec(scope)),
@@ -155,15 +176,27 @@ export default class GitArcClaimViewController {
       .filter(relative => !scopes.length || scopes.some(scope => relative === scope || relative.startsWith(`${scope}/`)));
     // Removals first, so a stale file never blocks a folder the view needs at its path.
     let deleted = 0;
-    for (const relative of present) {
-      const want = wanted.get(relative);
+    const currentBlob = async (relative: string) => {
       const file = path.join(directory, relative);
-      if (!want) {
-        await fs.rm(file, { force: true });
-        deleted += 1;
-      } else if ((await fs.lstat(file)).isFile() && blobId(await fs.readFile(file), algorithm) === want.blob) {
-        wanted.delete(relative);
-      }
+      const stat = await fs.lstat(file);
+      if (!stat.isFile()) return null;
+      const cached = stats.get(relative);
+      if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) return cached.blob;
+      const blob = blobId(await fs.readFile(file), algorithm);
+      stats.set(relative, { blob, mtimeMs: stat.mtimeMs, size: stat.size });
+      return blob;
+    };
+    for (let offset = 0; offset < present.length; offset += 64) {
+      await Promise.all(present.slice(offset, offset + 64).map(async (relative) => {
+        const want = wanted.get(relative);
+        if (!want) {
+          await fs.rm(path.join(directory, relative), { force: true });
+          stats.delete(relative);
+          deleted += 1;
+        } else if (await currentBlob(relative) === want.blob) {
+          wanted.delete(relative);
+        }
+      }));
     }
     const contents = await GitObjectReadSession.read(repository.root, [...new Set([...wanted.values()].map(({ blob }) => blob))]);
     const byBlob = new Map(contents.flatMap(object => object?.contents ? [[object.objectId, object.contents] as const] : []));
@@ -180,6 +213,8 @@ export default class GitArcClaimViewController {
       await fs.mkdir(path.dirname(file), { recursive: true });
       await fs.writeFile(file, data);
       if (mode === "100755" && process.platform !== "win32") await fs.chmod(file, 0o755);
+      const written = await fs.lstat(file);
+      stats.set(relative, { blob, mtimeMs: written.mtimeMs, size: written.size });
     }
     await this.pruneEmptyFolders(directory, directory);
     return { deleted, written: wanted.size };

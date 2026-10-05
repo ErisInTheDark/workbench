@@ -4,7 +4,8 @@
  * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitResolvedCommitRef/GitWorktreeMergeResult/GitWorktreeSnapshot: typed history, object, merge, snapshot and publication facts.
  * - GitCommitIdentity/GitCommitBatch/GitBlobBatch: parsed metadata and per-object batch results.
  * - GIT_STATE_GENERATION_REF: per-worktree mutation generation ref.
- * Notable members: normalizeCommitActor lets Git canonicalise actor dates; listFirstParentRange expands `base..tip`.
+ * Notable members: normalizeCommitActor lets Git canonicalise actor dates; listFirstParentRange expands `base..tip`;
+ * writeTreeWithPathSources swaps several sources' paths through one temporary index; allAncestors checks containment in one walk.
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -597,22 +598,51 @@ export default class WorkbenchGitRepository {
   }
 
   async writeTreeWithPathsFromSource(baseTreeish: string | null, sourceTreeish: string, paths: string[]) {
+    return (await this.writeTreeWithPathSources(baseTreeish, [{ paths, source: sourceTreeish }])).tree;
+  }
+
+  /**
+   * `base` with each source's paths taken from that source, in order, through one temporary index. Also reports, per
+   * source, the paths that actually differed from `base` (and were therefore swapped).
+   */
+  async writeTreeWithPathSources(baseTreeish: string | null, sources: ReadonlyArray<{ paths: string[]; source: string | null }>) {
     return await GitObjectReadSession.run(async () => {
-      const [base, source] = await Promise.all([this.resolveTree(baseTreeish), this.resolveTree(sourceTreeish)]);
-      const allChangedPaths = base === source ? [] : await this.listAllChangedPaths(base, source);
-      const changedPaths = filterPathsByScopes(allChangedPaths, paths);
-      if (!changedPaths.length) return base;
-      if (changedPaths.length === allChangedPaths.length) return source;
-      return await this.withTemporaryIndex(async (indexPath) => {
+      const base = await this.resolveTree(baseTreeish);
+      const resolved = await Promise.all(sources.map(async ({ paths, source }) => {
+        const tree = await this.resolveTree(source);
+        const allChangedPaths = base === tree ? [] : await this.listAllChangedPaths(base, tree);
+        return { allChangedPaths, changedPaths: filterPathsByScopes(allChangedPaths, paths), tree };
+      }));
+      const changedPaths = resolved.map(swap => swap.changedPaths);
+      const swaps = resolved.filter(swap => swap.changedPaths.length);
+      if (!swaps.length) return { changedPaths, tree: base };
+      const [only] = swaps;
+      if (swaps.length === 1 && only!.changedPaths.length === only!.allChangedPaths.length) return { changedPaths, tree: only!.tree };
+      const tree = await this.withTemporaryIndex(async (indexPath) => {
         const env = { ...process.env, GIT_INDEX_FILE: indexPath };
         await this.run(["read-tree", base], env);
-        await this.runWithInput([
-          "restore", "--source", source, "--staged",
-          "--pathspec-from-file=-", "--pathspec-file-nul",
-        ], pathspecInput(changedPaths), env);
+        for (const swap of swaps) {
+          await this.runWithInput([
+            "restore", "--source", swap.tree, "--staged",
+            "--pathspec-from-file=-", "--pathspec-file-nul",
+          ], pathspecInput(swap.changedPaths), env);
+        }
         return (await this.run(["write-tree"], env)).trim();
       });
+      return { changedPaths, tree };
     });
+  }
+
+  /** Whether every commit is reachable from `descendant`, in one walk; unreadable commits are never proven reachable. */
+  async allAncestors(commits: readonly string[], descendant: string) {
+    if (!commits.length) return true;
+    try {
+      return !(await this.run(["rev-list", "--max-count=1", ...commits, "--not", descendant])).trim();
+    } catch (error) {
+      // A missing commit (rewritten or pruned history) fails the walk exactly like `merge-base --is-ancestor` did.
+      if (error instanceof Error && /bad revision|unknown revision|bad object/iu.test(error.message)) return false;
+      throw error;
+    }
   }
 
   async createCommitFromTree(

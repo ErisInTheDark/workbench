@@ -411,9 +411,9 @@ export default class WorkbenchWorkspaceGitArcController {
         if (request.into && members.length > 1) {
           throw new Error("A mirror directory holds one repository's view; this workspace spans several repositories.");
         }
+        // Mirroring happens at ingress after these member read gates are released.
         const values = await this.runMembers(members, async member => await this.local.readClaimView({
-          cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
-          holdOwn: request.holdOwn, into: request.into, paths: request.paths,
+          cwd: member.repoRoot, harness: request.harness, threadId: request.threadId, holdOwn: request.holdOwn,
         }), undefined, "read");
         return { repositories: values.map(({ result }) => result) } satisfies GitArcClaimViewResult;
       }

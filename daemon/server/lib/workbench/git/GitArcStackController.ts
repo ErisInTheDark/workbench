@@ -160,12 +160,10 @@ export default class GitArcStackController {
     })))).flat();
     if (summaries.some(({ status }) => status === "proposed")) return { commit: entry.stackTip, pending: true };
     const landings = summaries.flatMap(({ committedSha }) => committedSha ? [committedSha] : []);
-    for (const landing of landings) {
-      if (!checkpoint.parent || !await this.repository.isAncestor(landing, checkpoint.parent)) {
-        return { commit: entry.stackTip, pending: false };
-      }
-    }
-    return null;
+    if (!landings.length) return null;
+    return checkpoint.parent && await this.repository.allAncestors(landings, checkpoint.parent)
+      ? null
+      : { commit: entry.stackTip, pending: false };
   }
 
   /** Claimed-path drift for an arc, measured from its baseline tip when one still applies. */

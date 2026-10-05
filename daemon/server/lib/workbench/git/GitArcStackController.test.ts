@@ -114,7 +114,10 @@ test("released claims keep sealed proposals committable and a child on a lower l
   // Build views hold other owners' dirty claims at their stack-aware baselines and mirror only into ignored folders.
   await fs.appendFile(path.resolve(cwd, (await git("rev-parse", "--git-path", "info/exclude")).trim()), "\nbuild-out/\n");
   const out = path.join(cwd, "build-out");
-  const view = async (threadId: string, holdOwn = false) => await controller.readClaimView({ cwd, threadId, holdOwn, into: out, paths: ["two.txt"] });
+  const view = async (threadId: string, holdOwn = false) => {
+    const built = await controller.readClaimView({ cwd, threadId, holdOwn });
+    return { ...built, ...await controller.mirrorClaimView({ into: out, paths: ["two.txt"], repoRoot: built.repoRoot, tree: built.tree }) };
+  };
   await fs.mkdir(out);
   await fs.writeFile(path.join(out, "keep.txt"), "outside the mirrored paths\n");
   const parentView = await view("parent");
@@ -126,7 +129,7 @@ test("released claims keep sealed proposals committable and a child on a lower l
   assert.equal(await fs.readFile(path.join(out, "two.txt"), "utf8"), "child builds on two\n");
   await view("child", true);
   assert.equal(await fs.readFile(path.join(out, "two.txt"), "utf8"), "parent two\n");
-  await assert.rejects(controller.readClaimView({ cwd, threadId: "child", holdOwn: false, into: path.join(cwd, "tracked-out"), paths: [] }), /gitignored/u);
+  await assert.rejects(controller.mirrorClaimView({ into: path.join(cwd, "tracked-out"), paths: [], repoRoot: cwd, tree: parentView.tree }), /gitignored/u);
   const child =await controller.createProposal({ cwd, threadId: "child", paths: ["two.txt"], title: "child", description: "" });
   assert.equal((await read("child", child.proposalId)).waitingForLayer, "layer one", "it waits on the lowest unlanded layer");
   await commit("parent", state.lower, "parent one");

@@ -732,6 +732,8 @@ export default class GitArcProposalController {
   async logicalBaseline(input: ArcIdentityInput & {
     checkpointCommit: string;
     checkpointParent: string | null;
+    /** The owner's registry entry when the caller already holds it. */
+    entry?: Pick<GitArcRegistryEntry, "stackTip"> | null;
     /** Measure from real history even while stack layers are pending. */
     ignoreStack?: boolean;
     repository?: WorkbenchGitRepository;
@@ -739,7 +741,7 @@ export default class GitArcProposalController {
     const repository = input.repository ?? await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
     if (!input.ignoreStack) {
-      const entry = await this.registry(repository).find({ harness, threadId: input.threadId });
+      const entry = input.entry !== undefined ? input.entry : await this.registry(repository).find({ harness, threadId: input.threadId });
       const tip = await this.stack(repository).baselineTip(entry, { parent: input.checkpointParent });
       if (tip) return tip.commit;
     }

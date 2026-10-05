@@ -385,6 +385,17 @@ export default class WorkbenchGitArcFeature {
                   })
                   : await (this.options.transitions.read ?? this.options.transitions.run)
                     .call(this.options.transitions, project.cwd, async () => await this.dispatch(effectiveRequest, modifiedSince ?? undefined));
+            // Mirroring copies an immutable view tree into an ignored folder, so it runs after the Git gate is released.
+            if (response.ok && effectiveRequest.action === "arcTree" && effectiveRequest.into) {
+              const { into, paths } = effectiveRequest;
+              const [view, ...others] = (await response.json() as GitArcClaimViewResult).repositories;
+              if (!view || others.length) {
+                throw new Error("A mirror directory holds one repository's view; this workspace spans several repositories.");
+              }
+              response = Response.json({
+                repositories: [{ ...view, ...await this.controller.mirrorClaimView({ into, paths, repoRoot: view.repoRoot, tree: view.tree }) }],
+              } satisfies GitArcClaimViewResult);
+            }
           } catch (error) {
             throw new GitArcFailureException(await this.createFailure(project.project.id, effectiveRequest, error));
           }
@@ -806,7 +817,7 @@ export default class WorkbenchGitArcFeature {
       case "arcScope": return Response.json(await this.controller.readScope(common));
       case "arcStatus": return Response.json(await this.controller.readStatus(common));
       case "arcTree": return Response.json({
-        repositories: [await this.controller.readClaimView({ ...common, holdOwn: input.holdOwn, into: input.into, paths: input.paths })],
+        repositories: [await this.controller.readClaimView({ ...common, holdOwn: input.holdOwn })],
       } satisfies GitArcClaimViewResult);
       case "plan": return Response.json(await this.controller.createPlan({
         ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,

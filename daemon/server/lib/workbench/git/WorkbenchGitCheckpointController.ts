@@ -258,9 +258,14 @@ export default class WorkbenchGitCheckpointController {
     this.views = new GitArcClaimViewController(this.proposals, resolveThreadIdentity);
   }
 
-  /** The worktree as one owner builds it, optionally mirrored into an ignored directory. */
-  async readClaimView(input: ControllerInput & Omit<GitArcClaimViewInput, "cwd" | "harness" | "threadId">) {
+  /** The worktree as one owner builds it; hold the repository read gate around this only. */
+  async readClaimView(input: ControllerInput & Pick<GitArcClaimViewInput, "holdOwn">) {
     return await this.views.readClaimView({ ...input, harness: normalizeHarness(input.harness) });
+  }
+
+  /** Mirror a view tree into an ignored directory, outside any Git gate. */
+  async mirrorClaimView(input: Parameters<GitArcClaimViewController["mirrorClaimView"]>[0]) {
+    return await this.views.mirrorClaimView(input);
   }
 
   private registry(repository: WorkbenchGitRepository) {
