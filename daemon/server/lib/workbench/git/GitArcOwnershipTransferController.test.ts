@@ -77,6 +77,10 @@ test("adopted stash coexists with caller claims and restores without losing call
   await controller.unstashArc({ cwd, threadId: "parent" });
   assert.equal((await parentLoss.read({ harness: "codex", threadId: "parent" }))?.commit, boundary.newValue,
     "restoring adopted work must not overwrite an earlier recovery boundary");
+  // The restored checkpoint carries its own evidence, so the unrelated earlier boundary cannot break status.
+  const restored = await controller.readStatus({ cwd, threadId: "parent" });
+  assert.deepEqual(restored.dirtyClaims, ["one.txt", "two.txt"]);
+  assert.deepEqual([restored.recovery, restored.unavailableRecovery], [[], []]);
   assert.deepEqual((await controller.readScope({ cwd, threadId: "parent" }))?.claimedPaths, ["one.txt", "two.txt"]);
   assert.equal(await fs.readFile(path.join(cwd, "one.txt"), "utf8"), "parent change\n");
   assert.equal(await fs.readFile(path.join(cwd, "two.txt"), "utf8"), "saved child change\n");

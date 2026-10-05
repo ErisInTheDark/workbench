@@ -823,16 +823,25 @@ export default class WorkbenchGitCheckpointController {
           current.checkpointCommit,
           this.resolveThreadIdentity,
         );
-        if (checkpoint.metadata?.restoredFromStash) {
+        const restoredFromStash = checkpoint.metadata?.restoredFromStash;
+        let evidence = typeof restoredFromStash === "object" ? restoredFromStash : null;
+        if (restoredFromStash === true) {
+          // Older restored checkpoints kept no evidence; their stash snapshot may since be deleted or replaced.
           const restored = await new GitArcClaimLossStore(repository, this.resolveThreadIdentity)
             .read({ harness, threadId: owner?.threadId ?? input.threadId });
-          if (!restored?.frozen) throw new Error("The restored Git arc snapshot is unavailable.");
-          const restoredPaths = await repository.listChangedPaths(restored.head, restored.commit, restored.paths);
+          if (restored?.frozen) {
+            evidence = { head: restored.head, paths: await repository.listChangedPaths(restored.head, restored.commit, restored.paths) };
+          } else {
+            status.unavailableRecovery.push(repository.root);
+          }
+        }
+        if (evidence) {
+          const restoredPaths = evidence.paths;
           if (restoredPaths.length) {
             const drift = await collectGitArcDrift({
               repository,
               baseline: checkpoint.parent,
-              baseHead: restored.head,
+              baseHead: evidence.head,
               head: checkpoint.parent,
               tree,
               paths: restoredPaths,

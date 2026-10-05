@@ -126,11 +126,13 @@ export default class GitArcStashController {
         if (merged.unsupportedConflictTypes.length) {
           throw new Error(`The stashed changes have conflicts that cannot be represented as editable markers: ${merged.unsupportedConflictTypes.join(", ")}`);
         }
+        // Status reads restore evidence from the checkpoint itself: adopted stash refs are deleted below.
+        const restoredFromStash = { head: saved.head, paths: await repository.listChangedPaths(saved.head, saved.commit, saved.paths) };
         const prepared = await checkpoints.prepareCheckpoint(harness, input.threadId, headTree, head, {
           amendedFrom: arc?.checkpointCommit ?? saved.checkpointCommit,
           intentName: arc?.intentName ?? saved.intentName,
           intentDescription: arc?.intentDescription ?? saved.intentDescription,
-          kind: "arc", registryLifecycle: true, restoredFromStash: true, scopePaths: combined, version: 3,
+          kind: "arc", registryLifecycle: true, restoredFromStash, scopePaths: combined, version: 3,
         });
         const proposalIds = [...new Set([...(arc?.proposalIds ?? []), ...saved.proposalIds])];
         const retained = {

@@ -5,6 +5,7 @@
  * - GitArcHarness: supported owning harness.
  * - GitArcProposalStatus/GitArcProposalUnavailableReasonCode: proposal state and unavailability reason.
  * - CheckpointMetadata/ProposalMetadata/ArcOutcome: durable arc metadata and nullable history bases.
+ * - GitArcRestoredStashEvidence: unstash base HEAD and changed paths kept on the restored checkpoint.
  * - StackLayerMetadata: sealed proposal layer owned by a stack tip checkpoint.
  * - normalizeArcOutcome: conform legacy acceptance receipts.
  * - normalizeThreadId/normalizeCommit: validate ref identity inputs.
@@ -29,6 +30,11 @@ import type { ProviderKey as GitArcHarness } from "../provider/provider-key.ts";
 export type GitArcProposalStatus = "committed" | "proposed" | "rescinded" | "superseded" | "unavailable";
 export type GitArcProposalUnavailableReasonCode = "committed-outside-proposal";
 
+export interface GitArcRestoredStashEvidence {
+  head: string | null;
+  paths: string[];
+}
+
 export interface CheckpointMetadata {
   adoptedPaths?: string[];
   amendedFrom: string | null;
@@ -37,7 +43,8 @@ export interface CheckpointMetadata {
   intentName?: string;
   priorProposalId?: string;
   registryLifecycle?: true;
-  restoredFromStash?: true;
+  /** Unstash evidence: the stash's base HEAD and the paths it changed. `true` is the older form without evidence. */
+  restoredFromStash?: true | GitArcRestoredStashEvidence;
   scopePaths: string[];
   /** Present only on `stack` tips: the sealed layer this tip commit owns. */
   stackLayer?: StackLayerMetadata;
@@ -170,7 +177,12 @@ function mapped(value: string | null, commits: ReadonlyMap<string, string>) {
 }
 
 export function remapCheckpointMetadata(metadata: CheckpointMetadata, commits: ReadonlyMap<string, string>): CheckpointMetadata {
-  return { ...metadata, amendedFrom: mapped(metadata.amendedFrom, commits) };
+  const restored = metadata.restoredFromStash;
+  return {
+    ...metadata,
+    amendedFrom: mapped(metadata.amendedFrom, commits),
+    ...(typeof restored === "object" ? { restoredFromStash: { ...restored, head: mapped(restored.head, commits) } } : {}),
+  };
 }
 
 export function remapProposalMetadata(metadata: ProposalMetadata, commits: ReadonlyMap<string, string>): ProposalMetadata {
