@@ -54,10 +54,7 @@ export default class GitArcPublishState {
         };
       }
     }
-    const containingRefs: string[] = [];
-    for (const ref of await this.repository.listRefs("refs/remotes")) {
-      if (await this.repository.refContainsCommit(ref, commit)) containingRefs.push(ref);
-    }
+    const containingRefs = await this.repository.listRefsContaining(commit, "refs/remotes");
     return containingRefs.length ? { kind: "pushed", refs: containingRefs } : { kind: "unpushed" };
   }
 

@@ -5,7 +5,9 @@
  * - GitCommitIdentity/GitCommitBatch/GitBlobBatch: parsed metadata and per-object batch results.
  * - GIT_STATE_GENERATION_REF: per-worktree mutation generation ref.
  * Notable members: normalizeCommitActor lets Git canonicalise actor dates; listFirstParentRange expands `base..tip`;
- * writeTreeWithPathSources swaps several sources' paths through one temporary index; allAncestors checks containment in one walk.
+ * writeTreeWithPathSources swaps several sources' paths through one temporary index; allAncestors checks containment in one walk;
+ * worktree snapshots seed temporary indexes from the real index so only changed files are re-hashed;
+ * listRefsContaining finds refs holding a commit in one walk.
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -23,6 +25,20 @@ const GIT_MAX_BUFFER = 32 * 1024 * 1024;
 const COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu;
 const WORKBENCH_TRANSCRIPT_EXCLUSION = ":(top,glob,exclude).workbench/transcripts/**";
 export const GIT_STATE_GENERATION_REF = "refs/worktree/workbench/state-generation";
+
+/** Each worktree's real index path never moves, so resolve it once per root. */
+const realIndexPaths = new Map<string, Promise<string>>();
+
+function realIndexPath(repository: WorkbenchGitRepository) {
+  let resolved = realIndexPaths.get(repository.root);
+  if (!resolved) {
+    resolved = repository.run(["rev-parse", "--path-format=absolute", "--git-path", "index"]).then(output => output.trim());
+    // Callers still receive the rejection; a failed lookup is just never cached.
+    resolved.catch(() => realIndexPaths.delete(repository.root));
+    realIndexPaths.set(repository.root, resolved);
+  }
+  return resolved;
+}
 
 export interface GitHeadMovement {
   changedPaths: string[];
@@ -464,6 +480,11 @@ export default class WorkbenchGitRepository {
     return output.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
   }
 
+  async listRefsContaining(commit: string, namespace: string) {
+    const output = await this.run(["for-each-ref", "--contains", commit, "--format=%(refname)", namespace]);
+    return output.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+  }
+
   async listRefs(namespace: string) {
     const output = await this.run(["for-each-ref", "--format=%(refname)", namespace]);
     return output.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
@@ -532,10 +553,37 @@ export default class WorkbenchGitRepository {
     }
   }
 
+  /**
+   * Load `base` into a temporary index that starts as a copy of the repository's real index. `read-tree --reset` keeps
+   * stat info only for entries whose blob matches `base`, so a following `add` re-hashes just the changed files instead
+   * of the whole worktree. The real index is only ever read.
+   */
+  private async seedTemporaryIndex(indexPath: string, baseTreeish: string | null, env: NodeJS.ProcessEnv, signal?: AbortSignal) {
+    const base = await this.contentBase(baseTreeish);
+    const realIndex = await realIndexPath(this);
+    try {
+      await fs.copyFile(realIndex, indexPath);
+    } catch (error) {
+      // Repositories without a real index yet (fresh or unborn) simply have no stat cache to reuse.
+      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+      await this.run(["read-tree", base], env, signal);
+      return;
+    }
+    try {
+      await this.run(["read-tree", "--reset", base], env, signal);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      console.warn(`[git] stat-seeded snapshot unavailable for ${path.basename(this.root)}; hashing the full worktree: ${
+        (error instanceof Error ? error.message : String(error)).slice(0, 200)}`);
+      await fs.rm(indexPath, { force: true });
+      await this.run(["read-tree", base], env, signal);
+    }
+  }
+
   async writeWorktreeTree(baseTreeish: string | null = "HEAD", signal?: AbortSignal) {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      await this.run(["read-tree", await this.contentBase(baseTreeish)], env, signal);
+      await this.seedTemporaryIndex(indexPath, baseTreeish, env, signal);
       const transcriptIsIgnored = await this.succeeds([
         "check-ignore", "-q", "--no-index", ".workbench/transcripts",
       ]);
@@ -586,7 +634,7 @@ export default class WorkbenchGitRepository {
   async writeScopedWorktreeTree(paths: string[], baseTreeish: string | null = "HEAD", signal?: AbortSignal) {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-      await this.run(["read-tree", await this.contentBase(baseTreeish)], env, signal);
+      await this.seedTemporaryIndex(indexPath, baseTreeish, env, signal);
       const matchedPaths = await this.listWorktreePaths(paths, env, signal);
       if (matchedPaths.length) {
         await this.runWithInput([
@@ -964,10 +1012,6 @@ export default class WorkbenchGitRepository {
 
   async fetchRemotes() {
     await this.run(["fetch", "--all", "--prune", "--quiet"]);
-  }
-
-  async refContainsCommit(ref: string, commit: string) {
-    return await this.succeeds(["merge-base", "--is-ancestor", commit, ref]);
   }
 
   private async readObject(objectish: string) {
