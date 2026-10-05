@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default ThreadGitArcProposalList: hoisted proposal anchors, grouped into sealed stack layer disclosures, under a header that collapses unless a stopped thread has pending proposals, and offers stack-ordered commit all.
+ * - default ThreadGitArcProposalList: hoisted proposal anchors, grouped into sealed stack layer disclosures, under a header that collapses (listing each landed commit's message and totals) unless a stopped thread has pending proposals, and offers stack-ordered commit all.
  */
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
@@ -15,6 +15,26 @@ import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } fr
 import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import { ThreadCheckpointCommitTargetAnchor } from "./ThreadCheckpointCommitPortalLayer";
 import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
+import { useThreadGitArcProposalObservation } from "./ThreadGitArcObservationContext";
+
+/** One landed commit's message and totals; demands its own observation because closed cards are hidden. */
+function ClosedCommitRow({ proposalId }: { proposalId: string }) {
+  const { observe, state } = useThreadGitArcProposalObservation(proposalId);
+  useEffect(() => observe?.(proposalId), [observe, proposalId]);
+  const proposal = state?.status === "loaded" ? state.proposal : null;
+  return (
+    <div
+      className="flex min-w-0 items-baseline gap-2 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-1.5 text-[0.8em] leading-[1.5]"
+      data-thread-git-arc-closed-proposal={proposalId}
+    >
+      <span className={`min-w-0 truncate ${proposal ? "text-text" : "text-fg/muted"}`}>
+        {proposal?.title ?? (state?.status === "failed" ? "Commit unavailable" : "Loading commit...")}
+      </span>
+      {proposal ? <ThreadGitArcChangeTotals changes={proposal.changes} /> : null}
+    </div>
+  );
+}
 
 function plural(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -172,17 +192,25 @@ export default function ThreadGitArcProposalList({
     ...unsealedProposals.map(({ proposalId }) => anchor(proposalId)),
   ];
 
+  // Closed lists name landed commits only, in card order; pending proposals must not read as commits.
+  const closedRows = [...layerGroups.flatMap(({ proposals: layerProposals }) => layerProposals), ...unsealedProposals]
+    .filter(({ status }) => status === "committed")
+    .map(({ proposalId }) => <ClosedCommitRow key={proposalId} proposalId={proposalId} />);
+
   return collapsible ? (
-    <ThreadDisclosure
-      // Anchors stay mounted while closed so relocated controllers keep their edits.
-      keepMounted
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-      open={open}
-      summary={summary}
-      summaryClassName="px-3 py-2 text-[0.76em] leading-[1.45]"
-    >
-      {anchors}
-    </ThreadDisclosure>
+    <>
+      <ThreadDisclosure
+        // Anchors stay mounted while closed so relocated controllers keep their edits.
+        keepMounted
+        onToggle={(event) => setOpen(event.currentTarget.open)}
+        open={open}
+        summary={summary}
+        summaryClassName="px-3 py-2 text-[0.76em] leading-[1.45]"
+      >
+        {anchors}
+      </ThreadDisclosure>
+      {open ? null : closedRows}
+    </>
   ) : (
     <div>
       <div className="flex min-w-0 items-center px-3 py-2 text-[0.76em] leading-[1.45] text-fg/muted">{summary}</div>
