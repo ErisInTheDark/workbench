@@ -313,6 +313,14 @@ async function prepareAcceptedClaimTransition({
   };
 }
 
+/** Git's raw date form with the local offset, e.g. `1759633402 +1300`. */
+function gitRawDate(date: Date) {
+  const offset = -date.getTimezoneOffset();
+  const magnitude = Math.abs(offset);
+  const zone = `${offset < 0 ? "-" : "+"}${String(Math.floor(magnitude / 60)).padStart(2, "0")}${String(magnitude % 60).padStart(2, "0")}`;
+  return `${Math.floor(date.getTime() / 1000)} ${zone}`;
+}
+
 function commitMessage(title: string, description: string) {
   const normalizedTitle = title.trim();
   if (!normalizedTitle) throw new GitArcRejectionError({ reason: "missingCommitTitle" }, "A commit title is required.");
@@ -957,6 +965,7 @@ export default class GitArcProposalController {
       mode: amendTargetSha ? "amend" : "commit",
       paths,
       proposalId,
+      proposedAt: gitRawDate(new Date()),
       sourceCheckpoint: checkpoint.checkpointCommit,
       ...(stackTip ? { stackBase: stackTip } : {}),
       status: "proposed",
@@ -1443,7 +1452,10 @@ export default class GitArcProposalController {
     if (targetTree === await repository.resolveTree(baseCommit)) {
       throw new GitArcRejectionError({ reason: "noChangesToPropose" }, "The selected result has no changes to commit.");
     }
-    const committedSha = await repository.createCommitFromTree(targetTree, baseCommit, message);
+    // Commits land at their proposal time so accepted stacks keep their real history; newer work is dated now.
+    const proposedAt = includeNewer && resolved.includeNewerAvailable ? undefined : proposal.metadata.proposedAt;
+    const committedSha = await repository.createCommitFromTree(targetTree, baseCommit, message,
+      proposedAt ? { authorDate: proposedAt, committerDate: proposedAt } : undefined);
     const { freshCommitMessage: _freshCommitMessage, ...proposalMetadata } = proposal.metadata;
     const committedMetadata: ProposalMetadata = {
       ...proposalMetadata,

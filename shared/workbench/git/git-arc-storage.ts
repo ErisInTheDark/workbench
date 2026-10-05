@@ -78,6 +78,8 @@ export interface ProposalMetadata {
   mode: "amend" | "commit";
   paths: string[];
   proposalId: string;
+  /** Git raw date (`<unix seconds> <+hhmm>`) the proposal was made; accepted commits reuse it. Absent on older proposals. */
+  proposedAt?: string;
   sourceCheckpoint: string;
   /** Stack tip this proposal was built on; absent for proposals based on real history. */
   stackBase?: string;

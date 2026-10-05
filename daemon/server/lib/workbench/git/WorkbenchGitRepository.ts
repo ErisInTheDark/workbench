@@ -619,18 +619,19 @@ export default class WorkbenchGitRepository {
     tree: string,
     parent: string | string[] | null,
     message: string,
-    identity?: Omit<GitCommitIdentity, "message" | "parents" | "signed" | "tree">,
+    /** Supplied actor fields override Git's defaults; omitted ones keep them. */
+    identity?: Partial<Omit<GitCommitIdentity, "message" | "parents" | "signed" | "tree">>,
   ) {
     const parents = parent === null ? [] : Array.isArray(parent) ? parent : [parent];
-    const env = identity ? {
-      ...process.env,
+    const overrides = identity ? Object.fromEntries(Object.entries({
       GIT_AUTHOR_DATE: identity.authorDate,
       GIT_AUTHOR_EMAIL: identity.authorEmail,
       GIT_AUTHOR_NAME: identity.authorName,
       GIT_COMMITTER_DATE: identity.committerDate,
       GIT_COMMITTER_EMAIL: identity.committerEmail,
       GIT_COMMITTER_NAME: identity.committerName,
-    } : process.env;
+    }).filter(([, value]) => value !== undefined)) : {};
+    const env = identity ? { ...process.env, ...overrides } : process.env;
     return (await this.runWithInput([
       "commit-tree", tree, "--no-gpg-sign", ...parents.flatMap((candidate) => ["-p", candidate]), "-F", "-",
     ], message, env)).trim();

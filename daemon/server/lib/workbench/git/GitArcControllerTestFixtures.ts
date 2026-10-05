@@ -210,7 +210,7 @@ export type ControllerFixtureState = Awaited<ReturnType<typeof CONTROLLER_OPERAT
 export const STACK_OPERATIONS_FIXTURE = {
   commits: CONTROLLER_BASE_FIXTURE.commits,
   name: "stack-shared-states",
-  revision: 4,
+  revision: 5,
   prepare: async ({ bundleRoot, repositoryRoot, runGit }) => {
     const controller = new WorkbenchGitCheckpointController();
     const fork = async (name: string, source = repositoryRoot) => {

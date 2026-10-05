@@ -54,6 +54,13 @@ test("stacked proposals wait on sealed layers, reject sealed mutations and land 
   await commit("owner", state.upper, "second");
   assert.equal(await git("show", "HEAD:one.txt"), "second\n");
   assert.equal((await controller.findLifecycleState(owner))?.stackLayers, undefined, "a landed stack stops shaping the baseline");
+  // Accepted commits carry their proposal time, not the moment each layer happened to land.
+  const store = new GitCheckpointStore(await WorkbenchGitRepository.open(cwd));
+  const proposedAt = await Promise.all([state.upper, state.lower]
+    .map(async id => (await store.readProposal("codex", "owner", id)).metadata.proposedAt));
+  assert.ok(proposedAt.every(Boolean));
+  assert.deepEqual((await git("log", "-2", "--date=raw", "--format=%ad|%cd")).trim().split("\n"),
+    proposedAt.map(date => `${date}|${date}`));
 });
 
 test("a lower layer that lands differently makes stacked proposals unavailable", async () => {
