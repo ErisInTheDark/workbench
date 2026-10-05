@@ -29,12 +29,7 @@ import {
   WorkbenchPresentationLayoutChunkSchema,
   WorkbenchPresentationManifestPageSchema,
 } from "../thread/thread-presentation-export";
-import {
-  GitArcStashResultSchema,
-  GitCheckpointCompareResultSchema,
-  GitCheckpointProposalSchema,
-  GitArcProposalSummariesSchema,
-} from "../git/checkpoint-contracts.ts";
+import { WORKBENCH_GIT_ARC_RESULT_SCHEMAS } from "./git-arc-result-schemas.ts";
 import {
   createGitArcOperationRejected,
   GitArcFailureException,
@@ -79,6 +74,9 @@ const fileWriteSchema = z.union([
 function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
   if (method in workbenchThreadActions) {
     return workbenchThreadActions[method as keyof typeof workbenchThreadActions].result;
+  }
+  if (method in WORKBENCH_GIT_ARC_RESULT_SCHEMAS) {
+    return WORKBENCH_GIT_ARC_RESULT_SCHEMAS[method as WorkbenchDaemonGitArcMethod];
   }
   switch (method) {
     case "voice/configuration/read": return VoiceConfigurationSchema;
@@ -161,17 +159,6 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     }).passthrough()) }).passthrough();
     case "profiles/target/read": return z.object({ selection: WorkbenchComposerProfileSelectionSchema.nullable() }).strict();
     case "profiles/target/set": return z.object({ ok: z.literal(true) }).strict();
-    case "git/arc/compare": return GitCheckpointCompareResultSchema;
-    case "git/arc/proposal/commit":
-    case "git/arc/proposal/read": return GitCheckpointProposalSchema;
-    case "git/arc/proposals/summaries": return GitArcProposalSummariesSchema;
-    case "git/arc/diff-artifact/read": return z.string();
-    case "git/arc/release":
-    case "git/arc/remove":
-    case "git/arc/restore": return z.object({ ok: z.literal(true) }).strict();
-    case "git/arc/stash/discard": return z.object({ ok: z.literal(true) }).strict();
-    case "git/arc/stash":
-    case "git/arc/unstash": return GitArcStashResultSchema;
     default: throw new Error(`No response schema is registered for ${method}.`);
   }
 }

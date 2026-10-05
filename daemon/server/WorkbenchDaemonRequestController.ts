@@ -34,12 +34,7 @@ import {
   WorkbenchPresentationManifestRequestSchema,
 } from "workbench-shared/workbench/thread/thread-presentation-export";
 import type WorkbenchThreadLaunchController from "./WorkbenchThreadLaunchController";
-import {
-    GitArcStashResultSchema,
-    GitCheckpointCompareResultSchema,
-    GitArcProposalSummariesSchema,
-    GitCheckpointProposalSchema,
-} from "workbench-shared/workbench/git/checkpoint-contracts";
+import { WORKBENCH_GIT_ARC_RESULT_SCHEMAS } from "workbench-shared/workbench/daemon/git-arc-result-schemas";
 import {
     createGitArcOperationRejected,
     GitArcFailureException,
@@ -649,6 +644,7 @@ export default class WorkbenchDaemonRequestController {
       ));
     }
     if (method === "git/arc/diff-artifact/read") return text;
+    // Mutations answer with internal receipts; browsers only learn that they succeeded.
     if (method === "git/arc/release" || method === "git/arc/remove" || method === "git/arc/restore"
       || method === "git/arc/stash/discard") {
       return { ok: true as const };
@@ -659,17 +655,13 @@ export default class WorkbenchDaemonRequestController {
     } catch {
       throw new Error(`The ${method} result was not valid JSON.`);
     }
-    const parsed = method === "git/arc/compare"
-      ? GitCheckpointCompareResultSchema.safeParse(value)
-      : method === "git/arc/proposals/summaries"
-        ? GitArcProposalSummariesSchema.safeParse(value)
-      : method === "git/arc/stash" || method === "git/arc/unstash"
-        ? GitArcStashResultSchema.safeParse({
-          conflictedPaths: (value as { conflictedPaths?: unknown }).conflictedPaths,
-          phase: (value as { phase?: unknown }).phase,
-          stashedPaths: (value as { stashedPaths?: unknown }).stashedPaths,
-        })
-        : GitCheckpointProposalSchema.safeParse(value);
+    // Stash receipts carry internal checkpoint fields; only the browser-safe ones are published.
+    const published = method === "git/arc/stash" || method === "git/arc/unstash" ? {
+      conflictedPaths: (value as { conflictedPaths?: unknown }).conflictedPaths,
+      phase: (value as { phase?: unknown }).phase,
+      stashedPaths: (value as { stashedPaths?: unknown }).stashedPaths,
+    } : value;
+    const parsed = WORKBENCH_GIT_ARC_RESULT_SCHEMAS[method].safeParse(published);
     if (!parsed.success) throw new Error(`The ${method} result did not match its contract.`);
     return parsed.data;
   }
