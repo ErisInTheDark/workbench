@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchGitCheckpointController: route plan, lifecycle, stack and proposal owners; orchestrate inspection, file-claiming moves and restoration.
+ * - default WorkbenchGitCheckpointController: route plan, lifecycle, stack, proposal and claim-view owners; orchestrate inspection, file-claiming moves and restoration.
  * - GitArcNoopResult: ignored-path no-op result.
  * - GitArcLifecycleState: registered lifecycle projection.
  * - GitArcPlanClaimCollisionResult: inactive-plan collision facts.
@@ -56,6 +56,7 @@ import {
 } from "./git-arc-thread-identity";
 import GitArcRetentionController, { type GitArcRetentionResult } from "./GitArcRetentionController";
 import GitArcStackController from "./GitArcStackController";
+import GitArcClaimViewController, { type GitArcClaimViewInput } from "./GitArcClaimViewController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
@@ -242,6 +243,7 @@ export default class WorkbenchGitCheckpointController {
   private readonly lifecycle: GitArcLifecycleController;
   private readonly stashes: GitArcStashController;
   private readonly transfers: GitArcOwnershipTransferController;
+  private readonly views: GitArcClaimViewController;
 
   constructor(
     proposalDiffs = new GitArcProposalDiffController(),
@@ -253,6 +255,12 @@ export default class WorkbenchGitCheckpointController {
     this.lifecycle = new GitArcLifecycleController(resolveThreadIdentity);
     this.stashes = new GitArcStashController(resolveThreadIdentity);
     this.transfers = new GitArcOwnershipTransferController(resolveThreadIdentity);
+    this.views = new GitArcClaimViewController(this.proposals, resolveThreadIdentity);
+  }
+
+  /** The worktree as one owner builds it, optionally mirrored into an ignored directory. */
+  async readClaimView(input: ControllerInput & Omit<GitArcClaimViewInput, "cwd" | "harness" | "threadId">) {
+    return await this.views.readClaimView({ ...input, harness: normalizeHarness(input.harness) });
   }
 
   private registry(repository: WorkbenchGitRepository) {

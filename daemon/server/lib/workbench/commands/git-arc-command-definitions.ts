@@ -1,7 +1,8 @@
 /*
  * Exports:
- * - WORKBENCH_GIT_ARC_COMMANDS: typed planning, status, lifecycle, inspection and proposal commands shared by CLI/MCP.
+ * - WORKBENCH_GIT_ARC_COMMANDS: typed planning, status, lifecycle, inspection and proposal commands shared by CLI/MCP, plus the CLI-only build view tree.
  */
+import path from "node:path";
 import { z } from "zod";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { GitArcRejectionError, gitArcRejectionIssue } from "workbench-shared/workbench/git/git-arc-rejections";
@@ -379,6 +380,31 @@ const status = defineWorkbenchAgentCommand({
   },
 });
 
+const tree = defineWorkbenchAgentCommand({
+  description: "Print JSON with a Git tree of the worktree as the caller builds it: other live threads' dirty claims at their arc baselines (stack-aware). --hold-own holds the caller's back too. --into mirrors the view's paths (all when none) into a gitignored directory inside the repository, rewriting only changed files and removing strays under those paths; other files there stay.",
+  effects: { idempotent: true },
+  helpGroups: ["git-arc"],
+  hideFromMcp: true,
+  words: ["git", "arc", "tree"],
+  usage: "wb git arc tree [--hold-own] [--into <ignored-dir>] [-- <path>...]",
+  inputSchema: z.object({ holdOwn: z.boolean().default(false), into: requiredText.optional(), paths: paths.default([]) }).strict()
+    .refine(input => input.into || !input.paths.length, "Paths select what --into mirrors; supply --into with them."),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { boolean: ["--hold-own"], values: ["--into"] }), {
+      boolean: ["--hold-own"], trailing: true, values: ["--into"],
+    });
+    return { holdOwn: flags.has("--hold-own"), into: flags.optional("--into") ?? undefined, paths: flags.trailing };
+  },
+  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/git-checkpoint", {
+      action: "arcTree", ...baseBody(callerHarness, callerThreadId, cwd), holdOwn: input.holdOwn,
+      // The caller's cwd anchors a relative mirror; the daemon resolves requests from the project root.
+      ...(input.into ? { into: path.resolve(cwd, input.into) } : {}),
+      paths: input.paths,
+    }, "json");
+  },
+});
+
 export const WORKBENCH_GIT_ARC_COMMANDS = [
   ...WORKBENCH_GIT_PLAN_COMMANDS,
   start,
@@ -395,6 +421,7 @@ export const WORKBENCH_GIT_ARC_COMMANDS = [
   unstack,
   inspectionCommand("compare"),
   inspectionCommand("diff"),
+  tree,
   ...WORKBENCH_GIT_ARC_PROPOSAL_COMMANDS,
   rescind,
   restore,

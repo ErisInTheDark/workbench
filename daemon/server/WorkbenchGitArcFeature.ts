@@ -25,7 +25,7 @@ import { GitArcStartDiagnosticError } from "./lib/workbench/git/git-arc-start-di
 import { GitArcCollisionError } from "./lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "./lib/workbench/git/GitCheckpointStore";
 import type { WorkbenchHarness } from "workbench-shared/types";
-import { GitCheckpointRequestSchema, type GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
+import { GitCheckpointRequestSchema, type GitArcClaimViewResult, type GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
 import type { WorkbenchContextAdmission } from "workbench-shared/workbench/provider/provider-context";
 import type { WorkbenchAgentContextTarget } from "./WorkbenchAgentContextController";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
@@ -805,6 +805,9 @@ export default class WorkbenchGitArcFeature {
       case "arcTransferClaims": throw new Error("Selected claim transfer requires canonical child identity ingress.");
       case "arcScope": return Response.json(await this.controller.readScope(common));
       case "arcStatus": return Response.json(await this.controller.readStatus(common));
+      case "arcTree": return Response.json({
+        repositories: [await this.controller.readClaimView({ ...common, holdOwn: input.holdOwn, into: input.into, paths: input.paths })],
+      } satisfies GitArcClaimViewResult);
       case "plan": return Response.json(await this.controller.createPlan({
         ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
       }));

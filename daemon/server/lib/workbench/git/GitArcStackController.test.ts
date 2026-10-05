@@ -111,7 +111,23 @@ test("released claims keep sealed proposals committable and a child on a lower l
   await fs.writeFile(path.join(cwd, "two.txt"), "child builds on two\n");
   assert.match((await controller.diff({ cwd, threadId: "child", paths: ["two.txt"] })).diff, /-parent two\n\+child builds on two/u,
     "the child measures from the parent's newest layer");
-  const child = await controller.createProposal({ cwd, threadId: "child", paths: ["two.txt"], title: "child", description: "" });
+  // Build views hold other owners' dirty claims at their stack-aware baselines and mirror only into ignored folders.
+  await fs.appendFile(path.resolve(cwd, (await git("rev-parse", "--git-path", "info/exclude")).trim()), "\nbuild-out/\n");
+  const out = path.join(cwd, "build-out");
+  const view = async (threadId: string, holdOwn = false) => await controller.readClaimView({ cwd, threadId, holdOwn, into: out, paths: ["two.txt"] });
+  await fs.mkdir(out);
+  await fs.writeFile(path.join(out, "keep.txt"), "outside the mirrored paths\n");
+  const parentView = await view("parent");
+  assert.ok(parentView.held.some(({ paths, threadId }) => threadId === "child" && paths.includes("two.txt")));
+  assert.deepEqual([(await fs.readdir(out)).sort(), await fs.readFile(path.join(out, "two.txt"), "utf8")], [["keep.txt", "two.txt"], "parent two\n"]);
+  const unchanged = await view("parent");
+  assert.deepEqual([unchanged.written, unchanged.deleted], [0, 0], "unchanged files are left alone");
+  await view("child");
+  assert.equal(await fs.readFile(path.join(out, "two.txt"), "utf8"), "child builds on two\n");
+  await view("child", true);
+  assert.equal(await fs.readFile(path.join(out, "two.txt"), "utf8"), "parent two\n");
+  await assert.rejects(controller.readClaimView({ cwd, threadId: "child", holdOwn: false, into: path.join(cwd, "tracked-out"), paths: [] }), /gitignored/u);
+  const child =await controller.createProposal({ cwd, threadId: "child", paths: ["two.txt"], title: "child", description: "" });
   assert.equal((await read("child", child.proposalId)).waitingForLayer, "layer one", "it waits on the lowest unlanded layer");
   await commit("parent", state.lower, "parent one");
   await commit("parent", state.upper, "parent two");

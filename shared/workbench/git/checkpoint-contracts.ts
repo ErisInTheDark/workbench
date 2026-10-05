@@ -13,6 +13,7 @@
  * - GitCheckpointCompareResultSchema/GitCheckpointCompareResult: local and workspace inspection results.
  * - GitArcStashResultSchema/GitArcStashResult: browser-safe stash and unstash lifecycle result.
  * - GitArcStackResultSchema/GitArcStackResult: sealed or reopened stack layer receipt.
+ * - GitArcClaimViewSchema/GitArcClaimView/GitArcClaimViewResultSchema/GitArcClaimViewResult: per-repository build view tree, held owners and mirror counts.
  * - GitCheckpointProposalSchema/GitCheckpointProposal: durable proposal presentation.
  * - GitArcProposalSummarySchema/GitArcProposalSummary/GitArcProposalSummariesSchema/GitArcProposalSummaries: bulk diff-free proposal commit facts.
  */
@@ -275,6 +276,16 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     ...checkpointBaseRequest,
   }),
   z.object({
+    action: z.literal("arcTree"),
+    /** Hold the caller's own dirty claims back too, for a matched "before" build. */
+    holdOwn: z.boolean().default(false),
+    /** Absolute gitignored directory inside the repository to mirror the view into. */
+    into: nonEmptyString.optional(),
+    /** Repository paths the mirrored directory holds; every path when empty. */
+    paths: optionalCheckpointPaths.default([]),
+    ...checkpointBaseRequest,
+  }).strict(),
+  z.object({
     action: z.literal("restore"),
     checkpointCommit: checkpointSha.optional(),
     confirmRestore: z.boolean().optional(),
@@ -349,6 +360,19 @@ export const GitArcStackResultSchema = z.object({
   stackTip: checkpointSha.nullable(),
 }).strict();
 export type GitArcStackResult = z.infer<typeof GitArcStackResultSchema>;
+
+export const GitArcClaimViewSchema = z.object({
+  /** Mirrored files rewritten or removed; present only when the view was mirrored into a directory. */
+  deleted: z.number().int().nonnegative().optional(),
+  head: checkpointSha.nullable(),
+  held: z.array(z.object({ paths: z.array(nonEmptyString), threadId: nonEmptyString }).strict()),
+  repoRoot: nonEmptyString,
+  tree: checkpointSha,
+  written: z.number().int().nonnegative().optional(),
+}).strict();
+export type GitArcClaimView = z.infer<typeof GitArcClaimViewSchema>;
+export const GitArcClaimViewResultSchema = z.object({ repositories: z.array(GitArcClaimViewSchema) }).strict();
+export type GitArcClaimViewResult = z.infer<typeof GitArcClaimViewResultSchema>;
 
 const GitCheckpointCommitMessageSchema = z.object({
   description: z.string(),

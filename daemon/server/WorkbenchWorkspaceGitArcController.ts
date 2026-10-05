@@ -18,6 +18,7 @@ import type { GitArcRepositoryScope } from "workbench-shared/workbench/git/git-a
 import type { ResolvedProjectRoot } from "./lib/project";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
+  GitArcClaimViewResult,
   GitArcProposalSummary,
   GitArcRootPaths,
   GitArcStackResult,
@@ -405,6 +406,16 @@ export default class WorkbenchWorkspaceGitArcController {
         }
         for (const key of ["dirtyClaims", "cleanClaims", "stashedClaims", "unclaimedDirt"] as const) result[key] = unique(result[key]).sort();
         return result;
+      }
+      case "arcTree": {
+        if (request.into && members.length > 1) {
+          throw new Error("A mirror directory holds one repository's view; this workspace spans several repositories.");
+        }
+        const values = await this.runMembers(members, async member => await this.local.readClaimView({
+          cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
+          holdOwn: request.holdOwn, into: request.into, paths: request.paths,
+        }), undefined, "read");
+        return { repositories: values.map(({ result }) => result) } satisfies GitArcClaimViewResult;
       }
       case "planClaims":
       case "arcClaims": return await this.executeClaimChanges(project, members, request);
