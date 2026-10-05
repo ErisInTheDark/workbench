@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadMeasuredContent: replace exact or nearby offscreen content with its measured space.
+ * - default ThreadMeasuredContent: skip rendering exact or nearby offscreen content inside its measured space, keeping it mounted.
  */
 "use client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -29,8 +29,9 @@ export default function ThreadMeasuredContent({ children, onHidden, visibilityRa
       setState(next);
     }, visibilityRange);
   }, [viewport, visibilityRange]);
+  // Hidden content stays mounted so its React state (open disclosures, edits) survives; the browser skips its style, layout and paint.
   return <div ref={element} className="flow-root min-w-0" data-thread-measured-content={state.visible ? "visible" : "placeholder"}
-    style={state.visible ? undefined : { height: state.height }} aria-hidden={state.visible ? undefined : true}>
-    {state.visible ? children : null}
+    style={state.visible ? undefined : { height: state.height, contentVisibility: "hidden" }} aria-hidden={state.visible ? undefined : true}>
+    {children}
   </div>;
 }

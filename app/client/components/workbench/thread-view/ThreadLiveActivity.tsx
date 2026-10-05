@@ -12,6 +12,7 @@ import type { ThreadTextPresentationSource } from "../../../workbench/thread/Thr
 import { enterMotionClassName } from "../../../tailwind/enter-motion-classes";
 import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import ThreadDisclosure from "./ThreadDisclosure";
+import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import { LoaderIcon } from "../workbench-icons";
 import ThreadMarkdown from "./ThreadMarkdown";
 import {
@@ -81,37 +82,39 @@ export default function ThreadLiveActivity({
   const showReasoning = Boolean(reasoningDisplay?.body || (activity.kind === "webSearch" && activity.contextItems.length));
   return (
     <div className="py-4">
-      <ThreadDisclosure
-        hideChevron
-        className="group/live overflow-hidden rounded-[0.8rem] border border-transparent open:border-fg-alpha/16 open:bg-fg-alpha/3"
-        contentClassName="flex h-[min(100vh,24rem)] flex-col"
-        open={isOpen}
-        onOffscreen={() => setIsOpen(false)}
-        onToggle={event => setIsOpen(event.currentTarget.open)}
-        summaryClassName="group-open/live:border-b group-open/live:border-fg-alpha/16 px-3 py-2 text-[0.92em] font-medium leading-[1.6]"
-        summaryContentClassName="-mb-1"
-        summary={<span aria-live="polite">{title}</span>}
-      >
-        {showReasoning ? (
-          <ThreadScrollViewport resetKey={`${threadId}:${turnId}:reasoning`} className="flex-[0 1 auto] max-h-[30%] overscroll-contain border-b border-fg-alpha/16 [& [data-thread-scroll-end=true]]:[scroll-margin-block-start: 0]" contentClassName="px-3 py-2">
-            {reasoningDisplay?.body ? <ThreadMarkdown
-              className="text-[0.8em] text-fg/muted"
-              inlineMentionSources={inlineMentionSources}
-              markdown={reasoningDisplay.body}
-              threadCwdPath={threadCwdPath}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              revealAppends={Boolean(presentationSource)}
-              workspaceRoots={workspaceRoots}
-            /> : activity?.kind === "webSearch" ? activity.contextItems.map(item => (
-              <p key={item.id} className="m-0 text-[0.8em] text-fg/muted"><ThreadWebSearchActionRow item={item} /></p>
-            )) : null}
-            <ThreadScrollViewportEnd />
-          </ThreadScrollViewport>
-        ) : null}
-        <ThreadCommandTerminal items={items} context={terminalContext} retention={terminalRetention} hasReasoning={showReasoning} open={isOpen} presentationSource={presentationSource} threadId={threadId} turnId={turnId} />
-      </ThreadDisclosure>
+      {/* The live panel deliberately closes once scrolled out of view. */}
+      <ThreadMeasuredContent onHidden={() => setIsOpen(false)}>
+        <ThreadDisclosure
+          hideChevron
+          className="group/live overflow-hidden rounded-[0.8rem] border border-transparent open:border-fg-alpha/16 open:bg-fg-alpha/3"
+          contentClassName="flex h-[min(100vh,24rem)] flex-col"
+          open={isOpen}
+          onToggle={event => setIsOpen(event.currentTarget.open)}
+          summaryClassName="group-open/live:border-b group-open/live:border-fg-alpha/16 px-3 py-2 text-[0.92em] font-medium leading-[1.6]"
+          summaryContentClassName="-mb-1"
+          summary={<span aria-live="polite">{title}</span>}
+        >
+          {showReasoning ? (
+            <ThreadScrollViewport resetKey={`${threadId}:${turnId}:reasoning`} className="flex-[0 1 auto] max-h-[30%] overscroll-contain border-b border-fg-alpha/16 [& [data-thread-scroll-end=true]]:[scroll-margin-block-start: 0]" contentClassName="px-3 py-2">
+              {reasoningDisplay?.body ? <ThreadMarkdown
+                className="text-[0.8em] text-fg/muted"
+                inlineMentionSources={inlineMentionSources}
+                markdown={reasoningDisplay.body}
+                threadCwdPath={threadCwdPath}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                revealAppends={Boolean(presentationSource)}
+                workspaceRoots={workspaceRoots}
+              /> : activity?.kind === "webSearch" ? activity.contextItems.map(item => (
+                <p key={item.id} className="m-0 text-[0.8em] text-fg/muted"><ThreadWebSearchActionRow item={item} /></p>
+              )) : null}
+              <ThreadScrollViewportEnd />
+            </ThreadScrollViewport>
+          ) : null}
+          <ThreadCommandTerminal items={items} context={terminalContext} retention={terminalRetention} hasReasoning={showReasoning} open={isOpen} presentationSource={presentationSource} threadId={threadId} turnId={turnId} />
+        </ThreadDisclosure>
+      </ThreadMeasuredContent>
     </div>
   );
 }

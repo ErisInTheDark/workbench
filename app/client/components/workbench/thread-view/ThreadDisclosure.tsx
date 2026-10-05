@@ -8,7 +8,6 @@
 import { useEffect, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import ChevronIcon from "../ChevronIcon";
-import ThreadMeasuredContent from "./ThreadMeasuredContent";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -19,7 +18,6 @@ type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children
   /** `end` puts the chevron after the summary, pointing left while closed. */
   chevronSide?: "start" | "end";
   hideChevron?: boolean;
-  onOffscreen?: () => void;
   children?: ReactNode;
   compactSummary?: boolean;
   contentClassName?: string;
@@ -47,11 +45,7 @@ function shouldPreventSummaryActionDefault(target: EventTarget | null) {
   return Boolean(target.closest("button, [data-thread-summary-action='true']"));
 }
 
-export default function ThreadDisclosure({ onOffscreen, ...props }: ThreadDisclosureProps) {
-  return <ThreadMeasuredContent onHidden={onOffscreen}><ThreadDisclosureContent {...props} /></ThreadMeasuredContent>;
-}
-
-function ThreadDisclosureContent ({
+export default function ThreadDisclosure ({
   chevronClassName,
   chevronSide = "start",
   hideChevron = false,
