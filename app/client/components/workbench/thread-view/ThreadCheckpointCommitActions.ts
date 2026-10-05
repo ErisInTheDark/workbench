@@ -59,11 +59,11 @@ export default class ThreadCheckpointCommitActions {
     return () => { this.#listeners.delete(listener); };
   };
 
-  #resolve(proposalId: string): ThreadCheckpointCommitAction | null {
+  #resolve(proposalId: string, storedTier = { stored: this.#stored, commitStored: this.#commitStored }): ThreadCheckpointCommitAction | null {
     const card = this.#actions.get(proposalId);
     if (card && card.loaded !== false) return card;
-    const stored = this.#stored.get(proposalId);
-    const commitStored = this.#commitStored;
+    const stored = storedTier.stored.get(proposalId);
+    const commitStored = storedTier.commitStored;
     if (stored && commitStored) return { commit: () => commitStored(stored), ready: isStoredReady(stored) };
     return card ?? null;
   }
@@ -76,11 +76,13 @@ export default class ThreadCheckpointCommitActions {
    * Commits sequentially because each commit moves HEAD before the next proposal revalidates.
    * Readiness gates the start only: later cards briefly rehydrate after HEAD moves, and the
    * commit endpoint revalidates each proposal anyway. Proposals with neither a card nor a summary stop the run.
+   * The stored tier is captured at the start: each landed commit makes the list refetch its summaries mid-run.
    */
   async commitAll(proposalIds: readonly string[]) {
     if (!this.isReady(proposalIds)) return false;
+    const storedTier = { stored: this.#stored, commitStored: this.#commitStored };
     for (const proposalId of proposalIds) {
-      const action = this.#resolve(proposalId);
+      const action = this.#resolve(proposalId, storedTier);
       if (!action || !await action.commit()) return false;
     }
     return true;

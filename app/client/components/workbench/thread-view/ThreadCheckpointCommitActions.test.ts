@@ -68,8 +68,10 @@ const summary = (proposalId: string, overrides: Partial<{ hasChanges: boolean; s
 test("unloaded proposals are ready from bulk summaries and commit their stored message in order, while loaded cards keep their own", async () => {
   const actions = new ThreadCheckpointCommitActions();
   const committed: string[] = [];
-  actions.setStored([summary("one"), summary("two"), summary("three")], async ({ proposalId, title }) => {
+  // Each landed commit changes the pending set, so the list releases its summaries to refetch mid-run.
+  const release = actions.setStored([summary("one"), summary("two"), summary("three")], async ({ proposalId, title }) => {
     committed.push(`stored:${proposalId}:${title}`);
+    release();
     return true;
   });
   // Collapsed layers mount cards that never loaded; their registrations must not hide the summary.
