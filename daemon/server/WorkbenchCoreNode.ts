@@ -297,12 +297,33 @@ function createWorkbenchCoreFeature(
     identities: threadIdentity,
     listSubagents: projectId => subagents.listRelationships(projectId),
     provider,
+    // Resolve lazily: the shared waiter is built later within this core generation.
+    questionnaires: {
+      canDeliver: (threadId, requestKey) => questionnaires.canDeliver(threadId, requestKey),
+      deliver: input => questionnaires.deliver(input),
+    },
+    recordQuestionnaire: async entry => {
+      await transcript.record([{
+        kind: "questionnaire",
+        entry: {
+          ...entry,
+          itemId: entry.itemId ?? null,
+          insertAfterItemId: entry.insertAfterItemId ?? null,
+          insertAfterItemIndex: entry.insertAfterItemIndex ?? null,
+          threadId: WorkbenchThreadIdSchema.parse(entry.threadId),
+        },
+        observedAt: entry.resolvedAt,
+      }], { source: "workbench" });
+    },
     resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     threadState: {
       getEntry: async (projectId, harness, threadId) => (
         await requireThreadState().controller.getThreadEntry(projectId, harness, threadId)
       ),
       acceptIntent,
+      resolvePendingQuestionnaire: (input, deliver) => (
+        requireThreadState().controller.resolvePendingQuestionnaire(input, deliver)
+      ),
     },
   });
   threadState = new WorkbenchThreadStateFeature({

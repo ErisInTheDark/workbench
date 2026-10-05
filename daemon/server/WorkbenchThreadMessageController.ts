@@ -1,21 +1,23 @@
 /*
  * Exports:
  * - WorkbenchThreadMessageControllerOptions: provider, identity, project, relationship and thread-state ports.
- * - default WorkbenchThreadMessageController: own validated cross-thread message admission (child or sibling names, parent, thread ids), admitted-turn intent acceptance, and reload drain.
+ * - default WorkbenchThreadMessageController: own cross-thread message admission, parent-owned questionnaire settlement, admitted-turn intent acceptance, and reload drain.
  */
 import type {
-  ThreadPayload,
   WorkbenchHarness,
   WorkbenchSubagentRelationship,
 } from "workbench-shared/types";
 import {
   ThreadReferenceSchema,
+  WorkbenchTurnIdSchema,
   type ProjectId,
   type WorkbenchThreadId,
 } from "workbench-shared/workbench/identity";
 import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
-import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { isWorkbenchMcpQuestionnaireRequestKey } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
+import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import {
   WorkbenchThreadMessageRequestSchema,
   type WorkbenchThreadMessageRequest,
@@ -27,6 +29,8 @@ import type {
 import { createEmptySubagentQuestionnaireResponse } from "./lib/workbench/subagent/subagent-output";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
+import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
+import type { WorkbenchQuestionnaireResponseStatePort } from "./WorkbenchQuestionnaireResponseController";
 
 const PARENT_AGENT_NAME = "parent agent";
 
@@ -38,16 +42,15 @@ export interface WorkbenchThreadMessageControllerOptions {
   identities: Pick<WorkbenchThreadIdentityController, "resolve">;
   listSubagents(projectId: ProjectId): Promise<SubagentRelationshipList>;
   provider(harness: WorkbenchHarness): Pick<WorkbenchProvider, "threads" | "interactions">;
+  questionnaires: Pick<WorkbenchQuestionnaireController, "canDeliver" | "deliver">;
+  recordQuestionnaire(entry: WorkbenchQuestionnaireHistoryEntryState): Promise<void>;
   resolveProjectFromCwd: AgentEndpointProjectResolver;
   threadState: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
     /** Mark the target working on the turn that admitted the message, as user messages do. */
     acceptIntent(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnId: string): Promise<void>;
+    resolvePendingQuestionnaire: WorkbenchQuestionnaireResponseStatePort["resolvePendingQuestionnaire"];
   };
-}
-
-function currentTurn(thread: ThreadPayload) {
-  return thread.turns.at(-1) ?? null;
 }
 
 function buildSubagentPromptContext(name: string, workbenchOrigin: string | undefined): WorkbenchMessageContext {
@@ -188,28 +191,68 @@ export default class WorkbenchThreadMessageController {
     const accept = (admitted: { turnId: string }) => this.options.threadState.acceptIntent(
       target.projectId, target.harness, target.threadId, admitted.turnId,
     );
-    const turn = currentTurn(target.thread);
-    if (turn?.status === "inProgress") {
-      const pending = directChild
-        ? (await provider.interactions?.pending({ background: true }) ?? [])
-          .find(entry => entry.threadId === target.threadId) ?? null
-        : null;
-      await accept(await provider.threads.messageAgent(input));
-      if (pending) {
-        await provider.interactions!.respond({
-          requestKey: pending.requestKey,
-          response: createEmptySubagentQuestionnaireResponse(pending.request),
-          threadId: target.threadId,
-          turnId: pending.turnId,
+    const active = isThreadStatusActive(target.thread.status);
+    const entry = directChild
+      ? await this.options.threadState.getEntry(target.projectId, target.harness, target.threadId)
+      : null;
+    const stored = entry && entry.entryKind !== "draft" ? entry.pendingQuestionnaire : null;
+    const question = stored && isWorkbenchMcpQuestionnaireRequestKey(stored.requestKey) ? stored : null;
+    const nativeQuestion = directChild && active && !question
+      ? (await provider.interactions?.pending({ background: true }) ?? [])
+        .find(pending => pending.threadId === target.threadId) ?? null
+      : null;
+    const admitted = await provider.threads.messageAgent({
+      ...input,
+      ...(directChild && !active ? { context: buildSubagentPromptContext(directChild.name, request.workbenchOrigin) } : {}),
+    });
+    await accept(admitted);
+    if (question) {
+      const response = createEmptySubagentQuestionnaireResponse(question.request);
+      const replaced = new Error("The captured questionnaire was replaced.");
+      const settled = await this.options.threadState.resolvePendingQuestionnaire({
+        projectId: target.projectId,
+        harness: target.harness,
+        threadId: target.threadId,
+        requestKey: question.requestKey,
+        resolvedAt: Date.now(),
+        response,
+      }, async ({ questionnaire }) => {
+        // Request keys can be reused while message admission is awaiting the provider.
+        if (questionnaire.itemId !== question.itemId) throw replaced;
+        if (this.options.questionnaires.canDeliver(target.threadId, question.requestKey)) {
+          const delivered = await this.options.questionnaires.deliver({
+            threadId: target.threadId,
+            requestKey: question.requestKey,
+            response,
+          });
+          if (!delivered) throw new Error("The questionnaire waiter detached before delivery.");
+        }
+        return {
+          delivery: undefined,
+          turnId: WorkbenchTurnIdSchema.parse(admitted.turnId),
           insertAfterItemId: null,
           insertAfterItemIndex: null,
-        });
+        };
+      }).catch(error => {
+        if (error !== replaced) throw error;
+        return null;
+      });
+      if (settled) {
+        try {
+          await this.options.recordQuestionnaire(settled.historyEntry);
+        } catch {
+          console.warn("[thread-message] Message and questionnaire answer accepted, but transcript recording failed.");
+        }
       }
-      return;
+    } else if (nativeQuestion) {
+      await provider.interactions!.respond({
+        requestKey: nativeQuestion.requestKey,
+        response: createEmptySubagentQuestionnaireResponse(nativeQuestion.request),
+        threadId: target.threadId,
+        turnId: nativeQuestion.turnId,
+        insertAfterItemId: null,
+        insertAfterItemIndex: null,
+      });
     }
-    await accept(await provider.threads.messageAgent({
-      ...input,
-      ...(directChild ? { context: buildSubagentPromptContext(directChild.name, request.workbenchOrigin) } : {}),
-    }));
   }
 }
