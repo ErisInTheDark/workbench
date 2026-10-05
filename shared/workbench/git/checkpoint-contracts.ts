@@ -17,6 +17,7 @@
  */
 import { z } from "zod";
 import { ProviderKeySchema } from "../provider/provider-key.ts";
+import { GitArcStackedProposalSchema } from "./git-arc-receipts";
 import { gitArcRejectionIssue } from "./git-arc-rejections";
 import { GitArcStatusFullSchema } from "./git-arc-status";
 import { GitCheckpointFileChangeSchema } from "./git-checkpoint-file-change.ts";
@@ -333,6 +334,7 @@ export const GitArcStackResultSchema = z.object({
   checkpointCommit: checkpointSha,
   intentName: z.string().nullable(),
   layerId: nonEmptyString,
+  layerProposals: z.array(GitArcStackedProposalSchema).optional(),
   layerTitle: nonEmptyString,
   phase: z.enum(["active", "stashed", "resolved"]),
   proposalIds: z.array(nonEmptyString),

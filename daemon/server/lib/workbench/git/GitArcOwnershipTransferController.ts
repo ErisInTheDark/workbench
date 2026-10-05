@@ -84,7 +84,9 @@ export default class GitArcOwnershipTransferController {
     ]);
     const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
     const [sourceChain, targetChain] = await Promise.all([stack.readChain(origin?.stackTip), stack.readChain(target?.stackTip)]);
-    if (!selectedPaths && stack.ownLayers(sourceChain, source).length && await stack.chainHasPending(stack.ownLayers(sourceChain, source))) {
+    const sourceOwn = stack.ownLayers(sourceChain, source);
+    const targetOwn = stack.ownLayers(targetChain, caller);
+    if (!selectedPaths && sourceOwn.length && await stack.chainHasPending(sourceOwn)) {
       throw new GitArcRejectionError({ reason: "stackedSource" }, "The source thread owns pending stack layers. They must be committed before adoption.");
     }
     // Children build on the releasing thread's sealed layers so their proposals never re-propose sealed work.
@@ -94,7 +96,8 @@ export default class GitArcOwnershipTransferController {
       throw new GitArcRejectionError({ reason: "stackBaseMismatch" }, "The receiving thread builds on a different stack baseline.");
     }
     const recipientStackTip = sourceTip && !targetPendingTip ? sourceTip : undefined;
-    const [sourceSealed, targetSealed] = await Promise.all([stack.sealedProposalIds(origin), stack.sealedProposalIds(target)]);
+    const sourceSealed = new Set(sourceOwn.flatMap(({ layer }) => layer.proposalIds));
+    const targetSealed = new Set(targetOwn.flatMap(({ layer }) => layer.proposalIds));
     const sourceLive = origin ? getGitArcLiveClaimPaths(origin) : [];
     const requested = selectedPaths?.length ? repository.normalizePaths(selectedPaths) : [];
     if (selectedPaths && (!requested.length || new Set(requested).size !== selectedPaths.length

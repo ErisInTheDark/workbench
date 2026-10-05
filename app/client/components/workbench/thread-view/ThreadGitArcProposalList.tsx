@@ -54,27 +54,25 @@ export default function ThreadGitArcProposalList({
   const canPersist = clientState.schemaVersion >= appStateReleases.threadGitArcProposalsOpen.version;
   const [unpersistedOpen, setUnpersistedOpen] = useState(true);
   const [committingAll, setCommittingAll] = useState(false);
+  const pendingIdsOf = (values: typeof proposals) => values
+    .filter(({ status }) => status === "proposed").map(({ proposalId }) => proposalId);
   const sealedIds = new Set(stackLayers.flatMap(({ proposalIds }) => proposalIds));
   const layerGroups = stackLayers.flatMap((layer) => {
     const layerIds = new Set(layer.proposalIds);
     const layerProposals = proposals.filter(({ proposalId }) => layerIds.has(proposalId));
-    return layerProposals.length ? [{ layer, proposals: layerProposals }] : [];
+    return layerProposals.length ? [{ layer, pendingIds: pendingIdsOf(layerProposals), proposals: layerProposals }] : [];
   });
   const unsealedProposals = proposals.filter(({ proposalId }) => !sealedIds.has(proposalId));
   // Commit all walks the stack bottom-up, then unsealed work built on top of it.
-  const proposedIds = [...layerGroups.flatMap(({ proposals: layerProposals }) => layerProposals), ...unsealedProposals]
-    .filter(({ status }) => status === "proposed").map(({ proposalId }) => proposalId);
+  const proposedIds = [...layerGroups.flatMap(({ pendingIds }) => pendingIds), ...pendingIdsOf(unsealedProposals)];
+  // Only the lowest layer with pending work can commit; higher layers wait on it.
+  const lowestPendingGroup = layerGroups.find(({ pendingIds }) => pendingIds.length);
   // Only pending work on a stopped thread demands attention; anything else follows the saved preference.
   const collapsible = running || !proposedIds.length;
   const open = !collapsible || (canPersist ? readProposalsOpen(clientState.records) : unpersistedOpen);
   const readSnapshot = () => commitActions.isReady(proposedIds);
   const commitAllReady = useSyncExternalStore(commitActions.subscribe, readSnapshot, readSnapshot);
-  const pendingIdsOf = (group: (typeof layerGroups)[number]) => group.proposals
-    .filter(({ status }) => status === "proposed").map(({ proposalId }) => proposalId);
-  // Only the lowest layer with pending work can commit; higher layers wait on it.
-  const lowestPendingGroup = layerGroups.find(group => pendingIdsOf(group).length);
-  const lowestPendingLayerId = lowestPendingGroup?.layer.layerId ?? null;
-  const readLayerSnapshot = () => commitActions.isReady(lowestPendingGroup ? pendingIdsOf(lowestPendingGroup) : []);
+  const readLayerSnapshot = () => commitActions.isReady(lowestPendingGroup?.pendingIds ?? []);
   const commitLayerReady = useSyncExternalStore(commitActions.subscribe, readLayerSnapshot, readLayerSnapshot);
 
   const setOpen = (next: boolean) => {
@@ -131,10 +129,9 @@ export default function ThreadGitArcProposalList({
   );
   const anchors = [
     ...layerGroups.map((group) => {
-      const { layer, proposals: layerProposals } = group;
-      const layerPendingIds = pendingIdsOf(group);
+      const { layer, pendingIds: layerPendingIds, proposals: layerProposals } = group;
       const pending = layerPendingIds.length;
-      const lowest = layer.layerId === lowestPendingLayerId;
+      const lowest = group === lowestPendingGroup;
       return (
         <ThreadDisclosure
           className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]"

@@ -29,7 +29,7 @@ import GitArcRegistry from "./GitArcRegistry";
 import { CHECKPOINT_OPERATIONS_FIXTURE } from "./GitCheckpointTestFixtures";
 import { CLAIM_LOSS_OPERATIONS_FIXTURE } from "./GitArcClaimLossTestFixtures";
 import { HISTORY_ARC_READY_FIXTURE, HISTORY_CONFLICT_READY_FIXTURE, HISTORY_LINEAR_FIXTURE, HISTORY_ROOT_READY_FIXTURE } from "./GitHistoryRewriteTestFixtures";
-import { CONTROLLER_BASE_FIXTURE, CONTROLLER_OPERATIONS_FIXTURE, CONTROLLER_PARTIAL_READY_FIXTURE } from "./GitArcControllerTestFixtures";
+import { CONTROLLER_BASE_FIXTURE, CONTROLLER_OPERATIONS_FIXTURE, CONTROLLER_PARTIAL_READY_FIXTURE, STACK_OPERATIONS_FIXTURE } from "./GitArcControllerTestFixtures";
 import GitTestFixtureCache, {
   GIT_TEST_FIXTURE_MANIFEST_ENV,
   gitTestFixtureKey,
@@ -318,13 +318,13 @@ function demand<State extends object>(spec: GitTestFixtureSpec<State>, copies: n
 
 const specsByGitTestFile = new Map<string, GitTestFileSpec>([
   ["GitArcOwnershipTransferController.test.ts", { fixtures: [
-    demand(CONTROLLER_BASE_FIXTURE, 11),
+    demand(CONTROLLER_BASE_FIXTURE, 9),
   ], nested: false }],
   ["GitArcStackController.test.ts", { fixtures: [
-    demand(CONTROLLER_BASE_FIXTURE, 4),
+    demand(STACK_OPERATIONS_FIXTURE, 1),
   ], nested: false }],
   ["GitArcStashController.test.ts", { fixtures: [
-    demand(CONTROLLER_BASE_FIXTURE, 2),
+    demand(CONTROLLER_BASE_FIXTURE, 1),
   ], nested: false }],
   ["ReloadDirtController.test.ts", { fixtures: [
     demand(RELOAD_DIRT_FIXTURE, 1),

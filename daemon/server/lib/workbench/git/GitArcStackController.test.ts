@@ -1,123 +1,106 @@
 /*
- * Exports: none. Protect stack layer sealing, stacked proposal ordering, reopening and history rewrites.
+ * Exports: none. Protect stack layer waiting, sealing, reopening, history rewrites and subagent transfer on prepared branches.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
+import { after, before, test } from "node:test";
 import GitCheckpointStore from "./GitCheckpointStore";
-import GitTestFixtureCache from "./GitTestFixtureCache";
+import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
-import { CONTROLLER_BASE_FIXTURE } from "./GitArcControllerTestFixtures";
+import { STACK_OPERATIONS_FIXTURE, type StackFixtureState } from "./GitArcControllerTestFixtures";
 
 const fixtures = new GitTestFixtureCache();
+const controller = new WorkbenchGitCheckpointController();
+let fixture: GitTestFixtureCopy<StackFixtureState> | null = null;
+before(async () => { fixture = await fixtures.copy(STACK_OPERATIONS_FIXTURE); }, { timeout: 30_000 });
+after(async () => { await fixture?.dispose(); });
 
-async function setup(context: { after(callback: () => Promise<void> | void): void }, paths = ["one.txt"]) {
-  const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
-  context.after(() => fixture.dispose());
-  const cwd = fixture.root;
-  const controller = new WorkbenchGitCheckpointController();
-  await controller.createAndStartPlan({ cwd, threadId: "owner", intentName: "stacked work", paths });
-  const write = async (file: string, content: string) => await fs.writeFile(path.join(cwd, file), content);
-  const propose = async (title: string, files = ["one.txt"]) => (
-    await controller.createProposal({ cwd, threadId: "owner", paths: files, title, description: "" })
-  ).proposalId;
-  const commit = async (proposalId: string, title: string) => await controller.commitProposal({
-    cwd, threadId: "owner", proposalId, title, description: "", includeNewer: false,
+function branch<Key extends keyof StackFixtureState>(key: Key) {
+  const state = fixture!.state[key];
+  const cwd = path.join(fixture!.bundleRoot, state.root);
+  const commit = async (threadId: string, proposalId: string, title: string) => await controller.commitProposal({
+    cwd, threadId, proposalId, title, description: "", includeNewer: false,
   });
-  const headFile = async (file: string) => await (await WorkbenchGitRepository.open(cwd)).run(["show", `HEAD:${file}`]);
-  return { commit, controller, cwd, headFile, propose, write };
+  const read = async (threadId: string, proposalId: string) => await controller.getProposal({ cwd, threadId, proposalId, includeNewer: false });
+  const git = async (...args: string[]) => await (await WorkbenchGitRepository.open(cwd)).run(args);
+  return { commit, cwd, git, read, state };
 }
 
-test("stacked proposals measure from sealed layers and commit bottom-up by replaying onto HEAD", async context => {
-  const { commit, controller, cwd, headFile, propose, write } = await setup(context);
-  await write("one.txt", "first\n");
-  const lower = await propose("first");
-  await controller.stackArc({ cwd, threadId: "owner", title: "layer one" });
-  assert.deepEqual((await controller.compare({ cwd, threadId: "owner" })).changes, [], "sealed work is the new baseline");
+test("stacked proposals wait on sealed layers, reject sealed mutations and land bottom-up", async () => {
+  const { commit, cwd, git, read, state } = branch("stacked");
+  const owner = { cwd, threadId: "owner" };
+  const upper = await read("owner", state.upper);
+  assert.equal(upper.waitingForLayer, "layer one");
+  assert.match(upper.changes[0]!.diff, /-first\n\+second/u, "stacked work diffs from the sealed layer");
+  const lower = await read("owner", state.lower);
+  assert.equal(lower.sealedInLayer, "layer one");
+  assert.equal(lower.includeNewerAvailable, false, "newer work belongs to the upper layer");
+  const status = await controller.readStatus(owner);
+  assert.deepEqual(status.stacked, [{ title: "layer one", pending: [{ proposalId: state.lower, title: "first" }] }]);
+  assert.deepEqual(status.pending, [{ proposalId: state.upper, title: "second" }]);
 
-  await write("one.txt", "second\n");
-  const upper = await propose("second");
-  const waiting = await controller.getProposal({ cwd, threadId: "owner", proposalId: upper, includeNewer: false });
-  assert.equal(waiting.waitingForLayer, "layer one");
-  assert.match(waiting.changes[0]!.diff, /-first\n\+second/u, "the stacked proposal diffs only its own layer");
-  await assert.rejects(commit(upper, "second"), /layer one/u);
-  await assert.rejects(controller.rescindProposal({ cwd, threadId: "owner", proposalId: lower }), /sealed/iu);
+  await assert.rejects(controller.rescindProposal({ ...owner, proposalId: state.lower }), /sealed/iu);
+  await assert.rejects(commit("owner", state.upper, "second"), /layer one/u);
+  await assert.rejects(controller.unstackArc(owner), /builds on/iu);
+  await assert.rejects(controller.stashArc(owner), /stack/iu);
+  await assert.rejects(controller.adoptArc({ cwd, threadId: "other", source: { harness: "codex", threadId: "owner" } }), /stack/iu);
+  assert.deepEqual(await controller.readScope(owner).then(scope => scope?.claimedPaths), ["one.txt"], "rejections leave ownership intact");
 
-  const lowerState = await controller.getProposal({ cwd, threadId: "owner", proposalId: lower, includeNewer: false });
-  assert.equal(lowerState.sealedInLayer, "layer one");
-  assert.equal(lowerState.includeNewerAvailable, false, "newer work belongs to the upper layer");
-
-  await commit(lower, "first");
-  assert.equal(await headFile("one.txt"), "first\n");
-  assert.equal((await controller.getProposal({ cwd, threadId: "owner", proposalId: upper, includeNewer: false })).waitingForLayer, null);
-  await commit(upper, "second");
-  assert.equal(await headFile("one.txt"), "second\n");
-  assert.deepEqual((await controller.findLifecycleState({ cwd, threadId: "owner" }))?.stackLayers ?? [], [],
-    "a fully landed stack stops shaping the baseline");
+  await commit("owner", state.lower, "first");
+  assert.equal(await git("show", "HEAD:one.txt"), "first\n");
+  assert.equal((await read("owner", state.upper)).waitingForLayer, null);
+  await commit("owner", state.upper, "second");
+  assert.equal(await git("show", "HEAD:one.txt"), "second\n");
+  assert.equal((await controller.findLifecycleState(owner))?.stackLayers, undefined, "a landed stack stops shaping the baseline");
 });
 
-test("a lower layer that did not land as sealed makes stacked proposals unavailable", async context => {
-  const { controller, cwd, propose, write } = await setup(context);
-  await write("one.txt", "sealed\n");
-  await propose("sealed");
-  await controller.stackArc({ cwd, threadId: "owner", title: "layer one" });
-  await write("one.txt", "stacked\n");
-  const upper = await propose("stacked");
-
-  const repository = await WorkbenchGitRepository.open(cwd);
-  const head = await repository.currentHead();
-  await write("one.txt", "someone else\n");
-  const outside = await repository.createCommitFromTree(await repository.writeScopedWorktreeTree(["one.txt"], head), head, "outside\n");
-  await repository.updateRefs([{ newValue: outside, oldValue: head, ref: (await repository.symbolicHead())! }]);
-
-  const state = await controller.getProposal({ cwd, threadId: "owner", proposalId: upper, includeNewer: false });
-  assert.equal(state.status, "unavailable");
-  assert.equal(state.waitingForLayer, null);
+test("a lower layer that lands differently makes stacked proposals unavailable", async () => {
+  const { read, state } = branch("broken");
+  const upper = await read("owner", state.upper);
+  assert.equal(upper.status, "unavailable");
+  assert.equal(upper.waitingForLayer, null);
 });
 
-test("unstack reopens only an unused top layer, after which its proposals can be rescinded", async context => {
-  const { controller, cwd, propose, write } = await setup(context);
-  await write("one.txt", "sealed\n");
-  const lower = await propose("sealed");
-  await controller.stackArc({ cwd, threadId: "owner", title: "layer one" });
-  await write("one.txt", "stacked\n");
-  const upper = await propose("stacked");
-
-  await assert.rejects(controller.unstackArc({ cwd, threadId: "owner" }), /builds on/iu);
-  await controller.rescindProposal({ cwd, threadId: "owner", proposalId: upper });
-  const reopened = await controller.unstackArc({ cwd, threadId: "owner" });
-  assert.deepEqual(reopened.proposalIds, [lower]);
-  assert.equal(reopened.stackTip, null);
-  await controller.rescindProposal({ cwd, threadId: "owner", proposalId: lower });
-  await assert.rejects(controller.unstackArc({ cwd, threadId: "owner" }), /stack layer/iu);
+test("unstack reopens an unused top layer so its proposals can be rescinded", async () => {
+  const { cwd, state } = branch("sealed");
+  const owner = { cwd, threadId: "owner" };
+  const reopened = await controller.unstackArc(owner);
+  assert.deepEqual([reopened.proposalIds, reopened.stackTip], [[state.lower], null]);
+  assert.deepEqual(reopened.layerProposals, [{
+    changes: [{ additions: 1, deletions: 1, kind: "update", path: "one.txt" }],
+    description: "", proposalId: state.lower, title: "first",
+  }], "the tip recorded each sealed message and file totals");
+  await controller.rescindProposal({ ...owner, proposalId: state.lower });
+  await assert.rejects(controller.unstackArc(owner), /stack layer/iu);
 });
 
-test("accepting a sealed amend rewrites the stack onto the amended history", async context => {
-  const { commit, controller, cwd, headFile, propose, write } = await setup(context);
-  await write("one.txt", "first\n");
-  const original = await propose("first");
-  await write("one.txt", "amended\n");
-  await commit(original, "first");
-  const amendment = (await controller.createProposal({
-    cwd, threadId: "owner", amend: true, amendProposalId: original, paths: ["one.txt"],
-    title: "first amended", description: "", freshTitle: "first follow-up",
-  })).proposalId;
-  await controller.stackArc({ cwd, threadId: "owner", title: "amend layer" });
-  await write("one.txt", "stacked\n");
-  const upper = await propose("stacked");
-
+test("accepting a sealed amend rewrites the stack onto the amended history", async () => {
+  const { commit, cwd, git, state } = branch("amended");
   await controller.commitProposal({
-    cwd, threadId: "owner", proposalId: amendment, title: "first amended", description: "", includeNewer: false, mode: "amend",
+    cwd, threadId: "owner", proposalId: state.amendment, title: "first amended", description: "", includeNewer: false, mode: "amend",
   });
   const repository = await WorkbenchGitRepository.open(cwd);
-  const head = await repository.currentHead();
-  const { stackBase } = (await new GitCheckpointStore(repository).readProposal("codex", "owner", upper)).metadata;
-  assert.ok(stackBase);
-  assert.equal((await repository.readCommitAt(stackBase))?.identity.parents[0], head, "the stacked base follows the rewritten HEAD");
+  const { stackBase } = (await new GitCheckpointStore(repository).readProposal("codex", "owner", state.upper)).metadata;
+  assert.equal((await repository.readCommitAt(stackBase!))?.identity.parents[0], await repository.currentHead(),
+    "the stacked base follows the rewritten HEAD");
+  await commit("owner", state.upper, "stacked");
+  assert.equal(await git("show", "HEAD:one.txt"), "stacked\n");
+  assert.equal(await git("log", "-1", "--format=%s", "HEAD~1"), "first amended\n");
+});
 
-  await commit(upper, "stacked");
-  assert.equal(await headFile("one.txt"), "stacked\n");
-  assert.equal(await repository.run(["log", "-1", "--format=%s", "HEAD~1"]), "first amended\n");
+test("released claims keep sealed proposals committable and the child builds on the sealed layer", async () => {
+  const { commit, cwd, git, read, state } = branch("transfer");
+  await (await controller.prepareReleaseToChild({
+    cwd, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["one.txt"],
+  })).apply();
+  assert.equal((await read("parent", state.sealed)).status, "proposed");
+  await fs.writeFile(path.join(cwd, "one.txt"), "child builds on it\n");
+  assert.match((await controller.diff({ cwd, threadId: "child" })).diff, /-parent sealed\n\+child builds on it/u);
+  const child = await controller.createProposal({ cwd, threadId: "child", title: "child", description: "" });
+  assert.equal((await read("child", child.proposalId)).waitingForLayer, "parent layer");
+  await commit("parent", state.sealed, "parent");
+  await commit("child", child.proposalId, "child");
+  assert.equal(await git("show", "HEAD:one.txt"), "child builds on it\n");
 });

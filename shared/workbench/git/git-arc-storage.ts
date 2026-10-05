@@ -17,6 +17,7 @@
  * - GitArcSavedStashSchema/GitArcSavedStash: caller-owned adopted-stash registry metadata.
  */
 import { z } from "zod";
+import type { GitArcStackedProposal } from "./git-arc-receipts";
 
 export const CHECKPOINT_METADATA_MARKER = "workbench-git-checkpoint-v1";
 export const PROPOSAL_METADATA_MARKER = "workbench-git-checkpoint-proposal-v1";
@@ -47,6 +48,8 @@ export interface StackLayerMetadata {
   harness: string;
   layerId: string;
   proposalIds: string[];
+  /** Message and per-file totals captured at sealing; absent on layers sealed before they were recorded. */
+  proposals?: GitArcStackedProposal[];
   /** ISO time; orders one workspace layer across repositories. */
   sealedAt: string;
   threadId: string;

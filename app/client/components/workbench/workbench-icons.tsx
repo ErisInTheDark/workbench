@@ -51,7 +51,7 @@
  * - CompactIcon/QuestionnaireListIcon/EllipsisIcon/FeatherIcon: thread action glyphs.
  * - FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon: thread workflow glyphs.
  * - GitArcIcon: select the glyph for a Git arc action.
- * - GitArcStackIcon: stacked layers glyph for sealed proposal layers.
+ * - GitArcStackIcon/GitArcUnstackIcon: lucide layers and layers-arrow-up glyphs for sealing and reopening stack layers.
  * - GitArcClaimIcon/GitArcCleanClaimIcon/GitArcDirtyClaimIcon/GitArcPlannedClaimIcon: live and planned claim glyphs.
  * - GitArcUnclaimedIcon/GitArcConflictIcon/GitArcWaitIcon: unclaimed, conflicting and waiting claim glyphs.
  * - GitGraphIcon: sidebar Git section graph glyph.
@@ -779,9 +779,14 @@ export function GitArcStackIcon(props: IconProps) {
   return <OutlinedIcon {...props}><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></OutlinedIcon>;
 }
 
+export function GitArcUnstackIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M12 12V2" /><path d="M2 17.002a1 1 0 00.58.91l8.6 3.91a2 2 0 001.65 0l8.58-3.9a1 1 0 00.59-.92" /><path d="M7.674 8.774 2.58 11.09a1 1 0 000 1.822l8.6 3.91a2 2 0 001.65 0l8.58-3.9a1 1 0 00.59-.92 1 1 0 00-.59-.922l-5.078-2.308" /><path d="m9 5 3-3 3 3" /></OutlinedIcon>;
+}
+
 export function GitArcIcon({ action, ...props }: IconProps & { action: GitArcCommandAction }) {
   if (action === "stash" || action === "unstash") return <ArchiveIcon {...props} />;
-  if (action === "stack" || action === "unstack") return <GitArcStackIcon {...props} />;
+  if (action === "stack") return <GitArcStackIcon {...props} />;
+  if (action === "unstack") return <GitArcUnstackIcon {...props} />;
   if (action === "plan" || action === "scope" || action === "status") {
     return <OutlinedIcon {...props}><path d="M14 21h1" /><path d="M14 3h1" /><path d="M19 3a2 2 0 0 1 2 2" /><path d="M21 14v1" /><path d="M21 19a2 2 0 0 1-2 2" /><path d="M21 9v1" /><path d="M3 14v1" /><path d="M3 9v1" /><path d="M5 21a2 2 0 0 1-2-2" /><path d="M5 3a2 2 0 0 0-2 2" /><path d="M7 12h10" /><path d="M7 16h6" /><path d="M7 8h8" /><path d="M9 21h1" /><path d="M9 3h1" /></OutlinedIcon>;
   }

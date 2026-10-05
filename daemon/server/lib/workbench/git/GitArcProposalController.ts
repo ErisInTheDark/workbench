@@ -456,12 +456,9 @@ async function resolveProposalState(
   );
   if (proposal.metadata.stackBase && proposal.metadata.status === "proposed") {
     const head = options.snapshot ? options.snapshot.head : await repository.headOrNull();
-    const resolveStatus: GitArcStackStatusResolver = async (owner, lowerProposalId) => (await resolveProposalState(
-      resolveThreadIdentity, repository, normalizeHarness(owner.harness), owner.threadId, lowerProposalId,
-      { includeNewer: false, persistTransitions: false, snapshot: options.snapshot },
-    )).proposal.metadata.status;
     const stacked = await new GitArcStackController(repository, resolveThreadIdentity).classifyStackedProposal(
-      proposal.metadata.stackBase, proposal.metadata.livePaths, head, resolveStatus,
+      proposal.metadata.stackBase, proposal.metadata.livePaths, head,
+      derivedStatusResolver(resolveThreadIdentity, repository, options.snapshot),
     );
     if (stacked.kind === "waiting") {
       return { currentTree: null, includeNewerAvailable: false, proposal, waitingForLayer: stacked.layerTitle };
@@ -573,6 +570,18 @@ async function resolveProposalState(
   return { currentTree, includeNewerAvailable: false, proposal, waitingForLayer: null };
 }
 
+/** Stack decisions read derived proposal status without persisting transitions. */
+function derivedStatusResolver(
+  resolveThreadIdentity: GitArcThreadIdentityResolver,
+  repository: WorkbenchGitRepository,
+  snapshot?: { head: string | null; tree: string },
+): GitArcStackStatusResolver {
+  return async (owner, proposalId) => (await resolveProposalState(
+    resolveThreadIdentity, repository, normalizeHarness(owner.harness), owner.threadId, proposalId,
+    { includeNewer: false, persistTransitions: false, snapshot },
+  )).proposal.metadata.status;
+}
+
 export default class GitArcProposalController {
   constructor(
     private readonly proposalDiffs = new GitArcProposalDiffController(),
@@ -591,12 +600,8 @@ export default class GitArcProposalController {
     return new GitArcStackController(repository, this.resolveThreadIdentity);
   }
 
-  /** Derived proposal status for stack decisions, never persisting transitions. */
-  stackStatusResolver(repository: WorkbenchGitRepository): GitArcStackStatusResolver {
-    return async (owner, proposalId) => (await resolveProposalState(
-      this.resolveThreadIdentity, repository, normalizeHarness(owner.harness), owner.threadId, proposalId,
-      { includeNewer: false, persistTransitions: false },
-    )).proposal.metadata.status;
+  stackStatusResolver(repository: WorkbenchGitRepository) {
+    return derivedStatusResolver(this.resolveThreadIdentity, repository);
   }
 
   async readStatusProposals(
@@ -607,7 +612,7 @@ export default class GitArcProposalController {
   ) {
     const harness = normalizeHarness(input.harness);
     const entry = await this.registry(repository).find({ harness, threadId: input.threadId });
-    const layers = entry?.stackTip ? this.stack(repository).ownLayers(await this.stack(repository).readChain(entry.stackTip), entry) : [];
+    const layers = await this.stack(repository).readOwnLayers(entry);
     const pending: Array<{ proposalId: string; title: string }> = [];
     const stackedPending = new Map<string, Array<{ proposalId: string; title: string }>>();
     const accepted: Array<{ proposalId: string; title: string; commitSha: string }> = [];

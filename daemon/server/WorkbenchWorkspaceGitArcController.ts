@@ -939,6 +939,9 @@ export default class WorkbenchWorkspaceGitArcController {
     return {
       ...this.aggregateResults(project, values),
       layerId: first.layerId,
+      ...(values.every(({ result }) => result.layerProposals) ? {
+        layerProposals: values.flatMap(({ result }) => result.layerProposals!),
+      } : {}),
       layerTitle: first.layerTitle,
       proposalIds: values.flatMap(({ result }) => result.proposalIds),
     };
@@ -946,7 +949,7 @@ export default class WorkbenchWorkspaceGitArcController {
 
   private async latestOwnStackLayerId(members: readonly RepoMember[], identity: { harness: WorkbenchHarness; threadId: string }) {
     const tops = await Promise.all(members.map(async member => await this.local.readTopStackLayer({ ...identity, cwd: member.repoRoot })));
-    const latest = tops.flatMap(value => value ? [value.top.layer] : [])
+    const latest = tops.flatMap(layer => layer ? [layer] : [])
       .sort((left, right) => right.sealedAt.localeCompare(left.sealedAt))[0];
     if (!latest) throw new GitArcRejectionError({ reason: "noOwnStackLayer" });
     return latest.layerId;

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - GitArcAction/GitArcReceipt: describe persisted arc action presentation data.
+ * - GitArcStackedProposalSchema/GitArcStackedProposal: sealed proposal message and per-file totals captured at stacking.
  * - GitArcReceiptSchema/projectGitArcReceipt/parseGitArcReceipt: validate compact presentation facts and decode current or historical text.
  * - formatGitArcTextReceipt: emit one labelled plain-text result without duplicated JSON.
  * - escapeGitArcValue/readGitArcValue: preserve literal values without permitting output-section injection.
@@ -9,6 +10,20 @@ import { z } from "zod";
 import { DAEMON_RELOAD_SCOPE_PATTERN } from "../daemon-reload.ts";
 
 const RECEIPT_PREFIX = "Workbench arc receipt: ";
+
+/** One sealed proposal as captured when its layer was stacked. */
+export const GitArcStackedProposalSchema = z.object({
+  changes: z.array(z.object({
+    additions: z.number().int().nonnegative(),
+    deletions: z.number().int().nonnegative(),
+    kind: z.enum(["add", "delete", "update"]),
+    path: z.string().min(1),
+  }).strict()),
+  description: z.string(),
+  proposalId: z.string().min(1),
+  title: z.string(),
+}).strict();
+export type GitArcStackedProposal = z.infer<typeof GitArcStackedProposalSchema>;
 
 export const GitArcReceiptSchema = z.object({
   action: z.enum(["add", "adopt", "claims", "scope", "compare", "continue", "diff", "mv", "plan", "propose", "release", "remove", "restore", "stack", "stash", "start", "unstack", "unstash"]),
@@ -33,6 +48,8 @@ export const GitArcReceiptSchema = z.object({
   memberRefs: z.array(z.object({ ref: z.string().regex(/^[a-f0-9]{7,64}$/iu), rootId: z.string().min(1) }).strict()).optional(),
   proposalId: z.string().min(1).optional(),
   proposals: z.array(z.object({ proposalId: z.string().min(1), status: z.enum(["proposed", "committed"]) })).optional(),
+  /** Sealed proposals of the stacked or unstacked layer, when the layer recorded them. */
+  stackedProposals: z.array(GitArcStackedProposalSchema).optional(),
   rootId: z.string().min(1).optional(),
   reloadScopes: z.array(z.string().regex(DAEMON_RELOAD_SCOPE_PATTERN)).optional(),
   ref: z.string().regex(/^[a-f0-9]{7,64}$/iu),
@@ -79,6 +96,7 @@ export function projectGitArcReceipt(input: GitArcReceipt): GitArcReceipt {
     ...(receipt.proposalId ? { proposalId: receipt.proposalId } : {}),
     ...(receipt.layer ? { layer: receipt.layer } : {}),
     ...(receipt.proposals === undefined ? {} : { proposals: receipt.proposals }),
+    ...(receipt.stackedProposals === undefined ? {} : { stackedProposals: receipt.stackedProposals }),
     ...(receipt.unchanged ? { unchanged: true } : {}),
     ...(visible(receipt.memberRefs) ? { memberRefs: receipt.memberRefs } : {}),
     ...(visible(receipt.acceptedProposals) ? { acceptedProposals: receipt.acceptedProposals } : {}),
@@ -140,6 +158,10 @@ export function formatGitArcTextReceipt(input: GitArcReceipt) {
   if (receipt.proposals !== undefined) {
     lines.push(`proposals ${receipt.proposals.length}`);
     for (const proposal of receipt.proposals) lines.push(`${escapeGitArcValue(proposal.proposalId)}\t${proposal.status}`);
+  }
+  if (receipt.stackedProposals !== undefined) {
+    // One JSON object per line: JSON escapes newlines, so values cannot forge sections.
+    lines.push(`sealed ${receipt.stackedProposals.length}`, ...receipt.stackedProposals.map(proposal => JSON.stringify(proposal)));
   }
   if (receipt.unchanged) lines.push("unchanged");
   if (receipt.memberRefs?.length) {
@@ -225,6 +247,8 @@ function parseTextReceipt(output: string) {
       result[counts[key]] = Number(value);
     } else if (key === "ref" || key === "intent" || key === "root" || key === "proposal" || key === "mode" || key === "layer") {
       result[key === "intent" ? "intentName" : key === "root" ? "rootId" : key === "proposal" ? "proposalId" : key] = readGitArcValue(value);
+    } else if (key === "sealed") {
+      result.stackedProposals = take(count(value)).map(row => GitArcStackedProposalSchema.parse(JSON.parse(row)));
     } else if (key === "unchanged") result.unchanged = true;
     else if (key === "previous-plan") {
       if (previousRef) throw new Error("Missing planning drift paths.");

@@ -8,6 +8,7 @@
 import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import type { GitArcStackResult } from "workbench-shared/workbench/git/checkpoint-contracts";
+import type { GitArcStackedProposal } from "workbench-shared/workbench/git/git-arc-receipts";
 import {
   CHECKPOINT_METADATA_MARKER,
   type CheckpointMetadata,
@@ -19,7 +20,7 @@ import {
 } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcRegistry, { type GitArcPreparedOperation, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
-import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 import { passthroughGitArcThreadIdentityResolver, type GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
 
 export interface GitArcStackLayer {
@@ -89,6 +90,11 @@ export default class GitArcStackController {
     return chain.filter(({ layer }) => ownsLayer(layer, identity));
   }
 
+  /** The entry's own sealed layers, bottom first. */
+  async readOwnLayers(entry: GitArcRegistryEntry | null | undefined) {
+    return entry?.stackTip ? this.ownLayers(await this.readChain(entry.stackTip), entry) : [];
+  }
+
   /** Stored statuses are enough to decide whether a chain still shapes the baseline. */
   private async storedPendingIds(chain: readonly GitArcStackLayer[]) {
     const summaries = await this.store().readProposalSummaryGroups(chain.map(({ layer }) => ({
@@ -115,23 +121,27 @@ export default class GitArcStackController {
 
   /** The own layer sealing a proposal, if any. */
   async sealingLayer(entry: GitArcRegistryEntry | null | undefined, proposalId: string) {
-    if (!entry?.stackTip) return null;
-    return this.ownLayers(await this.readChain(entry.stackTip), entry)
-      .find(({ layer }) => layer.proposalIds.includes(proposalId))?.layer ?? null;
+    return (await this.readOwnLayers(entry)).find(({ layer }) => layer.proposalIds.includes(proposalId))?.layer ?? null;
   }
 
   async sealedProposalIds(entry: GitArcRegistryEntry | null | undefined) {
-    if (!entry?.stackTip) return new Set<string>();
-    return new Set(this.ownLayers(await this.readChain(entry.stackTip), entry).flatMap(({ layer }) => layer.proposalIds));
+    return new Set((await this.readOwnLayers(entry)).flatMap(({ layer }) => layer.proposalIds));
+  }
+
+  /** `base` with every sealed path in the chain below `tip` taken from that tip. */
+  async sealedTree(base: string, tip: string) {
+    const paths = [...new Set((await this.readChain(tip)).flatMap(({ scopePaths }) => scopePaths))];
+    return await this.repository.writeTreeWithPathsFromSource(base, tip, paths);
   }
 
   /** HEAD may differ from a stack tip only on paths still owned by pending chain proposals. */
   async validateBaseline(tip: string, paths: string[], head: string | null) {
     const changed = await this.repository.listChangedPaths(tip, head, paths);
     if (!changed.length) return;
+    const store = this.store();
     const pending = await this.storedPendingIds(await this.readChain(tip));
     const pendingPaths = (await Promise.all(pending.flatMap(({ layer, pending: ids }) => ids.map(async id => (
-      (await this.store().readProposal(layer.layer.harness as GitArcHarness, layer.layer.threadId, id)).metadata.paths
+      (await store.readProposal(layer.layer.harness as GitArcHarness, layer.layer.threadId, id)).metadata.paths
     ))))).flat();
     const unexplained = changed.filter(candidate => !pendingPaths.some(owned => gitArcPathsOverlap(candidate, owned)));
     if (unexplained.length) {
@@ -161,8 +171,7 @@ export default class GitArcStackController {
 
   /** Own layers in chain order for lifecycle presentation. */
   async projectLayers(entry: GitArcRegistryEntry) {
-    if (!entry.stackTip) return [];
-    return this.ownLayers(await this.readChain(entry.stackTip), entry).map(({ layer }) => ({
+    return (await this.readOwnLayers(entry)).map(({ layer }) => ({
       layerId: layer.layerId,
       proposalIds: [...layer.proposalIds],
       sealedAt: layer.sealedAt,
@@ -200,10 +209,19 @@ export default class GitArcStackController {
     for (const proposal of pending) {
       tree = await this.repository.writeTreeWithPathsFromSource(tree, proposal.proposalCommit, proposal.metadata.paths);
     }
+    // Summaries live on the tip so stack cards never rehydrate each sealed proposal.
+    const proposals = await Promise.all(pending.map(async ({ metadata, tree }): Promise<GitArcStackedProposal> => ({
+      changes: (await this.repository.buildFileChanges(metadata.baseCommit, tree, metadata.paths))
+        .map(({ additions, deletions, kind, path }) => ({ additions, deletions, kind: kind.type, path })),
+      description: metadata.description,
+      proposalId: metadata.proposalId,
+      title: metadata.title,
+    })));
     const stackLayer: StackLayerMetadata = {
       harness: identity.harness,
       layerId: input.layerId,
-      proposalIds: pending.map(({ metadata }) => metadata.proposalId),
+      proposalIds: proposals.map(({ proposalId }) => proposalId),
+      proposals,
       sealedAt: input.sealedAt,
       threadId: entry.threadId,
       title: input.title.trim(),
@@ -220,6 +238,7 @@ export default class GitArcStackController {
     return this.operation(updates, {
       ...this.resultBase(entry),
       layerId: stackLayer.layerId,
+      layerProposals: proposals,
       layerTitle: stackLayer.title,
       proposalIds: stackLayer.proposalIds,
       stackTip: prepared.checkpointCommit,
@@ -246,18 +265,18 @@ export default class GitArcStackController {
     return this.operation(mutation.updates, {
       ...this.resultBase(entry),
       layerId: top.layer.layerId,
+      ...(top.layer.proposals ? { layerProposals: top.layer.proposals } : {}),
       layerTitle: top.layer.title,
       proposalIds: [...top.layer.proposalIds],
       stackTip: nextTip,
     });
   }
 
-  /** Latest own top layer id, used by workspace unstack to pick one layer across repositories. */
+  /** The caller's top layer when it is their own; workspace unstack picks one layer across repositories. */
   async topOwnLayer(identity: StackIdentity) {
     const entry = await this.registry().find(identity);
-    const chain = await this.readChain(entry?.stackTip);
-    const top = chain.at(-1);
-    return entry && top && ownsLayer(top.layer, entry) ? { chain, top } : null;
+    const top = (await this.readChain(entry?.stackTip)).at(-1);
+    return entry && top && ownsLayer(top.layer, entry) ? top.layer : null;
   }
 
   private async requireLayerUnused(entry: GitArcRegistryEntry, top: GitArcStackLayer) {
@@ -289,7 +308,7 @@ export default class GitArcStackController {
     };
   }
 
-  private operation(updates: Awaited<ReturnType<GitArcRegistry["prepareSet"]>>["updates"], result: GitArcStackResult): GitArcPreparedOperation<GitArcStackResult> {
+  private operation(updates: GitRefUpdate[], result: GitArcStackResult): GitArcPreparedOperation<GitArcStackResult> {
     return {
       result,
       apply: async () => {

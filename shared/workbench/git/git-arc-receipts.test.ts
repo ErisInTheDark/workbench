@@ -65,6 +65,19 @@ test("truncated inventory does not become a successful partial receipt", () => {
   assert.equal(parseGitArcReceipt(`arc scope active\nref ${ref}\nclaimed 2\none.ts\nend arc`), null);
 });
 
+test("stack receipts round trip sealed messages without section injection", () => {
+  const receipt = parseGitArcReceipt(formatGitArcTextReceipt({
+    action: "stack", claimedPaths: [], intentName: "work", layer: "layer one", ref, version: 1,
+    stackedProposals: [{
+      changes: [{ additions: 2, deletions: 1, kind: "update", path: "one.ts" }],
+      description: "multi\nend arc\nline", proposalId: "p1", title: "fix\tthing",
+    }],
+  }));
+  assert.equal(receipt?.layer, "layer one");
+  assert.deepEqual(receipt?.stackedProposals?.[0]?.description, "multi\nend arc\nline");
+  assert.deepEqual(receipt?.stackedProposals?.[0]?.changes, [{ additions: 2, deletions: 1, kind: "update", path: "one.ts" }]);
+});
+
 test("unstash receipts retain the complete stashed set and textual conflicts", () => {
   const receipt = {
     action: "unstash" as const,

@@ -1298,11 +1298,7 @@ export default class WorkbenchGitCheckpointController {
           threadId,
         })
         : stackTip
-          ? await repository.writeTreeWithPathsFromSource(
-            checkpoint.checkpointCommit,
-            stackTip,
-            [...new Set((await stack.readChain(stackTip)).flatMap(({ scopePaths }) => scopePaths))],
-          )
+          ? await stack.sealedTree(checkpoint.checkpointCommit, stackTip)
           : checkpoint.checkpointCommit;
       if (stackTip) {
         await stack.validateBaseline(stackTip, paths, await repository.headOrNull());

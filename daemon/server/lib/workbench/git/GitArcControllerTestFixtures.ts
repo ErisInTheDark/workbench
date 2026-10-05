@@ -4,6 +4,7 @@
  * - CONTROLLER_PARTIAL_READY_FIXTURE: existing active two-file fixture for other consumers.
  * - CONTROLLER_OPERATIONS_FIXTURE: shared prepared histories for the controller battery.
  * - ControllerFixtureState: branch paths and prepared checkpoint/proposal identities.
+ * - STACK_OPERATIONS_FIXTURE/StackFixtureState: prepared stack layer branches and their proposal identities.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -205,3 +206,69 @@ export const CONTROLLER_OPERATIONS_FIXTURE = {
 } satisfies GitTestFixtureSpec<object>;
 
 export type ControllerFixtureState = Awaited<ReturnType<typeof CONTROLLER_OPERATIONS_FIXTURE.prepare>>;
+
+export const STACK_OPERATIONS_FIXTURE = {
+  commits: CONTROLLER_BASE_FIXTURE.commits,
+  name: "stack-shared-states",
+  revision: 2,
+  prepare: async ({ bundleRoot, repositoryRoot, runGit }) => {
+    const controller = new WorkbenchGitCheckpointController();
+    const fork = async (name: string, source = repositoryRoot) => {
+      const root = path.join(bundleRoot, `r/${name}`);
+      await fs.cp(source, root, { recursive: true, errorOnExist: true, force: false });
+      return root;
+    };
+    const propose = async (cwd: string, threadId: string, file: string, content: string, title: string) => {
+      await write(cwd, file, content);
+      return (await controller.createProposal({ cwd, threadId, paths: [file], title, description: "" })).proposalId;
+    };
+    const relative = (root: string) => path.relative(bundleRoot, root);
+
+    // owner: "first" sealed in "layer one"; other: unrelated live claims that could adopt owner.
+    const sealed = await fork("sealed");
+    await controller.createAndStartPlan({ cwd: sealed, threadId: "owner", intentName: "stacked work", paths: ["one.txt"] });
+    await controller.createAndStartPlan({ cwd: sealed, threadId: "other", intentName: "other work", paths: ["two.txt"] });
+    const lower = await propose(sealed, "owner", "one.txt", "first\n", "first");
+    await controller.stackArc({ cwd: sealed, threadId: "owner", title: "layer one" });
+
+    // stacked: "second" pending on top of the sealed layer.
+    const stacked = await fork("stacked", sealed);
+    const upper = await propose(stacked, "owner", "one.txt", "second\n", "second");
+
+    // broken: someone else commits the sealed path before the layer lands.
+    const broken = await fork("broken", stacked);
+    await write(broken, "one.txt", "someone else\n");
+    await runGit(["commit", "--quiet", "-am", "outside"], { cwd: broken });
+
+    // amended: an amend of committed work sealed, with "stacked" pending above it.
+    const amended = await fork("amended");
+    await controller.createAndStartPlan({ cwd: amended, threadId: "owner", intentName: "stacked amend", paths: ["one.txt"] });
+    const original = await propose(amended, "owner", "one.txt", "first\n", "first");
+    // Still-dirty claims keep the arc active after the original lands.
+    await write(amended, "one.txt", "amended\n");
+    await controller.commitProposal({ cwd: amended, threadId: "owner", proposalId: original, title: "first", description: "", includeNewer: false });
+    const amendment = (await controller.createProposal({
+      cwd: amended, threadId: "owner", amend: true, amendProposalId: original, paths: ["one.txt"],
+      title: "first amended", description: "", freshTitle: "first follow-up",
+    })).proposalId;
+    await controller.stackArc({ cwd: amended, threadId: "owner", title: "amend layer" });
+    const amendedUpper = await propose(amended, "owner", "one.txt", "stacked\n", "stacked");
+
+    // transfer: parent sealed one.txt and still claims both files.
+    const transfer = await fork("transfer");
+    await controller.createAndStartPlan({ cwd: transfer, threadId: "parent", intentName: "parent work", paths: ["one.txt", "two.txt"] });
+    const parentSealed = await propose(transfer, "parent", "one.txt", "parent sealed\n", "parent");
+    await controller.stackArc({ cwd: transfer, threadId: "parent", title: "parent layer" });
+
+    for (const root of [sealed, stacked, broken, amended, transfer]) await runGit(["fsck", "--strict"], { cwd: root });
+    return {
+      sealed: { root: relative(sealed), lower },
+      stacked: { root: relative(stacked), lower, upper },
+      broken: { root: relative(broken), upper },
+      amended: { root: relative(amended), amendment, upper: amendedUpper },
+      transfer: { root: relative(transfer), sealed: parentSealed },
+    };
+  },
+} satisfies GitTestFixtureSpec<object>;
+
+export type StackFixtureState = Awaited<ReturnType<typeof STACK_OPERATIONS_FIXTURE.prepare>>;
