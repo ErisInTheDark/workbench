@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchGitCheckpointController: route plan, lifecycle and proposal owners; orchestrate inspection, file-claiming moves and restoration.
+ * - default WorkbenchGitCheckpointController: route plan, lifecycle, stack and proposal owners; orchestrate inspection, file-claiming moves and restoration.
  * - GitArcNoopResult: ignored-path no-op result.
  * - GitArcLifecycleState: registered lifecycle projection.
  * - GitArcPlanClaimCollisionResult: inactive-plan collision facts.
@@ -11,15 +11,18 @@
  * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: rejected ownership paths.
  * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult/GitArcRetentionResult: controller results.
  */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type {
   GitArcMoveRequest,
+  GitArcStackResult,
   GitCheckpointFileChange,
   GitCheckpointProposal,
   GitCheckpointRequest,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcMissingClaimSetError } from "workbench-shared/workbench/git/git-arc-failures";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import type { GitArcClaimChanges, GitArcPlanningDrift } from "workbench-shared/workbench/git/git-arc-state";
 import GitArcLifecycleController from "./GitArcLifecycleController";
 import GitArcRegistry, {
@@ -52,6 +55,7 @@ import {
   type GitArcThreadIdentityResolver,
 } from "./git-arc-thread-identity";
 import GitArcRetentionController, { type GitArcRetentionResult } from "./GitArcRetentionController";
+import GitArcStackController from "./GitArcStackController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
@@ -254,6 +258,46 @@ export default class WorkbenchGitCheckpointController {
 
   private store(repository: WorkbenchGitRepository) {
     return new GitCheckpointStore(repository, this.resolveThreadIdentity);
+  }
+
+  private stack(repository: WorkbenchGitRepository) {
+    return new GitArcStackController(repository, this.resolveThreadIdentity);
+  }
+
+  /** Prepare one repository's stack or unstack so workspace callers can apply or compensate it. Null means nothing to change here. */
+  async prepareStackOperation(
+    input: ControllerInput,
+    operation: { action: "stack"; layerId: string; sealedAt: string; title: string } | { action: "unstack"; layerId?: string },
+  ) {
+    return await GitObjectReadSession.run(async () => {
+      const repository = await WorkbenchGitRepository.open(input.cwd);
+      const identity = { harness: normalizeHarness(input.harness), threadId: input.threadId };
+      return operation.action === "stack"
+        ? await this.stack(repository).prepareStack(identity, operation, this.proposals.stackStatusResolver(repository))
+        : await this.stack(repository).prepareUnstack(identity, operation.layerId);
+    });
+  }
+
+  /** Latest own stack layer for workspace unstack selection. */
+  async readTopStackLayer(input: ControllerInput) {
+    return await GitObjectReadSession.run(async () => {
+      const repository = await WorkbenchGitRepository.open(input.cwd);
+      return await this.stack(repository).topOwnLayer({ harness: normalizeHarness(input.harness), threadId: input.threadId });
+    });
+  }
+
+  async stackArc(input: ControllerInput & { title: string }): Promise<GitArcStackResult> {
+    const prepared = await this.prepareStackOperation(input, {
+      action: "stack", layerId: randomUUID(), sealedAt: new Date().toISOString(), title: input.title,
+    });
+    if (!prepared) throw new GitArcRejectionError({ reason: "noProposalsToStack" });
+    return await prepared.apply();
+  }
+
+  async unstackArc(input: ControllerInput): Promise<GitArcStackResult> {
+    const prepared = await this.prepareStackOperation(input, { action: "unstack" });
+    if (!prepared) throw new GitArcRejectionError({ reason: "noOwnStackLayer" });
+    return await prepared.apply();
   }
 
   async createInspectionSnapshot(cwd: string): Promise<GitArcInspectionSnapshot> {
@@ -1241,25 +1285,39 @@ export default class WorkbenchGitCheckpointController {
         ?? await readCheckpoint(repoRoot, harness, threadId, checkpointCommit, this.resolveThreadIdentity);
       const metadata = releasingArc?.metadata ?? checkpoint.metadata;
       if (!metadata?.scopePaths.length) throw new Error("This checkpoint does not contain a restorable file set.");
+      // Full restore & unclaim abandons sealed layers too; selected restores keep sealed content intact.
+      const stack = this.stack(repository);
+      const stackTip = releasingArc ? null : await stack.pendingTip(await this.registry(repository).find({ harness, threadId }));
       const restoreSource = releasingArc
         ? await this.proposals.logicalBaseline({
           checkpointCommit: checkpoint.checkpointCommit,
           cwd: repoRoot,
           fallbackHead: checkpoint.parent,
           harness,
+          ignoreStack: true,
           threadId,
         })
-        : checkpoint.checkpointCommit;
-      const headMovement = await repository.classifyHeadMovement(
-        releasingArc ? restoreSource : checkpoint.parent,
-        paths,
-        restoreSource,
-      );
-      if (headMovement.kind === "incompatible") {
-        throw new Error("Repository HEAD moved incompatibly after this checkpoint. Ask the user before restoring selected paths.");
-      }
-      if (headMovement.changedPaths.length) {
-        throw new Error(`Selected restore paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
+        : stackTip
+          ? await repository.writeTreeWithPathsFromSource(
+            checkpoint.checkpointCommit,
+            stackTip,
+            [...new Set((await stack.readChain(stackTip)).flatMap(({ scopePaths }) => scopePaths))],
+          )
+          : checkpoint.checkpointCommit;
+      if (stackTip) {
+        await stack.validateBaseline(stackTip, paths, await repository.headOrNull());
+      } else {
+        const headMovement = await repository.classifyHeadMovement(
+          releasingArc ? restoreSource : checkpoint.parent,
+          paths,
+          restoreSource,
+        );
+        if (headMovement.kind === "incompatible") {
+          throw new Error("Repository HEAD moved incompatibly after this checkpoint. Ask the user before restoring selected paths.");
+        }
+        if (headMovement.changedPaths.length) {
+          throw new Error(`Selected restore paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
+        }
       }
       const currentTree = await repository.writeScopedWorktreeTree(paths, restoreSource);
       const changedPaths = await repository.listChangedPaths(restoreSource, currentTree, paths);
@@ -1282,6 +1340,7 @@ export default class WorkbenchGitCheckpointController {
           ...releasingArc.active,
           claimedPaths: [],
           phase: "resolved",
+          stackTip: null,
         }, releasingArc.active.checkpointCommit);
         const previousOutcome = await readArcOutcome(releasingArc.repository, harness, threadId, checkpoint.checkpointCommit, this.resolveThreadIdentity);
         const outcomeUpdate = await prepareArcOutcome(releasingArc.repository, harness, threadId, {

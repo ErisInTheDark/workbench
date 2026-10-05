@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkspaceGitArcMemberError: preserve failed/completed member facts around the original failure.
- * - default WorkbenchWorkspaceGitArcController: aggregate status, recovery and paged diffs; route mutations and history retention.
+ * - default WorkbenchWorkspaceGitArcController: aggregate status, recovery, stack layers and paged diffs; route mutations and history retention.
  * - WorkspaceGitArcMemberState: active repository plus root identity.
  * - WorkspaceGitArcLifecycleState: workspace lifecycle projection.
  * - WorkspaceGitArcPlanMemberState: planned repository plus root identity.
@@ -9,6 +9,7 @@
  * - WorkspaceGitArcPlanClaimCollisionResult: project-qualified inactive member collision results.
  * Local mechanics: observe mutation claims while the Git transition remains held.
  */
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import type { GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
@@ -18,6 +19,7 @@ import type { ResolvedProjectRoot } from "./lib/project";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
   GitArcRootPaths,
+  GitArcStackResult,
   GitCheckpointFileChange,
   GitCheckpointRequest,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
@@ -381,6 +383,12 @@ export default class WorkbenchWorkspaceGitArcController {
         for (const { member, result: status } of values) {
           const qualify = (paths: string[]) => paths.map(file => this.qualify(project, member, file));
           result.pending.push(...status.pending);
+          for (const layer of status.stacked ?? []) {
+            const stacked = result.stacked ??= [];
+            const existing = stacked.find(({ title }) => title === layer.title);
+            if (existing) existing.pending.push(...layer.pending);
+            else stacked.push({ title: layer.title, pending: [...layer.pending] });
+          }
           result.accepted.push(...status.accepted);
           result.dirtyClaims.push(...qualify(status.dirtyClaims));
           result.cleanClaims.push(...qualify(status.cleanClaims));
@@ -423,6 +431,8 @@ export default class WorkbenchWorkspaceGitArcController {
       case "arcStash":
       case "arcUnstash": return await this.executeStash(project, members, request);
       case "arcDiscardStash": return await this.executeDiscardStash(project, members, request);
+      case "arcStack":
+      case "arcUnstack": return await this.executeStack(project, members, request);
       case "arcAdoptSource": throw new Error("Source adoption requires canonical identity ingress.");
       case "arcTransferClaims": throw new Error("Selected claim transfer requires canonical child identity ingress.");
       case "arcStart":
@@ -899,6 +909,49 @@ export default class WorkbenchWorkspaceGitArcController {
     return this.aggregateResults(project, values);
   }
 
+  /** One workspace layer shares its id and title across every repository that had pending work to seal. */
+  private async executeStack(
+    project: AgentEndpointProjectResolution,
+    members: readonly RepoMember[],
+    request: Extract<GitCheckpointRequest, { action: "arcStack" | "arcUnstack" }>,
+  ) {
+    const identity = { harness: request.harness, threadId: request.threadId };
+    const prepared = new Map<string, GitArcPreparedOperation<GitArcStackResult>>();
+    const values = await this.runPreparedMembers(
+      members,
+      async () => {
+        const operation = request.action === "arcStack"
+          ? { action: "stack" as const, layerId: randomUUID(), sealedAt: new Date().toISOString(), title: request.title }
+          : { action: "unstack" as const, layerId: await this.latestOwnStackLayerId(members, identity) };
+        for (const member of members) {
+          const value = await this.local.prepareStackOperation({ ...identity, cwd: member.repoRoot }, operation);
+          if (value) prepared.set(member.repoRoot, value);
+        }
+        if (!prepared.size) {
+          throw new GitArcRejectionError({ reason: request.action === "arcStack" ? "noProposalsToStack" : "noOwnStackLayer" });
+        }
+        return members.filter(member => prepared.has(member.repoRoot));
+      },
+      async member => prepared.get(member.repoRoot)!,
+      [{ ...identity, project }],
+    );
+    const first = values[0]!.result;
+    return {
+      ...this.aggregateResults(project, values),
+      layerId: first.layerId,
+      layerTitle: first.layerTitle,
+      proposalIds: values.flatMap(({ result }) => result.proposalIds),
+    };
+  }
+
+  private async latestOwnStackLayerId(members: readonly RepoMember[], identity: { harness: WorkbenchHarness; threadId: string }) {
+    const tops = await Promise.all(members.map(async member => await this.local.readTopStackLayer({ ...identity, cwd: member.repoRoot })));
+    const latest = tops.flatMap(value => value ? [value.top.layer] : [])
+      .sort((left, right) => right.sealedAt.localeCompare(left.sealedAt))[0];
+    if (!latest) throw new GitArcRejectionError({ reason: "noOwnStackLayer" });
+    return latest.layerId;
+  }
+
   private async executeDiscardStash(
     project: AgentEndpointProjectResolution,
     members: readonly RepoMember[],
@@ -1277,6 +1330,14 @@ export default class WorkbenchWorkspaceGitArcController {
       : members.some(({ phase }) => phase === "stashed")
         ? "stashed" as const
         : "resolved" as const;
+    // Workspace layers share ids across repositories; seal time orders layers that only some repositories hold.
+    const stackLayers = new Map<string, NonNullable<GitArcLifecycleState["stackLayers"]>[number]>();
+    for (const layer of members.flatMap(({ stackLayers: memberLayers }) => memberLayers ?? [])) {
+      const existing = stackLayers.get(layer.layerId);
+      stackLayers.set(layer.layerId, existing
+        ? { ...existing, proposalIds: [...existing.proposalIds, ...layer.proposalIds] }
+        : { ...layer, proposalIds: [...layer.proposalIds] });
+    }
     return {
       checkpointCommit: first.checkpointCommit,
       claimedPaths: members.flatMap(({ claimedPaths }) => claimedPaths),
@@ -1286,6 +1347,9 @@ export default class WorkbenchWorkspaceGitArcController {
       members,
       phase,
       proposals: members.flatMap(({ proposals }) => proposals),
+      ...(stackLayers.size ? {
+        stackLayers: [...stackLayers.values()].sort((left, right) => left.sealedAt.localeCompare(right.sealedAt)),
+      } : {}),
       threadId: first.threadId,
       updatedAt: members.map(({ updatedAt }) => updatedAt).sort().at(-1) ?? first.updatedAt,
       stashedPaths: members.flatMap(({ stashedPaths }) => stashedPaths ?? []),

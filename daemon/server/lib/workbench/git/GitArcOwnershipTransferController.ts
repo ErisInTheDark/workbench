@@ -2,7 +2,7 @@
  * Exports:
  * - GitArcAdoptionInput/GitArcAdoptionResult: complete-source transfer input and receipt.
  * - GitArcSelectedTransferInput: selected live claims released to a child.
- * - default GitArcOwnershipTransferController: prepare atomic claim/stash ownership transfers.
+ * - default GitArcOwnershipTransferController: prepare atomic claim/stash ownership transfers; children inherit stack baselines and sealed proposals survive.
  */
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
@@ -11,6 +11,8 @@ import GitArcRegistry, { getGitArcLiveClaimPaths, type GitArcRegistryEntry } fro
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitArcProposalController from "./GitArcProposalController";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
+import GitArcStackController from "./GitArcStackController";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import type { GitArcPreparedOperation } from "./GitArcRegistry";
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 import { passthroughGitArcThreadIdentityResolver, type GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
@@ -80,6 +82,19 @@ export default class GitArcOwnershipTransferController {
     const [callerStash, sourceStash] = await Promise.all([
       stashes.readOwnedStash(caller, target), stashes.readOwnedStash(source, origin),
     ]);
+    const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
+    const [sourceChain, targetChain] = await Promise.all([stack.readChain(origin?.stackTip), stack.readChain(target?.stackTip)]);
+    if (!selectedPaths && stack.ownLayers(sourceChain, source).length && await stack.chainHasPending(stack.ownLayers(sourceChain, source))) {
+      throw new GitArcRejectionError({ reason: "stackedSource" }, "The source thread owns pending stack layers. They must be committed before adoption.");
+    }
+    // Children build on the releasing thread's sealed layers so their proposals never re-propose sealed work.
+    const sourceTip = selectedPaths && sourceChain.length && await stack.chainHasPending(sourceChain) ? sourceChain.at(-1)!.tipCommit : null;
+    const targetPendingTip = targetChain.length && await stack.chainHasPending(targetChain) ? targetChain.at(-1)!.tipCommit : null;
+    if (sourceTip && targetPendingTip && !targetChain.some(({ tipCommit }) => tipCommit === sourceTip)) {
+      throw new GitArcRejectionError({ reason: "stackBaseMismatch" }, "The receiving thread builds on a different stack baseline.");
+    }
+    const recipientStackTip = sourceTip && !targetPendingTip ? sourceTip : undefined;
+    const [sourceSealed, targetSealed] = await Promise.all([stack.sealedProposalIds(origin), stack.sealedProposalIds(target)]);
     const sourceLive = origin ? getGitArcLiveClaimPaths(origin) : [];
     const requested = selectedPaths?.length ? repository.normalizePaths(selectedPaths) : [];
     if (selectedPaths && (!requested.length || new Set(requested).size !== selectedPaths.length
@@ -170,9 +185,10 @@ export default class GitArcOwnershipTransferController {
     } : null;
     const nextTarget = plan && target ? {
       ...target, phase: "plan" as const, claimedPaths, retainedArc: claimedPaths.length ? retained : null,
-      savedStash,
+      savedStash, stackTip: recipientStackTip,
     } : {
       ...caller, ...retained, proposalId: retained.proposalIds.at(-1) ?? null, retainedArc: null, savedStash,
+      stackTip: recipientStackTip,
     };
     const nextSource = origin ? origin.phase === "plan" || origin.phase === "stashed" && origin.retainedArc
       ? {
@@ -193,9 +209,14 @@ export default class GitArcOwnershipTransferController {
       { identity: source, expectedCheckpointCommit: origin?.checkpointCommit ?? null, next: nextSource },
     ]);
     updates.push(...mutation.updates);
+    // Sealed proposals no longer depend on live claims, so ownership moves leave them committable.
     const invalidations = [
-      { identity: source, ids: [...new Set([...(sourceArc?.proposalIds ?? origin?.proposalIds ?? []), ...(!selectedPaths ? sourceStash?.proposalIds ?? [] : [])])] },
-      ...(incoming.length ? [{ identity: caller, ids: callerArc?.proposalIds ?? [] }] : []),
+      {
+        identity: source,
+        ids: [...new Set([...(sourceArc?.proposalIds ?? origin?.proposalIds ?? []), ...(!selectedPaths ? sourceStash?.proposalIds ?? [] : [])])]
+          .filter(id => !sourceSealed.has(id)),
+      },
+      ...(incoming.length ? [{ identity: caller, ids: (callerArc?.proposalIds ?? []).filter(id => !targetSealed.has(id)) }] : []),
     ];
     for (const { identity, ids } of invalidations) {
       updates.push(...await proposals.prepareUnavailableUpdates({

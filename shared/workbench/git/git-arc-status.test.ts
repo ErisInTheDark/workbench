@@ -45,6 +45,20 @@ test("status round-trips proposal identities and recovery counts without section
   assert.equal(parseGitArcStatus('Dirty claims: "unterminated').success, false);
 });
 
+test("stacked layers round trip in order, separate from unsealed pending proposals", () => {
+  const input: GitArcStatus = {
+    ...empty,
+    pending: [{ proposalId: "top", title: "unsealed" }],
+    stacked: [
+      { title: 'fix "cache", pending: fake', pending: [{ proposalId: "a", title: "first, sealed" }, { proposalId: "b", title: "second" }] },
+      { title: "add layer two", pending: [{ proposalId: "c", title: "third" }] },
+    ],
+  };
+  const parsed = parseGitArcStatus(formatGitArcStatus(input));
+  assert.ok(parsed.success);
+  assert.deepEqual(parsed.data, input);
+});
+
 test("clean claim loss omits empty comparison noise", () => {
   const input: GitArcStatus = {
     ...empty,

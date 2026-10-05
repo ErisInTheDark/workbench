@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcProposalController: own proposal validity, bounded diff hydration, publication, acceptance, and lifecycle projection.
+ * - default GitArcProposalController: own proposal validity (including stacked proposals), bounded diff hydration, publication, acceptance, and lifecycle projection.
  * - GitArcLifecycleState: active or resolved arc with ordered proposal summaries.
  * - GitArcAcceptedProposalsError: accepted receipts and remaining claims when continuation stops.
  * - GitCheckpointProposalReceipt: published proposal identity.
@@ -20,6 +20,7 @@ import {
 } from "./git-arc-thread-identity";
 import GitArcPublishState from "./GitArcPublishState";
 import GitArcRegistry, { REGISTRY_REF, getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcStackController, { type GitArcStackStatusResolver } from "./GitArcStackController";
 import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
 import GitCheckpointStore, {
   type GitArcProposalSummary,
@@ -46,6 +47,7 @@ interface ArcIdentityInput {
 }
 
 const BRANCH_CHANGED_UNAVAILABLE_REASON = "The branch changed after this proposal was created, so it can no longer be committed as proposed.";
+const STACK_BROKEN_UNAVAILABLE_REASON = "The lower stack layer was not committed as proposed.";
 
 export interface GitCheckpointProposalReceipt {
   baseCommit: string | null;
@@ -66,6 +68,8 @@ export interface GitArcLifecycleState {
   intentName: string;
   phase: "active" | "stashed" | "resolved";
   proposals: Array<{ proposalId: string; status: "committed" | "proposed" }>;
+  /** Own sealed layers, bottom first; absent means none. */
+  stackLayers?: Array<{ layerId: string; proposalIds: string[]; sealedAt: string; title: string }>;
   stashedPaths?: string[];
   threadId: string;
   updatedAt: string;
@@ -106,7 +110,8 @@ function projectLifecycleState(
   entry: GitArcRegistryEntry,
   lifecycle: NonNullable<ReturnType<typeof lifecycleEntry>>,
   summaries: GitArcProposalSummary[],
-  saved?: GitArcSavedStash | null,
+  saved: GitArcSavedStash | null | undefined,
+  stackLayers: NonNullable<GitArcLifecycleState["stackLayers"]>,
 ): GitArcLifecycleState {
   const common = {
     checkpointCommit: lifecycle.checkpointCommit,
@@ -116,6 +121,7 @@ function projectLifecycleState(
     proposals: summaries.flatMap(({ proposalId, status }) => (
       status === "proposed" || status === "committed" ? [{ proposalId, status }] : []
     )),
+    ...(stackLayers.length ? { stackLayers } : {}),
     threadId: entry.threadId,
     updatedAt: entry.updatedAt,
     ...(saved ? { stashedPaths: saved.paths } : {}),
@@ -218,6 +224,7 @@ async function prepareAcceptedClaimTransition({
   registry,
   repository,
   source,
+  stack,
   store,
   threadId,
 }: {
@@ -229,9 +236,14 @@ async function prepareAcceptedClaimTransition({
   registry: GitArcRegistry;
   repository: WorkbenchGitRepository;
   source: StoredCheckpoint;
+  stack: GitArcStackController;
   store: GitCheckpointStore;
   threadId: string;
 }) {
+  // A stack stops shaping the baseline once nothing in its chain is pending after this acceptance.
+  const stackTip = active.stackTip && await stack.chainHasPending(await stack.readChain(active.stackTip), proposalId)
+    ? commitRemaps?.get(active.stackTip) ?? active.stackTip
+    : null;
   const lifecycle = lifecycleEntry(active);
   if (!lifecycle) {
     throw new GitArcRejectionError({ reason: "proposalNotOwned" }, "The proposal no longer belongs to this thread's Git arc.");
@@ -280,10 +292,12 @@ async function prepareAcceptedClaimTransition({
     ...active,
     checkpointCommit: commitRemaps?.get(active.checkpointCommit) ?? active.checkpointCommit,
     retainedArc: nextLifecycle,
+    stackTip,
   } : {
     ...active,
     ...nextLifecycle,
     retainedArc: null,
+    stackTip,
   }, {
     commitRemaps,
     expectedCheckpointCommit: commitRemaps?.get(active.checkpointCommit) ?? active.checkpointCommit,
@@ -348,6 +362,8 @@ async function buildProposalResult(
     includeNewerAvailable?: boolean;
     preparedHead?: WorkbenchGitPreparedHead;
     refreshAmendability?: boolean;
+    sealedInLayer?: string | null;
+    waitingForLayer?: string | null;
   } = {},
 ): Promise<GitCheckpointProposal> {
   const targetTree = "tree" in target ? target.tree : await repository.resolveTree(target.commit);
@@ -386,7 +402,9 @@ async function buildProposalResult(
     mode: metadata.mode,
     paths: metadata.paths,
     proposalId: metadata.proposalId,
+    sealedInLayer: options.sealedInLayer ?? null,
     status: metadata.status,
+    waitingForLayer: metadata.status === "proposed" ? options.waitingForLayer ?? null : null,
     supersededByProposalId: metadata.supersededByProposalId,
     supersededBySha: metadata.supersededBySha,
     title: metadata.title,
@@ -421,8 +439,14 @@ async function resolveProposalState(
   harness: GitArcHarness,
   threadId: string,
   proposalId: string,
-  options: { includeNewer: boolean; persistTransitions: boolean; snapshot?: { head: string | null; tree: string } },
-) {
+  options: {
+    includeNewer: boolean;
+    persistTransitions: boolean;
+    /** Sealed proposals never offer newer work: it belongs to higher stack layers. */
+    sealed?: boolean;
+    snapshot?: { head: string | null; tree: string };
+  },
+): Promise<{ currentTree: string | null; includeNewerAvailable: boolean; proposal: StoredProposal; waitingForLayer: string | null }> {
   const store = new GitCheckpointStore(repository, resolveThreadIdentity);
   let proposal = await store.readProposal(harness, threadId, proposalId);
   const applyTransition = async (metadata: ProposalMetadata, treeish?: string) => (
@@ -430,6 +454,31 @@ async function resolveProposalState(
       ? await persistProposalTransition(repository, proposal, metadata, treeish)
       : deriveProposalTransition(proposal, metadata, treeish)
   );
+  if (proposal.metadata.stackBase && proposal.metadata.status === "proposed") {
+    const head = options.snapshot ? options.snapshot.head : await repository.headOrNull();
+    const resolveStatus: GitArcStackStatusResolver = async (owner, lowerProposalId) => (await resolveProposalState(
+      resolveThreadIdentity, repository, normalizeHarness(owner.harness), owner.threadId, lowerProposalId,
+      { includeNewer: false, persistTransitions: false, snapshot: options.snapshot },
+    )).proposal.metadata.status;
+    const stacked = await new GitArcStackController(repository, resolveThreadIdentity).classifyStackedProposal(
+      proposal.metadata.stackBase, proposal.metadata.livePaths, head, resolveStatus,
+    );
+    if (stacked.kind === "waiting") {
+      return { currentTree: null, includeNewerAvailable: false, proposal, waitingForLayer: stacked.layerTitle };
+    }
+    if (stacked.kind === "broken") {
+      proposal = await applyTransition({
+        ...proposal.metadata, status: "unavailable", unavailableReason: STACK_BROKEN_UNAVAILABLE_REASON, unavailableReasonCode: null,
+      });
+      return { currentTree: null, includeNewerAvailable: false, proposal, waitingForLayer: null };
+    }
+    // Lower layers landed as sealed; the proposal now sits on real history like any other.
+    const { stackBase: _stackBase, ...metadata } = proposal.metadata;
+    proposal = await applyTransition(
+      { ...metadata, baseCommit: head, liveBaseCommit: head },
+      await repository.writeTreeWithPathsFromSource(head, proposal.proposalCommit, proposal.metadata.paths),
+    );
+  }
   let currentTree: string | null = null;
   const legacyCommittedHistoryReason = proposal.metadata.status === "unavailable"
     && proposal.metadata.unavailableReason?.startsWith("Proposed paths changed in committed history:");
@@ -491,7 +540,7 @@ async function resolveProposalState(
       });
     }
     let changedFromProposal: string[] = [];
-    if (proposal.metadata.status === "proposed" && !unavailableReason && !proposal.metadata.messageOnly) {
+    if (proposal.metadata.status === "proposed" && !unavailableReason && !proposal.metadata.messageOnly && !options.sealed) {
       changedFromProposal = options.snapshot
         ? await repository.listChangedPaths(proposal.tree, options.snapshot.tree, proposal.metadata.livePaths)
         : await repository.listWorktreeChangedPaths(proposal.tree, proposal.metadata.livePaths);
@@ -519,9 +568,9 @@ async function resolveProposalState(
           proposal.metadata.liveBaseCommit,
         );
     }
-    return { currentTree, includeNewerAvailable, proposal };
+    return { currentTree, includeNewerAvailable, proposal, waitingForLayer: null };
   }
-  return { currentTree, includeNewerAvailable: false, proposal };
+  return { currentTree, includeNewerAvailable: false, proposal, waitingForLayer: null };
 }
 
 export default class GitArcProposalController {
@@ -537,25 +586,50 @@ export default class GitArcProposalController {
   private store(repository: WorkbenchGitRepository) {
     return new GitCheckpointStore(repository, this.resolveThreadIdentity);
   }
+
+  private stack(repository: WorkbenchGitRepository) {
+    return new GitArcStackController(repository, this.resolveThreadIdentity);
+  }
+
+  /** Derived proposal status for stack decisions, never persisting transitions. */
+  stackStatusResolver(repository: WorkbenchGitRepository): GitArcStackStatusResolver {
+    return async (owner, proposalId) => (await resolveProposalState(
+      this.resolveThreadIdentity, repository, normalizeHarness(owner.harness), owner.threadId, proposalId,
+      { includeNewer: false, persistTransitions: false },
+    )).proposal.metadata.status;
+  }
+
   async readStatusProposals(
     input: ArcIdentityInput,
     proposalIds: string[],
     repository: WorkbenchGitRepository,
     snapshot: { head: string | null; tree: string },
   ) {
+    const harness = normalizeHarness(input.harness);
+    const entry = await this.registry(repository).find({ harness, threadId: input.threadId });
+    const layers = entry?.stackTip ? this.stack(repository).ownLayers(await this.stack(repository).readChain(entry.stackTip), entry) : [];
     const pending: Array<{ proposalId: string; title: string }> = [];
+    const stackedPending = new Map<string, Array<{ proposalId: string; title: string }>>();
     const accepted: Array<{ proposalId: string; title: string; commitSha: string }> = [];
     for (const proposalId of proposalIds) {
-      const { proposal } = await resolveProposalState(this.resolveThreadIdentity, repository, normalizeHarness(input.harness), input.threadId, proposalId, {
+      const { proposal } = await resolveProposalState(this.resolveThreadIdentity, repository, harness, input.threadId, proposalId, {
         includeNewer: false, persistTransitions: false, snapshot,
       });
       const metadata = proposal.metadata;
-      if (metadata.status === "proposed") pending.push({ proposalId, title: metadata.title });
+      const layer = layers.find(({ layer: candidate }) => candidate.proposalIds.includes(proposalId));
+      if (metadata.status === "proposed") {
+        if (layer) stackedPending.set(layer.tipCommit, [...stackedPending.get(layer.tipCommit) ?? [], { proposalId, title: metadata.title }]);
+        else pending.push({ proposalId, title: metadata.title });
+      }
       if (metadata.status === "committed" && metadata.committedSha) {
         accepted.push({ proposalId, title: metadata.title, commitSha: metadata.committedSha });
       }
     }
-    return { pending, accepted };
+    const stacked = layers.flatMap(({ layer, tipCommit }) => {
+      const layerPending = stackedPending.get(tipCommit);
+      return layerPending?.length ? [{ title: layer.title, pending: layerPending }] : [];
+    });
+    return { pending, accepted, ...(stacked.length ? { stacked } : {}) };
   }
 
   async listLifecycleStates({ cwd }: { cwd: string }): Promise<GitArcLifecycleState[]> {
@@ -567,13 +641,17 @@ export default class GitArcProposalController {
       return { entry, saved, lifecycle: savedLifecycle(entry, saved) };
     });
     const projected = candidates.filter(value => value.lifecycle !== null);
-    const summaries = await this.store(repository).readProposalSummaryGroups(projected.map(({ entry, lifecycle }) => ({
-      harness: normalizeHarness(entry.harness),
-      proposalIds: lifecycle!.proposalIds,
-      threadId: entry.threadId,
-    })));
+    const stack = this.stack(repository);
+    const [summaries, stackLayers] = await Promise.all([
+      this.store(repository).readProposalSummaryGroups(projected.map(({ entry, lifecycle }) => ({
+        harness: normalizeHarness(entry.harness),
+        proposalIds: lifecycle!.proposalIds,
+        threadId: entry.threadId,
+      }))),
+      Promise.all(projected.map(async ({ entry }) => await stack.projectLayers(entry))),
+    ]);
     return projected.map(({ entry, lifecycle, saved }, index) => (
-      projectLifecycleState(entry, lifecycle!, summaries[index] ?? [], saved)
+      projectLifecycleState(entry, lifecycle!, summaries[index] ?? [], saved, stackLayers[index] ?? [])
     ));
   }
 
@@ -586,12 +664,11 @@ export default class GitArcProposalController {
     const saved = entry.savedStash ?? null;
     const lifecycle = savedLifecycle(entry, saved);
     if (!lifecycle) return null;
-    const summaries = await this.store(repository).readProposalSummaries(
-      harness,
-      input.threadId,
-      lifecycle.proposalIds,
-    );
-    return projectLifecycleState(entry, lifecycle, summaries, saved);
+    const [summaries, stackLayers] = await Promise.all([
+      this.store(repository).readProposalSummaries(harness, input.threadId, lifecycle.proposalIds),
+      this.stack(repository).projectLayers(entry),
+    ]);
+    return projectLifecycleState(entry, lifecycle, summaries, saved, stackLayers);
   }
 
   async readAcceptedOutcomes(input: ArcIdentityInput & {
@@ -626,13 +703,20 @@ export default class GitArcProposalController {
     }
   }
 
+  /** The commit current arc work is measured from: the pending stack tip, else accepted or checkpoint history. */
   async logicalBaseline(input: ArcIdentityInput & {
     checkpointCommit: string;
     fallbackHead: string | null;
+    /** Measure from real history even while stack layers are pending. */
+    ignoreStack?: boolean;
     repository?: WorkbenchGitRepository;
   }) {
     const repository = input.repository ?? await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
+    if (!input.ignoreStack) {
+      const tip = await this.stack(repository).pendingTip(await this.registry(repository).find({ harness, threadId: input.threadId }));
+      if (tip) return tip;
+    }
     const outcome = await this.store(repository).readOutcome(harness, input.threadId, input.checkpointCommit);
     return outcome?.acceptedProposals?.at(-1)?.headSha ?? input.fallbackHead;
   }
@@ -762,6 +846,10 @@ export default class GitArcProposalController {
     }
     const { active, arc, checkpoint, claimedPaths, harness, metadata: checkpointMetadata, proposalIds, registry, repository } = await this.requireProposableArc({ cwd, harness: rawHarness, threadId });
     const store = this.store(repository);
+    const stack = this.stack(repository);
+    const [stackTip, sealedIds] = await Promise.all([stack.pendingTip(active), stack.sealedProposalIds(active)]);
+    if (stackTip && (amend || amendProposalId)) throw new GitArcRejectionError({ reason: "amendOnPendingStack" });
+    if (replaceProposalId && sealedIds.has(replaceProposalId)) throw new GitArcRejectionError({ reason: "sealedProposal" });
     let replacementTarget: StoredProposal | null = null;
     if (replaceProposalId) {
       replacementTarget = await store.readProposal(harness, threadId, replaceProposalId);
@@ -789,16 +877,23 @@ export default class GitArcProposalController {
       ));
       if (outsideClaim.length) throw new GitArcRejectionError({ reason: "pathsOutsideClaims", paths: outsideClaim }, `Proposed paths must stay within the arc's claimed set: ${outsideClaim.join(", ")}`);
     }
-    const logicalBaseline = (await store.readOutcome(harness, threadId, checkpoint.checkpointCommit))?.acceptedProposals?.at(-1)?.headSha
-      ?? checkpoint.parent;
-    const headMovement = await repository.classifyHeadMovement(logicalBaseline, requestedPaths, logicalBaseline);
-    if (headMovement.kind === "incompatible") {
-      throw new GitArcRejectionError({ reason: "incompatibleHead" }, "Repository HEAD moved incompatibly after this arc began. Create a new plan before proposing a commit.");
+    let liveBaseCommit: string | null;
+    if (stackTip) {
+      // Stacked proposals build on sealed layers, which real HEAD only gains as the user commits them.
+      await stack.validateBaseline(stackTip, requestedPaths, await repository.headOrNull());
+      liveBaseCommit = stackTip;
+    } else {
+      const logicalBaseline = (await store.readOutcome(harness, threadId, checkpoint.checkpointCommit))?.acceptedProposals?.at(-1)?.headSha
+        ?? checkpoint.parent;
+      const headMovement = await repository.classifyHeadMovement(logicalBaseline, requestedPaths, logicalBaseline);
+      if (headMovement.kind === "incompatible") {
+        throw new GitArcRejectionError({ reason: "incompatibleHead" }, "Repository HEAD moved incompatibly after this arc began. Create a new plan before proposing a commit.");
+      }
+      if (headMovement.changedPaths.length) {
+        throw new GitArcRejectionError({ reason: "baselineChanged", paths: headMovement.changedPaths }, `Proposed paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
+      }
+      liveBaseCommit = headMovement.currentHead;
     }
-    if (headMovement.changedPaths.length) {
-      throw new GitArcRejectionError({ reason: "baselineChanged", paths: headMovement.changedPaths }, `Proposed paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
-    }
-    const liveBaseCommit = headMovement.currentHead;
     if (amend && liveBaseCommit === null) throw new Error("An amend requires an existing HEAD commit.");
     const requestedAmendTarget = amendTargetProposal?.metadata.committedSha ?? (amend ? liveBaseCommit : null);
     let amendTargetSha: string | null = null;
@@ -820,7 +915,8 @@ export default class GitArcProposalController {
     const proposalTree = await repository.writeScopedWorktreeTree(requestedPaths, amendTargetSha ?? liveBaseCommit);
     const livePaths = await repository.listChangedPaths(liveBaseCommit, proposalTree, requestedPaths);
     if (!livePaths.length) throw new GitArcRejectionError({ reason: "noChangesToPropose" }, "The selected arc paths do not contain any working-tree changes to propose.");
-    await this.requireNoPendingOverlap(repository, harness, threadId, proposalIds.filter(id => id !== replaceProposalId), livePaths);
+    // Sealed proposals may overlap: later layers deliberately build on their files.
+    await this.requireNoPendingOverlap(repository, harness, threadId, proposalIds.filter(id => id !== replaceProposalId && !sealedIds.has(id)), livePaths);
     const paths = amendTargetSha
       ? await repository.listAllChangedPaths(baseCommit, proposalTree)
       : livePaths;
@@ -845,6 +941,7 @@ export default class GitArcProposalController {
       paths,
       proposalId,
       sourceCheckpoint: checkpoint.checkpointCommit,
+      ...(stackTip ? { stackBase: stackTip } : {}),
       status: "proposed",
       supersededByProposalId: null,
       supersededBySha: null,
@@ -942,13 +1039,14 @@ export default class GitArcProposalController {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
     const snapshot = includeUnclaimed ? await repository.writeWorktreeSnapshot() : undefined;
-    const { currentTree, includeNewerAvailable, proposal } = await resolveProposalState(
+    const sealingLayer = await this.sealingLayer(repository, harness, threadId, proposalId);
+    const { currentTree, includeNewerAvailable, proposal, waitingForLayer } = await resolveProposalState(
       this.resolveThreadIdentity,
       repository,
       harness,
       threadId,
       proposalId,
-      { includeNewer, persistTransitions: false, snapshot },
+      { includeNewer, persistTransitions: false, sealed: Boolean(sealingLayer), snapshot },
     );
     const target = (proposal.metadata.status === "committed" || proposal.metadata.status === "superseded") && proposal.metadata.committedSha
       ? { commit: proposal.metadata.committedSha }
@@ -958,6 +1056,8 @@ export default class GitArcProposalController {
     const result = await buildProposalResult(this.proposalDiffs, repository, proposal.metadata, target, {
       includeNewerAvailable,
       refreshAmendability: false,
+      sealedInLayer: sealingLayer?.title ?? null,
+      waitingForLayer,
     });
     if (!snapshot || !result.unclaimedDirtAvailable) return result;
     const paths = await this.unclaimedPaths(repository, snapshot, proposal.metadata.paths);
@@ -974,9 +1074,16 @@ export default class GitArcProposalController {
     return [...proposal.metadata.paths];
   }
 
+  private async sealingLayer(repository: WorkbenchGitRepository, harness: GitArcHarness, threadId: string, proposalId: string) {
+    return await this.stack(repository).sealingLayer(await this.registry(repository).find({ harness, threadId }), proposalId);
+  }
+
   async rescindProposal(input: ArcIdentityInput & { proposalId: string }) {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
+    if (await this.sealingLayer(repository, harness, input.threadId, input.proposalId)) {
+      throw new GitArcRejectionError({ reason: "sealedProposal" }, "Sealed proposals cannot be rescinded. Unstack the top layer first when nothing builds on it.");
+    }
     const proposal = await this.store(repository).readProposal(harness, input.threadId, input.proposalId);
     if (proposal.metadata.status === "committed") {
       throw proposalAlreadyCommitted(proposal);
@@ -1118,14 +1225,20 @@ export default class GitArcProposalController {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
     const snapshot = unclaimedSelection ? await repository.writeWorktreeSnapshot() : undefined;
+    // Newer work above a sealed proposal belongs to higher layers, so sealed commits never include it.
+    const sealed = Boolean(await this.sealingLayer(repository, harness, threadId, proposalId));
+    if (sealed) includeNewer = false;
     const resolved = await resolveProposalState(
       this.resolveThreadIdentity,
       repository,
       harness,
       threadId,
       proposalId,
-      { includeNewer, persistTransitions: true, snapshot },
+      { includeNewer, persistTransitions: true, sealed, snapshot },
     );
+    if (resolved.waitingForLayer) {
+      throw new GitArcRejectionError({ reason: "proposalUnavailable" }, `Commit the lower stack layer "${resolved.waitingForLayer}" first.`);
+    }
     let proposal = resolved.proposal;
     if (unclaimedSelection && snapshot) {
       if (proposal.metadata.status !== "proposed" || proposal.metadata.messageOnly) {
@@ -1251,6 +1364,7 @@ export default class GitArcProposalController {
             registry,
             repository,
             source: activeSource,
+            stack: this.stack(repository),
             store,
             threadId,
           });
@@ -1337,6 +1451,7 @@ export default class GitArcProposalController {
       registry,
       repository,
       source: activeSource,
+      stack: this.stack(repository),
       store,
       threadId,
     });

@@ -34,8 +34,12 @@ const recovery = z.object({
   comparison,
   omittedCommits: z.number().int().nonnegative().default(0),
 }).strict();
+const proposalSummary = z.object({ proposalId: text, title: z.string() }).strict();
 export const GitArcStatusSchema = z.object({
-  pending: z.array(z.object({ proposalId: text, title: z.string() }).strict()),
+  /** Pending proposals outside any sealed stack layer. */
+  pending: z.array(proposalSummary),
+  /** Own sealed stack layers with pending proposals, bottom first; absent means none. */
+  stacked: z.array(z.object({ title: text, pending: z.array(proposalSummary).min(1) }).strict()).optional(),
   accepted: z.array(z.object({ proposalId: text, title: z.string(), commitSha: sha }).strict()),
   dirtyClaims: filePaths,
   cleanClaims: filePaths,
@@ -107,6 +111,9 @@ function readProposal(value: string) {
 export function formatGitArcStatus(input: GitArcStatus, full: readonly GitArcStatusFull[] = []) {
   const status = GitArcStatusSchema.parse(input);
   const lines: string[] = [];
+  for (const layer of status.stacked ?? []) {
+    lines.push(`Stacked layer: ${JSON.stringify(layer.title)} pending ${layer.pending.map(p => `${quote(p.proposalId)} ${quote(p.title)}`).join(", ")}`);
+  }
   if (status.pending.length) lines.push(`Proposals pending: ${status.pending.map(p => `${quote(p.proposalId)} ${quote(p.title)}`).join(", ")}`);
   if (status.accepted.length) lines.push(`Proposals accepted: ${status.accepted.map(p => `${quote(p.proposalId)} ${quote(p.title)} as ${p.commitSha}`).join(", ")}`);
   for (const [label, paths, selector] of [
@@ -168,6 +175,12 @@ export function parseGitArcStatus(output: string) {
         seen.add(label);
       }
       switch (label) {
+        case "Stacked layer": {
+          const match = /^("(?:[^"\\]|\\.)*") pending (.+)$/u.exec(value);
+          if (!match) throw new Error("Invalid stacked layer.");
+          (result.stacked ??= []).push({ title: unquote(match[1]!), pending: splitList(match[2]!).map(readProposal) });
+          break;
+        }
         case "Proposals pending": result.pending = splitList(value).map(readProposal); break;
         case "Proposals accepted":
           result.accepted = splitList(value).map(entry => {

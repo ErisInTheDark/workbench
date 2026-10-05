@@ -318,6 +318,40 @@ function stashCommand(action: "arcStash" | "arcUnstash", word: "stash" | "unstas
 const stash = stashCommand("arcStash", "stash");
 const unstash = stashCommand("arcUnstash", "unstash");
 
+const stack = defineWorkbenchAgentCommand({
+  description: "Seal all pending unsealed proposals as one titled stack layer; their result becomes the arc baseline while claims stay.",
+  helpGroups: ["git-arc"],
+  words: ["git", "arc", "stack"],
+  usage: "wb git arc stack --title <title>",
+  inputSchema: z.object({ title: requiredText.describe("Commit-message-style layer title; no description.") }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--title"], leadingDashValues: ["--title"] });
+    return { title: flags.required("--title") };
+  },
+  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/git-checkpoint", {
+      action: "arcStack", ...baseBody(callerHarness, callerThreadId, cwd), title: input.title,
+    }, "git-arc-stack");
+  },
+});
+
+const unstack = defineWorkbenchAgentCommand({
+  description: "Reopen the caller's top stack layer when nothing builds on it, returning its proposals to ordinary pending proposals.",
+  helpGroups: ["git-arc"],
+  words: ["git", "arc", "unstack"],
+  usage: "wb git arc unstack",
+  inputSchema: z.object({}).strict(),
+  parseCliArgs(args) {
+    if (args.length) throw new Error("Git arc unstack accepts no paths or flags.");
+    return {};
+  },
+  buildRequest(_input, { callerHarness, callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/git-checkpoint", {
+      action: "arcUnstack", ...baseBody(callerHarness, callerThreadId, cwd),
+    }, "git-arc-unstack");
+  },
+});
+
 const status = defineWorkbenchAgentCommand({
   description: "Read compact proposals, dirty/clean claims and unclaimed dirt for the caller or another Workbench thread. On follow-ups use status before rereading; lost claims include changes since their exact loss boundary.",
   effects: { readOnly: true, idempotent: true },
@@ -357,6 +391,8 @@ export const WORKBENCH_GIT_ARC_COMMANDS = [
   release,
   stash,
   unstash,
+  stack,
+  unstack,
   inspectionCommand("compare"),
   inspectionCommand("diff"),
   ...WORKBENCH_GIT_ARC_PROPOSAL_COMMANDS,

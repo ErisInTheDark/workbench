@@ -164,6 +164,8 @@ export default function ThreadCheckpointCommitCard({
     title,
   });
   const commitLabel = proposal?.status === "committed" || commitMode === "amend" ? "Amend" : "Commit";
+  // Stacked proposals wait for lower layers; commit-all still reaches them because it commits in stack order.
+  const waitingForLayer = proposal?.status === "proposed" ? proposal.waitingForLayer ?? null : null;
   const failure = state.status === "error"
     ? state.failure ?? createGitArcOperationRejected("proposalCreate", state.error)
     : null;
@@ -367,9 +369,11 @@ export default function ThreadCheckpointCommitCard({
                       !text-[0.78rem]
                     `}
                     data-thread-checkpoint-commit-action="true"
-                    disabled={!canCommit}
+                    // Commit-all may still reach a waiting card once lower layers land, so only the button waits.
+                    disabled={!canCommit || Boolean(waitingForLayer && !committing)}
                     onClick={onCommit}
                     pendingHalo={committing}
+                    title={waitingForLayer && !committing ? `Commit "${waitingForLayer}" first.` : undefined}
                   >
                     {committing ? (commitLabel === "Amend" ? "Amending..." : "Committing...") : commitLabel}
                   </PrimaryButton>

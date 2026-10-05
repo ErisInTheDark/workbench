@@ -40,7 +40,9 @@ const ARC_MATCHER_IDS = {
   release: "git-arc.release",
   restore: "git-arc.restore",
   start: "git-arc.start",
+  stack: "git-arc.stack",
   stash: "git-arc.stash",
+  unstack: "git-arc.unstack",
   unstash: "git-arc.unstash",
   planStart: "git-arc.plan-start",
   rescind: "git-arc.rescind",
@@ -66,6 +68,7 @@ export interface GitArcCommandIntent {
   removePaths?: string[];
   disown?: boolean;
   intentName: string | null;
+  layerTitle?: string;
   move?: GitArcMoveArguments;
   paths: string[];
   proposalId?: string | null;
@@ -173,6 +176,16 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     id: ARC_MATCHER_IDS.unstash,
     presentationName: "git_arc_unstash",
   }),
+  createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+stack(?:\s|$)/iu,
+    id: ARC_MATCHER_IDS.stack,
+    presentationName: "git_arc_stack",
+  }),
+  createMatcher({
+    commandPattern: /^wb(?:\.cmd)?\s+git\s+arc\s+unstack(?:\s|$)/iu,
+    id: ARC_MATCHER_IDS.unstack,
+    presentationName: "git_arc_unstack",
+  }),
   CommandMatcher({
     id: ARC_MATCHER_IDS.unknown,
     match: ({ stage }) => /^wb(?:\.cmd)?\s+git\s+(?:arc|plan)(?:\s|$)/iu.test(stage.text.trim())
@@ -238,6 +251,15 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
     } catch {
       return null;
     }
+  }
+  if (action === "stack") {
+    const [flag, value, ...extra] = tokens.slice(cursor);
+    return flag === "--title" && value && !extra.length
+      ? { action, intentName: null, layerTitle: value, paths: [], ref: null }
+      : null;
+  }
+  if (action === "unstack") {
+    return cursor === tokens.length ? { action, intentName: null, paths: [], ref: null } : null;
   }
   if (action === "adopt") {
     const [flag, value, ...extra] = tokens.slice(cursor);

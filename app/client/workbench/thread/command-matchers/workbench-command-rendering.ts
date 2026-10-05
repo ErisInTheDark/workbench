@@ -70,6 +70,8 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "git_arc_adopt",
   "git_arc_stash",
   "git_arc_unstash",
+  "git_arc_stack",
+  "git_arc_unstack",
   "git_arc_wait",
   "git_arc_continue",
   "git_arc_mv",
@@ -89,11 +91,13 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
 export type WorkbenchCommandPresentationName = typeof WORKBENCH_COMMAND_PRESENTATION_NAMES[number];
 
 export type WorkbenchGitArcOperation = {
-  action: "adopt" | "claims" | "scope" | "status" | "compare" | "continue" | "diff" | "mv" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restore" | "start" | "stash" | "unstash" | "unknown";
+  action: "adopt" | "claims" | "scope" | "status" | "compare" | "continue" | "diff" | "mv" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restore" | "stack" | "start" | "stash" | "unstack" | "unstash" | "unknown";
   adoptPaths?: string[];
   removePaths?: string[];
   disown?: boolean;
   intentName: string | null;
+  /** Stack layer title requested by `stack`. */
+  layerTitle?: string;
   move?: GitArcMoveArguments;
   paths: string[];
   proposalId?: string | null;
@@ -415,6 +419,8 @@ function gitArcAction(name: WorkbenchCommandPresentationName): WorkbenchGitArcOp
     git_arc_adopt: "adopt",
     git_arc_stash: "stash",
     git_arc_unstash: "unstash",
+    git_arc_stack: "stack",
+    git_arc_unstack: "unstack",
   };
   return actions[name] ?? null;
 }
@@ -469,6 +475,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     ...(action === "release" ? { disown: readBoolean(args.disown) } : {}),
     ...(action === "release" && readString(args.toSubagent) ? { toSubagent: readString(args.toSubagent)! } : {}),
     intentName,
+    ...(action === "stack" && readString(args.title) ? { layerTitle: readString(args.title)! } : {}),
     ...(parsedMove ? { move: parsedMove } : {}),
     paths,
     ...(proposalId ? { proposalId } : {}),
@@ -506,8 +513,10 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     release: "git-arc.release",
     rescind: "git-arc.rescind",
     restore: "git-arc.restore",
+    stack: "git-arc.stack",
     start: "git-arc.start",
     stash: "git-arc.stash",
+    unstack: "git-arc.unstack",
     unstash: "git-arc.unstash",
     unknown: "git-arc.unknown",
   };
@@ -515,7 +524,9 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     ? { gitCheckpointDiffs: 1 }
     : action === "restore"
       ? { gitCheckpointRestores: 1 }
-      : action === "propose" || action === "rescind" || action === "scope" ? undefined : { gitCheckpointCreates: 1 };
+      : action === "propose" || action === "rescind" || action === "scope" || action === "stack" || action === "unstack"
+        ? undefined
+        : { gitCheckpointCreates: 1 };
   return specialized(matcherIds[action], { kind: "gitArc", operation }, stats);
 }
 

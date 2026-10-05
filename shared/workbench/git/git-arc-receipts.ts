@@ -11,7 +11,9 @@ import { DAEMON_RELOAD_SCOPE_PATTERN } from "../daemon-reload.ts";
 const RECEIPT_PREFIX = "Workbench arc receipt: ";
 
 export const GitArcReceiptSchema = z.object({
-  action: z.enum(["add", "adopt", "claims", "scope", "compare", "continue", "diff", "mv", "plan", "propose", "release", "remove", "restore", "stash", "start", "unstash"]),
+  action: z.enum(["add", "adopt", "claims", "scope", "compare", "continue", "diff", "mv", "plan", "propose", "release", "remove", "restore", "stack", "stash", "start", "unstack", "unstash"]),
+  /** Stack layer title sealed or reopened by stack/unstack. */
+  layer: z.string().min(1).optional(),
   additionalClaims: z.array(z.string().min(1)).optional(),
   claimedPaths: z.array(z.string().min(1)),
   claimedPathCount: z.number().int().nonnegative().optional(),
@@ -75,6 +77,7 @@ export function projectGitArcReceipt(input: GitArcReceipt): GitArcReceipt {
     ...(visible(receipt.reloadScopes) ? { reloadScopes: receipt.reloadScopes } : {}),
     ...(receipt.rootId ? { rootId: receipt.rootId } : {}),
     ...(receipt.proposalId ? { proposalId: receipt.proposalId } : {}),
+    ...(receipt.layer ? { layer: receipt.layer } : {}),
     ...(receipt.proposals === undefined ? {} : { proposals: receipt.proposals }),
     ...(receipt.unchanged ? { unchanged: true } : {}),
     ...(visible(receipt.memberRefs) ? { memberRefs: receipt.memberRefs } : {}),
@@ -133,6 +136,7 @@ export function formatGitArcTextReceipt(input: GitArcReceipt) {
   list("reload", receipt.reloadScopes);
   if (receipt.rootId) lines.push(`root ${escapeGitArcValue(receipt.rootId)}`);
   if (receipt.proposalId) lines.push(`proposal ${escapeGitArcValue(receipt.proposalId)}`);
+  if (receipt.layer) lines.push(`layer ${escapeGitArcValue(receipt.layer)}`);
   if (receipt.proposals !== undefined) {
     lines.push(`proposals ${receipt.proposals.length}`);
     for (const proposal of receipt.proposals) lines.push(`${escapeGitArcValue(proposal.proposalId)}\t${proposal.status}`);
@@ -219,7 +223,7 @@ function parseTextReceipt(output: string) {
         matched: "matchedPathCount", remaining: "remainingMatchCount",
       };
       result[counts[key]] = Number(value);
-    } else if (key === "ref" || key === "intent" || key === "root" || key === "proposal" || key === "mode") {
+    } else if (key === "ref" || key === "intent" || key === "root" || key === "proposal" || key === "mode" || key === "layer") {
       result[key === "intent" ? "intentName" : key === "root" ? "rootId" : key === "proposal" ? "proposalId" : key] = readGitArcValue(value);
     } else if (key === "unchanged") result.unchanged = true;
     else if (key === "previous-plan") {

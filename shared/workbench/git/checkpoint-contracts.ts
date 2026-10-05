@@ -12,6 +12,7 @@
  * - GitCheckpointFileChangeSchema/GitCheckpointFileChange: per-file inspection changes.
  * - GitCheckpointCompareResultSchema/GitCheckpointCompareResult: local and workspace inspection results.
  * - GitArcStashResultSchema/GitArcStashResult: browser-safe stash and unstash lifecycle result.
+ * - GitArcStackResultSchema/GitArcStackResult: sealed or reopened stack layer receipt.
  * - GitCheckpointProposalSchema/GitCheckpointProposal: durable proposal presentation.
  */
 import { z } from "zod";
@@ -190,6 +191,8 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("arcStash"), ...checkpointBaseRequest }).strict(),
   z.object({ action: z.literal("arcUnstash"), ...checkpointBaseRequest }).strict(),
   z.object({ action: z.literal("arcDiscardStash"), ...checkpointBaseRequest }).strict(),
+  z.object({ action: z.literal("arcStack"), title: nonEmptyString, ...checkpointBaseRequest }).strict(),
+  z.object({ action: z.literal("arcUnstack"), ...checkpointBaseRequest }).strict(),
   z.object({
     action: z.literal("arcMove"),
     move: GitArcMoveRequestSchema,
@@ -326,6 +329,19 @@ export const GitArcStashResultSchema = z.object({
 }).strict();
 export type GitArcStashResult = z.infer<typeof GitArcStashResultSchema>;
 
+export const GitArcStackResultSchema = z.object({
+  checkpointCommit: checkpointSha,
+  intentName: z.string().nullable(),
+  layerId: nonEmptyString,
+  layerTitle: nonEmptyString,
+  phase: z.enum(["active", "stashed", "resolved"]),
+  proposalIds: z.array(nonEmptyString),
+  repoRoot: nonEmptyString,
+  scopePaths: optionalCheckpointPaths,
+  stackTip: checkpointSha.nullable(),
+}).strict();
+export type GitArcStackResult = z.infer<typeof GitArcStackResultSchema>;
+
 const GitCheckpointCommitMessageSchema = z.object({
   description: z.string(),
   title: nonEmptyString,
@@ -353,6 +369,10 @@ export const GitCheckpointProposalSchema = z.object({
   paths: checkpointPaths,
   proposalId: nonEmptyString,
   rootId: rootId.optional(),
+  /** Title of the stack layer sealing this proposal. */
+  sealedInLayer: z.string().nullable().default(null).optional(),
+  /** Title of a lower stack layer that must land before this proposal can commit. */
+  waitingForLayer: z.string().nullable().default(null).optional(),
   status: z.enum(["proposed", "committed", "rescinded", "superseded", "unavailable"]),
   supersededByProposalId: nonEmptyString.nullable(),
   supersededBySha: checkpointSha.nullable(),

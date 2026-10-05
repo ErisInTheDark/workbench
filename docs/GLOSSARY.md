@@ -30,6 +30,7 @@
 | provider | A harness integrated by Workbench, such as Codex, OpenCode or Copilot. Provider and harness are interchangeable here; Workbench is the enclosing harness. |
 | app | Sometimes "app server"; not the Codex harness. App server owns SPA serving, app-local state, cross-daemon workspace subscriptions and routing. Daemons own local data and execution; browser owns rendering and interaction. |
 | Git transition | A worktree-keyed shared-read/exclusive-write lease that coordinates Git arc and thread-state decisions across reload generations |
+| stack layer | Titled seal of a thread's pending Git arc proposals; its synthetic tip commit becomes the arc baseline for later work. |
 | workspace search | Full-screen command/search dialog backed by SQLite rows and projections for projects, current-project settings/files, threads, and registered actions. |
 | usage stats | Durable Workbench usage facts and bounded global/project aggregates for tokens, estimated API cost, account rate limits, and claim traffic; missing facts hydrate into SQLite from retained Workbench journals, never provider history APIs; import state, checkpoints, and reads remain SQLite-owned |
 | claim traffic | Distinct managed threads whose active Git arc checkpoints declared each file in a selected period; directory scopes expand to contained files, including unchanged files, while inactive plan scope does not count. Unambiguous committed rename chains within one root combine under their latest path; reused names remain separate. |

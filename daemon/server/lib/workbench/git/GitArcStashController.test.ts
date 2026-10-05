@@ -1,5 +1,5 @@
 /*
- * Exports: none. Protect independent saved work across new live arcs and stash disposal.
+ * Exports: none. Protect independent saved work across new live arcs, stash disposal and pending stacks.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -10,6 +10,21 @@ import GitTestFixtureCache from "./GitTestFixtureCache";
 import { CONTROLLER_BASE_FIXTURE } from "./GitArcControllerTestFixtures";
 
 const fixtures = new GitTestFixtureCache();
+
+test("stash rejects while stack layers are pending so sealed work never becomes unclaimed", async context => {
+  const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
+  context.after(() => fixture.dispose());
+  const cwd = fixture.root;
+  const controller = new WorkbenchGitCheckpointController();
+  await controller.createAndStartPlan({ cwd, threadId: "owner", intentName: "stacked", paths: ["one.txt"] });
+  await fs.writeFile(path.join(cwd, "one.txt"), "sealed\n");
+  await controller.createProposal({ cwd, threadId: "owner", title: "sealed", description: "" });
+  await controller.stackArc({ cwd, threadId: "owner", title: "layer one" });
+  await fs.writeFile(path.join(cwd, "one.txt"), "above the stack\n");
+  await assert.rejects(controller.stashArc({ cwd, threadId: "owner" }), /stack/iu);
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "owner" })).dirtyClaims, ["one.txt"]);
+  assert.equal(await fs.readFile(path.join(cwd, "one.txt"), "utf8"), "above the stack\n");
+});
 
 test("discarding an adopted stash preserves the caller's live claims and changes", async context => {
   const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);

@@ -60,6 +60,15 @@ const simpleMessages = {
   invalidHarness: "The request has no supported agent identity.",
   invalidProposalId: "The proposal identifier is invalid.",
   wrongCheckpointOwnership: "The checkpoint does not belong to this thread and worktree.",
+  noProposalsToStack: "This thread has no unsealed pending proposals to stack.",
+  sealedProposal: "The proposal is sealed in a stack layer.",
+  amendOnPendingStack: "An amend proposal can't build on pending stack layers.",
+  pendingStack: "This thread's stack layers are still pending.",
+  savedWorkBlocksStack: "This thread has saved stash work, so it can't stack proposals.",
+  stackedSource: "The source thread owns pending stack layers.",
+  stackBaseMismatch: "The receiving thread builds on a different stack baseline.",
+  noOwnStackLayer: "This thread has no stack layer of its own to unstack.",
+  stackLayerInUse: "Other work builds on the top stack layer.",
 } as const;
 
 export const GitArcRejectionSchema = z.discriminatedUnion("reason", [

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcStashController: keep ordinary stash storage while restoring or discarding adopted saved work.
+ * - default GitArcStashController: keep ordinary stash storage while restoring or discarding adopted saved work; reject stash and unstash under pending stack layers.
  */
 import fs from "node:fs/promises";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
@@ -11,6 +11,8 @@ import GitArcRegistry, { findGitArcCollisions, getGitArcLiveClaimPaths, GitArcCo
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitArcProposalController from "./GitArcProposalController";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
+import GitArcStackController from "./GitArcStackController";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 import { passthroughGitArcThreadIdentityResolver, type GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
 
@@ -37,6 +39,10 @@ export default class GitArcStashController {
     const snapshots = new GitArcClaimLossStore(repository, this.resolveThreadIdentity);
     const proposals = new GitArcProposalController(undefined, this.resolveThreadIdentity);
     const current = await registry.find(identity);
+    // Stash baselines are real HEAD; pending stack layers would leave sealed work unclaimed or block unstash.
+    if (action !== "discard" && await new GitArcStackController(repository, this.resolveThreadIdentity).pendingTip(current)) {
+      throw new GitArcRejectionError({ reason: "pendingStack" }, "Stash is unavailable while this thread's stack layers are pending.");
+    }
     const saved = await snapshots.readOwnedStash(identity, current);
     const arc = current?.phase === "plan" ? current.retainedArc : current?.phase === "active" ? current : null;
     const live = current ? getGitArcLiveClaimPaths(current) : [];

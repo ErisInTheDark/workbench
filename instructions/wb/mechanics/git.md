@@ -117,6 +117,11 @@ Set `replace: proposalId` to replace one pending proposal. Use <tool id="git_arc
 **Default to amend proposals for fixes/minor addendums to committed work.** User chooses amend or fresh; Workbench handles impossible amends. Set `amend: proposalId` for committed proposals or `amend: true` for HEAD; do not pre-check targets. Compare against target. Update title/description for changed scope, or omit both to inherit. Content amendments require `freshTitle` and optional `freshDescription`. For message-only proposals use <tool id="git_arc_reword" /> with `{ proposalId, title, description? }`, not immediate commit.
 
 Proposal acceptance atomically changes branch history, proposal metadata, accepted receipts and live claims. Preserve excluded newer work.
+
+### stack proposals
+
+<!-- Failure: agents kept editing files with pending proposals, so later proposals overlapped or swallowed work the user had not committed yet. Stacking seals pending proposals into a layer whose result becomes the arc baseline. -->
+<tool id="git_arc_stack" /> with `title` seals all pending unsealed proposals as one layer; their result becomes the arc baseline. Claims stay. Compare, diff, selected restore and new proposals measure from the top layer; user commits layers bottom-up. **Stack before further work building on pending proposals; call again per layer.** Sealed proposals cannot be replaced or rescinded; <tool id="git_arc_unstack" /> reopens your top layer when nothing builds on it. Amend proposals cannot build on a pending stack. Stash is unavailable while a stack is pending. Subagent claim transfers keep sealed proposals; children inherit the stack baseline.
 </available:git-proposals>
 
 ### restore selected paths

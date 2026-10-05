@@ -5,6 +5,7 @@
  * - GitArcHarness: supported owning harness.
  * - GitArcProposalStatus/GitArcProposalUnavailableReasonCode: proposal state and unavailability reason.
  * - CheckpointMetadata/ProposalMetadata/ArcOutcome: durable arc metadata and nullable history bases.
+ * - StackLayerMetadata: sealed proposal layer owned by a stack tip checkpoint.
  * - normalizeArcOutcome: conform legacy acceptance receipts.
  * - normalizeThreadId/normalizeCommit: validate ref identity inputs.
  * - checkpointNamespace/legacyCheckpointNamespace: checkpoint ref namespaces.
@@ -21,7 +22,7 @@ export const CHECKPOINT_METADATA_MARKER = "workbench-git-checkpoint-v1";
 export const PROPOSAL_METADATA_MARKER = "workbench-git-checkpoint-proposal-v1";
 const CHECKPOINT_COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu;
 
-export type CheckpointKind = "arc" | "implement" | "plan";
+export type CheckpointKind = "arc" | "implement" | "plan" | "stack";
 export type { ProviderKey as GitArcHarness } from "../provider/provider-key.ts";
 import type { ProviderKey as GitArcHarness } from "../provider/provider-key.ts";
 export type GitArcProposalStatus = "committed" | "proposed" | "rescinded" | "superseded" | "unavailable";
@@ -37,7 +38,19 @@ export interface CheckpointMetadata {
   registryLifecycle?: true;
   restoredFromStash?: true;
   scopePaths: string[];
+  /** Present only on `stack` tips: the sealed layer this tip commit owns. */
+  stackLayer?: StackLayerMetadata;
   version: 1 | 2 | 3;
+}
+
+export interface StackLayerMetadata {
+  harness: string;
+  layerId: string;
+  proposalIds: string[];
+  /** ISO time; orders one workspace layer across repositories. */
+  sealedAt: string;
+  threadId: string;
+  title: string;
 }
 
 export interface ProposalMetadata {
@@ -56,6 +69,8 @@ export interface ProposalMetadata {
   paths: string[];
   proposalId: string;
   sourceCheckpoint: string;
+  /** Stack tip this proposal was built on; absent for proposals based on real history. */
+  stackBase?: string;
   status: GitArcProposalStatus;
   supersededByProposalId: string | null;
   supersededBySha: string | null;
@@ -163,6 +178,7 @@ export function remapProposalMetadata(metadata: ProposalMetadata, commits: Reado
     committedSha: mapped(metadata.committedSha, commits),
     liveBaseCommit: mapped(metadata.liveBaseCommit, commits),
     sourceCheckpoint: mapped(metadata.sourceCheckpoint, commits)!,
+    ...(metadata.stackBase ? { stackBase: mapped(metadata.stackBase, commits)! } : {}),
     supersededBySha: mapped(metadata.supersededBySha, commits),
   };
 }

@@ -253,7 +253,16 @@ const WorkbenchGitArcProposalStateSchema = z.object({
   status: z.enum(["committed", "proposed"]),
 }).strict();
 
+/** Own sealed stack layers, bottom first; proposals listed here render inside their layer. Absent means none. */
+const WorkbenchGitArcStackLayersSchema = z.array(z.object({
+  layerId: z.string().min(1),
+  proposalIds: z.array(z.string().min(1)),
+  sealedAt: z.string().min(1),
+  title: z.string().min(1),
+}).strict()).optional();
+
 const workbenchGitArcMemberState = {
+  stackLayers: WorkbenchGitArcStackLayersSchema,
   stashedPaths: z.array(z.string().min(1)).default([]).optional(),
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
   harness: z.string().min(1),
@@ -287,6 +296,7 @@ const WorkbenchGitArcMemberStateSchema = z.discriminatedUnion("phase", [
 ]);
 
 const workbenchGitArcLifecycleState = {
+  stackLayers: WorkbenchGitArcStackLayersSchema,
   stashedPaths: z.array(z.string().min(1)).default([]).optional(),
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),
   intentDescription: z.string(),

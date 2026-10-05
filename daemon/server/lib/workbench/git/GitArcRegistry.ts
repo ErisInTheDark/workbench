@@ -50,6 +50,8 @@ export interface GitArcRegistryEntry extends GitArcIdentity {
     reloadScopes?: DaemonReloadScope[];
   } | null;
   savedStash?: GitArcSavedStash | null;
+  /** Top stack tip this thread's work builds on; tip metadata owns layer facts. */
+  stackTip?: string | null;
   updatedAt: string;
 }
 
@@ -173,6 +175,7 @@ function remapState(state: GitArcRegistryState, commits?: ReadonlyMap<string, st
     entries: state.entries.map((entry) => ({
       ...entry,
       checkpointCommit: commits.get(entry.checkpointCommit) ?? entry.checkpointCommit,
+      ...(entry.stackTip ? { stackTip: commits.get(entry.stackTip) ?? entry.stackTip } : {}),
       ...(entry.retainedArc ? {
         retainedArc: {
           ...entry.retainedArc,
@@ -295,6 +298,7 @@ export default class GitArcRegistry {
       const next = replacement.next ? {
         ...replacement.next, harness: replacement.identity.harness, threadId: identity.threadId,
         savedStash: replacement.next.savedStash === undefined ? current?.savedStash ?? null : replacement.next.savedStash,
+        stackTip: replacement.next.stackTip === undefined ? current?.stackTip ?? null : replacement.next.stackTip,
         updatedAt: new Date().toISOString(),
       } satisfies GitArcRegistryEntry : null;
       return { key, owned, current, next };
@@ -365,6 +369,7 @@ export default class GitArcRegistry {
       proposalIds,
       retainedArc: canonicalEntry.retainedArc ?? null,
       savedStash: canonicalEntry.savedStash === undefined ? current?.savedStash ?? null : canonicalEntry.savedStash,
+      stackTip: canonicalEntry.stackTip === undefined ? current?.stackTip ?? null : canonicalEntry.stackTip,
       updatedAt: new Date().toISOString(),
     };
     const ownedRaw = new Set(owned.map(candidate => candidate.raw));
@@ -456,6 +461,7 @@ export default class GitArcRegistry {
       proposalIds,
       retainedArc: canonicalEntry.retainedArc ?? null,
       savedStash: canonicalEntry.savedStash === undefined ? current?.savedStash ?? null : canonicalEntry.savedStash,
+      stackTip: canonicalEntry.stackTip === undefined ? current?.stackTip ?? null : canonicalEntry.stackTip,
       updatedAt: new Date().toISOString(),
     };
     const ownedRaw = new Set(owned.map(candidate => candidate.raw));

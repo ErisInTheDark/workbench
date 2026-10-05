@@ -202,6 +202,9 @@ Before the first file edit in Implement mode:
 - For an inactive plan's first Implement pass, call <tool id="git_arc_start" />, optionally with an exact historical `ref`. Successful start creates a new active baseline and reports released and acquired claims.
 - If already active, use ref-free <tool id="git_arc_continue" /> before another pass, or <tool id="git_arc_claims" /> for scope edits. Claims includes continuation checks; do not call both.
 - Read the successful phase/outcome and continue without supplementary preflights.
+<available:git-proposals>
+- Own pending proposals and new work builds on them: call <tool id="git_arc_stack" /> with a layer title first.
+</available:git-proposals>
 - Start drift below 2,000 plan-scoped additions + deletions: inspect <tool id="git_arc_diff" /> against supplied ref.
 - Larger or binary drift: enter Inspect; reread affected current code and owners; rebase planned work, not Git history.
 - Preserve approval only if scope, behavior, structure, ownership, mechanics and validation match. Enter Implement and <tool id="git_plan_start" /> with `{ inherit: true }`; otherwise revise in Brief and seek approval.

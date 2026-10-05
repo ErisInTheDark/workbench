@@ -89,6 +89,10 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
         return memberRef ? [{ ref: memberRef, rootId: string(member, "rootId") }] : [];
       }),
       ...(string(payload, "proposalId") ? { proposalId: string(payload, "proposalId") } : {}),
+      ...(action === "stack" || action === "unstack" ? {
+        layer: string(payload, "layerTitle"),
+        proposals: paths(payload, "proposalIds").map(proposalId => ({ proposalId, status: "proposed" as const })),
+      } : {}),
       ...(string(payload, "rootId") ? { rootId: string(payload, "rootId") } : {}),
       reloadScopes: normalizeDaemonReloadScopes(paths(payload, "reloadScopes")),
       ...(action === "mv" ? {

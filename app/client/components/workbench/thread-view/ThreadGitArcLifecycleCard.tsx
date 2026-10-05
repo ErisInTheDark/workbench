@@ -164,7 +164,12 @@ export default function ThreadGitArcLifecycleCard ({
     <div className="my-2 w-full" data-thread-git-arc-lifecycle="true">
       <section className="w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-[color-mix(in_srgb,var(--text)_2%,transparent)] [--fg-bg:color-mix(in_srgb,var(--text)_2%,var(--app-bg-solid))]" data-thread-git-arc-lifecycle-card="true">
         {visibleProposals.length ? (
-          <ThreadGitArcProposalList commitActions={commitActions} proposals={visibleProposals} running={running} />
+          <ThreadGitArcProposalList
+            commitActions={commitActions}
+            proposals={visibleProposals}
+            running={running}
+            stackLayers={claim.stackLayers ?? []}
+          />
         ) : null}
         {sections.map(({ phase, paths: lifecyclePaths }, index) => (
           <div

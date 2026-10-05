@@ -1,5 +1,5 @@
 /*
- * Exports: none. Protect whole adoption and selected release across live and saved work.
+ * Exports: none. Protect whole adoption and selected release across live, saved and stacked work.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -212,6 +212,45 @@ test("selected release keeps a parent's inactive plan while narrowing its retain
   assert.deepEqual(parent?.plannedPaths, ["one.txt", "two.txt"]);
   assert.deepEqual(parent?.claimedPaths, ["two.txt"]);
   assert.deepEqual((await controller.readScope({ cwd, threadId: "child" }))?.claimedPaths, ["one.txt"]);
+});
+
+test("selected release keeps sealed proposals committable and the child builds on the sealed layer", async context => {
+  const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
+  context.after(() => fixture.dispose());
+  const cwd = fixture.root;
+  const controller = new WorkbenchGitCheckpointController();
+  await start(controller, cwd, "parent", ["one.txt", "two.txt"]);
+  await fs.writeFile(path.join(cwd, "one.txt"), "parent sealed\n");
+  const sealed = await controller.createProposal({ cwd, threadId: "parent", paths: ["one.txt"], title: "parent", description: "" });
+  await controller.stackArc({ cwd, threadId: "parent", title: "parent layer" });
+  await (await controller.prepareReleaseToChild({
+    cwd, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["one.txt"],
+  })).apply();
+  assert.equal((await controller.getProposal({ cwd, threadId: "parent", proposalId: sealed.proposalId, includeNewer: false })).status, "proposed");
+
+  await fs.writeFile(path.join(cwd, "one.txt"), "child builds on it\n");
+  assert.match((await controller.diff({ cwd, threadId: "child" })).diff, /-parent sealed\n\+child builds on it/u,
+    "the child measures from the parent's sealed layer");
+  const childProposal = await controller.createProposal({ cwd, threadId: "child", title: "child", description: "" });
+  assert.equal((await controller.getProposal({ cwd, threadId: "child", proposalId: childProposal.proposalId, includeNewer: false })).waitingForLayer, "parent layer");
+
+  await controller.commitProposal({ cwd, threadId: "parent", proposalId: sealed.proposalId, title: "parent", description: "", includeNewer: false });
+  await controller.commitProposal({ cwd, threadId: "child", proposalId: childProposal.proposalId, title: "child", description: "", includeNewer: false });
+  assert.equal(await (await WorkbenchGitRepository.open(cwd)).run(["show", "HEAD:one.txt"]), "child builds on it\n");
+});
+
+test("adoption rejects a source that owns pending stack layers", async context => {
+  const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
+  context.after(() => fixture.dispose());
+  const cwd = fixture.root;
+  const controller = new WorkbenchGitCheckpointController() as AdoptionOwner;
+  await start(controller, cwd, "parent", ["one.txt"]);
+  await start(controller, cwd, "child", ["two.txt"]);
+  await fs.writeFile(path.join(cwd, "two.txt"), "child sealed\n");
+  await controller.createProposal({ cwd, threadId: "child", title: "child", description: "" });
+  await controller.stackArc({ cwd, threadId: "child", title: "child layer" });
+  await assert.rejects(controller.adoptArc({ cwd, threadId: "parent", source: { harness: "codex", threadId: "child" } }), /stack/iu);
+  assert.deepEqual((await controller.readScope({ cwd, threadId: "child" }))?.claimedPaths, ["two.txt"]);
 });
 
 test("selected release rejects unowned paths and uncovered child plans before changing ownership", async context => {

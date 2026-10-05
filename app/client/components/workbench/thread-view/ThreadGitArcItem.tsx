@@ -44,8 +44,10 @@ const ACTION_LABELS = {
   release: { completed: "Released", failed: "Failed to release", inProgress: "Releasing", timedOut: "Timed out releasing" },
   rescind: { completed: "Rescinded", failed: "Failed to rescind", inProgress: "Rescinding", timedOut: "Timed out rescinding" },
   restore: { completed: "Restored", failed: "Failed to restore", inProgress: "Restoring", timedOut: "Timed out restoring" },
+  stack: { completed: "Stacked", failed: "Failed to stack", inProgress: "Stacking", timedOut: "Timed out stacking" },
   start: { completed: "Started", failed: "Failed to start", inProgress: "Starting", timedOut: "Timed out starting" },
   stash: { completed: "Stashed", failed: "Failed to stash", inProgress: "Stashing", timedOut: "Timed out stashing" },
+  unstack: { completed: "Unstacked", failed: "Failed to unstack", inProgress: "Unstacking", timedOut: "Timed out unstacking" },
   unstash: { completed: "Unstashed", failed: "Failed to unstash", inProgress: "Unstashing", timedOut: "Timed out unstashing" },
   unknown: { completed: "Ran unrecognised action on", failed: "Failed to run action on", inProgress: "Running action on", timedOut: "Timed out running action on" },
 } as const;
@@ -70,8 +72,10 @@ function failureAction (action: GitArcCommandAction): GitArcFailureAction {
     release: "arcRelease",
     rescind: "proposalRescind",
     restore: "restore",
+    stack: "arcStack",
     start: "arcStart",
     stash: "arcStash",
+    unstack: "arcUnstack",
     unstash: "arcUnstash",
     unknown: "unknown",
   };
@@ -199,7 +203,10 @@ export default function ThreadGitArcItem ({
   const currentPlanMatchesCommand = Boolean(currentPlan && requestedPlanRef && (
     currentPlan.checkpointCommit.startsWith(requestedPlanRef)
   ));
-  const planName = receipt?.intentName
+  const stackAction = commandIntent.action === "stack" || commandIntent.action === "unstack";
+  const stackedProposalCount = stackAction ? receipt?.proposals?.length ?? null : null;
+  const planName = (stackAction ? receipt?.layer ?? commandIntent.layerTitle : null)
+    ?? receipt?.intentName
     ?? commandIntent.intentName
     ?? (commandIntent.action === "start" && currentPlanMatchesCommand ? currentPlan?.intentName : null)
     ?? "git arc";
@@ -379,6 +386,11 @@ export default function ThreadGitArcItem ({
             {commandIntent.action === "rescind" || commandIntent.action === "status" ? null : <span className="min-w-0 truncate font-medium text-text">{planName}</span>}
             {commandIntent.action === "rescind" && commandIntent.proposalId ? (
               <span className="font-mono text-[0.86em] text-fg/muted">{commandIntent.proposalId.slice(0, 8)}</span>
+            ) : null}
+            {stackedProposalCount !== null ? (
+              <span className="text-[0.86em] text-fg/muted">
+                {stackedProposalCount} {stackedProposalCount === 1 ? "proposal" : "proposals"}
+              </span>
             ) : null}
             {ref ? <span className="font-mono text-[0.86em] text-fg/muted">{ref.slice(0, 8)}</span> : null}
             {memberRefs.length > 1 ? <span className="text-[0.86em] text-fg/muted">{memberRefs.length} roots</span> : null}
