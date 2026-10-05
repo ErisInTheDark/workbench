@@ -65,7 +65,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         harness: WorkbenchHarnessSchema.parse(request.caller.harness),
         threadId: request.caller.threadId, turnId: request.turnId, itemId: request.itemId, subject: request.subject,
       }, signal),
-      executeCommand: async (request, signal) => await requestRegistry.executeCommand(request, signal),
       isSubagentCaller: async caller => {
         const project = await build.get("projectCatalog").resolveAgentEndpointProjectFromCwd(caller.cwd, { endpointName: "MCP tool audience" });
         const identity = threadIdentity.knownThread(caller.threadId);
@@ -92,6 +91,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     return {
       afterCommit: () => {
         activateCommandExecutor();
+        mcp.activateToolGeneration();
         stopWaitObservation ??= requestRegistry.subscribeThreadWaits(
           ({ threadId, toolNames }) => {
             for (const binding of threadIdentity.knownThread(threadId).bindings) {

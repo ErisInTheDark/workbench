@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchAgentMcpPendingRequest: describe one active request for runtime-drain diagnostics.
  * - WorkbenchAgentMcpThreadWaitState: describe active waits owned by one Workbench thread.
- * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, wait observation, and reload-safe command re-entry.
+ * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, wait observation, reload-safe command re-entry, and the current MCP tool generation.
  * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
  * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across module generations.
  */
@@ -18,6 +18,7 @@ import {
   type WorkbenchAgentCommandRequest,
   type WorkbenchAgentMcpRuntimeDrainPolicy,
 } from "./lib/workbench/commands/workbench-agent-command-definition";
+import type { WorkbenchMcpToolGeneration } from "./workbench-mcp-ingress";
 
 type WorkbenchAgentMcpRequestId = number | string;
 type WorkbenchAgentMcpClientScope = string;
@@ -52,8 +53,16 @@ interface WorkbenchAgentMcpRuntimeOwnerState {
   released: boolean;
 }
 
+interface WorkbenchAgentMcpToolGenerationSlot {
+  generation: WorkbenchMcpToolGeneration;
+  owner: object;
+}
+
 interface WorkbenchAgentMcpRequestRegistryState {
   commandGeneration: WorkbenchAgentMcpCommandGeneration | null;
+  /** The MCP generation that serves requests; held here so in-flight requests never capture one. */
+  toolGeneration: WorkbenchAgentMcpToolGenerationSlot | null;
+  toolGenerationWaiters: Set<() => void>;
   disposed: boolean;
   exitHookInstalled: boolean;
   threadWaitListeners: Set<(state: WorkbenchAgentMcpThreadWaitState | WorkbenchAgentMcpLegacyThreadWaitState) => void>;
@@ -101,6 +110,8 @@ export function isWorkbenchAgentMcpSteerInterruption(error: unknown) {
 function createState(): WorkbenchAgentMcpRequestRegistryState {
   return {
     commandGeneration: null,
+    toolGeneration: null,
+    toolGenerationWaiters: new Set(),
     disposed: false,
     exitHookInstalled: false,
     threadWaitListeners: new Set(),
@@ -114,6 +125,8 @@ function disposeState(state: WorkbenchAgentMcpRequestRegistryState, reason: stri
   state.disposed = true;
   state.commandGeneration?.controller.abort(new Error(reason));
   state.commandGeneration = null;
+  state.toolGeneration = null;
+  for (const wake of [...state.toolGenerationWaiters]) wake();
   for (const requests of state.requestsByClient.values()) {
     for (const entry of requests.values()) {
       if (!entry.controller.signal.aborted) entry.controller.abort(new Error(reason));
@@ -131,6 +144,9 @@ function getProcessState() {
     Reflect.set(globalThis, PROCESS_REGISTRY_KEY, state);
   }
   state.commandGeneration ??= null;
+  // Process state outlives module generations, so fields added later start empty on older state.
+  state.toolGeneration ??= null;
+  state.toolGenerationWaiters ??= new Set();
   state.threadWaitListeners ??= new Set();
   if (!state.exitHookInstalled) {
     state.exitHookInstalled = true;
@@ -211,6 +227,35 @@ export class WorkbenchAgentMcpRequestRegistry {
     this.state.commandGeneration = null;
     if (!current.controller.signal.aborted) {
       current.controller.abort(new Error("Workbench command runtime is shutting down."));
+    }
+  }
+
+  activateToolGeneration(owner: object, generation: WorkbenchMcpToolGeneration) {
+    if (this.state.disposed) throw new Error("Workbench MCP request registry is disposed.");
+    this.state.toolGeneration = { generation, owner };
+    for (const wake of [...this.state.toolGenerationWaiters]) wake();
+  }
+
+  releaseToolGeneration(owner: object) {
+    if (this.state.toolGeneration?.owner === owner) this.state.toolGeneration = null;
+  }
+
+  /** The current MCP generation, waiting through a reload's gap between retirement and replacement. */
+  async awaitToolGeneration(signal?: AbortSignal): Promise<WorkbenchMcpToolGeneration> {
+    for (;;) {
+      signal?.throwIfAborted();
+      if (this.state.disposed) throw new Error("Workbench MCP request registry is disposed.");
+      const current = this.state.toolGeneration;
+      if (current) return current.generation;
+      await new Promise<void>(resolve => {
+        const wake = () => {
+          this.state.toolGenerationWaiters.delete(wake);
+          signal?.removeEventListener("abort", wake);
+          resolve();
+        };
+        this.state.toolGenerationWaiters.add(wake);
+        signal?.addEventListener("abort", wake, { once: true });
+      });
     }
   }
 

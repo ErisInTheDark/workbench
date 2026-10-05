@@ -209,6 +209,7 @@ test("companion catalogue and decoded calls cross real MCP transport with full c
       return Response.json({ title: "captured task" });
     },
   });
+  controller.activateToolGeneration();
   const server = http.createServer((request, response) => { void controller.handleHttpRequest(request, response); });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -243,6 +245,8 @@ async function startController(getController: WorkbenchAgentMcpController | (() 
   let releasedRequestCount = 0;
   const server = http.createServer((request, response) => {
     const controller = typeof getController === "function" ? getController() : getController;
+    // The MCP node activates its committed controller; tests treat the one serving each request as committed.
+    controller.activateToolGeneration();
     void controller.handleHttpRequest(request, response).then(() => { releasedRequestCount += 1; });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -1139,7 +1143,10 @@ test("thread steer interruption ends declared waits but preserves questionnaires
   }
 });
 
-test("declared waits survive runtime drain and finish through the replacement command generation", { timeout: 5_000 }, async () => {
+setFlagsFromString("--expose-gc");
+const collectGarbage = runInNewContext("gc") as () => void;
+
+test("declared waits survive runtime drain, release their generation and finish through the replacement", { timeout: 5_000 }, async () => {
   const oldStarted = deferred<void>();
   const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
   const oldExecutor = {};
@@ -1152,14 +1159,14 @@ test("declared waits survive runtime drain and finish through the replacement co
       signal.addEventListener("abort", () => reject(signal.reason), { once: true });
     });
   });
-  const controller = codexController({
-    executeCommand: async (request, signal) => await requestRegistry.executeCommand(request, signal),
+  const createController = () => codexController({
     lifecycleLogError: () => undefined,
     daemonOrigin: "http://127.0.0.1:4500",
     requestCodex: async (request) => ({ id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } }),
     requestRegistry,
   });
-  const server = await startController(controller);
+  let controller = createController();
+  const server = await startController(() => controller);
   const oldUrl = new URL(server.url);
   oldUrl.searchParams.set("client", "11111111-1111-4111-8111-111111111111");
   const oldClient = await connectClient(oldUrl);
@@ -1172,6 +1179,17 @@ test("declared waits survive runtime drain and finish through the replacement co
     await oldStarted.promise;
 
     assert.equal(controller.beginRuntimeDrain(), 0);
+    // A reload commits a replacement generation and retires the old one while the wait is still open.
+    const replacement = createController();
+    replacement.activateToolGeneration();
+    controller.releaseRuntimeOwner();
+    const retired = new WeakRef(controller);
+    controller = replacement;
+    for (let pass = 0; pass < 2; pass++) {
+      await new Promise<void>(resolve => { setImmediate(resolve); });
+      collectGarbage();
+    }
+    assert.equal(retired.deref(), undefined, "an open wait must not keep its retired MCP generation alive");
     requestRegistry.activateCommandExecutor(replacementExecutor, async (request) => {
       assert.strictEqual(request, builtRequest);
       return new Response("replacement generation completed");
