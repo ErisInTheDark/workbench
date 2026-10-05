@@ -223,6 +223,26 @@ export default class ClaudeSessionHost {
     if (this.disposed) throw new Error("Claude sessions were disposed.");
     if (this.sessions.has(input.scope)) throw new Error("Claude session scope is already live.");
     const view = this.viewsRoot ? await ClaudeConfigView.create(this.viewsRoot) : null;
+    let options: ReturnType<ClaudeSessionLaunch["options"]>;
+    try {
+      options = input.options(view?.env);
+    } catch (error) {
+      await view?.dispose();
+      throw error;
+    }
+    return await this.start(input.scope, input.captureStderr, options, view);
+  }
+
+  /**
+   * Sessions outlive the bridge generation that launched them. Every closure here shares one context, so none of
+   * them may see the launch request: its `options` builder belongs to that generation and would pin all of it.
+   */
+  private async start(
+    scope: string,
+    captureStderr: boolean,
+    sdkOptions: ReturnType<ClaudeSessionLaunch["options"]>,
+    view: ClaudeConfigView | null,
+  ) {
     const queue = new ClaudePromptQueue();
     let exit: Promise<void> | null = null;
     let stderr = "";
@@ -231,16 +251,16 @@ export default class ClaudeSessionHost {
       const sdkQuery = (this.options.createQuery ?? query)({
         prompt: queue,
         options: {
-          ...input.options(view?.env),
+          ...sdkOptions,
           spawnClaudeCodeProcess: options => spawnTrackedClaude(options, value => { exit = value; }),
-          ...(input.captureStderr ? { stderr: (data: string) => { stderr = (stderr + data).slice(-2000); } } : {}),
+          ...(captureStderr ? { stderr: (data: string) => { stderr = (stderr + data).slice(-2000); } } : {}),
         },
       });
-      session = new ClaudeProcessSession(input.scope, sdkQuery, queue, {
+      session = new ClaudeProcessSession(scope, sdkQuery, queue, {
         exit: () => exit ?? Promise.resolve(),
         stderr: () => stderr,
         release: async () => {
-          if (this.sessions.get(input.scope) === session) this.sessions.delete(input.scope);
+          if (this.sessions.get(scope) === session) this.sessions.delete(scope);
           await view?.dispose();
         },
       });
@@ -248,7 +268,7 @@ export default class ClaudeSessionHost {
       await view?.dispose();
       throw error;
     }
-    this.sessions.set(input.scope, session);
+    this.sessions.set(scope, session);
     return session;
   }
 

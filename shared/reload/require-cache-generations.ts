@@ -29,6 +29,10 @@ export function releaseRetiredModules(loader: NodeRequire, retired: ReadonlySet<
       .filter((child): child is NodeModule => !!child);
     surviving.children.splice(0, surviving.children.length, ...new Set(current));
   }
+  // Node also keeps each module's first parent for life, so a package first required by a retired module pins it.
+  for (const surviving of Object.values(loader.cache)) {
+    if (surviving?.parent && retired.has(surviving.parent)) surviving.parent = loader.cache[surviving.parent.id];
+  }
   // A stray reference to one retired module must not pin the tree beneath it.
   for (const module of retired) module.children.length = 0;
 }
