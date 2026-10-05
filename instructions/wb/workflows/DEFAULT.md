@@ -198,26 +198,24 @@ In Implement mode:
 
 Before the first file edit in Implement mode:
 
-- Run the required arc command directly without preceding it with raw `git status`, raw `git diff`, `arc compare`, or `arc diff`; the operation owns its safety checks and its rejection is the stop signal.
-- For an inactive plan's first Implement pass, call <tool id="git_arc_start" />, optionally with an exact historical `ref`. Successful start creates a new active baseline and reports released and acquired claims.
-- If already active, use ref-free <tool id="git_arc_continue" /> before another pass, or <tool id="git_arc_claims" /> for scope edits. Claims includes continuation checks; do not call both.
-- Read the successful phase/outcome and continue without supplementary preflights.
+- Run the required arc command directly.
+- For an inactive plan's first Implement pass, call <tool id="git_arc_start" />.
+- If already active, call <tool id="git_arc_continue" /> before another pass, or <tool id="git_arc_claims" /> for scope edits.
 <available:git-proposals>
-- Own pending proposals and new work builds on them: call <tool id="git_arc_stack" /> with a layer title first.
+- Own pending proposals and new work builds on them: call <tool id="git_arc_stack" /> first.
 </available:git-proposals>
-- Start drift below 2,000 plan-scoped additions + deletions: inspect <tool id="git_arc_diff" /> against supplied ref.
+- Start drift below 2,000 plan-scoped additions + deletions: inspect <tool id="git_arc_diff" /> against the supplied ref.
 - Larger or binary drift: enter Inspect; reread affected current code and owners; rebase planned work, not Git history.
-- Preserve approval only if scope, behavior, structure, ownership, mechanics and validation match. Enter Implement and <tool id="git_plan_start" /> with `{ inherit: true }`; otherwise revise in Brief and seek approval.
-- Acceptance narrows live scope. Read every accepted proposal ID/SHA. Resolved continuation succeeds without acquiring claims; approved follow-up requires explicit additions/adoptions through <tool id="git_arc_claims" />. Changed approval boundaries return to Brief and <tool id="git_plan_claims" />.
-- Replacement plans must cover every dirty owned file. Publication releases clean claims, retaining covered dirt through approval. Dirty unclaimed adoption stays explicit. Never ask the user to clean another agent's work.
+- Preserve approval only if scope, behavior, structure, ownership, mechanics and validation match. When it does, enter Implement with <tool id="git_plan_start" /> and `{ inherit: true }`; otherwise revise in Brief and seek approval.
+- Acceptance narrows live scope; read every accepted proposal ID/SHA. Changed approval boundaries return to Brief and <tool id="git_plan_claims" />.
+- Replacement plans must cover every dirty owned file. Never ask the user to clean another agent's work.
 <!-- Failure: agents erase valid work, ask permission for forgotten paths, or plan vague scope. -->
 Unexpected omitted paths:
 
 - Report each path and reason.
-- No material change: edit with <tool id="git_arc_claims" /> and `inherit: true`; continuation is included. No Decision.
+- No material change: acquire the path and continue. No Decision.
 - Material or uncertain change: keep work; use inherited <tool id="git_plan_claims" />; return to Brief.
-- Never restore, release, unclaim, or discard only to change scope.
-- For collisions, wait on the inactive plan with <tool id="git_arc_wait" />, without republishing it. If requested scope has no inactive plan, publish it first. Edit only after claims are acquired.
+- For collisions, wait on the inactive plan with <tool id="git_arc_wait" />, without republishing it. If requested scope has no inactive plan, publish it first.
 - For incompatible HEAD movement, unexplained dirt, or another unsafe rejection, stop before editing and inspect the reported condition. Do not steal, clean, restore, or overwrite work. Return to Brief when safe recovery changes the approved plan.
 - If the required arc command cannot run, or you cannot confidently interpret its result, stop before editing and report degraded arc safety. Continue without it only after explicit user approval.
 
@@ -327,13 +325,13 @@ Before editing after pause, approval, questionnaire, wait, compaction, or interr
 
 Restore current request, approval boundary, and file state before risky work.
 
-On follow-ups, call <tool id="git_arc_status" /> before rereading prior work. Retained claims: reuse known context. Lost claims: inspect reported changes with ref-free <tool id="git_arc_diff" />; reread affected files only when needed or the loss baseline is unavailable. Status does not replace approval recovery or mutation safety checks.
+On follow-ups, call <tool id="git_arc_status" /> before rereading prior work. Retained claims: reuse known context. Lost claims: inspect the reported changes and reread affected files only when needed or the baseline is unavailable. Status does not replace approval recovery or mutation safety checks.
 
 - After compaction, use Thread Recall through complete approval boundary
 - After other resume or delay, verify newest request
 - If exact approval boundary known, keep approval; stale or missing arc ref alone does not invalidate it
 - If approval boundary missing or ambiguous, return to Brief
-- Use registered lifecycle defaults rather than copied refs; <tool id="git_arc_status" /> provides follow-up ownership facts
+- Use registered lifecycle defaults rather than copied refs
 - Require explicit approval for degraded arc safety
 
 ### Report rollbacks
