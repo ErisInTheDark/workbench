@@ -14,6 +14,7 @@ import {
 } from "workbench-shared/workbench/git/git-arc-failures";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { GitArcStatusPresentation } from "workbench-shared/workbench/git/git-arc-status";
+import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { GitArcCommandAction, GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 import GitArcIcon from "./GitArcIcon";
@@ -25,6 +26,7 @@ import ThreadGitArcCollapsedSummary, {
 } from "./ThreadGitArcCollapsedSummary";
 import type { ThreadFileChangeListChange } from "./ThreadFileChangeItem";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
+import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
 import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadGitArcStackedProposals from "./ThreadGitArcStackedProposals";
@@ -407,6 +409,12 @@ export default function ThreadGitArcItem ({
             ) : null}
             {ref ? <span className="font-mono text-[0.86em] text-fg/muted">{ref.slice(0, 8)}</span> : null}
             {memberRefs.length > 1 ? <span className="text-[0.86em] text-fg/muted">{memberRefs.length} roots</span> : null}
+            {operationSummaryRows.length ? (
+              <ThreadGitArcChangeTotals changes={operationSummaryRows.map(row => ({
+                path: row.change.path,
+                ...(row.summaryTotals ?? row.diff ?? parseUnifiedDiff(row.change.diff)),
+              }))} />
+            ) : null}
             {durationMs !== null ? durationPresentation === "waited" ? (
               <span className="text-fg/muted" data-thread-git-arc-duration="waited">
                 (waited <ThreadDurationText className="inline" durationMs={durationMs} />)

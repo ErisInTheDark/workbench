@@ -20,10 +20,8 @@ import PlaintextEditable from "./PlaintextEditable";
 import GitArcIcon from "./GitArcIcon";
 import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
-import {
-  ThreadFileChangeList,
-  ThreadFileChangeTotals,
-} from "./ThreadFileChangeItem";
+import { ThreadFileChangeList } from "./ThreadFileChangeItem";
+import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
 
 export type CheckpointCommitCardState =
   | { error: string; failure?: GitArcFailure; retryable: boolean; status: "error" }
@@ -141,8 +139,6 @@ export default function ThreadCheckpointCommitCard({
     && proposal.unavailableReasonCode === "committed-outside-proposal";
   const editable = !compactPreview && (!proposal || proposal.status === "proposed" || committedAmendable);
   const displayedChanges = getCheckpointProposalDisplayedChanges(proposal, commitMode);
-  const additions = displayedChanges.reduce((total, change) => total + change.additions, 0);
-  const deletions = displayedChanges.reduce((total, change) => total + change.deletions, 0);
   const fileCount = proposal ? displayedChanges.length : paths.length;
   const amendTargetMessage = proposal?.amendTargetMessage ?? null;
   const titleWillChange = commitMode === "amend"
@@ -294,7 +290,7 @@ export default function ThreadCheckpointCommitCard({
             <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <span className="inline-flex min-w-0 items-baseline gap-2">
                 <span>{changeSummary}</span>
-                {proposal ? <ThreadFileChangeTotals additions={additions} deletions={deletions} /> : null}
+                {proposal ? <ThreadGitArcChangeTotals changes={displayedChanges} /> : null}
               </span>
               <span
                 className="inline-flex min-w-0 flex-wrap items-center justify-end gap-2"

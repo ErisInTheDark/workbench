@@ -7,7 +7,8 @@
 import type { GitArcStackedProposal } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { createThreadGitArcCompareSummaryRows } from "./ThreadGitArcCollapsedSummary";
-import { ThreadFileChangeList, ThreadFileChangeTotals } from "./ThreadFileChangeItem";
+import { ThreadFileChangeList } from "./ThreadFileChangeItem";
+import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
 
 const STATUS = { add: "A", delete: "D", update: "M" } as const;
 
@@ -32,10 +33,7 @@ export default function ThreadGitArcStackedProposals({
         <div key={proposalId}>
           <div className="flex min-w-0 items-baseline gap-2 text-[0.84em] leading-[1.5]">
             <span className="min-w-0 truncate text-text">{title}</span>
-            <ThreadFileChangeTotals
-              additions={changes.reduce((total, change) => total + change.additions, 0)}
-              deletions={changes.reduce((total, change) => total + change.deletions, 0)}
-            />
+            <ThreadGitArcChangeTotals changes={changes} />
           </div>
           {expanded ? (
             <>
