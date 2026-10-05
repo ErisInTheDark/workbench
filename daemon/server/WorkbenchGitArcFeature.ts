@@ -26,6 +26,7 @@ import { GitArcCollisionError } from "./lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "./lib/workbench/git/GitCheckpointStore";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { GitCheckpointRequestSchema, type GitArcClaimViewResult, type GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
+import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import type { WorkbenchContextAdmission } from "workbench-shared/workbench/provider/provider-context";
 import type { WorkbenchAgentContextTarget } from "./WorkbenchAgentContextController";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
@@ -395,6 +396,15 @@ export default class WorkbenchGitArcFeature {
               response = Response.json({
                 repositories: [{ ...view, ...await this.controller.mirrorClaimView({ into, paths, repoRoot: view.repoRoot, tree: view.tree }) }],
               } satisfies GitArcClaimViewResult);
+            }
+            // Only an owner reading its own status has viewed its accepted rows; the stamp takes its own lease.
+            if (response.ok && effectiveRequest.action === "arcStatus" && !effectiveRequest.targetThreadId) {
+              const { accepted } = await response.clone().json() as GitArcStatus;
+              if (accepted.length) {
+                await this.workspaceController.markAcceptedViewed(project, {
+                  harness: owner.harness, proposalIds: accepted.map(({ proposalId }) => proposalId), threadId: owner.threadId,
+                });
+              }
             }
           } catch (error) {
             throw new GitArcFailureException(await this.createFailure(project.project.id, effectiveRequest, error));

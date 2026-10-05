@@ -1002,6 +1002,16 @@ controllerTest("partial", "partial acceptance preserves claims and unrelated sta
   assert.equal(followUp.intentName, completed.intentName);
   const inventory = await controller.readScope({ cwd: source, harness: "codex", threadId: "partial-thread" });
   assert.deepEqual(inventory?.claimedPaths, ["planned.txt"]);
+  // Status keeps accepted rows until they were viewed and a later acceptance leaves no claims.
+  const identity = { cwd: source, harness: "codex" as const, threadId: "partial-thread" };
+  assert.deepEqual((await controller.readStatus(identity)).accepted.map(({ proposalId }) => proposalId), [firstProposal.proposalId, secondProposal.proposalId]);
+  assert.deepEqual(await controller.readUnviewedAccepted({ ...identity, proposalIds: [firstProposal.proposalId] }), [firstProposal.proposalId]);
+  await controller.markAcceptedViewed({ ...identity, proposalIds: [firstProposal.proposalId] });
+  assert.deepEqual(await controller.readUnviewedAccepted({ ...identity, proposalIds: [firstProposal.proposalId, secondProposal.proposalId] }), [secondProposal.proposalId]);
+  await fs.writeFile(path.join(source, "planned.txt"), "planned\n");
+  const thirdProposal = await controller.createProposal({ ...identity, description: "", paths: ["planned.txt"], title: "commit three" });
+  await controller.commitProposal({ ...identity, description: "", includeNewer: false, proposalId: thirdProposal.proposalId, title: "commit three" });
+  assert.deepEqual((await controller.readStatus(identity)).accepted.map(({ proposalId }) => proposalId), [secondProposal.proposalId, thirdProposal.proposalId]);
 });
 
 async function checkProposalReadPurity({ repository, source, state }: ControllerBranch<"status">) {

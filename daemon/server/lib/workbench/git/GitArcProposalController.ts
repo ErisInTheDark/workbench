@@ -106,6 +106,15 @@ function lifecycleEntry(entry: GitArcRegistryEntry) {
   };
 }
 
+/** Stored accepted visibility, pruned to the lifecycle's own proposals. */
+function acceptedVisibility(entry: GitArcRegistryEntry) {
+  const ids = new Set(lifecycleEntry(entry)?.proposalIds ?? []);
+  return {
+    dismissed: (entry.acceptedVisibility?.dismissed ?? []).filter(id => ids.has(id)),
+    viewed: (entry.acceptedVisibility?.viewed ?? []).filter(id => ids.has(id)),
+  };
+}
+
 function projectLifecycleState(
   entry: GitArcRegistryEntry,
   lifecycle: NonNullable<ReturnType<typeof lifecycleEntry>>,
@@ -260,6 +269,11 @@ async function prepareAcceptedClaimTransition({
   const sourceCheckpoint = commitRemaps?.get(source.checkpointCommit) ?? source.checkpointCommit;
   let successorCheckpoint: string | null = null;
   const updates: GitRefUpdate[] = [];
+  // A claim-free acceptance hides every accepted proposal status already showed.
+  const visibility = acceptedVisibility(active);
+  const dismissal = claimedPaths.length ? {} : {
+    acceptedVisibility: { dismissed: [...new Set([...visibility.dismissed, ...visibility.viewed])], viewed: [] },
+  };
   if (claimedPaths.length) {
     requireArcMetadata(source.metadata);
     const metadata: CheckpointMetadata = {
@@ -290,12 +304,14 @@ async function prepareAcceptedClaimTransition({
   };
   const registryMutation = await registry.prepareClaim(active.phase === "plan" ? {
     ...active,
+    ...dismissal,
     checkpointCommit: commitRemaps?.get(active.checkpointCommit) ?? active.checkpointCommit,
     retainedArc: nextLifecycle,
     stackTip,
   } : {
     ...active,
     ...nextLifecycle,
+    ...dismissal,
     retainedArc: null,
     stackTip,
   }, {
@@ -625,7 +641,18 @@ export default class GitArcProposalController {
     const stackedPending = new Map<string, Array<{ proposalId: string; title: string }>>();
     const accepted: Array<{ proposalId: string; title: string; commitSha: string }> = [];
     const unavailable: Array<{ proposalId: string; title: string; reason: string }> = [];
+    const dismissed = new Set(entry?.acceptedVisibility?.dismissed ?? []);
+    // Committed metadata is final, so one batched read settles those rows without per-proposal resolution.
+    const summaries = new Map((await this.store(repository).readProposalSummaries(harness, input.threadId, proposalIds))
+      .map(summary => [summary.proposalId, summary]));
     for (const proposalId of proposalIds) {
+      const summary = summaries.get(proposalId);
+      if (summary?.status === "committed") {
+        if (summary.committedSha && !dismissed.has(proposalId)) {
+          accepted.push({ proposalId, title: summary.title, commitSha: summary.committedSha });
+        }
+        continue;
+      }
       const { proposal } = await resolveProposalState(this.resolveThreadIdentity, repository, harness, input.threadId, proposalId, {
         includeNewer: false, persistTransitions: false, snapshot,
       });
@@ -635,7 +662,7 @@ export default class GitArcProposalController {
         if (layer) stackedPending.set(layer.tipCommit, [...stackedPending.get(layer.tipCommit) ?? [], { proposalId, title: metadata.title }]);
         else pending.push({ proposalId, title: metadata.title });
       }
-      if (metadata.status === "committed" && metadata.committedSha) {
+      if (metadata.status === "committed" && metadata.committedSha && !dismissed.has(proposalId)) {
         accepted.push({ proposalId, title: metadata.title, commitSha: metadata.committedSha });
       }
       if (metadata.status === "unavailable") {
@@ -647,6 +674,32 @@ export default class GitArcProposalController {
       return layerPending?.length ? [{ title: layer.title, pending: layerPending }] : [];
     });
     return { pending, accepted, ...(stacked.length ? { stacked } : {}), ...(unavailable.length ? { unavailable } : {}) };
+  }
+
+  /** The given accepted proposal ids this thread's lifecycle owns that status has not yet shown it. */
+  async readUnviewedAccepted(input: ArcIdentityInput & { proposalIds: string[]; repository?: WorkbenchGitRepository }) {
+    const repository = input.repository ?? await WorkbenchGitRepository.open(input.cwd);
+    const entry = await this.registry(repository).find({ harness: normalizeHarness(input.harness), threadId: input.threadId });
+    if (!entry) return [];
+    const owned = new Set(lifecycleEntry(entry)?.proposalIds ?? []);
+    const { viewed } = acceptedVisibility(entry);
+    return input.proposalIds.filter(id => owned.has(id) && !viewed.includes(id));
+  }
+
+  /** Record that status showed these accepted proposals to their owner. */
+  async markAcceptedViewed(input: ArcIdentityInput & { proposalIds: string[]; repository?: WorkbenchGitRepository }) {
+    const repository = input.repository ?? await WorkbenchGitRepository.open(input.cwd);
+    const registry = this.registry(repository);
+    const entry = await registry.find({ harness: normalizeHarness(input.harness), threadId: input.threadId });
+    if (!entry) return;
+    const owned = new Set(lifecycleEntry(entry)?.proposalIds ?? []);
+    const visibility = acceptedVisibility(entry);
+    const added = input.proposalIds.filter(id => owned.has(id) && !visibility.viewed.includes(id));
+    if (!added.length) return;
+    const mutation = await registry.prepareSet({
+      ...entry, acceptedVisibility: { dismissed: visibility.dismissed, viewed: [...visibility.viewed, ...added] },
+    }, entry.checkpointCommit);
+    await repository.updateRefs(mutation.updates);
   }
 
   async listLifecycleStates({ cwd }: { cwd: string }): Promise<GitArcLifecycleState[]> {

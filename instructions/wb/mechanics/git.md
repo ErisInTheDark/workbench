@@ -9,7 +9,7 @@ Workbench stores immutable plan/arc snapshots under local per-worktree Git refs.
 
 Ordinary operations resolve registered lifecycle; omit refs. <tool id="git_arc_status" /> provides ownership, proposal and recovery facts.
 
-`wb git arc status [--full=dirty,clean,unclaimed-dirt]`; MCP `full: ["dirty", "clean", "unclaimed-dirt"]`. Empty groups are omitted; file groups list up to five paths, otherwise counts. `full` expands selected groups. Pending proposals must remain valid; accepted proposals remain until the next implementation arc starts. Unclaimed dirt excludes all live owners, not older files.
+`wb git arc status [--full=dirty,clean,unclaimed-dirt]`; MCP `full: ["dirty", "clean", "unclaimed-dirt"]`. Empty groups are omitted; file groups list up to five paths, otherwise counts. `full` expands selected groups. Pending proposals must remain valid; accepted proposals show until status has listed them and a later acceptance leaves no claims. Unclaimed dirt excludes all live owners, not older files.
 
 Stashes own no live claims. Resume saved work only with user agreement.
 

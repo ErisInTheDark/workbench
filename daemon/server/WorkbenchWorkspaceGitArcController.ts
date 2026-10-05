@@ -368,6 +368,23 @@ export default class WorkbenchWorkspaceGitArcController {
     return result;
   }
 
+  /** Stamp accepted rows status showed their owner; only members with unviewed rows take a write lease. */
+  async markAcceptedViewed(
+    project: AgentEndpointProjectResolution,
+    input: { harness: WorkbenchHarness; proposalIds: string[]; threadId: string },
+  ) {
+    const members = await this.resolveRepoMembers(project);
+    const unviewed = await this.runMembers(members, async member => await this.local.readUnviewedAccepted({
+      cwd: member.repoRoot, ...input,
+    }), undefined, "read");
+    const stale = unviewed.filter(({ result }) => result.length);
+    if (!stale.length) return;
+    const proposalIds = new Map<string, string[]>(stale.map(({ member, result }) => [member.repoRoot, result]));
+    await this.runMembers(stale.map(({ member }) => member), async member => await this.local.markAcceptedViewed({
+      cwd: member.repoRoot, harness: input.harness, threadId: input.threadId, proposalIds: proposalIds.get(member.repoRoot) ?? [],
+    }), undefined, "write");
+  }
+
   async execute(
     project: AgentEndpointProjectResolution,
     request: GitCheckpointRequest,

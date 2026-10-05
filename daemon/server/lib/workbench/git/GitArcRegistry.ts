@@ -3,6 +3,7 @@
  * - default GitArcRegistry: preserve raw rows while owning canonical live claims and final-loss snapshot publication.
  * - REGISTRY_REF: worktree-owned registry address.
  * - GitArcIdentity: registry owner identity.
+ * - GitArcAcceptedVisibility: accepted proposal ids status showed its owner or hid after a claim-free acceptance.
  * - GitArcRegistryEntry: stored arc lifecycle and claims.
  * - GitArcRegistryMutation: prepared canonical state and ref updates.
  * - GitArcRegistryReplaceOptions: replacement guards, remaps and claim-loss snapshot.
@@ -31,7 +32,14 @@ export interface GitArcIdentity {
   threadId: string;
 }
 
+/** Accepted proposal ids status has shown its owner, and ids a later claim-free acceptance hid. */
+export interface GitArcAcceptedVisibility {
+  dismissed: string[];
+  viewed: string[];
+}
+
 export interface GitArcRegistryEntry extends GitArcIdentity {
+  acceptedVisibility?: GitArcAcceptedVisibility | null;
   checkpointCommit: string;
   claimedPaths: string[];
   intentDescription: string;
@@ -132,13 +140,26 @@ export function findGitArcCollisions(
     .filter((collision) => collision.overlaps.length > 0);
 }
 
+/** Rebuilt entries that omit visibility keep the stored value, so old accepted rows never resurface. */
+function keptAcceptedVisibility(
+  entry: Pick<GitArcRegistryEntry, "acceptedVisibility">,
+  current: Pick<GitArcRegistryEntry, "acceptedVisibility"> | null,
+) {
+  const visibility = entry.acceptedVisibility === undefined ? current?.acceptedVisibility : entry.acceptedVisibility;
+  return visibility ? { acceptedVisibility: visibility } : {};
+}
+
+function proposalIdList(value: unknown) {
+  return Array.isArray(value) ? value.filter((proposalId): proposalId is string => typeof proposalId === "string" && Boolean(proposalId.trim())) : [];
+}
+
 function parseState(contents: string): GitArcRegistryState {
   const parsed = JSON.parse(contents) as Partial<GitArcRegistryState>;
   if (parsed.version !== 1 || !Array.isArray(parsed.entries)) throw new Error("The active arc registry is invalid.");
   return {
     entries: parsed.entries.map((entry) => {
       const proposalIds = Array.isArray(entry.proposalIds)
-        ? entry.proposalIds.filter((proposalId): proposalId is string => typeof proposalId === "string" && Boolean(proposalId.trim()))
+        ? proposalIdList(entry.proposalIds)
         : entry.proposalId ? [entry.proposalId] : [];
       const phase = entry.phase ?? "active";
       const { reloadScopes: _storedReloadScopes, ...storedEntry } = entry;
@@ -149,6 +170,10 @@ function parseState(contents: string): GitArcRegistryState {
       })() : null;
       return {
         ...storedEntry,
+        ...(entry.acceptedVisibility ? { acceptedVisibility: {
+          dismissed: proposalIdList(entry.acceptedVisibility.dismissed),
+          viewed: proposalIdList(entry.acceptedVisibility.viewed),
+        } } : {}),
         ...(entry.savedStash !== undefined ? {
           savedStash: entry.savedStash === null ? null : GitArcSavedStashSchema.parse(entry.savedStash),
         } : {}),
@@ -297,6 +322,7 @@ export default class GitArcRegistry {
       }
       const next = replacement.next ? {
         ...replacement.next, harness: replacement.identity.harness, threadId: identity.threadId,
+        ...keptAcceptedVisibility(replacement.next, current),
         savedStash: replacement.next.savedStash === undefined ? current?.savedStash ?? null : replacement.next.savedStash,
         stackTip: replacement.next.stackTip === undefined ? current?.stackTip ?? null : replacement.next.stackTip,
         updatedAt: new Date().toISOString(),
@@ -364,6 +390,7 @@ export default class GitArcRegistry {
     const { reloadScopes: _inputReloadScopes, ...storedEntry } = canonicalEntry;
     const nextEntry: GitArcRegistryEntry = {
       ...storedEntry,
+      ...keptAcceptedVisibility(canonicalEntry, current),
       phase: canonicalEntry.phase ?? "active",
       proposalId: proposalIds.at(-1) ?? null,
       proposalIds,
@@ -455,6 +482,7 @@ export default class GitArcRegistry {
     const { reloadScopes: _inputReloadScopes, ...storedEntry } = canonicalEntry;
     const nextEntry: GitArcRegistryEntry = {
       ...storedEntry,
+      ...keptAcceptedVisibility(canonicalEntry, current),
       claimedPaths: canonicalEntry.phase === "resolved" ? [] : canonicalEntry.claimedPaths,
       phase: canonicalEntry.phase ?? "active",
       proposalId: proposalIds.at(-1) ?? null,

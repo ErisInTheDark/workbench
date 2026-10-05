@@ -1044,7 +1044,12 @@ test("reloadable Git arc dispatch owns current-plan and proposal lifecycle actio
   const internal = (feature as unknown as { controller: Record<string, (...args: never[]) => Promise<object>> }).controller;
   internal.createInspectionSnapshot = async () => ({});
   for (const method of ["createPlan", "addToPlan", "removeFromPlan", "adoptIntoPlan", "createAndStartPlan", "editPlanClaims", "editArcClaims", "readScope", "readStatus", "continueArc", "startArc", "stashArc", "unstashArc", "rescindProposal", "diff", "createProposal"] as const) {
-    internal[method] = async () => { calls.push(method); return {}; };
+    internal[method] = async () => {
+      calls.push(method);
+      return method === "readStatus" ? {
+        pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
+      } : {};
+    };
   }
   internal.listUnclaimedWorkspaceDirt = async () => [];
   const common = { cwd: "C:/Git/Project", harness: "codex" as const, threadId: "thread-one" };
@@ -1106,10 +1111,14 @@ test("status and proposal diff may inspect a cross-harness target without changi
   internal.readStatus = async input => {
     calls.push({ action: "status", ...input });
     return {
-      pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: [],
-      recovery: [], unavailableRecovery: [],
+      pending: [], accepted: [{ proposalId: "accepted-one", title: "accepted", commitSha: "b".repeat(40) }],
+      dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
     };
   };
+  // Only an owner reading its own status marks accepted rows viewed; peeking at another thread never does.
+  const marks: unknown[] = [];
+  (feature as unknown as { workspaceController: { markAcceptedViewed: (project: unknown, input: unknown) => Promise<void> } })
+    .workspaceController.markAcceptedViewed = async (_project, input) => { marks.push(input); };
   internal.diff = async input => {
     calls.push({ action: "diff", ...input });
     return { changes: [], checkpointCommit: "a".repeat(40), diff: "", scopePaths: [] };
@@ -1131,4 +1140,7 @@ test("status and proposal diff may inspect a cross-harness target without changi
     action: "arcStatus", full: [], targetThreadId, ...caller, threadId: "missing-caller",
   })).status, 400);
   assert.equal(calls.length, 2);
+  assert.deepEqual(marks, []);
+  assert.equal((await feature.executeRequest({ action: "arcStatus", full: [], ...caller })).status, 200);
+  assert.deepEqual(marks.map(mark => (mark as { proposalIds: string[] }).proposalIds), [["accepted-one"]]);
 });
