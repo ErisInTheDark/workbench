@@ -896,12 +896,14 @@ export default class WorkbenchGitCheckpointController {
   async moveInArc({ cwd, harness: rawHarness, move, threadId }: ControllerInput & { move: GitArcMoveRequest }): Promise<GitArcMoveResult> {
     return await GitObjectReadSession.run<GitArcMoveResult>(async () => {
       const { active, checkpoint, harness, metadata, registry, repository } = await this.requireMutableActiveArc({ cwd, harness: rawHarness, threadId });
-      const headMovement = await repository.classifyHeadMovement(checkpoint.parent, metadata.scopePaths, checkpoint.checkpointCommit);
-      if (headMovement.kind === "incompatible") {
+      const currentHead = await repository.headOrNull();
+      const drift = await new GitArcStackController(repository, this.resolveThreadIdentity)
+        .arcDrift(active, checkpoint, metadata.scopePaths, currentHead);
+      if (drift.incompatible) {
         throw new Error("Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
       }
-      if (headMovement.changedPaths.length) {
-        throw new Error(`Claimed paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
+      if (drift.changedPaths.length) {
+        throw new Error(`Claimed paths no longer match the arc baseline: ${drift.changedPaths.join(", ")}`);
       }
 
       const mover = new GitArcPathMover(repository);
@@ -936,12 +938,12 @@ export default class WorkbenchGitCheckpointController {
       await rejectIgnoredGitArcPaths(repository, additionalClaims);
 
       const tree = await repository.writeTreeWithPathsFromSource(
-        headMovement.currentHead,
+        currentHead,
         checkpoint.checkpointCommit,
         metadata.scopePaths,
       );
       const successor = await this.createActiveSuccessor({
-        active, harness, metadata, parent: headMovement.currentHead, registry, repository, scopePaths, threadId, tree,
+        active, harness, metadata, parent: currentHead, registry, repository, scopePaths, threadId, tree,
         withPublish: async (publish) => await mover.apply(resolved.mappings, publish),
       });
       return {
@@ -1293,20 +1295,22 @@ export default class WorkbenchGitCheckpointController {
         ?? await readCheckpoint(repoRoot, harness, threadId, checkpointCommit, this.resolveThreadIdentity);
       const metadata = releasingArc?.metadata ?? checkpoint.metadata;
       if (!metadata?.scopePaths.length) throw new Error("This checkpoint does not contain a restorable file set.");
-      // Full restore & unclaim abandons sealed layers too; selected restores keep sealed content intact.
+      // Full restore & unclaim abandons pending sealed layers too; selected restores keep sealed content intact.
+      // Landed tips are real history, so every restore measures from them.
       const stack = this.stack(repository);
-      const stackTip = releasingArc ? null : await stack.pendingTip(await this.registry(repository).find({ harness, threadId }));
-      const restoreSource = releasingArc
-        ? await this.proposals.logicalBaseline({
-          checkpointCommit: checkpoint.checkpointCommit,
-          cwd: repoRoot,
-          fallbackHead: checkpoint.parent,
-          harness,
-          ignoreStack: true,
-          threadId,
-        })
-        : stackTip
-          ? await stack.sealedTree(checkpoint.checkpointCommit, stackTip)
+      const entry = await this.registry(repository).find({ harness, threadId });
+      const stackTip = releasingArc && await stack.pendingTip(entry) ? null : entry?.stackTip ?? null;
+      const restoreSource = stackTip
+        ? await stack.sealedTree(checkpoint.checkpointCommit, stackTip)
+        : releasingArc
+          ? await this.proposals.logicalBaseline({
+            checkpointCommit: checkpoint.checkpointCommit,
+            cwd: repoRoot,
+            fallbackHead: checkpoint.parent,
+            harness,
+            ignoreStack: true,
+            threadId,
+          })
           : checkpoint.checkpointCommit;
       if (stackTip) {
         await stack.validateBaseline(stackTip, paths, await repository.headOrNull());

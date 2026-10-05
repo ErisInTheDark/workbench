@@ -13,6 +13,6 @@
 - Stashing retained claims beneath an inactive plan preserves that plan, releases every live claim, and restores the retained arc beneath the unchanged plan on unstash; later work remains visible as planning drift. Successful conflicted unstash sends supported passive agent context without starting a turn; unsupported delivery warns.
 - Adopted stashes reuse frozen Git commits under caller-owned refs; ordinary stashes retain claim-loss storage and `stashed` phase. The caller's saved-stash slot may coexist with live claims and blocks settlement and retention.
 - Selected release to an owned subagent atomically moves only named live file claims, refreshes both checkpoints, and leaves stashes and worktree/index content untouched.
-- Stack layers seal pending proposals into tip checkpoints; while any chain proposal is pending, the arc's logical baseline is the top tip and arc checkpoints keep real HEAD parents.
+- Stack layers seal pending proposals into tip checkpoints; while any chain proposal is pending, the arc's logical baseline is the top tip and arc checkpoints keep real HEAD parents. Arcs keep measuring claimed paths from their stack tip after it lands, until their next re-baseline.
 - Stacked proposals commit only after lower chain proposals resolve, replaying onto HEAD when their paths match the tip; otherwise unavailable.
 - Stash, unstash and stack reject when pending stack layers and saved work would coexist.

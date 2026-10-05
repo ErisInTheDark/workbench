@@ -9,6 +9,7 @@ import GitArcRegistry, { findGitArcCollisions, getGitArcLiveClaimPaths, GitArcCo
 import GitArcProposalController from "./GitArcProposalController";
 import { GitCheckpointDirtyPathsError, partitionIgnoredGitArcPaths } from "./GitArcPlanController";
 import GitCheckpointStore from "./GitCheckpointStore";
+import GitArcStackController from "./GitArcStackController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import { expandGitArcClaimPaths } from "./git-arc-claim-expansion";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
@@ -153,8 +154,8 @@ export default class GitArcLifecycleController {
     const headIdentity = await repository.readHead();
     const head = headIdentity?.commit ?? null;
     const retained = existing.filter((scope) => scopePaths.some((candidate) => covers(scope, candidate) || covers(candidate, scope)));
-    const movement = await repository.classifyHeadMovement(checkpoint.parent, retained, checkpoint.checkpointCommit, head);
-    if (current.phase !== "resolved" && movement.kind === "incompatible") {
+    const movement = await new GitArcStackController(repository, this.resolveThreadIdentity).arcDrift(current, checkpoint, retained, head);
+    if (current.phase !== "resolved" && movement.incompatible) {
       throw new GitArcRejectionError({ reason: "incompatibleHead" }, "Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
     }
     if (current.phase !== "resolved" && movement.changedPaths.length) {

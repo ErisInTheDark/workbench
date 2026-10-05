@@ -115,6 +115,9 @@ test("released claims keep sealed proposals committable and a child on a lower l
   assert.equal((await read("child", child.proposalId)).waitingForLayer, "layer one", "it waits on the lowest unlanded layer");
   await commit("parent", state.lower, "parent one");
   await commit("parent", state.upper, "parent two");
+  // Landed parent layers are the child's baseline, not drift in its claims.
+  assert.match((await controller.diff({ cwd, threadId: "child", paths: ["two.txt"] })).diff, /-parent two\n\+child builds on two/u);
+  await controller.editArcClaims({ cwd, threadId: "child", inherit: true });
   await commit("child", child.proposalId, "child");
   assert.equal(await git("show", "HEAD:two.txt"), "child builds on two\n");
 });

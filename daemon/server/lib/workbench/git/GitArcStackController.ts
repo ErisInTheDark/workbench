@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcStackController: own stack layer tips, chain reads, stacked baselines and seal/reopen operations.
+ * - default GitArcStackController: own stack layer tips, chain reads, stacked baselines (including arc drift measured from landed tips) and seal/reopen operations.
  * - GitArcStackLayer: one readable stack tip with its sealed layer facts.
  * - GitArcStackStatusResolver: derived proposal status supplied by the proposal owner.
  * - GitArcStackedProposalState: waiting, replayable or broken stacked proposal classification.
@@ -134,16 +134,36 @@ export default class GitArcStackController {
     return await this.repository.writeTreeWithPathsFromSource(base, tip, paths);
   }
 
-  /** HEAD may differ from a stack tip only on paths still owned by pending chain proposals. */
-  async validateBaseline(tip: string, paths: string[], head: string | null) {
+  /** Paths where HEAD differs from a stack tip, other than those still owned by pending chain proposals. */
+  private async tipDrift(tip: string, paths: string[], head: string | null) {
     const changed = await this.repository.listChangedPaths(tip, head, paths);
-    if (!changed.length) return;
+    if (!changed.length) return [];
     const store = this.store();
     const pending = await this.storedPendingIds(await this.readChain(tip));
     const pendingPaths = (await Promise.all(pending.flatMap(({ layer, pending: ids }) => ids.map(async id => (
       (await store.readProposal(layer.layer.harness as GitArcHarness, layer.layer.threadId, id)).metadata.paths
     ))))).flat();
-    const unexplained = changed.filter(candidate => !pendingPaths.some(owned => gitArcPathsOverlap(candidate, owned)));
+    return changed.filter(candidate => !pendingPaths.some(owned => gitArcPathsOverlap(candidate, owned)));
+  }
+
+  /**
+   * Claimed-path drift for an arc. Arcs built on a stack measure from its tip, landed or not, until their next
+   * re-baseline: after a clean landing the tip matches HEAD, while the arc checkpoint still sits on older history.
+   */
+  async arcDrift(
+    entry: Pick<GitArcRegistryEntry, "stackTip"> | null | undefined,
+    checkpoint: { checkpointCommit: string; parent: string | null },
+    paths: string[],
+    head: string | null,
+  ) {
+    if (entry?.stackTip) return { incompatible: false, changedPaths: await this.tipDrift(entry.stackTip, paths, head) };
+    const movement = await this.repository.classifyHeadMovement(checkpoint.parent, paths, checkpoint.checkpointCommit, head);
+    return { incompatible: movement.kind === "incompatible", changedPaths: movement.changedPaths };
+  }
+
+  /** HEAD may differ from a stack tip only on paths still owned by pending chain proposals. */
+  async validateBaseline(tip: string, paths: string[], head: string | null) {
+    const unexplained = await this.tipDrift(tip, paths, head);
     if (unexplained.length) {
       throw new GitArcRejectionError(
         { reason: "baselineChanged", paths: unexplained },

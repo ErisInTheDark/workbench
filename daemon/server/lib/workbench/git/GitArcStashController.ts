@@ -117,8 +117,8 @@ export default class GitArcStashController {
         }
         if (arc && live.length) {
           const base = await checkpoints.readCheckpoint(harness, input.threadId, arc.checkpointCommit);
-          const movement = await repository.classifyHeadMovement(base.parent, live, base.checkpointCommit, head);
-          if (movement.kind === "incompatible" || movement.changedPaths.length) {
+          const movement = await new GitArcStackController(repository, this.resolveThreadIdentity).arcDrift(current, base, live, head);
+          if (movement.incompatible || movement.changedPaths.length) {
             throw new Error("Current live claims no longer match their baseline. Re-plan before restoring saved work.");
           }
         }

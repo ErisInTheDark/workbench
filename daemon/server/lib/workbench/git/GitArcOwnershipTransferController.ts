@@ -120,7 +120,7 @@ export default class GitArcOwnershipTransferController {
     const head = await repository.headOrNull();
     const sourceArc = liveArc(origin);
     const callerArc = liveArc(target);
-    for (const [identity, arc, paths] of [[source, sourceArc, sourceLive], [caller, callerArc, existing]] as const) {
+    for (const [identity, entry, arc, paths] of [[source, origin, sourceArc, sourceLive], [caller, target, callerArc, existing]] as const) {
       if (!paths.length) continue;
       if (!arc) throw new Error("Live claims have no implementation baseline.");
       const checkpoint = await store.readCheckpoint(identity.harness, identity.threadId, arc.checkpointCommit);
@@ -128,8 +128,8 @@ export default class GitArcOwnershipTransferController {
         || paths.some(value => !checkpoint.metadata!.scopePaths.includes(value))) {
         throw new Error("The claim transfer set does not match its implementation checkpoint.");
       }
-      const movement = await repository.classifyHeadMovement(checkpoint.parent, paths, checkpoint.checkpointCommit, head);
-      if (movement.kind === "incompatible" || movement.changedPaths.length) {
+      const movement = await stack.arcDrift(entry, checkpoint, paths, head);
+      if (movement.incompatible || movement.changedPaths.length) {
         throw new Error("Claim transfer baselines changed. Re-plan the affected claims before transferring ownership.");
       }
     }
