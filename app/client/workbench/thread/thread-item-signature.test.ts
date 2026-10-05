@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { ThreadPayload } from "workbench-shared/types";
 import ThreadCanonicalLayer from "./ThreadCanonicalLayer";
 import { getThreadItemRenderSignature } from "./thread-item-signature";

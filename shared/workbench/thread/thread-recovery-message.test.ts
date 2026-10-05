@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
+import type { ThreadItem } from "./workbench-thread-items.ts";
 import { createWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
 import { unwrapWorkbenchSteerDisplayInput } from "./thread-steer-display.ts";
 import {

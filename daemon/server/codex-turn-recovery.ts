@@ -4,6 +4,7 @@
  * - recoverCodexTurn: deduplicate, interrupt, and delegate replacement to managed admission.
  */
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
+import { toThreadTurn } from "workbench-shared/codex/thread-adapter";
 import { getCurrentTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import { createWorkbenchThreadRecoveryInput, isWorkbenchThreadRecoveryUserMessage } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
@@ -21,10 +22,11 @@ function readThread(response: JsonRpcResponse, candidate: WorkbenchObservedTurnC
   if (response.error) throw new Error(response.error.message);
   const thread = record(response.result)?.thread;
   if (!thread || typeof thread !== "object") throw new Error(`Recovery could not read Codex thread ${candidate.threadId}.`);
-  return thread as ThreadReadResponse["thread"];
+  const native = thread as ThreadReadResponse["thread"];
+  return { ...native, turns: native.turns.map(turn => toThreadTurn(turn)) };
 }
 
-function containsRecoveryMarker(thread: ThreadReadResponse["thread"], recoveryId: string) {
+function containsRecoveryMarker(thread: ReturnType<typeof readThread>, recoveryId: string) {
   return thread.turns.some((turn) => turn.items.some((item) => (
     item.type === "userMessage"
     && item.clientId === recoveryId

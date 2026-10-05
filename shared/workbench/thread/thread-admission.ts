@@ -16,13 +16,13 @@ export function getWorkbenchTurnAdmission(turn: Pick<WorkbenchAdmissionTurn, "id
   return turn.workbenchAdmission ?? "admitted";
 }
 
-export function isPendingWorkbenchTurn(turn: WorkbenchAdmissionTurn): turn is Turn & {
+export function isPendingWorkbenchTurn<T extends Pick<WorkbenchAdmissionTurn, "id" | "workbenchAdmission">>(turn: T): turn is T & {
   id: PendingTurnId;
   workbenchAdmission: "connecting" | "providerPending";
 } {
   return turn.workbenchAdmission === "connecting" || turn.workbenchAdmission === "providerPending";
 }
 
-export function withWorkbenchTurnAdmission<T extends Turn>(turn: T, admission: WorkbenchTurnAdmission): T {
+export function withWorkbenchTurnAdmission<T extends { id: string }>(turn: T, admission: WorkbenchTurnAdmission): T {
   return { ...turn, workbenchAdmission: admission };
 }

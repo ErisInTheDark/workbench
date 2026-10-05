@@ -10,6 +10,8 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 type Thread = Omit<NativeThread, "turns"> & { turns: Turn[] };
 import type { SerializableJson } from "./codex-transcript-types";
+import { toThreadTurn, toWorkbenchCodexItem, type CodexThreadSource, type CodexTurnSource } from "workbench-shared/codex/thread-adapter";
+import type { ThreadItem as NativeThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 
 export function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -57,21 +59,22 @@ export function extractThread(value: unknown): Thread | null {
   const params = asRecord(record?.params);
   const resultThread = asRecord(result?.thread);
   const paramsThread = asRecord(params?.thread);
-  return (resultThread ?? paramsThread) as Thread | null;
+  const thread = (resultThread ?? paramsThread) as CodexThreadSource | null;
+  return thread ? { ...thread, turns: thread.turns.map(turn => toThreadTurn(turn)) } : null;
 }
 
 export function extractTurn(value: unknown): Turn | null {
   const record = asRecord(value);
   const params = asRecord(record?.params);
   const turn = asRecord(params?.turn);
-  return turn as Turn | null;
+  return turn ? toThreadTurn(turn as CodexTurnSource) : null;
 }
 
 export function extractItem(value: unknown): ThreadItem | null {
   const record = asRecord(value);
   const params = asRecord(record?.params);
   const item = asRecord(params?.item);
-  return item as ThreadItem | null;
+  return item ? toWorkbenchCodexItem(item as NativeThreadItem) : null;
 }
 
 export function extractThreadId(value: unknown) {

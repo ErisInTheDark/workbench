@@ -35,6 +35,7 @@ function providerThread(): Thread {
     agentNickname: null,
     agentRole: null,
     canAcceptDirectInput: null,
+    environments: null, originator: null, daybreakEnabled: null,
     cliVersion: "test",
     createdAt: 1,
     cwd: "C:/repo",
@@ -102,6 +103,31 @@ test("routine provider metadata projects without importing turns", () => {
     title: "Thread",
     updatedAt: 6_000,
   });
+});
+
+test("live and snapshot observations reject unsupported image references before returning partial content", () => {
+  const thread = providerThread();
+  const item = {
+    type: "userMessage" as const, id: "input", clientId: null, content: [
+      { type: "text" as const, text: "visible text", text_elements: [] },
+      { type: "image" as const, fileId: "private-file" },
+    ],
+  };
+  thread.turns[0]!.items = [thread.turns[0]!.items[0]!, item];
+  for (const action of [
+    () => createCodexTranscriptProviderItemObservation({
+      item, lifecycle: "completed", observedAt: 1000, threadId: thread.id, turnId: thread.turns[0]!.id,
+    }),
+    () => createCodexTranscriptProviderItemLifecycleObservation({
+      item, method: "item/completed", observedAt: 1000, threadId: thread.id, turnId: thread.turns[0]!.id,
+    }),
+    () => createCodexTranscriptProviderThreadObservations(thread, context),
+    () => createCodexTranscriptProviderThreadScopeObservation(thread, context),
+    () => createCodexTranscriptProviderTurnScopeObservation({ threadId: thread.id, turn: thread.turns[0]!, context }),
+  ]) {
+    assert.throws(action, error => error instanceof Error && !error.message.includes("private-file"));
+  }
+  assert.equal(thread.turns[0]!.items[1], item);
 });
 
 test("turn usage helpers preserve explicit turn identity and final token categories", () => {

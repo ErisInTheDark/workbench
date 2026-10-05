@@ -10,6 +10,7 @@ import test from "node:test";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import type { AgentEndpointProjectResolution } from "./lib/workbench/project/agent-endpoint-project";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import { toThreadTurn } from "workbench-shared/codex/thread-adapter";
 import type CodexAppServer from "./CodexAppServer";
 import CodexStdioBridge from "./CodexStdioBridge";
 import CodexStoredTranscriptAdapter from "./CodexStoredTranscriptAdapter";
@@ -37,6 +38,7 @@ function createThread(cwd: string): Thread {
     agentNickname: null,
     agentRole: null,
     canAcceptDirectInput: null,
+    environments: null, originator: null, daybreakEnabled: null,
     cliVersion: "test",
     createdAt: 1,
     cwd,
@@ -80,7 +82,7 @@ async function createThreadReadHarness(
   const sqlReads: string[] = [];
   sqliteReader.read = async (metadata) => {
     sqlReads.push(metadata.id);
-    return { thread: metadata, questionnaireEntries: [], steerEntries: [], browseResultEntries: [] };
+    return { thread: { ...metadata, turns: metadata.turns.map(turn => toThreadTurn(turn)) }, questionnaireEntries: [], steerEntries: [], browseResultEntries: [] };
   };
   sqliteReader.history = async () => ({
     turns: [], turnHistory: [], questionnaireEntries: [], steerEntries: [], browseResultEntries: [], approvalEntries: [],

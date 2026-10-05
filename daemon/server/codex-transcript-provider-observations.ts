@@ -16,10 +16,11 @@
  * - createCodexModelRerouteObservation: retain explicit mixed-model evidence.
  */
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
-import type { Thread as NativeThread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
-type Thread = Omit<NativeThread, "turns"> & { turns: Turn[] };
+import type { ThreadItem as NativeThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import { toThreadTurn, toWorkbenchCodexItem, type CodexThreadSource, type CodexTurnSource } from "workbench-shared/codex/thread-adapter";
+type Thread = CodexThreadSource;
 import type { TokenUsageBreakdown } from "workbench-shared/codex/generated/app-server/v2/TokenUsageBreakdown";
 import type {
   NativeTranscriptAtomicObservation,
@@ -142,7 +143,8 @@ function secondsToMilliseconds(value: number | null) {
   return Math.round(value * 1_000);
 }
 
-function normalizeProviderTurn(turn: Turn): Turn {
+function normalizeProviderTurn(source: CodexTurnSource): Turn {
+  const turn = toThreadTurn(source);
   return {
     ...turn,
     items: normalizeThreadItems(turn.items, { mergeDuplicateItems: mergeThreadItem, classifyItem: getCodexItemIdentityKind }),
@@ -173,7 +175,7 @@ export function createCodexTranscriptProviderTurnObservation({
 }: {
   context: CodexTranscriptProviderContext;
   threadId: string;
-  turn: Turn;
+  turn: CodexTurnSource;
   turnIndex?: number;
 }): Extract<NativeTranscriptAtomicObservation, { kind: "turn" }> {
   const startedAt = secondsToMilliseconds(turn.startedAt);
@@ -204,7 +206,7 @@ export function createCodexTranscriptProviderItemObservation({
   turnId,
 }: {
   completedAtMs?: number | null;
-  item: ThreadItem;
+  item: ThreadItem | NativeThreadItem;
   lifecycle: WorkbenchTranscriptItemLifecycle;
   observedAt: number;
   startedAtMs?: number | null;
@@ -213,7 +215,7 @@ export function createCodexTranscriptProviderItemObservation({
 }): Extract<NativeTranscriptAtomicObservation, { kind: "item" }> {
   const hasTimeline = startedAtMs !== undefined || completedAtMs !== undefined;
   return {
-    item: withWorkbenchThreadItemIdentity(item, getCodexItemIdentityKind(item)),
+    item: withWorkbenchThreadItemIdentity(toWorkbenchCodexItem(item), getCodexItemIdentityKind(item)),
     kind: "item",
     lifecycle,
     observedAt,
@@ -239,7 +241,7 @@ export function createCodexTranscriptProviderItemLifecycleObservation({
   threadId,
   turnId,
 }: {
-  item: ThreadItem;
+  item: ThreadItem | NativeThreadItem;
   method: "item/started" | "item/completed";
   observedAt: number;
   threadId: string;
@@ -335,7 +337,7 @@ export function createCodexTranscriptProviderTurnScopeObservation({
 }: {
   context: CodexTranscriptProviderContext;
   threadId: string;
-  turn: Turn;
+  turn: CodexTurnSource;
   turnIndex?: number;
 }): WorkbenchTranscriptProviderTurnScopeObservation<NativeThreadId, NativeTurnId> {
   const normalizedTurn = normalizeProviderTurn(turn);

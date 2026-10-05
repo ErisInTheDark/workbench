@@ -17,6 +17,7 @@ function thread(turnIds: string[], historyIds: string[]): Thread & {
     agentNickname: null,
     agentRole: null,
     canAcceptDirectInput: null,
+    environments: null, originator: null, daybreakEnabled: null,
     cliVersion: "test",
     createdAt: 1,
     cwd: "C:/repo",

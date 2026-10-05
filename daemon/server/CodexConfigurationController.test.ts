@@ -10,7 +10,7 @@ function model(id: string, overrides: Partial<Model> = {}): Model {
     upgrade: null, upgradeInfo: null, availabilityNux: null, modelSpecialty: null,
     supportedReasoningEfforts: [], defaultReasoningEffort: "none",
     inputModalities: ["text"], supportsPersonality: false, multiAgentVersion: null,
-    additionalSpeedTiers: [], serviceTiers: [], defaultServiceTier: null,
+    additionalSpeedTiers: [], serviceTiers: [], defaultServiceTier: null, availableAccessPrograms: null,
     isDefault: false, ...overrides,
   };
 }

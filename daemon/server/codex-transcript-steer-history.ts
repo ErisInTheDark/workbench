@@ -12,13 +12,15 @@
  * updateSteerEntryStatus: apply terminal or delivered state.
  */
 import { randomUUID } from "node:crypto";
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { ThreadItem as NativeThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem as WorkbenchThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { toWorkbenchCodexInput, type CodexTurnSource as Turn } from "workbench-shared/codex/thread-adapter";
 import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/workbench/thread/thread-item-normalization";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types.ts";
 import { asRecord, asString } from "./codex-transcript-normalizers.ts";
+
+type ThreadItem = NativeThreadItem | WorkbenchThreadItem;
 
 function readTextElements(value: unknown): Extract<UserInput, { type: "text" }>["text_elements"] | null {
   if (!Array.isArray(value)) return null;
@@ -49,7 +51,9 @@ function readUserInput(value: unknown): UserInput | null {
     }
     case "image": {
       const url = asString(record.url);
-      return url !== null ? { type, url } : null;
+      const fileId = asString(record.fileId);
+      return url !== null ? { type, url }
+        : fileId !== null ? toWorkbenchCodexInput({ type, fileId }) : null;
     }
     case "localImage": {
       const path = asString(record.path);
@@ -186,7 +190,9 @@ export function updateNativeSteerEntriesForUserMessage(
   item: ThreadItem,
   resolvedAt: number,
 ) {
-  if (item.type !== "userMessage" || !item.clientId) return entries;
+  if (item.type !== "userMessage") return entries;
+  item.content.forEach(toWorkbenchCodexInput);
+  if (!item.clientId) return entries;
   let changed = false;
   const nextEntries = entries.map((entry) => {
     if (entry.clientUserMessageId !== item.clientId) return entry;
@@ -254,12 +260,13 @@ export function updateMatchingPendingSteerEntriesForUserMessage(
   resolvedAt: number,
 ) {
   if (item.type !== "userMessage") return entries;
+  const content = item.content.map(toWorkbenchCodexInput);
   let changed = false;
   const nextEntries = entries.map((entry) => {
     if (
       entry.status !== "pending"
       || Boolean(entry.clientUserMessageId?.trim())
-      || !areUserInputsEquivalentForUserMessageDedupe(entry.input, item.content)
+      || !areUserInputsEquivalentForUserMessageDedupe(entry.input, content)
     ) {
       return entry;
     }
@@ -277,7 +284,8 @@ export function updatePendingSteerEntriesForInterruptedTurn(
   if (turn.status !== "interrupted") return entries;
   const canonicalUserMessages = turn.items.filter((
     item,
-  ): item is Extract<ThreadItem, { type: "userMessage" }> => item.type === "userMessage");
+  ): item is Extract<ThreadItem, { type: "userMessage" }> => item.type === "userMessage")
+    .map(item => ({ ...item, content: item.content.map(toWorkbenchCodexInput) }));
   let changed = false;
   const nextEntries = entries.map((entry) => {
     if (entry.status !== "pending" || Boolean(entry.clientUserMessageId?.trim())) return entry;

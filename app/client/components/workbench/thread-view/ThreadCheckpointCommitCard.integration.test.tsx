@@ -6,7 +6,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";

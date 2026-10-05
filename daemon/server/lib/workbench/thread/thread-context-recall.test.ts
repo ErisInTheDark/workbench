@@ -8,8 +8,7 @@ import { test } from "node:test";
 
 import Database from "better-sqlite3";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { UserInput } from "workbench-shared/codex/generated/app-server/v2/UserInput";
+import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
   WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS,
   type WorkbenchThreadContextBundle,

@@ -65,6 +65,7 @@ function wireThread(
 ): Thread {
   return {
     agentNickname: null, agentRole: null, canAcceptDirectInput: null, cliVersion: "test", createdAt: 1, cwd: "C:/repo", ephemeral: false,
+    environments: null, originator: null, daybreakEnabled: null,
     extra: null, forkedFromId: null, gitInfo: null, historyMode: "legacy", id, modelProvider: "openai", name: null, parentThreadId: null, path: null,
     model: null, projectId: null, reasoningEffort: null,
     preview: "", recencyAt: null, section: null, sectionEnteredAt: null, sessionId: `${id}-session`, source: "appServer",

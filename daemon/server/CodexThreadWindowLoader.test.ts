@@ -33,6 +33,7 @@ function thread(turns: Turn[] = []): Omit<Thread, "turns"> & { turns: Turn[] } {
     agentNickname: null,
     agentRole: null,
     canAcceptDirectInput: null,
+    environments: null, originator: null, daybreakEnabled: null,
     cliVersion: "test",
     createdAt: 1,
     cwd: "C:/repo",

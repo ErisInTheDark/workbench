@@ -5,6 +5,7 @@
 import type { CodexThreadContextReadResponse } from "workbench-shared/codex/thread-context";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import { toWorkbenchCodexItem } from "workbench-shared/codex/thread-adapter";
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type { WorkbenchThreadHydrationRequest } from "./lib/codex/thread-hydration";
 import type WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
@@ -43,12 +44,12 @@ export default class CodexStoredTranscriptAdapter {
         ...metadata, id: snapshot.thread.id,
         turns: turns.map(turn => ({
           ...turn,
-          items: turn.items.map((item): ThreadItem => {
+          items: turn.items.map((item) => {
             if (item.type !== "generic") return item;
             const value = item.safeValue;
             const payload = value && typeof value === "object" && !Array.isArray(value) ? value : { value };
             // Only this retained native-response boundary reconstructs provider-native evidence.
-            return { ...payload, id: item.id, type: item.nativeType } as ThreadItem;
+            return toWorkbenchCodexItem({ ...payload, id: item.id, type: item.nativeType } as ThreadItem);
           }),
         })),
         createdAt: snapshot.thread.created_at / 1000,

@@ -35,3 +35,49 @@ test("native turn adaptation converts old steer state while preserving explicit 
     assert.deepEqual(getWorkbenchInputState(toThreadTurn(turn).items[0]!), { kind: "steer", status: "sent" });
   }
 });
+
+test("native adaptation rejects file-backed user and tool images without exposing their references", () => {
+  const reference = "private-provider-file-reference";
+  const items: Turn["items"] = [
+    { type: "userMessage", id: "input", clientId: null, content: [
+      { type: "text", text: "retain this text", text_elements: [] },
+      { type: "image", fileId: reference },
+    ] },
+    { type: "functionCallOutput", id: "output", name: "capture", namespace: null, output: [
+      { type: "input_text", text: "retain this output" },
+      { type: "input_image", file_id: reference },
+    ] },
+  ];
+  for (const item of items) {
+    const turn: Turn = {
+      id: "turn", items: [item], itemsView: "full", status: "completed",
+      error: null, startedAt: null, completedAt: null, durationMs: null,
+    };
+    assert.throws(() => toThreadTurn(turn), error => (
+      error instanceof Error && !error.message.includes(reference)
+    ));
+    assert.equal(turn.items[0], item);
+  }
+});
+
+test("native adaptation preserves supported images, surrounding content and detail", () => {
+  const turn: Turn = {
+    id: "turn", itemsView: "full", status: "completed",
+    error: null, startedAt: 1, completedAt: 2, durationMs: 1000,
+    items: [
+      { type: "userMessage", id: "input", clientId: "client", content: [
+        { type: "text", text: "look here", text_elements: [] },
+        { type: "image", url: "data:image/png;base64,image", detail: "original" },
+        { type: "localImage", path: "/image.png", detail: "high" },
+      ] },
+      { type: "functionCallOutput", id: "output", name: "capture", namespace: null, output: [
+        { type: "input_text", text: "captured context" },
+        { type: "input_image", image_url: "/image.png", detail: "original" },
+      ] },
+    ],
+  };
+  const adapted = toThreadTurn(turn);
+  assert.deepEqual(adapted.items, turn.items);
+  assert.equal(adapted.id, turn.id);
+  assert.equal(adapted.durationMs, turn.durationMs);
+});

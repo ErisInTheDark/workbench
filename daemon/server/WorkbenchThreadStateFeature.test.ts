@@ -86,6 +86,7 @@ function providerThread(cwd: string, threadId: string, fields: Partial<ThreadRea
   return {
     cwd, id: `native:${threadId}`, projectId: null, status: { type: "idle" }, turns: [], updatedAt: 1,
     agentNickname: null, agentRole: null, canAcceptDirectInput: null, cliVersion: "", createdAt: 1,
+    environments: null, originator: null, daybreakEnabled: null,
     ephemeral: false, extra: null, forkedFromId: null, gitInfo: null, historyMode: "legacy",
     model: null, modelProvider: "openai", name: null, parentThreadId: null, path: null, preview: "",
     reasoningEffort: null, recencyAt: null, section: null, sectionEnteredAt: null,
@@ -740,6 +741,7 @@ test("MCP admission consumes translated metadata without additional provider rea
   const provider: ThreadReadResponse["thread"] = {
     cwd: storageRoot, id: "thread", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("untrusted-provider-project"), status: { type: "notLoaded" }, turns: [], updatedAt: 1,
     agentNickname: null, agentRole: null, canAcceptDirectInput: null, cliVersion: "", createdAt: 1,
+    environments: null, originator: null, daybreakEnabled: null,
     ephemeral: false, extra: null, forkedFromId: null, gitInfo: null, historyMode: "legacy",
     model: null, modelProvider: "openai", name: null, parentThreadId: null, path: null, preview: "",
     reasoningEffort: null, recencyAt: null, section: null, sectionEnteredAt: null,

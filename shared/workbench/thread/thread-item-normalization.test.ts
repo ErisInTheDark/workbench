@@ -24,13 +24,13 @@ function user(id: string, clientId: string | null, text = "same"): Extract<Threa
 
 test("compaction observations dedupe only by identity, never adjacency", () => {
   const first = { id: "first", type: "contextCompaction" } as const;
-  const second = withWorkbenchThreadItemIdentity({ id: "second", type: "contextCompaction" }, "provisional");
+  const second = withWorkbenchThreadItemIdentity({ id: "second", type: "contextCompaction" as const }, "provisional");
   assert.deepEqual(normalizeThreadItems([first, second, first]).map(item => item.id), ["first", "second"]);
 });
 
 test("provider reconciliation cannot identify a compaction by snapshot ordinal", () => {
   const first = { id: "first", type: "contextCompaction" } as const;
-  const second = withWorkbenchThreadItemIdentity({ id: "second", type: "contextCompaction" }, "provisional");
+  const second = withWorkbenchThreadItemIdentity({ id: "second", type: "contextCompaction" as const }, "provisional");
   assert.deepEqual(reconcileCompleteThreadItems([first], [second]).map(entry => ({
     id: entry.item.id, aliases: entry.aliases,
   })), [{ id: "second", aliases: [] }]);

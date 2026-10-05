@@ -11,13 +11,13 @@
  * - admitProviderNotifications: restore retained references and admit structural facts before ordered publication.
  * - WorkbenchProviderIdentityAdmissionOwners: durable admission ports at the provider boundary.
  */
-import type { CodexThreadContextReadResponse } from "workbench-shared/codex/thread-context";
 import type { ServerNotification } from "workbench-shared/codex/generated/app-server/ServerNotification";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem as WorkbenchThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
 import { NativeItemIdSchema, NativeThreadIdSchema, NativeTurnIdSchema, type NativeTurnId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
-import { readWorkbenchTurnHistory } from "workbench-shared/codex/thread-adapter";
+import { readWorkbenchTurnHistory, type CodexThreadSource } from "workbench-shared/codex/thread-adapter";
 import { getCodexItemIdentityKind, withCodexItemMetadata } from "workbench-shared/codex/thread-item-source";
 import { withWorkbenchThreadItemIdentity } from "workbench-shared/workbench/thread/thread-item-identity";
 import { getWorkbenchTurnAdmission, isPendingWorkbenchTurn } from "workbench-shared/workbench/thread/thread-admission";
@@ -130,7 +130,7 @@ export async function admitProviderNotifications(
 
 export async function admitProviderThreads(
   owners: WorkbenchProviderIdentityAdmissionOwners,
-  inputs: readonly { metadata: WorkbenchThreadIdentityMetadata; thread: CodexThreadContextReadResponse["thread"] }[],
+  inputs: readonly { metadata: WorkbenchThreadIdentityMetadata; thread: CodexThreadSource }[],
 ) {
   const identities = await owners.threads.observeMany(inputs.map(({ metadata }) => metadata));
   const catalogs = inputs.map(({ metadata, thread }, index) => {
@@ -157,7 +157,7 @@ export async function admitProviderThreads(
   }))));
   const admissions = catalogs.flatMap(({ metadata, identity, catalog, loaded }) => catalog.flatMap((entry) => {
     const turnId = owners.threads.workbenchTurnIdForNative({ ...metadata.native, nativeTurnId: NativeTurnIdSchema.parse(entry.turnId) });
-    const items = new Map((loaded.get(entry.turnId)?.items ?? []).map((item) => [item.id, item]));
+    const items = new Map<string, ThreadItem | WorkbenchThreadItem>((loaded.get(entry.turnId)?.items ?? []).map((item) => [item.id, item] as const));
     const timelines = new Map((entry.itemTimeline ?? []).map((timeline) => [timeline.itemId, timeline]));
     const references = new Set([...items.keys(), ...entry.itemIds ?? [], ...timelines.keys()]);
     return [...references].map((reference) => {
@@ -303,7 +303,22 @@ export function mapProviderThreadItem(
   owners: WorkbenchProviderIdentityOwners,
   native: WorkbenchNativeTurnIdentity,
   item: ThreadItem,
-) {
+): ThreadItem;
+export function mapProviderThreadItem(
+  owners: WorkbenchProviderIdentityOwners,
+  native: WorkbenchNativeTurnIdentity,
+  item: WorkbenchThreadItem,
+): WorkbenchThreadItem;
+export function mapProviderThreadItem(
+  owners: WorkbenchProviderIdentityOwners,
+  native: WorkbenchNativeTurnIdentity,
+  item: ThreadItem | WorkbenchThreadItem,
+): ThreadItem | WorkbenchThreadItem;
+export function mapProviderThreadItem(
+  owners: WorkbenchProviderIdentityOwners,
+  native: WorkbenchNativeTurnIdentity,
+  item: ThreadItem | WorkbenchThreadItem,
+): ThreadItem | WorkbenchThreadItem {
   const threadId = owners.threads.workbenchIdForNative(native);
   const turnId = owners.threads.workbenchTurnIdForNative(native);
   const source = providerItemSource(native, turnId, item);
@@ -343,7 +358,7 @@ function providerReferenceId(
   threadId: WorkbenchThreadId,
   turnId: WorkbenchTurnId,
   reference: string,
-  item?: ThreadItem,
+  item?: ThreadItem | WorkbenchThreadItem,
 ) {
   const source = wholeItemSource(
     turnId,
@@ -357,7 +372,7 @@ function providerReferenceId(
 function providerItemSource(
   native: WorkbenchNativeTurnIdentity,
   turnId: WorkbenchTurnId,
-  item: ThreadItem,
+  item: ThreadItem | WorkbenchThreadItem,
 ): WorkbenchTranscriptItemSource {
   return {
     turnId,

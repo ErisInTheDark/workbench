@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import { createWorkbenchThreadRecoveryInput, createWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import projectThreadRenderTurns from "./thread-render-turns";

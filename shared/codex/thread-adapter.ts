@@ -10,6 +10,9 @@
  * - toThreadPayload: normalise thread details without changing identity provenance.
  * - toThreadResumePayload: normalise resume metadata and its initial turn page.
  * - toThreadTurn: admit native item identity evidence before a turn reaches Workbench consumers.
+ * - CodexThreadSource/CodexTurnSource: accepted native or canonical content before conversion.
+ * - UnsupportedCodexImageReferenceError: sanitized failure for unsupported provider-file media.
+ * - toWorkbenchCodexInput/toWorkbenchCodexItem: convert supported native content without widening core contracts.
  * - readWorkbenchTurnHistory: normalise the existing provider-thread history extension at its boundary.
  */
 import type { ThreadPayloadData, ThreadSummary, WorkbenchHarness, WorkbenchThreadTurnHistoryEntry } from "../types.ts";
@@ -18,6 +21,10 @@ import type { Thread } from "./generated/app-server/v2/Thread.ts";
 import type { ThreadResumeResponse } from "./generated/app-server/v2/ThreadResumeResponse.ts";
 import type { ThreadTokenUsage } from "./generated/app-server/v2/ThreadTokenUsage.ts";
 import type { Turn } from "../workbench/thread/workbench-thread-turn.ts";
+import type { Turn as NativeTurn } from "./generated/app-server/v2/Turn.ts";
+import type { ThreadItem as NativeThreadItem } from "./generated/app-server/v2/ThreadItem.ts";
+import type { UserInput as NativeUserInput } from "./generated/app-server/v2/UserInput.ts";
+import type { ThreadItem, UserInput, FunctionCallOutputContentItem } from "../workbench/thread/workbench-thread-items.ts";
 import { normalizeWorkbenchThreadItemTimeline } from "../workbench/thread/thread-item-timeline.ts";
 import { withCodexItemMetadata } from "./thread-item-source.ts";
 import { formatThreadStatus } from "../workbench/thread/thread-runtime-state.ts";
@@ -28,7 +35,43 @@ export {
   isProjectThread as isProjectCodexThread, isProjectThreadAtExpectedCwd as isProjectCodexThreadAtExpectedCwd,
 } from "../workbench/thread/thread-location.ts";
 
-type CompatibleThread = Omit<Thread, "turns"> & { turns: Turn[] };
+export type CodexTurnSource = Turn | NativeTurn;
+export type CodexThreadSource = Omit<Thread, "turns"> & { turns: CodexTurnSource[] };
+type CompatibleThread = CodexThreadSource;
+
+export class UnsupportedCodexImageReferenceError extends Error {
+  override readonly name = "UnsupportedCodexImageReferenceError";
+
+  constructor() {
+    super("Codex file-backed images are not supported by this Workbench integration.");
+  }
+}
+
+export function toWorkbenchCodexInput(input: UserInput | NativeUserInput): UserInput {
+  if (input.type === "image") {
+    if (!("url" in input)) throw new UnsupportedCodexImageReferenceError();
+    return input;
+  }
+  return input;
+}
+
+function toWorkbenchCodexOutputPart(part: FunctionCallOutputContentItem | NativeThreadItemOutputPart): FunctionCallOutputContentItem {
+  if (part.type === "input_image") {
+    if (!("image_url" in part)) throw new UnsupportedCodexImageReferenceError();
+    return part;
+  }
+  return part;
+}
+
+type NativeThreadItemOutputPart = Exclude<Extract<NativeThreadItem, { type: "functionCallOutput" }>["output"], string>[number];
+
+export function toWorkbenchCodexItem(item: ThreadItem | NativeThreadItem): ThreadItem {
+  if (item.type === "userMessage") return { ...item, content: item.content.map(toWorkbenchCodexInput) };
+  if (item.type === "functionCallOutput") {
+    return { ...item, output: typeof item.output === "string" ? item.output : item.output.map(toWorkbenchCodexOutputPart) };
+  }
+  return item;
+}
 type ThreadResumePayloadSource = Pick<ThreadResumeResponse, "thread">
   & Partial<Pick<ThreadResumeResponse, "initialTurnsPage" | "model" | "reasoningEffort" | "serviceTier">>;
 
@@ -106,11 +149,11 @@ export function toThreadSummary<Id extends string>(thread: Omit<CompatibleThread
   };
 }
 
-export function toThreadTurn<T extends Turn>(turn: T, harness: WorkbenchHarness = "codex"): T {
+export function toThreadTurn(turn: CodexTurnSource, harness: WorkbenchHarness = "codex"): Turn {
   return harness === "codex" ? {
     ...turn,
-    items: turn.items.map(item => item.type === "generic" ? item : withCodexItemMetadata(item)),
-  } : turn;
+    items: turn.items.map(item => item.type === "generic" ? item : withCodexItemMetadata(toWorkbenchCodexItem(item))),
+  } : { ...turn, items: turn.items.map(toWorkbenchCodexItem) };
 }
 
 export function toThreadPayload<Id extends string>(
@@ -151,7 +194,7 @@ export function toThreadResumePayload<Id extends string>(
   return toThreadPayload(thread, harness, model, reasoningEffort, serviceTier, agentPath);
 }
 
-function createTurnHistoryFromTurns(turns: Turn[]): WorkbenchThreadTurnHistoryEntry[] {
+function createTurnHistoryFromTurns(turns: CodexTurnSource[]): WorkbenchThreadTurnHistoryEntry[] {
   return turns.map((turn) => ({
     completedAt: turn.completedAt,
     durationMs: turn.durationMs,

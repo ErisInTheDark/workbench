@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { Children, cloneElement, createElement, isValidElement, type ComponentProps, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
 import { createGitArcFailureFromError, createGitArcOperationRejected, describeGitArcFailure, formatGitArcFailureReceipt, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError, gitArcRejectionIssue } from "workbench-shared/workbench/git/git-arc-rejections";

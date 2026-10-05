@@ -11,6 +11,7 @@ import CodexProviderObservations, { admitCodexTranscriptObservations } from "./C
 import { NativeThreadIdSchema, NativeTurnIdSchema } from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { UnsupportedCodexImageReferenceError } from "workbench-shared/codex/thread-adapter";
 
 test("one provider ingress publishes admitted references without rewriting content or native recovery input", async () => {
   const database = new Database(":memory:");
@@ -68,6 +69,18 @@ test("one provider ingress publishes admitted references without rewriting conte
       item: { ...item, id: itemId, workbenchIdentityKind: "provisional" },
     });
     assert.equal(publication.observation.projectId, thread.projectId);
+    for (const method of ["item/started", "item/completed"]) {
+      for (const unsupported of [
+        { type: "userMessage", id: item.id, clientId: null, content: [{ type: "image", fileId: "private-reference" }] },
+        { type: "functionCallOutput", id: item.id, callId: "call", output: [{ type: "input_image", file_id: "private-reference" }] },
+      ]) {
+        const event = { method, params: { threadId: native.nativeThreadId, turnId: nativeTurnId, item: unsupported } };
+        const before = structuredClone(event);
+        assert.throws(() => edge.native(event), error => error instanceof UnsupportedCodexImageReferenceError
+          && !error.message.includes("private-reference"));
+        assert.deepEqual(event, before);
+      }
+    }
     const delta = edge.native({
       method: "item/reasoning/textDelta",
       params: { threadId: native.nativeThreadId, turnId: nativeTurnId, itemId: item.id, contentIndex: 0, delta: "item-12" },

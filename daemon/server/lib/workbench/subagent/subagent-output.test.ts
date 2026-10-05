@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchUserInputRequest } from "workbench-shared/types";
 import {
   createEmptySubagentQuestionnaireResponse,
@@ -32,8 +32,11 @@ const questionnaire: WorkbenchUserInputRequest = {
   title: "Direction needed",
 };
 
-function thread(items: Thread["turns"][number]["items"]): Thread {
-  return { turns: [{ items, status: "completed" }] } as Thread;
+function thread(items: Turn["items"]): { turns: Turn[] } {
+  return { turns: [{
+    id: "turn", items, status: "completed", itemsView: "full",
+    error: null, startedAt: null, completedAt: null, durationMs: null,
+  }] };
 }
 
 test("renders only trailing commentary before a questionnaire", () => {

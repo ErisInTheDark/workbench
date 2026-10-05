@@ -314,6 +314,7 @@ function bridgeThread(items: ThreadItem[] = []) {
     agentNickname: null,
     agentRole: null,
     canAcceptDirectInput: null,
+    environments: null, originator: null, daybreakEnabled: null,
     cliVersion: "test",
     createdAt: 1,
     cwd: "C:/repo",
@@ -1241,6 +1242,24 @@ test("thread pages map first and continuation reads into Codex-owned hydration",
       params: { cursor: null, cwd: "C:/repo", readScope: "subagentBackground", threadId: "thread" },
     });
     assert.equal(upstreamRequests.length, 0);
+
+    pageOwner.readThreadContext = async () => ({
+      browseResultEntries: [], questionnaireEntries: [], steerEntries: [],
+      thread: bridgeThread([{
+        type: "userMessage", id: "unsupported-input", clientId: null,
+        content: [
+          { type: "text", text: "visible context", text_elements: [] },
+          { type: "image", fileId: "private-file" },
+        ],
+      }]),
+    });
+    const unsupported = await bridge.handleBridgeRequest({
+      id: 4, method: "workbench/thread/page/read", params: { cursor: null, threadId: "thread" },
+    });
+    assert.ok(unsupported?.error);
+    assert.equal(unsupported.result, undefined);
+    assert.ok(!unsupported.error.message.includes("private-file"));
+    assert.equal(upstreamRequests.length, 0);
   } finally {
     await bridge.waitForIdle();
     await bridge.disposeImmediately();
@@ -1285,6 +1304,7 @@ test("provider refresh durably repairs a newer turn omitted by an inactive provi
     status: "inProgress",
     tool: "shell",
     type: "mcpToolCall",
+    mcpAppUi: null,
   };
   const latest = {
     ...bridgeThread([reasoningItem, mcpItem]).turns[0]!,
@@ -2563,7 +2583,7 @@ for (const cold of [false, true]) {
       threadId, sources: [{ turnId, kind: "stable" as const, reference }],
     })));
     assert.ok(first && question && last);
-    const message = (id: string): ThreadItem => ({
+    const message = (id: string): Extract<ThreadItem, { type: "agentMessage" }> => ({
       id, type: "agentMessage", text: id, phase: "commentary", memoryCitation: null, delivery: null, questions: null,
     });
     sql.repository.settle([

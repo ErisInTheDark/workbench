@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
 import { test } from "node:test";
 
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { ThreadCommandDisplayPart } from "./command-matchers/types.ts";
 import {
   WORKBENCH_COMMAND_PRESENTATION_NAMES,

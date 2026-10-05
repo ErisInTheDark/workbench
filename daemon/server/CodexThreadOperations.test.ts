@@ -70,6 +70,7 @@ function threadMetadata(status: Thread["status"]): Thread {
     preview: "", ephemeral: false, section: null, sectionEnteredAt: null, projectId: null, historyMode: "legacy",
     modelProvider: "openai", model: null, reasoningEffort: null, createdAt: 1, updatedAt: 1, recencyAt: null,
     status, path: null, cwd: "C:/project", cliVersion: "test", source: "cli", canAcceptDirectInput: true,
+    environments: null, originator: null, daybreakEnabled: null,
     threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null, turns: [],
   };
 }

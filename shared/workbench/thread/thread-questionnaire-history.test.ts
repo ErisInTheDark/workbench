@@ -4,8 +4,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ThreadItem } from "../../codex/generated/app-server/v2/ThreadItem.ts";
-import type { Turn } from "../../codex/generated/app-server/v2/Turn.ts";
+import type { ThreadItem } from "./workbench-thread-items.ts";
+import type { Turn } from "./workbench-thread-turn.ts";
 import type { ThreadPayload, WorkbenchQuestionnaireHistoryEntry } from "../../types.ts";
 import { findWorkbenchThreadItemTimelineEntry } from "./thread-item-timeline.ts";
 import {

@@ -15,6 +15,6 @@ export function getWorkbenchThreadItemIdentityKind(item: { id: string; workbench
   return item.workbenchIdentityKind ?? "stable";
 }
 
-export function withWorkbenchThreadItemIdentity<Item extends ThreadItem>(item: Item, kind: WorkbenchThreadItemIdentityKind): Item {
+export function withWorkbenchThreadItemIdentity<Item extends { id: string }>(item: Item, kind: WorkbenchThreadItemIdentityKind): Item {
   return getWorkbenchThreadItemIdentityKind(item) === kind ? item : { ...item, workbenchIdentityKind: kind };
 }

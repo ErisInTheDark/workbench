@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import Database from "better-sqlite3";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-source";
 import { withWorkbenchThreadItemIdentity } from "workbench-shared/workbench/thread/thread-item-identity";
 import { projectWorkbenchTranscriptItems } from "workbench-shared/workbench/database/transcript/workbench-transcript-item-projection";

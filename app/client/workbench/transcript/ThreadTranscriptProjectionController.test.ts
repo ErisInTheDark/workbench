@@ -1245,7 +1245,7 @@ test(`a ${admission} turn stays visible outside durable scope with incremental=$
     durationMs: null,
     items: [withWorkbenchInputState({
       clientId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      content: [{ text: "pending", text_elements: [], type: "text" }],
+      content: [{ text: "pending", text_elements: [], type: "text" as const }],
       id: "pending-message",
       type: "userMessage",
     }, {
@@ -1327,7 +1327,7 @@ test("retained optimistic placement replaces a stale pending-turn copy", async (
   const optimisticId = "35439acf-3a80-4895-8a93-bf74091b5c21";
   const optimisticItem = withWorkbenchInputState({
     clientId: optimisticId,
-    content: [{ text: "hello", text_elements: [], type: "text" }],
+    content: [{ text: "hello", text_elements: [], type: "text" as const }],
     id: optimisticId,
     type: "userMessage",
   }, {

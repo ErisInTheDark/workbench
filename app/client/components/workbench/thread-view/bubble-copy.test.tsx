@@ -7,8 +7,8 @@ import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { createWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";

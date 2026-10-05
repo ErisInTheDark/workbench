@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { captureTestOutput } from "../../test/capture-test-output.mts";
 import Database from "better-sqlite3";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import { readWorkbenchTurnHistory } from "workbench-shared/codex/thread-adapter";
+import { readWorkbenchTurnHistory, toWorkbenchCodexItem, toWorkbenchCodexInput } from "workbench-shared/codex/thread-adapter";
 import type { WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
@@ -368,6 +368,7 @@ test("repeated provider catalogues admit only new identity evidence without hidi
       section: null, sectionEnteredAt: null, projectId: null, historyMode: "paginated",
       modelProvider: "openai", model: null, reasoningEffort: null, recencyAt: null,
       status: { type: "idle" }, path: null, cliVersion: "test", canAcceptDirectInput: null,
+      environments: null, originator: null, daybreakEnabled: null,
       threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null,
       source: "cli", parentThreadId: null,
       turns: [{
@@ -448,7 +449,7 @@ for (const route of ["catalogue", "event", "recorder"] as const) {
         state: "completed", createdAt: 1, startedAt: 1, endedAt: 2, durationMs: 1,
       }, {
         kind: "item", threadId: parent.threadId, turnId: turn.turnId, publicItemId: recorded!.itemId,
-        lifecycle: "completed", observedAt: 3, item: { ...message, id: "item-1" },
+        lifecycle: "completed", observedAt: 3, item: toWorkbenchCodexItem({ ...message, id: "item-1" }),
       }]);
       const before = database.prepare("SELECT * FROM thread_items").all();
       const event = { method: "item/completed" as const, params: {
@@ -456,7 +457,7 @@ for (const route of ["catalogue", "event", "recorder"] as const) {
       } };
       const observation: NativeTranscriptAtomicObservation = {
         kind: "item", threadId: native.nativeThreadId, turnId: native.nativeTurnId,
-        lifecycle: "completed", observedAt: 3, item: message,
+        lifecycle: "completed", observedAt: 3, item: toWorkbenchCodexItem(message),
       };
       const thread: Thread = {
         id: native.nativeThreadId, cwd: native.nativeLocation, createdAt: 1, updatedAt: 2,
@@ -464,6 +465,7 @@ for (const route of ["catalogue", "event", "recorder"] as const) {
         section: null, sectionEnteredAt: null, projectId: null, historyMode: "paginated",
         modelProvider: "openai", model: null, reasoningEffort: null, recencyAt: null,
         status: { type: "idle" }, path: null, cliVersion: "test", canAcceptDirectInput: null,
+        environments: null, originator: null, daybreakEnabled: null,
         threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null,
         source: "cli", parentThreadId: null,
         turns: [{ id: native.nativeTurnId, items: [message], itemsView: "full", status: "completed",
@@ -531,6 +533,7 @@ test("provider event batches admit starts before deltas without storing pending 
       section: null, sectionEnteredAt: null, projectId: null, historyMode: "paginated",
       modelProvider: "openai", model: null, reasoningEffort: null, recencyAt: null,
       status: { type: "active", activeFlags: [] }, path: null, cliVersion: "test", canAcceptDirectInput: null,
+      environments: null, originator: null, daybreakEnabled: null,
       threadSource: null, agentNickname: null, agentRole: null, gitInfo: null,
     };
     const snapshot = { ...metadata,
@@ -880,6 +883,7 @@ test("thread metadata maps known parents without admitting unsupported fork ance
       section: null, sectionEnteredAt: null, projectId: null, historyMode: "paginated",
       modelProvider: "openai", model: null, reasoningEffort: null, createdAt: 1, updatedAt: 1, recencyAt: null,
       status: { type: "idle" }, path: null, cwd: "C:/repo", cliVersion: "test", canAcceptDirectInput: null,
+      environments: null, originator: null, daybreakEnabled: null,
       source: { subAgent: { thread_spawn: { parent_thread_id: native.nativeThreadId,
         depth: 1, agent_path: null, agent_nickname: null, agent_role: null } } },
       threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null, turns: [],
@@ -988,7 +992,7 @@ for (const evidence of ["provisional", "retained-collision", "client-only"] as c
       }
       const entry = {
         threadId: native.nativeThreadId, turnId: native.nativeTurnId,
-        entryKey: "submitted-steer", input: source.content, status: "sent" as const,
+        entryKey: "submitted-steer", input: source.content.map(toWorkbenchCodexInput), status: "sent" as const,
         attemptedAt: 1, resolvedAt: 2, requestId: "request",
         clientUserMessageId: source.clientId,
         canonicalItemId: evidence === "client-only" ? null : source.id,
@@ -1004,6 +1008,7 @@ for (const evidence of ["provisional", "retained-collision", "client-only"] as c
         section: null, sectionEnteredAt: null, projectId: null, historyMode: "paginated",
         modelProvider: "openai", model: null, reasoningEffort: null, recencyAt: null,
         status: { type: "idle" }, path: null, cliVersion: "test", canAcceptDirectInput: null,
+        environments: null, originator: null, daybreakEnabled: null,
         threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null,
         source: "cli", parentThreadId: null,
         turns: [{

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import ThreadErrorCard from "./ThreadErrorCard";
 
 function turn(id: string, message: string | null): Turn {

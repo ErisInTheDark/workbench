@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { cloneElement, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { getWorkbenchMcpCommandRoute } from "../../../workbench/thread/thread-command-matchers";
 import { ThreadTurnDetails } from "./thread-view-items";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";

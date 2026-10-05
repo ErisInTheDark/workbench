@@ -3,8 +3,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
-import type { Turn } from "workbench-shared/codex/generated/app-server/v2/Turn";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import type { WorkbenchGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";
 import getThreadGitArcProposalPresentation, {

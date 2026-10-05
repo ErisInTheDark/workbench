@@ -18,9 +18,9 @@ import { getCodexItemIdentityKind } from "workbench-shared/codex/thread-item-sou
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import { mapProviderNotification, mapProviderThreadItem } from "./CodexProviderIdentity";
 import { normalizeThreadTitle } from "./lib/thread-bootstrap";
-import { toThreadPayload, toThreadTurn } from "workbench-shared/codex/thread-adapter";
+import { toThreadPayload, toThreadTurn, toWorkbenchCodexItem, type CodexTurnSource } from "workbench-shared/codex/thread-adapter";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
-import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
+import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 
 export function admitCodexTranscriptObservations(
   owners: NativeTranscriptIdentityOwners,
@@ -128,7 +128,11 @@ export default class CodexProviderObservations {
       } };
     } else if ((publicNotification.method === "turn/started" || publicNotification.method === "turn/completed") && publicParams?.turn) {
       publicNotification = { ...publicNotification, params: {
-        ...publicParams, turn: toThreadTurn(publicParams.turn as Turn, "codex"),
+        ...publicParams, turn: toThreadTurn(publicParams.turn as CodexTurnSource, "codex"),
+      } };
+    } else if ((publicNotification.method === "item/started" || publicNotification.method === "item/completed") && publicParams?.item) {
+      publicNotification = { ...publicNotification, params: {
+        ...publicParams, item: toWorkbenchCodexItem(publicParams.item as ThreadItem),
       } };
     }
     return { notification: publicNotification, nativeNotification: notification, observation: this.workbench(publicNotification) };

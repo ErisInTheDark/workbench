@@ -67,3 +67,19 @@ test("Codex recovery propagates managed admission failure", async () => {
   }), /resume failed/u);
   assert.deepEqual(methods, ["thread/read", "workbench/codex/message/admit"]);
 });
+
+test("unsupported media in a recovery read blocks interruption and replacement admission", async () => {
+  const methods: string[] = [];
+  await assert.rejects(recoverCodexTurn(candidate(), {
+    request: async request => {
+      methods.push(request.method);
+      return { id: request.id, result: { thread: { turns: [{
+        id: "original-turn", status: "inProgress", items: [{
+          type: "userMessage", id: "input", clientId: null,
+          content: [{ type: "image", fileId: "private-file" }],
+        }],
+      }] } } };
+    },
+  }), error => error instanceof Error && !error.message.includes("private-file"));
+  assert.deepEqual(methods, ["thread/read"]);
+});

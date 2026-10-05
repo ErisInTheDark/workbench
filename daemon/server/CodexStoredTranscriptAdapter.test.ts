@@ -82,6 +82,7 @@ test("SQL reads select the exact window and retain answered interactions without
       recencyAt: null, status: { type: "idle" }, path: null, cwd: "/repo", cliVersion: "test",
       source: "appServer", threadSource: null, agentNickname: null, agentRole: null,
       gitInfo: null, name: null, canAcceptDirectInput: null, section: null, sectionEnteredAt: null,
+      environments: null, originator: null, daybreakEnabled: null,
     };
     const latest = await reader.read(metadata, { mode: "latest" });
     assert.deepEqual(latest?.thread.turns.map(turn => turn.id), [newer]);
@@ -106,5 +107,23 @@ test("SQL reads select the exact window and retain answered interactions without
     })), [{ path: "src/blocked.ts", additions: 2, deletions: 1 }]);
     assert.equal(await reader.readFileChange(threadId, newer, "message-1"), null);
     assert.equal(await reader.readFileChange(threadId, newer, "missing"), null);
+
+    repository.settle([{
+      kind: "item", threadId, turnId: newer, observedAt: 6, lifecycle: "completed",
+      item: { id: "opaque-media", type: "functionCallOutput", name: "capture", namespace: null,
+        output: [{ type: "input_audio", audio_url: "unsupported-audio" }] },
+    }]);
+    const retainedNativeItem = {
+      id: "opaque-media", type: "functionCallOutput", name: "capture", namespace: null,
+      output: [{ type: "input_image", file_id: "private-file" }],
+    };
+    database.prepare("UPDATE thread_item_unknown SET safe_json = ? WHERE native_type = 'functionCallOutput'")
+      .run(JSON.stringify(retainedNativeItem));
+    await assert.rejects(reader.read(metadata, { mode: "latest" }), error => (
+      error instanceof Error && !error.message.includes("private-file")
+    ));
+    const retained = database.prepare("SELECT safe_json FROM thread_item_unknown WHERE native_type = 'functionCallOutput'")
+      .get() as { safe_json: string };
+    assert.deepEqual(JSON.parse(retained.safe_json), retainedNativeItem);
   } finally { database.close(); }
 });
