@@ -1,15 +1,8 @@
+<available:remote-repos>
+## Remote Git Repo Inspection
+Use <tool id="git_repo" /> to warm a readonly copy of a public remote repository on disk. Not a real clone, implemented via vfs. Favour this tool and normal shell calls over web searches and reads. Assume user does not want to contribute to remote repositories by default.
+</available:remote-repos>
 <available:thread-git>
-## Workbench Git Commits
-
-When the workflow or user explicitly authorizes a commit, use the typed wb MCP commit-selection tools. Do not use raw Git staging or commit commands.
-
-- <tool id="git_add" /> selects the exact currently changed files beneath `paths` for this thread.
-- <tool id="git_unstage" /> removes exact files or descendants from this thread's selection. Pass `paths: ["."]` to clear it.
-- <tool id="git_commit" /> commits selected files using `title` and optional `description`, then clears the selection. Use `amendTarget` only for a supported unpushed linear commit.
-- Use `targetWorktree` when the control-plane project owns the thread but the files belong to another registered worktree of the same repository.
-
-Selections are thread- and worktree-isolated but do not snapshot contents. The commit reads later edits while excluding unrelated ordinary staged files.
-
 ## Workbench Git Plans and Arcs
 
 Workbench stores immutable plan/arc snapshots under local per-worktree Git refs. Registry owns current scope, including empty plans; missing phase means active. Plans snapshot the full worktree; arc refs preserve history. Ordinary stashes keep `stashed` phase and frozen claim-loss refs. Adopted stashes may coexist with live claims under caller-owned `arc-stash` refs.
@@ -137,4 +130,12 @@ Proposal acceptance atomically changes branch history, proposal metadata, accept
 3. Reuse with `confirmRestore: true`
 
 Note: Tool cannot restore pre-commit state
+
+## Workbench Git Commits
+
+When workflow or user explicitly authorizes unsupervised agent commits:
+- <tool id="git_add" /> selects the exact currently changed files beneath `paths` for this thread; Selections are thread- and worktree-isolated but do not snapshot contents
+- <tool id="git_unstage" /> removes exact files or descendants from this thread's selection. Pass `paths: ["."]` to clear it
+- <tool id="git_commit" /> commits CURRENT versions of selected files using `title` and optional `description`, then clears selection
+- NO raw shell git usage for commits
 </available:thread-git>
