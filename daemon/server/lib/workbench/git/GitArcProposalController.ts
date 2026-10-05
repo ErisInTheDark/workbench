@@ -676,6 +676,14 @@ export default class GitArcProposalController {
     return projectLifecycleState(entry, lifecycle, summaries, saved, stackLayers);
   }
 
+  /** Commit facts for many proposals from one batched metadata read; unknown ids read as unavailable. */
+  async readProposalSummaries(input: ArcIdentityInput & { proposalIds: string[] }) {
+    const repository = await WorkbenchGitRepository.tryOpen(input.cwd);
+    if (!repository) return [];
+    const summaries = await this.store(repository).readProposalSummaries(normalizeHarness(input.harness), input.threadId, input.proposalIds);
+    return summaries.map(({ committedSha: _committedSha, ...summary }) => summary);
+  }
+
   async readAcceptedOutcomes(input: ArcIdentityInput & {
     checkpointCommit: string;
     repository?: WorkbenchGitRepository;

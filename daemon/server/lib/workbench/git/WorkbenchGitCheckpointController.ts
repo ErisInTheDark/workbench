@@ -635,6 +635,10 @@ export default class WorkbenchGitCheckpointController {
     return await GitObjectReadSession.run(() => this.proposals.listLifecycleStates({ cwd }));
   }
 
+  async readProposalSummaries(input: ControllerInput & { proposalIds: string[] }) {
+    return await GitObjectReadSession.run(() => this.proposals.readProposalSummaries(input));
+  }
+
   async findLifecycleState(input: ControllerInput): Promise<GitArcLifecycleState | null> {
     return await GitObjectReadSession.run(() => this.proposals.findLifecycleState(input));
   }

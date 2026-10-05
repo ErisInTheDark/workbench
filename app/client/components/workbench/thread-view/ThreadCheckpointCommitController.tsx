@@ -329,8 +329,8 @@ function ThreadCheckpointCommitController({
 
   useEffect(() => {
     if (!commitActions || !proposalId) return;
-    return commitActions.register(proposalId, { commit: () => commitRef.current(), ready: commitReady });
-  }, [commitActions, commitReady, proposalId]);
+    return commitActions.register(proposalId, { commit: () => commitRef.current(), loaded: state.status === "loaded", ready: commitReady });
+  }, [commitActions, commitReady, proposalId, state.status]);
 
   const changeDescription = (value: string) => {
     if (commitMode === "amend") {

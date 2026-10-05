@@ -61,6 +61,33 @@ test("commit all stops when a later proposal unmounts mid-run", async () => {
   assert.deepEqual(started, ["one"]);
 });
 
+const summary = (proposalId: string, overrides: Partial<{ hasChanges: boolean; status: "proposed" | "committed"; title: string }> = {}) => ({
+  description: `${proposalId} why`, hasChanges: true, mode: "commit" as const, proposalId, status: "proposed" as const, title: proposalId, ...overrides,
+});
+
+test("unloaded proposals are ready from bulk summaries and commit their stored message in order, while loaded cards keep their own", async () => {
+  const actions = new ThreadCheckpointCommitActions();
+  const committed: string[] = [];
+  actions.setStored([summary("one"), summary("two"), summary("three")], async ({ proposalId, title }) => {
+    committed.push(`stored:${proposalId}:${title}`);
+    return true;
+  });
+  // Collapsed layers mount cards that never loaded; their registrations must not hide the summary.
+  actions.register("one", { commit: async () => { committed.push("card:one"); return true; }, loaded: false, ready: false });
+  actions.register("two", { commit: async () => { committed.push("card:two"); return true; }, loaded: true, ready: true });
+  assert.equal(actions.isReady(["one", "two", "three"]), true);
+  assert.equal(await actions.commitAll(["one", "two", "three"]), true);
+  assert.deepEqual(committed, ["stored:one:one", "card:two", "stored:three:three"]);
+});
+
+test("a stored summary without changes, without a title or no longer proposed is not ready", () => {
+  const actions = new ThreadCheckpointCommitActions();
+  actions.setStored([
+    summary("empty", { hasChanges: false }), summary("untitled", { title: " " }), summary("landed", { status: "committed" }),
+  ], async () => true);
+  for (const id of ["empty", "untitled", "landed"]) assert.equal(actions.isReady([id]), false, id);
+});
+
 test("a replaced registration survives the stale cleanup", () => {
   const actions = new ThreadCheckpointCommitActions();
   const stale = actions.register("one", { commit: async () => true, ready: false });

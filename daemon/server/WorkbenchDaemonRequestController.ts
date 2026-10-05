@@ -37,6 +37,7 @@ import type WorkbenchThreadLaunchController from "./WorkbenchThreadLaunchControl
 import {
     GitArcStashResultSchema,
     GitCheckpointCompareResultSchema,
+    GitArcProposalSummariesSchema,
     GitCheckpointProposalSchema,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
 import {
@@ -660,6 +661,8 @@ export default class WorkbenchDaemonRequestController {
     }
     const parsed = method === "git/arc/compare"
       ? GitCheckpointCompareResultSchema.safeParse(value)
+      : method === "git/arc/proposals/summaries"
+        ? GitArcProposalSummariesSchema.safeParse(value)
       : method === "git/arc/stash" || method === "git/arc/unstash"
         ? GitArcStashResultSchema.safeParse({
           conflictedPaths: (value as { conflictedPaths?: unknown }).conflictedPaths,

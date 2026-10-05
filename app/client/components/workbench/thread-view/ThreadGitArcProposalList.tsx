@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcProposalList: hoisted proposal anchors, grouped into sealed stack layer disclosures, under a header that collapses (listing each landed commit's message and totals) unless a stopped thread has pending proposals, and offers stack-ordered commit all.
+ * - default ThreadGitArcProposalList: hoisted proposal anchors, grouped into sealed stack layer disclosures, under a header that collapses (listing each landed commit's message and totals) unless a stopped thread has pending proposals, and offers stack-ordered commit all backed by one bulk proposal summary read.
  */
 "use client";
 
@@ -9,6 +9,8 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 import type { GitArcProposalStatus } from "workbench-shared/workbench/git/git-arc-storage";
+import type { WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
+import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import PrimaryButton from "../PrimaryButton";
 import { GitArcStackIcon } from "../workbench-icons";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
@@ -56,13 +58,62 @@ function readProposalsOpen(records: readonly WorkbenchClientStateRecord[]) {
   return true;
 }
 
+/**
+ * Collapsed layers keep their cards mounted but never load them, so readiness and commits for every pending
+ * proposal come from one diff-free bulk read; a card that did load (and may hold edits) still wins.
+ */
+function useStoredProposalCommits({ commitActions, cwd, harness, pendingIds, threadId }: {
+  commitActions: ThreadCheckpointCommitActions;
+  cwd: string;
+  harness: WorkbenchHarnessId;
+  pendingIds: readonly string[];
+  threadId: string;
+}) {
+  const daemon = useWorkbenchDaemonClient();
+  const [failure, setFailure] = useState<string | null>(null);
+  const pendingKey = pendingIds.join("\0");
+  useEffect(() => {
+    const proposalIds = pendingKey ? pendingKey.split("\0") : [];
+    if (!proposalIds.length) return;
+    let disposed = false;
+    let release = () => {};
+    void (async () => {
+      try {
+        const { proposals } = await daemon.git.arc.proposal.summaries({ cwd, harness, proposalIds, threadId });
+        if (disposed) return;
+        release = commitActions.setStored(proposals, async ({ description, mode, proposalId, title }) => {
+          try {
+            await daemon.git.arc.proposal.commit({ cwd, description, harness, includeNewer: false, mode, proposalId, threadId, title });
+            setFailure(null);
+            return true;
+          } catch (error) {
+            setFailure(`${title}: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
+            return false;
+          }
+        });
+      } catch (error) {
+        // Daemons that predate bulk summaries leave readiness to each card's own load.
+        if (!disposed) console.warn(`Proposal summaries unavailable: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`);
+      }
+    })();
+    return () => { disposed = true; release(); };
+  }, [commitActions, cwd, daemon, harness, pendingKey, threadId]);
+  return failure;
+}
+
 export default function ThreadGitArcProposalList({
   commitActions,
+  cwd,
+  harness,
   proposals,
   running,
   stackLayers,
+  threadId,
 }: {
   commitActions: ThreadCheckpointCommitActions;
+  cwd: string;
+  harness: WorkbenchHarnessId;
+  threadId: string;
   proposals: ReadonlyArray<{ proposalId: string; status: GitArcProposalStatus }>;
   /** Running turns collapse by saved preference; stopped threads always show pending proposals. */
   running: boolean;
@@ -90,6 +141,7 @@ export default function ThreadGitArcProposalList({
   // Only pending work on a stopped thread demands attention; anything else follows the saved preference.
   const collapsible = running || !proposedIds.length;
   const open = !collapsible || (canPersist ? readProposalsOpen(clientState.records) : unpersistedOpen);
+  const storedFailure = useStoredProposalCommits({ commitActions, cwd, harness, pendingIds: open ? proposedIds : [], threadId });
   const readSnapshot = () => commitActions.isReady(proposedIds);
   const commitAllReady = useSyncExternalStore(commitActions.subscribe, readSnapshot, readSnapshot);
   const readLayerSnapshot = () => commitActions.isReady(lowestPendingGroup?.pendingIds ?? []);
@@ -192,6 +244,13 @@ export default function ThreadGitArcProposalList({
     ...unsealedProposals.map(({ proposalId }) => anchor(proposalId)),
   ];
 
+  // Commits started from bulk summaries have no loaded card to show their failure, so the list shows it.
+  const failureRow = storedFailure ? (
+    <p className="m-0 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-1.5 text-[0.8em] leading-[1.5] text-danger" role="alert">
+      {storedFailure}
+    </p>
+  ) : null;
+
   // Closed lists name landed commits only, in card order; pending proposals must not read as commits.
   const closedRows = [...layerGroups.flatMap(({ proposals: layerProposals }) => layerProposals), ...unsealedProposals]
     .filter(({ status }) => status === "committed")
@@ -207,6 +266,7 @@ export default function ThreadGitArcProposalList({
         summary={summary}
         summaryClassName="px-3 py-2 text-[0.76em] leading-[1.45]"
       >
+        {failureRow}
         {anchors}
       </ThreadDisclosure>
       {open ? null : closedRows}
@@ -214,6 +274,7 @@ export default function ThreadGitArcProposalList({
   ) : (
     <div>
       <div className="flex min-w-0 items-center px-3 py-2 text-[0.76em] leading-[1.45] text-fg/muted">{summary}</div>
+      {failureRow}
       {anchors}
     </div>
   );

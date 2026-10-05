@@ -101,7 +101,9 @@ test("proposal summary groups read only the requested thread proposal namespaces
     { ref: `${proposalNamespace("codex", "unrelated-thread")}/unrelated`, value: "4".repeat(40) },
   ], new Map([
     [proposedCommit, commitIdentity(proposalMessage(proposalMetadata("proposal-one", "proposed", null)))],
-    [committedCommit, commitIdentity(proposalMessage(proposalMetadata("proposal-two", "committed", committedSha)))],
+    [committedCommit, commitIdentity(proposalMessage({
+      ...proposalMetadata("proposal-two", "committed", committedSha), description: "why", mode: "amend", paths: [],
+    }))],
   ]));
   const store = new GitCheckpointStore(repository as unknown as WorkbenchGitRepository, async ({ threadId }) => (
     threadId === "target-thread" || threadId === "wb-target-thread"
@@ -116,10 +118,10 @@ test("proposal summary groups read only the requested thread proposal namespaces
   }]);
 
   assert.deepEqual(repository.namespaceReads, [[canonical, canonicalLegacy, provider, providerLegacy]]);
-  assert.deepEqual(repository.commitReads, [[proposedCommit, committedCommit]]);
+  assert.deepEqual(repository.commitReads, [[proposedCommit, committedCommit]], "one batched commit read, no diffs");
   assert.deepEqual(summaries, [[
-    { committedSha: null, proposalId: "proposal-one", status: "proposed" },
-    { committedSha, proposalId: "proposal-two", status: "committed" },
+    { committedSha: null, description: "", hasChanges: true, mode: "commit", proposalId: "proposal-one", status: "proposed", title: "proposal-one" },
+    { committedSha, description: "why", hasChanges: false, mode: "amend", proposalId: "proposal-two", status: "committed", title: "proposal-two" },
   ]]);
 });
 

@@ -18,6 +18,7 @@ import type { GitArcRepositoryScope } from "workbench-shared/workbench/git/git-a
 import type { ResolvedProjectRoot } from "./lib/project";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
+  GitArcProposalSummary,
   GitArcRootPaths,
   GitArcStackResult,
   GitCheckpointFileChange,
@@ -447,6 +448,7 @@ export default class WorkbenchWorkspaceGitArcController {
       }
       case "arcMove": return await this.executeMove(project, members, request);
       case "proposalCreate": return await this.createProposal(project, members, request);
+      case "proposalSummaries": return await this.executeProposalSummaries(members, request);
       case "proposalState":
       case "proposalCommit":
       case "proposalRescind": return await this.executeProposalOperation(project, members, request);
@@ -1259,6 +1261,24 @@ export default class WorkbenchWorkspaceGitArcController {
       }
     }
     throw new GitArcRejectionError({ reason: "proposalNotFound", proposalId: request.proposalId }, `Git arc proposal not found: ${request.proposalId}`);
+  }
+
+  /** One metadata read per repository member; a proposal lives in exactly one, so its known summary wins. */
+  private async executeProposalSummaries(
+    members: readonly RepoMember[],
+    request: Extract<GitCheckpointRequest, { action: "proposalSummaries" }>,
+  ) {
+    const values = await this.runMembers(members, async member => await this.local.readProposalSummaries({
+      cwd: member.repoRoot, harness: request.harness, proposalIds: request.proposalIds, threadId: request.threadId,
+    }), undefined, "read");
+    const byId = new Map<string, GitArcProposalSummary>();
+    for (const { member, result } of values) {
+      for (const summary of result) {
+        if (summary.status === "unavailable" && byId.has(summary.proposalId)) continue;
+        byId.set(summary.proposalId, { ...summary, rootId: member.roots[0]!.id });
+      }
+    }
+    return { proposals: request.proposalIds.flatMap(id => byId.get(id) ?? []) };
   }
 
   private async executeProposalOperation(

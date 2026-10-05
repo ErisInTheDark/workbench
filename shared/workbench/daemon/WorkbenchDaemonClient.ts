@@ -33,6 +33,7 @@ import {
   GitArcStashResultSchema,
   GitCheckpointCompareResultSchema,
   GitCheckpointProposalSchema,
+  GitArcProposalSummariesSchema,
 } from "../git/checkpoint-contracts.ts";
 import {
   createGitArcOperationRejected,
@@ -163,6 +164,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "git/arc/compare": return GitCheckpointCompareResultSchema;
     case "git/arc/proposal/commit":
     case "git/arc/proposal/read": return GitCheckpointProposalSchema;
+    case "git/arc/proposals/summaries": return GitArcProposalSummariesSchema;
     case "git/arc/diff-artifact/read": return z.string();
     case "git/arc/release":
     case "git/arc/remove":
@@ -388,6 +390,7 @@ class WorkbenchDaemonClient {
       proposal: {
         read: (params: WorkbenchDaemonParams<"git/arc/proposal/read">) => this.requestGitArc("git/arc/proposal/read", params),
         commit: (params: WorkbenchDaemonParams<"git/arc/proposal/commit">) => this.requestGitArc("git/arc/proposal/commit", params),
+        summaries: (params: WorkbenchDaemonParams<"git/arc/proposals/summaries">) => this.requestGitArc("git/arc/proposals/summaries", params),
       },
     },
   };

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default GitCheckpointStore: own canonical writes and WB-first/provider-fallback checkpoint, outcome, history, and proposal reads.
- * - GitArcProposalSummary: normalized proposal identity and terminal status used by lifecycle projection.
+ * - GitArcProposalSummary: normalized proposal identity, status and commit message facts, read in bulk without diffs.
  * - GitArcProposalSummaryRequest: thread-qualified proposal summary selection.
  * - StoredCheckpoint: owned checkpoint identity, metadata, and nullable parent.
  * - StoredProposal: owned proposal identity, metadata, and tree.
@@ -34,10 +34,15 @@ import {
   type GitArcThreadIdentityResolver,
 } from "./git-arc-thread-identity";
 
+/** Metadata-only proposal facts: enough to decide and perform a commit, without building diffs. */
 export interface GitArcProposalSummary {
   committedSha: string | null;
+  description: string;
+  hasChanges: boolean;
+  mode: "amend" | "commit";
   proposalId: string;
   status: GitArcProposalStatus;
+  title: string;
 }
 
 export interface GitArcProposalSummaryRequest {
@@ -198,14 +203,20 @@ export default class GitCheckpointStore {
       }));
     });
     const commits = await this.repository.readCommits(selections.flatMap((selection) => selection.flatMap(({ entry }) => entry ? [entry.value] : [])));
+    const missing = (proposalId: string): GitArcProposalSummary => ({
+      committedSha: null, description: "", hasChanges: false, mode: "commit", proposalId, status: "unavailable", title: "",
+    });
     return selections.map((selection) => selection.map(({ entry, proposalId }): GitArcProposalSummary => {
-      if (!entry) return { committedSha: null, proposalId, status: "unavailable" };
+      if (!entry) return missing(proposalId);
       const identity = commits.commits.get(entry.value);
-      if (!identity) return { committedSha: null, proposalId, status: "unavailable" };
+      if (!identity) return missing(proposalId);
       const parsed = parseMarkedMetadata<ProposalMetadata>(identity.message, PROPOSAL_METADATA_MARKER);
-      if (!parsed || parsed.proposalId !== proposalId) return { committedSha: null, proposalId, status: "unavailable" };
+      if (!parsed || parsed.proposalId !== proposalId) return missing(proposalId);
       const metadata = normalizeProposalMetadata(parsed);
-      return { committedSha: metadata.committedSha, proposalId, status: metadata.status };
+      return {
+        committedSha: metadata.committedSha, description: metadata.description, hasChanges: metadata.paths.length > 0,
+        mode: metadata.mode, proposalId, status: metadata.status, title: metadata.title,
+      };
     }));
   }
 

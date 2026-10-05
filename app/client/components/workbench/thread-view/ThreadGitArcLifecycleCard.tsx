@@ -166,9 +166,12 @@ export default function ThreadGitArcLifecycleCard ({
         {visibleProposals.length ? (
           <ThreadGitArcProposalList
             commitActions={commitActions}
+            cwd={cwd}
+            harness={harness}
             proposals={visibleProposals}
             running={running}
             stackLayers={claim.stackLayers ?? []}
+            threadId={threadId}
           />
         ) : null}
         {sections.map(({ phase, paths: lifecyclePaths }, index) => (
