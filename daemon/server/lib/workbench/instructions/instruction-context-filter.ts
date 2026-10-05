@@ -75,6 +75,7 @@ const KNOWN_AVAILABLE_VALUES = new Set([
   "long-waits",
   "messages",
   "multi-root",
+  "remote-repos",
   "subagents",
   "thread-git",
   "git-proposals",

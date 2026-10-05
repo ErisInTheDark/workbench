@@ -30,10 +30,10 @@ export async function createManagedThreadFilter(
   context: ManagedThreadInstructionContext,
   readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings>,
 ) {
-  const available = await listWorkbenchInstructionMechanics(context, readLocalCapabilities);
   const catalogue = (await context.readInstructionTools()).filter(tool => (
     isWorkbenchToolVisibleTo(tool.id, Boolean(context.subagentName?.trim()))
   ));
+  const available = await listWorkbenchInstructionMechanics(context, readLocalCapabilities, catalogue);
   return (value: string | null, field: string, sources: readonly InstructionSourceSpan[] = []) => (
     filterWorkbenchInstructionContent(value, {
       available,

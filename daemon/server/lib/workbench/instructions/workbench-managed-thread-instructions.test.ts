@@ -44,6 +44,45 @@ function createContext(activatedSkillPaths: readonly string[] = []) {
 
 const readNoLocalCapabilities = async () => ({ browseRawCommandsEnabled: false });
 
+test("remote repository guidance follows one current audience tool catalogue", async () => {
+  const input = '<available:remote-repos>read with <tool id="git_repo" /></available:remote-repos>';
+  for (const harness of ["codex", "opencode", "claude"] as const) {
+    for (const subagentName of [null, "mira"]) {
+      let available = false;
+      let reads = 0;
+      const context = {
+        ...createContext(), harness, subagentName,
+        readInstructionTools: async () => {
+          reads++;
+          return available ? [{ id: "git_repo", codeModeEligible: false }] : [];
+        },
+      };
+      for (const enabled of [true, false, true]) {
+        available = enabled;
+        const before = reads;
+        const filter = await managed.createManagedThreadFilter(context, readNoLocalCapabilities);
+        const output = filter(input, "policy") ?? "";
+        assert.equal(reads - before, 1);
+        if (enabled) {
+          const reference = harness === "codex" ? "tools.mcp__wbex__git_repo"
+            : harness === "opencode" ? "tools.wb.git_repo" : "mcp__wb__git_repo";
+          assert.equal(output, `read with \`${reference}\``);
+        } else {
+          assert.equal(output, "");
+        }
+      }
+    }
+  }
+});
+
+test("failed instruction tool catalogue reads propagate instead of guessing availability", async () => {
+  const failure = new Error("catalogue unavailable");
+  await assert.rejects(managed.createManagedThreadFilter({
+    ...createContext(),
+    readInstructionTools: async () => { throw failure; },
+  }, readNoLocalCapabilities), error => error === failure);
+});
+
 test("proposal instructions resolve for parents but become handoff instructions for children", async () => {
   const base = createContext();
   const tools = async () => [{ id: "git_arc_propose", codeModeEligible: false }];

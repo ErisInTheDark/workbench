@@ -5,6 +5,7 @@
  */
 
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
+import type { WorkbenchInstructionTool } from "./instruction-tool-reference";
 import type { WorkbenchPromptContext } from "./workbench-prompt-types";
 
 export function isManagedPromptThread(context: WorkbenchPromptContext) {
@@ -14,8 +15,10 @@ export function isManagedPromptThread(context: WorkbenchPromptContext) {
 export async function listWorkbenchInstructionMechanics(
   context: WorkbenchPromptContext,
   readLocalCapabilities: () => Promise<WorkbenchLocalCapabilitySettings> = async () => ({ browseRawCommandsEnabled: false }),
+  catalogue: readonly WorkbenchInstructionTool[] = [],
 ) {
   const available = new Set<string>();
+  if (catalogue.some(tool => tool.id === "git_repo")) available.add("remote-repos");
   if (context.managedThread || context.workbenchOrigin?.trim()) {
     available.add("browse");
     available.add("long-waits");
