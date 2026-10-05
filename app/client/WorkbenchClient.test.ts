@@ -68,6 +68,66 @@ test("settings keeps zero, one or many selected logical projects without browsin
     && item.params.query.kind === "projectTree"), false);
 });
 
+test("multi-project git follows the url folder and can change or clear it without narrowing projects", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const snapshots: ExplorerSnapshot[] = [];
+  const client = WorkbenchClient({ workspace: fixture.workspace,
+    onExplorerStateChange: snapshot => snapshots.push(snapshot) });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const secondId = LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000004");
+  const secondLocation = { daemonId: blockedId, projectId: ProjectIdSchema.parse("local://C:/git/app/other") };
+  const data = facts(true);
+  data.projects.push({
+    id: secondId, label: "other", matchKey: "local://C:/git/app/other",
+    locations: [{ target: secondLocation, daemonId: blockedId, hostname: "other", name: "other",
+      rootPath: "C:/git/app/other", project: { ...project, id: secondLocation.projectId,
+        name: "other", relativePath: "other", rootPath: "C:/git/app/other" } }],
+  });
+  const projects = await socket.request("workspace/observe", 0,
+    request => request.params.query.kind === "projects");
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data });
+  const route = { ...createProjectSelectionRoute([logicalId, secondId]), view: "git" as const };
+  for (const [folderAddress, expected] of [
+    [["bak"], location], [["other"], secondLocation], [null, null], [["bak"], location],
+  ] as const) {
+    const addressed = { ...route, folderAddress: folderAddress ? [...folderAddress] : null };
+    assert.equal((await client.controls.applyRoute(client.projectNavigator.resolveRoute(addressed))).ok, true);
+    await Promise.resolve();
+    assert.deepEqual(snapshots.at(-1)?.browseLocation, expected);
+    assert.deepEqual(client.navigation.getSnapshot().route.selectedProjectIds, [logicalId, secondId]);
+    assert.equal(client.navigation.getSnapshot().error, null);
+  }
+  const trees = socket.sent.filter(item => item.method === "workspace/observe"
+    && item.params.query.kind === "projectTree");
+  assert.deepEqual(trees.map(item => item.method === "workspace/observe"
+    && item.params.query.kind === "projectTree" ? item.params.query.location : null),
+  [location, secondLocation, location]);
+});
+
+test("default and empty project selections can open Git without inventing a folder", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const snapshots: ExplorerSnapshot[] = [];
+  const client = WorkbenchClient({ workspace: fixture.workspace,
+    onExplorerStateChange: snapshot => snapshots.push(snapshot) });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const projects = await socket.request("workspace/observe", 0,
+    request => request.params.query.kind === "projects");
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
+  for (const selected of [null, []]) {
+    const route = { ...createProjectSelectionRoute(selected), view: "git" as const };
+    assert.equal((await client.controls.applyRoute(route)).ok, true);
+    await Promise.resolve();
+    assert.equal(snapshots.at(-1)?.browseLocation, null);
+  }
+  const homeFolderGit = { ...createProjectSelectionRoute(null), view: "git" as const, folderAddress: ["bak"] };
+  assert.equal((await client.controls.applyRoute(homeFolderGit)).ok, true);
+  await Promise.resolve();
+  assert.deepEqual(snapshots.at(-1)?.browseLocation, location);
+  assert.equal(client.navigation.getSnapshot().route.selectedProjectIds, null);
+});
+
 test("mounted project navigation keeps its identity while project facts change", async context => {
   const fixture = createWorkspaceClientFixture();
   const socket = await fixture.open();

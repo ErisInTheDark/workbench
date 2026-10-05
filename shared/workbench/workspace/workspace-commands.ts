@@ -36,7 +36,7 @@ const nonCommandMethods = [
   // Browser creation uses saved-draft launch, not daemon thread creation.
   "thread/create", "thread/launch", "thread/launch/read",
   // App-owned projection reads and exports.
-  "project/locations/read", "git/working-tree/summary",
+  "project/locations/read",
   "thread/presentation/export", "thread/presentation/manifest/read",
   "thread/presentation/attachment/read", "thread/presentation/layout/read",
   // Browser identity lookup uses the workspace owner observation.
@@ -79,6 +79,7 @@ export const workspaceCommandRoutes = {
   "voice/cancel": "session",
   "repo/runtime/read": "installation",
   "git/working-tree/read": "folder",
+  "git/working-tree/summary": "folder",
   "git/working-tree/diff": "folder",
   "git/working-tree/preview": "folder",
   "git/working-tree/mutate": "folder",

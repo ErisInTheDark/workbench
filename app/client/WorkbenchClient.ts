@@ -599,6 +599,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     const browseFolder = projectNavigator.folderForRoute(route) ?? null;
     selectRowsForRoute(route);
     if (route.view === "home" || route.view === "project" && route.selectedProjectIds?.length !== 1
+      || route.view === "git" && (route.logical || !route.projectId || route.folderAddress?.length)
       || route.view === "settings"
       || route.view === "stats"
       || route.view === "new-project") {

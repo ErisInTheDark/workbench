@@ -317,7 +317,7 @@ test("a folder equal to its project address is omitted from the path as redundan
   const navigation = new WorkbenchProjectNavigation([], [], [{
     id, matchKey: "remote://github.com/team/workbench", label: "workbench", locations: [folder],
   }]);
-  assert.equal(navigation.folderAddressFor(folder.target), null);
+  assert.equal(navigation.folderAddressFor(folder.target, createLogicalProjectRoute(id)), null);
   assert.deepEqual(navigation.href(withProjectSelection(createProjectRoute(""), [id])), "/workbench/@/");
   // A folder that still needs its slot keeps it.
   const worktree = {
@@ -329,18 +329,63 @@ test("a folder equal to its project address is omitted from the path as redundan
     id, matchKey: "remote://github.com/team/workbench", label: "workbench",
     locations: [folder, worktree],
   }]);
-  assert.deepEqual(multi.folderAddressFor(worktree.target), ["+convex-lab"]);
+  assert.deepEqual(multi.folderAddressFor(worktree.target, createLogicalProjectRoute(id)), ["+convex-lab"]);
 });
 
 test("folder addresses disambiguate colliding paths across daemons and never guess", () => {
-  const { navigation, workbenchOnOne, workbenchOnTwo, worktree } = createFolderNavigation();
-  assert.deepEqual(navigation.folderAddressFor(workbenchOnOne.target), [workbenchOnOne.daemonId, "workbench"]);
-  assert.deepEqual(navigation.folderAddressFor(workbenchOnTwo.target), [workbenchOnTwo.daemonId, "workbench"]);
-  assert.deepEqual(navigation.folderAddressFor(worktree.target), ["+convex-lab"]);
+  const { first, second, navigation, workbenchOnOne, workbenchOnTwo, worktree } = createFolderNavigation();
+  const route = withProjectSelection(createProjectRoute(""), [first, second]);
+  assert.deepEqual(navigation.folderAddressFor(workbenchOnOne.target, route), [workbenchOnOne.daemonId, "workbench"]);
+  assert.deepEqual(navigation.folderAddressFor(workbenchOnTwo.target, route), [workbenchOnTwo.daemonId, "workbench"]);
+  assert.deepEqual(navigation.folderAddressFor(worktree.target, route), ["+convex-lab"]);
   assert.deepEqual(navigation.folderForAddress(["+convex-lab"]), worktree.target);
   assert.deepEqual(navigation.folderForAddress([workbenchOnOne.daemonId, "workbench"]), workbenchOnOne.target);
   assert.equal(navigation.folderForAddress(["workbench"]), null);
   assert.equal(navigation.folderForAddress(["missing"]), null);
+});
+
+test("an own folder is implicit only for its sole selected project and survives explicit multi-project urls", () => {
+  const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const daemonId = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
+  const folder = {
+    target: { daemonId, projectId: ProjectIdSchema.parse("repo") },
+    daemonId, hostname: "alpha", name: "workbench", rootPath: "/home/me/workbench", project: null,
+  };
+  const navigation = new WorkbenchProjectNavigation([], [], [{
+    id: first, matchKey: "remote://github.com/team/workbench", label: "workbench", locations: [folder],
+  }, {
+    id: second, matchKey: "remote://github.com/team/zoomie-lint", label: "zoomie-lint", locations: [],
+  }]);
+  const single = createLogicalProjectRoute(first);
+  assert.equal(navigation.folderAddressFor(folder.target, single), null);
+  const multi = withProjectSelection(single, [first, second]);
+  assert.deepEqual(navigation.folderAddressFor(folder.target, multi), ["workbench"]);
+  assert.deepEqual(navigation.folderForRoute(single), folder.target);
+  assert.equal(navigation.folderForRoute(multi), null);
+  assert.equal(navigation.folderForRoute(withProjectSelection(single, [])), null);
+  assert.equal(navigation.folderForRoute(withProjectSelection(single, null)), null);
+
+  const explicit = { ...multi, folderAddress: ["workbench"] };
+  const reopened = navigation.readRoute(navigation.href(explicit)!);
+  assert.deepEqual(reopened.selectedProjectIds, [first, second]);
+  assert.deepEqual(navigation.folderForRoute(reopened), folder.target);
+  for (const current of [single, reopened]) {
+    const git = navigation.gitRoute(current);
+    const opened = navigation.readRoute(navigation.href(git)!);
+    assert.equal(opened.view, "git");
+    assert.deepEqual(opened.selectedProjectIds, current.selectedProjectIds);
+    assert.deepEqual(navigation.folderForRoute(opened), folder.target);
+    assert.equal(opened.folderAddress?.length ?? 0, current === single ? 0 : 1);
+  }
+  const unscoped = navigation.readRoute(navigation.href(navigation.gitRoute(multi))!);
+  assert.deepEqual(unscoped.selectedProjectIds, [first, second]);
+  assert.equal(navigation.folderForRoute(unscoped), null);
+  // Home threads can browse their owner's folder without narrowing the project list.
+  const home = navigation.gitRoute(createHomeThreadRoute("repo", "thread"), folder.target);
+  const homeOpened = navigation.readRoute(navigation.href(home)!);
+  assert.equal(homeOpened.selectedProjectIds, null);
+  assert.deepEqual(navigation.folderForRoute(homeOpened), folder.target);
 });
 
 test("folder selection rides hrefs and stays scoped to its owning project", () => {

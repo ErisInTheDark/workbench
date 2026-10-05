@@ -33,12 +33,10 @@ import {
 } from "workbench-shared/workbench/navigation/workbench-mosaic-route";
 import {
     createFileRoute,
-    createGitRoute,
     createHomeRoute,
     createHomeThreadRoute,
     createLogicalExistingThreadRoute,
     createLogicalFileRoute,
-    createLogicalGitRoute,
     createLogicalMosaicRoute,
     createLogicalProjectRoute,
     createLogicalThreadRoute,
@@ -835,15 +833,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const browseProjectId = browseLocation?.projectId ?? explorer.currentProjectId;
   const folderOptions =
     workbenchClient.mounted?.projectNavigator?.folderOptions(selectionProjectIds) ?? [];
-  const implicitFolderLocation =
-    !route.folderAddress && selectedLogicalProject
-      ? folderOptions.find(option =>
-        option.name === selectedLogicalProject.displayName
-      )?.target ?? null
-      : null;
-  const selectedFolderLocation =
-    browseLocation ?? implicitFolderLocation;
+  const selectedFolderLocation = browseLocation;
   const folderSelected = Boolean(selectedFolderLocation);
+  const gitRoute = workbenchClient.mounted?.projectNavigator?.gitRoute(route, browseLocation) ?? null;
   const attachedProjectId = route.logical
     ? browseProjectId && browseLocation?.daemonId === workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId
       ? browseProjectId : ""
@@ -2537,17 +2529,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       navigateToRoute({
                         ...route,
                         folderAddress:
-                          workbenchClient.mounted?.projectNavigator?.folderAddressFor(location) ?? null,
+                          workbenchClient.mounted?.projectNavigator?.folderAddressFor(location, route) ?? null,
                       });
                     }}
                     selected={selectedFolderLocation}
                   >
-                    {folderSelected ? <WorkbenchGitSidebar active={showGitView} onNavigate={event => {
+                    {folderSelected && gitRoute ? <WorkbenchGitSidebar active={showGitView} route={gitRoute} onNavigate={event => {
                       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                       event.preventDefault();
-                      navigateToRoute(route.logical?.projectId
-                        ? createLogicalGitRoute(route.logical.projectId, browseLocation)
-                        : createGitRoute(activeProjectId));
+                      navigateToRoute(gitRoute);
                     }} /> : (
                       <p className="m-0 px-2 py-1 text-[0.8rem] leading-5 text-fg/muted">
                         Choose a folder to see its working tree and files.
@@ -2931,11 +2921,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   <p role="alert" className="mx-auto max-w-content px-5 py-8 text-danger">{selectionError}</p>
                 ) : null}
                 {showGitView && !selectionError && !shouldRenderMainLayout ? (
-                  <WorkbenchDaemonClientContext.Provider value={selectedDaemon ?? null}>
-                    <WorkbenchDaemonAssetOriginContext.Provider value={selectedAssetSource}>
-                    <WorkbenchWorkingTreeView />
-                    </WorkbenchDaemonAssetOriginContext.Provider>
-                  </WorkbenchDaemonClientContext.Provider>
+                  !folderSelected ? (
+                    <p className="mx-auto max-w-content px-5 py-8 text-fg/muted">Choose a folder to see its working tree and files.</p>
+                  ) : (
+                    <WorkbenchDaemonClientContext.Provider value={selectedDaemon ?? null}>
+                      <WorkbenchDaemonAssetOriginContext.Provider value={selectedAssetSource}>
+                        <WorkbenchWorkingTreeView />
+                      </WorkbenchDaemonAssetOriginContext.Provider>
+                    </WorkbenchDaemonClientContext.Provider>
+                  )
                 ) : null}
                 {routeView && !shouldRenderMainLayout ? (
                   <routeView.Component key={route.view} route={route} navigateToRoute={navigateToRoute} />

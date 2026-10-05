@@ -4,7 +4,7 @@
  */
 import type { WorkbenchLogicalProject, WorkbenchProjectAlias, WorkbenchProjectOption } from "workbench-shared/types";
 import {
-  createHomeRoute, createInvalidWorkbenchRoute, createProjectRoute, createWorkbenchHref,
+  createHomeRoute, createInvalidWorkbenchRoute, createProjectRoute, createProjectSelectionRoute, createWorkbenchHref,
   parseWorkbenchRouteFromLocation, withProjectSelection, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
@@ -123,7 +123,7 @@ export default class WorkbenchProjectNavigation {
   folderForRoute(route: WorkbenchRoute): ProjectLocationReference | null {
     if (!route.folderAddress?.length) {
       const ownerProjectId =
-        route.logical?.projectId ?? route.logical?.threadOwnerProjectId;
+        route.selectedProjectIds?.length === 1 ? route.selectedProjectIds[0] : null;
 
       if (!ownerProjectId) return null;
 
@@ -145,12 +145,22 @@ export default class WorkbenchProjectNavigation {
       : folder.target;
   }
 
-  /** Derive one folder's url address segments. Null when the address is redundant with its project. */
-  folderAddressFor(target: ProjectLocationReference): string[] | null {
+  /** Omit a folder address only when this route would implicitly select that same folder. */
+  folderAddressFor(target: ProjectLocationReference, route: WorkbenchRoute): string[] | null {
     const address = ProjectFolderAddress.forFolder(this.folders, target);
     if (!address.length) return null;
-    return this.isProjectOwnFolder(this.folders.find(folder =>
-      folder.target.daemonId === target.daemonId && folder.target.projectId === target.projectId)) ? null : address;
+    const implicit = this.folderForRoute(this.resolveRoute({ ...route, folderAddress: undefined }));
+    return implicit?.daemonId === target.daemonId && implicit.projectId === target.projectId ? null : address;
+  }
+
+  /** Open Git without replacing the project selection or its url folder with a physical project id. */
+  gitRoute(route: WorkbenchRoute, location: ProjectLocationReference | null = this.folderForRoute(route)): WorkbenchRoute {
+    return this.resolveRoute({
+      ...createProjectSelectionRoute(route.selectedProjectIds),
+      folderAddress: route.folderAddress?.length ? route.folderAddress
+        : location ? this.folderAddressFor(location, route) : route.folderAddress,
+      view: "git",
+    });
   }
 
   /** A folder whose address equals its owning project's address is that project's own folder. */

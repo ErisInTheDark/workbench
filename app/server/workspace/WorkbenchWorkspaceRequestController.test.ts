@@ -7,7 +7,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
 import type { WorkspaceObservation, WorkspaceObservationDelta } from "workbench-shared/workbench/workspace/workspace-observation";
-import { DaemonIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchPresentationRepository from "../state/WorkbenchPresentationRepository";
 import WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 import WorkbenchDaemonSources from "./WorkbenchDaemonSources";
@@ -16,6 +16,43 @@ import WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
 import WorkbenchWorkspaceRequestController from "./WorkbenchWorkspaceRequestController";
 import { WorkspaceCommandSchema } from "workbench-shared/workbench/workspace/workspace-commands";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+
+test("git summary routes through the observed folder's daemon and rejects missing or unobserved scope", async context => {
+  const daemonId = DaemonIdSchema.parse(randomUUID());
+  const location = { daemonId, projectId: ProjectIdSchema.parse("observed-folder") };
+  const calls: Array<{ method: string; params: object }> = [];
+  const summary = { repositories: [{ rootId: "root", label: "folder", dirty: true }], errors: [] };
+  const source = {
+    available: true,
+    request: async (method: string, params: object) => { calls.push({ method, params }); return summary; },
+  };
+  const f = await fixture(context, { get: id => id === daemonId ? source : undefined });
+  const snapshot = f.workspace.getSnapshot();
+  context.mock.method(f.workspace, "getSnapshot", () => ({
+    ...snapshot,
+    observedProjects: [{
+      identityKey: ProjectIdentityKeySchema.parse("local:///repo/folder"), registrationFailure: null,
+      locations: [{ location, hostname: "remote", project: {
+        id: location.projectId, kind: "git" as const, name: "folder", relativePath: "folder",
+        rootPath: "/repo/folder", roots: [], lastCommitTimeMs: null,
+      } }],
+    }],
+  }));
+  assert.deepEqual(await f.owner.command(WorkspaceCommandSchema.parse({
+    method: "git/working-tree/summary", scope: { kind: "folder", location },
+    params: { projectId: "wrong-project" },
+  })), summary);
+  assert.deepEqual(calls, [{ method: "git/working-tree/summary", params: { projectId: location.projectId } }]);
+  await assert.rejects(f.owner.command(WorkspaceCommandSchema.parse({
+    method: "git/working-tree/summary",
+    scope: { kind: "folder", location: { ...location, projectId: ProjectIdSchema.parse("not-observed") } },
+    params: { projectId: location.projectId },
+  })), /not observed/);
+  await assert.rejects(async () => f.owner.command(WorkspaceCommandSchema.parse({
+    method: "git/working-tree/summary", params: { projectId: location.projectId },
+  })));
+  assert.equal(calls.length, 1);
+});
 
 test("daemon compaction settings route to the selected installation without a project", async context => {
   const daemonId = DaemonIdSchema.parse(randomUUID());
@@ -100,7 +137,7 @@ async function fixture(context: TestContext, daemons?: { get(daemonId: string): 
     owner.dispose(); threads.dispose(); workspace.dispose(); sources.dispose();
     presentation.close(); await repository.close(); await temporary.dispose();
   });
-  return { owner, updates, deltas, providerEvents, warnings, changes,
+  return { owner, workspace, updates, deltas, providerEvents, warnings, changes,
     read: (operation: typeof read) => { read = operation; },
     changed: () => { for (const changed of [...changes]) changed(); },
     wait: (predicate: (value: WorkspaceObservation) => boolean) => new Promise<WorkspaceObservation>(resolve => {

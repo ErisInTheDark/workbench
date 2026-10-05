@@ -1,7 +1,7 @@
 /* Exports: default WorkbenchGitSidebar: render selected-project unclaimed Git status and navigation. */
 "use client";
 import { useEffect, type MouseEvent } from "react";
-import { createGitRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListLabelClassName } from "../workbench-class-names";
 import { GitArcCleanClaimIcon, GitArcDirtyClaimIcon, GitGraphIcon } from "../workbench-icons";
@@ -9,7 +9,9 @@ import WorkbenchSidebarSectionDisclosure from "../WorkbenchSidebarSectionDisclos
 import { useWorkbenchSidebarPreferences } from "../workbench-sidebar-preferences-context";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 
-export default function WorkbenchGitSidebar ({ active, onNavigate }: { active: boolean; onNavigate (event: MouseEvent<HTMLAnchorElement>): void }) {
+export default function WorkbenchGitSidebar ({ active, route, onNavigate }: {
+  active: boolean; route: WorkbenchRoute; onNavigate (event: MouseEvent<HTMLAnchorElement>): void;
+}) {
   const state = useWorkingTree();
   const snapshot = useWorkingTreeSnapshot();
   const { preferences } = useWorkbenchSidebarPreferences();
@@ -24,7 +26,7 @@ export default function WorkbenchGitSidebar ({ active, onNavigate }: { active: b
         : dirty ? "Uncommitted changes" : "No changes";
   return <section className="shrink-0 pb-3">
     <WorkbenchSidebarSectionDisclosure icon={GitGraphIcon} preferenceKey="gitOpen" title="Git">
-      <a href={projectHref(createGitRoute(state.projectId))} onClick={onNavigate} aria-current={active ? "page" : undefined} className={`
+      <a href={projectHref(route, "exact")} onClick={onNavigate} aria-current={active ? "page" : undefined} className={`
         ${workbenchOptionRowClassName} min-h-9 w-full md:min-h-8
         ${active ? `${workbenchOptionSelectedClassName} text-text` : `${workbenchOptionHoverClassName} border-transparent text-fg/muted hover:text-text`}
       `}>

@@ -526,9 +526,9 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
         : createSettingsRoute(projectId);
     }
     if (mode === "git") {
-      return projectId && !valueSegments.value.length
-        ? createGitRoute(projectId)
-        : createInvalidWorkbenchRoute("Git routes require one project and no extra segments.", projectId);
+      return !valueSegments.value.length
+        ? withProjectSelection(createGitRoute(projectId), projectId ? [projectId] : null)
+        : createInvalidWorkbenchRoute("Git routes do not accept extra segments.", projectId);
     }
     if (mode === "stats") {
       return valueSegments.value.length
