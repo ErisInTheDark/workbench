@@ -236,6 +236,8 @@ function createController(options: {
     settings: {
       readLocalCapabilities: async () => ({ browseRawCommandsEnabled: false }),
       updateLocalCapabilities: async (update) => update({ browseRawCommandsEnabled: false }),
+      readThreadAutoCompact: async () => ({ enabled: true, tokenThreshold: 200_000, idleMinutes: 30 }),
+      updateThreadAutoCompact: async edit => ({ enabled: true, tokenThreshold: 200_000, idleMinutes: 30, ...edit }),
     },
   });
   return {
@@ -746,6 +748,19 @@ for (const harness of ["codex", "copilot", "opencode"] as const) {
     }
   });
 }
+
+test("auto-compact settings dispatch accepts daemon-wide field edits and rejects invalid increments", async () => {
+  const { controller } = createController();
+  assert.deepEqual((await controller.handle({ id: 1, method: "thread-auto-compact/read", params: {} })).result,
+    { settings: { enabled: true, tokenThreshold: 200_000, idleMinutes: 30 } });
+  assert.deepEqual((await controller.handle({ id: 2, method: "thread-auto-compact/update", params: {
+    settings: { enabled: false, idleMinutes: 40 },
+  } })).result, { settings: { enabled: false, tokenThreshold: 200_000, idleMinutes: 40 } });
+  const rejected = await controller.handle({ id: 3, method: "thread-auto-compact/update", params: {
+    settings: { tokenThreshold: 200_001 },
+  } });
+  assert.equal(rejected.error?.code, -32602);
+});
 
 test("profile target dispatch preserves exact slot and settings contracts", async () => {
   const { controller, targetReads, targetWrites } = createController();

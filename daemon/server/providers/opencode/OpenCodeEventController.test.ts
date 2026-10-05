@@ -153,6 +153,7 @@ test("write settlement replaces its live preview on the same canonical item for 
 });
 
 const executionLifecycle = {
+  observeCompaction: () => {},
   acceptExecutionEvent: () => true,
   settleExecution: () => undefined,
   executionIntentVersion: () => 0,

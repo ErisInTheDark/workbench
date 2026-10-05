@@ -56,7 +56,7 @@ export interface WorkbenchProviderThreads {
   /** Deliver an attributed agent message; report whether its Workbench turn started or was steered. */
   messageAgent(input: { threadId: string; cwd: string; message: WorkbenchAgentMessage; context?: WorkbenchMessageContext }): Promise<{ kind: "started" | "steered"; turnId: string }>;
   rename(threadId: string, title: string): Promise<void>;
-  compact(threadId: string): Promise<void>;
+  compact(threadId: string, options?: { waitForCompletion?: boolean; signal?: AbortSignal }): Promise<void>;
   /** Delete the backing provider session, retaining WB identity, state and history. */
   delete?(threadId: string): Promise<void>;
   /** Interrupt the thread's current execution without requiring a caller-selected turn. */

@@ -12,6 +12,7 @@ import type {
 } from "./workbench-daemon-requests.ts";
 import { WORKBENCH_GIT_ARC_ACTION_BY_METHOD } from "./workbench-daemon-requests.ts";
 import { z } from "zod";
+import { ThreadAutoCompactSettingsSchema } from "../settings/thread-auto-compact";
 import { VoiceConfigurationSchema, VoiceSessionEventSchema, type VoiceSessionEvent } from "../voice/voice-session-contract";
 import { VirtualRepoAvailabilitySchema } from "../repo/virtual-repo-contract";
 import { WorkingTreeReadSchema, WorkingTreeSummarySchema, WorkingTreeDiffSchema, WorkingTreePreviewSchema, WorkingTreeResultSchema } from "../git/working-tree-contracts";
@@ -134,6 +135,8 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "local-capabilities/update": return z.object({
       localCapabilities: z.object({ browseRawCommandsEnabled: z.boolean() }).strict(),
     }).strict();
+    case "thread-auto-compact/read":
+    case "thread-auto-compact/update": return z.object({ settings: ThreadAutoCompactSettingsSchema }).strict();
     case "agents/list": return z.object({ data: z.array(recordSchema) }).strict();
     case "agents/read": return z.object({ providerGlobalDuplicate: z.boolean(), data: recordSchema }).strict();
     case "skills/read": return z.object({
@@ -298,6 +301,10 @@ class WorkbenchDaemonClient {
   readonly localCapabilities = {
     read: () => this.request("local-capabilities/read", {}),
     update: (params: WorkbenchDaemonParams<"local-capabilities/update">) => this.request("local-capabilities/update", params),
+  };
+  readonly threadAutoCompact = {
+    read: () => this.request("thread-auto-compact/read", {}),
+    update: (params: WorkbenchDaemonParams<"thread-auto-compact/update">) => this.request("thread-auto-compact/update", params),
   };
 
   readonly sandboxNetwork = {

@@ -126,6 +126,57 @@ const session = {
   location: { directory: "C:/repo" },
 };
 
+test("completion-aware compaction waits for native completion and execution settlement", async () => {
+  const requested = Promise.withResolvers<void>();
+  const owner = operations({ session: { compact: async () => { requested.resolve(); return {}; } } }, {});
+  let finished = false;
+  const work = owner.compact(threadId, { waitForCompletion: true }).then(() => { finished = true; });
+  await requested.promise;
+  owner.observeCompaction(nativeThreadId, "started", "compact");
+  owner.observeCompaction(nativeThreadId, "completed");
+  await Promise.resolve();
+  assert.equal(finished, false);
+  owner.markExecutionSettled(nativeThreadId);
+  await work;
+  assert.equal(finished, true);
+});
+
+test("failed, interrupted and retired compaction cannot release a waiting admission", async () => {
+  for (const outcome of ["failed", "interrupted", "retired"] as const) {
+    const requested = Promise.withResolvers<void>();
+    const signal = new AbortController();
+    const owner = operations({ session: { compact: async () => { requested.resolve(); return {}; } } }, {}, {}, { signal: signal.signal });
+    const work = owner.compact(threadId, { waitForCompletion: true });
+    const rejected = assert.rejects(work, /failed|interrupted|retired/);
+    await requested.promise;
+    owner.observeCompaction(nativeThreadId, "started", "compact");
+    if (outcome === "failed") owner.observeCompaction(nativeThreadId, "failed");
+    else if (outcome === "interrupted") owner.markExecutionSettled(nativeThreadId, "interrupted");
+    else signal.abort(new Error("retired"));
+    await rejected;
+  }
+});
+
+test("auto-compaction waits for the event connection and rejects when that connection ends", async () => {
+  const readiness = Promise.withResolvers<AbortSignal>();
+  const waiting = Promise.withResolvers<void>();
+  const requested = Promise.withResolvers<void>();
+  const connection = new AbortController();
+  let requests = 0;
+  const owner = operations({ session: { compact: async () => { requests++; requested.resolve(); } } }, {}, {}, {
+    waitForCompactionConnection: async () => { waiting.resolve(); return readiness.promise; },
+  });
+  const work = owner.compact(threadId, { waitForCompletion: true });
+  const rejected = assert.rejects(work, /connection ended/);
+  await Promise.race([waiting.promise, requested.promise]);
+  assert.equal(requests, 0);
+  readiness.resolve(connection.signal);
+  await requested.promise;
+  connection.abort(new Error("connection ended"));
+  await rejected;
+  await owner.settle();
+});
+
 function operations(
   client: object,
   transcript: object,
@@ -142,11 +193,13 @@ function operations(
     signal?: AbortSignal;
     refresh?: OpenCodeManagedSessionController["refresh"];
     workingRecords?: OpenCodeThreadOperationsOptions["readWorkingRecords"];
+    waitForCompactionConnection?: (signal: AbortSignal) => Promise<AbortSignal>;
   } = {},
 ) {
   const owner: OpenCodeThreadOperations = new OpenCodeThreadOperations({
     reconciliation: { reconcile: (input, signal) => owner.reconcile({ ...input, gapIds: [] }, signal ?? new AbortController().signal) },
     readProviderCursor: async () => undefined,
+    waitForCompactionConnection: lifecycle.waitForCompactionConnection ?? (async signal => signal),
     acquire: async () => {
       const value = client as { session?: Record<string, unknown> };
       return {
@@ -377,6 +430,7 @@ test("fails a public read when no OpenCode binding exists", async () => {
     readWorkingRecords: async () => [],
     readProviderCursor: async () => undefined,
     acquire: async () => ({}) as never,
+    waitForCompactionConnection: async signal => signal,
     observe: async () => undefined,
     identities: { resolve: async () => null } as never,
     projects: {} as never,

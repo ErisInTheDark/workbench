@@ -14,6 +14,33 @@ import WorkbenchDaemonSources from "./WorkbenchDaemonSources";
 import WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
 import WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
 import WorkbenchWorkspaceRequestController from "./WorkbenchWorkspaceRequestController";
+import { WorkspaceCommandSchema } from "workbench-shared/workbench/workspace/workspace-commands";
+import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+
+test("daemon compaction settings route to the selected installation without a project", async context => {
+  const daemonId = DaemonIdSchema.parse(randomUUID());
+  const calls: Array<{ method: string; params: object }> = [];
+  const source = {
+    available: true,
+    request: async (method: string, params: { settings?: object }) => {
+      calls.push({ method, params });
+      return { settings: { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ...params.settings } };
+    },
+  };
+  const f = await fixture(context, { get: id => id === daemonId ? source : undefined });
+  const scope = { kind: "installation", daemonId };
+  assert.deepEqual(await f.owner.command(WorkspaceCommandSchema.parse({
+    method: "thread-auto-compact/read", scope, params: {},
+  })), { settings: DEFAULT_THREAD_AUTO_COMPACT_SETTINGS });
+  const patch = { enabled: false, idleMinutes: 40 };
+  assert.deepEqual(await f.owner.command(WorkspaceCommandSchema.parse({
+    method: "thread-auto-compact/update", scope, params: { settings: patch },
+  })), { settings: { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ...patch } });
+  assert.deepEqual(calls, [
+    { method: "thread-auto-compact/read", params: {} },
+    { method: "thread-auto-compact/update", params: { settings: patch } },
+  ]);
+});
 
 function state(revision: number): WorkbenchClientStateResponse {
   return { daemonRegistrationId: "registration", revision, kind: "snapshot", oldestAvailableRevision: 0,

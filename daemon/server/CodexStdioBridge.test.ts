@@ -3828,6 +3828,51 @@ test("fresh first turn prepares its stored profile across reload and failed admi
   }
 });
 
+for (const outcome of ["completed", "interrupted"] as const) {
+  test(`completion-aware compaction waits beyond acknowledgement without blocking other commands: ${outcome}`, async () => {
+    const acknowledged = Promise.withResolvers<void>();
+    let bridge!: InstanceType<typeof CodexStdioBridge>;
+    const appServer = { send(message: JsonRpcRequest) {
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage({ id: message.id ?? null, result: message.method === "thread/read"
+          ? { thread: { ...bridgeThread(), status: { type: "idle" }, turns: [] } } : {} });
+        if (message.method === "thread/compact/start") acknowledged.resolve();
+      });
+    } } as unknown as CodexAppServer;
+    bridge = new CodexStdioBridge({
+      appServer, handleWorkbenchRequest: rejectWorkbenchRequest,
+      onNotification() {}, resolveProjectFromCwd: async () => null,
+    });
+    let finished = false;
+    const work = bridge.handleServerRequest({ id: 1, method: "thread/compact/start", params: { threadId: "thread" } }, { waitForCompletion: true });
+    const observed = work.then(() => { finished = true; }, error => { finished = true; throw error; });
+    const result = outcome === "interrupted" ? assert.rejects(observed, /interrupted or failed/) : observed;
+    try {
+      await acknowledged.promise;
+      await bridge.handleServerRequest({ id: 2, method: "account/read", params: {} });
+      assert.equal(finished, false, "acknowledgement is not completion");
+      const nativeTurn = { ...bridgeThread().turns[0]!, id: "compact-turn", status: "inProgress" };
+      await bridge.handleUpstreamMessage({ method: "turn/started", params: { threadId: "thread", turn: nativeTurn } });
+      await bridge.handleUpstreamMessage({ method: "item/completed", params: {
+        threadId: "thread", turnId: "old-turn", item: { id: "old", type: "contextCompaction" },
+      } });
+      assert.equal(finished, false);
+      if (outcome === "completed") {
+        await bridge.handleUpstreamMessage({ method: "item/completed", params: {
+          threadId: "thread", turnId: "compact-turn", item: { id: "compact", type: "contextCompaction" },
+        } });
+        assert.equal(finished, false, "execution must settle before admission");
+      }
+      await bridge.handleUpstreamMessage({ method: "turn/completed", params: {
+        threadId: "thread", turn: { ...nativeTurn, status: outcome },
+      } });
+      await result;
+    } finally {
+      await bridge.disposeImmediately();
+    }
+  });
+}
+
 for (const status of ["notLoaded", "idle", "active", "resumeFailure"] as const) {
   test(`compaction prepares only a cold thread without admitting a turn: ${status}`, async () => {
     const temporary = await WorkbenchTemporaryDirectory.create("workbench-compact-");

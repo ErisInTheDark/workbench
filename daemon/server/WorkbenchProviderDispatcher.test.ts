@@ -10,6 +10,58 @@ import WorkbenchProviderHandle from "./WorkbenchProviderHandle";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchToolTranscriptReference } from "workbench-shared/workbench/provider/provider-execution";
+import WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
+import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+
+test("user and agent messages on every provider share compact-before-start admission and steer safely after overlap", async () => {
+  for (const harness of ["codex", "claude", "opencode"] as const) {
+    for (const firstRoute of ["user", "agent"] as const) {
+      const compacting = Promise.withResolvers<void>();
+      const completed = Promise.withResolvers<void>();
+      const calls: string[] = [];
+      const waits: string[] = [];
+      let active = false;
+      const provider = { threads: {
+        read: async () => ({ status: active ? "active" : "idle" }),
+        latestTurn: async () => ({ id: "previous", status: "completed" }),
+        isTurnLive: async () => active,
+        compact: async () => { calls.push("compact"); compacting.resolve(); await completed.promise; },
+        submit: async () => {
+          calls.push("user");
+          const wasActive = active;
+          active = true;
+          return wasActive ? { kind: "steered", turnId: "new" } : { kind: "started", turn: { id: "new" } };
+        },
+        messageAgent: async () => {
+          calls.push("agent");
+          const wasActive = active;
+          active = true;
+          return { kind: wasActive ? "steered" : "started", turnId: "new" };
+        },
+      } } as unknown as WorkbenchProvider;
+      const owner = new WorkbenchThreadAutoCompactController({
+        readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
+        readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
+        now: () => 30 * 60_000,
+      });
+      const dispatcher = new WorkbenchProviderDispatcher(async (_registration, operation) => operation(provider),
+        threadId => { waits.push(threadId); }, owner.run.bind(owner));
+      const send = (route: "user" | "agent") => route === "user"
+        ? dispatcher.get(harness).threads.submit({ threadId: "thread", clientMessageId: "message", input: [], intent: "continue" })
+        : dispatcher.get(harness).threads.messageAgent({ threadId: "thread", cwd: "C:/repo",
+          message: { message: "next", senderName: "luna", senderThreadId: "sender" } });
+      const first = send(firstRoute);
+      await Promise.race([compacting.promise, first.then(() => assert.fail("inactive message started before compaction"))]);
+      const next = send(firstRoute === "user" ? "agent" : "user");
+      assert.deepEqual(calls, ["compact"]);
+      completed.resolve();
+      await Promise.all([first, next]);
+      assert.deepEqual(calls, ["compact", firstRoute, firstRoute === "user" ? "agent" : "user"]);
+      assert.deepEqual(waits, ["thread"]);
+      await owner.dispose();
+    }
+  }
+});
 
 test("the shared provider admission gate wakes waits only for accepted steers", async () => {
   const interrupted: string[] = [];

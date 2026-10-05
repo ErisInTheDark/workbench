@@ -26,6 +26,11 @@ export default class OpenCodeEventStreamController {
   private running: Promise<void> | null = null;
   private readonly baselines = new Set<Promise<void>>();
   private pendingEvents = 0;
+  private readyConnection: AbortSignal | null = null;
+  private readonly readiness = new Set<{
+    resolve(signal: AbortSignal): void;
+    reject(error: Error): void;
+  }>();
 
   constructor(private readonly options: OpenCodeEventStreamControllerOptions) {}
 
@@ -43,7 +48,27 @@ export default class OpenCodeEventStreamController {
   }
 
   hasPendingWork() {
-    return this.pendingEvents > 0 || this.baselines.size > 0;
+    return this.pendingEvents > 0 || this.baselines.size > 0 || this.readiness.size > 0;
+  }
+
+  async waitForConnection(signal: AbortSignal): Promise<AbortSignal> {
+    signal = AbortSignal.any([signal, this.lifetime.signal]);
+    signal.throwIfAborted();
+    if (this.readyConnection && !this.readyConnection.aborted) return this.readyConnection;
+    return new Promise<AbortSignal>((resolve, reject) => {
+      const cleanup = () => {
+        signal.removeEventListener("abort", cancel);
+        this.readiness.delete(waiter);
+      };
+      const waiter = {
+        resolve: (connection: AbortSignal) => { cleanup(); resolve(connection); },
+        reject: (error: Error) => { cleanup(); reject(error); },
+      };
+      const cancel = () => { cleanup(); reject(signal.reason); };
+      this.readiness.add(waiter);
+      signal.addEventListener("abort", cancel, { once: true });
+      this.start();
+    });
   }
 
   async dispose() {
@@ -57,6 +82,10 @@ export default class OpenCodeEventStreamController {
       const connection = new AbortController();
       const cancel = () => connection.abort(this.lifetime.signal.reason);
       this.lifetime.signal.addEventListener("abort", cancel, { once: true });
+      connection.signal.addEventListener("abort", () => {
+        if (this.readyConnection === connection.signal) this.readyConnection = null;
+        for (const waiter of this.readiness) waiter.reject(new Error("OpenCode event connection ended before readiness."));
+      }, { once: true });
       let touched = new Set<string>();
       let connected = false;
       let queued = 0;
@@ -71,6 +100,10 @@ export default class OpenCodeEventStreamController {
             const baseline = this.options.onConnected({
               signal: connection.signal,
               wasTouched: sessionID => observed.has(sessionID),
+            }).then(() => {
+              if (connection.signal.aborted) return;
+              this.readyConnection = connection.signal;
+              for (const waiter of this.readiness) waiter.resolve(connection.signal);
             }).catch(error => {
               if (!connection.signal.aborted) {
                 this.options.warn(`OpenCode activity reconciliation failed (${this.errorName(error)}).`);

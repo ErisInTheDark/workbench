@@ -39,6 +39,7 @@ import type {
   WorkbenchUserInputResponse,
 } from "../../types.ts";
 import type { WorkbenchUserInput as UserInput } from "../provider/provider-input.ts";
+import type { ThreadAutoCompactSettings } from "../settings/thread-auto-compact";
 import type { WorkbenchThreadActionMap } from "../thread/thread-actions.ts";
 import type { WorkbenchModelOption } from "../provider/provider-model.ts";
 import type { WorkbenchAccountLimits } from "../provider/provider-account.ts";
@@ -187,6 +188,8 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "git/arc/unstash": { params: GitArcParams<"arcUnstash">; result: GitArcStashResult };
   "git/arc/stash/discard": { params: GitArcParams<"arcDiscardStash">; result: WorkbenchGitArcSuccess };
   "local-capabilities/read": { params: object; result: WorkbenchLocalCapabilitySettingsResponse };
+  "thread-auto-compact/read": { params: object; result: { settings: ThreadAutoCompactSettings } };
+  "thread-auto-compact/update": { params: { settings: Partial<ThreadAutoCompactSettings> }; result: { settings: ThreadAutoCompactSettings } };
   "local-capabilities/update": { params: WorkbenchLocalCapabilitySettingsUpdateRequest; result: WorkbenchLocalCapabilitySettingsResponse };
   "native/file/link-roots": { params: ResolveExternalFileLinkRootsRequest; result: ResolveExternalFileLinkRootsResponse };
   "native/file/open": { params: OpenFileInEditorRequest; result: OpenFileInEditorResponse };

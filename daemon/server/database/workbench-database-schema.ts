@@ -64,6 +64,7 @@ import { threadGitSelectionSchemaHistory } from "../lib/workbench/database/schem
 import { itemApprovalSchemaHistory } from "../lib/workbench/database/schema/thread-approval-schema.ts";
 import { projectStoreSchemaHistory } from "../lib/workbench/database/schema/project-store-schema.ts";
 import { threadSkillSchemaHistory } from "../lib/workbench/database/schema/thread-skill-schema.ts";
+import { threadAutoCompactSchemaHistory } from "../lib/workbench/database/schema/thread-auto-compact-schema.ts";
 
 export { projectTables } from "workbench-shared/workbench/database/schema/project-schema";
 export type { ProjectSchemaRows } from "workbench-shared/workbench/database/schema/project-schema";
@@ -127,6 +128,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       itemApprovalSchemaHistory,
       projectStoreSchemaHistory,
       threadSkillSchemaHistory,
+      threadAutoCompactSchemaHistory,
     ],
   });
 }

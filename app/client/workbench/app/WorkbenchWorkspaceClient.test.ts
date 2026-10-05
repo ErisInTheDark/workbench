@@ -4,6 +4,31 @@ import test from "node:test";
 import { workspaceObservationShape } from "workbench-shared/workbench/workspace/workspace-observation";
 import { diffObservationValue } from "workbench-shared/workbench/workspace/observation-patch";
 import { createWorkspaceClientFixture } from "./workspace-client-fixture";
+import { DaemonIdSchema } from "workbench-shared/workbench/identity";
+import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+
+test("auto-compaction settings cross the workspace facade to the selected daemon and validate replies", async context => {
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const daemonId = DaemonIdSchema.parse("00000001-0000-4000-8000-000000000000");
+  const daemon = fixture.workspace.daemon({ kind: "installation", daemonId });
+  const read = daemon.threadAutoCompact.read();
+  const request = await Promise.race([
+    socket.request("workspace/command"),
+    read.then(() => assert.fail("settings resolved before the workspace replied")),
+  ]);
+  assert.deepEqual(request.params.scope, { kind: "installation", daemonId });
+  socket.reply(request, { settings: DEFAULT_THREAD_AUTO_COMPACT_SETTINGS });
+  assert.deepEqual(await read, { settings: DEFAULT_THREAD_AUTO_COMPACT_SETTINGS });
+  const patch = { tokenThreshold: 250_000, enabled: false };
+  const update = daemon.threadAutoCompact.update({ settings: patch });
+  const next = await socket.request("workspace/command", socket.sent.indexOf(request) + 1);
+  assert.deepEqual(next.params.scope, { kind: "installation", daemonId });
+  assert.deepEqual(next.params.params, { settings: patch });
+  socket.reply(next, { settings: { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ...patch } });
+  assert.deepEqual((await update).settings, { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ...patch });
+});
 
 const runtime = {
   kind: "runtime" as const, phase: "current" as const, failure: null,

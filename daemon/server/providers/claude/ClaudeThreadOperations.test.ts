@@ -6,7 +6,7 @@ import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from 
 import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
 import { isWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import ClaudeSessionHost from "./ClaudeSessionHost";
-import ClaudeThreadOperations from "./ClaudeThreadOperations";
+import ClaudeThreadOperations, { type ClaudeThreadOperationsOptions } from "./ClaudeThreadOperations";
 
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
 const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");
@@ -34,7 +34,7 @@ function messageText(content: unknown) {
 
 function fixture({
   failNative = false, failUsage = false, usage, contextWindowTokens, launches = [], windows = [], defaults = [],
-  captured, hold, subagentName, interrupt,
+  captured, hold, subagentName, interrupt, compactQuery, signal,
 }: {
   failNative?: boolean;
   failUsage?: boolean;
@@ -51,6 +51,8 @@ function fixture({
   hold?: Promise<void>;
   subagentName?: string;
   interrupt?: () => Promise<void>;
+  compactQuery?: ClaudeThreadOperationsOptions["createQuery"];
+  signal?: AbortSignal;
 }) {
   let reads = 0;
   const profile = contextWindowTokens === undefined ? selection
@@ -99,7 +101,8 @@ function fixture({
   const owner = new ClaudeThreadOperations({
     daemonOrigin: "http://127.0.0.1:1",
     sessions,
-    signal: new AbortController().signal,
+    createQuery: compactQuery,
+    signal: signal ?? new AbortController().signal,
     resolveExecutable: () => "fake-claude",
     observe: async () => undefined,
     broadcast: (notification: WorkbenchTranscriptNotification) => {
@@ -135,6 +138,8 @@ function fixture({
       readContextUsage: async () => null,
       recordContextUsage: async () => undefined,
       recordTurnUsage: async () => undefined,
+      recordCompactionMessage: async () => undefined,
+      reportCompaction: async () => undefined,
     },
   } as never);
   Object.assign(owner, {
@@ -146,6 +151,37 @@ function fixture({
   });
   return owner;
 }
+
+test("Claude compaction closes its query and rejects caller or owner cancellation even after a boundary", async () => {
+  for (const cause of ["caller", "owner"] as const) {
+    const entered = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    const cancellation = new AbortController();
+    let closes = 0;
+    const owner = fixture({
+      usage: [],
+      signal: cause === "owner" ? cancellation.signal : undefined,
+      compactQuery: () => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: "system", subtype: "compact_boundary" } as never;
+          entered.resolve();
+          await closed.promise;
+        },
+        close: () => { closes++; closed.resolve(); },
+      }) as never,
+    });
+    Object.assign(owner, { read: async () => ({ turns: [{ id: turnId, status: "interrupted" }] }) });
+    const work = owner.compact(threadId, cause === "caller" ? { signal: cancellation.signal } : undefined);
+    const rejected = assert.rejects(work, /cancelled compact/);
+    await entered.promise;
+    cancellation.abort(new Error("cancelled compact"));
+    // Release the fake stream even if the owner forgot cancellation, so red is deterministic.
+    try { assert.ok(closes > 0); }
+    finally { closed.resolve(); }
+    await rejected;
+    await owner.dispose();
+  }
+});
 
 test("Claude records accepted model use and treats recency failure as a warning, not an unsent turn", async context => {
   context.mock.method(console, "warn", () => undefined);

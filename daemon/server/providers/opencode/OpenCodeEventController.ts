@@ -27,12 +27,12 @@ export interface OpenCodeEventControllerOptions {
     consumeRequestedInterrupt?(nativeThreadId: string): boolean;
     currentTurn(nativeThreadId: string): ActiveTurn | null;
     latestTurn(threadId: string): Promise<Turn | null>;
-    markExecutionSettled(nativeThreadId: string): void;
+    markExecutionSettled(nativeThreadId: string, status?: "completed" | "interrupted" | "failed"): void;
     markExecutionStarted(nativeThreadId: string): void;
     syncNative(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId; latestTurnId?: WorkbenchTurnId | null; hasPendingSteers?: boolean; maintenance?: boolean }>;
     syncCreatedNative?(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId } | null>;
     reconcileActivity?(signal: AbortSignal, wasTouched: (sessionID: string) => boolean): ReturnType<OpenCodeThreadOperations["reconcileActivity"]>;
-  } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "settleExecution" | "executionIntentVersion">;
+  } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "settleExecution" | "executionIntentVersion" | "observeCompaction">;
   transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordCompaction" | "recordItem" | "recordTurnState">
     & Partial<Pick<OpenCodeTranscriptAdapter, "previewToolPatch">>;
 }
@@ -320,6 +320,7 @@ export default class OpenCodeEventController {
           threadId: identity.threadId, turnId, phase: "started", observedAt: event.created,
           reference: event.data.inputID ?? null,
         });
+        this.options.threads.observeCompaction(sessionID, "started", event.data.inputID ?? event.id);
         return;
       }
       case "session.compaction.ended":
@@ -332,6 +333,7 @@ export default class OpenCodeEventController {
           reference: event.type === "session.compaction.failed" ? event.data.inputID ?? null : null,
         });
         await this.options.threads.syncNative(sessionID);
+        this.options.threads.observeCompaction(sessionID, event.type === "session.compaction.ended" ? "completed" : "failed");
         return;
       }
       case "session.execution.succeeded":
@@ -342,22 +344,22 @@ export default class OpenCodeEventController {
         const intentVersion = this.options.threads.executionIntentVersion(sessionID);
         this.clearPreviews(sessionID);
         const requestedInterrupt = this.options.threads.consumeRequestedInterrupt?.(sessionID) ?? false;
+        const status = requestedInterrupt ? "interrupted"
+          : event.type === "session.execution.succeeded" ? "completed"
+          : event.type === "session.execution.interrupted" ? "interrupted" : "failed";
         const identity = await this.options.threads.syncNative(sessionID);
         if (event.type === "session.execution.succeeded" && identity.hasPendingSteers) return;
         if (startingTurn && this.options.threads.currentTurn(sessionID)?.turnId !== startingTurn.turnId) return;
         if (identity.latestTurnId && identity.latestTurnId !== this.options.threads.currentTurn(sessionID)?.turnId) return;
         if (identity.maintenance) {
-          this.options.threads.markExecutionSettled(sessionID);
+          this.options.threads.markExecutionSettled(sessionID, status);
           return;
         }
         const turn = await this.options.threads.latestTurn(identity.threadId);
         if (!turn) return;
         if (startingTurn && (turn.id !== startingTurn.turnId
           || this.options.threads.currentTurn(sessionID)?.turnId !== startingTurn.turnId)) return;
-        this.options.threads.markExecutionSettled(sessionID);
-        const status = requestedInterrupt ? "interrupted"
-          : event.type === "session.execution.succeeded" ? "completed"
-          : event.type === "session.execution.interrupted" ? "interrupted" : "failed";
+        this.options.threads.markExecutionSettled(sessionID, status);
         if (status !== "completed" || turn.status === "inProgress") {
           await this.options.transcript.recordTurnState({
             threadId: identity.threadId,

@@ -97,6 +97,7 @@ import type CodexAppServer from "./CodexAppServer";
 import type { WorkbenchCodexInstructionPort } from "./WorkbenchCodexInstructionAdapter";
 import type { CodexQuestionnairePort } from "./CodexQuestionnaireAdapter";
 import CodexThreadPageReadController from "./CodexThreadPageReadController";
+import ProviderCompactionCompletionController from "./ProviderCompactionCompletionController";
 import CodexThreadWindowLoader, { type CodexThreadWindowStore } from "./CodexThreadWindowLoader";
 import type { WorkbenchProviderTranscriptReconcile } from "workbench-shared/workbench/provider/provider-thread";
 import type CodexStoredTranscriptAdapter from "./CodexStoredTranscriptAdapter";
@@ -593,6 +594,7 @@ function toFileChangeApprovalDecision(choice: ApprovalDecisionChoice): FileChang
 }
 
 export default class CodexStdioBridge {
+  private readonly compactionCompletion = new ProviderCompactionCompletionController();
   private readonly appServer: CodexAppServer;
   private readonly fileChanges: CodexFileChangeController;
   private readonly publishNativeNotification: (notification: JsonRpcNotification) => void;
@@ -961,12 +963,25 @@ export default class CodexStdioBridge {
     );
   }
 
-  async handleServerRequest(message: JsonRpcRequest, options: { signal?: AbortSignal; timeoutMs?: number; healthProbe?: boolean } = {}): Promise<JsonRpcResponse> {
+  async handleServerRequest(message: JsonRpcRequest, options: { signal?: AbortSignal; timeoutMs?: number; healthProbe?: boolean; waitForCompletion?: boolean } = {}): Promise<JsonRpcResponse> {
     const controller = options.timeoutMs === undefined && !options.signal ? null : new AbortController();
     const abortFromCaller = () => controller?.abort(options.signal?.reason);
     if (options.signal?.aborted) abortFromCaller();
     else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     const run = async () => {
+      if (message.method === "thread/compact/start" && options.waitForCompletion) {
+        const threadId = asString(asRecord(message.params)?.threadId)?.trim();
+        if (!threadId) throw new Error("Compaction requires a thread id.");
+        const signal = controller
+          ? AbortSignal.any([this.generation.signal, controller.signal]) : this.generation.signal;
+        let response!: JsonRpcResponse;
+        // Waiting outside the global command queue keeps Stop and other threads usable.
+        await this.compactionCompletion.run(threadId, signal, async () => {
+          response = await this.enqueueCommand(() => this.compactThread(message, { signal }));
+          if (response.error) throw new Error(response.error.message);
+        });
+        return response;
+      }
       if (options.healthProbe) {
         if (message.method !== "account/read") throw new Error("Only account health may bypass the Codex command queue.");
         const dispatch = await this.dispatchRequest(message, { signal: controller?.signal });
@@ -2079,6 +2094,22 @@ export default class CodexStdioBridge {
         await this.persistTranscript(() => admitNativeTranscriptObservations(this.identities!, observations), signal);
       }
       signal.throwIfAborted();
+      const compactionParams = asRecord(message.params);
+      const compactionThread = asString(compactionParams?.threadId);
+      const compactionTurn = asRecord(compactionParams?.turn);
+      const compactionTurnId = asString(compactionParams?.turnId) ?? asString(compactionTurn?.id);
+      if (compactionThread) {
+        if (message.method === "turn/started" && compactionTurnId) {
+          this.compactionCompletion.started(compactionThread, compactionTurnId);
+        } else if (message.method === "item/completed" && compactionTurnId && asRecord(compactionParams?.item)?.type === "contextCompaction") {
+          this.compactionCompletion.completed(compactionThread, compactionTurnId);
+        } else if (message.method === "turn/completed" && compactionTurnId) {
+          if (compactionTurn?.status === "completed") this.compactionCompletion.settled(compactionThread, compactionTurnId);
+          else this.compactionCompletion.failed(compactionThread, new Error("Native compaction was interrupted or failed."), compactionTurnId);
+        } else if (message.method === "error" && compactionParams?.willRetry !== true) {
+          this.compactionCompletion.failed(compactionThread, new Error("Native compaction failed."), compactionTurnId ?? undefined);
+        }
+      }
       this.publishNativeNotification(message);
       if (syntheticFileChangeNotification) this.publishNativeNotification(syntheticFileChangeNotification);
       const textField = TRANSCRIPT_TEXT_NOTIFICATIONS[message.method!];
@@ -2950,8 +2981,8 @@ export default class CodexStdioBridge {
     });
   }
 
-  private async compactThread(message: JsonRpcRequest): Promise<JsonRpcResponse> {
-    const signal = this.generation.signal;
+  private async compactThread(message: JsonRpcRequest, options: { signal?: AbortSignal } = {}): Promise<JsonRpcResponse> {
+    const signal = options.signal ? AbortSignal.any([this.generation.signal, options.signal]) : this.generation.signal;
     const requestId = message.id ?? null;
     const threadId = asString(asRecord(message.params)?.threadId)?.trim();
     if (!threadId) return { id: requestId, error: { code: -32602, message: "Compaction requires a thread id." } };
@@ -3234,7 +3265,7 @@ export default class CodexStdioBridge {
   }
 
   hasPendingWork() {
-    return this.commandQueue !== null || this.transcriptActiveTurns.size > 0
+    return this.compactionCompletion.hasPendingWork() || this.commandQueue !== null || this.transcriptActiveTurns.size > 0
       || this.pendingResponses.size > 0 || this.retiringResponses.size > 0
       || this.pendingUserInputRequests.size > 0 || this.pendingApprovals.size > 0 || this.transcriptTasks.size > 0
       || this.backgroundTasks.size > 0

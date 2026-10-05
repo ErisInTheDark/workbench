@@ -6,17 +6,23 @@ import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
 import providerRegistrations, { type WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
+import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 
 export default class WorkbenchProviderHandle implements WorkbenchProvider {
   constructor(
     private readonly key: WorkbenchProviderKey,
     private readonly run: WorkbenchProviderOperation,
     private readonly interruptSteerWaits: (threadId: string) => void,
+    private readonly messageAdmission?: WorkbenchThreadAutoCompactController["run"],
   ) {}
 
   private admitted<T extends { kind: "started" | "steered" }>(threadId: string, result: T): T {
     if (result.kind === "steered") this.interruptSteerWaits(threadId);
     return result;
+  }
+
+  private admitMessage<T>(threadId: string, provider: WorkbenchProvider, admit: () => Promise<T>) {
+    return this.messageAdmission ? this.messageAdmission(threadId, provider, admit) : admit();
   }
 
   readonly context: NonNullable<WorkbenchProvider["context"]> = {
@@ -66,10 +72,10 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     readLatest: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.readLatest(threadId), `${this.key}: threads.readLatest`),
     latestTurn: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.latestTurn(threadId), `${this.key}: threads.latestTurn`),
     admitTurn: (threadId, turnReference) => this.run(providerRegistrations[this.key], provider => provider.threads.admitTurn(threadId, turnReference), `${this.key}: threads.admitTurn`),
-    submit: async input => this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => provider.threads.submit(input), `${this.key}: threads.submit`)),
-    messageAgent: async input => this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => provider.threads.messageAgent(input), `${this.key}: threads.messageAgent`)),
+    submit: async input => this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => this.admitMessage(input.threadId, provider, () => provider.threads.submit(input)), `${this.key}: threads.submit`)),
+    messageAgent: async input => this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => this.admitMessage(input.threadId, provider, () => provider.threads.messageAgent(input)), `${this.key}: threads.messageAgent`)),
     rename: (threadId, title) => this.run(providerRegistrations[this.key], provider => provider.threads.rename(threadId, title), `${this.key}: threads.rename`),
-    compact: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.compact(threadId), `${this.key}: threads.compact`),
+    compact: (threadId, options) => this.run(providerRegistrations[this.key], provider => provider.threads.compact(threadId, options), `${this.key}: threads.compact`),
     delete: threadId => this.run(providerRegistrations[this.key], provider => {
       if (!provider.threads.delete) throw new Error(`Provider ${this.key} does not support deleting its threads.`);
       return provider.threads.delete(threadId);

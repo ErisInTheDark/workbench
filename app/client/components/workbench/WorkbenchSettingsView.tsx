@@ -14,6 +14,7 @@ import CommandApprovalSettings from "./CommandApprovalSettings";
 import WorkbenchEnvironmentSettings from "./environment/WorkbenchEnvironmentSettings";
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import VoiceSettings from "./voice/VoiceSettings";
+import ThreadAutoCompactSettings from "./ThreadAutoCompactSettings";
 import WorkbenchFormSection from "./WorkbenchFormSection";
 import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
 import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
@@ -197,6 +198,9 @@ export default function WorkbenchSettingsView({
           <WorkbenchFormSection id="settings-threads" title="Threads">
             <WorkbenchSettingsPreferences keys={["threadCodeBlockWrap", "threadCodeDetails"]}
               logicalProjectId={logicalProject?.id ?? null} onError={onError} />
+            {daemonControl}
+            {daemon ? <ThreadAutoCompactSettings key={daemonId} daemon={daemon} />
+              : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
           </WorkbenchFormSection>
           <WorkbenchFormSection id="settings-voice" title="Voice"><VoiceSettings /></WorkbenchFormSection>
           <WorkbenchFormSection id="settings-runtime" title="Runtime"><WorkbenchReactDevelopmentModeSetting /></WorkbenchFormSection>

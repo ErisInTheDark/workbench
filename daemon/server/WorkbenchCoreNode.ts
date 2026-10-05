@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchCoreNode: own core state, Git, thread skills, questionnaire, harness, project, orphaned-turn settlement, unfinished-turn continuation, and supervisor registrations plus direct child declarations.
+ * - default WorkbenchCoreNode: own core state, Git, thread skills, auto-compaction admission, questionnaire, harness, project, orphaned-turn settlement, unfinished-turn continuation, and supervisor registrations plus direct child declarations.
  * Local helpers: construct reloadable modules, harness capabilities, and the core feature lifecycle.
  */
 import * as project from "./lib/project";
@@ -64,6 +64,7 @@ import WorkbenchApprovalController, { type WorkbenchApprovalHandoff } from "./Wo
 import WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
+import WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadMessageController from "./WorkbenchThreadMessageController";
 import WorkbenchThreadLaunchController from "./WorkbenchThreadLaunchController";
@@ -122,7 +123,19 @@ function createWorkbenchCoreFeature(
   const worktreeGitTransitions = createWorktreeGitTransitions(context.threadTransitions);
   let threadState: WorkbenchThreadStateFeature | null = null;
   let stats: WorkbenchStatsController | null = null;
-  const providers = new WorkbenchProviderDispatcher(run);
+  const autoCompact = new WorkbenchThreadAutoCompactController({
+    readSettings: () => settings.readThreadAutoCompact(),
+    readEvidence: async reference => {
+      const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(reference) });
+      if (!identity || !threadState) return null;
+      const entry = await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+      if (!entry || entry.entryKind === "draft") return null;
+      const usage = await database.readThreadContextUsage(identity.threadId);
+      return { activityAt: entry.activityAt, contextTokens: usage?.tokenUsage?.last.inputTokens ?? null };
+    },
+    now: Date.now,
+  });
+  const providers = new WorkbenchProviderDispatcher(run, undefined, autoCompact.run.bind(autoCompact));
   const threadSkillTarget = async (threadId: string) => {
     const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
     const harness = installedProviderKeys.find(key => key === identity?.bindings[0]?.harness);
@@ -581,7 +594,7 @@ function createWorkbenchCoreFeature(
     },
   };
   return new WorkbenchCoreFeature({
-    hasPendingWork: () => launches.hasPendingWork() || stats.hasPendingWork() || transcriptReconciliation.hasPendingWork(),
+    hasPendingWork: () => autoCompact.hasPendingWork() || launches.hasPendingWork() || stats.hasPendingWork() || transcriptReconciliation.hasPendingWork(),
     captureReloadState: (): WorkbenchCoreReloadState => ({
       projectStartup: projectCatalog.captureReloadState(),
       approvals: approvals.captureReloadState(),
@@ -601,12 +614,13 @@ function createWorkbenchCoreFeature(
         });
       }
     },
-    beginRuntimeDrain: () => { launches.beginRuntimeDrain(); messages.beginRuntimeDrain(); subagents.beginRuntimeDrain(); },
+    beginRuntimeDrain: () => { autoCompact.beginRuntimeDrain(); launches.beginRuntimeDrain(); messages.beginRuntimeDrain(); subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
       unsubscribeCompaction();
       unsubscribeTurnStarted();
       unsubscribeHeldSteers();
       unfinishedTurns.dispose();
+      await autoCompact.dispose();
       reportPhase("orphaned turn sweep disposal");
       await turnSettlement.dispose();
       reportPhase("transcript reconciliation disposal");

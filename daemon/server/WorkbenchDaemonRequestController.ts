@@ -17,6 +17,7 @@ import {
     type WorkbenchQuestionnaireRespondRequest,
 } from "workbench-shared/workbench/daemon/workbench-daemon-requests";
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
+import { ThreadAutoCompactSettingsPatchSchema } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type WorkbenchModelUsageStore from "./WorkbenchModelUsageStore";
 import { CommandApprovalPatchSchema, CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
@@ -93,6 +94,7 @@ const METHODS = new Set([
   "project/folders/list", "project/create",
   ...Object.keys(WORKBENCH_GIT_ARC_ACTION_BY_METHOD),
   "local-capabilities/read", "local-capabilities/update",
+  "thread-auto-compact/read", "thread-auto-compact/update",
   "native/file/link-roots", "native/file/open", "native/file/reveal",
   "profiles/delete", "profiles/read", "profiles/target/read", "profiles/target/set", "profiles/upsert",
   "project/catalog/read", "project/file-index/read", "project/locations/read", "thread/launch", "thread/launch/read",
@@ -244,7 +246,7 @@ export default class WorkbenchDaemonRequestController {
     projectSnapshot: Pick<WorkbenchProjectSnapshotController, "readProjectSnapshot" | "handleRequest">;
     search: Pick<WorkbenchSearchController, "search">;
     stats: Pick<WorkbenchStatsController, "observeAccountLimits" | "refreshRateLimits" | "startImport">;
-    settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities">;
+    settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities" | "readThreadAutoCompact" | "updateThreadAutoCompact">;
     threadIdentity: { resolve: WorkbenchHarnessController["resolveThreadIdentity"] };
     questionnaireResponses: Pick<WorkbenchQuestionnaireResponseController, "respond">;
   }) {}
@@ -536,6 +538,13 @@ export default class WorkbenchDaemonRequestController {
           result = { ok: true };
           break;
         case "local-capabilities/read": result = { localCapabilities: await this.owners.settings.readLocalCapabilities() }; break;
+        case "thread-auto-compact/read": result = { settings: await this.owners.settings.readThreadAutoCompact() }; break;
+        case "thread-auto-compact/update": {
+          const edit = ThreadAutoCompactSettingsPatchSchema.safeParse(params.settings);
+          if (!edit.success) throw new InvalidParamsError("Invalid auto-compact settings.");
+          result = { settings: await this.owners.settings.updateThreadAutoCompact(edit.data) };
+          break;
+        }
         case "local-capabilities/update": {
           const local = record(params.localCapabilities);
           result = { localCapabilities: await this.owners.settings.updateLocalCapabilities((current) => ({

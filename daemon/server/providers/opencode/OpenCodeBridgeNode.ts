@@ -53,6 +53,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     });
     const threads = new OpenCodeThreadOperations({
       acquire,
+      waitForCompactionConnection: signal => stream.waitForConnection(signal),
       observe: async facts => {
         await build.get("providerObservations").observe("opencode", facts);
       },

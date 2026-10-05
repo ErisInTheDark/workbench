@@ -12,6 +12,70 @@ const unrelatedStatus = { type: "session.status", data: { sessionID: "unrelated"
 const started = { type: "session.execution.started", data: { sessionID: "session" }, id: "started",
   durable: { aggregateID: "session", seq: 1, version: 1 } } as OpenCodeEvent;
 
+test("connection readiness waits for reconciliation and retires on disconnect", async () => {
+  const baseline = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const end = Promise.withResolvers<void>();
+  const retry = Promise.withResolvers<void>();
+  const controller = new OpenCodeEventStreamController({
+    subscribe: () => ({
+      async *[Symbol.asyncIterator]() { yield connected; await end.promise; },
+    }),
+    onConnected: async () => { entered.resolve(); await baseline.promise; },
+    onEvent: async () => {},
+    waitBeforeRetry: signal => new Promise<void>(resolve => {
+      signal.addEventListener("abort", () => resolve(), { once: true });
+      retry.resolve();
+    }),
+    warn: () => {},
+  });
+  let ready = false;
+  const work = controller.waitForConnection(new AbortController().signal).then(signal => {
+    ready = true;
+    return signal;
+  });
+  await entered.promise;
+  assert.equal(ready, false);
+  baseline.resolve();
+  const connection = await work;
+  assert.equal(connection.aborted, false);
+  end.resolve();
+  await retry.promise;
+  assert.equal(connection.aborted, true);
+  await controller.dispose();
+});
+
+test("failed connection, caller cancellation and disposal reject readiness without leaking waiters", async () => {
+  for (const cause of ["connection", "caller", "disposal"] as const) {
+    const end = Promise.withResolvers<void>();
+    const retry = Promise.withResolvers<void>();
+    const caller = new AbortController();
+    const controller = new OpenCodeEventStreamController({
+      subscribe: signal => ({
+        async *[Symbol.asyncIterator]() {
+          await Promise.race([end.promise, new Promise<void>(resolve => {
+            signal.addEventListener("abort", () => resolve(), { once: true });
+          })]);
+        },
+      }),
+      onConnected: async () => {},
+      onEvent: async () => {},
+      waitBeforeRetry: signal => new Promise<void>(resolve => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+        retry.resolve();
+      }),
+      warn: () => {},
+    });
+    const rejected = assert.rejects(controller.waitForConnection(caller.signal));
+    if (cause === "connection") { end.resolve(); await retry.promise; }
+    else if (cause === "caller") caller.abort(new Error("caller stopped"));
+    else await controller.dispose();
+    await rejected;
+    await controller.dispose();
+    assert.equal(controller.hasPendingWork(), false);
+  }
+});
+
 test("reconnects an ended daemon event stream and fences a connection snapshot behind newer session events", async () => {
   const firstEnd = Promise.withResolvers<void>();
   const baselineRelease = Promise.withResolvers<void>();

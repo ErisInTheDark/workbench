@@ -1,11 +1,34 @@
 /* No production exports. Protect durable capabilities, update ordering and reopen. */
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
 import WorkbenchServerSettings from "./WorkbenchServerSettings.ts";
 import WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController.ts";
+import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+
+test("daemon compaction thresholds merge independent edits and persist while disabled across reopen", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-auto-compact-");
+  const options = { databasePath: path.join(temporary.path, "workbench.sqlite3") };
+  let database = new WorkbenchDatabaseController(options);
+  try {
+    const settings = new WorkbenchServerSettings(database);
+    assert.deepEqual(await settings.readThreadAutoCompact(), DEFAULT_THREAD_AUTO_COMPACT_SETTINGS);
+    await Promise.all([
+      settings.updateThreadAutoCompact({ tokenThreshold: 250_000 }),
+      settings.updateThreadAutoCompact({ idleMinutes: 40 }),
+      settings.updateThreadAutoCompact({ enabled: false }),
+    ]);
+    await database.close();
+    database = new WorkbenchDatabaseController(options);
+    assert.deepEqual(await new WorkbenchServerSettings(database).readThreadAutoCompact(), {
+      enabled: false, tokenThreshold: 250_000, idleMinutes: 40,
+    });
+  } finally {
+    await database.close();
+    await temporary.dispose();
+  }
+});
 
 test("capabilities default safely and serialised updates persist across worker reopen", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-capabilities-");

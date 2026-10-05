@@ -27,6 +27,7 @@ import type WorkbenchProjectCatalogController from "../../WorkbenchProjectCatalo
 import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireController";
 import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature";
 import type OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
+import ProviderCompactionCompletionController from "../../ProviderCompactionCompletionController";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
 import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
@@ -64,6 +65,7 @@ function steerInput(inputs: readonly WorkbenchUserInput[]): WorkbenchSteerHistor
 
 export interface OpenCodeThreadOperationsOptions {
   acquire: () => Promise<WorkbenchOpenCodeClient>;
+  waitForCompactionConnection(signal: AbortSignal): Promise<AbortSignal>;
   observe: (facts: WorkbenchProviderObservation) => Promise<void>;
   identities: WorkbenchThreadIdentityController;
   projects: Pick<WorkbenchProjectCatalogController, "resolveAgentEndpointProjectFromCwd" | "resolveProjectById">;
@@ -150,8 +152,9 @@ function openCodeFailure(operation: string, error: unknown) {
 }
 
 export default class OpenCodeThreadOperations implements WorkbenchProviderThreads {
+  private readonly compactionCompletion = new ProviderCompactionCompletionController();
   hasPendingWork() {
-    return this.pendingCreations.size > 0 || this.pendingPrompts.size > 0 || this.pendingSteerSessions.size > 0
+    return this.compactionCompletion.hasPendingWork() || this.pendingCreations.size > 0 || this.pendingPrompts.size > 0 || this.pendingSteerSessions.size > 0
       || [...this.executions.values()].some(execution => execution.active || execution.admission !== null);
   }
   private readonly executions = new Map<string, SessionExecution>();
@@ -544,9 +547,28 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     await this.sync(threadId);
   }
 
-  async compact(threadId: string) {
+  async compact(threadId: string, options?: { waitForCompletion?: boolean; signal?: AbortSignal }) {
     const { binding } = await this.native(threadId);
-    await (await this.options.acquire()).session.compact({ sessionID: binding.nativeThreadId });
+    const client = await this.options.acquire();
+    if (!options?.waitForCompletion) {
+      await client.session.compact({ sessionID: binding.nativeThreadId });
+      return;
+    }
+    const callerSignal = options.signal ? AbortSignal.any([options.signal, this.options.signal]) : this.options.signal;
+    const connectionSignal = await this.options.waitForCompactionConnection(callerSignal);
+    const signal = AbortSignal.any([callerSignal, connectionSignal]);
+    signal.throwIfAborted();
+    const active = await client.session.active({ signal });
+    if (active[binding.nativeThreadId]) throw new Error("OpenCode cannot auto-compact during an active execution.");
+    await this.compactionCompletion.run(binding.nativeThreadId, signal, async () => {
+      await client.session.compact({ sessionID: binding.nativeThreadId }, { signal });
+    });
+  }
+
+  observeCompaction(sessionID: string, phase: "started" | "completed" | "failed", reference?: string) {
+    if (phase === "started") this.compactionCompletion.started(sessionID, reference ?? sessionID);
+    else if (phase === "completed") this.compactionCompletion.completed(sessionID);
+    else this.compactionCompletion.failed(sessionID, new Error("OpenCode compaction failed."));
   }
 
   async delete(threadId: string) {
@@ -762,8 +784,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     this.execution(nativeThreadId).active = true;
   }
 
-  markExecutionSettled(nativeThreadId: string) {
+  markExecutionSettled(nativeThreadId: string, status: "completed" | "interrupted" | "failed" = "completed") {
     this.execution(nativeThreadId).active = false;
+    if (status === "completed") this.compactionCompletion.settled(nativeThreadId);
+    else this.compactionCompletion.failed(nativeThreadId, new Error("OpenCode compaction was interrupted or failed."));
   }
 
   acceptExecutionEvent(nativeThreadId: string, sequence: number) {

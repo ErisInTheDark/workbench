@@ -542,7 +542,9 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     });
   }
 
-  async compact(threadId: string) {
+  async compact(threadId: string, options?: { waitForCompletion?: boolean; signal?: AbortSignal }) {
+    const signal = options?.signal ? AbortSignal.any([options.signal, this.options.signal]) : this.options.signal;
+    signal.throwIfAborted();
     const identity = await this.identity(threadId);
     if (this.live.has(identity.threadId)) throw new Error("Claude cannot compact during an active turn.");
     const binding = identity.bindings.find(value => value.harness === "claude");
@@ -559,7 +561,10 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     let processExit: Promise<void> | null = null;
     let sdkQuery: Query | null = null;
     let compacted = false;
+    const cancel = () => sdkQuery?.close();
     try {
+      signal.throwIfAborted();
+      signal.addEventListener("abort", cancel, { once: true });
       sdkQuery = (this.options.createQuery ?? query)({
         prompt: "/compact",
         options: {
@@ -573,19 +578,24 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
           spawnClaudeCodeProcess: options => spawnTrackedClaude(options, exit => { processExit = exit; }),
         },
       });
+      if (signal.aborted) cancel();
+      signal.throwIfAborted();
       const turnId = WorkbenchTurnIdSchema.parse(turn.id);
       for await (const message of sdkQuery) {
+        signal.throwIfAborted();
         if (message.type === "system" && (message.subtype === "compact_boundary" || message.subtype === "status")) {
           await this.options.transcript.recordCompactionMessage(identity.threadId, turnId, message);
           if (message.subtype === "compact_boundary") compacted = true;
         }
       }
+      signal.throwIfAborted();
       if (!compacted) {
         // Settle a compaction Claude started but never finished; with nothing open this records nothing.
         await this.options.transcript.reportCompaction(identity.threadId, turnId, "failed");
         throw new Error("Claude compaction ended without a native compact boundary.");
       }
     } finally {
+      signal.removeEventListener("abort", cancel);
       sdkQuery?.close();
       if (processExit) await processExit;
       await view?.dispose();

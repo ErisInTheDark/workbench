@@ -9,6 +9,7 @@ import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/p
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchProviderHandle from "./WorkbenchProviderHandle";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
+import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 
 function interruptSteerWaits(threadId: string) {
   getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(WorkbenchThreadIdSchema.parse(threadId));
@@ -18,10 +19,11 @@ export default class WorkbenchProviderDispatcher {
   constructor(
     private readonly run: WorkbenchProviderOperation,
     private readonly onSteerAdmitted: (threadId: string) => void = interruptSteerWaits,
+    private readonly messageAdmission?: WorkbenchThreadAutoCompactController["run"],
   ) {}
 
   get(key: WorkbenchProviderKey): WorkbenchProvider {
-    return new WorkbenchProviderHandle(key, this.run, this.onSteerAdmitted);
+    return new WorkbenchProviderHandle(key, this.run, this.onSteerAdmitted, this.messageAdmission);
   }
 
   hydratesUsage(key: WorkbenchProviderKey) {

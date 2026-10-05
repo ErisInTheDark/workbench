@@ -172,11 +172,11 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     }));
   }
 
-  private async dispatch(request: JsonRpcRequest): Promise<JsonRpcResponse> {
+  private async dispatch(request: JsonRpcRequest, options?: { waitForCompletion?: boolean; signal?: AbortSignal }): Promise<JsonRpcResponse> {
     await this.owners.bridge.ensureInitialized(createInitializeRequest(0, {
       capabilities: createInitializeCapabilities({ experimentalApi: true }),
     }));
-    return this.owners.bridge.handleServerRequest(request);
+    return this.owners.bridge.handleServerRequest(request, options);
   }
 
   private result(response: JsonRpcResponse) {
@@ -207,9 +207,9 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     };
   }
 
-  private async mapped(request: JsonRpcRequest) {
+  private async mapped(request: JsonRpcRequest, options?: { waitForCompletion?: boolean; signal?: AbortSignal }) {
     try {
-      return await this.mappedResponse(request);
+      return await this.mappedResponse(request, options);
     } catch (error) {
       if (request.method === "thread/read" || request.method === "thread/context/read") {
         const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
@@ -222,9 +222,9 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     }
   }
 
-  private async mappedResponse(request: JsonRpcRequest) {
+  private async mappedResponse(request: JsonRpcRequest, options?: { waitForCompletion?: boolean; signal?: AbortSignal }) {
     const { request: native } = await mapWorkbenchProviderRequest(this.owners.identities.threads, "codex", request);
-    const response = await this.dispatch(native);
+    const response = await this.dispatch(native, options);
     this.result(response);
     const result = record(response.result);
     if (result?.thread && request.method !== "thread/context/read") {
@@ -418,8 +418,8 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     await this.mapped({ id: 0, method: "thread/name/set", params: { threadId, name: title } });
   }
 
-  async compact(threadId: string) {
-    await this.mapped({ id: 0, method: "thread/compact/start", params: { threadId } });
+  async compact(threadId: string, options?: { waitForCompletion?: boolean; signal?: AbortSignal }) {
+    await this.mapped({ id: 0, method: "thread/compact/start", params: { threadId } }, options);
   }
 
   async delete(threadId: string) {

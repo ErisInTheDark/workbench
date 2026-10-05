@@ -9,6 +9,17 @@ import { captureTestOutput } from "../../../test/capture-test-output.mts";
 import { GitArcFailureException } from "../git/git-arc-failures.ts";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "./WorkbenchDaemonClient.ts";
 
+test("auto-compact replies validate daemon thresholds without leaking rejected values", async context => {
+  const diagnostics: string[] = [];
+  context.mock.method(console, "error", (message: string) => { diagnostics.push(message); });
+  const client = new WorkbenchDaemonClient({
+    request: async <TResponse>() => ({ settings: { enabled: true, tokenThreshold: "private-value", idleMinutes: 30 } }) as TResponse,
+  });
+  await assert.rejects(client.threadAutoCompact.read());
+  assert.equal(diagnostics.length, 1);
+  assert.ok(!diagnostics[0]!.includes("private-value"));
+});
+
 test("working-tree summary validates remote status without exposing rejected paths", async context => {
   const diagnostics: string[] = [];
   context.mock.method(console, "error", (message: string) => { diagnostics.push(message); });
