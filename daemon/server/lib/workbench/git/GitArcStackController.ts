@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcStackController: own stack layer tips, chain reads, stacked baselines (including arc drift measured from landed tips) and seal/reopen operations.
+ * - default GitArcStackController: own stack layer tips, chain reads, baseline tips (pending, or landed until an arc re-baselines past them), arc drift and seal/reopen operations.
  * - GitArcStackLayer: one readable stack tip with its sealed layer facts.
  * - GitArcStackStatusResolver: derived proposal status supplied by the proposal owner.
  * - GitArcStackedProposalState: waiting, replayable or broken stacked proposal classification.
@@ -147,16 +147,36 @@ export default class GitArcStackController {
   }
 
   /**
-   * Claimed-path drift for an arc. Arcs built on a stack measure from its tip, landed or not, until their next
-   * re-baseline: after a clean landing the tip matches HEAD, while the arc checkpoint still sits on older history.
+   * The stack tip shaping an arc's baseline. Pending tips always do. A landed tip does only until the arc re-baselines
+   * past its landing: the tip matches HEAD while the arc checkpoint still sits on older history, but once the checkpoint
+   * parent holds every landing commit, later commits on the tip's paths are real history the tip knows nothing about.
    */
+  async baselineTip(entry: Pick<GitArcRegistryEntry, "stackTip"> | null | undefined, checkpoint: { parent: string | null }) {
+    if (!entry?.stackTip) return null;
+    const chain = await this.readChain(entry.stackTip);
+    if (!chain.length) return null;
+    const summaries = (await this.store().readProposalSummaryGroups(chain.map(({ layer }) => ({
+      harness: layer.harness as GitArcHarness, proposalIds: layer.proposalIds, threadId: layer.threadId,
+    })))).flat();
+    if (summaries.some(({ status }) => status === "proposed")) return { commit: entry.stackTip, pending: true };
+    const landings = summaries.flatMap(({ committedSha }) => committedSha ? [committedSha] : []);
+    for (const landing of landings) {
+      if (!checkpoint.parent || !await this.repository.isAncestor(landing, checkpoint.parent)) {
+        return { commit: entry.stackTip, pending: false };
+      }
+    }
+    return null;
+  }
+
+  /** Claimed-path drift for an arc, measured from its baseline tip when one still applies. */
   async arcDrift(
     entry: Pick<GitArcRegistryEntry, "stackTip"> | null | undefined,
     checkpoint: { checkpointCommit: string; parent: string | null },
     paths: string[],
     head: string | null,
   ) {
-    if (entry?.stackTip) return { incompatible: false, changedPaths: await this.tipDrift(entry.stackTip, paths, head) };
+    const tip = await this.baselineTip(entry, checkpoint);
+    if (tip) return { incompatible: false, changedPaths: await this.tipDrift(tip.commit, paths, head) };
     const movement = await this.repository.classifyHeadMovement(checkpoint.parent, paths, checkpoint.checkpointCommit, head);
     return { incompatible: movement.kind === "incompatible", changedPaths: movement.changedPaths };
   }

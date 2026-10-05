@@ -117,6 +117,17 @@ test("released claims keep sealed proposals committable and a child on a lower l
   await commit("parent", state.upper, "parent two");
   // Landed parent layers are the child's baseline, not drift in its claims.
   assert.match((await controller.diff({ cwd, threadId: "child", paths: ["two.txt"] })).diff, /-parent two\n\+child builds on two/u);
+  // The parent commits one.txt past the landing, then hands it over: the child's checkpoint moves onto that HEAD,
+  // so its landed tip must stop measuring the later commit.
+  await controller.editArcClaims({ cwd, threadId: "parent", inherit: true, addPaths: ["one.txt"] });
+  await fs.writeFile(path.join(cwd, "one.txt"), "parent three\n");
+  const later = await controller.createProposal({ cwd, threadId: "parent", paths: ["one.txt"], title: "parent three", description: "" });
+  await fs.writeFile(path.join(cwd, "one.txt"), "handed over\n");
+  await commit("parent", later.proposalId, "parent three");
+  await (await controller.prepareReleaseToChild({
+    cwd, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["one.txt"],
+  })).apply();
+  assert.match((await controller.diff({ cwd, threadId: "child", paths: ["one.txt"] })).diff, /-parent three\n\+handed over/u);
   await controller.editArcClaims({ cwd, threadId: "child", inherit: true });
   await commit("child", child.proposalId, "child");
   assert.equal(await git("show", "HEAD:two.txt"), "child builds on two\n");

@@ -968,8 +968,8 @@ export default class WorkbenchGitCheckpointController {
     const paths = rawPaths?.length ? repository.normalizePaths(rawPaths) : repository.normalizePaths(metadata.scopePaths);
     const baseline = await this.proposals.logicalBaseline({
       checkpointCommit: checkpoint.checkpointCommit,
+      checkpointParent: checkpoint.parent,
       cwd: repository.root,
-      fallbackHead: checkpoint.parent,
       harness,
       repository,
       threadId,
@@ -1296,17 +1296,17 @@ export default class WorkbenchGitCheckpointController {
       const metadata = releasingArc?.metadata ?? checkpoint.metadata;
       if (!metadata?.scopePaths.length) throw new Error("This checkpoint does not contain a restorable file set.");
       // Full restore & unclaim abandons pending sealed layers too; selected restores keep sealed content intact.
-      // Landed tips are real history, so every restore measures from them.
+      // Landed baseline tips are real history, so every restore measures from them.
       const stack = this.stack(repository);
-      const entry = await this.registry(repository).find({ harness, threadId });
-      const stackTip = releasingArc && await stack.pendingTip(entry) ? null : entry?.stackTip ?? null;
+      const baselineTip = await stack.baselineTip(await this.registry(repository).find({ harness, threadId }), checkpoint);
+      const stackTip = releasingArc && baselineTip?.pending ? null : baselineTip?.commit ?? null;
       const restoreSource = stackTip
         ? await stack.sealedTree(checkpoint.checkpointCommit, stackTip)
         : releasingArc
           ? await this.proposals.logicalBaseline({
             checkpointCommit: checkpoint.checkpointCommit,
+            checkpointParent: checkpoint.parent,
             cwd: repoRoot,
-            fallbackHead: checkpoint.parent,
             harness,
             ignoreStack: true,
             threadId,

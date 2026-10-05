@@ -728,10 +728,10 @@ export default class GitArcProposalController {
     }
   }
 
-  /** The commit current arc work is measured from: the stack tip (landed or not), else accepted or checkpoint history. */
+  /** The commit current arc work is measured from: the baseline stack tip, else accepted or checkpoint history. */
   async logicalBaseline(input: ArcIdentityInput & {
     checkpointCommit: string;
-    fallbackHead: string | null;
+    checkpointParent: string | null;
     /** Measure from real history even while stack layers are pending. */
     ignoreStack?: boolean;
     repository?: WorkbenchGitRepository;
@@ -739,12 +739,12 @@ export default class GitArcProposalController {
     const repository = input.repository ?? await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
     if (!input.ignoreStack) {
-      // A landed tip matches HEAD on its paths while the arc checkpoint still sits on older history.
-      const tip = (await this.registry(repository).find({ harness, threadId: input.threadId }))?.stackTip;
-      if (tip) return tip;
+      const entry = await this.registry(repository).find({ harness, threadId: input.threadId });
+      const tip = await this.stack(repository).baselineTip(entry, { parent: input.checkpointParent });
+      if (tip) return tip.commit;
     }
     const outcome = await this.store(repository).readOutcome(harness, input.threadId, input.checkpointCommit);
-    return outcome?.acceptedProposals?.at(-1)?.headSha ?? input.fallbackHead;
+    return outcome?.acceptedProposals?.at(-1)?.headSha ?? input.checkpointParent;
   }
 
   private async createMessageOnlyProposal({
@@ -873,7 +873,8 @@ export default class GitArcProposalController {
     const { active, arc, checkpoint, claimedPaths, harness, metadata: checkpointMetadata, proposalIds, registry, repository } = await this.requireProposableArc({ cwd, harness: rawHarness, threadId });
     const store = this.store(repository);
     const stack = this.stack(repository);
-    const [stackTip, sealedIds] = await Promise.all([stack.pendingTip(active), stack.sealedProposalIds(active)]);
+    const [baselineTip, sealedIds] = await Promise.all([stack.baselineTip(active, checkpoint), stack.sealedProposalIds(active)]);
+    const stackTip = baselineTip?.pending ? baselineTip.commit : null;
     if (stackTip && (amend || amendProposalId)) throw new GitArcRejectionError({ reason: "amendOnPendingStack" });
     if (replaceProposalId && sealedIds.has(replaceProposalId)) throw new GitArcRejectionError({ reason: "sealedProposal" });
     let replacementTarget: StoredProposal | null = null;
@@ -908,9 +909,9 @@ export default class GitArcProposalController {
       // Stacked proposals build on sealed layers, which real HEAD only gains as the user commits them.
       await stack.validateBaseline(stackTip, requestedPaths, await repository.headOrNull());
       liveBaseCommit = stackTip;
-    } else if (active.stackTip) {
+    } else if (baselineTip) {
       // A landed stack is real history now: measure from its tip and build on HEAD, which already holds it.
-      await stack.validateBaseline(active.stackTip, requestedPaths, await repository.headOrNull());
+      await stack.validateBaseline(baselineTip.commit, requestedPaths, await repository.headOrNull());
       liveBaseCommit = await repository.headOrNull();
     } else {
       const logicalBaseline = (await store.readOutcome(harness, threadId, checkpoint.checkpointCommit))?.acceptedProposals?.at(-1)?.headSha
