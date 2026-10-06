@@ -340,23 +340,19 @@ func (group *networkGroupController) enrol(ctx context.Context, peerID string, a
 	if directory.Group.Transfer != nil && directory.Group.Transfer.Phase != "activated" {
 		return groupWelcome{}, errors.New("finish ownership handover before enrolling an app")
 	}
-	for _, existing := range directory.Members {
-		if existing.NodeID == member.NodeID && existing.Rename != nil {
-			return groupWelcome{}, errors.New("finish the app's pending rename before refreshing enrolment")
-		}
-		if existing.NodeID == member.NodeID && existing.KeyFingerprint != member.KeyFingerprint {
-			return groupWelcome{}, errors.New("enrolment cannot replace an app's registered key")
-		}
-	}
-	members, err := replaceMember(directory.Members, member)
+	status, err := group.node.local.Status(ctx)
+	if err != nil { return groupWelcome{}, errors.New("Tailscale app availability could not be checked") }
+	online := make(map[string]bool)
+	for _, peer := range status.Peer { online[string(peer.ID)] = peer.Online }
+	directory, changed, err := reconcileMemberIdentity(directory, member, online)
 	if err != nil { return groupWelcome{}, err }
 	ca, err := loadAuthority(group.node.directory)
 	if err != nil { return groupWelcome{}, errors.New("network signing key is unavailable") }
 	certificate, err := ca.issue(input.Request, input.Label+".wb.inthedark.boo", time.Now())
 	if err != nil { return groupWelcome{}, err }
-	directory.Group.Revision++
-	directory.Members = members
-	if err := group.store(ctx, directory); err != nil { return groupWelcome{}, err }
+	if changed {
+		if err := group.store(ctx, directory); err != nil { return groupWelcome{}, err }
+	}
 	envelope, err := signDirectory(directory, ca)
 	if err != nil { return groupWelcome{}, err }
 	return groupWelcome{Envelope: envelope, Certificate: certificate}, nil
@@ -382,15 +378,6 @@ func (group *networkGroupController) discover(ctx context.Context, selection ...
 		group.mu.Lock()
 		defer group.mu.Unlock()
 		if !group.isOwner() { return errors.New("network ownership changed during discovery; reconnect to its current owner") }
-		directory := *group.directory()
-		self := group.node.snapshot().NodeID
-		hostNodeID := ""
-		if group.hostNodeID != nil { hostNodeID = group.hostNodeID() }
-		if self != nil {
-			if repaired, changed := reconcileHostIdentity(directory, *self, hostNodeID); changed {
-				if err := group.store(ctx, repaired); err != nil { return err }
-			}
-		}
 		group.node.change(func(status *privateStatus) { status.Discovery = "joined" })
 		return group.publish(ctx)
 	}
@@ -463,17 +450,77 @@ func (group *networkGroupController) discover(ctx context.Context, selection ...
 	return nil
 }
 
-func reconcileHostIdentity(directory networkDirectory, appNodeID, hostNodeID string) (networkDirectory, bool) {
-	if appNodeID == "" || hostNodeID == "" { return directory, false }
-	for index, member := range directory.Members {
-		if member.NodeID != appNodeID { continue }
-		if member.HostNodeID == hostNodeID { return directory, false }
-		directory.Members = slices.Clone(directory.Members)
-		directory.Members[index].HostNodeID = hostNodeID
-		directory.Group.Revision++
-		return directory, true
+func reconcileMemberIdentity(directory networkDirectory, incoming networkMember, online map[string]bool) (networkDirectory, bool, error) {
+	nodeIndex, labelIndex := -1, -1
+	for index, existing := range directory.Members {
+		if existing.NodeID == incoming.NodeID { nodeIndex = index }
+		if existing.Label == incoming.Label { labelIndex = index }
 	}
-	return directory, false
+	if nodeIndex >= 0 && labelIndex >= 0 && nodeIndex != labelIndex {
+		return directory, false, errors.New("app identity collides with another directory member")
+	}
+	index := nodeIndex
+	if index < 0 { index = labelIndex }
+	if index < 0 {
+		if len(directory.Members) >= 256 { return directory, false, errors.New("private setup member limit reached") }
+		next := directory
+		next.Members = append(slices.Clone(directory.Members), incoming)
+		next.Group.Revision++
+		if err := next.validate(); err != nil { return directory, false, err }
+		return next, true, nil
+	}
+
+	existing := directory.Members[index]
+	if existing.Label != incoming.Label {
+		return directory, false, errors.New("enrolment cannot rename an app")
+	}
+	if existing.Rename != nil {
+		return directory, false, errors.New("finish the app's pending rename before refreshing enrolment")
+	}
+	if existing.KeyFingerprint != incoming.KeyFingerprint {
+		return directory, false, errors.New("enrolment cannot replace an app's registered key")
+	}
+	rotated := existing.NodeID != incoming.NodeID
+	if rotated && online[existing.NodeID] {
+		return directory, false, errors.New("the app's previous Tailscale identity is still online")
+	}
+	if incoming.HostNodeID == "" { incoming.HostNodeID = existing.HostNodeID }
+	incoming.Published = existing.Published
+	incoming.Addresses = slices.Clone(incoming.Addresses)
+	if sameMember(&existing, &incoming) { return directory, false, nil }
+
+	next := directory
+	next.Members = slices.Clone(directory.Members)
+	next.Members[index] = incoming
+	next.Group.Grants = slices.Clone(directory.Group.Grants)
+	if directory.Group.Transfer != nil {
+		transfer := *directory.Group.Transfer
+		next.Group.Transfer = &transfer
+	}
+	if rotated {
+		if next.Group.OwnerNodeID == existing.NodeID { next.Group.OwnerNodeID = incoming.NodeID }
+		if next.Group.DNSNodeID == existing.NodeID { next.Group.DNSNodeID = incoming.NodeID }
+		if next.Group.Transfer != nil {
+			if next.Group.Transfer.FromNodeID == existing.NodeID { next.Group.Transfer.FromNodeID = incoming.NodeID }
+			if next.Group.Transfer.ToNodeID == existing.NodeID { next.Group.Transfer.ToNodeID = incoming.NodeID }
+		}
+	}
+	grants := make([]networkGrant, 0, len(next.Group.Grants))
+	seen := make(map[networkGrant]bool)
+	for _, grant := range next.Group.Grants {
+		if rotated && grant.AppNodeID == existing.NodeID { grant.AppNodeID = incoming.NodeID }
+		if existing.HostNodeID != "" && existing.HostNodeID != incoming.HostNodeID && grant.DeviceNodeID == existing.HostNodeID {
+			grant.DeviceNodeID = incoming.HostNodeID
+		}
+		if !seen[grant] {
+			seen[grant] = true
+			grants = append(grants, grant)
+		}
+	}
+	next.Group.Grants = grants
+	next.Group.Revision++
+	if err := next.validate(); err != nil { return directory, false, err }
+	return next, true, nil
 }
 
 func (group *networkGroupController) acceptEnrolment(ctx context.Context, ownerID, hostname string, key *ecdsa.PrivateKey, welcome groupWelcome) error {
@@ -499,6 +546,7 @@ func (group *networkGroupController) acceptEnrolment(ctx context.Context, ownerI
 }
 
 func (group *networkGroupController) reconnect(ctx context.Context) error {
+	if err := group.reconcileOwnerIdentity(ctx); err != nil { return err }
 	current := group.directory()
 	self := group.node.snapshot().NodeID
 	if current != nil && self != nil && current.Group.Transfer != nil {
@@ -511,6 +559,42 @@ func (group *networkGroupController) reconnect(ctx context.Context) error {
 		}
 	}
 	return group.discover(ctx)
+}
+
+func (group *networkGroupController) reconcileOwnerIdentity(ctx context.Context) error {
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	directory := group.directory()
+	status := group.node.snapshot()
+	if directory == nil || status.NodeID == nil || status.KeyFingerprint == nil {
+		return nil
+	}
+	var owner *networkMember
+	for _, member := range directory.Members {
+		if member.NodeID == directory.Group.OwnerNodeID { copy := member; owner = &copy }
+	}
+	if owner == nil || owner.Label != group.node.settings.Load().Label || owner.KeyFingerprint != *status.KeyFingerprint {
+		return nil
+	}
+	if _, err := loadAuthority(group.node.directory); err != nil {
+		return errors.New("network owner identity changed but its signing key is unavailable")
+	}
+	tailnet, err := group.node.local.Status(ctx)
+	if err != nil { return errors.New("Tailscale app availability could not be checked") }
+	online := make(map[string]bool)
+	for _, peer := range tailnet.Peer { online[string(peer.ID)] = peer.Online }
+	hostNodeID := owner.HostNodeID
+	if group.hostNodeID != nil {
+		if current := group.hostNodeID(); current != "" { hostNodeID = current }
+	}
+	incoming := networkMember{
+		NodeID: *status.NodeID, HostNodeID: hostNodeID, Label: owner.Label,
+		Addresses: slices.Clone(status.Addresses), KeyFingerprint: *status.KeyFingerprint,
+	}
+	next, changed, err := reconcileMemberIdentity(*directory, incoming, online)
+	if err != nil { return err }
+	if !changed { return nil }
+	return group.store(ctx, next)
 }
 func (group *networkGroupController) initialise(ctx context.Context) error {
 	group.mu.Lock()

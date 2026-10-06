@@ -4,6 +4,6 @@
 - App admission grants its reachable daemon workspace. Authenticate each hop and apply the connecting machine's existing grants.
 - Authenticate remote app and daemon ingress through Tailscale; discard caller-supplied identity headers, enforce the network owner's grants on every published transport, and close owned connections on revocation.
 - Keep one network identity and policy receiver per installation. App disposal must not stop daemon publication, DNS or policy reception.
-- Keep the CA private key with the authority; members retain their own leaf keys and tsnet identities. DNS selection is independent of ownership, and ownership transfer preserves root trust through durable prepare, relinquish, and activate phases without automatic root replacement.
+- Keep the CA private key with the authority; a persistent leaf key identifies an installation while Tailscale node IDs are replaceable transport identities. Rebind only after key proof with the prior app node offline, migrating every directory reference atomically. DNS selection is independent of ownership, and ownership transfer preserves root trust through durable prepare, relinquish, and activate phases without automatic root replacement.
 - Persist network configuration, membership, grants, and handover or rename intent before acknowledging native changes; if persistence fails, keep the previous safe state and expose the failure.
 - Serve only the Workbench-owned DNS suffix from the selected DNS app; leave public and unrelated names to the configured external path, with no hidden resolver failover.
