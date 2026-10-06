@@ -45,7 +45,10 @@ import {
 } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { isUndeliveredInitialOptimisticInputItem } from "../../../workbench/thread/ThreadOptimisticInputStore";
-import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
+import {
+  readWorkbenchAgentMessageInput,
+  readWorkbenchAgentMessageItem,
+} from "workbench-shared/workbench/thread/thread-agent-message";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import {
   isVisibleWorkbenchAgentMessageText, isWorkbenchHiddenSystemSteerInput, stripWorkbenchTurnEndMarker,
@@ -114,12 +117,18 @@ import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadReasoningItem from "./ThreadReasoningItem";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
-import ThreadSentAgentMessageItem from "./ThreadAgentMessageItem";
+import ThreadSentAgentMessageItem, {
+  ThreadAgentMessageBubble,
+  ThreadAgentMessageTarget,
+} from "./ThreadAgentMessageItem";
+import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
+import ThreadAgentName from "./ThreadAgentName";
 import ThreadIncomingAgentMessageGroup from "./ThreadIncomingAgentMessageGroup";
 import ThreadIncomingAgentMessageItem from "./ThreadIncomingAgentMessageItem";
 import ThreadAgentScreenshotItem from "./ThreadAgentScreenshotItem";
 import ThreadToolOutputItem from "./ThreadToolOutputItem";
 import ThreadSubagentTargetActionItem from "./ThreadSubagentTargetActionItem";
+import ThreadSubagentCoordinationItem from "./ThreadSubagentCoordinationItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
 import ThreadStatusCommandItem from "./ThreadStatusCommandItem";
 import ThreadTitleCommandItem from "./ThreadTitleCommandItem";
@@ -136,8 +145,13 @@ import {
 } from "./thread-reasoning-display";
 import {
   getThreadSubagentWaitTiming,
+  type ThreadSubagentWaitRenderEntry,
   type ThreadSubagentWaitTiming,
 } from "./thread-subagent-wait-groups";
+import {
+  readThreadSubagentCoordinationOutgoingMessage,
+  readThreadSubagentCoordinationWait,
+} from "./thread-subagent-coordination";
 import { createThreadTurnCompactionRenderPlan } from "./thread-turn-compaction-sections";
 import { partitionCompletedThreadWork } from "./thread-completed-work";
 import getFinishedThreadTailHiddenItemIds from "./thread-finished-tail";
@@ -644,6 +658,170 @@ function ThreadSubagentWaitExchange ({
         </ThreadIncomingAgentMessageGroup>
       ) : null}
     </>
+  );
+}
+
+function getCoordinationParticipants(
+  items: readonly ThreadItem[],
+  relatedThreadsById: RelatedThreadsById,
+  subagents: readonly WorkbenchSubagentSummary[],
+) {
+  const participants = new Map<string, { key: string; label: ReactNode }>();
+  const add = ({
+    fallbackName,
+    kind,
+    value,
+  }: {
+    fallbackName: string;
+    kind: "id" | "name" | "parent";
+    value: string | null;
+  }) => {
+    const resolved = kind === "parent" || !value
+      ? null
+      : resolveWorkbenchSubagentCommandTargets(subagents, [{ kind, value }])[0] ?? null;
+    const key = resolved?.threadId ?? `${kind}:${value ?? ""}`;
+    if (participants.has(key)) return;
+    participants.set(key, {
+      key,
+      label: (
+        <ThreadAgentName
+          subagent={resolved?.subagent}
+          thread={resolved?.threadId
+            ? relatedThreadsById[resolved.threadId] ?? { agentNickname: resolved.fallbackName, agentRole: null }
+            : { agentNickname: fallbackName, agentRole: null }}
+        />
+      ),
+    });
+  };
+
+  for (const item of items) {
+    const outgoing = readThreadSubagentCoordinationOutgoingMessage(item);
+    if (outgoing) {
+      add({
+        fallbackName: outgoing.target.kind === "parent" ? "parent" : outgoing.target.value ?? "thread",
+        kind: outgoing.target.kind === "thread" ? "id" : outgoing.target.kind,
+        value: outgoing.target.value,
+      });
+      continue;
+    }
+    const wait = readThreadSubagentCoordinationWait(item);
+    if (wait) {
+      for (const target of wait.targets) {
+        add({ fallbackName: target.value, kind: target.kind, value: target.value });
+      }
+      continue;
+    }
+    const incoming = readWorkbenchAgentMessageItem(item);
+    if (incoming) {
+      add({ fallbackName: incoming.senderName, kind: "id", value: incoming.senderThreadId });
+    }
+  }
+  return [...participants.values()];
+}
+
+function ThreadCoordinationOutgoingMessage({
+  item,
+  relatedThreadsById,
+  subagents,
+  threadId,
+  ...markdownProps
+}: ThreadMessageMarkdownProps & {
+  item: ThreadItem;
+  relatedThreadsById: RelatedThreadsById;
+  subagents: readonly WorkbenchSubagentSummary[];
+  threadId: string;
+}) {
+  const outgoing = readThreadSubagentCoordinationOutgoingMessage(item);
+  if (!outgoing) return null;
+  const descriptor = outgoing.target.kind === "parent" || !outgoing.target.value
+    ? null
+    : {
+      kind: outgoing.target.kind === "name" ? "name" as const : "id" as const,
+      value: outgoing.target.value,
+    };
+  const target = descriptor ? resolveWorkbenchSubagentCommandTargets(subagents, [descriptor])[0] ?? null : null;
+  const recipient = (
+    <ThreadAgentMessageTarget
+      fallbackName={outgoing.target.kind === "parent" ? "parent" : target?.fallbackName ?? outgoing.target.value}
+      subagent={target?.subagent}
+      target={outgoing.target.kind === "parent"
+        ? { relation: "parent", threadId }
+        : target?.threadId ? { relation: "self", threadId: target.threadId } : null}
+      thread={target?.threadId ? relatedThreadsById[target.threadId] : undefined}
+    />
+  );
+  return (
+    <ThreadAgentMessageBubble recipient={recipient}>
+      <ThreadAgentMessageBody
+        {...markdownProps}
+        parts={[{
+          markdown: outgoing.message,
+          userVisibleSimpleVersion: outgoing.userVisibleSimpleVersion,
+        }]}
+        threadCwdPath={item.type === "commandExecution" ? item.cwd : markdownProps.threadCwdPath}
+      />
+    </ThreadAgentMessageBubble>
+  );
+}
+
+function ThreadSubagentCoordination({
+  block,
+  itemTimeline,
+  relatedThreadsById,
+  subagents,
+  threadId,
+  ...markdownProps
+}: ThreadMessageMarkdownProps & {
+  block: Extract<ThreadRenderableBlock, { kind: "subagentCoordination" }>;
+  itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
+  relatedThreadsById: RelatedThreadsById;
+  subagents: readonly WorkbenchSubagentSummary[];
+  threadId: string;
+}) {
+  const waits = block.items.flatMap(item => {
+    const wait = readThreadSubagentCoordinationWait(item);
+    return wait ? [{
+      item: wait.item,
+      outcome: wait.outcome,
+      targetKeys: wait.targetKeys,
+    } satisfies ThreadSubagentWaitRenderEntry<SubagentWaitItem>] : [];
+  });
+  const waitGroup = waits.length ? { anchor: waits.at(-1)!, entries: waits } : null;
+  const timing = waitGroup ? getThreadSubagentWaitTiming(waitGroup, itemTimeline ?? []) : null;
+  return (
+    <ThreadSubagentCoordinationItem
+      active={waitGroup?.anchor.outcome === "inProgress"}
+      activeStartedAtMs={timing?.activeStartedAtMs}
+      durationMs={timing?.durationMs}
+      participants={getCoordinationParticipants(block.items, relatedThreadsById, subagents)}
+    >
+      {block.blocks.map((conversationBlock) => {
+        const incomingItems = conversationBlock.kind === "agentMessageSequence"
+          ? conversationBlock.items
+          : conversationBlock.kind === "subagentWaitExchange" ? conversationBlock.messages : null;
+        if (incomingItems?.length) {
+          return (
+            <ThreadIncomingAgentMessageRuns
+              {...markdownProps}
+              itemTimeline={itemTimeline}
+              items={incomingItems}
+              key={getRenderableBlockKey(conversationBlock)}
+              subagents={subagents}
+            />
+          );
+        }
+        return getRenderableBlockItems(conversationBlock).map(item => (
+          <ThreadCoordinationOutgoingMessage
+            {...markdownProps}
+            item={item}
+            key={item.id}
+            relatedThreadsById={relatedThreadsById}
+            subagents={subagents}
+            threadId={threadId}
+          />
+        ));
+      })}
+    </ThreadSubagentCoordinationItem>
   );
 }
 
@@ -1974,6 +2152,23 @@ function ThreadRenderableBlockViewComponent ({
   turnStatus: Turn["status"];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  if (block.kind === "subagentCoordination") {
+    return (
+      <ThreadSubagentCoordination
+        block={block}
+        inlineMentionSources={inlineMentionSources}
+        itemTimeline={itemTimeline}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        relatedThreadsById={relatedThreadsById}
+        subagents={subagents}
+        threadId={threadId}
+        threadCwdPath={threadCwdPath}
+        workspaceRoots={workspaceRoots}
+      />
+    );
+  }
   if (block.kind === "agentMessageSequence") {
     return (
       <ThreadIncomingAgentMessageGroup items={block.items} state={block.state} subagents={subagents}>
@@ -2627,6 +2822,8 @@ function ThreadTurnDetailsComponent ({
               ? `agentMessages:${block.state}:${block.items[0]?.id ?? index}`
             : block.kind === "subagentWaitExchange"
               ? `waitExchange:${block.items[0]?.id ?? index}`
+            : block.kind === "subagentCoordination"
+              ? `coordination:${block.items[0]?.id ?? index}`
             : block.kind === "webSearchSequence"
               ? `webSearches:${block.items[0]?.id ?? index}`
               : `item:${block.item.id}`}>

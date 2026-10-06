@@ -48,7 +48,7 @@ export default function ThreadAgentMessageBody({
       {isFull ? fullMarkdown : (
         <div className="space-y-[0.9em]">
           {parts.map((part, index) => part.userVisibleSimpleVersion
-            ? <p className="m-0 text-[0.92em] leading-[1.6]" key={index}>{part.userVisibleSimpleVersion}</p>
+            ? <ThreadMarkdown {...markdownProps} key={index} markdown={part.userVisibleSimpleVersion} />
             // A message without a simple version shows in full even in the simple view.
             : <ThreadMarkdown {...markdownProps} key={index} markdown={part.markdown} />)}
         </div>

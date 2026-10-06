@@ -128,6 +128,12 @@ function note(id: string, senderName: string, status?: "pending" | "failed") {
 function mcpWait(id: string, names: string[], status: "completed" | "inProgress" = "completed"): ThreadItem {
   return { ...mcp(id, "subagent_wait", { names }), status } as ThreadItem;
 }
+function mcpMessage(id: string, name: string, message = id): ThreadItem {
+  return mcp(id, "subagent_message", { message, name });
+}
+function cliMessage(id: string, name: string, message = id): CommandItem {
+  return command(id, `wb subagent message --name ${name} --message ${message}`);
+}
 const blockShape = (block: ReturnType<typeof buildRenderableBlocks>[number]) => [
   block.kind === "agentMessageSequence" ? `agent:${block.state}` : block.kind,
   getRenderableBlockItems(block).map(item => item.id),
@@ -166,6 +172,70 @@ test("CLI waits fold only from blocks that are nothing but waits, and held messa
 
   const held = buildRenderableBlocks([mcpWait("w1", ["Rose"]), note("held", "Rose", "pending"), mcpWait("w2", ["Rose"])]);
   assert.deepEqual(held.map(blockShape), [["subagentWaitExchange", ["w1", "w2"]], ["agent:held", ["held"]]]);
+});
+
+test("two-way messaging gets priority over existing wait exchanges and absorbs a final live wait", () => {
+  const blocks = buildRenderableBlocks([
+    mcpMessage("outgoing-fern", "Fern"),
+    mcpWait("w1", ["Iris", "Rose", "Daisy", "Fern", "Poppy"]),
+    note("incoming-iris", "Iris"),
+    mcpWait("w2", ["Iris", "Rose", "Daisy", "Fern", "Poppy"]),
+    note("incoming-rose", "Rose"),
+    mcpMessage("outgoing-iris", "Iris"),
+    mcpWait("live", ["Iris", "Rose"], "inProgress"),
+  ]);
+
+  assert.deepEqual(blocks.map(blockShape), [[
+    "subagentCoordination",
+    ["outgoing-fern", "w1", "incoming-iris", "w2", "incoming-rose", "outgoing-iris", "live"],
+  ]]);
+  const coordination = blocks[0]!;
+  assert.ok(coordination.kind === "subagentCoordination");
+  assert.deepEqual(coordination.blocks.map(blockShape), [
+    ["item", ["outgoing-fern"]],
+    ["subagentWaitExchange", ["w1", "incoming-iris", "w2", "incoming-rose"]],
+    ["item", ["outgoing-iris"]],
+    ["item", ["live"]],
+  ]);
+  assert.deepEqual(getWorkedBlockRows(coordination).map(row => row.eligible), [false]);
+});
+
+test("the priority fold leaves one-way and held-message runs on their existing render paths", () => {
+  const oneWay = buildRenderableBlocks([
+    mcpMessage("outgoing", "Iris"), mcpWait("wait", ["Iris"]), mcpMessage("outgoing-again", "Iris"),
+  ]);
+  assert.deepEqual(oneWay.map(blockShape), [
+    ["item", ["outgoing"]], ["item", ["wait"]], ["item", ["outgoing-again"]],
+  ]);
+
+  const held = buildRenderableBlocks([
+    mcpMessage("outgoing", "Iris"), note("held", "Iris", "pending"), mcpWait("wait", ["Iris"]),
+  ]);
+  assert.deepEqual(held.map(blockShape), [
+    ["item", ["outgoing"]], ["item", ["wait"]], ["agent:held", ["held"]],
+  ]);
+});
+
+test("CLI message and wait sequences qualify without reviving failed outgoing messages", () => {
+  const coordinated = buildRenderableBlocks([
+    cliMessage("outgoing", "Iris"),
+    command("wait", "wb subagent wait --name Iris"),
+    note("incoming", "Iris"),
+  ]);
+  assert.deepEqual(coordinated.map(blockShape), [[
+    "subagentCoordination", ["outgoing", "wait", "incoming"],
+  ]]);
+
+  const failed = { ...cliMessage("failed", "Iris"), exitCode: 1, status: "failed" as const };
+  assert.deepEqual(buildRenderableBlocks([failed, note("incoming", "Iris")]).map(blockShape), [
+    ["commandSequence", ["failed"]], ["agent:delivered", ["incoming"]],
+  ]);
+  assert.deepEqual(buildRenderableBlocks([
+    mcp("missing-message", "subagent_message", { name: "Iris" }),
+    note("incoming", "Iris"),
+  ]).map(blockShape), [
+    ["item", ["missing-message"]], ["agent:delivered", ["incoming"]],
+  ]);
 });
 
 test("one sender's messages in one delivery state share a bubble even when another sender interleaves", () => {

@@ -2,7 +2,7 @@
  * Exports:
  * - CommandItem/CommandSequenceItem/ThreadRenderableBlock/HiddenThreadItemIds: shared render-plan shapes.
  * - IncomingAgentMessageItem: an attributed cross-agent message item.
- * - buildRenderableBlocks: group visible provider items, including adjacent same-state textual steers and incoming agent messages (held ones above held user steers), and fold settled wait ↔ message ping-pong into one exchange, before rendering.
+ * - buildRenderableBlocks: group visible provider items, preserve wait folds, then give qualifying two-way subagent coordination one outer render block.
  * - SubagentWaitItem: a settled subagent wait as a CLI command or wb MCP call.
  * - IncomingAgentMessageRun/groupIncomingAgentMessageRuns: bundle every same-sender, same-state incoming message in a group into one bubble.
  * - getUserMessageDeliveryState: classify held (pending or undelivered) user-message input.
@@ -50,6 +50,12 @@ import {
   findThreadSubagentWaitExchanges, groupThreadSubagentWaitRenderEntries,
   type ThreadSubagentWaitExchangeRole, type ThreadSubagentWaitRenderEntry, type ThreadSubagentWaitRenderGroup,
 } from "./thread-subagent-wait-groups";
+import {
+  findThreadSubagentCoordinationSpans,
+  readThreadSubagentCoordinationOutgoingMessage,
+  readThreadSubagentCoordinationWait,
+  type ThreadSubagentCoordinationRole,
+} from "./thread-subagent-coordination";
 
 export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & { shell?: CommandShell };
 export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcpToolCall" }>;
@@ -64,6 +70,12 @@ export interface IncomingAgentMessageRun {
 }
 export type ThreadRenderableBlock =
   | { kind: "agentMessageSequence"; items: IncomingAgentMessageItem[]; state: "delivered" | "held" }
+  | {
+    /** Existing render blocks absorbed by the priority two-way coordination disclosure. */
+    blocks: ThreadRenderableBlock[];
+    items: ThreadItem[];
+    kind: "subagentCoordination";
+  }
   | {
     /** Chronological waits and messages, which render as one wait row then one message group. */
     items: Array<SubagentWaitItem | IncomingAgentMessageItem>;
@@ -271,6 +283,83 @@ function foldSubagentWaitExchanges(blocks: ThreadRenderableBlock[]): ThreadRende
   return folded;
 }
 
+function splitCoordinationCommandSequence(
+  block: Extract<ThreadRenderableBlock, { kind: "commandSequence" }>,
+): ThreadRenderableBlock[] {
+  const segments = buildCommandSequenceRenderSegments({ items: block.items });
+  if (!segments.some(segment => segment.kind === "message" || segment.kind === "subagentWait")) return [block];
+  return segments.map(segment => {
+    if (segment.kind === "approval" || segment.kind === "commands") {
+      return { items: segment.items, kind: "commandSequence" };
+    }
+    if (segment.kind === "subagentWait") {
+      return { items: segment.group.entries.map(entry => entry.item), kind: "commandSequence" };
+    }
+    return { items: [segment.item], kind: "commandSequence" };
+  });
+}
+
+function getCoordinationBlockRole(block: ThreadRenderableBlock): ThreadSubagentCoordinationRole | null {
+  if (block.kind === "agentMessageSequence") {
+    return block.state === "delivered" ? { incoming: true, outgoing: false } : null;
+  }
+  if (block.kind === "subagentWaitExchange") {
+    return { incoming: block.messages.length > 0, outgoing: false };
+  }
+  if (block.kind === "commandSequence" && block.items.length) {
+    const segments = buildCommandSequenceRenderSegments({ items: block.items });
+    if (segments.length !== 1) return null;
+    const [segment] = segments;
+    if (segment?.kind === "message") return readThreadSubagentCoordinationOutgoingMessage(segment.item)
+      ? { incoming: false, outgoing: true }
+      : null;
+    if (segment?.kind === "subagentWait") return { incoming: false, outgoing: false };
+    return null;
+  }
+  if (block.kind !== "item") return null;
+  if (readThreadSubagentCoordinationOutgoingMessage(block.item)) return { incoming: false, outgoing: true };
+  return readThreadSubagentCoordinationWait(block.item) ? { incoming: false, outgoing: false } : null;
+}
+
+function coalesceCommandSequences(blocks: ThreadRenderableBlock[]) {
+  const coalesced: ThreadRenderableBlock[] = [];
+  for (const block of blocks) {
+    const previous = coalesced.at(-1);
+    if (previous?.kind === "commandSequence" && block.kind === "commandSequence") {
+      coalesced[coalesced.length - 1] = {
+        items: [...previous.items, ...block.items],
+        kind: "commandSequence",
+      };
+    } else {
+      coalesced.push(block);
+    }
+  }
+  return coalesced;
+}
+
+/** Preserve existing folds, then replace qualifying two-way activity with one higher-priority coordination block. */
+function foldSubagentCoordination(blocks: ThreadRenderableBlock[]): ThreadRenderableBlock[] {
+  const expanded = blocks.flatMap(block => block.kind === "commandSequence"
+    ? splitCoordinationCommandSequence(block)
+    : [block]);
+  const spans = findThreadSubagentCoordinationSpans(expanded.map(getCoordinationBlockRole));
+  if (!spans.length) return blocks;
+  const folded: ThreadRenderableBlock[] = [];
+  let cursor = 0;
+  for (const { end, start } of spans) {
+    folded.push(...expanded.slice(cursor, start));
+    const coordinationBlocks = expanded.slice(start, end);
+    folded.push({
+      blocks: coordinationBlocks,
+      items: coordinationBlocks.flatMap(block => getRenderableBlockItems(block)),
+      kind: "subagentCoordination",
+    });
+    cursor = end;
+  }
+  folded.push(...expanded.slice(cursor));
+  return coalesceCommandSequences(folded);
+}
+
 export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadItemIds = {}, fallbackCwd = "."): ThreadRenderableBlock[] {
   const blocks: ThreadRenderableBlock[] = [];
   const capturedGroups = new Set(items.flatMap(item =>
@@ -375,7 +464,7 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     const firstHeldSteer = blocks.findIndex(isHeldUserSteerBlock);
     blocks.splice(firstHeldSteer < 0 ? blocks.length : firstHeldSteer, 0, heldBlock);
   }
-  return foldSubagentWaitExchanges(blocks);
+  return foldSubagentCoordination(foldSubagentWaitExchanges(blocks));
 }
 
 type CommandContext = {
@@ -456,7 +545,8 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
 export function getWorkedBlockRows(block: ThreadRenderableBlock, context: CommandContext = {}): Array<{ block: ThreadRenderableBlock; eligible: boolean }> {
   if (block.kind !== "commandSequence") {
     // Exchanges hold delivered messages, which never hide inside a worked summary.
-    if (block.kind === "userMessageSequence" || block.kind === "agentMessageSequence" || block.kind === "subagentWaitExchange") {
+    if (block.kind === "userMessageSequence" || block.kind === "agentMessageSequence"
+      || block.kind === "subagentWaitExchange" || block.kind === "subagentCoordination") {
       return [{ block, eligible: false }];
     }
     if (block.kind === "item" && block.item.type === "functionCallOutput") {
