@@ -1,4 +1,4 @@
-/* Exports: none. Protect the memory breakdown line, stalled-sample marking, failure reporting and disposal. */
+/* Exports: none. Protect the memory breakdown line, stalled-sample marking, start-gated scheduling, failure reporting and disposal. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import WorkbenchMemoryReporter from "./WorkbenchMemoryReporter";
@@ -9,15 +9,16 @@ function fixture(readWorkerHeaps: () => Promise<Awaited<ReturnType<ConstructorPa
   const logs: string[] = [];
   const warnings: string[] = [];
   let stopped = false;
+  let scheduled = 0;
   const reporter = new WorkbenchMemoryReporter({
     readProcess: () => ({ rss: 1083 * MB, heapUsed: 366 * MB, heapTotal: 412 * MB, external: 41 * MB, arrayBuffers: 12 * MB }),
     readWorkerHeaps,
     readSystem: () => ({ free: 3.6 * 1024 * MB, total: 28 * 1024 * MB }),
     log: message => logs.push(message),
     warn: message => warnings.push(message),
-    schedule: () => ({ stop: () => { stopped = true; } }),
+    schedule: () => { scheduled += 1; return { stop: () => { stopped = true; } }; },
   });
-  return { reporter, logs, warnings, stopped: () => stopped };
+  return { reporter, logs, warnings, scheduled: () => scheduled, stopped: () => stopped };
 }
 
 test("one sample logs process and database worker memory in one line", async () => {
@@ -53,6 +54,11 @@ test("a sample still pending at the next tick is marked instead of stacked", asy
 
 test("failed samples warn once each and disposal stops the schedule", async () => {
   const f = fixture(async () => { throw new Error("worker gone"); });
+  // Sampling waits for its owner's start, so a stalled startup stays silent for the host watchdog.
+  assert.equal(f.scheduled(), 0);
+  f.reporter.start();
+  f.reporter.start();
+  assert.equal(f.scheduled(), 1);
   await f.reporter.tick();
   assert.equal(f.warnings.length, 1);
   assert.match(plain(f.warnings[0]!), /MEM sample failed \(worker gone\)/u);

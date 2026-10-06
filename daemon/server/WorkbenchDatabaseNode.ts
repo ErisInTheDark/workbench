@@ -93,6 +93,8 @@ export default ReloadableNode.define<
     return {
       activate: () => { committed = true; },
       deactivate: () => { committed = false; },
+      // After the whole graph commits: samples during a stalled startup would read as liveness to the host watchdog.
+      afterCommit: () => { memory.start(); },
       // Retirement begins after commit (or terminal shutdown), before dependant disposal.
       beginRuntimeDrain: () => database.retireSuspendedAdmission(),
       beginHandoff: () => {

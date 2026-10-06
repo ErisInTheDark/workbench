@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchMemoryReporterOptions: memory reads, scheduling and logging ports.
- * - default WorkbenchMemoryReporter: log one periodic daemon memory breakdown, including database worker heaps and machine free memory.
+ * - default WorkbenchMemoryReporter: once started, log one periodic daemon memory breakdown, including database worker heaps and machine free memory.
  */
 
 import os from "node:os";
@@ -41,14 +41,22 @@ function defaultSchedule(tick: () => void, intervalMs: number) {
 }
 
 export default class WorkbenchMemoryReporter {
-  private readonly timer: { stop(): void };
+  private timer: { stop(): void } | null = null;
   private pendingSince: number | null = null;
   private disposed = false;
   private readonly intervalMs: number;
 
   constructor(private readonly options: WorkbenchMemoryReporterOptions) {
     this.intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
-    this.timer = (options.schedule ?? defaultSchedule)(() => { void this.tick(); }, this.intervalMs);
+  }
+
+  /**
+   * Begin periodic samples. Owners start this once their runtime is committed: the host's silence watchdog reads any
+   * output as liveness, so samples during a stalled startup would keep it from ever recovering the process.
+   */
+  start() {
+    if (this.disposed || this.timer) return;
+    this.timer = (this.options.schedule ?? defaultSchedule)(() => { void this.tick(); }, this.intervalMs);
   }
 
   async tick() {
@@ -79,6 +87,7 @@ export default class WorkbenchMemoryReporter {
 
   dispose() {
     this.disposed = true;
-    this.timer.stop();
+    this.timer?.stop();
+    this.timer = null;
   }
 }
