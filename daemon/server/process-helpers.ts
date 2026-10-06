@@ -156,9 +156,8 @@ export async function killProcessTreeAsync(pid: number | undefined, options: Pro
   }
 
   await new Promise<void>((resolve, reject) => {
-    const child = (options.spawnProcess ?? spawn)("pwsh", [
-      "-NoProfile", "-NonInteractive", "-Command",
-      `$ErrorActionPreference = 'Stop'; $owned = [System.Diagnostics.Process]::GetProcessById(${pid}); $owned.Kill($true); $owned.WaitForExit()`,
+    const child = (options.spawnProcess ?? spawn)("taskkill.exe", [
+      "/pid", String(pid), "/t", "/f",
     ], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
