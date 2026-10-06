@@ -24,7 +24,7 @@ export function copyComposerSettings(settings: WorkbenchComposerSettings): Workb
     agentPath: settings.agentPath, agentSource: settings.agentSource,
     harness: settings.harness, model: settings.model,
     reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier,
-    ...(settings.harness !== "opencode" && settings.contextWindowTokens !== undefined ? { contextWindowTokens: settings.contextWindowTokens } : {}),
+    ...(settings.contextWindowTokens !== undefined ? { contextWindowTokens: settings.contextWindowTokens } : {}),
   };
 }
 

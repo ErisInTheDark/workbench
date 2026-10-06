@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - openCodeModelOption: preserve native model metadata without configurable context overrides.
+ * - openCodeModelOption: expose native model metadata and selectable Workbench rollover context.
  * - openCodeAccountLimits: map credential-free Go quota into the shared account contract.
  * - default OpenCodeProvider: bind graph-owned OpenCode capabilities to the daemon provider contract.
  */
@@ -12,12 +12,20 @@ import CodexShellController from "../../CodexShellController";
 import type { OpenCodeGoQuota } from "./opencode-workbench-rpc";
 import { openCodeWorkbenchRpc } from "./opencode-workbench-rpc";
 import type OpenCodeServiceController from "./OpenCodeServiceController";
+import { contextWindowFloor } from "workbench-shared/workbench/thread/thread-profile";
+
+const OPEN_CODE_CONTEXT_MINIMUM = 51_000;
 
 export function openCodeModelOption(
   model: Pick<Awaited<ReturnType<OpenCodeServiceController["readModelCatalog"]>>["models"][number],
     "id" | "providerID" | "modelID" | "name" | "family" | "enabled" | "status" | "variants" | "capabilities" | "limit">,
   defaultModelId?: string,
 ) {
+  const contextWindow = {
+    defaultTokens: model.limit.context,
+    minimumTokens: Math.min(OPEN_CODE_CONTEXT_MINIMUM, model.limit.context),
+    maximumTokens: model.limit.context,
+  };
   return {
     id: `${model.providerID}/${model.modelID}`, displayName: model.name, description: model.family ?? "",
     hidden: !model.enabled || model.status === "deprecated", isDefault: defaultModelId === model.id,
@@ -25,7 +33,8 @@ export function openCodeModelOption(
     supportedReasoningEfforts: model.variants.map(variant => variant.id), defaultReasoningEffort: null,
     supportsVision: model.capabilities.input.includes("image"), supportsFastMode: false,
     inputModalities: [...model.capabilities.input], maxContextWindowTokens: model.limit.context,
-    contextWindow: null, additionalSpeedTiers: [], policyState: null, billingMultiplier: null,
+    contextWindow: contextWindow.maximumTokens > contextWindowFloor(contextWindow) ? contextWindow : null,
+    additionalSpeedTiers: [], policyState: null, billingMultiplier: null,
   };
 }
 
@@ -99,7 +108,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           },
           configuration: {
             modelContext: {
-              read: async () => [],
+              read: async () => {
+                const catalog = await modelCatalog.read();
+                return catalog.models.flatMap(model => {
+                  const option = openCodeModelOption(model, catalog.defaultModel?.id);
+                  return option.contextWindow ? [{ model: option.id, ...option.contextWindow }] : [];
+                });
+              },
             },
             models: {
               read: async () => {

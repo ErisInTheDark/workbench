@@ -36,7 +36,7 @@ test("converts cumulative OpenCode usage without losing cache or reasoning token
   });
 });
 
-test("live context usage subtracts the persisted turn baseline and preserves a known model window", async () => {
+test("live context usage preserves the latest model step beside cumulative accounting", async () => {
   const observations: WorkbenchTranscriptObservation[] = [];
   const adapter = new OpenCodeTranscriptAdapter({
     modelContext: async () => null,
@@ -49,13 +49,13 @@ test("live context usage subtracts the persisted turn baseline and preserves a k
       },
     },
   });
-  const baseline = {
-    cacheWriteInputTokens: 1, cachedInputTokens: 2, inputTokens: 13,
-    outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 17,
+  const last = {
+    cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 8,
+    outputTokens: 2, reasoningOutputTokens: 0, totalTokens: 10,
   };
   const tokenUsage = await adapter.recordContextUsage({
     threadId: WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001"),
-    baseline,
+    last,
     current: { input: 16, output: 5, reasoning: 1, cache: { read: 3, write: 2 } },
     model: { providerID: "provider", id: "model" },
     nativeLocation: "C:/repo",
@@ -63,10 +63,7 @@ test("live context usage subtracts the persisted turn baseline and preserves a k
     canCommit: () => true,
   });
   assert.deepEqual(tokenUsage, {
-    last: {
-      cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 8,
-      outputTokens: 2, reasoningOutputTokens: 0, totalTokens: 10,
-    },
+    last,
     total: {
       cacheWriteInputTokens: 2, cachedInputTokens: 3, inputTokens: 21,
       outputTokens: 5, reasoningOutputTokens: 1, totalTokens: 27,

@@ -66,6 +66,16 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
   };
 
   readonly threads: WorkbenchProvider["threads"] = {
+    contextRollover: {
+      requestDirective: input => this.run(providerRegistrations[this.key], provider => {
+        if (!provider.threads.contextRollover) throw new Error(`Provider ${this.key} does not support context rollover.`);
+        return provider.threads.contextRollover.requestDirective(input);
+      }, `${this.key}: threads.contextRollover.requestDirective`),
+      replace: input => this.run(providerRegistrations[this.key], provider => {
+        if (!provider.threads.contextRollover) throw new Error(`Provider ${this.key} does not support context rollover.`);
+        return provider.threads.contextRollover.replace(input);
+      }, `${this.key}: threads.contextRollover.replace`),
+    },
     reconcile: (input, signal) => this.run(providerRegistrations[this.key], provider => {
       if (!provider.threads.reconcile) throw new Error("Provider reconciliation is unavailable until its bridge is reloaded.");
       return provider.threads.reconcile(input, signal);

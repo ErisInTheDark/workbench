@@ -348,7 +348,8 @@ export default class WorkbenchAgentCommandController {
       if (!this.direct.executeSubagentQueueRequest) throw new Error("Subagent queues are not configured.");
       return await this.direct.executeSubagentQueueRequest(request.body, signal);
     }
-    if ((request.path === "/api/thread-status" || request.path === "/api/thread-title" || request.path === "/api/thread-resume") && request.body) {
+    if ((request.path === "/api/thread-status" || request.path === "/api/thread-title"
+      || request.path === "/api/thread-resume" || request.path === "/api/thread-compact") && request.body) {
       return await this.dispatchManagedThreadRequest(request.path, request.body, signal);
     }
     if (request.path === "/api/git-checkpoint" && request.body && this.direct.executeGitArcRequest) {
@@ -443,6 +444,8 @@ export default class WorkbenchAgentCommandController {
         ? "workbench/thread/status"
         : pathname === "/api/thread-resume"
           ? "workbench/thread/resume"
+          : pathname === "/api/thread-compact"
+            ? "workbench/thread/compact"
           : "workbench/thread/title",
       params: body,
     });

@@ -14,6 +14,7 @@ import type {
   WorkbenchThreadIdentityLookup,
   WorkbenchThreadIdentityMetadata,
   WorkbenchThreadIdentityRecord,
+  WorkbenchThreadReplacementBinding,
   WorkbenchTurnIdentityLookup,
   WorkbenchTurnIdentityMetadata,
   WorkbenchTurnIdentityRecord,
@@ -89,6 +90,22 @@ export default class WorkbenchThreadIdentityController {
       candidate.harness === input.harness
     ));
     return binding ? { nativeThreadId: binding.nativeThreadId, threadId: identity.threadId } : null;
+  }
+
+  async reserveReplacementBinding(input: WorkbenchThreadReplacementBinding) {
+    this.assertActive();
+    if (!this.database.reserveReplacementBinding) throw new Error("Replacement binding reservation is unavailable.");
+    const record = await this.database.reserveReplacementBinding(input);
+    this.assertActive();
+    return this.remember(record);
+  }
+
+  async releaseReplacementBinding(input: Omit<WorkbenchThreadReplacementBinding, "reservedAt">) {
+    this.assertActive();
+    if (!this.database.releaseReplacementBinding) throw new Error("Replacement binding release is unavailable.");
+    const record = await this.database.releaseReplacementBinding(input);
+    this.assertActive();
+    return this.remember(record);
   }
 
   async resolveGitArcThreadOwner(input: {

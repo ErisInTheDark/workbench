@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type { ThreadPayload } from "workbench-shared/types";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
+import WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
 import WorkbenchThreadAutoCompactController, { type ThreadAutoCompactEvidence } from "./WorkbenchThreadAutoCompactController";
 
 function fixture() {
@@ -21,7 +22,8 @@ function fixture() {
   const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
   let settingsReads = 0;
   let publicationListener = () => {};
-  const owner = new WorkbenchThreadAutoCompactController({
+  const admission = new WorkbenchThreadAdmissionController();
+  const owner = new WorkbenchThreadAutoCompactController(admission, {
     readSettings: async () => {
       settingsReads += 1;
       return settings;
@@ -55,7 +57,7 @@ function fixture() {
     compact: async () => compact(),
   } };
   return {
-    owner, provider, calls, publications, scheduled,
+    owner, admission, provider, calls, publications, scheduled,
     settingsReads: () => settingsReads,
     onPublication: (listener: () => void) => { publicationListener = listener; },
     now: (next: number) => { now = next; },
@@ -217,12 +219,14 @@ test("runtime drain rejects queued messages without admitting them after the ear
   await admitted.promise;
   const next = f.owner.run("thread", f.provider, f.admit);
   const rejected = assert.rejects(next, /reloading/);
-  assert.equal(f.owner.hasPendingWork(), true);
+  assert.equal(f.admission.hasPendingWork(), true);
   f.owner.beginRuntimeDrain();
+  f.admission.beginRuntimeDrain();
   settled.resolve();
   await first;
   await rejected;
   await f.owner.dispose();
+  await f.admission.dispose();
   assert.deepEqual(f.calls, []);
-  assert.equal(f.owner.hasPendingWork(), false);
+  assert.equal(f.admission.hasPendingWork(), false);
 });

@@ -11,6 +11,7 @@ import type WorkbenchProvider from "./WorkbenchProvider";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchToolTranscriptReference } from "./provider-execution";
 import WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
+import WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
 import WorkbenchMessageWaitController from "./WorkbenchMessageWaitController";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
@@ -95,7 +96,8 @@ test("user and agent messages on every provider share compact-before-start admis
           return { kind: wasActive ? "steered" : "started", turnId: "new" };
         },
       } } as unknown as WorkbenchProvider;
-      const owner = new WorkbenchThreadAutoCompactController({
+      const admission = new WorkbenchThreadAdmissionController();
+      const owner = new WorkbenchThreadAutoCompactController(admission, {
         readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
         readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
         readRuntime: async () => ({ latestTurn: { id: "previous" }, status: active ? "active" : "idle", turnLive: active }),
@@ -118,6 +120,7 @@ test("user and agent messages on every provider share compact-before-start admis
       assert.deepEqual(calls, ["compact", firstRoute, firstRoute === "user" ? "agent" : "user"]);
       assert.deepEqual(waits, ["thread"]);
       await owner.dispose();
+      await admission.dispose();
     }
   }
 });
@@ -134,7 +137,8 @@ test("user bypass skips Workbench compaction and is stripped before provider sub
       return { kind: "steered", turnId: "turn" };
     },
   } } as unknown as WorkbenchProvider;
-  const owner = new WorkbenchThreadAutoCompactController({
+  const admission = new WorkbenchThreadAdmissionController();
+  const owner = new WorkbenchThreadAutoCompactController(admission, {
     readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
     readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
     readRuntime: async () => ({ latestTurn: { id: "previous" }, status: "idle", turnLive: false }),
@@ -161,6 +165,7 @@ test("user bypass skips Workbench compaction and is stripped before provider sub
     intent: "continue",
   }]);
   await owner.dispose();
+  await admission.dispose();
 });
 
 test("the shared provider admission gate wakes waits only for accepted steers", async () => {

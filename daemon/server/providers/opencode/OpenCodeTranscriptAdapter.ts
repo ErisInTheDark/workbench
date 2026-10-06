@@ -46,7 +46,7 @@ export interface OpenCodeTranscriptOwners {
   items: Pick<WorkbenchTranscriptIdentityController, "admit" | "itemIdForSource">;
   transcript: Pick<DaemonTranscriptRegistration, "acceptLiveUpdate" | "record">;
   assets?: Pick<WorkbenchDatabaseController, "writeTranscriptAsset">;
-  modelContext?(model: { id: string; providerID: string }, directory: string): Promise<number | null>;
+  modelContext?(model: { id: string; providerID: string }, directory: string, threadId: WorkbenchThreadId): Promise<number | null>;
 }
 
 interface MessageTurn {
@@ -319,20 +319,20 @@ export default class OpenCodeTranscriptAdapter {
 
   async recordContextUsage(input: {
     threadId: WorkbenchThreadId;
-    baseline: TokenBreakdown;
     current: OpenCodeTokenUsage;
+    last: TokenBreakdown;
     model: SessionInfo["model"] | null;
     nativeLocation: string;
     modelContextWindow: number | null;
     canCommit(): boolean;
   }): Promise<ThreadTokenUsage | null> {
     const resolvedContextWindow = input.model && this.owners.modelContext
-      ? await this.owners.modelContext(input.model, input.nativeLocation) ?? input.modelContextWindow
+      ? await this.owners.modelContext(input.model, input.nativeLocation, input.threadId) ?? input.modelContextWindow
       : input.modelContextWindow;
     if (!input.canCommit()) return null;
     const total = openCodeTokenBreakdown(input.current);
     const tokenUsage = {
-      last: subtractOpenCodeTokenBreakdowns(total, input.baseline),
+      last: input.last,
       total,
       modelContextWindow: resolvedContextWindow,
     };
@@ -561,6 +561,7 @@ export default class OpenCodeTranscriptAdapter {
         const modelContextWindow = await this.owners.modelContext?.(
           latestAssistant.model,
           nativeLocation,
+          identity.threadId,
         ) ?? null;
         usageObservations.push({
           kind: "turnUsageContext",

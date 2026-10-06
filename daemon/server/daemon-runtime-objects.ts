@@ -253,6 +253,7 @@ export interface DaemonRuntimeObjects {
   commandApprovals: WorkbenchCommandApprovalController;
   daemonRequests: WorkbenchDaemonRequestController;
   threadActions: WorkbenchThreadActionController;
+  threadContextRollover: import("./WorkbenchThreadContextRolloverController").default;
   gitArc: WorkbenchGitArcFeature;
   harnesses: WorkbenchHarnessController;
   mcp: WorkbenchAgentMcpController;

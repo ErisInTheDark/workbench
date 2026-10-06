@@ -4,6 +4,7 @@
  * - WorkbenchProviderThreadCreate: resolved creation context supplied by the daemon.
  * - WorkbenchProviderThreadList: bounded provider discovery request.
  * - WorkbenchProviderThreads: WB-valued thread operations implemented at the provider edge.
+ * - WorkbenchProviderThreadContextRollover: optional fresh-native-context operations.
  * - WorkbenchProviderTranscriptReconcile: demanded window and pre-fetch capture-gap identities.
  */
 import type {
@@ -17,6 +18,12 @@ import type { WorkbenchMessageContext } from "./provider-input.ts";
 import type { Turn } from "../thread/workbench-thread-turn.ts";
 import type { WorkbenchAgentMessage } from "../thread/thread-agent-message.ts";
 import type { ProjectId } from "../identity.ts";
+
+export interface WorkbenchProviderThreadContextRollover {
+  requestDirective(input: { instruction: string; key: string; threadId: string; turnId: string }): Promise<void>;
+  /** Resolve only after the replacement summary turn has natively started. */
+  replace(input: { summary: string; threadId: string; turnId: string }): Promise<void>;
+}
 
 export const WORKBENCH_THREAD_HISTORY_PENDING = -32010;
 export class WorkbenchThreadHistoryPendingError extends Error {}
@@ -42,6 +49,7 @@ export interface WorkbenchProviderTranscriptReconcile {
   gapIds: string[];
 }
 export interface WorkbenchProviderThreads {
+  readonly contextRollover?: WorkbenchProviderThreadContextRollover;
   reconcile(input: WorkbenchProviderTranscriptReconcile, signal: AbortSignal): Promise<WorkbenchThreadReconcileResult>;
   history: {
     materialize(threadId: string, turnId: string | null, signal: AbortSignal): Promise<void>;

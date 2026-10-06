@@ -33,7 +33,15 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       items: build.get("transcriptIdentity"),
       transcript: build.get("transcript"),
       assets: build.get("database"),
-      modelContext: async (model, directory) => {
+      modelContext: async (model, directory, threadId) => {
+        const identity = build.get("threadIdentity").knownThread(threadId);
+        const profile = await build.get("threadState").controller.readComposerProfileSnapshot({
+          kind: "thread",
+          harness: "opencode",
+          projectId: identity.projectId,
+          threadId: identity.threadId,
+        });
+        if (profile?.settings.contextWindowTokens) return profile.settings.contextWindowTokens;
         const catalog = await service.readModelCatalog(directory);
         return catalog.models.find(candidate =>
           candidate.providerID === model.providerID && candidate.modelID === model.id
@@ -74,6 +82,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       broadcast: notification => context.broadcastProviderNotification("opencode", notification),
       invalidateModelCatalogs: () => service.invalidateModelCatalogs(),
       observe: facts => build.get("providerObservations").observe("opencode", facts),
+      rollover: build.get("threadContextRollover"),
       threads,
       transcript,
     });
@@ -122,6 +131,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   requires: [
     "openCodeService", "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity",
     "threadState", "transcript", "transcriptReader", "providerObservations", "transcriptReconciliation", "database", "turnRecovery",
+    "threadContextRollover",
   ],
   safeAll: true,
   scope: "server:opencode",

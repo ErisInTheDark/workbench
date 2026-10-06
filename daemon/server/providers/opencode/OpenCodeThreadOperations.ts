@@ -50,6 +50,7 @@ import {
   createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput,
   isWorkbenchQuestionnaireResponsePart, WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
+import { createWorkbenchContextRolloverInput } from "workbench-shared/workbench/thread/thread-context-rollover";
 
 type OpenCodeSteerEntry = Omit<WorkbenchSteerHistoryEntry, "threadId" | "turnId"> & {
   threadId: WorkbenchThreadId;
@@ -100,8 +101,8 @@ interface SessionExecution {
   admission: Promise<void> | null;
   /** The last completed turn and the intent it ended, until continued or superseded. */
   completion?: { eventID: string; turnId: WorkbenchTurnId; intentVersion: number } | null;
-  /** Persisted cumulative usage before this execution; live events derive their current-turn delta from it. */
-  usageBaseline?: ThreadTokenUsage["total"];
+  /** Previous cumulative native usage; consecutive snapshots reveal one model step's context. */
+  usageCheckpoint?: ThreadTokenUsage["total"];
   usageContextWindow?: number | null;
 }
 export interface OpenCodeNativeActivity {
@@ -174,6 +175,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   private readonly pendingSteers = new Map<string, Map<string, WorkbenchSteerHistoryEntry>>();
   private readonly pendingSteerSessions = new Map<string, Set<string>>();
   private readonly requestedInterruptions = new Set<string>();
+  private readonly replacementStarts = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
 
   readonly history = {
     materialize: async (threadId: string, turnId: string | null, signal: AbortSignal) => {
@@ -196,6 +198,87 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         value: input.text,
       });
       return "admitted";
+    },
+  };
+
+  readonly contextRollover = {
+    requestDirective: async (input: { instruction: string; key: string; threadId: string; turnId: string }) => {
+      const { binding } = await this.native(input.threadId);
+      const execution = this.execution(binding.nativeThreadId);
+      const turnId = WorkbenchTurnIdSchema.parse(input.turnId);
+      if (!execution.active
+        || execution.kind !== "prompt"
+        || execution.turn?.threadId !== WorkbenchThreadIdSchema.parse(input.threadId)
+        || execution.turn.turnId !== turnId) {
+        throw new Error("OpenCode context rollover directive has no matching active turn.");
+      }
+      const client = await this.options.acquire();
+      await client.session.instructions.entry.put({
+        sessionID: binding.nativeThreadId,
+        key: input.key,
+        value: input.instruction,
+      });
+    },
+    replace: async (input: { summary: string; threadId: string; turnId: string }) => {
+      const { binding: retiring, identity } = await this.native(input.threadId);
+      const retiringExecution = this.execution(retiring.nativeThreadId);
+      const retiringTurnId = WorkbenchTurnIdSchema.parse(input.turnId);
+      if (!retiringExecution.active
+        || retiringExecution.kind !== "prompt"
+        || retiringExecution.turn?.threadId !== identity.threadId
+        || retiringExecution.turn.turnId !== retiringTurnId) {
+        throw new Error("OpenCode context rollover has no matching active retiring turn.");
+      }
+      const client = await this.options.acquire();
+      const oldSession = this.sessions.get(retiring.nativeThreadId)
+        ?? await client.session.get({ sessionID: retiring.nativeThreadId }, { signal: this.options.signal });
+      const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+      if (!entry || entry.entryKind === "draft") throw new Error("OpenCode rollover thread state is unavailable.");
+      const settings = entry.profile?.settings;
+      const session = await client.session.create({
+        location: { directory: oldSession.location.directory },
+        ...(settings?.model ? { model: modelRef(settings.model) } : {}),
+        ...this.options.managed.creation(),
+      });
+      this.sessions.set(session.id, session);
+      const native = {
+        harness: "opencode",
+        nativeLocation: session.location.directory,
+        nativeThreadId: NativeThreadIdSchema.parse(session.id),
+      };
+      await this.options.identities.reserveReplacementBinding({
+        threadId: identity.threadId,
+        native,
+        reservedAt: Date.now(),
+      });
+      const started = Promise.withResolvers<void>();
+      this.replacementStarts.set(session.id, started);
+      let admitted = false;
+      try {
+        await this.interruptSession(identity.threadId, retiring.nativeThreadId);
+        const result = await this.submit({
+          threadId: identity.threadId,
+          clientMessageId: randomUUID(),
+          input: createWorkbenchContextRolloverInput(input.summary),
+          intent: "newTurn",
+        });
+        if (result.kind !== "started") throw new Error("OpenCode rollover summary was admitted as a steer.");
+        admitted = true;
+        await started.promise;
+      } catch (error) {
+        if (!admitted) {
+          try {
+            await this.options.identities.releaseReplacementBinding({ threadId: identity.threadId, native });
+          } catch (releaseError) {
+            console.warn(`[opencode] unused rollover binding release failed: ${
+              releaseError instanceof Error ? releaseError.message.slice(0, 300) : "unknown failure"
+            }`);
+          }
+        }
+        throw error;
+      } finally {
+        if (this.replacementStarts.get(session.id) === started) this.replacementStarts.delete(session.id);
+      }
     },
   };
 
@@ -518,7 +601,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       };
       execution.active = true;
       execution.kind = "prompt";
-      execution.usageBaseline = openCodeTokenBreakdown(session.tokens);
+      execution.usageCheckpoint = openCodeTokenBreakdown(session.tokens);
       execution.usageContextWindow = undefined;
       resolvePromptOwner({
         threadId: recorded.threadId,
@@ -579,20 +662,19 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     await this.sync(threadId);
   }
 
-  async compact(threadId: string, options?: { waitForCompletion?: boolean; signal?: AbortSignal }) {
+  async compact(threadId: string, options: Parameters<WorkbenchProviderThreads["compact"]>[1]) {
     const { binding } = await this.native(threadId);
     const client = await this.options.acquire();
-    if (!options?.waitForCompletion) {
-      await client.session.compact({ sessionID: binding.nativeThreadId });
-      return;
-    }
     const callerSignal = options.signal ? AbortSignal.any([options.signal, this.options.signal]) : this.options.signal;
     const connectionSignal = await this.options.waitForCompactionConnection(callerSignal);
     const signal = AbortSignal.any([callerSignal, connectionSignal]);
     signal.throwIfAborted();
     const active = await client.session.active({ signal });
     if (active[binding.nativeThreadId]) throw new Error("OpenCode cannot auto-compact during an active execution.");
-    await this.compactionCompletion.run(binding.nativeThreadId, signal, async () => {
+    await this.compactionCompletion.run(binding.nativeThreadId, {
+      ...options.scope,
+      threadId: WorkbenchThreadIdSchema.parse(threadId),
+    }, signal, async () => {
       await client.session.compact({ sessionID: binding.nativeThreadId }, { signal });
     });
   }
@@ -694,20 +776,14 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     signal?.throwIfAborted();
     const session = await client.session.get({ sessionID: nativeThreadId }, { signal });
     const execution = this.execution(nativeThreadId);
-    if (execution.active && execution.usageBaseline === undefined) {
-      execution.usageBaseline = openCodeTokenBreakdown(session.tokens);
+    if (execution.active && execution.usageCheckpoint === undefined) {
+      execution.usageCheckpoint = openCodeTokenBreakdown(session.tokens);
     }
     const identity = await this.syncSession(session, []);
     const result = await this.sync(identity.threadId, signal);
     const thread = await this.read(identity.threadId);
     const turn = thread.turns.at(-1) ?? null;
     if (execution.active) {
-      if (execution.usageBaseline === undefined && thread.tokenUsage) {
-        execution.usageBaseline = subtractOpenCodeTokenBreakdowns(
-          thread.tokenUsage.total,
-          thread.tokenUsage.last,
-        );
-      }
       if (execution.usageContextWindow === undefined) {
         execution.usageContextWindow = thread.tokenUsage?.modelContextWindow ?? null;
       }
@@ -832,12 +908,13 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   markExecutionStarted(nativeThreadId: string) {
     const execution = this.execution(nativeThreadId);
     if (!execution.active) {
-      execution.usageBaseline = this.sessions.has(nativeThreadId)
+      execution.usageCheckpoint = this.sessions.has(nativeThreadId)
         ? openCodeTokenBreakdown(this.sessions.get(nativeThreadId)!.tokens)
         : undefined;
       execution.usageContextWindow = undefined;
     }
     execution.active = true;
+    this.replacementStarts.get(nativeThreadId)?.resolve();
   }
 
   markExecutionSettled(nativeThreadId: string, status: "completed" | "interrupted" | "failed" = "completed") {
@@ -850,7 +927,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     nativeThreadId: string,
     tokens: SessionInfo["tokens"],
     _observedAt: number,
-  ): Promise<{ threadId: WorkbenchThreadId; turnId: WorkbenchTurnId; tokenUsage: ThreadTokenUsage } | null> {
+  ): Promise<{ contextTokens: number; threadId: WorkbenchThreadId; turnId: WorkbenchTurnId; tokenUsage: ThreadTokenUsage } | null> {
     const execution = this.execution(nativeThreadId);
     const active = execution.active && execution.kind === "prompt" ? execution.turn : null;
     if (!active) return null;
@@ -866,10 +943,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       this.sessions.set(nativeThreadId, session);
     }
     if (!isCurrent()) return null;
-    if (execution.usageBaseline === undefined || execution.usageContextWindow === undefined) {
+    if (execution.usageCheckpoint === undefined || execution.usageContextWindow === undefined) {
       const thread = await this.read(active.threadId);
       if (!isCurrent()) return null;
-      execution.usageBaseline ??= thread.tokenUsage?.total ?? {
+      execution.usageCheckpoint ??= thread.tokenUsage?.total ?? {
         cacheWriteInputTokens: 0,
         cachedInputTokens: 0,
         inputTokens: 0,
@@ -879,16 +956,20 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       };
       execution.usageContextWindow = thread.tokenUsage?.modelContextWindow ?? null;
     }
+    const current = openCodeTokenBreakdown(tokens);
+    const last = subtractOpenCodeTokenBreakdowns(current, execution.usageCheckpoint);
     const tokenUsage = await this.options.transcript.recordContextUsage({
       threadId: active.threadId,
-      baseline: execution.usageBaseline,
       current: tokens,
+      last,
       model: session.model ?? null,
       nativeLocation: session.location.directory,
       modelContextWindow: execution.usageContextWindow ?? null,
       canCommit: isCurrent,
     });
-    return tokenUsage && isCurrent() ? { ...active, tokenUsage } : null;
+    if (!tokenUsage || !isCurrent()) return null;
+    execution.usageCheckpoint = current;
+    return { ...active, contextTokens: last.inputTokens, tokenUsage };
   }
 
   acceptExecutionEvent(nativeThreadId: string, sequence: number) {
@@ -1127,7 +1208,15 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       throw error;
     }
     if (execution.intentVersion === intentVersion) intentVersion = ++execution.intentVersion;
-    const synced = await this.sync(threadId);
+    const retiredSession = await client.session.get({ sessionID: nativeThreadId }, { signal: this.options.signal });
+    const retiredIdentity = await this.syncSession(retiredSession, []);
+    const retiredThread = await this.options.reader.readPage({ threadId: retiredIdentity.threadId, cursor: null });
+    const latest = retiredThread.thread.turns.at(-1);
+    const synced = {
+      ...retiredIdentity,
+      projectId: (await this.identity(threadId)).projectId,
+      latestTurnId: latest ? WorkbenchTurnIdSchema.parse(latest.id) : null,
+    };
     const turnId = interruptedTurnId ?? synced.latestTurnId;
     if (!turnId) return;
     if (execution.intentVersion === intentVersion && execution.turn?.turnId === turnId) {

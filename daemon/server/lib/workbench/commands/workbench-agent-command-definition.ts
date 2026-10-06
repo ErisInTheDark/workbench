@@ -111,6 +111,8 @@ export interface WorkbenchAgentCommandDefinition {
   /** Providers that see this command in MCP registration and CLI help; omitted means every provider. */
   harnesses?: readonly ProviderKey[];
   hideFromMcp?: boolean;
+  /** Execute without recording MCP arguments or results in the conversation transcript. */
+  hideMcpTranscript?: boolean;
   hideFromRootHelp?: boolean;
   helpGroups: readonly string[];
   inputSchema: z.ZodType;
@@ -129,6 +131,7 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   effects?: WorkbenchAgentCommandEffects;
   harnesses?: readonly ProviderKey[];
   hideFromMcp?: boolean;
+  hideMcpTranscript?: boolean;
   hideFromRootHelp?: boolean;
   helpGroups: readonly string[];
   inputSchema: TSchema;
@@ -160,6 +163,7 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     effects: definition.effects ?? {},
     harnesses: definition.harnesses,
     hideFromMcp: definition.hideFromMcp,
+    hideMcpTranscript: definition.hideMcpTranscript,
     hideFromRootHelp: definition.hideFromRootHelp,
     helpGroups: definition.helpGroups,
     inputSchema: definition.inputSchema,

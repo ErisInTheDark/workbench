@@ -27,6 +27,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "threadGit",
   "threadState",
   "threadActions",
+  "threadContextRollover",
   "threadSkills",
   "transcriptReader",
   "transcriptReconciliation",

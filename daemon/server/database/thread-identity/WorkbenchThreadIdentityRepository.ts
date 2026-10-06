@@ -32,6 +32,7 @@ import type {
   WorkbenchThreadIdentityLookup,
   WorkbenchThreadIdentityMetadata,
   WorkbenchThreadIdentityRecord,
+  WorkbenchThreadReplacementBinding,
   WorkbenchTurnIdentityLookup,
   WorkbenchTurnIdentityMetadata,
   WorkbenchTurnIdentityRecord,
@@ -151,6 +152,56 @@ export default class WorkbenchThreadIdentityRepository {
 
   resolveNative(native: WorkbenchNativeThreadIdentity): WorkbenchThreadIdentityRecord | null {
     return this.database.transaction(() => this.resolveNativeInTransaction(native))();
+  }
+
+  reserveReplacementBinding(input: WorkbenchThreadReplacementBinding): WorkbenchThreadIdentityRecord {
+    return this.database.transaction(() => {
+      const owner = this.canonical(input.threadId);
+      const nativeOwner = this.resolveNativeInTransaction(input.native);
+      if (nativeOwner) {
+        const binding = nativeOwner.bindings.find(candidate => this.sameNative(candidate, input.native));
+        if (nativeOwner.threadId !== owner.threadId) {
+          throw new Error("Replacement native thread belongs to another Workbench thread.");
+        }
+        if (!binding?.pending) throw new Error("Replacement native thread is already admitted.");
+        return owner;
+      }
+      const pending = this.database.prepare(`
+        SELECT harness_id AS harness, native_location AS nativeLocation, native_thread_id AS nativeThreadId
+        FROM workbench_pending_import_threads WHERE thread_id = ?
+      `).get(owner.threadId) as WorkbenchNativeThreadIdentity | undefined;
+      if (pending) throw new Error("Workbench thread already has a pending replacement binding.");
+      this.database.prepare("INSERT OR IGNORE INTO workbench_harnesses(id) VALUES (?)").run(input.native.harness);
+      this.database.prepare(`
+        INSERT INTO workbench_pending_import_threads
+          (thread_id, harness_id, native_location, native_thread_id, discovered_at, last_seen_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(owner.threadId, input.native.harness, input.native.nativeLocation,
+        input.native.nativeThreadId, input.reservedAt, input.reservedAt);
+      return this.read(owner.threadId)!;
+    })();
+  }
+
+  releaseReplacementBinding(input: Omit<WorkbenchThreadReplacementBinding, "reservedAt">): WorkbenchThreadIdentityRecord {
+    return this.database.transaction(() => {
+      const owner = this.canonical(input.threadId);
+      const durable = this.database.prepare(`
+        SELECT native_location AS nativeLocation FROM thread_turns
+        WHERE thread_id = ? AND harness_id = ? AND native_thread_id = ?
+      `).all(owner.threadId, input.native.harness, input.native.nativeThreadId) as Array<{ nativeLocation: string }>;
+      if (durable.some(candidate => this.sameLocation(candidate.nativeLocation, input.native.nativeLocation))) {
+        throw new Error("Replacement native thread is already admitted.");
+      }
+      const pending = this.database.prepare(`
+        SELECT harness_id AS harness, native_location AS nativeLocation, native_thread_id AS nativeThreadId
+        FROM workbench_pending_import_threads WHERE thread_id = ?
+      `).get(owner.threadId) as WorkbenchNativeThreadIdentity | undefined;
+      if (!pending || !this.sameNative(pending, input.native)) {
+        throw new Error("Workbench thread does not own the pending replacement binding.");
+      }
+      this.database.prepare("DELETE FROM workbench_pending_import_threads WHERE thread_id = ?").run(owner.threadId);
+      return this.read(owner.threadId)!;
+    })();
   }
 
   private resolveNativeInTransaction(native: WorkbenchNativeThreadIdentity): WorkbenchThreadIdentityRecord | null {
@@ -379,6 +430,12 @@ export default class WorkbenchThreadIdentityRepository {
 
   private sameLocation(left: string, right: string) {
     return nativeLocationKey(left, this.platform) === nativeLocationKey(right, this.platform);
+  }
+
+  private sameNative(left: WorkbenchNativeThreadIdentity, right: WorkbenchNativeThreadIdentity) {
+    return left.harness === right.harness
+      && left.nativeThreadId === right.nativeThreadId
+      && this.sameLocation(left.nativeLocation, right.nativeLocation);
   }
 
   private nativeTurnRow(input: WorkbenchTurnIdentityMetadata) {

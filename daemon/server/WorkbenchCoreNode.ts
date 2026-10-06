@@ -65,6 +65,8 @@ import WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireRe
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
 import WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
+import WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
+import WorkbenchThreadContextRolloverController from "./WorkbenchThreadContextRolloverController";
 import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadMessageController from "./WorkbenchThreadMessageController";
 import type { WorkbenchMessageWaitHandoff } from "./WorkbenchMessageWaitController";
@@ -130,7 +132,8 @@ function createWorkbenchCoreFeature(
   const worktreeGitTransitions = createWorktreeGitTransitions(context.threadTransitions);
   let threadState: WorkbenchThreadStateFeature | null = null;
   let stats: WorkbenchStatsController | null = null;
-  const autoCompact = new WorkbenchThreadAutoCompactController({
+  const admission = new WorkbenchThreadAdmissionController();
+  const autoCompact = new WorkbenchThreadAutoCompactController(admission, {
     readSettings: () => settings.readThreadAutoCompact(),
     readEvidence: async reference => {
       const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(reference) });
@@ -161,6 +164,29 @@ function createWorkbenchCoreFeature(
   });
   const providers = new WorkbenchProviderDispatcher(run, undefined, autoCompact.run.bind(autoCompact),
     (threadId, message) => run("messages", owner => { owner.receive(threadId, message); }, "agent message admission"));
+  const threadContextRollover = new WorkbenchThreadContextRolloverController(admission, {
+    readSelectedCap: async threadId => {
+      const identity = await threadIdentity.resolve({ threadId });
+      if (!identity || !threadState) return null;
+      const entry = await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+      return entry && entry.entryKind !== "draft" ? entry.profile?.settings.contextWindowTokens ?? null : null;
+    },
+    requestDirective: async (threadId, turnId, instruction, key) => {
+      const rollover = providers.get("opencode").threads.contextRollover;
+      if (!rollover) throw new Error("OpenCode context rollover is unavailable.");
+      await rollover.requestDirective({ instruction, key, threadId, turnId });
+    },
+    record: async observation => {
+      await transcript.record([observation], { source: "provider" });
+    },
+    replace: async input => {
+      const rollover = providers.get("opencode").threads.contextRollover;
+      if (!rollover) throw new Error("OpenCode context rollover is unavailable.");
+      await rollover.replace(input);
+    },
+    now: Date.now,
+    warn: message => console.warn(`[context-rollover] ${message.slice(0, 500)}`),
+  });
   const threadSkillTarget = async (threadId: string) => {
     const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
     const harness = installedProviderKeys.find(key => key === identity?.bindings[0]?.harness);
@@ -378,6 +404,7 @@ function createWorkbenchCoreFeature(
     database,
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
     gitArcs: gitArc,
+    compactThread: input => threadContextRollover.acceptSummary(input),
     listSubagents: (projectId) => subagents.listRelationships(projectId),
     log: logThreadStateWarning,
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
@@ -632,6 +659,7 @@ function createWorkbenchCoreFeature(
     approvals,
     voiceSettings,
     browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, transcriptReader, transcriptReconciliation,
+    threadContextRollover,
     providerObservations: {
       observe: async (harness, facts) => {
         if (!lease.isCurrent()) return null;
@@ -645,7 +673,8 @@ function createWorkbenchCoreFeature(
     },
   };
   return new WorkbenchCoreFeature({
-    hasPendingWork: () => autoCompact.hasPendingWork() || launches.hasPendingWork() || stats.hasPendingWork() || transcriptReconciliation.hasPendingWork(),
+    hasPendingWork: () => admission.hasPendingWork() || autoCompact.hasPendingWork() || threadContextRollover.hasPendingWork()
+      || launches.hasPendingWork() || stats.hasPendingWork() || transcriptReconciliation.hasPendingWork(),
     captureReloadState: (): WorkbenchCoreReloadState => ({
       projectStartup: projectCatalog.captureReloadState(),
       approvals: approvals.captureReloadState(),
@@ -667,14 +696,22 @@ function createWorkbenchCoreFeature(
         });
       }
     },
-    beginRuntimeDrain: () => { autoCompact.beginRuntimeDrain(); launches.beginRuntimeDrain(); messages.beginRuntimeDrain(); subagents.beginRuntimeDrain(); },
+    beginRuntimeDrain: () => {
+      admission.beginRuntimeDrain();
+      autoCompact.beginRuntimeDrain();
+      launches.beginRuntimeDrain();
+      messages.beginRuntimeDrain();
+      subagents.beginRuntimeDrain();
+    },
     dispose: async (reportPhase = () => undefined) => {
       unsubscribeCompaction();
       unsubscribeAutoCompactSettled();
       unsubscribeTurnStarted();
       unsubscribeHeldSteers();
       unfinishedTurns.dispose();
+      await threadContextRollover.dispose();
       await autoCompact.dispose();
+      await admission.dispose();
       reportPhase("orphaned turn sweep disposal");
       await turnSettlement.dispose();
       reportPhase("transcript reconciliation disposal");

@@ -226,6 +226,14 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     post({ id: request.id, type: "threadIdentities", identities: threadIdentityRepository.observeMany(request.inputs) });
     return;
   }
+  if (request.type === "reserveReplacementBinding" || request.type === "releaseReplacementBinding") {
+    if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");
+    const identity = request.type === "reserveReplacementBinding"
+      ? threadIdentityRepository.reserveReplacementBinding(request.input)
+      : threadIdentityRepository.releaseReplacementBinding(request.input);
+    post({ id: request.id, type: "threadIdentity", identity });
+    return;
+  }
   if (request.type === "resolveThreadIdentity"
     || request.type === "resolveNativeThreadIdentity" || request.type === "listThreadIdentities") {
     if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");

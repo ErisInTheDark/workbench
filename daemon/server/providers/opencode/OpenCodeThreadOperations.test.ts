@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+  NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, WorkbenchItemIdSchema,
+  WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
 import OpenCodeThreadOperations, { type OpenCodeThreadOperationsOptions } from "./OpenCodeThreadOperations";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../../provider-execution";
@@ -117,6 +118,10 @@ const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-00000000
 const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");
 const nativeThreadId = NativeThreadIdSchema.parse("native-session");
 const nativeTurnId = NativeTurnIdSchema.parse("msg_queued-turn");
+const compactionScope = {
+  itemId: WorkbenchItemIdSchema.parse("00000000-0000-4000-8000-000000000003"),
+  turnId,
+};
 const session = {
   id: nativeThreadId,
   projectID: "native-project",
@@ -131,7 +136,7 @@ test("completion-aware compaction waits for native completion and execution sett
   const requested = Promise.withResolvers<void>();
   const owner = operations({ session: { compact: async () => { requested.resolve(); return {}; } } }, {});
   let finished = false;
-  const work = owner.compact(threadId, { waitForCompletion: true }).then(() => { finished = true; });
+  const work = owner.compact(threadId, { scope: compactionScope }).then(() => { finished = true; });
   await requested.promise;
   owner.observeCompaction(nativeThreadId, "started", "compact");
   owner.observeCompaction(nativeThreadId, "completed");
@@ -147,7 +152,7 @@ test("failed, interrupted and retired compaction cannot release a waiting admiss
     const requested = Promise.withResolvers<void>();
     const signal = new AbortController();
     const owner = operations({ session: { compact: async () => { requested.resolve(); return {}; } } }, {}, {}, { signal: signal.signal });
-    const work = owner.compact(threadId, { waitForCompletion: true });
+    const work = owner.compact(threadId, { scope: compactionScope });
     const rejected = assert.rejects(work, /failed|interrupted|retired/);
     await requested.promise;
     owner.observeCompaction(nativeThreadId, "started", "compact");
@@ -167,7 +172,7 @@ test("auto-compaction waits for the event connection and rejects when that conne
   const owner = operations({ session: { compact: async () => { requests++; requested.resolve(); } } }, {}, {}, {
     waitForCompactionConnection: async () => { waiting.resolve(); return readiness.promise; },
   });
-  const work = owner.compact(threadId, { waitForCompletion: true });
+  const work = owner.compact(threadId, { scope: compactionScope });
   const rejected = assert.rejects(work, /connection ended/);
   await Promise.race([waiting.promise, requested.promise]);
   assert.equal(requests, 0);
@@ -176,6 +181,55 @@ test("auto-compaction waits for the event connection and rejects when that conne
   connection.abort(new Error("connection ended"));
   await rejected;
   await owner.settle();
+});
+
+test("context rollover rejects a stale retiring turn before creating a replacement session", async () => {
+  let creates = 0;
+  const owner = operations({
+    session: {
+      create: async () => {
+        creates += 1;
+        return { ...session, id: "replacement-session" };
+      },
+    },
+  }, {}, {
+    controller: {
+      getCanonicalThreadEntry: async () => ({
+        entryKind: "thread",
+        profile: null,
+      }),
+    },
+  });
+
+  await assert.rejects(
+    owner.contextRollover.replace({ summary: "complete handoff", threadId, turnId }),
+    /active retiring turn/u,
+  );
+  assert.equal(creates, 0);
+});
+
+test("context rollover rejects stale usage before writing its directive", async () => {
+  const entries: object[] = [];
+  const owner = operations({
+    session: {
+      instructions: {
+        entry: {
+          put: async (input: object) => { entries.push(input); },
+        },
+      },
+    },
+  }, {});
+
+  await assert.rejects(
+    owner.contextRollover.requestDirective({
+      instruction: "compact now",
+      key: "rollover",
+      threadId,
+      turnId,
+    }),
+    /active turn/u,
+  );
+  assert.deepEqual(entries, []);
 });
 
 function operations(
@@ -637,10 +691,10 @@ test("execution outlives submission and only terminal execution releases the idl
   assert.equal(owner.hasPendingWork(), false);
 });
 
-test("live usage derives the current execution from the persisted cumulative baseline", async () => {
+test("live usage reports each latest model step while preserving cumulative accounting", async () => {
   const recorded: Array<{
-    baseline: object;
     current: object;
+    last: object;
     model: object | null;
     nativeLocation: string;
     modelContextWindow: number | null;
@@ -661,10 +715,7 @@ test("live usage derives the current execution from the persisted cumulative bas
     recordContextUsage: async (input: typeof recorded[number] & { threadId: string }) => {
       recorded.push(input);
       return {
-        last: {
-          cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 8,
-          outputTokens: 2, reasoningOutputTokens: 0, totalTokens: 10,
-        },
+        last: input.last,
         total: {
           cacheWriteInputTokens: 2, cachedInputTokens: 3, inputTokens: 21,
           outputTokens: 5, reasoningOutputTokens: 1, totalTokens: 27,
@@ -688,7 +739,10 @@ test("live usage derives the current execution from the persisted cumulative bas
   assert.equal(recorded.length, 1);
   assert.deepEqual(recorded[0], {
     threadId,
-    baseline: firstTotal,
+    last: {
+      cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 8,
+      outputTokens: 2, reasoningOutputTokens: 0, totalTokens: 10,
+    },
     current: { input: 16, output: 5, reasoning: 1, cache: { read: 3, write: 2 } },
     model: null,
     nativeLocation: "C:/repo",
@@ -696,15 +750,22 @@ test("live usage derives the current execution from the persisted cumulative bas
     canCommit: recorded[0]!.canCommit,
   });
   assert.equal(recorded[0]?.canCommit(), true);
-  await owner.recordUsage(nativeThreadId, {
+  const secondUsage = await owner.recordUsage(nativeThreadId, {
     input: 20, output: 7, reasoning: 2, cache: { read: 4, write: 3 },
   }, 5);
+  assert.equal(secondUsage?.contextTokens, 6);
+  assert.deepEqual(secondUsage?.tokenUsage.last, {
+    cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 6,
+    outputTokens: 2, reasoningOutputTokens: 1, totalTokens: 9,
+  });
   assert.equal(recorded.length, 2);
-  assert.deepEqual(recorded[1]?.baseline, firstTotal,
-    "Repeated live updates keep the execution's original cumulative baseline.");
+  assert.deepEqual(recorded[1]?.last, {
+    cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 6,
+    outputTokens: 2, reasoningOutputTokens: 1, totalTokens: 9,
+  });
 });
 
-test("reconnected live usage recovers the pre-turn baseline from the persisted snapshot", async () => {
+test("reconnected live usage continues from the persisted cumulative checkpoint", async () => {
   const total = {
     cacheWriteInputTokens: 2, cachedInputTokens: 3, inputTokens: 21,
     outputTokens: 5, reasoningOutputTokens: 1, totalTokens: 27,
@@ -713,7 +774,7 @@ test("reconnected live usage recovers the pre-turn baseline from the persisted s
     cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 8,
     outputTokens: 2, reasoningOutputTokens: 0, totalTokens: 10,
   };
-  let baseline: object | null = null;
+  let checkpoint: object | null = null;
   const owner = operations({
     session: { get: async () => ({
       ...session,
@@ -722,8 +783,8 @@ test("reconnected live usage recovers the pre-turn baseline from the persisted s
     message: { list: async () => ({ data: [], cursor: {} }) },
   }, {
     record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "inProgress" }),
-    recordContextUsage: async (input: { baseline: object }) => {
-      baseline = input.baseline;
+    recordContextUsage: async (input: { last: object }) => {
+      checkpoint = input.last;
       return { last, total, modelContextWindow: 200_000 };
     },
   }, {}, {
@@ -736,9 +797,9 @@ test("reconnected live usage recovers the pre-turn baseline from the persisted s
   await owner.recordUsage(nativeThreadId, {
     input: 16, output: 5, reasoning: 1, cache: { read: 3, write: 2 },
   }, 5);
-  assert.deepEqual(baseline, {
-    cacheWriteInputTokens: 1, cachedInputTokens: 2, inputTokens: 13,
-    outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 17,
+  assert.deepEqual(checkpoint, {
+    cacheWriteInputTokens: 0, cachedInputTokens: 0, inputTokens: 0,
+    outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0,
   });
 });
 

@@ -2,11 +2,12 @@
  * Exports:
  * - ThreadAutoCompactEvidence: canonical activity and current-context measurement.
  * - ThreadAutoCompactTarget: observed thread identity for status publication.
- * - default WorkbenchThreadAutoCompactController: own observed eligibility and serial compact-before-message admission.
+ * - default WorkbenchThreadAutoCompactController: own observed eligibility and compact-before-message policy.
  */
 import type { ThreadAutoCompactSettings } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type WorkbenchProvider from "./WorkbenchProvider";
+import type WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 
@@ -39,14 +40,15 @@ interface ObservedThread {
 }
 
 export default class WorkbenchThreadAutoCompactController {
-  private readonly admissions = new Map<string, Promise<void>>();
   private readonly lifetime = new AbortController();
   private readonly observed = new Map<string, ObservedThread>();
   private readonly refreshes = new Set<Promise<boolean>>();
   private readonly schedule: (callback: () => void, delayMs: number) => unknown;
   private readonly cancel: (timer: unknown) => void;
-  hasPendingWork() { return this.admissions.size > 0 || this.refreshes.size > 0; }
-  constructor(private readonly ports: {
+  hasPendingWork() { return this.refreshes.size > 0; }
+  constructor(
+    private readonly admission: Pick<WorkbenchThreadAdmissionController, "run">,
+    private readonly ports: {
     readSettings(): Promise<ThreadAutoCompactSettings>;
     readEvidence(threadId: string): Promise<ThreadAutoCompactEvidence | null>;
     readRuntime(target: ThreadAutoCompactTarget): Promise<ThreadAutoCompactRuntime>;
@@ -103,8 +105,7 @@ export default class WorkbenchThreadAutoCompactController {
     options: { skipAutoCompact?: boolean } = {},
   ): Promise<T> {
     this.lifetime.signal.throwIfAborted();
-    const previous = this.admissions.get(threadId);
-    const operation = (previous ?? Promise.resolve()).then(async () => {
+    return await this.admission.run(threadId, async () => {
       const signal = this.lifetime.signal;
       signal.throwIfAborted();
       if (!options.skipAutoCompact && (await this.decide(threadId, provider)).willAutoCompact) {
@@ -122,12 +123,6 @@ export default class WorkbenchThreadAutoCompactController {
       }
       return result;
     });
-    // Each caller receives its failure. The lane remains usable for later independent input.
-    const tail = operation.then(() => {}, () => {}).finally(() => {
-      if (this.admissions.get(threadId) === tail) this.admissions.delete(threadId);
-    });
-    this.admissions.set(threadId, tail);
-    return operation;
   }
 
   beginRuntimeDrain() {
@@ -137,7 +132,7 @@ export default class WorkbenchThreadAutoCompactController {
   }
   async dispose() {
     this.beginRuntimeDrain();
-    await Promise.allSettled([...this.admissions.values(), ...this.refreshes]);
+    await Promise.allSettled(this.refreshes);
   }
 
   private async decide(

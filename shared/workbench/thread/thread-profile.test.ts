@@ -52,7 +52,7 @@ test("context caps survive catalogue normalization and target snapshots", () => 
   assert.deepEqual(mutation.changes, { contextWindowTokens: 600_000 });
 });
 
-test("repairs legacy OpenCode context caps without changing Codex settings", () => {
+test("OpenCode context caps survive profile normalization and copying", () => {
   const settings = {
     agentPath: null, agentSource: null, harness: "opencode" as const, model: "opencode-go/model",
     reasoningEffort: null, serviceTier: null, contextWindowTokens: 200_000,
@@ -62,8 +62,8 @@ test("repairs legacy OpenCode context caps without changing Codex settings", () 
   });
 
   assert.ok(normalized);
-  assert.equal(Reflect.has(normalized, "contextWindowTokens"), false);
-  assert.equal(Reflect.has(copyComposerSettings(settings), "contextWindowTokens"), false);
+  assert.equal(normalized.contextWindowTokens, 200_000);
+  assert.equal(copyComposerSettings(settings).contextWindowTokens, 200_000);
   assert.equal(copyComposerSettings({ ...settings, harness: "codex" }).contextWindowTokens, 200_000);
 });
 

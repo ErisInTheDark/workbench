@@ -19,6 +19,7 @@ import type {
   WorkbenchThreadIdentityLookup,
   WorkbenchThreadIdentityMetadata,
   WorkbenchThreadIdentityRecord,
+  WorkbenchThreadReplacementBinding,
   WorkbenchTurnIdentityLookup,
   WorkbenchTurnIdentityMetadata,
   WorkbenchTurnIdentityRecord,
@@ -118,6 +119,8 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "observeThreadIdentities"; inputs: readonly WorkbenchThreadIdentityMetadata[] }
   | { type: "resolveThreadIdentity"; input: WorkbenchThreadIdentityLookup }
   | { type: "resolveNativeThreadIdentity"; input: WorkbenchNativeThreadIdentity }
+  | { type: "reserveReplacementBinding"; input: WorkbenchThreadReplacementBinding }
+  | { type: "releaseReplacementBinding"; input: Omit<WorkbenchThreadReplacementBinding, "reservedAt"> }
   | { type: "listThreadIdentities" }
   | { type: "observeTurnIdentities"; inputs: readonly WorkbenchTurnIdentityMetadata[] }
   | { type: "resolveTurnIdentity"; input: WorkbenchTurnIdentityLookup }

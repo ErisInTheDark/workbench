@@ -58,7 +58,7 @@ test("maps all three OpenCode Go windows into one account limit", () => {
   assert.equal(limits.rateLimits.rateLimitReachedType, null);
 });
 
-test("keeps fixed OpenCode context as model metadata instead of configurable profile state", () => {
+test("publishes native OpenCode context as a configurable Workbench range", () => {
   const option = openCodeModelOption({
     id: "opencode-go/model",
     providerID: "opencode-go",
@@ -73,6 +73,10 @@ test("keeps fixed OpenCode context as model metadata instead of configurable pro
   }, "opencode-go/model");
 
   assert.equal(option.maxContextWindowTokens, 200_000);
-  assert.equal(option.contextWindow, null);
+  assert.deepEqual(option.contextWindow, {
+    defaultTokens: 200_000,
+    minimumTokens: 51_000,
+    maximumTokens: 200_000,
+  });
   assert.equal(option.isDefault, true);
 });

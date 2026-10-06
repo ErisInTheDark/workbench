@@ -10,6 +10,7 @@ import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-tu
 import OpenCodeEventController from "./OpenCodeEventController";
 import type OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
 import { readTranscriptText } from "workbench-shared/workbench/transcript/thread-transcript-stream";
+import { WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME } from "workbench-shared/workbench/thread/thread-context-rollover";
 
 test("compaction execution settles without accepting a user turn or continuing its task", async () => {
   let active = false;
@@ -185,6 +186,46 @@ test("invalidates cached model catalogues on provider catalogue events", async (
   assert.deepEqual(notifications, ["models/updated", "models/updated"]);
 });
 
+test("context rollover tool starts the shared hold and never records a dynamic tool item", async () => {
+  const lifecycle: string[] = [];
+  const owner = new OpenCodeEventController({
+    observe: async () => undefined,
+    rollover: {
+      observeUsage: async () => undefined,
+      toolStarted: async input => { lifecycle.push(`started:${input.reference}`); },
+      toolSucceeded: async input => { lifecycle.push(`completed:${input.reference}`); },
+      toolFailed: async () => assert.fail("successful rollover must not fail"),
+    },
+    threads: {
+      ...executionLifecycle,
+      currentTurn: () => ({ threadId, turnId }),
+      syncNative: async () => ({ threadId, turn: turn() }),
+    },
+    transcript: {
+      appendText: () => undefined,
+      recordCompaction: async () => undefined,
+      recordTurnState: async () => undefined,
+      recordItem: async () => assert.fail("rollover tool must not record a dynamic tool item"),
+    },
+  });
+  await owner.accept(event({
+    type: "session.tool.input.started",
+    created: 1,
+    data: { sessionID: "session", id: "compact", name: WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME },
+  }));
+  await owner.accept(event({
+    type: "session.tool.input.ended",
+    created: 2,
+    data: { sessionID: "session", id: "compact", text: "{\"summary\":\"handoff\"}" },
+  }));
+  await owner.accept(event({
+    type: "session.tool.success",
+    created: 3,
+    data: { sessionID: "session", id: "compact", metadata: {}, content: [] },
+  }));
+  assert.deepEqual(lifecycle, ["started:compact", "completed:compact"]);
+});
+
 test("persists and publishes live cumulative usage for the active OpenCode turn", async () => {
   const tokenUsage = {
     last: {
@@ -208,7 +249,7 @@ test("persists and publishes live cumulative usage for the active OpenCode turn"
       recordUsage: async (_sessionID, tokens, observedAt) => {
         assert.deepEqual(tokens, { input: 20, output: 4, reasoning: 1, cache: { read: 0, write: 0 } });
         assert.equal(observedAt, 3);
-        return { threadId, turnId, tokenUsage };
+        return { contextTokens: tokens.input, threadId, turnId, tokenUsage };
       },
     },
     transcript: {

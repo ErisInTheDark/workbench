@@ -39,6 +39,7 @@ import type {
     WorkbenchNativeThreadIdentity,
     WorkbenchThreadIdentityLookup,
     WorkbenchThreadIdentityMetadata,
+    WorkbenchThreadReplacementBinding,
     WorkbenchTurnIdentityLookup,
     WorkbenchTurnIdentityMetadata,
 } from "./thread-identity/workbench-thread-identity-types";
@@ -358,6 +359,24 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     const response = await this.#request({ type: "resolveNativeThreadIdentity", input });
     if (response.type !== "threadIdentity") {
       throw new WorkbenchDatabaseFailure(`Unexpected native thread identity lookup response: ${response.type}`);
+    }
+    return response.identity;
+  }
+
+  async reserveReplacementBinding(input: WorkbenchThreadReplacementBinding) {
+    await this.start();
+    const response = await this.#request({ type: "reserveReplacementBinding", input });
+    if (response.type !== "threadIdentity" || !response.identity) {
+      throw new WorkbenchDatabaseFailure(`Unexpected replacement binding reservation response: ${response.type}`);
+    }
+    return response.identity;
+  }
+
+  async releaseReplacementBinding(input: Omit<WorkbenchThreadReplacementBinding, "reservedAt">) {
+    await this.start();
+    const response = await this.#request({ type: "releaseReplacementBinding", input });
+    if (response.type !== "threadIdentity" || !response.identity) {
+      throw new WorkbenchDatabaseFailure(`Unexpected replacement binding release response: ${response.type}`);
     }
     return response.identity;
   }

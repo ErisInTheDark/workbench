@@ -649,6 +649,7 @@ test("Custom provider changes persist before models arrive and only fill the cur
   assert.equal(await controller.fillMissingModel(slot, "opencode", [OPENCODE_MODEL]), true);
   assert.deepEqual(controller.resolveSettings({ ...slot, harness: "opencode" }), {
     harness: "opencode", model: "native/default", agentPath: null, agentSource: null, reasoningEffort: "high", serviceTier: null,
+    contextWindowTokens: 200_000,
   });
   assert.equal(await controller.selectHarness(slot, "codex", async () => [{ ...OPENCODE_MODEL, id: "codex/default" }]), true);
   assert.equal(await controller.fillMissingModel(slot, "opencode", [OPENCODE_MODEL]), false);

@@ -117,6 +117,67 @@ test("retained parent references acquire real provider bindings without changing
   } finally { database.close(); }
 });
 
+test("replacement bindings reserve the same canonical thread and release only while unused", () => {
+  const { database, identity } = setup();
+  try {
+    const original = metadata();
+    const thread = identity.observe(original);
+    identity.observeTurn({
+      kind: "turn",
+      threadId: thread.threadId,
+      turnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("original-turn"),
+      nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("original-turn"),
+      harnessId: original.native.harness,
+      nativeLocation: original.native.nativeLocation,
+      nativeThreadId: original.native.nativeThreadId,
+      state: "completed",
+      createdAt: 2,
+      startedAt: 2,
+      endedAt: 3,
+      durationMs: 1,
+    });
+    const replacement = {
+      harness: "opencode",
+      nativeLocation: "C:/project",
+      nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("replacement-thread"),
+    };
+
+    const reserved = identity.reserveReplacementBinding({
+      threadId: thread.threadId, native: replacement, reservedAt: 40,
+    });
+    assert.equal(reserved.threadId, thread.threadId);
+    assert.deepEqual(reserved.bindings[0], { ...replacement, pending: true, turnIndex: null });
+    assert.equal(identity.reserveReplacementBinding({
+      threadId: thread.threadId, native: replacement, reservedAt: 41,
+    }).threadId, thread.threadId);
+    assert.throws(() => identity.reserveReplacementBinding({
+      threadId: thread.threadId,
+      native: { ...replacement, nativeThreadId: fixtureIdentitySchemas.NativeThreadIdSchema.parse("other-replacement") },
+      reservedAt: 42,
+    }), /already has a pending replacement/);
+
+    const released = identity.releaseReplacementBinding({ threadId: thread.threadId, native: replacement });
+    assert.equal(released.bindings.some(binding => binding.nativeThreadId === replacement.nativeThreadId), false);
+
+    identity.reserveReplacementBinding({ threadId: thread.threadId, native: replacement, reservedAt: 43 });
+    identity.observeTurn({
+      kind: "turn",
+      threadId: thread.threadId,
+      turnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("replacement-turn"),
+      nativeTurnId: fixtureIdentitySchemas.NativeTurnIdSchema.parse("replacement-turn"),
+      harnessId: replacement.harness,
+      nativeLocation: replacement.nativeLocation,
+      nativeThreadId: replacement.nativeThreadId,
+      state: "inProgress",
+      createdAt: 44,
+      startedAt: 44,
+      endedAt: null,
+      durationMs: null,
+    });
+    assert.throws(() => identity.releaseReplacementBinding({ threadId: thread.threadId, native: replacement }), /already admitted/);
+  } finally { database.close(); }
+});
+
 test("Windows metadata and turn catalogs reuse retained identities across equivalent path spellings", () => {
   const { database } = setup();
   const identity = new WorkbenchThreadIdentityRepository(database, "win32");

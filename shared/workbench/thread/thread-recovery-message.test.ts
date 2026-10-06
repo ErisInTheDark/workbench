@@ -26,6 +26,7 @@ import {
   isWorkbenchUnfinishedTurnInput,
 } from "./thread-recovery-message.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import { createWorkbenchContextRolloverInput } from "./thread-context-rollover.ts";
 
 const fixtureIdentityValues = {
   WorkbenchTurnId: {
@@ -79,6 +80,7 @@ test("manual recovery follows inactive Workbench lifecycle without competing wit
 test("recovery control inputs reject extra content outside their reserved envelope", () => {
   assert.equal(isWorkbenchThreadRecoveryInput(createWorkbenchThreadRecoveryInput()), true);
   assert.equal(isWorkbenchThreadRecoveryInput(createWorkbenchUnfinishedTurnInput()), true);
+  assert.equal(isWorkbenchThreadRecoveryInput(createWorkbenchContextRolloverInput("summary")), true);
   assert.equal(isWorkbenchUnfinishedTurnInput(createWorkbenchUnfinishedTurnInput()), true);
   assert.equal(isWorkbenchHiddenSystemSteerInput(createWorkbenchUnfinishedTurnInput()), true);
   assert.equal(isWorkbenchThreadRecoveryInput([{ text: `${WORKBENCH_THREAD_RECOVERY_MESSAGE} extra`, text_elements: [], type: "text" }]), false);

@@ -77,6 +77,43 @@ for (const name of ["task_get", "shell"]) {
   });
 }
 
+test("OpenCode context handoff executes without admitting MCP arguments or results", async () => {
+  const order: string[] = [];
+  const tools: WorkbenchProviderTools = {
+    caller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd: "C:/workspace" }),
+    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
+    patchClaims: async () => "",
+    transcript: {
+      start: async () => { order.push("start"); return null; },
+      finish: async () => { order.push("finish"); },
+    },
+  };
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => tools,
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    executeCommand: async request => {
+      order.push("execute");
+      assert.equal(request.path, "/api/thread-compact");
+      assert.deepEqual(request.body, {
+        cwd: "C:/workspace", harness: "opencode", summary: "complete handoff", threadId: "thread",
+      });
+      return Response.json({ accepted: true });
+    },
+  });
+  const server = await startController(controller);
+  server.url.searchParams.set("provider", "opencode");
+  const client = await connectClient(server.url);
+  try {
+    const result = await client.callTool({ name: "thread_compact", arguments: { summary: "complete handoff" } });
+    assert.equal(result.isError, false, responseText(result));
+    assert.deepEqual(order, ["execute"]);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 for (const phase of ["start", "finish", "operation"] as const) {
   test(`capture ${phase} failure never retries or discards executed output`, async () => {
     let executions = 0;

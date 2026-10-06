@@ -23,7 +23,10 @@ import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransiti
 import type { WorkbenchGitArcActiveClaim } from "./WorkbenchGitArcFeature";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
-import { ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import {
+  ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchThreadIdSchema,
+  type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId,
+} from "workbench-shared/workbench/identity";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 import type WorkbenchAgentContextController from "./WorkbenchAgentContextController";
@@ -81,6 +84,7 @@ export interface WorkbenchThreadStateFeatureContext {
   getProjectCatalog(): WorkbenchProjectsPayload;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   listSubagents(projectId: ProjectId): Promise<SubagentRelationshipList>;
+  compactThread?(input: { cwd: string; summary: string; threadId: WorkbenchThreadId; turnId: WorkbenchTurnId }): Promise<void>;
   log?: (message: string) => void;
   resolveProjectById(projectId: string): Promise<ProjectRecord>;
   resolveProjectFromCwd(cwd: string, options?: { endpointName?: string }): Promise<ProjectResolution>;
@@ -319,11 +323,20 @@ export default class WorkbenchThreadStateFeature {
         } };
       }
       const resolved = await this.resolveManagedThread(params);
-      const needsTurn = request.method === "workbench/thread/resume";
+      const needsTurn = request.method === "workbench/thread/resume" || request.method === "workbench/thread/compact";
       const turnId = needsTurn ? await this.resolveManagedTurn(resolved) : null;
       const providerEntry = normalizeProviderSidebarEntry(resolved.harness, resolved.thread, this.context.identities.threads);
       if (!providerEntry || providerEntry.entryKind === "draft") throw new Error("The managed provider thread could not be normalized.");
       await this.controller.ensureProviderEntry(resolved.projectId, providerEntry);
+      if (request.method === "workbench/thread/compact") {
+        if (resolved.harness !== "opencode") throw new Error("Context rollover is available only for OpenCode threads.");
+        if (!turnId) throw new Error("The managed thread has no current turn to compact.");
+        const summary = typeof params.summary === "string" ? params.summary.trim() : "";
+        if (!summary) throw new Error("A non-empty context-compaction summary is required.");
+        if (!this.context.compactThread) throw new Error("Context rollover is not available until the core reload completes.");
+        await this.context.compactThread({ cwd: resolved.cwd, summary, threadId: resolved.thread.id, turnId });
+        return { id, result: { accepted: true, threadId: resolved.thread.id, turnId } };
+      }
       if (request.method === "workbench/thread/title") {
         // The explicit title is workbench state; provider rows only supply a display label.
         const canonical = await this.controller.getCanonicalThreadEntry(resolved.projectId, resolved.thread.id);

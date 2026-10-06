@@ -16,6 +16,8 @@ import { openCodeContentSource, openCodeItemSource } from "./open-code-source-id
 import type { OpenCodePatchObservation } from "./opencode-workbench-rpc";
 import type OpenCodeThreadOperations from "./OpenCodeThreadOperations";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import { WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME } from "workbench-shared/workbench/thread/thread-context-rollover";
+import type WorkbenchThreadContextRolloverController from "../../WorkbenchThreadContextRolloverController";
 
 type ActiveTurn = { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId };
 
@@ -23,6 +25,7 @@ export interface OpenCodeEventControllerOptions {
   broadcast?(notification: WorkbenchTranscriptNotification): void;
   invalidateModelCatalogs?(): void;
   observe(facts: WorkbenchProviderObservation): Promise<WorkbenchThreadLifecycle | null | void>;
+  rollover?: Pick<WorkbenchThreadContextRolloverController, "observeUsage" | "toolStarted" | "toolSucceeded" | "toolFailed">;
   threads: {
     consumeRequestedInterrupt?(nativeThreadId: string): boolean;
     currentTurn(nativeThreadId: string): ActiveTurn | null;
@@ -152,10 +155,18 @@ export default class OpenCodeEventController {
         return;
       case "session.usage.updated": {
         const usage = await this.options.threads.recordUsage(sessionID, event.data.tokens, event.created);
-        if (usage) this.options.broadcast?.({
-          method: "thread/tokenUsage/updated",
-          params: usage,
-        });
+        if (usage) {
+          const { contextTokens, ...notification } = usage;
+          this.options.broadcast?.({
+            method: "thread/tokenUsage/updated",
+            params: notification,
+          });
+          await this.options.rollover?.observeUsage({
+            contextTokens,
+            threadId: usage.threadId,
+            turnId: usage.turnId,
+          });
+        }
         return;
       }
       case "session.inbox.delivered": {
@@ -264,7 +275,13 @@ export default class OpenCodeEventController {
         return;
       }
       case "session.tool.input.started": {
-        this.setTool(sessionID, event.data.id, { input: "", name: event.data.name, startedAt: event.created });
+        const active = await this.active(sessionID);
+        this.setTool(sessionID, event.data.id, { active, input: "", name: event.data.name, startedAt: event.created });
+        if (event.data.name === WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME) {
+          if (!this.options.rollover) throw new Error("OpenCode context rollover is unavailable.");
+          await this.options.rollover.toolStarted({ ...active, reference: event.data.id });
+          return;
+        }
         await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
         return;
       }
@@ -276,7 +293,9 @@ export default class OpenCodeEventController {
           name: previous?.name ?? "unknown",
           startedAt: previous?.startedAt ?? event.created,
         });
-        await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
+        if (previous?.name !== WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME) {
+          await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
+        }
         return;
       }
       case "session.tool.called": {
@@ -287,14 +306,18 @@ export default class OpenCodeEventController {
           name: previous?.name ?? "unknown",
           startedAt: previous?.startedAt ?? event.created,
         });
-        await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
+        if (previous?.name !== WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME) {
+          await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
+        }
         return;
       }
       case "session.tool.progress": {
         const previous = this.getTool(sessionID, event.data.id);
         if (previous) {
           previous.metadata = event.data.metadata;
-          await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
+          if (previous.name !== WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME) {
+            await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
+          }
         }
         return;
       }
@@ -305,6 +328,20 @@ export default class OpenCodeEventController {
         const metadata = event.data.metadata ?? previous?.metadata;
         const succeeded = event.type === "session.tool.success"
           && !(metadata && typeof metadata === "object" && !Array.isArray(metadata) && metadata.error === true);
+        if (previous?.name === WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME) {
+          if (!this.options.rollover) throw new Error("OpenCode context rollover is unavailable.");
+          if (succeeded) {
+            await this.options.rollover.toolSucceeded({ ...active, reference: event.data.id });
+          } else {
+            const reason = event.type === "session.tool.failed" ? event.data.error : "Context rollover tool reported failure.";
+            await this.options.rollover.toolFailed(
+              { ...active, reference: event.data.id },
+              new Error(typeof reason === "string" ? reason.slice(0, 300) : "Context rollover tool failed."),
+            );
+          }
+          this.deleteTool(sessionID, event.data.id);
+          return;
+        }
         await this.options.transcript.recordItem({
           ...active,
           source: openCodeItemSource(event.data.id),

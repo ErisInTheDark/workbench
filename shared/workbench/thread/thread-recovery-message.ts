@@ -16,6 +16,7 @@ import type { ThreadPayload, WorkbenchUserInputResponse } from "../../types.ts";
 import { defineTagWrapper } from "./tag-wrapper.ts";
 import { stripWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
 import type { WorkbenchThreadLifecycle } from "./thread-state.ts";
+import { isWorkbenchContextRolloverInput } from "./thread-context-rollover.ts";
 
 const WORKBENCH_RESUME_TAG_WRAPPER = defineTagWrapper("wb:resume", {
   attributes: [],
@@ -111,6 +112,7 @@ export function isWorkbenchThreadRecoveryInput(input: readonly UserInput[]) {
     && (
       input[0].text === WORKBENCH_THREAD_RECOVERY_MESSAGE
       || isWorkbenchResumeWrapper(input[0].text)
+      || isWorkbenchContextRolloverInput(input)
     );
 }
 

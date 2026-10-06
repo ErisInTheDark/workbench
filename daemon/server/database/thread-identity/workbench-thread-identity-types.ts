@@ -5,6 +5,7 @@
  * - WorkbenchThreadIdentityLookup: public WB-first lookup with optional disambiguating scope.
  * - WorkbenchThreadIdentityBinding: one native destination owned by a Workbench thread.
  * - WorkbenchThreadIdentityRecord: durable thread identity and its native destinations.
+ * - WorkbenchThreadReplacementBinding: one pending replacement reservation request.
  * - WorkbenchThreadIdentityDatabase: typed identity operations on the existing database worker.
  * - WorkbenchTurnIdentityMetadata: native turn metadata sufficient for identity admission without a body.
  * - WorkbenchTurnIdentityRecord: canonical turn identity with its private native destination.
@@ -52,6 +53,12 @@ export interface WorkbenchThreadIdentityRecord {
   bindings: readonly WorkbenchThreadIdentityBinding[];
 }
 
+export interface WorkbenchThreadReplacementBinding {
+  threadId: WorkbenchThreadId;
+  native: WorkbenchNativeThreadIdentity;
+  reservedAt: number;
+}
+
 export type WorkbenchTurnIdentityMetadata = Omit<Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }>, "turnId"> & {
   turnId: WorkbenchTurnId | NativeTurnId;
 };
@@ -72,6 +79,8 @@ export interface WorkbenchThreadIdentityDatabase {
   observeThreadIdentities(inputs: readonly WorkbenchThreadIdentityMetadata[]): Promise<WorkbenchThreadIdentityRecord[]>;
   resolveThreadIdentity(input: WorkbenchThreadIdentityLookup): Promise<WorkbenchThreadIdentityRecord | null>;
   resolveNativeThreadIdentity(input: WorkbenchNativeThreadIdentity): Promise<WorkbenchThreadIdentityRecord | null>;
+  reserveReplacementBinding?(input: WorkbenchThreadReplacementBinding): Promise<WorkbenchThreadIdentityRecord>;
+  releaseReplacementBinding?(input: Omit<WorkbenchThreadReplacementBinding, "reservedAt">): Promise<WorkbenchThreadIdentityRecord>;
   listThreadIdentities(): Promise<WorkbenchThreadIdentityRecord[]>;
   /** Requested records first, then other records whose ordered indexes changed. */
   observeTurnIdentities(inputs: readonly WorkbenchTurnIdentityMetadata[]): Promise<WorkbenchTurnIdentityRecord[]>;

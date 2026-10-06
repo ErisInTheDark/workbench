@@ -457,6 +457,9 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     signal: AbortSignal,
     tools: WorkbenchProviderTools,
   ) {
+    if (definition.hideMcpTranscript) {
+      return await this.executeTool(definition, input, meta, clientScope, requestId, signal, tools);
+    }
     return this.observeTool(getWorkbenchAgentCommandToolName(definition), input, meta, clientScope, signal, tools,
       () => this.executeTool(definition, input, meta, clientScope, requestId, signal, tools));
   }

@@ -8,6 +8,7 @@ import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments"
 import {
   defineWorkbenchAgentCommand,
   getWorkbenchAgentCommand,
+  managedWorkbenchAgentCommandBody,
   postWorkbenchAgentCommand,
   queryWorkbenchAgentCommandPath,
 } from "./workbench-agent-command-definition";
@@ -94,6 +95,28 @@ const refresh = defineWorkbenchAgentCommand({
   },
 });
 
+const compact = defineWorkbenchAgentCommand({
+  description: "Hand off the active OpenCode turn into a fresh native context.",
+  harnesses: ["opencode"],
+  helpGroups: ["thread"],
+  hideMcpTranscript: true,
+  words: ["thread", "compact"],
+  usage: "wb thread compact --summary <text>",
+  inputSchema: z.object({
+    summary: requiredText.describe("Complete post-context-compaction handoff for the replacement context."),
+  }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--summary"] });
+    return { summary: flags.required("--summary") };
+  },
+  buildRequest({ summary }, context) {
+    return postWorkbenchAgentCommand("/api/thread-compact", {
+      ...managedWorkbenchAgentCommandBody(context),
+      summary,
+    });
+  },
+});
+
 const recallSearch = defineWorkbenchAgentCommand({
   aliases: [["thread", "context", "search"]],
   description: "Search visible narrative history and return stable result references.",
@@ -171,4 +194,4 @@ const recall = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_THREAD_COMMANDS = [taskGet, taskSet, taskCompleted, taskBlocked, refresh, recallSearch, recallExpand, recall] as const;
+export const WORKBENCH_THREAD_COMMANDS = [taskGet, taskSet, taskCompleted, taskBlocked, refresh, compact, recallSearch, recallExpand, recall] as const;
