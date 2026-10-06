@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchOpenCodeClient: typed client for the user's companion-capable shared OpenCode service.
  * - OpenCodeServiceControllerOptions: injectable service discovery and client construction.
- * - default OpenCodeServiceController: own companion-ready service startup and model catalogue warming.
+ * - default OpenCodeServiceController: own reload-safe companion service startup, suspension, and model warming.
  */
 import type { OpenCodeClient } from "@opencode/client";
 import type { Endpoint, EnsureOptions, StopOptions } from "@opencode/client/service";
@@ -131,7 +131,7 @@ export default class OpenCodeServiceController {
   private acquiring: Promise<WorkbenchOpenCodeClient> | null = null;
   private active = false;
   private stopService: ((options?: StopOptions) => Promise<void>) | null = null;
-  private readonly lifetime = new AbortController();
+  private lifetime = new AbortController();
   private disposed = false;
   private readonly serviceStateHome: string;
   private readonly serviceFile: string;
@@ -155,19 +155,26 @@ export default class OpenCodeServiceController {
   async readModelCatalog(directory?: string) {
     const client = await this.acquire();
     const key = directory ?? "";
-    const first = this.modelCatalogs.get(key) ?? this.startModelCatalogRead(client, key, directory);
+    const first = this.modelCatalogs.get(key)
+      ?? this.startModelCatalogRead(client, key, this.lifetime.signal, directory);
     const catalog = await first;
     if (catalog.models.length) return catalog;
-    return await (this.modelCatalogs.get(key) ?? this.startModelCatalogRead(client, key, directory));
+    return await (this.modelCatalogs.get(key)
+      ?? this.startModelCatalogRead(client, key, this.lifetime.signal, directory));
   }
 
-  private startModelCatalogRead(client: WorkbenchOpenCodeClient, key: string, directory?: string) {
+  private startModelCatalogRead(
+    client: WorkbenchOpenCodeClient,
+    key: string,
+    signal: AbortSignal,
+    directory?: string,
+  ) {
     const location = directory ? { location: { directory } } : undefined;
     let reading: Promise<OpenCodeModelCatalog>;
     reading = Promise.resolve().then(async () => {
       const [models, defaultModel] = await Promise.all([
-        client.model.list(location, { signal: this.lifetime.signal }),
-        client.model.default(location, { signal: this.lifetime.signal }),
+        client.model.list(location, { signal }),
+        client.model.default(location, { signal }),
       ]);
       return { models: models.data, defaultModel: defaultModel.data };
     }).then(catalog => {
@@ -185,17 +192,25 @@ export default class OpenCodeServiceController {
     this.modelCatalogs.clear();
   }
 
+  async suspend() {
+    if (this.disposed) return false;
+    return await this.retireGeneration(
+      new Error("OpenCode service controller suspended for replacement."),
+      { drain: true, renew: true },
+    );
+  }
+
   async dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    this.lifetime.abort(new Error("OpenCode service controller disposed."));
-    this.client = null;
-    this.acquiring = null;
-    this.modelCatalogs.clear();
-    await this.stopOwnedService();
+    await this.retireGeneration(
+      new Error("OpenCode service controller disposed."),
+      { drain: false, renew: false },
+    );
   }
 
   private async create() {
+    const lifetime = this.lifetime;
     const [{ OpenCode }, { Service }] = await Promise.all([
       import("@opencode/client"),
       import("@opencode/client/service"),
@@ -225,13 +240,13 @@ export default class OpenCodeServiceController {
       await waitForCompanion(
         client,
         pluginSource,
-        this.lifetime.signal,
+        lifetime.signal,
         this.options.warn ?? (message => console.warn(message)),
       );
       if (this.disposed) throw new Error("OpenCode service client was disposed during acquisition.");
       this.client = client;
-      void this.startModelCatalogRead(client, "").catch(error => {
-        if (this.disposed) return;
+      void this.startModelCatalogRead(client, "", lifetime.signal).catch(error => {
+        if (this.disposed || this.lifetime !== lifetime) return;
         const name = error instanceof Error ? error.name : "unknown failure";
         (this.options.warn ?? console.warn)(`OpenCode model catalogue warmup failed (${name.slice(0, 80)}).`);
       });
@@ -250,5 +265,24 @@ export default class OpenCodeServiceController {
     if (!this.active) return;
     this.active = false;
     await this.stopService?.({ file: this.serviceFile, pty: "handoff" });
+  }
+
+  private async retireGeneration(reason: Error, options: { drain: boolean; renew: boolean }) {
+    const shouldResume = this.active || this.client !== null || this.acquiring !== null;
+    const acquiring = this.acquiring;
+    const catalogues = [...this.modelCatalogs.values()];
+    this.lifetime.abort(reason);
+    this.client = null;
+    if (!options.drain) this.acquiring = null;
+    this.modelCatalogs.clear();
+    if (options.drain) {
+      await Promise.allSettled([
+        ...(acquiring ? [acquiring] : []),
+        ...catalogues,
+      ]);
+    }
+    await this.stopOwnedService();
+    if (options.renew) this.lifetime = new AbortController();
+    return shouldResume;
   }
 }

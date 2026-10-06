@@ -113,6 +113,41 @@ test("allows failed dedicated-service acquisition to be retried", async () => {
   await controller.dispose();
 });
 
+test("suspends active service ownership for replacement and remains resumable until disposal", async () => {
+  let ensures = 0;
+  let stops = 0;
+  const clients = [1, 2].map(id => ({
+    id,
+    model: modelApi,
+    plugin: {
+      list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }),
+    },
+  }));
+  const controller = new OpenCodeServiceController({
+    prepareServiceDirectory: async () => undefined,
+    ensureService: async () => {
+      ensures++;
+      return { url: `http://127.0.0.1:${4_095 + ensures}` };
+    },
+    createClient: () => clients[ensures - 1] as never,
+    stopService: async () => { stops++; },
+  });
+
+  assert.equal(await controller.suspend(), false);
+  assert.equal(ensures, 0);
+  assert.equal(stops, 0);
+
+  assert.equal(await controller.acquire(), clients[0]);
+  assert.equal(await controller.suspend(), true);
+  assert.equal(stops, 1);
+  assert.equal(await controller.acquire(), clients[1]);
+  assert.equal(ensures, 2);
+
+  await controller.dispose();
+  assert.equal(stops, 2);
+  await assert.rejects(controller.acquire(), /has been disposed/u);
+});
+
 test("coalesces model catalogues by directory and invalidates provider changes", async () => {
   let lists = 0;
   const client = {
