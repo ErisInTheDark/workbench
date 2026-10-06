@@ -165,6 +165,7 @@ export default function ThreadGitArcLifecycleCard ({
       <section className="w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-fg/2" data-thread-git-arc-lifecycle-card="true">
         {visibleProposals.length ? (
           <ThreadGitArcProposalList
+            acceptance={claim.acceptance ?? null}
             commitActions={commitActions}
             cwd={cwd}
             harness={harness}

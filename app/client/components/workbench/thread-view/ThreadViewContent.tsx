@@ -1103,6 +1103,7 @@ export default memo(function ThreadViewContent ({
       disambiguationPaths={projectFilePaths}
     >
       <ThreadGitArcObservationProvider
+        acceptance={activeThreadController.state.entry?.gitArc?.acceptance ?? null}
         observeProposal={observeGitArcProposal}
         proposals={activeThreadController.state.gitArcProposals}
       >

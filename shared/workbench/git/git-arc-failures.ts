@@ -35,7 +35,7 @@ const GitArcFailureActionSchema = z.enum([
   "arcTransferClaims",
   "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "arcContinue", "arcStart", "arcStash", "arcUnstash", "arcDiscardStash", "arcStack", "arcUnstack", "arcWait", "arcAdd", "arcAdopt", "arcRemove", "arcRelease", "arcMove",
-  "compare", "diff", "proposalCreate", "proposalRescind", "proposalState", "proposalSummaries", "proposalCommit",
+  "compare", "diff", "proposalCreate", "proposalRescind", "proposalState", "proposalSummaries", "proposalCommit", "proposalCommitMany",
   "readDiffArtifact", "restore", "unknown",
 ]);
 

@@ -1,22 +1,33 @@
 /*
  * Exports:
- * - ThreadCheckpointCommitAction: one mounted proposal controller's readiness and commit entry point.
+ * - ThreadCheckpointCommitAction: one mounted proposal controller's readiness, batched commit choices and outcome handling.
+ * - ThreadCheckpointCommitOutcome: a batched acceptance's landed proposal or failure for one proposal.
  * - ThreadCheckpointStoredProposal: bulk-read proposal commit facts used while a card has not loaded.
  * - ThreadCheckpointCommitActionsContext: provide the owning view's registry to relocatable proposal controllers.
- * - default ThreadCheckpointCommitActions: resolve each proposal's commit action (loaded card first, bulk summary otherwise) and commit selected proposals in order.
+ * - default ThreadCheckpointCommitActions: resolve each proposal's commit action (loaded card first, bulk summary otherwise) and land selected proposals in one batched acceptance.
  */
 "use client";
 
 import { createContext } from "react";
 
-import type { GitArcProposalSummary } from "workbench-shared/workbench/git/checkpoint-contracts";
+import type {
+  GitArcProposalCommitEntry,
+  GitArcProposalCommitManyResult,
+  GitArcProposalSummary,
+  GitCheckpointProposal,
+} from "workbench-shared/workbench/git/checkpoint-contracts";
+import { GitArcFailureException } from "workbench-shared/workbench/git/git-arc-failures";
+
+export type ThreadCheckpointCommitOutcome = { proposal: GitCheckpointProposal } | { error: unknown };
 
 export interface ThreadCheckpointCommitAction {
-  /** Resolves false when the controller surfaced a failure on its own card. */
-  commit: () => Promise<boolean>;
+  /** This proposal's current commit choices, or null when it has nothing committable. */
+  entry: () => GitArcProposalCommitEntry | null;
   /** False until the card loaded its proposal; an unloaded card defers to the bulk summary. Defaults to true. */
   loaded?: boolean;
   ready: boolean;
+  /** Shows a batched acceptance's outcome for this proposal on its own card. */
+  settle: (outcome: ThreadCheckpointCommitOutcome) => void;
 }
 
 export type ThreadCheckpointStoredProposal = Omit<GitArcProposalSummary, "rootId">;
@@ -29,7 +40,7 @@ export default class ThreadCheckpointCommitActions {
   readonly #actions = new Map<string, ThreadCheckpointCommitAction>();
   readonly #listeners = new Set<() => void>();
   #stored = new Map<string, ThreadCheckpointStoredProposal>();
-  #commitStored: ((proposal: ThreadCheckpointStoredProposal) => Promise<boolean>) | null = null;
+  #settleStored: ((proposal: ThreadCheckpointStoredProposal, outcome: ThreadCheckpointCommitOutcome) => void) | null = null;
 
   register(proposalId: string, action: ThreadCheckpointCommitAction) {
     this.#actions.set(proposalId, action);
@@ -41,15 +52,18 @@ export default class ThreadCheckpointCommitActions {
     };
   }
 
-  /** Replace the bulk summaries; their commits use the stored message, so cards that never loaded still take part. */
-  setStored(proposals: readonly ThreadCheckpointStoredProposal[], commit: (proposal: ThreadCheckpointStoredProposal) => Promise<boolean>) {
+  /** Replace the bulk summaries; they commit with their stored message, so cards that never loaded still take part. */
+  setStored(
+    proposals: readonly ThreadCheckpointStoredProposal[],
+    settle: (proposal: ThreadCheckpointStoredProposal, outcome: ThreadCheckpointCommitOutcome) => void,
+  ) {
     this.#stored = new Map(proposals.map(proposal => [proposal.proposalId, proposal]));
-    this.#commitStored = commit;
+    this.#settleStored = settle;
     this.#notify();
     return () => {
-      if (this.#commitStored !== commit) return;
+      if (this.#settleStored !== settle) return;
       this.#stored = new Map();
-      this.#commitStored = null;
+      this.#settleStored = null;
       this.#notify();
     };
   }
@@ -59,12 +73,18 @@ export default class ThreadCheckpointCommitActions {
     return () => { this.#listeners.delete(listener); };
   };
 
-  #resolve(proposalId: string, storedTier = { stored: this.#stored, commitStored: this.#commitStored }): ThreadCheckpointCommitAction | null {
+  #resolve(proposalId: string, storedTier = { stored: this.#stored, settleStored: this.#settleStored }): ThreadCheckpointCommitAction | null {
     const card = this.#actions.get(proposalId);
     if (card && card.loaded !== false) return card;
     const stored = storedTier.stored.get(proposalId);
-    const commitStored = storedTier.commitStored;
-    if (stored && commitStored) return { commit: () => commitStored(stored), ready: isStoredReady(stored) };
+    const settleStored = storedTier.settleStored;
+    if (stored && settleStored) {
+      return {
+        entry: () => ({ description: stored.description, includeNewer: false, mode: stored.mode, proposalId, title: stored.title }),
+        ready: isStoredReady(stored),
+        settle: outcome => settleStored(stored, outcome),
+      };
+    }
     return card ?? null;
   }
 
@@ -73,19 +93,33 @@ export default class ThreadCheckpointCommitActions {
   }
 
   /**
-   * Commits sequentially because each commit moves HEAD before the next proposal revalidates.
-   * Readiness gates the start only: later cards briefly rehydrate after HEAD moves, and the
-   * commit endpoint revalidates each proposal anyway. Proposals with neither a card nor a summary stop the run.
-   * The stored tier is captured at the start: each landed commit makes the list refetch its summaries mid-run.
+   * Lands every proposal in one batched acceptance, in order; the daemon stops at the first failure and earlier ones
+   * stay landed. Readiness gates the start only, since the daemon revalidates each proposal. Proposals with neither a
+   * card nor a summary stop the run before it starts. The stored tier is captured at the start, because each landed
+   * commit makes the list refetch its summaries.
    */
-  async commitAll(proposalIds: readonly string[]) {
+  async commitAll(
+    proposalIds: readonly string[],
+    commitMany: (entries: GitArcProposalCommitEntry[]) => Promise<GitArcProposalCommitManyResult>,
+  ) {
     if (!this.isReady(proposalIds)) return false;
-    const storedTier = { stored: this.#stored, commitStored: this.#commitStored };
-    for (const proposalId of proposalIds) {
-      const action = this.#resolve(proposalId, storedTier);
-      if (!action || !await action.commit()) return false;
+    const storedTier = { stored: this.#stored, settleStored: this.#settleStored };
+    const actions = proposalIds.map(proposalId => this.#resolve(proposalId, storedTier));
+    const entries = actions.map(action => action?.entry() ?? null);
+    if (entries.some(entry => !entry)) return false;
+    const byProposal = new Map(proposalIds.map((proposalId, index) => [proposalId, actions[index]!]));
+    let result: GitArcProposalCommitManyResult;
+    try {
+      result = await commitMany(entries as GitArcProposalCommitEntry[]);
+    } catch (error) {
+      // Nothing was accepted; the first proposal reports why.
+      actions[0]!.settle({ error });
+      return false;
     }
-    return true;
+    for (const proposal of result.landed) byProposal.get(proposal.proposalId)?.settle({ proposal });
+    if (!result.failed) return true;
+    byProposal.get(result.failed.proposalId)?.settle({ error: new GitArcFailureException(result.failed.failure) });
+    return false;
   }
 
   #notify() {

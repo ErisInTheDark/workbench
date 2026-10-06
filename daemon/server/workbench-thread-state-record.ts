@@ -225,8 +225,12 @@ export function conformStoredWorkbenchThreadStateRecord(
   const persistent = conformed.data.entryKind === "thread"
     ? (({ previousTitles: _previousTitles, waitingFor: _waitingFor, waitingOnThreads: _waitingOnThreads, ...record }) => record)(conformed.data)
     : (({ previousTitles: _previousTitles, waitingFor: _waitingFor, ...record }) => record)(conformed.data);
+  // A running acceptance belongs to the daemon process that ran it; a stored one is a crash leftover.
+  const gitArc = persistent.gitArc?.acceptance
+    ? (({ acceptance: _acceptance, ...arc }) => arc)(persistent.gitArc)
+    : persistent.gitArc;
   return {
-    data: { ...persistent, ...internalFields(value) },
+    data: { ...persistent, ...(gitArc !== undefined ? { gitArc } : {}), ...internalFields(value) },
     repairedPaths: conformed.repairedPaths,
     success: true,
   };

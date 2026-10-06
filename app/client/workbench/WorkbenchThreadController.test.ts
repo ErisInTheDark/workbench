@@ -164,6 +164,47 @@ function gitArc(proposalId = "proposal") {
   };
 }
 
+test("lifecycle changes re-read only changed proposal rows while an acceptance runs, then refresh every card keeping loaded data", async () => {
+  const f = fixture();
+  f.publish(f.document);
+  const release = f.owner.acquire("view");
+  const arc = (checkpoint: string, committed: string[], acceptance?: { landingId: string | null; queuedIds: string[] }) => ({
+    ...gitArc(), checkpointCommit: checkpoint.repeat(40),
+    proposals: ["one", "two"].map(proposalId => ({ proposalId, status: committed.includes(proposalId) ? "committed" as const : "proposed" as const })),
+    ...(acceptance ? { acceptance } : {}),
+  });
+  f.admit(0, [], arc("a", []));
+  const releases = ["one", "two"].map(id => f.owner.observeGitArcProposal(id));
+  for (const read of f.proposalReads) read.resolve(proposal(read.proposalId, "proposed"));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const republish = (gitArcState: ReturnType<typeof arc>, revision: number) => {
+    f.observations.accept({
+      projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: f.requests[0]!.subscriptionId,
+      target: { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+      entries: [{
+        activityAt: 1, title: "thread", entryKind: "thread", identity: { harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+        gitArc: gitArcState, metadata: { archived: false, pinned: true, snoozed: false },
+        lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+      }],
+      revision, version: 2, updateKind: "threadObservation", freshness: "fresh", error: null,
+    } satisfies WorkbenchThreadObservationSnapshot);
+  };
+
+  republish(arc("b", ["one"], { landingId: "two", queuedIds: ["two"] }), 2);
+  assert.deepEqual(f.proposalReads.slice(2).map(({ proposalId }) => proposalId), ["one"], "only the landed row is re-read mid-acceptance");
+  const states = f.owner.getSnapshot().gitArcProposals;
+  assert.deepEqual([states.one?.status === "loaded" && states.one.refreshing, states.two], [
+    true, { proposal: proposal("two", "proposed"), status: "loaded" },
+  ]);
+
+  republish(arc("c", ["one", "two"]), 3);
+  assert.deepEqual(f.proposalReads.slice(3).map(({ proposalId }) => proposalId).sort(), ["one", "two"], "the finished acceptance refreshes every card");
+  assert.ok(Object.values(f.owner.getSnapshot().gitArcProposals).every(state => state.status === "loaded" && state.refreshing));
+  for (const releaseProposal of releases) releaseProposal();
+  release();
+  f.owner.dispose();
+});
+
 test("opening reconciles saved history without discarding it when the provider is unavailable", async () => {
   const f = fixture();
   let reconciliations = 0;

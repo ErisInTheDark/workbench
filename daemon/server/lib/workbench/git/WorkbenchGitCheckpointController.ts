@@ -16,6 +16,7 @@ import fs from "node:fs/promises";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type {
   GitArcMoveRequest,
+  GitArcProposalCommitEntry,
   GitArcStackResult,
   GitCheckpointFileChange,
   GitCheckpointProposal,
@@ -1215,6 +1216,16 @@ export default class WorkbenchGitCheckpointController {
     title: string;
   }): Promise<GitCheckpointProposal> {
     return await GitObjectReadSession.run(() => this.proposals.commitProposal({ cwd, description, harness: rawHarness, includeNewer, unclaimedSelection, mode, proposalId, threadId, title }));
+  }
+
+  /** Lands proposals in order in one operation; the first failure stops the batch and is returned, not thrown. */
+  async commitProposals(input: ControllerInput & { entries: GitArcProposalCommitEntry[]; worktree?: GitWorktreeSnapshot }) {
+    return await GitObjectReadSession.run(() => this.proposals.commitProposals(input));
+  }
+
+  /** The worktree content a whole acceptance measures its claims against, captured once. */
+  async captureAcceptanceWorktree(input: ControllerInput & { entries: GitArcProposalCommitEntry[] }) {
+    return await GitObjectReadSession.run(() => this.proposals.captureAcceptanceWorktree(input));
   }
 
   async readLegacyDiffArtifact({ artifactId, threadId }: { artifactId: string; threadId: string }) {

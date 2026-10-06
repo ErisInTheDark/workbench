@@ -96,6 +96,16 @@ test("stored-record conformance preserves lifecycle truth when an optional proje
   if (!conformed.success) return;
   assert.deepEqual(projectWorkbenchThreadStateEntry(conformed.data), { ...entry, previousTitles: [], waitingOnThreads: [] });
   assert.deepEqual(conformed.repairedPaths, [["gitArc"]]);
+
+  // A stored running acceptance is a crash leftover: the lifecycle survives without it.
+  const gitArc = {
+    checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "work",
+    phase: "resolved", proposals: [{ proposalId: "one", status: "proposed" }], updatedAt: "now",
+  };
+  const stale = conformStoredWorkbenchThreadStateRecord({
+    ...entry, gitArc: { ...gitArc, acceptance: { landingId: "one", queuedIds: [] } },
+  }, fixtureIdentityValues.ProjectId["project"]);
+  assert.deepEqual(stale.success && stale.data.entryKind === "thread" ? stale.data.gitArc : null, { ...gitArc, stashedPaths: [] });
 });
 
 test("stored-record conformance repairs malformed lifecycle to a non-terminal state", () => {

@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 
-import type { GitCheckpointProposal, GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
+import type { GitArcProposalCommitEntry, GitCheckpointProposal, GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcMissingClaimSetError, GitArcProposalAlreadyCommittedError } from "workbench-shared/workbench/git/git-arc-failures";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import type { GitArcSavedStash } from "workbench-shared/workbench/git/git-arc-storage";
@@ -27,8 +27,9 @@ import GitCheckpointStore, {
   type StoredCheckpoint,
   type StoredProposal,
 } from "./GitCheckpointStore";
+import { formatGitRawDate } from "./GitObjectWriter";
 import WorkbenchGitHistoryRewriter, { type WorkbenchGitPreparedHead } from "./WorkbenchGitHistoryRewriter";
-import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
+import WorkbenchGitRepository, { type GitRefUpdate, type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
 import {
   type ArcOutcome,
   type CheckpointMetadata,
@@ -200,22 +201,6 @@ function pathIsCoveredBy(candidate: string, scopePath: string) {
   return candidate === scopePath || candidate.startsWith(`${scopePath}/`);
 }
 
-async function arcChainContains(
-  store: GitCheckpointStore,
-  harness: GitArcHarness,
-  threadId: string,
-  startCheckpoint: StoredCheckpoint,
-  requiredCheckpoint: string,
-) {
-  let cursor = startCheckpoint;
-  for (let depth = 0; depth < 100; depth += 1) {
-    if (cursor.checkpointCommit === requiredCheckpoint) return true;
-    if (!cursor.metadata?.amendedFrom) return false;
-    cursor = await store.readCheckpoint(harness, threadId, cursor.metadata.amendedFrom);
-  }
-  return false;
-}
-
 async function prepareAcceptedClaimTransition({
   acceptedHead,
   active,
@@ -228,6 +213,7 @@ async function prepareAcceptedClaimTransition({
   stack,
   store,
   threadId,
+  worktreeTree,
 }: {
   acceptedHead: string;
   active: GitArcRegistryEntry;
@@ -240,6 +226,8 @@ async function prepareAcceptedClaimTransition({
   stack: GitArcStackController;
   store: GitCheckpointStore;
   threadId: string;
+  /** Captured worktree content covering every claimed path. */
+  worktreeTree: string;
 }) {
   // A stack stops shaping the baseline once nothing in its chain is pending after this acceptance.
   const stackTip = active.stackTip && await stack.chainHasPending(await stack.readChain(active.stackTip), proposalId)
@@ -250,7 +238,7 @@ async function prepareAcceptedClaimTransition({
     throw new GitArcRejectionError({ reason: "proposalNotOwned" }, "The proposal no longer belongs to this thread's Git arc.");
   }
   const currentTree = lifecycle.claimedPaths.length
-    ? await repository.writeScopedWorktreeTree(lifecycle.claimedPaths, acceptedHead)
+    ? await repository.writeTreeWithPathsFromSource(acceptedHead, worktreeTree, lifecycle.claimedPaths)
     : null;
   const changedPaths = currentTree
     ? await repository.listChangedPaths(acceptedHead, currentTree, lifecycle.claimedPaths)
@@ -319,14 +307,6 @@ async function prepareAcceptedClaimTransition({
     successorCheckpoint,
     updates,
   };
-}
-
-/** Git's raw date form with the local offset, e.g. `1759633402 +1300`. */
-function gitRawDate(date: Date) {
-  const offset = -date.getTimezoneOffset();
-  const magnitude = Math.abs(offset);
-  const zone = `${offset < 0 ? "-" : "+"}${String(Math.floor(magnitude / 60)).padStart(2, "0")}${String(magnitude % 60).padStart(2, "0")}`;
-  return `${Math.floor(date.getTime() / 1000)} ${zone}`;
 }
 
 function commitMessage(title: string, description: string) {
@@ -462,14 +442,22 @@ async function resolveProposalState(
     sealed?: boolean;
     snapshot?: { head: string | null; tree: string };
   },
-): Promise<{ currentTree: string | null; includeNewerAvailable: boolean; proposal: StoredProposal; waitingForLayer: string | null }> {
+): Promise<{
+  currentTree: string | null;
+  includeNewerAvailable: boolean;
+  proposal: StoredProposal;
+  /** Unpersisted transitions were derived; the caller persists or publishes them. */
+  transitioned: boolean;
+  waitingForLayer: string | null;
+}> {
   const store = new GitCheckpointStore(repository, resolveThreadIdentity);
   let proposal = await store.readProposal(harness, threadId, proposalId);
-  const applyTransition = async (metadata: ProposalMetadata, treeish?: string) => (
-    options.persistTransitions
-      ? await persistProposalTransition(repository, proposal, metadata, treeish)
-      : deriveProposalTransition(proposal, metadata, treeish)
-  );
+  let transitioned = false;
+  const applyTransition = async (metadata: ProposalMetadata, treeish?: string) => {
+    if (options.persistTransitions) return await persistProposalTransition(repository, proposal, metadata, treeish);
+    transitioned = true;
+    return deriveProposalTransition(proposal, metadata, treeish);
+  };
   if (proposal.metadata.stackBase && proposal.metadata.status === "proposed") {
     const head = options.snapshot ? options.snapshot.head : await repository.headOrNull();
     const stacked = await new GitArcStackController(repository, resolveThreadIdentity).classifyStackedProposal(
@@ -477,13 +465,13 @@ async function resolveProposalState(
       derivedStatusResolver(resolveThreadIdentity, repository, options.snapshot),
     );
     if (stacked.kind === "waiting") {
-      return { currentTree: null, includeNewerAvailable: false, proposal, waitingForLayer: stacked.layerTitle };
+      return { currentTree: null, includeNewerAvailable: false, proposal, transitioned, waitingForLayer: stacked.layerTitle };
     }
     if (stacked.kind === "broken") {
       proposal = await applyTransition({
         ...proposal.metadata, status: "unavailable", unavailableReason: STACK_BROKEN_UNAVAILABLE_REASON, unavailableReasonCode: null,
       });
-      return { currentTree: null, includeNewerAvailable: false, proposal, waitingForLayer: null };
+      return { currentTree: null, includeNewerAvailable: false, proposal, transitioned, waitingForLayer: null };
     }
     // Lower layers landed as sealed; the proposal now sits on real history like any other.
     const { stackBase: _stackBase, ...metadata } = proposal.metadata;
@@ -581,9 +569,9 @@ async function resolveProposalState(
           proposal.metadata.liveBaseCommit,
         );
     }
-    return { currentTree, includeNewerAvailable, proposal, waitingForLayer: null };
+    return { currentTree, includeNewerAvailable, proposal, transitioned, waitingForLayer: null };
   }
-  return { currentTree, includeNewerAvailable: false, proposal, waitingForLayer: null };
+  return { currentTree, includeNewerAvailable: false, proposal, transitioned, waitingForLayer: null };
 }
 
 /** Stack decisions read derived proposal status without persisting transitions. */
@@ -1020,7 +1008,7 @@ export default class GitArcProposalController {
       mode: amendTargetSha ? "amend" : "commit",
       paths,
       proposalId,
-      proposedAt: gitRawDate(new Date()),
+      proposedAt: formatGitRawDate(new Date()),
       sourceCheckpoint: checkpoint.checkpointCommit,
       ...(stackTip ? { stackBase: stackTip } : {}),
       status: "proposed",
@@ -1289,38 +1277,80 @@ export default class GitArcProposalController {
     return await buildProposalResult(this.proposalDiffs, repository, committedMetadata, { commit: amendedCommit });
   }
 
-  async commitProposal({
-    cwd,
-    description,
-    harness: rawHarness,
-    includeNewer,
-    unclaimedSelection,
-    mode,
-    proposalId,
-    threadId,
-    title,
-  }: ArcIdentityInput & {
-    description: string;
-    includeNewer: boolean;
-    unclaimedSelection?: Extract<GitCheckpointRequest, { action: "proposalCommit" }>["unclaimedSelection"];
-    mode?: "amend" | "commit";
-    proposalId: string;
-    title: string;
-  }): Promise<GitCheckpointProposal> {
+  async commitProposal({ cwd, harness, threadId, ...entry }: ArcIdentityInput & GitArcProposalCommitEntry): Promise<GitCheckpointProposal> {
+    const { failed, landed } = await this.commitProposals({ cwd, entries: [entry], harness, threadId });
+    if (failed) throw failed.error;
+    return landed[0]!;
+  }
+
+  /**
+   * Commits proposals in order inside one operation, each publishing atomically on its own, and stops at the first
+   * failure so earlier ones stay landed. One worktree capture serves the whole batch: edits made while it runs count as after it.
+   */
+  async commitProposals({ cwd, entries, harness: rawHarness, threadId, worktree: captured }: ArcIdentityInput & {
+    entries: GitArcProposalCommitEntry[];
+    /** A capture shared with earlier parts of the same acceptance; captured here when absent. */
+    worktree?: GitWorktreeSnapshot;
+  }) {
     const repository = await WorkbenchGitRepository.open(cwd);
     const harness = normalizeHarness(rawHarness);
-    const snapshot = unclaimedSelection ? await repository.writeWorktreeSnapshot() : undefined;
+    const worktree = captured ?? await this.captureAcceptanceWorktree({ cwd, entries, harness, threadId });
+    const landed: GitCheckpointProposal[] = [];
+    for (const entry of entries) {
+      try {
+        landed.push(await this.acceptProposal(repository, harness, threadId, entry, worktree));
+      } catch (error) {
+        return { failed: { error, proposalId: entry.proposalId }, landed };
+      }
+    }
+    return { failed: null, landed };
+  }
+
+  /** Worktree content for every claimed and proposed path, or the whole worktree when unclaimed files are being folded in. */
+  async captureAcceptanceWorktree({ cwd, entries, harness: rawHarness, threadId }: ArcIdentityInput & { entries: GitArcProposalCommitEntry[] }): Promise<GitWorktreeSnapshot> {
+    const repository = await WorkbenchGitRepository.open(cwd);
+    const harness = normalizeHarness(rawHarness);
+    if (entries.some(({ unclaimedSelection }) => unclaimedSelection)) return await repository.writeWorktreeSnapshot();
+    const store = this.store(repository);
+    const active = await this.registry(repository).find({ harness, threadId });
+    const proposalPaths = await Promise.all(entries.map(async ({ proposalId }) => {
+      try {
+        return (await store.readProposal(harness, threadId, proposalId)).metadata.livePaths;
+      } catch (error) {
+        // Its acceptance reports the missing proposal itself.
+        if (error instanceof GitArcRejectionError && error.rejection.reason === "proposalNotFound") return [];
+        throw error;
+      }
+    }));
+    const paths = [...new Set([...(active ? lifecycleEntry(active)?.claimedPaths ?? [] : []), ...proposalPaths.flat()])];
+    const head = await repository.headOrNull();
+    return { head, tree: paths.length ? await repository.writeScopedWorktreeTree(paths, head) : await repository.resolveTree(head) };
+  }
+
+  private async acceptProposal(
+    repository: WorkbenchGitRepository,
+    harness: GitArcHarness,
+    threadId: string,
+    { description, includeNewer: requestedIncludeNewer, mode, proposalId, title, unclaimedSelection }: GitArcProposalCommitEntry,
+    worktree: GitWorktreeSnapshot,
+  ): Promise<GitCheckpointProposal> {
+    // HEAD moves as earlier entries land; the captured worktree content stays.
+    const snapshot = { head: await repository.headOrNull(), tree: worktree.tree };
     // Newer work above a sealed proposal belongs to higher layers, so sealed commits never include it.
     const sealed = Boolean(await this.sealingLayer(repository, harness, threadId, proposalId));
-    if (sealed) includeNewer = false;
+    const includeNewer = requestedIncludeNewer && !sealed;
     const resolved = await resolveProposalState(
       this.resolveThreadIdentity,
       repository,
       harness,
       threadId,
       proposalId,
-      { includeNewer, persistTransitions: true, sealed, snapshot },
+      { includeNewer, persistTransitions: false, sealed, snapshot },
     );
+    // Rebases onto landed history publish with the commit itself; a proposal that became unavailable stores that now.
+    if (resolved.transitioned && resolved.proposal.metadata.status !== "proposed") {
+      resolved.proposal = await persistProposalTransition(repository, resolved.proposal, resolved.proposal.metadata, resolved.proposal.tree);
+    }
     if (resolved.waitingForLayer) {
       throw new GitArcRejectionError({ reason: "proposalUnavailable" }, `Commit the lower stack layer "${resolved.waitingForLayer}" first.`);
     }
@@ -1386,7 +1416,7 @@ export default class GitArcProposalController {
       ? proposalSource
       : await store.readCheckpoint(harness, threadId, lifecycle.checkpointCommit);
     const stack = this.stack(repository);
-    const sourceIsOwned = await arcChainContains(store, harness, threadId, activeSource, proposalSource.checkpointCommit)
+    const sourceIsOwned = await store.lineageContains(harness, threadId, activeSource, proposalSource.checkpointCommit)
       || Boolean(await stack.sealingLayer(active, proposalId));
     if (!sourceIsOwned) {
       throw new GitArcRejectionError({ reason: "proposalNotOwned" }, "The proposal no longer belongs to this thread's active Git arc.");
@@ -1457,6 +1487,7 @@ export default class GitArcProposalController {
             stack,
             store,
             threadId,
+            worktreeTree: worktree.tree,
           });
           for (const update of transition.updates) {
             updates.push(update);
@@ -1547,6 +1578,7 @@ export default class GitArcProposalController {
       stack,
       store,
       threadId,
+      worktreeTree: worktree.tree,
     });
     const outcomeUpdate = await store.prepareOutcome(harness, threadId, {
       acceptedProposals,

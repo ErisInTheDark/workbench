@@ -1,99 +1,107 @@
-/* No production exports. Regression wards cover ordered commit-all, failure stops, readiness gating, and unmounted cards. */
+/* No production exports. Regression wards cover one ordered batch, per-card outcomes, failure stops, readiness gating, and stored versus loaded choices. */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
+import type { GitArcProposalCommitEntry, GitArcProposalCommitManyResult, GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
+import { createGitArcOperationRejected, GitArcFailureException } from "workbench-shared/workbench/git/git-arc-failures";
+import ThreadCheckpointCommitActions, { type ThreadCheckpointCommitOutcome } from "./ThreadCheckpointCommitActions";
 
-function deferred() {
-  let resolve!: (value: boolean) => void;
-  const promise = new Promise<boolean>(next => { resolve = next; });
-  return { promise, resolve };
+const landed = (proposalId: string) => ({ proposalId, status: "committed" }) as GitCheckpointProposal;
+const entry = (proposalId: string, title = proposalId): GitArcProposalCommitEntry => ({ description: "", includeNewer: false, proposalId, title });
+
+function card(proposalId: string, outcomes: string[], overrides: { loaded?: boolean; ready?: boolean; title?: string } = {}) {
+  return {
+    entry: () => entry(proposalId, overrides.title),
+    loaded: overrides.loaded,
+    ready: overrides.ready ?? true,
+    settle: (outcome: ThreadCheckpointCommitOutcome) => {
+      outcomes.push("proposal" in outcome ? `${proposalId}:landed` : `${proposalId}:${(outcome.error as Error).message}`);
+    },
+  };
 }
 
-test("commit all waits for each proposal before starting the next", async () => {
+test("commit all sends every card's choices in order as one batch and settles each landed card", async () => {
   const actions = new ThreadCheckpointCommitActions();
-  const first = deferred();
-  const started: string[] = [];
-  actions.register("one", { commit: () => { started.push("one"); return first.promise; }, ready: true });
-  actions.register("two", { commit: async () => { started.push("two"); return true; }, ready: true });
-
-  const run = actions.commitAll(["one", "two"]);
-  await Promise.resolve();
-  assert.deepEqual(started, ["one"]);
-  first.resolve(true);
-  assert.equal(await run, true);
-  assert.deepEqual(started, ["one", "two"]);
+  const outcomes: string[] = [];
+  actions.register("one", card("one", outcomes, { title: "edited title" }));
+  actions.register("two", card("two", outcomes));
+  const requests: GitArcProposalCommitEntry[][] = [];
+  const result = await actions.commitAll(["one", "two"], async (entries) => {
+    requests.push(entries);
+    return { failed: null, landed: [landed("one"), landed("two")] };
+  });
+  assert.equal(result, true);
+  assert.deepEqual(requests.map(entries => entries.map(({ proposalId, title }) => `${proposalId}:${title}`)), [["one:edited title", "two:two"]]);
+  assert.deepEqual(outcomes, ["one:landed", "two:landed"]);
 });
 
-test("commit all stops at the first failed proposal", async () => {
+test("commit all shows the first failure on its own card, after the landed ones", async () => {
   const actions = new ThreadCheckpointCommitActions();
-  const started: string[] = [];
-  actions.register("one", { commit: async () => { started.push("one"); return false; }, ready: true });
-  actions.register("two", { commit: async () => { started.push("two"); return true; }, ready: true });
+  const outcomes: string[] = [];
+  for (const id of ["one", "two", "three"]) actions.register(id, card(id, outcomes));
+  const failure = createGitArcOperationRejected("proposalCommit", "two broke");
+  const result: GitArcProposalCommitManyResult = { failed: { failure, proposalId: "two" }, landed: [landed("one")] };
+  assert.equal(await actions.commitAll(["one", "two", "three"], async () => result), false);
+  assert.deepEqual(outcomes, ["one:landed", `two:${new GitArcFailureException(failure).message}`]);
+});
 
-  assert.equal(await actions.commitAll(["one", "two"]), false);
-  assert.deepEqual(started, ["one"]);
+test("a batch that fails as a whole reports on the first card", async () => {
+  const actions = new ThreadCheckpointCommitActions();
+  const outcomes: string[] = [];
+  for (const id of ["one", "two"]) actions.register(id, card(id, outcomes));
+  assert.equal(await actions.commitAll(["one", "two"], async () => { throw new Error("socket closed"); }), false);
+  assert.deepEqual(outcomes, ["one:socket closed"]);
 });
 
 test("commit all starts only when every proposal is ready", async () => {
   const actions = new ThreadCheckpointCommitActions();
-  const started: string[] = [];
-  actions.register("one", { commit: async () => { started.push("one"); return true; }, ready: true });
-  actions.register("two", { commit: async () => { started.push("two"); return true; }, ready: false });
-
+  const outcomes: string[] = [];
+  actions.register("one", card("one", outcomes));
+  actions.register("two", card("two", outcomes, { ready: false }));
+  let requested = false;
   assert.equal(actions.isReady(["one", "two"]), false);
-  assert.equal(await actions.commitAll(["one", "two"]), false);
-  assert.deepEqual(started, []);
-});
-
-test("commit all stops when a later proposal unmounts mid-run", async () => {
-  const actions = new ThreadCheckpointCommitActions();
-  const started: string[] = [];
-  let unregisterTwo = () => {};
-  actions.register("one", {
-    commit: async () => { started.push("one"); unregisterTwo(); return true; },
-    ready: true,
-  });
-  unregisterTwo = actions.register("two", { commit: async () => { started.push("two"); return true; }, ready: true });
-
-  assert.equal(await actions.commitAll(["one", "two"]), false);
-  assert.deepEqual(started, ["one"]);
+  assert.equal(await actions.commitAll(["one", "two"], async () => { requested = true; return { failed: null, landed: [] }; }), false);
+  assert.equal(requested, false);
 });
 
 const summary = (proposalId: string, overrides: Partial<{ hasChanges: boolean; status: "proposed" | "committed"; title: string }> = {}) => ({
   description: `${proposalId} why`, hasChanges: true, mode: "commit" as const, proposalId, status: "proposed" as const, title: proposalId, ...overrides,
 });
 
-test("unloaded proposals are ready from bulk summaries and commit their stored message in order, while loaded cards keep their own", async () => {
+test("unloaded proposals commit their stored message while loaded cards keep their own, and outcomes reach the right tier", async () => {
   const actions = new ThreadCheckpointCommitActions();
-  const committed: string[] = [];
+  const outcomes: string[] = [];
   // Each landed commit changes the pending set, so the list releases its summaries to refetch mid-run.
-  const release = actions.setStored([summary("one"), summary("two"), summary("three")], async ({ proposalId, title }) => {
-    committed.push(`stored:${proposalId}:${title}`);
+  const release = actions.setStored([summary("one"), summary("two"), summary("three")], ({ proposalId }, outcome) => {
+    outcomes.push(`stored:${proposalId}:${"proposal" in outcome ? "landed" : "failed"}`);
     release();
-    return true;
   });
   // Collapsed layers mount cards that never loaded; their registrations must not hide the summary.
-  actions.register("one", { commit: async () => { committed.push("card:one"); return true; }, loaded: false, ready: false });
-  actions.register("two", { commit: async () => { committed.push("card:two"); return true; }, loaded: true, ready: true });
+  actions.register("one", card("one", outcomes, { loaded: false, ready: false }));
+  actions.register("two", card("two", outcomes, { loaded: true, title: "card title" }));
   assert.equal(actions.isReady(["one", "two", "three"]), true);
-  assert.equal(await actions.commitAll(["one", "two", "three"]), true);
-  assert.deepEqual(committed, ["stored:one:one", "card:two", "stored:three:three"]);
+  let sent: GitArcProposalCommitEntry[] = [];
+  assert.equal(await actions.commitAll(["one", "two", "three"], async (entries) => {
+    sent = entries;
+    return { failed: null, landed: [landed("one"), landed("two"), landed("three")] };
+  }), true);
+  assert.deepEqual(sent.map(({ description, title }) => `${title}|${description}`), ["one|one why", "card title|", "three|three why"]);
+  assert.deepEqual(outcomes, ["stored:one:landed", "two:landed", "stored:three:landed"]);
 });
 
 test("a stored summary without changes, without a title or no longer proposed is not ready", () => {
   const actions = new ThreadCheckpointCommitActions();
   actions.setStored([
     summary("empty", { hasChanges: false }), summary("untitled", { title: " " }), summary("landed", { status: "committed" }),
-  ], async () => true);
+  ], () => {});
   for (const id of ["empty", "untitled", "landed"]) assert.equal(actions.isReady([id]), false, id);
 });
 
 test("a replaced registration survives the stale cleanup", () => {
   const actions = new ThreadCheckpointCommitActions();
-  const stale = actions.register("one", { commit: async () => true, ready: false });
-  actions.register("one", { commit: async () => true, ready: true });
+  const stale = actions.register("one", card("one", [], { ready: false }));
+  actions.register("one", card("one", []));
   stale();
   assert.equal(actions.isReady(["one"]), true);
 });

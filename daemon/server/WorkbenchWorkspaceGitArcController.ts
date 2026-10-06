@@ -23,6 +23,7 @@ import type {
   GitArcRootPaths,
   GitArcStackResult,
   GitCheckpointFileChange,
+  GitCheckpointProposal,
   GitCheckpointRequest,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { createGitArcDiffPage } from "workbench-shared/workbench/git/git-arc-diff-pages";
@@ -33,7 +34,8 @@ import WorkbenchGitCheckpointController, {
   type GitArcRetentionResult,
 } from "./lib/workbench/git/WorkbenchGitCheckpointController";
 import GitClaimHistoryReader from "./lib/workbench/git/GitClaimHistoryReader";
-import WorkbenchGitRepository from "./lib/workbench/git/WorkbenchGitRepository";
+import GitObjectReadSession from "./lib/workbench/git/GitObjectReadSession";
+import WorkbenchGitRepository, { type GitWorktreeSnapshot } from "./lib/workbench/git/WorkbenchGitRepository";
 import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import type { AgentEndpointProjectResolution } from "./lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
@@ -481,6 +483,7 @@ export default class WorkbenchWorkspaceGitArcController {
       case "proposalState":
       case "proposalCommit":
       case "proposalRescind": return await this.executeProposalOperation(project, members, request);
+      case "proposalCommitMany": throw new Error("Batched acceptance reports per-proposal failures through its own ingress.");
       case "restore": return await this.executeRestore(project, members, request);
       case "readDiffArtifact": return await this.local.readLegacyDiffArtifact({ artifactId: request.diffArtifactId, threadId: request.threadId });
     }
@@ -1295,7 +1298,67 @@ export default class WorkbenchWorkspaceGitArcController {
     return { ...proposal, rootId: root.id };
   }
 
+  /**
+   * Lands proposals in order, each through its own repository member. Each layer holds only its member's gate, so
+   * observers read between layers; each repository's worktree is captured once, when its first layer lands.
+   * The first failure stops the batch and is returned; `afterLanded` runs outside the gate after each landing.
+   */
+  async commitProposals(
+    project: AgentEndpointProjectResolution,
+    request: Extract<GitCheckpointRequest, { action: "proposalCommitMany" }>,
+    afterLanded?: (proposal: GitCheckpointProposal) => Promise<void>,
+  ) {
+    const members = await this.resolveRepoMembers(project);
+    const located = await Promise.all(request.entries.map(async entry => ({
+      entry, member: await this.findProposalMember(members, { ...request, proposalId: entry.proposalId }),
+    })));
+    const identity = { harness: request.harness, threadId: request.threadId };
+    const worktrees = new Map<RepoMember, GitWorktreeSnapshot>();
+    const landed: GitCheckpointProposal[] = [];
+    const landLayer = async ({ entry, member }: (typeof located)[number]) => await this.transitions.runMany([member.repoRoot], async () => {
+      // Other writers may have run while the gate was yielded, so ref facts restart with every layer.
+      WorkbenchGitRepository.forgetRefFacts(member.repoRoot);
+      let worktree = worktrees.get(member);
+      if (!worktree) {
+        worktree = await this.local.captureAcceptanceWorktree({
+          ...identity, cwd: member.repoRoot, entries: located.filter(item => item.member === member).map(item => item.entry),
+        });
+        worktrees.set(member, worktree);
+      }
+      return await this.local.commitProposals({ ...identity, cwd: member.repoRoot, entries: [entry], worktree });
+    });
+    // One operation scope keeps the object reader and identity facts across layers; observers run outside it.
+    const batchScope = GitObjectReadSession.share();
+    try {
+      for (const layer of located) {
+        const result = await GitObjectReadSession.run(() => landLayer(layer), batchScope);
+        if (result.failed) return { failed: result.failed, landed };
+        const proposal = this.withProposalRoot(layer.member, result.landed[0]!);
+        landed.push(proposal);
+        await afterLanded?.(proposal);
+      }
+      return { failed: null, landed };
+    } finally {
+      try {
+        await batchScope.close();
+      } finally {
+        await this.observeMemberClaims([...worktrees.keys()], { ...identity, project });
+      }
+    }
+  }
+
+  private withProposalRoot<T extends { paths: string[] }>(member: RepoMember, result: T) {
+    return { ...result, rootId: this.proposalRootId(member, result.paths) };
+  }
+
+  /** The workspace root holding a proposal's first path, else the member's first root. */
+  private proposalRootId(member: RepoMember, paths: readonly string[]) {
+    return unique(paths.map((candidate) => this.rootForRepoPath(member, candidate).id))[0] ?? member.roots[0]!.id;
+  }
+
   private async findProposalMember(members: readonly RepoMember[], request: { harness: WorkbenchHarness; proposalId: string; threadId: string }) {
+    // A single repository needs no probe; its own operation reports a missing proposal.
+    if (members.length === 1) return members[0]!;
     for (const member of members) {
       try {
         await this.local.getProposal({ cwd: member.repoRoot, harness: request.harness, includeNewer: false, proposalId: request.proposalId, threadId: request.threadId });
@@ -1341,9 +1404,7 @@ export default class WorkbenchWorkspaceGitArcController {
       threadId: request.threadId,
     });
     const result = values[0]!.result;
-    const proposalPaths = "paths" in result && Array.isArray(result.paths) ? result.paths : [];
-    const roots = unique(proposalPaths.map((candidate) => this.rootForRepoPath(member, candidate).id));
-    return { ...result, rootId: roots[0] ?? member.roots[0]!.id };
+    return { ...result, rootId: this.proposalRootId(member, "paths" in result && Array.isArray(result.paths) ? result.paths : []) };
   }
 
   private async executeRestore(

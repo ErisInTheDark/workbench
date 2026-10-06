@@ -10,7 +10,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { WorkbenchHarness } from "workbench-shared/types";
-import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
+import type { GitArcProposalCommitEntry, GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   createGitArcOperationRejected,
@@ -25,7 +25,7 @@ import ThreadCheckpointCommitCard, {
   canCommitCheckpointProposal,
   type CheckpointCommitCardState,
 } from "./ThreadCheckpointCommitCard";
-import { ThreadCheckpointCommitActionsContext } from "./ThreadCheckpointCommitActions";
+import { ThreadCheckpointCommitActionsContext, type ThreadCheckpointCommitOutcome } from "./ThreadCheckpointCommitActions";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import { proposalIntentOwnsMessage } from "./thread-git-arc-presentation";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
@@ -76,6 +76,8 @@ function ThreadCheckpointCommitController({
   proposalObservation: ThreadGitArcProposalObservation | null;
 }) {
   const daemon = useWorkbenchDaemonClient();
+  // A running batched acceptance is an observed fact, so every tab shows which card is landing and which wait.
+  const { acceptance } = useThreadGitArcProposalObservation(proposalId);
   const [includeNewer, setIncludeNewer] = useState(false);
   const [includeUnclaimed, setIncludeUnclaimed] = useState(false);
   // Keep the inspected content with the choice so refresh cannot silently approve changed files.
@@ -260,32 +262,29 @@ function ThreadCheckpointCommitController({
     };
   }, [includeNewer, includeUnclaimed, isProposalObserved, loadProposal, proposalId]);
 
-  const commit = async () => {
-    if (!proposalId || !title.trim() || committingRef.current) return false;
-    committingRef.current = true;
-    setCommitting(true);
-    try {
-      const proposal = await daemon.git.arc.proposal.commit(
-        {
-          cwd,
-          description,
-          harness,
-          includeNewer,
-          ...(unclaimedSelection?.proposalId === proposalId && unclaimedSelection.changes.length ? {
-            unclaimedSelection: {
-              paths: unclaimedSelection.changes.map(change => change.path),
-              tree: unclaimedSelection.tree,
-            },
-          } : {}),
-          // Commit-all can reach later cards while HEAD movement rehydrates them, so use the last loaded mode.
-          ...(loadedModeRef.current === "amend" && commitMode === "commit"
-            ? { mode: "commit" as const }
-            : {}),
-          proposalId,
-          threadId,
-          title,
+  /** The card's current commit choices, shared by its own commit and batched commit-all. */
+  const entry = (): GitArcProposalCommitEntry | null => {
+    if (!proposalId || !title.trim()) return null;
+    return {
+      description,
+      includeNewer,
+      ...(unclaimedSelection?.proposalId === proposalId && unclaimedSelection.changes.length ? {
+        unclaimedSelection: {
+          paths: unclaimedSelection.changes.map(change => change.path),
+          tree: unclaimedSelection.tree,
         },
-      );
+      } : {}),
+      // A rehydrating card keeps the last loaded mode, so a fresh-commit choice survives HEAD movement.
+      ...(loadedModeRef.current === "amend" && commitMode === "commit"
+        ? { mode: "commit" as const }
+        : {}),
+      proposalId,
+      title,
+    };
+  };
+  const settle = (outcome: ThreadCheckpointCommitOutcome) => {
+    if ("proposal" in outcome) {
+      const { proposal } = outcome;
       setCommitMode(proposal.mode);
       if (proposal.mode === "amend") {
         setAmendTitle(proposal.title);
@@ -297,25 +296,37 @@ function ThreadCheckpointCommitController({
       loadedModeRef.current = proposal.mode;
       setState({ proposal, status: "loaded" });
       setUnclaimedSelection(null);
+      return;
+    }
+    const { error } = outcome;
+    const failure = error instanceof GitArcFailureException
+      ? error.failure
+      : createGitArcOperationRejected("proposalCommit", error instanceof Error ? error.message : "Unable to commit checkpoint proposal.");
+    setState({
+      error: error instanceof Error ? error.message : "Unable to commit checkpoint proposal.",
+      failure,
+      retryable: true,
+      status: "error",
+    });
+  };
+  const commit = async () => {
+    const choices = entry();
+    if (!choices || committingRef.current) return false;
+    committingRef.current = true;
+    setCommitting(true);
+    try {
+      settle({ proposal: await daemon.git.arc.proposal.commit({ ...choices, cwd, harness, threadId }) });
       return true;
     } catch (error) {
-      const failure = error instanceof GitArcFailureException
-        ? error.failure
-        : createGitArcOperationRejected("proposalCommit", error instanceof Error ? error.message : "Unable to commit checkpoint proposal.");
-      setState({
-        error: error instanceof Error ? error.message : "Unable to commit checkpoint proposal.",
-        failure,
-        retryable: true,
-        status: "error",
-      });
+      settle({ error });
       return false;
     } finally {
       committingRef.current = false;
       setCommitting(false);
     }
   };
-  const commitRef = useRef(commit);
-  useEffect(() => { commitRef.current = commit; });
+  const latest = useRef({ entry, settle });
+  useEffect(() => { latest.current = { entry, settle }; });
   const commitReady = state.status === "loaded"
     && state.proposal.status === "proposed"
     && canCommitCheckpointProposal({
@@ -329,7 +340,12 @@ function ThreadCheckpointCommitController({
 
   useEffect(() => {
     if (!commitActions || !proposalId) return;
-    return commitActions.register(proposalId, { commit: () => commitRef.current(), loaded: state.status === "loaded", ready: commitReady });
+    return commitActions.register(proposalId, {
+      entry: () => latest.current.entry(),
+      loaded: state.status === "loaded",
+      ready: commitReady,
+      settle: outcome => latest.current.settle(outcome),
+    });
   }, [commitActions, commitReady, proposalId, state.status]);
 
   const changeDescription = (value: string) => {
@@ -365,7 +381,8 @@ function ThreadCheckpointCommitController({
   return (
     <ThreadCheckpointCommitCard
       commitMode={commitMode}
-      committing={committing}
+      committing={committing || acceptance === "landing"}
+      queued={acceptance === "queued"}
       description={description}
       embedded={embedded}
       freshCommitAvailable={freshCommitAvailable}

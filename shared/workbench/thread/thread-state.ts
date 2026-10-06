@@ -296,6 +296,11 @@ const WorkbenchGitArcMemberStateSchema = z.discriminatedUnion("phase", [
 ]);
 
 const workbenchGitArcLifecycleState = {
+  /** A running batched acceptance: the proposal landing now and those still queued, in order. Absent when idle; never persisted. */
+  acceptance: z.object({
+    landingId: z.string().min(1).nullable(),
+    queuedIds: z.array(z.string().min(1)),
+  }).strict().optional(),
   stackLayers: WorkbenchGitArcStackLayersSchema,
   stashedPaths: z.array(z.string().min(1)).default([]).optional(),
   checkpointCommit: z.string().regex(/^[a-f0-9]{40,64}$/u),

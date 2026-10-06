@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default GitObjectReadSession: own operation-scoped Git object streams, operation-scoped fact memos, and deterministic disposal.
+ * - GitObjectReadScope: a shared scope that separate steps of one long operation re-enter until its owner closes it.
  * - GitObjectReadResult: object identity and optional raw contents; null means missing.
  * - GitObjectReadProcess: injectable process boundary for protocol/lifecycle tests.
  */
@@ -32,8 +33,52 @@ function startGit(root: string): GitObjectReadProcess {
   });
 }
 
+/** A scope several separate steps of one long operation re-enter; its owner closes it once. */
+export interface GitObjectReadScope {
+  close(): Promise<void>;
+}
+
+async function closeReaders(scope: Scope) {
+  const cleanup = await Promise.allSettled([...scope.readers.values()].map((reader) => reader.close()));
+  scope.readers.clear();
+  return cleanup.flatMap((entry) => entry.status === "rejected" ? [entry.reason as unknown] : []);
+}
+
+const sharedScopes = new WeakMap<GitObjectReadScope, Scope>();
+
 export default class GitObjectReadSession {
-  static async run<T>(callback: () => Promise<T>): Promise<T> {
+  /** Opens a scope that `run` can re-enter across steps that yield in between, such as per-layer gate holds. */
+  static share(): GitObjectReadScope {
+    const scope: Scope = { readers: new Map(), memos: new Map(), closed: false };
+    const handle: GitObjectReadScope = {
+      close: async () => {
+        if (scope.closed) return;
+        scope.closed = true;
+        const failures = await closeReaders(scope);
+        if (failures.length) throw new AggregateError(failures, "Git object-reader cleanup failed.");
+      },
+    };
+    sharedScopes.set(handle, scope);
+    return handle;
+  }
+
+  static async run<T>(callback: () => Promise<T>, shared?: GitObjectReadScope): Promise<T> {
+    if (shared) {
+      const scope = sharedScopes.get(shared)!;
+      if (scope.closed) throw new Error("Git object read scope is closed.");
+      return await scopes.run(scope, async () => {
+        try {
+          return await callback();
+        } catch (error) {
+          // A failed step may leave a stream mid-protocol; later steps start fresh readers.
+          const cause = error instanceof Error ? error : new Error(String(error));
+          for (const reader of scope.readers.values()) reader.abort(cause);
+          const failures = (await closeReaders(scope)).filter(reason => reason !== cause);
+          if (failures.length) throw new AggregateError([error, ...failures], "Git operation and object-reader cleanup failed.");
+          throw error;
+        }
+      });
+    }
     const current = scopes.getStore();
     if (current) {
       if (current.closed) throw new Error("Git object read scope is closed.");

@@ -195,6 +195,42 @@ test("proposal dispatch preserves on-demand inspection and inspected selection",
   assert.equal(result.mode, "commit");
 });
 
+test("a batched acceptance publishes which proposal is landing and which wait after every landing, then clears", async () => {
+  const observed: Array<object | null> = [];
+  let feature!: WorkbenchGitArcFeature;
+  feature = waitFeature({
+    refreshThreadGitArcState: async (_project: string, harness: "codex", threadId: string) => {
+      const state = await feature.findLifecycleState("C:/Git/Project", harness, fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId));
+      observed.push(state?.acceptance ?? null);
+    },
+  });
+  const internal = feature as unknown as {
+    workspaceController: {
+      commitProposals: (project: object, request: { entries: Array<{ proposalId: string }> }, afterLanded: (proposal: object) => Promise<void>) => Promise<object>;
+      findLifecycleState: () => Promise<object>;
+    };
+  };
+  internal.workspaceController.findLifecycleState = async () => ({
+    checkpointCommit: "a".repeat(40), claimedPaths: [], harness: "codex", intentDescription: "", intentName: "work",
+    members: [], phase: "resolved", proposals: [], threadId: wbThreadId("codex", "thread"), updatedAt: "now",
+  });
+  internal.workspaceController.commitProposals = async (_project, request, afterLanded) => {
+    for (const { proposalId } of request.entries) await afterLanded({ proposalId });
+    return { failed: null, landed: [] };
+  };
+  const response = await feature.executeRequest({
+    action: "proposalCommitMany", cwd: "C:/Git/Project", harness: "codex", threadId: "thread",
+    entries: ["one", "two"].map(proposalId => ({ proposalId, title: proposalId, description: "", includeNewer: false })),
+  });
+  assert.equal(response.ok, true, await response.text());
+  assert.deepEqual(observed, [
+    { landingId: "one", queuedIds: ["two"] },
+    { landingId: "two", queuedIds: [] },
+    { landingId: null, queuedIds: [] },
+    null,
+  ]);
+});
+
 test("startup claim reconciliation seeds current scopes at observation time", async () => {
   const snapshots: WorkbenchGitClaimSnapshot[] = [];
   const feature = new WorkbenchGitArcFeature({

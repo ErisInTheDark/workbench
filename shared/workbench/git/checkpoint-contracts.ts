@@ -15,10 +15,13 @@
  * - GitArcStackResultSchema/GitArcStackResult: sealed or reopened stack layer receipt.
  * - GitArcClaimViewSchema/GitArcClaimView/GitArcClaimViewResultSchema/GitArcClaimViewResult: per-repository build view tree, held owners and mirror counts.
  * - GitCheckpointProposalSchema/GitCheckpointProposal: durable proposal presentation.
+ * - GitArcProposalCommitEntry: one proposal's commit choices inside a batched acceptance.
+ * - GitArcProposalCommitManyResultSchema/GitArcProposalCommitManyResult: landed proposals and the first failure of a batch.
  * - GitArcProposalSummarySchema/GitArcProposalSummary/GitArcProposalSummariesSchema/GitArcProposalSummaries: bulk diff-free proposal commit facts.
  */
 import { z } from "zod";
 import { ProviderKeySchema } from "../provider/provider-key.ts";
+import { GitArcFailureSchema } from "./git-arc-failures";
 import { GitArcStackedProposalSchema } from "./git-arc-receipts";
 import { gitArcRejectionIssue } from "./git-arc-rejections";
 import { GitArcStatusFullSchema } from "./git-arc-status";
@@ -111,6 +114,20 @@ const checkpointBaseRequest = {
   harness: ProviderKeySchema.default("codex"),
   threadId: nonEmptyString,
 };
+
+const proposalCommitEntry = z.object({
+  description: z.string(),
+  includeNewer: z.boolean(),
+  unclaimedSelection: z.object({
+    paths: checkpointPaths,
+    tree: checkpointSha,
+  }).strict().optional(),
+  mode: z.enum(["amend", "commit"]).optional(),
+  proposalId: nonEmptyString,
+  title: nonEmptyString,
+});
+
+export type GitArcProposalCommitEntry = z.infer<typeof proposalCommitEntry>;
 
 export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   z.object({
@@ -265,19 +282,13 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     proposalId: nonEmptyString,
     ...checkpointBaseRequest,
   }),
+  z.object({ action: z.literal("proposalCommit"), ...proposalCommitEntry.shape, ...checkpointBaseRequest }),
   z.object({
-    action: z.literal("proposalCommit"),
-    description: z.string(),
-    includeNewer: z.boolean(),
-    unclaimedSelection: z.object({
-      paths: checkpointPaths,
-      tree: checkpointSha,
-    }).strict().optional(),
-    mode: z.enum(["amend", "commit"]).optional(),
-    proposalId: nonEmptyString,
-    title: nonEmptyString,
+    action: z.literal("proposalCommitMany"),
+    /** Committed in order, stopping at the first that fails; earlier ones stay landed. */
+    entries: z.array(proposalCommitEntry).min(1).max(200),
     ...checkpointBaseRequest,
-  }),
+  }).strict(),
   z.object({
     action: z.literal("readDiffArtifact"),
     diffArtifactId: nonEmptyString.regex(/^[a-f0-9]{64}$/u),
@@ -422,6 +433,13 @@ export const GitCheckpointProposalSchema = z.object({
 });
 
 export type GitCheckpointProposal = z.infer<typeof GitCheckpointProposalSchema>;
+
+/** Landed proposals in commit order, and the first one that failed (later entries were not attempted). */
+export const GitArcProposalCommitManyResultSchema = z.object({
+  failed: z.object({ failure: GitArcFailureSchema, proposalId: nonEmptyString }).strict().nullable(),
+  landed: z.array(GitCheckpointProposalSchema),
+}).strict();
+export type GitArcProposalCommitManyResult = z.infer<typeof GitArcProposalCommitManyResultSchema>;
 
 /** Metadata-only proposal facts read in one batch: enough to decide and perform a commit, without diffs. */
 export const GitArcProposalSummarySchema = z.object({

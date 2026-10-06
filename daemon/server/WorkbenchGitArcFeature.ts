@@ -25,7 +25,12 @@ import { GitArcStartDiagnosticError } from "./lib/workbench/git/git-arc-start-di
 import { GitArcCollisionError } from "./lib/workbench/git/GitArcRegistry";
 import { GitCheckpointMissingObjectError } from "./lib/workbench/git/GitCheckpointStore";
 import type { WorkbenchHarness } from "workbench-shared/types";
-import { GitCheckpointRequestSchema, type GitArcClaimViewResult, type GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
+import {
+  GitCheckpointRequestSchema,
+  type GitArcClaimViewResult,
+  type GitArcProposalCommitManyResult,
+  type GitCheckpointRequest,
+} from "workbench-shared/workbench/git/checkpoint-contracts";
 import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import type { WorkbenchContextAdmission } from "workbench-shared/workbench/provider/provider-context";
 import type { WorkbenchAgentContextTarget } from "./WorkbenchAgentContextController";
@@ -35,7 +40,7 @@ import type { WorkbenchThreadClaimContext } from "./WorkbenchThreadStateControll
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 import WorkbenchWorkspaceGitArcController, { WorkspaceGitArcMemberError, type WorkspaceGitArcLifecycleState, type WorkspaceGitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
-import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchHarnessSchema, type WorkbenchGitArcLifecycleState as ObservedGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -68,7 +73,7 @@ type PublicGitState<T extends { threadId: string; members: Array<{ threadId: str
     threadId: WorkbenchThreadId;
     members: Array<PublicGitOwner<T["members"][number]>>;
   };
-export type WorkbenchGitArcLifecycleState = PublicGitState<WorkspaceGitArcLifecycleState>;
+export type WorkbenchGitArcLifecycleState = PublicGitState<WorkspaceGitArcLifecycleState> & Pick<ObservedGitArcLifecycleState, "acceptance">;
 export type WorkbenchGitArcPlanState = PublicGitState<WorkspaceGitArcPlanState>;
 export type WorkbenchGitArcActiveClaim = PublicGitOwner<GitArcActiveClaim>;
 
@@ -77,10 +82,14 @@ const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
   "arcTransferClaims",
   "planClaims", "arcClaims",
   "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRelease", "arcRemove", "arcStart", "arcStack", "arcStash", "arcUnstack", "arcUnstash", "arcDiscardStash", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
-  "proposalCommit", "proposalCreate", "proposalRescind", "restore",
+  "proposalCommit", "proposalCommitMany", "proposalCreate", "proposalRescind", "restore",
 ]);
 const COALESCED_CARD_READ_ACTIONS = new Set<GitCheckpointRequest["action"]>(["compare", "proposalState", "proposalSummaries"]);
 const CLAIM_START_ACTIONS = new Set<GitCheckpointRequest["action"]>(["arcContinue", "arcStart", "planStart"]);
+
+function acceptanceKey(owner: { harness: string; threadId: string }) {
+  return `${owner.harness}\0${owner.threadId}`;
+}
 
 function sanitizeError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 500);
@@ -151,6 +160,8 @@ export default class WorkbenchGitArcFeature {
   private readonly disposal = new AbortController();
   private readonly workspaceController: WorkbenchWorkspaceGitArcController;
   private readonly pendingCardReads = new Map<string, Promise<Response>>();
+  /** Running batched acceptances by owner: process-local facts overlaid on the observed lifecycle. */
+  private readonly acceptances = new Map<string, { landingId: string | null; queuedIds: string[] }>();
   private claimRevision = 0;
   private readonly claimWaiters = new Set<() => void>();
 
@@ -235,7 +246,9 @@ export default class WorkbenchGitArcFeature {
     const project = await this.resolveProject(cwd);
     const owner = await this.gitThreadIdentity(project, harness, threadId);
     const state = await this.workspaceController.findLifecycleState(project, owner.harness, owner.threadId);
-    return state ? this.publicState(state) : null;
+    if (!state) return null;
+    const acceptance = this.acceptances.get(acceptanceKey(owner));
+    return { ...this.publicState(state), ...(acceptance ? { acceptance: { ...acceptance, queuedIds: [...acceptance.queuedIds] } } : {}) };
   }
 
   async discoverClaimHistory(input: { projectId: string; rootId: string; workspaceRoot: string }) {
@@ -382,6 +395,8 @@ export default class WorkbenchGitArcFeature {
                   throw new Error("A settled or unavailable thread cannot adopt Git arc ownership.");
                 }
               }, effectiveRequest.paths))
+              : effectiveRequest.action === "proposalCommitMany"
+              ? Response.json(await this.commitProposals(project, effectiveRequest))
               : effectiveRequest.action === "readDiffArtifact"
               ? await this.dispatch(effectiveRequest)
               : usesWorkspaceController(project, effectiveRequest)
@@ -620,6 +635,44 @@ export default class WorkbenchGitArcFeature {
     }
   }
 
+  /**
+   * Publishes the running acceptance as an observed lifecycle fact after every landing, so every observer renders what is
+   * landing and queued. A batch's failed entry reports exactly as its own single commit would have.
+   */
+  private async commitProposals(
+    project: AgentEndpointProjectResolution,
+    request: Extract<GitCheckpointRequest, { action: "proposalCommitMany" }>,
+  ): Promise<GitArcProposalCommitManyResult> {
+    const owner = await this.gitThreadIdentity(project, request.harness, request.threadId);
+    const key = acceptanceKey(owner);
+    if (this.acceptances.has(key)) throw new Error("This thread is already committing proposals.");
+    const ids = request.entries.map(({ proposalId }) => proposalId);
+    this.acceptances.set(key, { landingId: ids[0]!, queuedIds: ids.slice(1) });
+    let result: Awaited<ReturnType<WorkbenchWorkspaceGitArcController["commitProposals"]>>;
+    try {
+      await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
+      result = await this.workspaceController.commitProposals(project, request, async () => {
+        const [landingId = null, ...queuedIds] = this.acceptances.get(key)!.queuedIds;
+        this.acceptances.set(key, { landingId, queuedIds });
+        await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
+      });
+    } finally {
+      // The request's own completion publishes the settled lifecycle without this fact.
+      this.acceptances.delete(key);
+    }
+    const { failed, landed } = result;
+    if (!failed) return { failed: null, landed };
+    const { entries: _entries, ...identity } = request;
+    const entry = request.entries.find(({ proposalId }) => proposalId === failed.proposalId)!;
+    return {
+      failed: {
+        failure: await this.createFailure(project.project.id, { ...identity, ...entry, action: "proposalCommit" }, failed.error),
+        proposalId: failed.proposalId,
+      },
+      landed,
+    };
+  }
+
   private async createFailure(projectId: ProjectId, request: GitCheckpointRequest, error: unknown): Promise<GitArcFailure> {
     if (error instanceof WorkspaceGitArcMemberError) {
       return {
@@ -833,6 +886,7 @@ export default class WorkbenchGitArcFeature {
       case "planClaims": return Response.json(await this.controller.editPlanClaims({ ...common, ...input }));
       case "arcClaims": return Response.json(await this.controller.editArcClaims({ ...common, ...input }));
       case "arcAdoptSource": throw new Error("Source adoption requires canonical identity ingress.");
+      case "proposalCommitMany": throw new Error("Batched acceptance reports per-proposal failures through its own ingress.");
       case "arcTransferClaims": throw new Error("Selected claim transfer requires canonical child identity ingress.");
       case "arcScope": return Response.json(await this.controller.readScope(common));
       case "arcStatus": return Response.json(await this.controller.readStatus(common));

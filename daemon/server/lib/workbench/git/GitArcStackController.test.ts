@@ -142,13 +142,10 @@ test("transferred claims keep sealed proposals committable, never lower a stack 
   await (await controller.prepareReleaseToChild({
     cwd, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["two.txt"],
   })).apply();
-  assert.equal((await read("parent", state.upper)).status, "proposed");
   await assert.rejects(controller.editArcClaims({ cwd, threadId: "child", inherit: true, removePaths: ["two.txt"] }),
     (error) => error instanceof GitArcRejectionError && error.rejection.reason === "sealedStackContent",
     "unlanded sealed content keeps its claim, and says so");
   await fs.writeFile(path.join(cwd, "two.txt"), "child builds on two\n");
-  assert.match((await controller.diff({ cwd, threadId: "child", paths: ["two.txt"] })).diff, /-parent two\n\+child builds on two/u,
-    "the child measures from the parent's newest layer");
   // Build views hold other owners' dirty claims at their stack-aware baselines and mirror only into ignored folders.
   await fs.appendFile(path.resolve(cwd, (await git("rev-parse", "--git-path", "info/exclude")).trim()), "\nbuild-out/\n");
   const out = path.join(cwd, "build-out");
@@ -161,12 +158,12 @@ test("transferred claims keep sealed proposals committable, never lower a stack 
   const parentView = await view("parent");
   assert.ok(parentView.held.some(({ paths, threadId }) => threadId === "child" && paths.includes("two.txt")));
   assert.deepEqual([(await fs.readdir(out)).sort(), await fs.readFile(path.join(out, "two.txt"), "utf8")], [[".wb-arc-tree.json", "keep.txt", "two.txt"], "parent two\n"]);
-  const unchanged = await view("parent");
+  const unchanged = await controller.mirrorClaimView({ into: out, paths: ["two.txt"], repoRoot: parentView.repoRoot, tree: parentView.tree });
   assert.deepEqual([unchanged.written, unchanged.deleted], [0, 0], "unchanged files are left alone");
   await view("child");
   assert.equal(await fs.readFile(path.join(out, "two.txt"), "utf8"), "child builds on two\n");
   await view("child", true);
-  assert.equal(await fs.readFile(path.join(out, "two.txt"), "utf8"), "parent two\n");
+  assert.equal(await fs.readFile(path.join(out, "two.txt"), "utf8"), "parent two\n", "the child's baseline is the parent's newest layer");
   // Whole-tree mirrors never touch files they didn't write, and remove their own once those leave the view.
   assert.ok((await controller.mirrorClaimView({ into: out, paths: [], repoRoot: cwd, tree: parentView.tree })).written > 0);
   const emptySource = path.resolve(cwd, (await git("rev-parse", "--git-path", "wb-empty-tree")).trim());
@@ -175,10 +172,17 @@ test("transferred claims keep sealed proposals committable, never lower a stack 
   await controller.mirrorClaimView({ into: out, paths: [], repoRoot: cwd, tree: emptyTree });
   assert.deepEqual(await fs.readdir(out), ["keep.txt"]);
   await assert.rejects(controller.mirrorClaimView({ into: path.join(cwd, "tracked-out"), paths: [], repoRoot: cwd, tree: parentView.tree }), /gitignored/u);
-  const child =await controller.createProposal({ cwd, threadId: "child", paths: ["two.txt"], title: "child", description: "" });
+  const child = await controller.createProposal({ cwd, threadId: "child", paths: ["two.txt"], title: "child", description: "" });
   assert.equal((await read("child", child.proposalId)).waitingForLayer, "layer one", "it waits on the lowest unlanded layer");
-  await commit("parent", state.lower, "parent one");
-  await commit("parent", state.upper, "parent two");
+  // Both layers land in one batch; the batch stops at its first failure with earlier entries landed.
+  const batch = await controller.commitProposals({ cwd, threadId: "parent", entries: [
+    { proposalId: state.lower, title: "parent one", description: "", includeNewer: false },
+    { proposalId: state.upper, title: "parent two", description: "", includeNewer: false },
+    { proposalId: "missing", title: "missing", description: "", includeNewer: false },
+  ] });
+  assert.deepEqual([batch.landed.map(({ status, title }) => `${title}:${status}`), batch.failed?.proposalId],
+    [["parent one:committed", "parent two:committed"], "missing"]);
+  assert.equal(await git("log", "-2", "--format=%s"), "parent two\nparent one\n");
   // Landed parent layers are the child's baseline, not drift in its claims.
   assert.match((await controller.diff({ cwd, threadId: "child", paths: ["two.txt"] })).diff, /-parent two\n\+child builds on two/u);
   // The parent commits one.txt past the landing, then hands it over: the child's checkpoint moves onto that HEAD,

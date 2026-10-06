@@ -93,6 +93,7 @@ export default function ThreadCheckpointCommitCard({
   projectId,
   projectRootPath,
   presentation = "full",
+  queued = false,
   sourceItemId,
   state,
   title,
@@ -120,6 +121,8 @@ export default function ThreadCheckpointCommitCard({
   projectId?: string | null;
   projectRootPath?: string;
   presentation?: CheckpointCommitPresentation;
+  /** Waiting its turn in a running batched acceptance. */
+  queued?: boolean;
   sourceItemId: string;
   state: CheckpointCommitCardState;
   title: string;
@@ -366,12 +369,12 @@ export default function ThreadCheckpointCommitCard({
                     `}
                     data-thread-checkpoint-commit-action="true"
                     // Commit-all may still reach a waiting card once lower layers land, so only the button waits.
-                    disabled={!canCommit || Boolean(waitingForLayer && !committing)}
+                    disabled={!canCommit || queued || Boolean(waitingForLayer && !committing)}
                     onClick={onCommit}
                     pendingHalo={committing}
-                    title={waitingForLayer && !committing ? `Commit "${waitingForLayer}" first.` : undefined}
+                    title={waitingForLayer && !committing && !queued ? `Commit "${waitingForLayer}" first.` : undefined}
                   >
-                    {committing ? (commitLabel === "Amend" ? "Amending..." : "Committing...") : commitLabel}
+                    {committing ? (commitLabel === "Amend" ? "Amending..." : "Committing...") : queued ? "Queued" : commitLabel}
                   </PrimaryButton>
                 ) : null}
               </span>

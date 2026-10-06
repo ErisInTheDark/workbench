@@ -9,7 +9,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 import type { GitArcProposalStatus } from "workbench-shared/workbench/git/git-arc-storage";
-import type { WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import PrimaryButton from "../PrimaryButton";
 import { CheckCheckIcon, GitArcStackIcon } from "../workbench-icons";
@@ -89,15 +89,10 @@ function useStoredProposalCommits({ commitActions, cwd, harness, pendingIds, thr
       try {
         const { proposals } = await daemon.git.arc.proposal.summaries({ cwd, harness, proposalIds, threadId });
         if (disposed) return;
-        release = commitActions.setStored(proposals, async ({ description, mode, proposalId, title }) => {
-          try {
-            await daemon.git.arc.proposal.commit({ cwd, description, harness, includeNewer: false, mode, proposalId, threadId, title });
-            setFailure(null);
-            return true;
-          } catch (error) {
-            setFailure(`${title}: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
-            return false;
-          }
+        release = commitActions.setStored(proposals, ({ title }, outcome) => {
+          setFailure("error" in outcome
+            ? `${title}: ${(outcome.error instanceof Error ? outcome.error.message : String(outcome.error)).slice(0, 300)}`
+            : null);
         });
       } catch (error) {
         // Daemons that predate bulk summaries leave readiness to each card's own load.
@@ -110,6 +105,7 @@ function useStoredProposalCommits({ commitActions, cwd, harness, pendingIds, thr
 }
 
 export default function ThreadGitArcProposalList({
+  acceptance,
   commitActions,
   cwd,
   harness,
@@ -118,6 +114,8 @@ export default function ThreadGitArcProposalList({
   stackLayers,
   threadId,
 }: {
+  /** The observed running batched acceptance, if any. */
+  acceptance: WorkbenchGitArcLifecycleState["acceptance"] | null;
   commitActions: ThreadCheckpointCommitActions;
   cwd: string;
   harness: WorkbenchHarnessId;
@@ -128,6 +126,7 @@ export default function ThreadGitArcProposalList({
   /** Sealed layers, bottom first; their proposals render inside one disclosure per layer. */
   stackLayers: ReadonlyArray<{ layerId: string; proposalIds: readonly string[]; title: string }>;
 }) {
+  const daemon = useWorkbenchDaemonClient();
   const clientStateController = useWorkbenchClientStateController();
   const clientState = useWorkbenchClientStateSnapshot();
   const canPersist = clientState.schemaVersion >= appStateReleases.threadGitArcProposalsOpen.version;
@@ -160,6 +159,10 @@ export default function ThreadGitArcProposalList({
   const readLayerSnapshot = () => commitActions.isReady(lowestPendingGroup?.pendingIds ?? []);
   const commitLayerReady = useSyncExternalStore(commitActions.subscribe, readLayerSnapshot, readLayerSnapshot);
 
+  // The observed acceptance covers every tab; the local flag covers this tab's request until the fact arrives.
+  const remaining = acceptance ? acceptance.queuedIds.length + (acceptance.landingId ? 1 : 0) : 0;
+  const committing = committingAll || Boolean(acceptance);
+
   const setOpen = (next: boolean) => {
     if (next === open) return;
     if (!canPersist) {
@@ -175,11 +178,11 @@ export default function ThreadGitArcProposalList({
   };
   /** One commit run at a time, whether started from the header or a layer. */
   const commitInOrder = async (ids: readonly string[]) => {
-    if (committingAll) return;
+    if (committing) return;
     setCommittingAll(true);
     try {
-      // Each card surfaces its own failure; the run simply stops there.
-      await commitActions.commitAll(ids);
+      // One batched acceptance; each card surfaces its own outcome and the run stops at the first failure.
+      await commitActions.commitAll(ids, async entries => await daemon.git.arc.proposal.commitMany({ cwd, entries, harness, threadId }));
     } finally {
       setCommittingAll(false);
     }
@@ -188,16 +191,16 @@ export default function ThreadGitArcProposalList({
   const summary = (
     <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
       <span>{formatProposalCounts(proposals.length - proposedIds.length, proposedIds.length)}</span>
-      {open && (proposedIds.length > 1 || committingAll) ? (
+      {open && (proposedIds.length > 1 || committing) ? (
         <span className="inline-flex min-w-0 items-center justify-end" data-thread-summary-action="true">
           <PrimaryButton
             className="!px-3 !py-1.5 !text-[0.76rem]"
             data-thread-git-arc-commit-all="true"
-            disabled={committingAll || !commitAllReady}
+            disabled={committing || !commitAllReady}
             onClick={() => void commitInOrder(proposedIds)}
-            pendingHalo={committingAll}
+            pendingHalo={committing}
           >
-            {committingAll ? "Committing…" : "Commit all"}
+            {remaining ? `Committing… ${remaining} left` : committing ? "Committing…" : "Commit all"}
           </PrimaryButton>
         </span>
       ) : null}
@@ -255,12 +258,12 @@ export default function ThreadGitArcProposalList({
                   <PrimaryButton
                     className="!px-3 !py-1 !text-[0.74rem]"
                     data-thread-git-arc-commit-layer={layer.layerId}
-                    disabled={committingAll || !lowest || !commitLayerReady}
+                    disabled={committing || !lowest || !commitLayerReady}
                     onClick={() => void commitInOrder(layerPendingIds)}
-                    pendingHalo={committingAll && lowest}
+                    pendingHalo={committing && lowest}
                     title={lowest ? undefined : "Commit lower layers first."}
                   >
-                    {committingAll && lowest ? "Committing…" : "Commit layer"}
+                    {committing && lowest ? "Committing…" : "Commit layer"}
                   </PrimaryButton>
                 </span>
               ) : null}

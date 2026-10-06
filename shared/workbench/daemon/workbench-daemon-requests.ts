@@ -110,6 +110,7 @@ export const WORKBENCH_GIT_ARC_ACTION_BY_METHOD = {
   "git/arc/compare": "compare",
   "git/arc/diff-artifact/read": "readDiffArtifact",
   "git/arc/proposal/commit": "proposalCommit",
+  "git/arc/proposals/commit": "proposalCommitMany",
   "git/arc/proposal/read": "proposalState",
   "git/arc/proposals/summaries": "proposalSummaries",
   "git/arc/release": "arcRelease",
@@ -181,6 +182,7 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "git/arc/compare": { params: GitArcParams<"compare">; result: GitCheckpointCompareResult };
   "git/arc/diff-artifact/read": { params: GitArcParams<"readDiffArtifact">; result: string };
   "git/arc/proposal/commit": { params: GitArcParams<"proposalCommit">; result: GitCheckpointProposal };
+  "git/arc/proposals/commit": { params: GitArcParams<"proposalCommitMany">; result: import("../git/checkpoint-contracts").GitArcProposalCommitManyResult };
   "git/arc/proposal/read": { params: GitArcParams<"proposalState">; result: GitCheckpointProposal };
   "git/arc/proposals/summaries": { params: GitArcParams<"proposalSummaries">; result: import("../git/checkpoint-contracts").GitArcProposalSummaries };
   "git/arc/release": { params: GitArcParams<"arcRelease">; result: WorkbenchGitArcSuccess };

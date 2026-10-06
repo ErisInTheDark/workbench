@@ -388,8 +388,8 @@ export default class WorkbenchGitRepository {
   }
 
   async symbolicHead() {
-    // Arc operations move HEAD along its branch but never switch branches, so one read serves the operation.
-    return await GitObjectReadSession.memo(`head-name:${this.root}`, async () => {
+    // Arc operations move HEAD along its branch but never switch branches, so one read serves until refs are republished.
+    return await GitObjectReadSession.memo(`${this.refMemoPrefix()}head-name`, async () => {
       try {
         return (await this.run(["symbolic-ref", "-q", "HEAD"])).trim() || null;
       } catch {
@@ -591,7 +591,16 @@ export default class WorkbenchGitRepository {
 
   /** Memo keys for facts derived from this repository's refs; ref publication invalidates them. */
   refMemoPrefix() {
-    return `refs:${this.root}:`;
+    return WorkbenchGitRepository.refMemoPrefix(this.root);
+  }
+
+  static refMemoPrefix(root: string) {
+    return `refs:${path.resolve(root)}:`;
+  }
+
+  /** Drops the operation's ref-derived facts, e.g. after other writers may have run while a long operation yielded its gate. */
+  static forgetRefFacts(root: string) {
+    GitObjectReadSession.forget(WorkbenchGitRepository.refMemoPrefix(root));
   }
 
   async withTemporaryIndex<T>(callback: (indexPath: string, directory: string) => Promise<T>) {
