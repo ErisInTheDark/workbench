@@ -346,6 +346,14 @@ export default class WorkbenchThreadStateFeature {
         if (params.currentTitle !== undefined && typeof params.currentTitle !== "string") {
           throw new Error("currentTitle must be exact non-empty text when supplied.");
         }
+        if (title === currentTitle) {
+          return { id, result: {
+            changed: false,
+            harness: resolved.harness,
+            threadId: resolved.thread.id,
+            title,
+          } };
+        }
         const expectedCurrentTitle = typeof params.currentTitle === "string" ? params.currentTitle : null;
         if (expectedCurrentTitle !== (currentTitle || null)) {
           throw new Error(currentTitle
@@ -354,7 +362,7 @@ export default class WorkbenchThreadStateFeature {
         }
         await this.setProviderThreadTitle(resolved.harness, resolved.thread.id, title, resolved.cwd);
         await this.controller.setTitle(resolved.projectId, resolved.harness, resolved.thread.id, title);
-        return { id, result: { harness: resolved.harness, threadId: resolved.thread.id, title } };
+        return { id, result: { changed: true, harness: resolved.harness, threadId: resolved.thread.id, title } };
       }
       if (request.method === "workbench/thread/resume") {
         if (!turnId) throw new Error("The managed thread has no current turn to resume.");

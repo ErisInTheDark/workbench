@@ -56,6 +56,9 @@ import {
   readThreadSubagentCoordinationWait,
   type ThreadSubagentCoordinationRole,
 } from "./thread-subagent-coordination";
+import { formatToolCallOutput } from "./format-thread-tool-call";
+
+const TASK_TITLE_ALREADY_MATCHES_OUTPUT = "Task title already matches";
 
 export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & { shell?: CommandShell };
 export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcpToolCall" }>;
@@ -156,6 +159,30 @@ export function isHiddenCommandExecution(command: string) {
 
 export function hasReasoningSteps(item: Extract<ThreadItem, { type: "reasoning" }>) {
   return item.summary.some(section => section.trim()) || item.content.some(section => section.trim());
+}
+
+function isAlreadyMatchingTaskTitle(item: ThreadItem, fallbackCwd: string) {
+  if (item.type === "commandExecution") {
+    if (getThreadCommandExecutionOutcome(item.status, item.exitCode) !== "completed"
+      || item.aggregatedOutput?.trim() !== TASK_TITLE_ALREADY_MATCHES_OUTPUT) return false;
+    const display = getThreadCommandDisplay({
+      command: item.command,
+      commandActions: item.commandActions,
+      cwd: item.cwd || fallbackCwd,
+    });
+    return isWorkbenchTaskTitleSetMatcherClaim(display.claimedBy);
+  }
+  if (item.type !== "mcpToolCall" || item.status !== "completed" || item.error
+    || formatToolCallOutput({
+      content: item.result?.content,
+      fallback: item.result?.structuredContent ?? item.result?._meta,
+    }).trim() !== TASK_TITLE_ALREADY_MATCHES_OUTPUT) return false;
+  const route = getWorkbenchMcpCommandRoute({
+    argumentsValue: item.arguments,
+    server: item.server,
+    tool: item.tool,
+  });
+  return route?.kind === "specialized" && route.operation.kind === "threadTitle";
 }
 
 /** Held input awaiting delivery (`pending`) or never delivered (`unsent`); null once delivered or for ordinary input. */
@@ -376,6 +403,7 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
   for (const item of items) {
     if (item.type === "plan") continue;
     if (hidden.itemIds?.has(item.id)) continue;
+    if (isAlreadyMatchingTaskTitle(item, fallbackCwd)) continue;
     if (item.type === "userMessage" && (isWorkbenchHiddenSystemSteerInput(item.content)
       || (item.content.length > 0 && item.content.every(isWorkbenchActivatedSkillsInput)))) continue;
     const text = item.type === "agentMessage" ? item.text

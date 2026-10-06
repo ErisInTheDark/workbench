@@ -1175,7 +1175,7 @@ test("managed title commands use the workbench-recorded title as the mutation pr
   });
   assert.deepEqual(initiallyNamed, {
     id: 2,
-    result: { harness: "codex", threadId: "thread-one", title: "Current task" },
+    result: { changed: true, harness: "codex", threadId: "thread-one", title: "Current task" },
   });
 
   const named = await feature.handleManagedThreadRequest({
@@ -1187,6 +1187,26 @@ test("managed title commands use the workbench-recorded title as the mutation pr
     id: 3,
     result: { harness: "codex", threadId: "thread-one", title: "Current task" },
   });
+
+  const providerSetCount = requests.filter(({ method }) => method === "thread/name/set").length;
+  for (const [id, currentTitle] of [[31, undefined], [32, "Stale task"]] as const) {
+    const alreadyCurrent = await feature.handleManagedThreadRequest({
+      id,
+      method: "workbench/thread/title",
+      params: {
+        action: "set",
+        callerThreadId: "thread-one",
+        ...(currentTitle ? { currentTitle } : {}),
+        cwd: "C:/workspace",
+        title: "Current task",
+      },
+    });
+    assert.deepEqual(alreadyCurrent, {
+      id,
+      result: { changed: false, harness: "codex", threadId: "thread-one", title: "Current task" },
+    });
+  }
+  assert.equal(requests.filter(({ method }) => method === "thread/name/set").length, providerSetCount);
 
   const missingCurrentTitle = await feature.handleManagedThreadRequest({
     id: 4,
@@ -1225,7 +1245,7 @@ test("managed title commands use the workbench-recorded title as the mutation pr
   });
   assert.deepEqual(renamed, {
     id: 6,
-    result: { harness: "codex", threadId: "thread-one", title: "New overarching task" },
+    result: { changed: true, harness: "codex", threadId: "thread-one", title: "New overarching task" },
   });
   // Only the two accepted sets may rename the provider.
   assert.equal(requests.filter(({ method }) => method === "thread/name/set").length, 2);

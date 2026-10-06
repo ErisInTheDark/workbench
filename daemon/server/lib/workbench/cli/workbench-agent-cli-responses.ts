@@ -57,7 +57,9 @@ export function adaptWorkbenchAgentCliResponse({
       return succeeded(title ? `Task title: ${title}` : "No task title is set.");
     }
     case "thread-title":
-      return succeeded(`Task title set: ${readString(payload, "title") || "untitled"}`);
+      return succeeded(payload?.changed === false
+        ? "Task title already matches"
+        : `Task title set: ${readString(payload, "title") || "untitled"}`);
     case "thread-status":
       return succeeded(`Task marked ${readString(payload, "agentStatus") || "unknown"}.`);
     case "thread-refresh":

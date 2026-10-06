@@ -1663,10 +1663,15 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     })
   );
 
-  assert.deepEqual(adapt("thread-title", { title: "Clean output" }), {
+  assert.deepEqual(adapt("thread-title", { changed: true, title: "Clean output" }), {
     exitCode: 0,
     stderr: "",
     stdout: "Task title set: Clean output\n",
+  });
+  assert.deepEqual(adapt("thread-title", { changed: false, title: "Clean output" }), {
+    exitCode: 0,
+    stderr: "",
+    stdout: "Task title already matches\n",
   });
   assert.deepEqual(adapt("thread-title-get", { title: "Current task" }), {
     exitCode: 0,

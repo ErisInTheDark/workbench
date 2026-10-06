@@ -16,9 +16,24 @@ function command(id: string, text = "pwd"): CommandItem {
   return { id, type: "commandExecution", command: text, commandActions: [], cwd: "C:/repo", durationMs: 1,
     exitCode: 0, aggregatedOutput: "", pluginId: null, processId: null, scriptPath: null, source: "agent", status: "completed" };
 }
-function mcp(id: string, tool: string, args: Extract<ThreadItem, { type: "mcpToolCall" }>["arguments"]): ThreadItem {
+function mcp(
+  id: string,
+  tool: string,
+  args: Extract<ThreadItem, { type: "mcpToolCall" }>["arguments"],
+): Extract<ThreadItem, { type: "mcpToolCall" }> {
   return { id, type: "mcpToolCall", server: "wb", tool, arguments: args, status: "completed", result: null,
     error: null, durationMs: 1, appContext: null, pluginId: null, readOnlyHint: null };
+}
+function mcpWithOutput(
+  id: string,
+  tool: string,
+  args: Extract<ThreadItem, { type: "mcpToolCall" }>["arguments"],
+  output: string,
+): Extract<ThreadItem, { type: "mcpToolCall" }> {
+  return {
+    ...mcp(id, tool, args),
+    result: { _meta: null, content: [{ text: output, type: "text" }], structuredContent: null },
+  };
 }
 function user(id: string): Extract<ThreadItem, { type: "userMessage" }> {
   return { clientId: null, content: [{ text: id, text_elements: [], type: "text" }], id, type: "userMessage" };
@@ -318,6 +333,21 @@ test("MCP task actions and outgoing thread messages remain boundaries", () => {
     command("after"),
   ]);
   assert.deepEqual(result.map(row => row.eligible), [true, false, false, false, false, true]);
+});
+
+test("already-matching task title sets stay in canonical items but leave no render block", () => {
+  const rendered = buildRenderableBlocks([
+    command("before"),
+    { ...command("cli-noop", 'wb task set --title "same"'), aggregatedOutput: "Task title already matches\n" },
+    mcpWithOutput("mcp-noop", "task_set", { title: "same" }, "Task title already matches\n"),
+    command("after"),
+    command("cli-change", 'wb task set --title "changed"'),
+    mcpWithOutput("mcp-change", "task_set", { title: "changed" }, "Task title set: changed\n"),
+  ]);
+
+  assert.deepEqual(rendered.flatMap(getRenderableBlockItems).map(item => item.id), [
+    "before", "after", "cli-change", "mcp-change",
+  ]);
 });
 
 test("conversation and unclassified interaction rows break work runs", () => {
