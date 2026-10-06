@@ -58,6 +58,7 @@ export interface ThreadMessageAdmissionRequest {
     turnId: WorkbenchTurnId;
   }) => void;
   context?: WorkbenchMessageContext;
+  skipAutoCompact?: boolean;
 }
 
 export type ThreadMessageAdmissionResult =
@@ -179,6 +180,7 @@ function ThreadMessageAdmissionController({
           input,
           threadId: capture.threadId,
           ...(request.context ? { context: request.context } : {}),
+          ...(request.skipAutoCompact ? { skipAutoCompact: true } : {}),
       });
     } catch (error) {
       const status = optimisticInputs.transition(entry.handle, "failed");
@@ -272,6 +274,7 @@ function ThreadMessageAdmissionController({
           input,
           threadId: capture.threadId,
           ...(request.context ? { context: request.context } : {}),
+          ...(request.skipAutoCompact ? { skipAutoCompact: true } : {}),
       });
     } catch (error) {
       const admitted = settleFailedProjection();

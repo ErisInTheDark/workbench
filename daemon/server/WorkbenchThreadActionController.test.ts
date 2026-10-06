@@ -41,6 +41,7 @@ function fixture(providerWarning?: string) {
   };
   const recorded: object[] = [];
   const owners: WorkbenchThreadActionOwners = {
+    autoCompact: { observe: async () => true },
     approvals: { list: () => [] },
     reconciliation: { reconcile: unused },
     transcripts: { readPage: unused, history: unused },
@@ -132,12 +133,15 @@ test("creation preparation failure is distinct from an uncertain provider failur
 test("canonical page reads do not require an available provider", async () => {
   const f = fixture();
   const reads: string[] = [];
-  const page = { nextCursor: null, questionnaireEntries: [], steerEntries: [], browseResultEntries: [], thread: {} };
+  const page = {
+    nextCursor: null, questionnaireEntries: [], steerEntries: [], browseResultEntries: [],
+    thread: { harness: "codex", id: "wb-thread", isDraft: false },
+  };
   Object.assign(f.owners, {
     transcripts: {
       readPage: async (input: { threadId: string }) => {
         reads.push(input.threadId);
-        return page;
+        return page as never;
       },
     },
   });
@@ -148,7 +152,10 @@ test("canonical page reads do not require an available provider", async () => {
     ...identity.bindings,
     { harness: "opencode", nativeLocation: "C:/project", nativeThreadId: NativeThreadIdSchema.parse("other-native"), pending: false, turnIndex: 1 },
   ] });
-  assert.equal(await f.controller.handle("thread/page/read", { threadId: "wb-thread", cursor: null }), page);
+  assert.deepEqual(await f.controller.handle("thread/page/read", { threadId: "wb-thread", cursor: null }), {
+    ...page,
+    thread: { ...page.thread, willAutoCompact: true },
+  });
   assert.deepEqual(reads, ["wb-thread"]);
 });
 

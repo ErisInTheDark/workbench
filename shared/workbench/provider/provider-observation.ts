@@ -18,6 +18,7 @@ import type { WorkbenchThreadSkill } from "../thread/thread-skill-state.ts";
 type ItemReference = { threadId: string; turnId: string; itemId: string };
 const publicMethods = new Set<string>([
   "thread/started", "thread/status/changed", "thread/name/updated", "thread/tokenUsage/updated",
+  "thread/autoCompact/updated",
   "thread/goal/updated", "thread/goal/cleared", "thread/skills/updated", "account/updated", "account/rateLimits/updated", "models/updated",
   "turn/started", "turn/completed", "item/started", "item/completed",
   "item/agentMessage/delta", "item/plan/delta", "item/commandExecution/outputDelta",
@@ -35,6 +36,7 @@ export function isWorkbenchPublicNotification(message: unknown): message is Work
 
 export type WorkbenchTranscriptNotification =
   | { method: "thread/started"; params: { thread: ThreadPayload } }
+  | { method: "thread/autoCompact/updated"; params: { threadId: string; willAutoCompact: boolean } }
   | { method: "thread/tokenUsage/updated"; params: { threadId: string; turnId: string; tokenUsage: ThreadTokenUsage } }
   | { method: "account/updated"; params: object }
   | { method: "account/rateLimits/updated"; params: { rateLimits: WorkbenchRateLimitSnapshot } }

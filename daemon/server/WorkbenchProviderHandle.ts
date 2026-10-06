@@ -23,8 +23,13 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     return result;
   }
 
-  private admitMessage<T>(threadId: string, provider: WorkbenchProvider, admit: () => Promise<T>) {
-    return this.messageAdmission ? this.messageAdmission(threadId, provider, admit) : admit();
+  private admitMessage<T>(
+    threadId: string,
+    provider: WorkbenchProvider,
+    admit: () => Promise<T>,
+    options?: { skipAutoCompact?: boolean },
+  ) {
+    return this.messageAdmission ? this.messageAdmission(threadId, provider, admit, options) : admit();
   }
 
   readonly context: NonNullable<WorkbenchProvider["context"]> = {
@@ -74,7 +79,12 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     readLatest: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.readLatest(threadId), `${this.key}: threads.readLatest`),
     latestTurn: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.latestTurn(threadId), `${this.key}: threads.latestTurn`),
     admitTurn: (threadId, turnReference) => this.run(providerRegistrations[this.key], provider => provider.threads.admitTurn(threadId, turnReference), `${this.key}: threads.admitTurn`),
-    submit: async input => this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => this.admitMessage(input.threadId, provider, () => provider.threads.submit(input)), `${this.key}: threads.submit`)),
+    submit: async input => {
+      const { skipAutoCompact, ...providerInput } = input;
+      return this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => (
+        this.admitMessage(input.threadId, provider, () => provider.threads.submit(providerInput), { skipAutoCompact })
+      ), `${this.key}: threads.submit`));
+    },
     messageAgent: async input => {
       const result = await this.run(providerRegistrations[this.key], provider => this.admitMessage(input.threadId, provider, () => provider.threads.messageAgent(input)), `${this.key}: threads.messageAgent`);
       await this.onAgentMessageAdmitted?.(input.threadId, input.message);

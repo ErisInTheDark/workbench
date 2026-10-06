@@ -98,7 +98,10 @@ test("user and agent messages on every provider share compact-before-start admis
       const owner = new WorkbenchThreadAutoCompactController({
         readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
         readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
+        readRuntime: async () => ({ latestTurn: { id: "previous" }, status: active ? "active" : "idle", turnLive: active }),
+        publish: () => {},
         now: () => 30 * 60_000,
+        warn: () => {},
       });
       const dispatcher = new WorkbenchProviderDispatcher(async (_registration, operation) => operation(provider),
         threadId => { waits.push(threadId); }, owner.run.bind(owner));
@@ -117,6 +120,47 @@ test("user and agent messages on every provider share compact-before-start admis
       await owner.dispose();
     }
   }
+});
+
+test("user bypass skips Workbench compaction and is stripped before provider submission", async () => {
+  const received: object[] = [];
+  const provider = { threads: {
+    read: async () => ({ status: "idle" }),
+    latestTurn: async () => ({ id: "previous", status: "completed" }),
+    isTurnLive: async () => false,
+    compact: async () => assert.fail("Bypassed admission must not compact."),
+    submit: async (input: object) => {
+      received.push(input);
+      return { kind: "steered", turnId: "turn" };
+    },
+  } } as unknown as WorkbenchProvider;
+  const owner = new WorkbenchThreadAutoCompactController({
+    readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
+    readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
+    readRuntime: async () => ({ latestTurn: { id: "previous" }, status: "idle", turnLive: false }),
+    publish: () => {},
+    now: () => 30 * 60_000,
+    warn: () => {},
+  });
+  const dispatcher = new WorkbenchProviderDispatcher(
+    async (_registration, operation) => operation(provider),
+    undefined,
+    owner.run.bind(owner),
+  );
+  await dispatcher.get("codex").threads.submit({
+    threadId: "thread",
+    clientMessageId: "message",
+    input: [],
+    intent: "continue",
+    skipAutoCompact: true,
+  });
+  assert.deepEqual(received, [{
+    threadId: "thread",
+    clientMessageId: "message",
+    input: [],
+    intent: "continue",
+  }]);
+  await owner.dispose();
 });
 
 test("the shared provider admission gate wakes waits only for accepted steers", async () => {

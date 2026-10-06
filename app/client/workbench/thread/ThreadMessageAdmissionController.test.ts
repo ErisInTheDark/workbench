@@ -33,6 +33,7 @@ function setup(options: {
   deliveredAfterFailure?: boolean;
   context?: WorkbenchMessageContext;
   renderFailure?: boolean;
+  skipAutoCompact?: boolean;
 } = {}) {
   const documents = ThreadDocumentStore();
   const sources = ThreadSourceStore();
@@ -65,6 +66,7 @@ function setup(options: {
   });
   const projection = {
     context: options.context,
+    skipAutoCompact: options.skipAutoCompact,
     projectFailedTurn: () => {
       events.push("failed");
       return options.deliveredAfterFailure ? WorkbenchTurnIdSchema.parse("delivered") : null;
@@ -101,6 +103,16 @@ test("provider-started response replaces an optimistic steer with a new turn", a
   assert.equal(result.kind, "turnStarted");
   assert.deepEqual(f.messages.map(message => message.intent), ["continue"]);
   assert.deepEqual(f.events, ["connect", "render", "started"]);
+});
+
+test("explicit auto-compact bypass survives active and idle optimistic admission", async () => {
+  for (const idle of [false, true]) {
+    const f = setup({ skipAutoCompact: true });
+    if (idle) f.idle();
+    await f.admit();
+    assert.equal(f.messages.length, 1);
+    assert.equal(f.messages[0]?.skipAutoCompact, true);
+  }
 });
 
 test("idle admission projects pending input before starting or steering through the daemon", async () => {

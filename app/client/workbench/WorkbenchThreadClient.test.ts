@@ -2143,8 +2143,23 @@ test("status and token owners survive canonical updates, authoritative nulls, an
   socket.notify("thread/tokenUsage/updated", { threadId: "thread", tokenUsage: usage(20), turnId: "turn" });
   assert.equal(client.getSnapshot().currentThread?.tokenUsage?.total.totalTokens, 20);
 
+  socket.notify("thread/autoCompact/updated", { threadId: "thread", willAutoCompact: true });
+  assert.equal(client.getSnapshot().currentThread?.willAutoCompact, true);
+  socket.notify("thread/autoCompact/updated", { threadId: "thread", willAutoCompact: false });
+  assert.equal(client.getSnapshot().currentThread?.willAutoCompact, false);
+
   await client.compactThread(client.getSnapshot().currentThread!);
   assert.equal(client.getSnapshot().currentThread?.tokenUsage?.total.totalTokens, 20);
+}));
+
+test("send options carry explicit auto-compact bypass to daemon admission", async () => withClient(async (client, socket) => {
+  const source = activeThread();
+  client.selectThreadPayload(source);
+  await client.sendThreadMessage(source, [{ text: "without compacting", text_elements: [], type: "text" }], {
+    skipAutoCompact: true,
+  });
+  const request = socket.requests.find(isContinueRequest);
+  assert.equal(request?.params?.skipAutoCompact, true);
 }));
 
 test("a thread controller changes its own preferences without changing the selected thread", async () => withClient(async client => {

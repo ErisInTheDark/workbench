@@ -1695,6 +1695,7 @@ function WorkbenchThreadClient(
       && left.path === right.path
       && left.agentNickname === right.agentNickname
       && left.agentRole === right.agentRole
+      && left.willAutoCompact === right.willAutoCompact
       && areDeeplyEqual(left.browseResultEntries ?? [], right.browseResultEntries ?? [])
       && areDeeplyEqual(left.tokenUsage, right.tokenUsage)
       && areDeeplyEqual(left.turnHistory, right.turnHistory)
@@ -3646,6 +3647,10 @@ function WorkbenchThreadClient(
         return updateCanonicalThreadFields(threadKey, {
           tokenUsage: notification.params.tokenUsage,
         });
+      case "thread/autoCompact/updated":
+        return updateCanonicalThreadFields(threadKey, {
+          willAutoCompact: notification.params.willAutoCompact,
+        });
       case "turn/started":
       case "turn/completed":
         if (
@@ -4057,6 +4062,7 @@ function WorkbenchThreadClient(
         return deliveredTurn ? WorkbenchTurnIdSchema.parse(deliveredTurn.id) : null;
       };
       const admission = await messageAdmissionController.admit(thread.id, normalizedInput, {
+        ...(sendOptions.skipAutoCompact ? { skipAutoCompact: true } : {}),
         projectFailedTurn: ({ clientUserMessageId }) => discardPendingProjection(clientUserMessageId),
         projectPendingTurn: ({
           clientUserMessageId,

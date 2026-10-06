@@ -100,6 +100,7 @@ test("context capability bounds reject invalid target mutations without writing"
 });
 
 function createController(options: {
+  autoCompact?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["autoCompact"];
   workingTree?: ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["workingTree"];
   gitArcResponse?: Response;
   rejectProjectId?: string;
@@ -124,6 +125,7 @@ function createController(options: {
   const searchRequests: object[] = [];
   const observedLimits: Array<{ harness: string; limitId: string | null }> = [];
   let statsRefreshes = 0;
+  let autoCompactRefreshes = 0;
   const unused = async (): Promise<never> => { throw new Error("Unexpected provider operation."); };
   const readNetwork = async (projectId: string | null) => {
     const projectOverride = projectId ? projectNetworkOverrides.get(projectId) ?? null : null;
@@ -133,6 +135,9 @@ function createController(options: {
     };
   };
   const controller = new WorkbenchDaemonRequestController({
+    autoCompact: options.autoCompact ?? {
+      refreshObserved: async () => { autoCompactRefreshes += 1; },
+    },
     workingTree: options.workingTree,
     commandApprovals: options.commandApprovals,
     modelUsage: options.modelUsage ?? { read: async () => [] },
@@ -248,6 +253,7 @@ function createController(options: {
     searchRequests,
     observedLimits,
     statsRefreshes: () => statsRefreshes,
+    autoCompactRefreshes: () => autoCompactRefreshes,
     targetReads,
     targetWrites,
   };
@@ -750,16 +756,18 @@ for (const harness of ["codex", "copilot", "opencode"] as const) {
 }
 
 test("auto-compact settings dispatch accepts daemon-wide field edits and rejects invalid increments", async () => {
-  const { controller } = createController();
+  const { controller, autoCompactRefreshes } = createController();
   assert.deepEqual((await controller.handle({ id: 1, method: "thread-auto-compact/read", params: {} })).result,
     { settings: { enabled: true, tokenThreshold: 200_000, idleMinutes: 30 } });
   assert.deepEqual((await controller.handle({ id: 2, method: "thread-auto-compact/update", params: {
     settings: { enabled: false, idleMinutes: 40 },
   } })).result, { settings: { enabled: false, tokenThreshold: 200_000, idleMinutes: 40 } });
+  assert.equal(autoCompactRefreshes(), 1);
   const rejected = await controller.handle({ id: 3, method: "thread-auto-compact/update", params: {
     settings: { tokenThreshold: 200_001 },
   } });
   assert.equal(rejected.error?.code, -32602);
+  assert.equal(autoCompactRefreshes(), 1);
 });
 
 test("profile target dispatch preserves exact slot and settings contracts", async () => {

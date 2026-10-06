@@ -20,6 +20,7 @@ import type {
   WorkbenchHarness,
   WorkbenchSkillSummary,
   WorkbenchComposerInputDraft,
+  WorkbenchSendThreadMessageOptions,
 } from "workbench-shared/types";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import {
@@ -41,7 +42,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../PrimaryButton";
-import { PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
+import { CompactIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
 import PlaintextEditable, { threadPlaintextEditableClassName, type PlaintextEditableHandle } from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
@@ -145,7 +146,7 @@ export default function ThreadComposer ({
   onSendMessage: (
     threadId: string,
     input: UserInput[],
-    options?: { activatedSkillPaths?: string[] },
+    options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact">,
   ) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
   onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission" | "retarget", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
@@ -211,7 +212,6 @@ export default function ThreadComposer ({
   const attachments = isSending ? [] : editing.draft.attachments;
   const [isRecoveringInterruptedTurn, setIsRecoveringInterruptedTurn] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
-  const [isQuestionnaireActionsHovered, setIsQuestionnaireActionsHovered] = useState(false);
   const [isStickyComposerCollapsed, setIsStickyComposerCollapsed] = useState(false);
   const isCommentMode = controlsMode === "comment";
   const trimmedValue = value.trim();
@@ -222,9 +222,6 @@ export default function ThreadComposer ({
   const questionnaireRequestKey = pendingUserInputRequest?.requestKey ?? "";
   const showQuestionnairePanel = hasVisiblePendingUserInputRequest && isQuestionnaireVisible;
   const composerInputRef = useRef<PlaintextEditableHandle>(null);
-  useEffect(() => {
-    setIsQuestionnaireActionsHovered(false);
-  }, [questionnaireRequestKey]);
   const isProviderUnavailable = !isCommentMode && !installedProviderKeys.some(key => key === thread.harness);
   const isThreadStateBroken = hasStaleApprovalState(thread);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
@@ -241,8 +238,22 @@ export default function ThreadComposer ({
   const isSendDisabled = isInputDisabled || isProviderUnavailable
     || (!isActiveThread && !hasEffectiveProfile);
   const isShiftPressed = useNonTextInputShiftKey({
-    allowWhileTextInputFocused: showQuestionnairePanel && isQuestionnaireActionsHovered,
+    allowWhileTextInputFocused: true,
   });
+  const hasSendableInput = Boolean(trimmedValue || attachments.length);
+  const willAutoCompactOnSend = Boolean(thread.willAutoCompact)
+    && hasSendableInput
+    && !isSendDisabled
+    && !isShiftPressed;
+  const sendButtonLabel = isSending
+    ? "Sending..."
+    : isAttaching
+      ? "Attaching..."
+      : isThreadStateBroken
+        ? "Unavailable"
+        : willAutoCompactOnSend
+          ? `${sendLabel} (compacts context first)`
+          : sendLabel;
   useEffect(() => {
     onDraftSessionChange?.(editing.session);
     return () => onDraftSessionChange?.(null);
@@ -396,6 +407,7 @@ export default function ThreadComposer ({
     setError("");
     const send = () => onSendMessage(thread.id, input, {
       ...(activatedSkillPaths.length ? { activatedSkillPaths } : {}),
+      ...(!thread.isDraft && isShiftPressed ? { skipAutoCompact: true } : {}),
     });
     if (!thread.isDraft) {
       await editing.session.submitAccepted(async () => await send(),
@@ -558,7 +570,6 @@ export default function ThreadComposer ({
           : "border-[color-mix(in srgb, var(--text) 12%, transparent)] bg-[color-mix(in srgb, var(--bg) 96%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 96%, var(--app-bg-solid))] text-fg/muted hover:text-text",
       )}
       onClick={() => {
-        setIsQuestionnaireActionsHovered(false);
         setIsQuestionnaireVisible((current) => !current);
       }}
     >
@@ -618,7 +629,6 @@ export default function ThreadComposer ({
                   highlightSources={highlightSources}
                   knownSkills={knownSkills}
                   leadingActions={questionnaireToggleButton}
-                  onActionsHoverChange={setIsQuestionnaireActionsHovered}
                   spellCheck={composerSpellCheck}
                   onDraftChange={questionnaire.save}
                   onDraftClear={questionnaire.clear}
@@ -785,13 +795,25 @@ export default function ThreadComposer ({
                     {leadingActions}
                     <PrimaryButton
                       type="submit"
-                      disabled={(!trimmedValue && !attachments.length) || isSendDisabled}
+                      disabled={!hasSendableInput || isSendDisabled}
                       shape="circle"
-                      aria-label={isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
-                      title={isSending ? "Sending..." : isAttaching ? "Attaching..." : isThreadStateBroken ? "Unavailable" : sendLabel}
+                      aria-label={sendButtonLabel}
+                      title={sendButtonLabel}
                       pendingHalo={isSending || isAttaching}
                     >
                       <SendHorizontalIcon size={20} />
+                      {willAutoCompactOnSend ? (
+                        <span
+                          aria-hidden="true"
+                          className="
+                            absolute -right-2.5 -bottom-2.5 inline-flex size-3.5 items-center justify-center rounded-full
+                            bg-[color:var(--text)] text-[color:var(--app-bg-solid)]
+                            ring-2 ring-[color:var(--app-bg-solid)]
+                          "
+                        >
+                          <CompactIcon size={12} />
+                        </span>
+                      ) : null}
                     </PrimaryButton>
                     {trailingActions}
                     {resumeButton}

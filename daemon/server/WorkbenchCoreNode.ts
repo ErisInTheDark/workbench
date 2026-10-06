@@ -9,7 +9,7 @@ import type { WorkbenchHarness } from "workbench-shared/types";
 import { type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import providerRegistrations, { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "./lib/workbench-library";
 import type { WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
@@ -136,7 +136,24 @@ function createWorkbenchCoreFeature(
       const usage = await database.readThreadContextUsage(identity.threadId);
       return { activityAt: entry.activityAt, contextTokens: usage?.tokenUsage?.last.inputTokens ?? null };
     },
+    readRuntime: async target => {
+      const key = installedProviderKeys.find(candidate => candidate === target.harness);
+      if (!key) throw new Error(`Provider ${target.harness} is not installed.`);
+      return run(providerRegistrations[key], async provider => {
+        const thread = await provider.threads.read(target.threadId, { background: true });
+        const latestTurn = await provider.threads.latestTurn(target.threadId);
+        const turnLive = latestTurn ? await provider.threads.isTurnLive(target.threadId, latestTurn.id) : false;
+        return { latestTurn, status: thread.status, turnLive };
+      }, `${key}: auto-compact status`);
+    },
+    publish: (target, willAutoCompact) => {
+      context.broadcastProviderNotification(target.harness, {
+        method: "thread/autoCompact/updated",
+        params: { threadId: target.threadId, willAutoCompact },
+      });
+    },
     now: Date.now,
+    warn: message => console.warn(`[auto-compact] ${message.slice(0, 500)}`),
   });
   const providers = new WorkbenchProviderDispatcher(run, undefined, autoCompact.run.bind(autoCompact),
     (threadId, message) => run("messages", owner => { owner.receive(threadId, message); }, "agent message admission"));
@@ -475,6 +492,7 @@ function createWorkbenchCoreFeature(
     warn: message => logThreadStateWarning(message),
   });
   const threadActions = new WorkbenchThreadActionController({
+    autoCompact,
     approvals,
     reconciliation: transcriptReconciliation,
     transcripts: transcriptReader,
@@ -490,6 +508,9 @@ function createWorkbenchCoreFeature(
     if (!lease.isCurrent()) return;
     await turnSettlement.settleSuperseded(threadId, turnId);
     if (lease.isCurrent()) await threadActions.resendUndeliveredAgentMessages(threadId, turnId);
+  });
+  const unsubscribeAutoCompactSettled = transcript.subscribeSettled(threadIds => {
+    if (lease.isCurrent()) void autoCompact.refreshObserved(threadIds);
   });
   // Held steers live outside the transcript stream, so open views learn about them from this push.
   const unsubscribeHeldSteers = transcript.subscribeHeldSteers(async ({ threadId, turnId }) => {
@@ -528,6 +549,7 @@ function createWorkbenchCoreFeature(
     resolveProjectFromCwd: cwd => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Project store" }),
   });
   const daemonRequests = new WorkbenchDaemonRequestController({
+    autoCompact,
     commandApprovals,
     projectStore,
     workingTree,
@@ -622,6 +644,7 @@ function createWorkbenchCoreFeature(
     beginRuntimeDrain: () => { autoCompact.beginRuntimeDrain(); launches.beginRuntimeDrain(); messages.beginRuntimeDrain(); subagents.beginRuntimeDrain(); },
     dispose: async (reportPhase = () => undefined) => {
       unsubscribeCompaction();
+      unsubscribeAutoCompactSettled();
       unsubscribeTurnStarted();
       unsubscribeHeldSteers();
       unfinishedTurns.dispose();

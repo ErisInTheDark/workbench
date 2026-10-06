@@ -901,6 +901,7 @@ export interface ThreadPayloadData<Id extends string> extends ThreadSummary<Id> 
   recencyAt?: number | null;
   browseResultEntries?: WorkbenchBrowseResultEntry[];
   contextWindowTokens?: number | null;
+  willAutoCompact?: boolean;
   model: string | null;
   reasoningEffort: string | null;
   serviceTier: string | null;
@@ -952,6 +953,7 @@ export interface WorkbenchSendThreadMessageOptions {
   onThreadLaunched?: (thread: Pick<ThreadPayload, "id" | "harness">) => void;
   onTurnAdmitted?: (turnId: string) => void;
   selectThread?: boolean;
+  skipAutoCompact?: boolean;
   startNewTurn?: boolean;
   workflowIds?: string[];
 }

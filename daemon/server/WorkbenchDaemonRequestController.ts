@@ -64,6 +64,7 @@ import type WorkbenchSearchController from "./WorkbenchSearchController";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import type WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
+import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import type WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import { workbenchThreadActions, WorkbenchTranscriptRecoveryRequiredError, WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED } from "workbench-shared/workbench/thread/thread-actions";
@@ -221,6 +222,7 @@ export default class WorkbenchDaemonRequestController {
   private browse: WorkbenchBrowseSessionPort | null = null;
 
   constructor(private readonly owners: {
+    autoCompact?: Pick<WorkbenchThreadAutoCompactController, "refreshObserved">;
     commandApprovals?: Pick<import("./WorkbenchCommandApprovalController").default, "list" | "remove" | "patch">;
     projectStore?: Pick<import("./store/WorkbenchProjectStore").default, "read" | "update">;
     providers?: Pick<WorkbenchProviderDispatcher, "get">;
@@ -538,7 +540,9 @@ export default class WorkbenchDaemonRequestController {
         case "thread-auto-compact/update": {
           const edit = ThreadAutoCompactSettingsPatchSchema.safeParse(params.settings);
           if (!edit.success) throw new InvalidParamsError("Invalid auto-compact settings.");
-          result = { settings: await this.owners.settings.updateThreadAutoCompact(edit.data) };
+          const settings = await this.owners.settings.updateThreadAutoCompact(edit.data);
+          await this.owners.autoCompact?.refreshObserved();
+          result = { settings };
           break;
         }
         case "local-capabilities/update": {

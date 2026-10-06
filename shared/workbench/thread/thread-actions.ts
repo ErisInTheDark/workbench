@@ -69,6 +69,7 @@ const message = {
   clientMessageId: z.string().min(1),
   input: z.array(WorkbenchUserInputSchema),
   context: WorkbenchMessageContextSchema.optional(),
+  skipAutoCompact: z.boolean().optional(),
 };
 export const WorkbenchThreadMessageSchema = z.discriminatedUnion("intent", [
   z.object({ ...message, intent: z.literal("continue") }),

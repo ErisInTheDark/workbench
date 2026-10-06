@@ -5,7 +5,7 @@
  * - default WorkbenchThreadActionController: own WB actions, full thread stop, orphan repair, skills, questionnaire snooze and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
-import type { WorkbenchHarness } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchHarness } from "workbench-shared/types";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import {
@@ -27,10 +27,12 @@ import type WorkbenchThreadStateController from "./WorkbenchThreadStateControlle
 import type WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import type WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 import type WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
+import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 
 export interface WorkbenchThreadActionOwners {
+  autoCompact: Pick<WorkbenchThreadAutoCompactController, "observe">;
   approvals: Pick<WorkbenchApprovalController, "list">;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   transcripts: Pick<WorkbenchTranscriptReader, "readPage" | "history">;
@@ -140,10 +142,11 @@ export default class WorkbenchThreadActionController {
     "thread/message/submit": input => this.message(input),
     "thread/metadata/read": async input => {
       const target = await this.target(input.threadId);
-      return target.provider.threads.read(target.identity.threadId);
+      return this.withAutoCompactStatus(await target.provider.threads.read(target.identity.threadId));
     },
     "thread/page/read": async input => {
-      return this.owners.transcripts.readPage(input);
+      const page = await this.owners.transcripts.readPage(input);
+      return { ...page, thread: await this.withAutoCompactStatus(page.thread) };
     },
     "thread/reconcile": async input => {
       return this.owners.reconciliation.reconcile(input);
@@ -247,6 +250,7 @@ export default class WorkbenchThreadActionController {
           clientMessageId: input.clientMessageId,
           input: input.input,
           ...(input.context ? { context: input.context } : {}),
+          ...(input.skipAutoCompact ? { skipAutoCompact: true } : {}),
           intent: "continue" as const,
         };
     const result = await provider.threads.submit(providerInput);
@@ -275,6 +279,15 @@ export default class WorkbenchThreadActionController {
     return warnings.length
       ? { ...result, warning: [result.warning?.slice(0, 500), ...warnings].filter(Boolean).join(" ") }
       : result;
+  }
+
+  private async withAutoCompactStatus<Thread extends ThreadPayload>(thread: Thread): Promise<Thread> {
+    if (thread.isDraft) return thread;
+    const willAutoCompact = await this.owners.autoCompact.observe({
+      harness: thread.harness,
+      threadId: thread.id,
+    });
+    return { ...thread, willAutoCompact };
   }
 
   /** Stop on a parent agent's behalf: interrupt the live turn, then mark stopped, dismissing the questionnaire that interruption retains. */

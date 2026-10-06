@@ -7,6 +7,7 @@ import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-tu
 import WorkbenchThreadAutoCompactController, { type ThreadAutoCompactEvidence } from "./WorkbenchThreadAutoCompactController";
 
 function fixture() {
+  let now = 30 * 60_000;
   let settings = { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS };
   let evidence: ThreadAutoCompactEvidence | null = {
     activityAt: 0, contextTokens: 200_000,
@@ -16,10 +17,36 @@ function fixture() {
   let latest: Turn | null = { id: "turn", status: "interrupted" } as Turn;
   let compact = async () => { calls.push("compact"); };
   const calls: string[] = [];
+  const publications: boolean[] = [];
+  const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
+  let settingsReads = 0;
+  let publicationListener = () => {};
   const owner = new WorkbenchThreadAutoCompactController({
-    readSettings: async () => settings,
+    readSettings: async () => {
+      settingsReads += 1;
+      return settings;
+    },
     readEvidence: async () => evidence,
-    now: () => 30 * 60_000,
+    readRuntime: async () => ({
+      latestTurn: latest,
+      status: active ? "active" : "idle",
+      turnLive: active || nativeActive,
+    }),
+    publish: (_target, willAutoCompact) => {
+      publications.push(willAutoCompact);
+      publicationListener();
+    },
+    schedule: (callback, delayMs) => {
+      const timer = { callback, delayMs };
+      scheduled.push(timer);
+      return timer;
+    },
+    cancel: (timer) => {
+      const index = scheduled.findIndex(candidate => candidate === timer);
+      if (index >= 0) scheduled.splice(index, 1);
+    },
+    now: () => now,
+    warn: () => {},
   });
   const provider = { threads: {
     read: async () => ({ status: active ? "active" : "idle" }) as ThreadPayload,
@@ -28,10 +55,14 @@ function fixture() {
     compact: async () => compact(),
   } };
   return {
-    owner, provider, calls,
+    owner, provider, calls, publications, scheduled,
+    settingsReads: () => settingsReads,
+    onPublication: (listener: () => void) => { publicationListener = listener; },
+    now: (next: number) => { now = next; },
     settings: (next: Partial<typeof settings>) => { settings = { ...settings, ...next }; },
     evidence: (next: ThreadAutoCompactEvidence | null) => { evidence = next; },
     active: () => { active = true; },
+    inactive: () => { active = false; },
     nativeActive: () => { nativeActive = true; },
     latest: (status: Turn["status"] | null) => { latest = status === null ? null : { id: "turn", status } as Turn; },
     compact: (next: () => Promise<void>) => { compact = next; },
@@ -47,6 +78,86 @@ test("inactive completed, failed and interrupted turns compact at both exact thr
     assert.deepEqual(f.calls, ["compact", "admit"]);
     await f.owner.dispose();
   }
+});
+
+test("observed thread publishes when its daemon-owned idle deadline becomes due", async () => {
+  const f = fixture();
+  f.now(29 * 60_000);
+  assert.equal(await f.owner.observe({ harness: "codex", threadId: "thread" }), false);
+  assert.equal(f.scheduled.length, 1);
+  assert.deepEqual(f.publications, []);
+
+  const published = Promise.withResolvers<void>();
+  f.onPublication(() => published.resolve());
+  f.now(30 * 60_000);
+  f.scheduled.shift()?.callback();
+  await published.promise;
+
+  assert.deepEqual(f.publications, [true]);
+  assert.equal(f.scheduled.length, 0);
+  await f.owner.dispose();
+});
+
+test("observed status replaces its deadline and fences a cancelled callback", async () => {
+  const f = fixture();
+  f.now(10 * 60_000);
+  assert.equal(await f.owner.observe({ harness: "codex", threadId: "thread" }), false);
+  const cancelled = f.scheduled[0]!;
+  assert.equal(cancelled.delayMs, 20 * 60_000);
+
+  f.settings({ idleMinutes: 40 });
+  await f.owner.refreshObserved(["thread"]);
+  assert.equal(f.scheduled.length, 1);
+  assert.equal(f.scheduled[0]?.delayMs, 30 * 60_000);
+  cancelled.callback();
+  assert.equal(f.scheduled.length, 1);
+  assert.deepEqual(f.publications, []);
+
+  const published = Promise.withResolvers<void>();
+  f.onPublication(() => published.resolve());
+  f.now(40 * 60_000);
+  f.scheduled.shift()?.callback();
+  await published.promise;
+  assert.deepEqual(f.publications, [true]);
+  await f.owner.dispose();
+});
+
+test("observed active, natively live and turnless threads remain ineligible", async () => {
+  for (const configure of [
+    (f: ReturnType<typeof fixture>) => f.active(),
+    (f: ReturnType<typeof fixture>) => f.nativeActive(),
+    (f: ReturnType<typeof fixture>) => f.latest(null),
+  ]) {
+    const f = fixture();
+    configure(f);
+    assert.equal(await f.owner.observe({ harness: "codex", threadId: "thread" }), false);
+    assert.deepEqual(f.publications, []);
+    await f.owner.dispose();
+  }
+});
+
+test("disposing observed status cancels its deadline", async () => {
+  const f = fixture();
+  f.now(29 * 60_000);
+  assert.equal(await f.owner.observe({ harness: "codex", threadId: "thread" }), false);
+  assert.equal(f.scheduled.length, 1);
+  await f.owner.dispose();
+  assert.equal(f.scheduled.length, 0);
+  assert.equal(f.owner.hasPendingWork(), false);
+});
+
+test("explicit bypass skips compaction without changing the next ordinary admission", async () => {
+  const f = fixture();
+  assert.equal(await f.owner.run("thread", f.provider, f.admit, { skipAutoCompact: true }), "started");
+  assert.deepEqual(f.calls, ["admit"]);
+  assert.equal(f.settingsReads(), 0);
+  f.settings({ enabled: true });
+  f.inactive();
+  f.latest("completed");
+  assert.equal(await f.owner.run("thread", f.provider, f.admit), "started");
+  assert.deepEqual(f.calls, ["admit", "compact", "admit"]);
+  assert.equal(f.settingsReads(), 1);
+  await f.owner.dispose();
 });
 
 test("either unmet threshold, missing evidence or turn, disabled policy and live executions leave admission unchanged", async () => {
