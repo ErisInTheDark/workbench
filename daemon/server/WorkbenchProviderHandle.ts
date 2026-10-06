@@ -199,17 +199,17 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
         return tools.transcript.finish(reference, result);
       }, "transcript.finish"),
     },
-    execute: (request, signal) => this.tool(tools => {
-      if (!tools.execute) throw new Error(`Provider ${this.key} does not support admitted execution.`);
-      return tools.execute(request, signal);
-    }, "execute"),
+    prepareExecution: (request, signal) => this.tool(tools => {
+      if (!tools.prepareExecution) throw new Error(`Provider ${this.key} does not support admitted execution.`);
+      return tools.prepareExecution(request, signal);
+    }, "prepareExecution"),
     patchClaims: (input, check, signal) => this.tool(tools => tools.patchClaims(input, check, signal), "patchClaims"),
     describe: () => this.tool(tools => tools.describe(), "describe"),
     caller: (metadata, signal, context) => this.tool(tools => tools.caller(metadata, signal, context), "caller"),
-    shell: (input, metadata, signal, context) => this.tool(tools => {
-      if (!tools.shell) throw new Error(`Provider ${this.key} has no native shell; Workbench hosts its shell tool.`);
-      return tools.shell(input, metadata, signal, context);
-    }, "shell"),
+    prepareShell: (input, metadata, signal, context) => this.tool(tools => {
+      if (!tools.prepareShell) throw new Error(`Provider ${this.key} has no native shell; Workbench hosts its shell tool.`);
+      return tools.prepareShell(input, metadata, signal, context);
+    }, "prepareShell"),
   };
 
   readonly browse: NonNullable<WorkbenchProvider["browse"]> = {

@@ -21,7 +21,18 @@ import { WORKBENCH_SHELL_SANDBOX_CAPABILITY } from "./CodexShellController";
 import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import type { WorkbenchProviderTools, ProviderToolResult, WorkbenchToolTranscriptReference } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchPreparedShell, WorkbenchProviderTools, ProviderToolResult, WorkbenchToolTranscriptReference } from "./provider-execution";
+
+/** A prepared shell whose run is opaque to the MCP layer; the injected `executeShell` supplies its result. */
+function preparedShell(cwd: string): WorkbenchPreparedShell {
+  return {
+    cwd, shell: "pwsh",
+    run: { kind: "sandboxed", label: "test", expensive: false, request: {
+      command: ["pwsh", "-Command", "test"], cwd, permissions: { type: "disabled" },
+      windowsSandboxLevel: "disabled", windowsSandboxPrivateDesktop: false, workspaceRoots: [cwd],
+    } },
+  };
+}
 
 for (const name of ["task_get", "shell"]) {
   test(`captures complete ${name} results before replying`, async () => {
@@ -33,10 +44,7 @@ for (const name of ["task_get", "shell"]) {
       caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: "C:/workspace" }),
       describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
       patchClaims: async () => "",
-      shell: async () => {
-        order.push("execute");
-        return { cwd: "C:/workspace", shell: "pwsh", exitCode: 3, stdout: "complete stdout", stderr: "complete stderr" };
-      },
+      prepareShell: async () => preparedShell("C:/workspace"),
       transcript: {
         start: async () => { order.push("start"); return reference; },
         finish: async (pinned, result) => {
@@ -50,6 +58,10 @@ for (const name of ["task_get", "shell"]) {
       tools: () => tools, daemonOrigin: "http://127.0.0.1:4500",
       requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
       executeCommand: async () => { order.push("execute"); return new Response("complete task output"); },
+      executeShell: async () => {
+        order.push("execute");
+        return { exitCode: 3, stdout: "complete stdout", stderr: "complete stderr" };
+      },
     });
     const server = await startController(controller);
     const client = await connectClient(server.url);
@@ -76,7 +88,7 @@ for (const phase of ["start", "finish", "operation"] as const) {
     const tools: WorkbenchProviderTools = {
       caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: "C:/workspace" }),
       describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
-      patchClaims: unused, shell: unused,
+      patchClaims: unused, prepareShell: unused,
       transcript: {
         start: async () => { if (phase === "start") throw new Error("capture failed"); return reference; },
         finish: async (_reference, result) => {
@@ -118,7 +130,7 @@ function codexController(options: Omit<WorkbenchAgentMcpControllerOptions, "tool
   transcript?: WorkbenchProviderTools["transcript"];
   requestCodex: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   resolveThreadId?: (nativeId: NativeThreadId, cwd: string) => Promise<WorkbenchThreadId>;
-  shell?: Pick<CodexShellController, "execute">;
+  shell?: Pick<CodexShellController, "prepare">;
 }) {
   const tools = new CodexToolsController({
     resolvePatchCaller: async () => { throw new Error("unexpected patch"); },
@@ -206,11 +218,12 @@ for (const failResolution of [false, true]) test(`shell resolves caller identity
       return WorkbenchThreadIdSchema.parse("workbench-thread");
     },
     shell: {
-      execute: async (_input, _meta, _signal, identity) => {
+      prepare: async (_input, _meta, _signal, identity) => {
         identities.push(identity);
-        return { cwd: "C:/other", exitCode: 0, shell: "pwsh", stderr: "", stdout: "" };
+        return preparedShell("C:/other");
       },
     },
+    executeShell: async () => ({ exitCode: 0, stderr: "", stdout: "" }),
   });
   const server = await startController(controller);
   const client = await connectClient(server.url);
@@ -375,7 +388,6 @@ test("git_repo exists only while the virtual repository runtime is available", a
 test("lists one typed tool per eligible command and dispatches with trusted thread cwd", async () => {
   const executed: WorkbenchAgentCommandRequest[] = [];
   const codexRequests: Array<{ method?: string; params?: unknown }> = [];
-  const loggedCommands: Array<{ label: string; succeeded: boolean }> = [];
   const shellCalls: Array<{ input: object; meta: Record<string, unknown> | undefined }> = [];
   const controller = codexController({
     executeCommand: async (request) => {
@@ -389,17 +401,13 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       codexRequests.push(request);
       return { id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } };
     },
-    runLoggedCommand: async (label, _signal, operation, succeeded) => {
-      const result = await operation();
-      loggedCommands.push({ label, succeeded: succeeded?.(result) ?? true });
-      return result;
-    },
     shell: {
-      execute: async (input, meta) => {
+      prepare: async (input, meta) => {
         shellCalls.push({ input, meta });
-        return { cwd: "C:/authoritative/child", exitCode: 3, shell: "pwsh", stderr: "sandbox denial\n", stdout: "partial\n" };
+        return preparedShell("C:/authoritative/child");
       },
     },
+    executeShell: async () => ({ exitCode: 3, stderr: "sandbox denial\n", stdout: "partial\n" }),
   });
   const server = await startController(controller);
   const client = await connectClient(server.url);
@@ -504,7 +512,6 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       stdout: "partial\n",
     });
     assert.deepEqual(shellCalls, [{ input: { command: "Get-ChildItem", workdir: "child" }, meta: shellMeta }]);
-    assert.deepEqual(loggedCommands, [{ label: "wb shell", succeeded: false }]);
 
     for (const [toolName, action, responseKind] of [
       ["git_arc_compare", "compare", "git-arc-compare"],
@@ -704,7 +711,8 @@ test("child catalogues omit proposals while parent catalogues retain them", asyn
     executeCommand: async () => Response.json({}),
     daemonOrigin: "http://127.0.0.1:4500",
     requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } }),
-    shell: { execute: async () => ({ cwd: "C:/authoritative", exitCode: 0, shell: "pwsh", stderr: "", stdout: "" }) },
+    shell: { prepare: async () => preparedShell("C:/authoritative") },
+    executeShell: async () => ({ exitCode: 0, stderr: "", stdout: "" }),
   });
   const server = await startController(controller);
   const parent = await connectClient(server.url);
@@ -1015,12 +1023,11 @@ test("shell calls that request progress keep their stream alive", { timeout: 5_0
     lifecycleLogError: () => {},
     requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
     requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd: "C:/workspace" } } }),
-    shell: {
-      execute: async () => {
-        started.resolve();
-        await release.promise;
-        return { cwd: "C:/workspace", exitCode: 0, shell: "pwsh", stderr: "", stdout: "complete" };
-      },
+    shell: { prepare: async () => preparedShell("C:/workspace") },
+    executeShell: async () => {
+      started.resolve();
+      await release.promise;
+      return { exitCode: 0, stderr: "", stdout: "complete" };
     },
     scheduleProgress: (pulse) => {
       let active = true;
@@ -1063,6 +1070,60 @@ test("shell calls that request progress keep their stream alive", { timeout: 5_0
     await client.close();
     await server.close();
   }
+});
+
+for (const hosted of [false, true]) test(`${hosted ? "hosted" : "native"} shells hold no reload while waiting or running`, { timeout: 5_000 }, async () => {
+  const approval = deferred<void>();
+  const approvalRequested = deferred<void>();
+  const running = deferred<void>();
+  // Hosted admission canonicalizes the caller's real working directory.
+  const cwd = process.cwd();
+  const run = { kind: "sandboxed" as const, label: "pnpm test", expensive: true, request: {
+    command: ["pwsh", "-Command", "pnpm test"], cwd, permissions: { type: "disabled" as const },
+    windowsSandboxLevel: "disabled" as const, windowsSandboxPrivateDesktop: false, workspaceRoots: [cwd],
+  } };
+  const tools: WorkbenchProviderTools = {
+    caller: async () => ({ harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd }),
+    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: hosted }),
+    patchClaims: async () => "",
+    prepareShell: async () => ({ run, cwd, shell: "pwsh" }),
+    prepareExecution: async () => run,
+  };
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => tools, daemonOrigin: "http://127.0.0.1:4500", lifecycleLogError: () => {},
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    // Running inside the generation's call is exactly what must not happen.
+    executeShell: async () => { running.resolve(); return await new Promise<never>(() => {}); },
+    approveHostedShell: async () => {
+      approvalRequested.resolve();
+      await approval.promise;
+      return { kind: "allowOnce" };
+    },
+  });
+  const scope = { clientScope: "client", projectLocal: false, provider: "claude", subagent: false };
+  const step = controller.call(scope, {
+    arguments: { command: "pnpm test", ...(hosted ? { outside_sandbox: true } : {}) },
+    detachableShell: true, meta: {}, name: "shell", requestId: 1, signal: new AbortController().signal,
+  });
+  if (hosted) {
+    await approvalRequested.promise;
+    assert.deepEqual(controller.listRuntimeDrainPending(), [], "an approval wait holds no reload");
+    approval.resolve();
+  }
+  const settled = await Promise.race([step.then(() => "prepared"), running.promise.then(() => "running")]);
+  assert.equal(settled, "prepared", "the command runs outside the generation that prepared it");
+  const detached = await step;
+  assert.ok(detached.kind === "detached" && detached.call.shell);
+  assert.deepEqual(controller.listRuntimeDrainPending(), [], "a running command holds no reload");
+  const result = await controller.finish(scope, detached.call, {
+    shellResult: { exitCode: 3, stdout: "partial\n", stderr: "denied\n" },
+  });
+  detached.call.unregister();
+  assert.equal(result.isError, false);
+  assert.match(responseText(result), /Exit code: 3[\s\S]*partial[\s\S]*denied/u);
+  assert.deepEqual(result.structuredContent, {
+    cwd, exitCode: 3, shell: detached.call.shell.shell, stderr: "denied\n", stdout: "partial\n",
+  });
 });
 
 test("thread steer interruption ends declared waits but preserves questionnaires and ordinary MCP calls", { timeout: 5_000 }, async () => {

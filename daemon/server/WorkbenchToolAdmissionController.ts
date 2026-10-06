@@ -1,16 +1,17 @@
 /*
  * Exports:
  * - WorkbenchToolAdmissionOptions: bind authoritative identity, policy, approval and execution owners.
- * - default WorkbenchToolAdmissionController: admit one provider tool call without owning pending interactions; `shell` runs the Workbench-hosted shell for escalating providers.
+ * - default WorkbenchToolAdmissionController: admit one provider tool call without owning pending interactions; `prepareShell` prepares the Workbench-hosted shell for escalating providers.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { WorkbenchEscalatingShellInput, WorkbenchShellResult } from "workbench-shared/workbench/commands/workbench-shell-command";
+import type { WorkbenchEscalatingShellInput } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { WorkbenchItemId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import type { WorkbenchApprovalDecision, WorkbenchApprovalSubject } from "workbench-shared/workbench/provider/provider-approval";
 import type {
-  ProviderToolMetadata, ProviderToolRequestContext, WorkbenchAdmittedExecution, WorkbenchProviderCaller, WorkbenchProviderTools,
-} from "workbench-shared/workbench/provider/provider-execution";
+  ProviderToolMetadata, ProviderToolRequestContext, WorkbenchAdmittedExecution, WorkbenchPreparedShell, WorkbenchProviderCaller,
+  WorkbenchProviderTools, WorkbenchShellRun,
+} from "./provider-execution";
 import { prepareWorkbenchShellExecution } from "./CodexShellController";
 import { isPathWithinRoot } from "./lib/project";
 
@@ -27,7 +28,7 @@ export interface WorkbenchToolAdmissionOptions {
     itemId: WorkbenchItemId | null;
     turnId: WorkbenchTurnId | null;
   }, signal: AbortSignal): Promise<WorkbenchApprovalDecision>;
-  execute: NonNullable<WorkbenchProviderTools["execute"]>;
+  prepare: NonNullable<WorkbenchProviderTools["prepareExecution"]>;
   canonicalize?: (path: string) => Promise<string>;
 }
 
@@ -49,16 +50,16 @@ export default class WorkbenchToolAdmissionController {
 
   /**
    * The shell tool for providers that escalate through Workbench approval: the provider only names the trusted
-   * caller and runs the admitted command in its sandbox; Workbench owns admission and the approval wait.
+   * caller and prepares the admitted command for its sandbox; Workbench owns admission and the approval wait.
    */
-  static async shell(owners: {
-    tools: Pick<WorkbenchProviderTools, "caller" | "execute">;
+  static async prepareShell(owners: {
+    tools: Pick<WorkbenchProviderTools, "caller" | "prepareExecution">;
     approve: WorkbenchToolAdmissionOptions["approve"];
     canonicalize?: WorkbenchToolAdmissionOptions["canonicalize"];
-  }, input: WorkbenchEscalatingShellInput, metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchShellResult> {
+  }, input: WorkbenchEscalatingShellInput, metadata: ProviderToolMetadata, signal: AbortSignal, context?: ProviderToolRequestContext): Promise<WorkbenchPreparedShell> {
     const { tools } = owners;
-    if (!tools.execute) throw new Error("This provider cannot run Workbench-admitted commands.");
-    const execute = tools.execute.bind(tools);
+    if (!tools.prepareExecution) throw new Error("This provider cannot run Workbench-admitted commands.");
+    const prepare = tools.prepareExecution.bind(tools);
     const caller = await tools.caller(metadata, signal, context);
     const prepared = prepareWorkbenchShellExecution(input, caller.cwd);
     const admission = new WorkbenchToolAdmissionController({
@@ -68,18 +69,18 @@ export default class WorkbenchToolAdmissionController {
         writableRoots: [caller.cwd], network: false,
       }),
       approve: owners.approve,
-      execute,
+      prepare,
       ...(owners.canonicalize ? { canonicalize: owners.canonicalize } : {}),
     });
-    const result = await admission.execute({
+    const run = await admission.admit({
       ...prepared,
       ...(context?.itemId ? { itemId: context.itemId } : {}),
       ...(context?.turnId ? { turnId: context.turnId } : {}),
     }, signal);
-    return { ...result, cwd: prepared.cwd, shell: prepared.shell };
+    return { run, cwd: prepared.cwd, shell: prepared.shell };
   }
 
-  async execute(input: {
+  async admit(input: {
     command: string[];
     cwd?: string;
     outsideSandbox?: boolean;
@@ -88,7 +89,7 @@ export default class WorkbenchToolAdmissionController {
     expensive?: boolean;
     itemId?: WorkbenchItemId;
     turnId?: WorkbenchTurnId;
-  }, signal: AbortSignal) {
+  }, signal: AbortSignal): Promise<WorkbenchShellRun> {
     signal.throwIfAborted();
     const command = [...input.command];
     if (!command.length || !command[0]?.trim() || command.some(arg => arg.includes("\0"))) {
@@ -137,7 +138,7 @@ export default class WorkbenchToolAdmissionController {
       permissions = { mode: "approved-unrestricted" };
     }
     signal.throwIfAborted();
-    return this.options.execute({
+    return await this.options.prepare({
       caller, command, cwd, permissions, timeoutMs, ...(input.expensive ? { expensive: true } : {}),
     }, signal);
   }

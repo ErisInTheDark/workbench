@@ -36,7 +36,7 @@ import OpenCodeTranscriptAdapter, {
   subtractOpenCodeTokenBreakdowns,
 } from "./OpenCodeTranscriptAdapter";
 import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
-import type { WorkbenchProviderCaller, WorkbenchToolTranscript, WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchProviderCaller, WorkbenchToolTranscript, WorkbenchToolTranscriptReference, ProviderToolResult } from "../../provider-execution";
 import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
 import OpenCodeThreadWindowLoader from "./OpenCodeThreadWindowLoader";
 import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";

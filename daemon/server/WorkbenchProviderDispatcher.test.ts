@@ -9,7 +9,7 @@ import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import WorkbenchProviderHandle from "./WorkbenchProviderHandle";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import type { WorkbenchToolTranscriptReference } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchToolTranscriptReference } from "./provider-execution";
 import WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
 import WorkbenchMessageWaitController from "./WorkbenchMessageWaitController";
@@ -216,7 +216,7 @@ test("tool capture finishes through the replacement owner with the original pinn
   const reference = { threadId: "thread", turnId: "old-turn", itemId: "item", sourceId: "child",
     parentId: "parent", tool: "task_get", arguments: {}, startedAt: 1 } as WorkbenchToolTranscriptReference;
   const tools: NonNullable<WorkbenchProvider["tools"]> = {
-    patchClaims: unused, describe: unused, caller: unused, shell: unused,
+    patchClaims: unused, describe: unused, caller: unused, prepareShell: unused,
     transcript: { start: async () => reference, finish: async () => assert.fail("old owner retained") },
   };
   f.setTools(tools);
@@ -365,17 +365,23 @@ test("optional single-file calls reject unsupported owners and follow replacemen
   } finally { await f.host.dispose(); }
 });
 
-test("admitted execution retains its provider lease and later calls use replacement capability", async () => {
+test("admitted preparation retains its provider lease and later calls use replacement capability", async () => {
   const f = fixture();
   const entered = deferred();
   const finish = deferred();
   const unused = async (): Promise<never> => { throw new Error("unexpected tool"); };
   const tools: NonNullable<WorkbenchProvider["tools"]> = {
-    patchClaims: unused, describe: unused, caller: unused, shell: unused,
-    execute: async () => {
+    patchClaims: unused, describe: unused, caller: unused, prepareShell: unused,
+    prepareExecution: async request => {
       entered.resolve();
       await finish.promise;
-      return { exitCode: 0, stdout: "original", stderr: "" };
+      return {
+        kind: "sandboxed", label: "original", expensive: false,
+        request: {
+          command: request.command, cwd: request.cwd, permissions: { type: "disabled" },
+          windowsSandboxLevel: "disabled", windowsSandboxPrivateDesktop: false, workspaceRoots: [request.cwd],
+        },
+      };
     },
   };
   f.setTools(tools);
@@ -386,17 +392,17 @@ test("admitted execution retains its provider lease and later calls use replacem
     command: ["echo"], cwd: "/project", permissions: { mode: "restricted" as const, writableRoots: ["/project"], network: false },
   };
   try {
-    const execute = f.providers.get("codex").tools.execute!;
+    const execute = f.providers.get("codex").tools.prepareExecution!;
     const active = execute(request, new AbortController().signal);
     await entered.promise;
-    f.setTools({ ...tools, execute: undefined });
+    f.setTools({ ...tools, prepareExecution: undefined });
     f.hold();
     const reload = f.host.reload(["server:codex/def"]);
     await f.started.promise;
     assert.equal(f.disposed.includes(2), false);
     f.releaseStart.resolve();
     finish.resolve();
-    assert.equal((await active).stdout, "original");
+    assert.equal((await active).label, "original");
     await reload;
     assert.equal(f.disposed.includes(2), true);
     await assert.rejects(execute(request, new AbortController().signal), /does not support admitted execution/);

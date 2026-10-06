@@ -1,11 +1,10 @@
 /*
  * Exports:
  * - OpenCodeToolsControllerOptions: bind native identity to shared admitted execution.
- * - default OpenCodeToolsController: adapt OpenCode MCP metadata to Workbench tools and Codex sandbox execution; Workbench hosts the shell tool.
+ * - default OpenCodeToolsController: adapt OpenCode MCP metadata to Workbench tools and prepared Codex sandbox execution; Workbench hosts the shell tool.
  */
 import path from "node:path";
-import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
-import type { WorkbenchProviderCaller, WorkbenchToolTranscript } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchProviderCaller, WorkbenchProviderTools, WorkbenchToolTranscript } from "../../provider-execution";
 import { OpenCodeFileClaimRequestSchema, OpenCodeToolContextSchema, type OpenCodeToolContext } from "./opencode-workbench-rpc";
 import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
 
@@ -15,7 +14,7 @@ export interface OpenCodeToolsControllerOptions {
     threadId: import("workbench-shared/workbench/identity").WorkbenchThreadId;
     cwd: string;
   }>;
-  execute: NonNullable<WorkbenchProviderTools["execute"]>;
+  prepareExecution: NonNullable<WorkbenchProviderTools["prepareExecution"]>;
   transcript?: {
     start(input: Parameters<WorkbenchToolTranscript["start"]>[0], context: OpenCodeToolContext, caller: WorkbenchProviderCaller): ReturnType<WorkbenchToolTranscript["start"]>;
     finish: WorkbenchToolTranscript["finish"];
@@ -23,7 +22,7 @@ export interface OpenCodeToolsControllerOptions {
 }
 
 export default class OpenCodeToolsController implements WorkbenchProviderTools {
-  readonly execute: NonNullable<WorkbenchProviderTools["execute"]>;
+  readonly prepareExecution: NonNullable<WorkbenchProviderTools["prepareExecution"]>;
   readonly transcript: WorkbenchToolTranscript = {
     start: async (input, signal) => {
       if (input.metadata.workbenchTool === undefined) return null;
@@ -40,7 +39,7 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
   };
 
   constructor(private readonly options: OpenCodeToolsControllerOptions) {
-    this.execute = options.execute;
+    this.prepareExecution = options.prepareExecution;
   }
 
   async caller(metadata: Parameters<WorkbenchProviderTools["caller"]>[0], signal: AbortSignal) {

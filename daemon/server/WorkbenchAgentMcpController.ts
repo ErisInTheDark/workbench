@@ -10,8 +10,9 @@ import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-sc
 import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import {
   ProviderToolMetadataSchema, ProviderToolResultSchema,
-  type ProviderToolRequestContext, type WorkbenchToolTranscriptReference, type WorkbenchProviderTools,
-} from "workbench-shared/workbench/provider/provider-execution";
+  type ProviderToolRequestContext, type WorkbenchPreparedShell, type WorkbenchShellRun, type WorkbenchShellRunResult,
+  type WorkbenchToolTranscriptReference, type WorkbenchProviderTools,
+} from "./provider-execution";
 import { ErrorCode, McpError, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { adaptWorkbenchAgentCliResponse } from "./lib/workbench/cli/workbench-agent-cli-responses";
@@ -25,7 +26,7 @@ import {
 } from "./lib/workbench/commands/workbench-agent-command-definition";
 import type { WorkbenchInstructionTool } from "./lib/workbench/instructions/instruction-tool-reference";
 import { isWorkbenchToolVisibleTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
-import type { WorkbenchProviderCaller } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchProviderCaller } from "./provider-execution";
 import {
   getWorkbenchShellAggregatedOutput,
   WORKBENCH_SHELL_MCP_TOOL_NAME,
@@ -68,6 +69,8 @@ export interface WorkbenchAgentMcpControllerOptions {
   approveHostedShell?: WorkbenchToolAdmissionOptions["approve"];
   /** Defaults to the registry's generation-reentrant executor; tests inject their own. */
   executeCommand?: (request: WorkbenchAgentCommandRequest, signal: AbortSignal) => Promise<Response>;
+  /** Defaults to the registry's exec-node shell runner; tests inject their own. */
+  executeShell?: (run: WorkbenchShellRun, signal: AbortSignal) => Promise<WorkbenchShellRunResult>;
   getReloadScopeCatalog?: () => readonly DaemonReloadScopeDescriptor[];
   /** Read per request so the catalogue follows the virtual repository runtime as it appears or disappears. */
   virtualReposAvailable?: () => boolean;
@@ -75,12 +78,6 @@ export interface WorkbenchAgentMcpControllerOptions {
   daemonOrigin: string;
   requestRegistry?: WorkbenchAgentMcpRequestRegistry;
   scheduleProgress?: (pulse: () => Promise<void>, signal: AbortSignal) => () => void;
-  runLoggedCommand?: <TValue>(
-    label: string,
-    signal: AbortSignal,
-    operation: () => Promise<TValue>,
-    succeeded?: (value: TValue) => boolean,
-  ) => Promise<TValue>;
 }
 
 function isLoopbackAddress(address: string | undefined) {
@@ -141,12 +138,14 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   private readonly injectedScheduleProgress: WorkbenchAgentMcpControllerOptions["scheduleProgress"];
   private readonly tools: WorkbenchAgentMcpControllerOptions["tools"];
   private readonly approveHostedShell: WorkbenchAgentMcpControllerOptions["approveHostedShell"];
-  private readonly runLoggedCommand: NonNullable<WorkbenchAgentMcpControllerOptions["runLoggedCommand"]>;
+  /** Injected runner only; detached shells otherwise run through the registry's exec-node runner. */
+  private readonly injectedExecuteShell: WorkbenchAgentMcpControllerOptions["executeShell"];
   private readonly runtimeOwner = {};
   private readonly isSubagentCaller: NonNullable<WorkbenchAgentMcpControllerOptions["isSubagentCaller"]>;
 
   constructor({
     executeCommand,
+    executeShell,
     getReloadScopeCatalog = () => [],
     virtualReposAvailable = () => false,
     lifecycleLogError = logError,
@@ -155,7 +154,6 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     approveHostedShell,
     requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry(),
     scheduleProgress,
-    runLoggedCommand = async (_label, _signal, operation) => await operation(),
     isSubagentCaller = async () => false,
   }: WorkbenchAgentMcpControllerOptions) {
     this.injectedExecuteCommand = executeCommand;
@@ -168,7 +166,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     this.injectedScheduleProgress = scheduleProgress;
     this.tools = tools;
     this.approveHostedShell = approveHostedShell;
-    this.runLoggedCommand = runLoggedCommand;
+    this.injectedExecuteShell = executeShell;
     this.isSubagentCaller = isSubagentCaller;
   }
 
@@ -282,10 +280,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         const { shellEscalation } = await tools.describe();
         const shellInputSchema = shellEscalation ? WorkbenchEscalatingShellInputSchema : WorkbenchShellInputSchema;
         const input = shellInputSchema.parse(await validateToolInput(shellInputSchema, call.arguments, call.name));
-        const result = await this.callShell(input, call.meta, scope.clientScope, call.requestId, call.signal, tools,
-          shellEscalation, call.sendProgress);
-        await validateToolOutput(WorkbenchShellResultSchema, result, call.name);
-        return { kind: "result", result };
+        return await this.callShell(scope, call, input, tools, shellEscalation);
       }
       const definition = this.visibleCommands(scope).get(call.name);
       if (!definition) throw new McpError(ErrorCode.InvalidParams, `Tool ${call.name} not found`);
@@ -332,10 +327,17 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
 
   async finish(scope: WorkbenchMcpScope, call: WorkbenchMcpDetachedCall, outcome: WorkbenchMcpCallOutcome) {
     const tools = this.tools(scope.provider);
-    const definition = this.listCommands().find(candidate => getWorkbenchAgentCommandToolName(candidate) === call.toolName);
-    const result = "response" in outcome
-      ? await this.commandResult(call.request, outcome.response)
-      : this.commandFailure(definition, outcome.error, call.signal);
+    let result: CallToolResult;
+    if (call.shell) {
+      result = "shellResult" in outcome
+        ? await this.shellResult(call.shell, outcome.shellResult)
+        : this.shellFailure("error" in outcome ? outcome.error : new Error("The shell finished without a result."), call.signal);
+    } else {
+      const definition = this.listCommands().find(candidate => getWorkbenchAgentCommandToolName(candidate) === call.toolName);
+      result = "response" in outcome
+        ? await this.commandResult(call.request, outcome.response)
+        : this.commandFailure(definition, "error" in outcome ? outcome.error : new Error("The command finished without a response."), call.signal);
+    }
     return await this.finishTranscript(tools, call.transcript as WorkbenchToolTranscriptReference | null, result);
   }
 
@@ -354,81 +356,96 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     }, signal);
   }
 
+  /**
+   * Shells only prepare here: the ingress runs the command through the exec node, so neither an approval wait nor a
+   * running command holds this generation or any provider generation. An older ingress gets the same steps inline.
+   */
   private async callShell(
-    input: WorkbenchEscalatingShellInput,
-    meta: Record<string, unknown> | undefined,
-    clientScope: string,
-    requestId: WorkbenchAgentMcpRequestId,
-    signal: AbortSignal,
-    tools: WorkbenchProviderTools,
-    hosted: boolean,
-    sendProgress?: (progress: number) => Promise<void>,
-  ) {
-    return this.observeTool("shell", input, meta, clientScope, signal, tools,
-      reference => this.executeShell(input, meta, {
-        clientScope, ...(reference ? { itemId: reference.itemId, turnId: reference.turnId } : {}),
-      }, requestId, signal, tools, hosted, sendProgress));
+    scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, input: WorkbenchEscalatingShellInput,
+    tools: WorkbenchProviderTools, hosted: boolean,
+  ): Promise<WorkbenchMcpToolStep> {
+    const started = await this.startTranscript("shell", input, call.meta, scope.clientScope, call.signal, tools);
+    if (started.kind === "failed") return { kind: "result", result: started.result };
+    const finishFailure = async (error: unknown, signal: AbortSignal): Promise<WorkbenchMcpToolStep> => ({
+      kind: "result", result: await this.finishTranscript(tools, started.reference, this.shellFailure(error, signal)),
+    });
+    let registration: ReturnType<WorkbenchAgentMcpRequestRegistry["register"]>;
+    try {
+      registration = this.requestRegistry.register(scope.clientScope, call.requestId, {
+        owner: this.runtimeOwner, steerInterruptible: false, toolName: "shell",
+      });
+    } catch (error) {
+      return await finishFailure(error, call.signal);
+    }
+    registration.markDrainIndependent();
+    const signal = AbortSignal.any([call.signal, registration.signal]);
+    let prepared: WorkbenchPreparedShell;
+    try {
+      prepared = await this.prepareShell(input, call.meta, {
+        clientScope: scope.clientScope,
+        ...(started.reference ? { itemId: started.reference.itemId, turnId: started.reference.turnId } : {}),
+      }, signal, tools, hosted);
+    } catch (error) {
+      registration.unregister();
+      return await finishFailure(error, signal);
+    }
+    const detached: WorkbenchMcpDetachedCall = {
+      ...(this.injectedExecuteShell ? { executeShell: this.injectedExecuteShell } : {}),
+      ...(this.injectedScheduleProgress ? { scheduleProgress: this.injectedScheduleProgress } : {}),
+      keepalive: true, shell: prepared, signal, toolName: "shell", transcript: started.reference,
+      unregister: registration.unregister,
+    };
+    if (call.detachableShell) return { kind: "detached", call: detached };
+    const stopProgress = this.startProgressKeepalive(call.sendProgress, signal);
+    let outcome: WorkbenchMcpCallOutcome;
+    try {
+      const shellResult = this.injectedExecuteShell
+        ? await this.injectedExecuteShell(prepared.run, signal)
+        : await this.requestRegistry.executeShell(prepared.run, signal);
+      outcome = signal.aborted ? { error: signal.reason } : { shellResult };
+    } catch (error) {
+      outcome = { error };
+    } finally {
+      stopProgress?.();
+      registration.unregister();
+    }
+    return { kind: "result", result: await this.finish(scope, detached, outcome) };
   }
 
-  /** Escalating providers get the Workbench-hosted shell; others run their native shell. */
-  private async runShell(
+  /** Escalating providers get the Workbench-hosted shell, including its approval; others prepare their native shell. */
+  private async prepareShell(
     input: WorkbenchEscalatingShellInput, meta: Record<string, unknown> | undefined, context: ProviderToolRequestContext,
     signal: AbortSignal, tools: WorkbenchProviderTools, hosted: boolean,
   ) {
     const metadata = ProviderToolMetadataSchema.parse(meta ?? {});
     if (!hosted) {
-      if (!tools.shell) throw new Error("This provider has no native shell.");
-      return await tools.shell(input, metadata, signal, context);
+      if (!tools.prepareShell) throw new Error("This provider has no native shell.");
+      return await tools.prepareShell(input, metadata, signal, context);
     }
     const approve = this.approveHostedShell;
     if (!approve) throw new Error("Workbench approval is unavailable for the hosted shell.");
-    return await WorkbenchToolAdmissionController.shell({ tools, approve }, input, metadata, signal, context);
+    return await WorkbenchToolAdmissionController.prepareShell({ tools, approve }, input, metadata, signal, context);
   }
 
-  private async executeShell(
-    input: WorkbenchEscalatingShellInput,
-    meta: Record<string, unknown> | undefined,
-    context: ProviderToolRequestContext,
-    requestId: WorkbenchAgentMcpRequestId,
-    signal: AbortSignal,
-    tools: WorkbenchProviderTools,
-    hosted: boolean,
-    sendProgress?: (progress: number) => Promise<void>,
-  ) {
-    const { clientScope } = context;
-    let stopProgress: (() => void) | null = null;
-    let unregister: (() => void) | null = null;
+  private async shellResult(shell: WorkbenchPreparedShell, run: WorkbenchShellRunResult): Promise<CallToolResult> {
+    const structured = { ...run, cwd: shell.cwd, shell: shell.shell };
+    const result: CallToolResult = {
+      content: [{ type: "text", text: `Exit code: ${structured.exitCode}\nOutput:\n${getWorkbenchShellAggregatedOutput(structured)}` }],
+      isError: false,
+      structuredContent: structured,
+    };
     try {
-      const registration = this.requestRegistry.register(clientScope, requestId, {
-        owner: this.runtimeOwner,
-        policy: undefined,
-        steerInterruptible: false,
-        toolName: "shell",
-      });
-      unregister = registration.unregister;
-      signal = AbortSignal.any([signal, registration.signal]);
-      stopProgress = this.startProgressKeepalive(sendProgress, signal);
-      const result = await this.runLoggedCommand(
-        "wb shell",
-        signal,
-        async () => await this.runShell(input, meta, context, signal, tools, hosted),
-        (value) => value.exitCode === 0,
-      );
-      if (signal.aborted) throw signal.reason;
-      const output = getWorkbenchShellAggregatedOutput(result);
-      return {
-        content: [{ type: "text" as const, text: `Exit code: ${result.exitCode}\nOutput:\n${output}` }],
-        isError: false,
-        structuredContent: result,
-      };
+      await validateToolOutput(WorkbenchShellResultSchema, result, WORKBENCH_SHELL_MCP_TOOL_NAME);
+      return result;
     } catch (error) {
-      const message = sanitizeError(error) || "Workbench shell tool call failed.";
-      if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);
-      return { content: [{ type: "text" as const, text: `Workbench shell failed: ${message}` }], isError: true };
-    } finally {
-      stopProgress?.();
-      unregister?.();
+      return toolError(error);
     }
+  }
+
+  private shellFailure(error: unknown, signal: AbortSignal): CallToolResult {
+    const message = sanitizeError(error) || "Workbench shell tool call failed.";
+    if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);
+    return { content: [{ type: "text", text: `Workbench shell failed: ${message}` }], isError: true };
   }
 
   private async callTool(

@@ -75,9 +75,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       virtualReposAvailable: () => repo.isAvailable(),
       daemonOrigin: context.localDaemonOrigin,
       requestRegistry,
-      runLoggedCommand: async (label, signal, operation, succeeded) => (
-        await agentCommand.runLoggedCommand(label, signal, operation, succeeded)
-      ),
     });
     const daemonHttp = new WorkbenchDaemonHttpRouter({
       agentCommand,

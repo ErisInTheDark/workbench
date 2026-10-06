@@ -22,8 +22,8 @@ import { createAgentScreenshotSteerText } from "workbench-shared/workbench/threa
 import { randomUUID } from "node:crypto";
 import externalizeCodexTranscriptInlineImages from "../../codex-transcript-image-assets";
 import type WorkbenchDatabaseController from "../../database/WorkbenchDatabaseController";
-import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
-import { ProviderToolMetadataSchema, type ProviderToolMetadata } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../../provider-execution";
+import { ProviderToolMetadataSchema, type ProviderToolMetadata } from "../../provider-execution";
 import type { ClaudeFileChangeMetadata } from "workbench-shared/workbench/provider/claude-file-change-metadata";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "../../WorkbenchTranscriptIdentityController";

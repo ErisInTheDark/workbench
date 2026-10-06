@@ -3,7 +3,7 @@
  * - default executeApprovedCommand: own one explicitly approved unsandboxed process and its retirement.
  */
 import { spawn } from "node:child_process";
-import type { WorkbenchAdmittedExecution } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchAdmittedExecution } from "./provider-execution";
 import { killProcessTreeAsync, lowerAgentProcessPriority } from "./process-helpers";
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;

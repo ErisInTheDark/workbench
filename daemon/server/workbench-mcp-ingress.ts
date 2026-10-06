@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchMcpScope: plain per-request client, provider and catalogue selection.
- * - WorkbenchMcpToolCall/WorkbenchMcpDetachedCall/WorkbenchMcpToolStep/WorkbenchMcpCallOutcome: step contracts between ingress and generation.
+ * - WorkbenchMcpToolCall/WorkbenchMcpDetachedCall/WorkbenchMcpToolStep/WorkbenchMcpCallOutcome: step contracts between ingress and generation, for detached commands and shells.
  * - WorkbenchMcpToolGeneration: the current MCP generation's short describe, call and finish steps.
  * - scheduleWorkbenchMcpProgress: request-owned 60s progress keepalive.
  * - sanitizeWorkbenchMcpError: bounded error text without paths or secrets.
@@ -22,6 +22,7 @@ import {
 
 import type { WorkbenchAgentCommandRequest } from "./lib/workbench/commands/workbench-agent-command-definition";
 import type { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
+import type { WorkbenchPreparedShell, WorkbenchShellRun, WorkbenchShellRunResult } from "./provider-execution";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -36,6 +37,8 @@ export interface WorkbenchMcpScope {
 
 export interface WorkbenchMcpToolCall {
   arguments: Record<string, unknown> | undefined;
+  /** Set by ingress that runs detached shells; a generation newer than its ingress runs them inline otherwise. */
+  detachableShell?: boolean;
   meta: Record<string, unknown> | undefined;
   name: string;
   requestId: WorkbenchMcpRequestId;
@@ -43,25 +46,29 @@ export interface WorkbenchMcpToolCall {
   signal: AbortSignal;
 }
 
-/** A prepared command whose wait runs here, outside every reloadable generation. Plain data and registry handles only. */
-export interface WorkbenchMcpDetachedCall {
+/**
+ * A prepared command or shell whose wait runs here, outside every reloadable generation. Plain data and registry
+ * handles only. A shell call carries its prepared run in `shell`; otherwise `request` is a Workbench command.
+ */
+export type WorkbenchMcpDetachedCall = {
   /** Test-injected executor; production re-enters the registry's current command generation. */
   execute?: (request: WorkbenchAgentCommandRequest, signal: AbortSignal) => Promise<Response>;
+  /** Test-injected shell runner; production runs through the registry's exec-node runner. */
+  executeShell?: (run: WorkbenchShellRun, signal: AbortSignal) => Promise<WorkbenchShellRunResult>;
   keepalive: boolean;
   /** Test-injected keepalive scheduler; production uses `scheduleWorkbenchMcpProgress`. */
   scheduleProgress?: (pulse: () => Promise<void>, signal: AbortSignal) => () => void;
-  request: WorkbenchAgentCommandRequest;
   signal: AbortSignal;
   toolName: string;
   transcript: object | null;
   unregister: () => void;
-}
+} & ({ request: WorkbenchAgentCommandRequest; shell?: undefined } | { request?: undefined; shell: WorkbenchPreparedShell });
 
 export type WorkbenchMcpToolStep =
   | { kind: "result"; result: CallToolResult }
   | { kind: "detached"; call: WorkbenchMcpDetachedCall };
 
-export type WorkbenchMcpCallOutcome = { response: Response } | { error: unknown };
+export type WorkbenchMcpCallOutcome = { response: Response } | { shellResult: WorkbenchShellRunResult } | { error: unknown };
 
 export interface WorkbenchMcpToolGeneration {
   describe(scope: WorkbenchMcpScope, signal: AbortSignal): Promise<{ experimental: Record<string, object>; tools: Tool[] }>;
@@ -167,6 +174,7 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
       const progressToken = extra._meta?.progressToken;
       return await callTool(options, {
         arguments: message.params.arguments,
+        detachableShell: true,
         meta: extra._meta,
         name: message.params.name,
         requestId: extra.requestId,
@@ -209,10 +217,18 @@ async function callTool(options: WorkbenchMcpIngressOptions, call: WorkbenchMcpT
     : null;
   let outcome: WorkbenchMcpCallOutcome;
   try {
-    const response = detached.execute
-      ? await detached.execute(detached.request, detached.signal)
-      : await registry.executeCommand(detached.request, detached.signal);
-    outcome = detached.signal.aborted ? { error: detached.signal.reason } : { response };
+    if (detached.shell) {
+      const { run } = detached.shell;
+      const shellResult = detached.executeShell
+        ? await detached.executeShell(run, detached.signal)
+        : await registry.executeShell(run, detached.signal);
+      outcome = detached.signal.aborted ? { error: detached.signal.reason } : { shellResult };
+    } else {
+      const response = detached.execute
+        ? await detached.execute(detached.request, detached.signal)
+        : await registry.executeCommand(detached.request, detached.signal);
+      outcome = detached.signal.aborted ? { error: detached.signal.reason } : { response };
+    }
   } catch (error) {
     outcome = { error };
   } finally {

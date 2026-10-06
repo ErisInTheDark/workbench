@@ -5,7 +5,7 @@ import {
   NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
 import OpenCodeThreadOperations, { type OpenCodeThreadOperationsOptions } from "./OpenCodeThreadOperations";
-import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../../provider-execution";
 import WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
 import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import {

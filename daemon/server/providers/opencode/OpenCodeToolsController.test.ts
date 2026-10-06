@@ -6,13 +6,13 @@ import test from "node:test";
 import path from "node:path";
 import OpenCodeToolsController from "./OpenCodeToolsController";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchProviderTools } from "../../provider-execution";
 
 test("native mutation admission checks every resource against the resolved caller", async () => {
   const checked: object[] = [];
   const controller: WorkbenchProviderTools = new OpenCodeToolsController({
     resolveCaller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("owner"), cwd: "/repo" }),
-    execute: async () => { throw new Error("must not execute"); },
+    prepareExecution: async () => { throw new Error("must not execute"); },
   });
   const input = { callerThreadId: null, raw: JSON.stringify({
     sessionID: "native", resources: ["src/old.ts", "src/new.ts", "removed.ts"],
@@ -35,7 +35,7 @@ test("native admission propagates cancellation and never substitutes caller-supp
   let checked = 0;
   const owner = new OpenCodeToolsController({
     resolveCaller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("real-owner"), cwd: "/real" }),
-    execute: async () => { throw new Error("must not execute"); },
+    prepareExecution: async () => { throw new Error("must not execute"); },
   });
   const input = { callerThreadId: "forged", raw: JSON.stringify({ sessionID: "native", resources: ["ignored/generated.ts"] }) };
   assert.deepEqual(JSON.parse(await owner.patchClaims(input, async caller => {
@@ -64,7 +64,7 @@ test("transcript capture requires valid child context and resolves authoritative
       sessions.push(id);
       return { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("owned"), cwd: "/repo" };
     },
-    execute: async () => { throw new Error("not executing"); },
+    prepareExecution: async () => { throw new Error("not executing"); },
     transcript: {
       start: async (_input, context, caller) => {
         starts++;

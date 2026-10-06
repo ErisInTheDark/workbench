@@ -227,6 +227,7 @@ export interface DaemonRuntimeObjects {
   codexExecutor: import("./CodexExecServer").default;
   codexSandboxAcl: import("./CodexSandboxAclController").default;
   commandCapacity: import("./WorkbenchCommandCapacity").default;
+  shellRunner: import("./WorkbenchShellRunner").default;
   codexProvider: WorkbenchProvider;
   openCodeService: import("./providers/opencode/OpenCodeServiceController").default;
   openCodeModelCatalog: {

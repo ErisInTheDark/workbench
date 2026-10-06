@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - default CodexToolsController: interpret Codex MCP metadata, gate apply_patch on claims and sandbox ACL repair, and execute tools inside its native sandbox.
+ * - default CodexToolsController: interpret Codex MCP metadata, gate apply_patch on claims and sandbox ACL repair, and prepare tools for its native sandbox.
  */
 import { NativeThreadIdSchema, type NativeThreadId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import type { ProviderToolMetadata, WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+import type { ProviderToolMetadata, WorkbenchProviderTools } from "./provider-execution";
 import CodexShellController, { WORKBENCH_SHELL_SANDBOX_CAPABILITY, WORKBENCH_SHELL_TOOL_DESCRIPTION } from "./CodexShellController";
 import type CodexSandboxAclController from "./CodexSandboxAclController";
 import { allowCodexApplyPatch, denyCodexApplyPatch, parseCodexApplyPatchClaimHook } from "./lib/workbench/codex-apply-patch-claim-hook";
@@ -12,16 +12,16 @@ import {
 } from "workbench-shared/workbench/thread/workbench-file-change";
 
 export default class CodexToolsController implements WorkbenchProviderTools {
-  readonly execute: WorkbenchProviderTools["execute"];
+  readonly prepareExecution: WorkbenchProviderTools["prepareExecution"];
 
   constructor(private readonly options: {
     readCallerThread(nativeThreadId: NativeThreadId): Promise<{ id: WorkbenchThreadId; cwd: string }>;
     resolvePatchCaller(threadId: string, cwd: string): Promise<{ threadId: WorkbenchThreadId; nativeThreadId: NativeThreadId }>;
     /** Repairs Windows sandbox write ACEs on patch targets so the sandboxed apply_patch can write them. */
     sandboxAcl?: Pick<CodexSandboxAclController, "ensureWritable">;
-    shell: Pick<CodexShellController, "execute"> & Partial<Pick<CodexShellController, "executeAdmitted" | "runSandboxed">>;
+    shell: Pick<CodexShellController, "prepare"> & Partial<Pick<CodexShellController, "prepareAdmitted" | "runSandboxed">>;
   }) {
-    this.execute = options.shell.executeAdmitted?.bind(options.shell);
+    this.prepareExecution = options.shell.prepareAdmitted?.bind(options.shell);
   }
 
   async patchClaims(...[input, check, signal]: Parameters<WorkbenchProviderTools["patchClaims"]>) {
@@ -73,9 +73,9 @@ export default class CodexToolsController implements WorkbenchProviderTools {
     return { harness: "codex", threadId: thread.id, cwd: thread.cwd };
   }
 
-  async shell(...[input, metadata, signal]: Parameters<WorkbenchProviderTools["shell"]>) {
+  async prepareShell(...[input, metadata, signal]: Parameters<NonNullable<WorkbenchProviderTools["prepareShell"]>>) {
     const caller = await this.caller(metadata, signal);
-    return this.options.shell.execute(input, metadata, signal, {
+    return this.options.shell.prepare(input, metadata, signal, {
       nativeThreadId: this.nativeThreadId(metadata),
       workbenchThreadId: caller.threadId,
     });

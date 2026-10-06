@@ -9,7 +9,7 @@ import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provid
 import type { WorkbenchProviderGoals } from "workbench-shared/workbench/provider/provider-goal";
 import type { WorkbenchAccountLimits } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
-import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchProviderTools } from "./provider-execution";
 import type { WorkbenchProviderBrowse } from "workbench-shared/workbench/provider/provider-browse";
 import type { WorkbenchProviderSandboxNetwork } from "workbench-shared/workbench/provider/provider-settings";
 import type { WorkbenchProviderRecovery } from "workbench-shared/workbench/provider/provider-recovery";

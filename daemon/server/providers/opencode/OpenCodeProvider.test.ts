@@ -10,15 +10,11 @@ import type { CodexExecRequest } from "../../codex-exec-protocol";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
 test("provider execution preserves configured sandbox policy and admitted boundaries", async () => {
-  const calls: CodexExecRequest[] = [];
   const configurationReads: object[] = [];
   const registrations = {
     openCodeService: {},
     openCodeThreadOperations: {},
-    codexExecutor: { execute: async (request: CodexExecRequest) => {
-      calls.push(request);
-      return { exitCode: 7, stdout: "", stderr: "failure" };
-    } },
+    codexExecutor: { execute: async () => { throw new Error("prepared commands run through the exec node"); } },
     codexThreadOperations: { requestNative: async (method: string, params: object) => {
       assert.equal(method, "config/read");
       configurationReads.push(params);
@@ -29,18 +25,18 @@ test("provider execution preserves configured sandbox policy and admitted bounda
   const instance = await OpenCodeProvider.create({} as never, {
     get: (key: keyof typeof registrations) => registrations[key],
   } as never);
-  const result = await instance.registrations!.openCodeProvider!.tools!.execute!({
+  const run = await instance.registrations!.openCodeProvider!.tools!.prepareExecution!({
     caller: { harness: "opencode", cwd: process.cwd(), threadId: WorkbenchThreadIdSchema.parse("native-owner") },
     command: ["pwsh", "-Command", "exit 7"], cwd: process.cwd(),
     permissions: { mode: "restricted", writableRoots: [process.cwd()], network: false },
   }, new AbortController().signal);
-  assert.equal(result.exitCode, 7);
+  assert.ok(run.kind === "sandboxed");
+  const request: CodexExecRequest = run.request;
   assert.equal(configurationReads.length, 1);
-  assert.equal(calls[0]?.windowsSandboxLevel, "elevated");
-  assert.equal(calls[0]?.windowsSandboxPrivateDesktop, false);
-  assert.equal(calls[0]?.envPolicy.inherit, "core");
-  assert.equal(calls[0]?.permissions.type, "managed");
-  assert.ok(calls[0]?.permissions.type === "managed" && calls[0].permissions.network === "restricted");
+  assert.equal(request.windowsSandboxLevel, "elevated");
+  assert.equal(request.windowsSandboxPrivateDesktop, false);
+  assert.equal(request.envPolicy?.inherit, "core");
+  assert.ok(request.permissions.type === "managed" && request.permissions.network === "restricted");
 });
 
 test("installs OpenCode under its graph provider registration", () => {

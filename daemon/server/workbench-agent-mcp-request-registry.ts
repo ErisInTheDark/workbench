@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchAgentMcpPendingRequest: describe one active request for runtime-drain diagnostics.
  * - WorkbenchAgentMcpThreadWaitState: describe active waits owned by one Workbench thread.
- * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, wait observation, reload-safe command re-entry, and the current MCP tool generation.
+ * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, wait observation, reload-safe command re-entry, the current MCP tool generation, and the exec node's shell runner.
  * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
  * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across module generations.
  */
@@ -19,6 +19,7 @@ import {
   type WorkbenchAgentMcpRuntimeDrainPolicy,
 } from "./lib/workbench/commands/workbench-agent-command-definition";
 import type { WorkbenchMcpToolGeneration } from "./workbench-mcp-ingress";
+import type { WorkbenchShellRun, WorkbenchShellRunResult } from "./provider-execution";
 
 type WorkbenchAgentMcpRequestId = number | string;
 type WorkbenchAgentMcpClientScope = string;
@@ -58,11 +59,16 @@ interface WorkbenchAgentMcpToolGenerationSlot {
   owner: object;
 }
 
+type WorkbenchAgentMcpShellRunner = (run: WorkbenchShellRun, signal: AbortSignal) => Promise<WorkbenchShellRunResult>;
+
 interface WorkbenchAgentMcpRequestRegistryState {
   commandGeneration: WorkbenchAgentMcpCommandGeneration | null;
   /** The MCP generation that serves requests; held here so in-flight requests never capture one. */
   toolGeneration: WorkbenchAgentMcpToolGenerationSlot | null;
   toolGenerationWaiters: Set<() => void>;
+  /** The exec node's entry for running prepared shells; it leases only that node for each command. */
+  shellRunner: { owner: object; run: WorkbenchAgentMcpShellRunner } | null;
+  shellRunnerWaiters: Set<() => void>;
   disposed: boolean;
   exitHookInstalled: boolean;
   threadWaitListeners: Set<(state: WorkbenchAgentMcpThreadWaitState | WorkbenchAgentMcpLegacyThreadWaitState) => void>;
@@ -112,6 +118,8 @@ function createState(): WorkbenchAgentMcpRequestRegistryState {
     commandGeneration: null,
     toolGeneration: null,
     toolGenerationWaiters: new Set(),
+    shellRunner: null,
+    shellRunnerWaiters: new Set(),
     disposed: false,
     exitHookInstalled: false,
     threadWaitListeners: new Set(),
@@ -127,6 +135,8 @@ function disposeState(state: WorkbenchAgentMcpRequestRegistryState, reason: stri
   state.commandGeneration = null;
   state.toolGeneration = null;
   for (const wake of [...state.toolGenerationWaiters]) wake();
+  state.shellRunner = null;
+  for (const wake of [...state.shellRunnerWaiters]) wake();
   for (const requests of state.requestsByClient.values()) {
     for (const entry of requests.values()) {
       if (!entry.controller.signal.aborted) entry.controller.abort(new Error(reason));
@@ -147,6 +157,8 @@ function getProcessState() {
   // Process state outlives module generations, so fields added later start empty on older state.
   state.toolGeneration ??= null;
   state.toolGenerationWaiters ??= new Set();
+  state.shellRunner ??= null;
+  state.shellRunnerWaiters ??= new Set();
   state.threadWaitListeners ??= new Set();
   if (!state.exitHookInstalled) {
     state.exitHookInstalled = true;
@@ -242,18 +254,37 @@ export class WorkbenchAgentMcpRequestRegistry {
 
   /** The current MCP generation, waiting through a reload's gap between retirement and replacement. */
   async awaitToolGeneration(signal?: AbortSignal): Promise<WorkbenchMcpToolGeneration> {
+    return (await this.awaitSlot(() => this.state.toolGeneration, this.state.toolGenerationWaiters, signal)).generation;
+  }
+
+  activateShellRunner(owner: object, run: WorkbenchAgentMcpShellRunner) {
+    if (this.state.disposed) throw new Error("Workbench MCP request registry is disposed.");
+    this.state.shellRunner = { owner, run };
+    for (const wake of [...this.state.shellRunnerWaiters]) wake();
+  }
+
+  releaseShellRunner(owner: object) {
+    if (this.state.shellRunner?.owner === owner) this.state.shellRunner = null;
+  }
+
+  /** Runs a prepared shell through the exec node, waiting through its reload gap; only the caller's signal cancels. */
+  async executeShell(run: WorkbenchShellRun, signal: AbortSignal) {
+    return await (await this.awaitSlot(() => this.state.shellRunner, this.state.shellRunnerWaiters, signal)).run(run, signal);
+  }
+
+  private async awaitSlot<T>(read: () => T | null, waiters: Set<() => void>, signal?: AbortSignal): Promise<T> {
     for (;;) {
       signal?.throwIfAborted();
       if (this.state.disposed) throw new Error("Workbench MCP request registry is disposed.");
-      const current = this.state.toolGeneration;
-      if (current) return current.generation;
+      const current = read();
+      if (current) return current;
       await new Promise<void>(resolve => {
         const wake = () => {
-          this.state.toolGenerationWaiters.delete(wake);
+          waiters.delete(wake);
           signal?.removeEventListener("abort", wake);
           resolve();
         };
-        this.state.toolGenerationWaiters.add(wake);
+        waiters.add(wake);
         signal?.addEventListener("abort", wake, { once: true });
       });
     }

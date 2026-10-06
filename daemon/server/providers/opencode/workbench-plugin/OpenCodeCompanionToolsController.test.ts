@@ -9,7 +9,7 @@ import WorkbenchAgentMcpController from "../../../WorkbenchAgentMcpController";
 import { WorkbenchAgentMcpRequestRegistry } from "../../../workbench-agent-mcp-request-registry";
 import OpenCodeToolsController from "../OpenCodeToolsController";
 import { WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
-import type { ProviderToolResult, WorkbenchToolTranscriptReference } from "workbench-shared/workbench/provider/provider-execution";
+import type { ProviderToolResult, WorkbenchToolTranscriptReference } from "../../../provider-execution";
 
 const catalogue = [{ name: "rg", inputSchema: { type: "object" as const, properties: { args: { type: "array", items: { type: "string" } } } } }];
 const context = (sessionID = "managed", id = "parent") => ({ sessionID, id, messageID: "assistant" }) as ToolContext;
@@ -186,7 +186,7 @@ test("companion catalogue and decoded calls cross real MCP transport with full c
       assert.equal(session, "managed");
       return { harness: "opencode", threadId, cwd: "C:/workspace" };
     },
-    execute: unused,
+    prepareExecution: unused,
     transcript: {
       start: async (input, identity, caller) => {
         const reference = { threadId: caller.threadId, turnId: WorkbenchTurnIdSchema.parse("original-turn"), itemId: WorkbenchItemIdSchema.parse(identity.childID),

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { WorkbenchAgentCommandRequest } from "./lib/workbench/commands/workbench-agent-command-definition";
+import type { WorkbenchShellRun } from "./provider-execution";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
@@ -211,6 +212,29 @@ test("successful retiring command wins and executor shutdown stays terminal", as
   await Promise.resolve();
   registry.releaseCommandExecutor(shutdownOwner);
   await assert.rejects(shuttingDown, /shutting down/u);
+});
+
+test("prepared shells wait through an exec reload gap for the current runner, and only their caller cancels", async () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const run: WorkbenchShellRun = { kind: "approved", label: "build", expensive: false, request: {
+    caller: { harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread-1"), cwd: "C:/work" },
+    command: ["build"], cwd: "C:/work", permissions: { mode: "approved-unrestricted" },
+  } };
+  const retired = {};
+  registry.activateShellRunner(retired, async () => { throw new Error("retired runner must not run"); });
+  registry.releaseShellRunner(retired);
+  const waiting = registry.executeShell(run, new AbortController().signal);
+  const current = {};
+  registry.activateShellRunner(current, async received => {
+    assert.strictEqual(received, run);
+    return { exitCode: 0, stdout: "built", stderr: "" };
+  });
+  assert.deepEqual(await waiting, { exitCode: 0, stdout: "built", stderr: "" });
+  registry.releaseShellRunner(current);
+  const cancelled = new AbortController();
+  const unserved = registry.executeShell(run, cancelled.signal);
+  cancelled.abort(new Error("caller cancelled"));
+  await assert.rejects(unserved, /caller cancelled/u);
 });
 
 test("runtime drain cancels only matching policies in the retiring generation", () => {

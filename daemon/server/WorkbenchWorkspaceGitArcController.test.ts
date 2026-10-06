@@ -676,7 +676,7 @@ test("active claims and Git ignore rules cover patch paths across workspace root
       cwd: apiRoot, harness: "opencode",
       threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(identity.threadId),
     }),
-    execute: async () => { throw new Error("must not execute"); },
+    prepareExecution: async () => { throw new Error("must not execute"); },
   });
   const admit = async (resources: string[]) => JSON.parse(await native.patchClaims({
     callerThreadId: null, raw: JSON.stringify({ sessionID: "native", resources }),

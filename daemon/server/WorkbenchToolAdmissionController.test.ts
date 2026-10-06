@@ -1,11 +1,22 @@
-/* No exports. Tests protect restricted defaults, one-call approvals, bound caller ownership and the hosted shell. */
+/* No exports. Tests protect restricted defaults, one-call approvals, bound caller ownership and the prepared hosted shell. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import { WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
-import type { WorkbenchAdmittedExecution } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchAdmittedExecution, WorkbenchShellRun } from "./provider-execution";
 import { parseApprovalCommand } from "./lib/workbench/command-approval-prefix";
 import WorkbenchToolAdmissionController, { type WorkbenchToolAdmissionOptions } from "./WorkbenchToolAdmissionController";
+
+/** The prepared run is opaque to admission; only the admitted request it was built from matters here. */
+function preparedRun(request: WorkbenchAdmittedExecution): WorkbenchShellRun {
+  return {
+    kind: "sandboxed", label: request.command.join(" "), expensive: request.expensive === true,
+    request: {
+      command: request.command, cwd: request.cwd, permissions: { type: "disabled" },
+      windowsSandboxLevel: "disabled", windowsSandboxPrivateDesktop: false, workspaceRoots: [request.cwd],
+    },
+  };
+}
 
 function fixture(overrides: Partial<WorkbenchToolAdmissionOptions> = {}) {
   const caller = { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("12345678-1234-4123-8123-123456789012"), cwd: process.cwd() };
@@ -14,19 +25,19 @@ function fixture(overrides: Partial<WorkbenchToolAdmissionOptions> = {}) {
     caller, resolve: async () => ({ caller, writableRoots: [caller.cwd], network: false }),
     canonicalize: async value => path.resolve(value),
     approve: async () => { throw new Error("unexpected approval"); },
-    execute: async request => { calls.push(request); return { exitCode: 0, stdout: "", stderr: "" }; },
+    prepare: async request => { calls.push(request); return preparedRun(request); },
     ...overrides,
   });
   return { controller, calls, caller };
 }
 
-test("ordinary calls use server roots and never ask or retry when execution fails", async () => {
+test("ordinary calls use server roots and never ask or retry when preparation fails", async () => {
   const f = fixture();
-  await f.controller.execute({ command: ["echo", "safe"] }, new AbortController().signal);
+  await f.controller.admit({ command: ["echo", "safe"] }, new AbortController().signal);
   assert.deepEqual(f.calls[0]?.permissions, { mode: "restricted", writableRoots: [process.cwd()], network: false });
   let attempts = 0;
-  const failed = fixture({ execute: async () => { attempts++; throw new Error("sandbox denied"); } });
-  await assert.rejects(failed.controller.execute({ command: ["write"] }, new AbortController().signal), /sandbox denied/);
+  const failed = fixture({ prepare: async () => { attempts++; throw new Error("sandbox denied"); } });
+  await assert.rejects(failed.controller.admit({ command: ["write"] }, new AbortController().signal), /sandbox denied/);
   assert.equal(attempts, 1);
 });
 
@@ -39,10 +50,10 @@ test("explicit escalation approves the immutable exact command once without gran
     input.command[1] = "changed";
     return { kind: "allowOnce" };
   } });
-  await f.controller.execute(input, new AbortController().signal);
+  await f.controller.admit(input, new AbortController().signal);
   assert.deepEqual(f.calls[0]?.command, ["write", "original"]);
   assert.equal(f.calls[0]?.permissions.mode, "approved-unrestricted");
-  await f.controller.execute({ command: ["next"] }, new AbortController().signal);
+  await f.controller.admit({ command: ["next"] }, new AbortController().signal);
   assert.equal(f.calls[1]?.permissions.mode, "restricted");
   assert.equal(approvals, 1);
 });
@@ -53,7 +64,7 @@ test("escalation offers saved-rule matching the wrapped script, its justificatio
   for (const launcher of [["pwsh", "-NoProfile", "-Command"], ["/bin/zsh", "-lc"]]) {
     let seen: Parameters<WorkbenchToolAdmissionOptions["approve"]>[0] | null = null;
     const f = fixture({ approve: async request => { seen = request; return { kind: "allowOnce" }; } });
-    await f.controller.execute({
+    await f.controller.admit({
       command: [...launcher, "git fetch --tags origin"], outsideSandbox: true, justification: " needs network ", itemId, turnId,
     }, new AbortController().signal);
     assert.deepEqual(parseApprovalCommand(seen!.subject.command), ["git", "fetch", "--tags", "origin"]);
@@ -65,13 +76,13 @@ test("escalation offers saved-rule matching the wrapped script, its justificatio
 
 test("decline and cancellation during approval never dispatch", async () => {
   const declined = fixture({ approve: async () => ({ kind: "decline" }) });
-  await assert.rejects(declined.controller.execute({ command: ["write"], outsideSandbox: true }, new AbortController().signal), /declined/);
+  await assert.rejects(declined.controller.admit({ command: ["write"], outsideSandbox: true }, new AbortController().signal), /declined/);
   const refused = fixture({ approve: async () => ({ kind: "decline", feedback: "resubmit with confirmation" }) });
-  await assert.rejects(refused.controller.execute({ command: ["write"], outsideSandbox: true }, new AbortController().signal), /resubmit with confirmation/);
+  await assert.rejects(refused.controller.admit({ command: ["write"], outsideSandbox: true }, new AbortController().signal), /resubmit with confirmation/);
   assert.equal(declined.calls.length + refused.calls.length, 0);
   const abort = new AbortController();
   const cancelled = fixture({ approve: async () => { abort.abort(new Error("cancelled")); return { kind: "allowOnce" }; } });
-  await assert.rejects(cancelled.controller.execute({ command: ["write"], outsideSandbox: true }, abort.signal), /cancelled/);
+  await assert.rejects(cancelled.controller.admit({ command: ["write"], outsideSandbox: true }, abort.signal), /cancelled/);
   assert.equal(cancelled.calls.length, 0);
 });
 
@@ -87,9 +98,9 @@ test("hosted shell binds the provider's trusted caller and tool item, and escala
       if (context?.clientScope !== "trusted") throw new Error("Scope is not active.");
       return { harness: "claude", threadId, cwd: process.cwd() };
     },
-    execute: async (request: WorkbenchAdmittedExecution) => {
+    prepareExecution: async (request: WorkbenchAdmittedExecution) => {
       executions.push(request);
-      return { exitCode: 0, stdout: "ok", stderr: "" };
+      return preparedRun(request);
     },
   };
   const owners = {
@@ -104,15 +115,16 @@ test("hosted shell binds the provider's trusted caller and tool item, and escala
   const context = { clientScope: "trusted", itemId, turnId };
   const escalate = { command: "echo approved", outside_sandbox: true };
 
-  await WorkbenchToolAdmissionController.shell(owners, { command: "echo safe" }, { threadId: "forged" }, signal, context);
+  await WorkbenchToolAdmissionController.prepareShell(owners, { command: "echo safe" }, { threadId: "forged" }, signal, context);
   assert.deepEqual(executions[0]?.caller, { harness: "claude", threadId, cwd: process.cwd() });
   assert.equal(executions[0]?.permissions.mode, "restricted");
-  await assert.rejects(WorkbenchToolAdmissionController.shell(owners, escalate, {}, signal, { clientScope: "forged" }), /not active/u);
+  await assert.rejects(WorkbenchToolAdmissionController.prepareShell(owners, escalate, {}, signal, { clientScope: "forged" }), /not active/u);
 
-  await assert.rejects(WorkbenchToolAdmissionController.shell(owners, escalate, {}, signal, context), /declined/u);
+  await assert.rejects(WorkbenchToolAdmissionController.prepareShell(owners, escalate, {}, signal, context), /declined/u);
   assert.equal(executions.length, 1);
   allowed = true;
-  assert.equal((await WorkbenchToolAdmissionController.shell(owners, escalate, {}, signal, context)).stdout, "ok");
+  const approved = await WorkbenchToolAdmissionController.prepareShell(owners, escalate, {}, signal, context);
+  assert.equal(approved.cwd, process.cwd());
   assert.equal(executions[1]?.permissions.mode, "approved-unrestricted");
   assert.ok(approvals[0]?.subject.command.includes("echo approved"));
   assert.deepEqual([approvals[0]?.caller.threadId, approvals[0]?.itemId, approvals[0]?.turnId], [threadId, itemId, turnId]);
@@ -123,9 +135,9 @@ test("identity drift and canonical path escape cannot dispatch", async () => {
   const drift = fixture({ resolve: async () => ({
     caller: { ...base.caller, harness: "different" }, writableRoots: [], network: false,
   }) });
-  await assert.rejects(drift.controller.execute({ command: ["read"] }, new AbortController().signal), /binding/);
+  await assert.rejects(drift.controller.admit({ command: ["read"] }, new AbortController().signal), /binding/);
   const escape = fixture({ canonicalize: async value => value.endsWith("link")
     ? path.resolve(process.cwd(), "..") : path.resolve(value) });
-  await assert.rejects(escape.controller.execute({ command: ["read"], cwd: "link" }, new AbortController().signal), /outside/);
+  await assert.rejects(escape.controller.admit({ command: ["read"], cwd: "link" }, new AbortController().signal), /outside/);
   assert.equal(drift.calls.length + escape.calls.length, 0);
 });

@@ -38,7 +38,7 @@ import { WORKBENCH_STATS_USAGE_DATA_VERSION } from "workbench-shared/workbench/s
 import {
   openCodeContentSource, openCodeItemSource, type OpenCodeTranscriptSource,
 } from "./open-code-source-id";
-import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../../provider-execution";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 
 export interface OpenCodeTranscriptOwners {

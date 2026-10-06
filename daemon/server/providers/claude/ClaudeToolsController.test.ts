@@ -18,7 +18,7 @@ test("Claude MCP caller comes from the server scope, never model metadata", asyn
       },
     } as ClaudeThreadOperations,
     transcript: {} as ClaudeTranscriptAdapter,
-    execute: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+    prepareExecution: async () => { throw new Error("unexpected execution"); },
   });
   const signal = new AbortController().signal;
   assert.deepEqual(await owner.caller({ threadId: "attacker", cwd: "C:/attacker" }, signal, {

@@ -1,21 +1,21 @@
 /*
  * Exports:
- * - default ClaudeToolsController: resolve server-owned Claude MCP scopes and run admitted commands; Workbench hosts the shell tool.
+ * - default ClaudeToolsController: resolve server-owned Claude MCP scopes and prepare admitted commands; Workbench hosts the shell tool.
  */
-import type { WorkbenchProviderTools } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchProviderTools } from "../../provider-execution";
 import type ClaudeThreadOperations from "./ClaudeThreadOperations";
 import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 
 export default class ClaudeToolsController implements WorkbenchProviderTools {
-  readonly execute: NonNullable<WorkbenchProviderTools["execute"]>;
+  readonly prepareExecution: NonNullable<WorkbenchProviderTools["prepareExecution"]>;
   readonly transcript: NonNullable<WorkbenchProviderTools["transcript"]>;
 
   constructor(private readonly options: {
     threads: Pick<ClaudeThreadOperations, "resolveScope">;
     transcript: ClaudeTranscriptAdapter;
-    execute: NonNullable<WorkbenchProviderTools["execute"]>;
+    prepareExecution: NonNullable<WorkbenchProviderTools["prepareExecution"]>;
   }) {
-    this.execute = options.execute;
+    this.prepareExecution = options.prepareExecution;
     this.transcript = {
       start: async (input, signal, context) => {
         signal.throwIfAborted();

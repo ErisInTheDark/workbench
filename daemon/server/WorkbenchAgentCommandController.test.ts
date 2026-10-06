@@ -14,7 +14,7 @@ import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDire
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import CodexToolsController from "./CodexToolsController";
-import type { WorkbenchPatchClaimCheck } from "workbench-shared/workbench/provider/provider-execution";
+import type { WorkbenchPatchClaimCheck } from "./provider-execution";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const reloadCatalog = [
@@ -32,7 +32,7 @@ function patchClaimPort(
   const tools = new CodexToolsController({
     resolvePatchCaller,
     readCallerThread: async () => { throw new Error("Unexpected shell caller lookup"); },
-    shell: { execute: async () => { throw new Error("Unexpected shell"); } },
+    shell: { prepare: async () => { throw new Error("Unexpected shell"); } },
   });
   return (harness: string, input: Parameters<CodexToolsController["patchClaims"]>[0], signal: AbortSignal) => {
     assert.equal(harness, "codex");
