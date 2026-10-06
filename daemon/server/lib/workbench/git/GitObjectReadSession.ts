@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitObjectReadSession: own operation-scoped Git object streams and deterministic disposal.
+ * - default GitObjectReadSession: own operation-scoped Git object streams, operation-scoped fact memos, and deterministic disposal.
  * - GitObjectReadResult: object identity and optional raw contents; null means missing.
  * - GitObjectReadProcess: injectable process boundary for protocol/lifecycle tests.
  */
@@ -21,7 +21,7 @@ type Request = {
   resolve: (result: GitObjectReadResult) => void;
   reject: (error: Error) => void;
 };
-type Scope = { readers: Map<string, GitObjectReadSession>; closed: boolean };
+type Scope = { readers: Map<string, GitObjectReadSession>; memos: Map<string, Promise<unknown>>; closed: boolean };
 type State = { kind: "open" | "closing" | "closed" } | { kind: "failed"; error: Error };
 
 const scopes = new AsyncLocalStorage<Scope>();
@@ -39,7 +39,7 @@ export default class GitObjectReadSession {
       if (current.closed) throw new Error("Git object read scope is closed.");
       return await callback();
     }
-    const scope: Scope = { readers: new Map(), closed: false };
+    const scope: Scope = { readers: new Map(), memos: new Map(), closed: false };
     return await scopes.run(scope, async () => {
       let result: T;
       try {
@@ -59,6 +59,27 @@ export default class GitObjectReadSession {
       if (failures.length) throw new AggregateError(failures, "Git object-reader cleanup failed.");
       return result;
     });
+  }
+
+  /** Shares one computation of a fact that cannot change within the current operation; outside one, computes fresh. */
+  static async memo<T>(key: string, compute: () => Promise<T>): Promise<T> {
+    const scope = scopes.getStore();
+    if (!scope || scope.closed) return await compute();
+    let entry = scope.memos.get(key) as Promise<T> | undefined;
+    if (!entry) {
+      entry = compute();
+      scope.memos.set(key, entry);
+      // A failed computation is retried by the next caller instead of replaying the failure.
+      entry.catch(() => { if (scope.memos.get(key) === entry) scope.memos.delete(key); });
+    }
+    return await entry;
+  }
+
+  /** Drops the current operation's memos whose keys start with `prefix`, after the facts behind them changed. */
+  static forget(prefix: string) {
+    const scope = scopes.getStore();
+    if (!scope) return;
+    for (const key of scope.memos.keys()) if (key.startsWith(prefix)) scope.memos.delete(key);
   }
 
   static async read(root: string, expressions: string[], mode: Request["mode"] = "contents") {

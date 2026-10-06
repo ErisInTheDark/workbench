@@ -5,9 +5,9 @@
  * - GitCommitIdentity/GitCommitBatch/GitBlobBatch: parsed metadata and per-object batch results.
  * - GIT_STATE_GENERATION_REF: per-worktree mutation generation ref.
  * Notable members: normalizeCommitActor lets Git canonicalise actor dates; listFirstParentRange expands `base..tip`;
- * writeTreeWithPathSources swaps several sources' paths through one temporary index; allAncestors checks containment in one walk;
- * worktree snapshots seed temporary indexes from the real index so only changed files are re-hashed;
- * listRefsContaining finds refs holding a commit in one walk.
+ * object writes, tree-to-tree path changes and writeTreeWithPathSources run in-process (GitObjectWriter/GitTreeObjects);
+ * allAncestors checks containment in one walk; worktree snapshots seed temporary indexes from the real index so only
+ * changed files are re-hashed, and scoped worktree reads pass literal pathspecs; listRefsContaining finds refs holding a commit in one walk.
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -17,6 +17,8 @@ import { promisify } from "node:util";
 
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import GitObjectReadSession from "./GitObjectReadSession";
+import GitObjectWriter from "./GitObjectWriter";
+import GitTreeObjects, { type GitTreeEdit } from "./GitTreeObjects";
 import parseGitFileChangeOutput from "./git-file-change-output";
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 
@@ -28,6 +30,10 @@ export const GIT_STATE_GENERATION_REF = "refs/worktree/workbench/state-generatio
 
 /** Each worktree's real index path never moves, so resolve it once per root. */
 const realIndexPaths = new Map<string, Promise<string>>();
+/** A directory's repository root only changes if the repository is removed, which `open` re-checks on every hit. */
+const repositoryRoots = new Map<string, string>();
+// Windows command lines cap near 32k characters; larger pathspec sets fall back to listing everything and filtering.
+const PATHSPEC_ARGUMENT_BUDGET = 16_000;
 
 function realIndexPath(repository: WorkbenchGitRepository) {
   let resolved = realIndexPaths.get(repository.root);
@@ -120,6 +126,21 @@ function isWithinRoot(candidatePath: string, rootPath: string, platform: NodeJS.
   return candidate === root || candidate.startsWith(`${root}/`);
 }
 
+function comparablePath(value: string) {
+  const normalized = path.resolve(value).replace(/\\/g, "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+async function gitDirectoryExists(root: string) {
+  try {
+    await fs.stat(path.join(root, ".git"));
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 function parseNullPaths(output: string) {
   return output.split("\0").filter(Boolean);
 }
@@ -184,9 +205,15 @@ export default class WorkbenchGitRepository {
   }
 
   static async open(cwd: string) {
+    const key = path.resolve(cwd);
+    const cached = repositoryRoots.get(key);
+    if (cached && await gitDirectoryExists(cached)) return new WorkbenchGitRepository(cached);
     const repoRoot = (await WorkbenchGitRepository.runAt(cwd, ["rev-parse", "--show-toplevel"])).trim();
     if (!repoRoot) throw new Error("Unable to find Git repository root.");
-    return new WorkbenchGitRepository(path.resolve(repoRoot));
+    const root = path.resolve(repoRoot);
+    // Only roots themselves are cached: a subdirectory could later become a nested repository of its own.
+    if (comparablePath(root) === comparablePath(key)) repositoryRoots.set(key, root);
+    return new WorkbenchGitRepository(root);
   }
 
   private static async runAt(
@@ -207,9 +234,13 @@ export default class WorkbenchGitRepository {
   }
 
   readonly root: string;
+  private readonly objects: GitObjectWriter;
+  private readonly trees: GitTreeObjects;
 
   constructor(repoRoot: string, private readonly platform: NodeJS.Platform = process.platform) {
     this.root = path.resolve(repoRoot);
+    this.objects = new GitObjectWriter(this.root);
+    this.trees = new GitTreeObjects(this.root, this.objects);
   }
 
   async run(args: string[], env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal) {
@@ -353,15 +384,18 @@ export default class WorkbenchGitRepository {
 
   private async contentBase(treeish: string | null): Promise<string> {
     if (treeish === "HEAD") return await this.contentBase(await this.headOrNull());
-    return treeish ?? (await this.runWithInput(["mktree"], "")).trim();
+    return treeish ?? await this.trees.emptyTree();
   }
 
   async symbolicHead() {
-    try {
-      return (await this.run(["symbolic-ref", "-q", "HEAD"])).trim() || null;
-    } catch {
-      return null;
-    }
+    // Arc operations move HEAD along its branch but never switch branches, so one read serves the operation.
+    return await GitObjectReadSession.memo(`head-name:${this.root}`, async () => {
+      try {
+        return (await this.run(["symbolic-ref", "-q", "HEAD"])).trim() || null;
+      } catch {
+        return null;
+      }
+    });
   }
 
   async resolveCommit(commit: string) {
@@ -490,16 +524,14 @@ export default class WorkbenchGitRepository {
     return output.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
   }
 
+  /** The object a ref names, or null when it is absent (a ref naming a missing object reads as absent too). */
   async readRef(ref: string) {
-    try {
-      return (await this.run(["rev-parse", "--verify", ref])).trim() || null;
-    } catch {
-      return null;
-    }
+    const [object] = await GitObjectReadSession.read(this.root, [ref], "info");
+    return object?.objectId ?? null;
   }
 
   async writeBlob(contents: string) {
-    return (await this.runWithInput(["hash-object", "-w", "--stdin"], contents)).trim();
+    return await this.objects.writeObject("blob", Buffer.from(contents, "utf8"));
   }
 
   async readBlob(blob: string) {
@@ -509,11 +541,19 @@ export default class WorkbenchGitRepository {
   }
 
   async updateRef(ref: string, newValue: string, oldValue?: string) {
-    await this.run(["update-ref", ref, newValue, ...(oldValue !== undefined ? [oldValue] : [])]);
+    try {
+      await this.run(["update-ref", ref, newValue, ...(oldValue !== undefined ? [oldValue] : [])]);
+    } finally {
+      GitObjectReadSession.forget(this.refMemoPrefix());
+    }
   }
 
   async deleteRef(ref: string, oldValue?: string) {
-    await this.run(["update-ref", "-d", ref, ...(oldValue !== undefined ? [oldValue] : [])]);
+    try {
+      await this.run(["update-ref", "-d", ref, ...(oldValue !== undefined ? [oldValue] : [])]);
+    } finally {
+      GitObjectReadSession.forget(this.refMemoPrefix());
+    }
   }
 
   async updateRefs(
@@ -541,7 +581,17 @@ export default class WorkbenchGitRepository {
       lines.push(`update ${GIT_STATE_GENERATION_REF} ${generationValue}${expected}`);
     }
     lines.push("prepare", "commit", "");
-    await this.runWithInput(["update-ref", "--stdin"], lines.join("\n"));
+    try {
+      await this.runWithInput(["update-ref", "--stdin"], lines.join("\n"));
+    } finally {
+      // Even a rejected transaction may race other writers, so ref-derived memos never outlive a publication attempt.
+      GitObjectReadSession.forget(this.refMemoPrefix());
+    }
+  }
+
+  /** Memo keys for facts derived from this repository's refs; ref publication invalidates them. */
+  refMemoPrefix() {
+    return `refs:${this.root}:`;
   }
 
   async withTemporaryIndex<T>(callback: (indexPath: string, directory: string) => Promise<T>) {
@@ -584,12 +634,8 @@ export default class WorkbenchGitRepository {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       await this.seedTemporaryIndex(indexPath, baseTreeish, env, signal);
-      const transcriptIsIgnored = await this.succeeds([
-        "check-ignore", "-q", "--no-index", ".workbench/transcripts",
-      ]);
-      await this.run([
-        "add", "-A", "--", ".", ...(transcriptIsIgnored ? [] : [WORKBENCH_TRANSCRIPT_EXCLUSION]),
-      ], env, signal);
+      // Excluding transcripts is a no-op where they are already ignored, so no ignore probe is needed first.
+      await this.run(["add", "-A", "--", ".", WORKBENCH_TRANSCRIPT_EXCLUSION], env, signal);
       return (await this.run(["write-tree"], env, signal)).trim();
     });
   }
@@ -608,9 +654,16 @@ export default class WorkbenchGitRepository {
     signal?: AbortSignal,
   ) {
     const candidates = [...new Set(parseNullPaths(await this.run([
-      "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+      "ls-files", "-z", "--cached", "--others", "--exclude-standard", ...this.scopePathspecs(scopes),
     ], env, signal)))].sort((left, right) => left.localeCompare(right));
     return filterPathsByScopes(candidates, scopes);
+  }
+
+  /** Literal pathspecs that let Git walk only the selected scopes; none (walk everything, then filter) when too many. */
+  private scopePathspecs(scopes: readonly string[]) {
+    if (!scopes.length || scopes.includes(".")) return [];
+    const pathspecs = scopes.map(scope => this.literalPathspec(scope));
+    return pathspecs.reduce((total, pathspec) => total + pathspec.length + 1, 0) > PATHSPEC_ARGUMENT_BUDGET ? [] : ["--", ...pathspecs];
   }
 
   async listWorktreeChangedPaths(
@@ -621,9 +674,10 @@ export default class WorkbenchGitRepository {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       await this.run(["read-tree", await this.contentBase(baseTreeish)], env, signal);
+      const pathspecs = this.scopePathspecs(scopes);
       const [tracked, untracked] = await Promise.all([
-        this.run(["diff", "--name-only", "-z", "--no-renames", "--"], env, signal),
-        this.run(["ls-files", "-z", "--others", "--exclude-standard", "--"], env, signal),
+        this.run(["diff", "--name-only", "-z", "--no-renames", ...pathspecs.length ? pathspecs : ["--"]], env, signal),
+        this.run(["ls-files", "-z", "--others", "--exclude-standard", ...pathspecs.length ? pathspecs : ["--"]], env, signal),
       ]);
       const changedPaths = [...new Set([...parseNullPaths(tracked), ...parseNullPaths(untracked)])]
         .sort((left, right) => left.localeCompare(right));
@@ -658,26 +712,14 @@ export default class WorkbenchGitRepository {
       const base = await this.resolveTree(baseTreeish);
       const resolved = await Promise.all(sources.map(async ({ paths, source }) => {
         const tree = await this.resolveTree(source);
-        const allChangedPaths = base === tree ? [] : await this.listAllChangedPaths(base, tree);
-        return { allChangedPaths, changedPaths: filterPathsByScopes(allChangedPaths, paths), tree };
+        return { changedPaths: await this.listChangedPaths(base, tree, paths), tree };
       }));
-      const changedPaths = resolved.map(swap => swap.changedPaths);
-      const swaps = resolved.filter(swap => swap.changedPaths.length);
-      if (!swaps.length) return { changedPaths, tree: base };
-      const [only] = swaps;
-      if (swaps.length === 1 && only!.changedPaths.length === only!.allChangedPaths.length) return { changedPaths, tree: only!.tree };
-      const tree = await this.withTemporaryIndex(async (indexPath) => {
-        const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-        await this.run(["read-tree", base], env);
-        for (const swap of swaps) {
-          await this.runWithInput([
-            "restore", "--source", swap.tree, "--staged",
-            "--pathspec-from-file=-", "--pathspec-file-nul",
-          ], pathspecInput(swap.changedPaths), env);
-        }
-        return (await this.run(["write-tree"], env)).trim();
-      });
-      return { changedPaths, tree };
+      // Later sources win where selections overlap, as successive index swaps did.
+      const edits = new Map<string, GitTreeEdit>();
+      for (const swap of resolved) {
+        for (const [filePath, entry] of await this.trees.entriesAt(swap.tree, swap.changedPaths)) edits.set(filePath, entry);
+      }
+      return { changedPaths: resolved.map(swap => swap.changedPaths), tree: edits.size ? await this.trees.withEdits(base, edits) : base };
     });
   }
 
@@ -701,6 +743,8 @@ export default class WorkbenchGitRepository {
     identity?: Partial<Omit<GitCommitIdentity, "message" | "parents" | "signed" | "tree">>,
   ) {
     const parents = parent === null ? [] : Array.isArray(parent) ? parent : [parent];
+    const written = await GitObjectReadSession.run(async () => await this.objects.writeCommit(tree, parents, message, identity));
+    if (written) return written;
     const overrides = identity ? Object.fromEntries(Object.entries({
       GIT_AUTHOR_DATE: identity.authorDate,
       GIT_AUTHOR_EMAIL: identity.authorEmail,
@@ -799,7 +843,12 @@ export default class WorkbenchGitRepository {
     return commits.slice(targetIndex);
   }
 
+  /** Refs under the namespaces with their values and object types; shared within an operation until it publishes refs. */
   async listRefsWithValues(...namespaces: string[]) {
+    return [...await GitObjectReadSession.memo(`${this.refMemoPrefix()}list:${namespaces.join("\0")}`, () => this.readRefsWithValues(namespaces))];
+  }
+
+  private async readRefsWithValues(namespaces: readonly string[]) {
     const output = await this.runWithInput(
       ["for-each-ref", "--stdin", "--format=%(refname)%00%(objectname)"],
       namespaces.length ? `${namespaces.join("\n")}\n` : "",
@@ -810,26 +859,28 @@ export default class WorkbenchGitRepository {
     });
     const values = [...new Set(refs.map(({ value }) => value).filter(Boolean))];
     if (!values.length) return [];
-    const typeOutput = await this.runWithInput(
-      ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
-      `${values.join("\n")}\n`,
-    );
-    const types = new Map<string, string>();
-    for (const line of typeOutput.split(/\r?\n/u).filter(Boolean)) {
-      const match = /^([a-f0-9]+) (\S+)$/iu.exec(line);
-      if (match) types.set(match[1]!, match[2]!);
-    }
+    const objects = await GitObjectReadSession.read(this.root, values, "info");
+    const types = new Map(values.map((value, index) => [value, objects[index]?.type ?? "missing"]));
     return refs.map(({ ref, value }) => ({ objectType: types.get(value) ?? "missing", ref, value }));
   }
 
   async listChangedPaths(from: string | null, to: string | null, paths: string[], signal?: AbortSignal) {
-    return filterPathsByScopes(await this.listAllChangedPaths(from, to, signal), paths);
+    return await this.listTreeChanges(from, to, paths, signal);
   }
 
   async listAllChangedPaths(from: string | null, to: string | null, signal?: AbortSignal) {
-    return parseNullPaths(await this.run([
-      "diff", "--name-only", "-z", "--no-renames", await this.contentBase(from), await this.contentBase(to),
-    ], process.env, signal)).sort((left, right) => left.localeCompare(right));
+    return await this.listTreeChanges(from, to, [], signal);
+  }
+
+  /** Tree-to-tree changes, read in-process through the operation's object reader and pruned to `scopes`. */
+  private async listTreeChanges(from: string | null, to: string | null, scopes: readonly string[], signal?: AbortSignal) {
+    return await GitObjectReadSession.run(async () => {
+      const [fromTree, toTree] = await Promise.all([this.resolveTree(from), this.resolveTree(to)]);
+      signal?.throwIfAborted();
+      const changed = await this.trees.changedPaths(fromTree, toTree, scopes.includes(".") ? [] : scopes);
+      signal?.throwIfAborted();
+      return filterPathsByScopes(changed, scopes).sort((left, right) => left.localeCompare(right));
+    });
   }
 
   async listPathsModifiedSince(paths: readonly string[], modifiedSince: number) {
@@ -910,8 +961,11 @@ export default class WorkbenchGitRepository {
         || (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" && error.message.startsWith("stdout "))
       );
       if (!capacityExceeded) throw error;
-      // Combined output/arguments can overflow even when each selected file fits.
-      return await this.inspectFileChanges(from, to, await this.listChangedPaths(from, to, paths, signal), signal);
+      // Combined output/arguments can overflow even when each selected file fits; Git lists the paths to inspect singly.
+      const changedPaths = filterPathsByScopes(parseNullPaths(await this.run([
+        "diff", "--name-only", "-z", "--no-renames", from, to,
+      ], process.env, signal)), paths).sort((left, right) => left.localeCompare(right));
+      return await this.inspectFileChanges(from, to, changedPaths, signal);
     }
     const parsed = parseGitFileChangeOutput(output);
     if (parsed.kind === "changes") {
@@ -1004,10 +1058,10 @@ export default class WorkbenchGitRepository {
   }
 
   async remotes() {
-    return (await this.run(["remote"]))
+    return await GitObjectReadSession.memo(`remotes:${this.root}`, async () => (await this.run(["remote"]))
       .split(/\r?\n/u)
       .map((value) => value.trim())
-      .filter(Boolean);
+      .filter(Boolean));
   }
 
   async fetchRemotes() {

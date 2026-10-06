@@ -1,12 +1,13 @@
 /*
  * Exports:
- * - default GitCheckpointStore: own canonical writes and WB-first/provider-fallback checkpoint, outcome, history, and proposal reads.
+ * - default GitCheckpointStore: own canonical writes and WB-first/provider-fallback checkpoint, lineage, outcome, history, and proposal reads.
  * - GitArcProposalSummary: normalized proposal identity, status and commit message facts, read in bulk without diffs.
  * - GitArcProposalSummaryRequest: thread-qualified proposal summary selection.
  * - StoredCheckpoint: owned checkpoint identity, metadata, and nullable parent.
  * - StoredProposal: owned proposal identity, metadata, and tree.
  * - GitCheckpointMissingObjectError: preserve a requested checkpoint ref that Git cannot resolve.
  */
+import GitObjectReadSession from "./GitObjectReadSession";
 import WorkbenchGitRepository, { type GitCommitIdentity, type GitRefUpdate } from "./WorkbenchGitRepository";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
@@ -137,20 +138,54 @@ export default class GitCheckpointStore {
       : normalizeArcOutcome(outcome, await this.repository.currentHead());
   }
 
+  /**
+   * Every owned checkpoint by commit, from one ref listing and one batched commit read, shared until the operation next
+   * publishes refs. Checkpoint commits are immutable, so an unindexed one only falls back to readCheckpoint.
+   */
+  private async checkpointIndex(harness: GitArcHarness, threadId: string) {
+    const namespaces = await this.checkpointNamespaces(harness, threadId);
+    const { byCommit, commits } = await GitObjectReadSession.memo(`${this.repository.refMemoPrefix()}checkpoint-index:${namespaces.join("|")}`, async () => {
+      const refs = await this.repository.listRefsWithValues(...namespaces);
+      const byCommit = new Map<string, (typeof refs)[number]>();
+      for (const ref of refs) if (!byCommit.has(ref.value)) byCommit.set(ref.value, ref);
+      return { byCommit, commits: await this.repository.readCommits([...byCommit.keys()]) };
+    });
+    return {
+      commits: [...byCommit.keys()],
+      /** The checkpoint at `commit`, or null when the index cannot decode it (callers fall back to readCheckpoint). */
+      decode: (commit: string) => {
+        const entry = byCommit.get(normalizeCommit(commit));
+        const identity = entry && commits.commits.get(entry.value);
+        return entry && identity ? this.decodeCheckpoint(entry.value, entry.ref, identity) : null;
+      },
+    };
+  }
+
+  /** Whether `required` is `start` or one of the checkpoints it amends, at most 100 steps back. */
+  async lineageContains(harness: GitArcHarness, threadId: string, start: StoredCheckpoint, required: string) {
+    if (start.checkpointCommit === required) return true;
+    if (!start.metadata?.amendedFrom) return false;
+    const index = await this.checkpointIndex(harness, threadId);
+    let cursor = start;
+    for (let depth = 0; depth < 100; depth += 1) {
+      if (cursor.checkpointCommit === required) return true;
+      const parent = cursor.metadata?.amendedFrom;
+      if (!parent) return false;
+      // Aliases and unindexed entries keep readCheckpoint's resolution and ownership errors.
+      cursor = index.decode(parent) ?? await this.readCheckpoint(harness, threadId, parent);
+    }
+    return false;
+  }
+
   async readAcceptedOutcomes(harness: GitArcHarness, threadId: string, start: string | StoredCheckpoint) {
     let checkpoint = typeof start === "string" ? await this.readCheckpoint(harness, threadId, start) : start;
     if (!checkpoint.metadata?.amendedFrom || checkpoint.metadata.kind === "plan") {
       return (await this.readOutcome(harness, threadId, checkpoint.checkpointCommit))?.acceptedProposals ?? [];
     }
-    const refs = await this.repository.listRefsWithValues(...await this.checkpointNamespaces(harness, threadId));
-    const byCommit = new Map<string, (typeof refs)[number]>();
-    for (const ref of refs) if (!byCommit.has(ref.value)) byCommit.set(ref.value, ref);
-    const [commits, outcomes] = await Promise.all([
-      this.repository.readCommits([...byCommit.keys()]),
-      this.repository.readBlobs(gitArcThreadStorageIds(await this.identity(harness, threadId)).flatMap(id => (
-        [...new Set([checkpoint.checkpointCommit, ...byCommit.keys()])].map(commit => outcomeRef(harness, id, commit))
-      ))),
-    ]);
+    const index = await this.checkpointIndex(harness, threadId);
+    const outcomes = await this.repository.readBlobs(gitArcThreadStorageIds(await this.identity(harness, threadId)).flatMap(id => (
+      [...new Set([checkpoint.checkpointCommit, ...index.commits])].map(commit => outcomeRef(harness, id, commit))
+    )));
     while (true) {
       const outcomeRefs = gitArcThreadStorageIds(await this.identity(harness, threadId))
         .map(id => outcomeRef(harness, id, checkpoint.checkpointCommit));
@@ -164,14 +199,8 @@ export default class GitCheckpointStore {
       if (outcome?.acceptedProposals?.length) return outcome.acceptedProposals;
       const parent = checkpoint.metadata?.amendedFrom;
       if (!parent || checkpoint.metadata?.kind === "plan") return [];
-      const entry = byCommit.get(normalizeCommit(parent));
-      const identity = entry && commits.commits.get(entry.value);
-      if (!entry || !identity) {
-        // Preserve alias resolution and the existing ownership/missing-object errors.
-        checkpoint = await this.readCheckpoint(harness, threadId, parent);
-        continue;
-      }
-      checkpoint = this.decodeCheckpoint(entry.value, entry.ref, identity);
+      // Preserve alias resolution and the existing ownership/missing-object errors.
+      checkpoint = index.decode(parent) ?? await this.readCheckpoint(harness, threadId, parent);
     }
   }
 
