@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ProcessViewConnection: authenticated lifecycle controls and persisted log location.
- * - default WorkbenchProcessView: own detachable terminal input and explicit stop intent.
+ * - default WorkbenchProcessView: own detachable terminal input and explicit restart/stop intent.
  */
 import type { ReadStream } from "node:tty";
 import WorkbenchLogFollower from "../shared/process/WorkbenchLogFollower.ts";
@@ -9,7 +9,7 @@ import WorkbenchLogFollower from "../shared/process/WorkbenchLogFollower.ts";
 export interface ProcessViewConnection {
   logDirectory: string;
   logPrefix: "workbench-host" | "workbench-app";
-  stopDaemon(signal: AbortSignal): Promise<void>;
+  restartDaemon(signal: AbortSignal): Promise<void>;
   stopHost(): Promise<void>;
   emergencyStopHost(): Promise<void>;
   quitApp(): Promise<void>;
@@ -20,8 +20,8 @@ export default class WorkbenchProcessView {
   private closed = false;
   private release: (() => void) | null = null;
   private commands = Promise.resolve();
-  /** `stop-failed` arms the emergency halt: a stop that fails fast must never leave Ctrl+C retrying it forever. */
-  private stage: "daemon" | "stopping-daemon" | "host" | "stop-failed" | "emergency" = "daemon";
+  /** `stop-failed` arms the emergency halt: a restart or stop that fails fast must never leave Ctrl+C retrying it forever. */
+  private stage: "daemon" | "restarting-daemon" | "host" | "stop-failed" | "emergency" = "daemon";
   private stopAbort: AbortController | null = null;
   private readonly lifetime = new AbortController();
 
@@ -46,7 +46,7 @@ export default class WorkbenchProcessView {
       for (const key of bytes.toString()) {
         if (key === "q" || key === "Q") { this.detach(); continue; }
         if (key !== "\u0003" || this.closed) continue;
-        if (this.options.target === "daemon" && (this.stage === "stopping-daemon" || this.stage === "stop-failed")) {
+        if (this.options.target === "daemon" && (this.stage === "restarting-daemon" || this.stage === "stop-failed")) {
           this.stage = "emergency";
           this.stopAbort?.abort(new Error("Viewer escalated to emergency host halt."));
           void connection.emergencyStopHost().then(() => this.detach(), error => {
@@ -56,7 +56,7 @@ export default class WorkbenchProcessView {
         }
         if (this.options.target === "daemon" && this.stage === "emergency") continue;
         if (this.options.target === "daemon" && this.stage === "daemon") {
-          this.stage = "stopping-daemon";
+          this.stage = "restarting-daemon";
           this.stopAbort = new AbortController();
         }
         this.commands = this.commands.then(async () => {
@@ -64,19 +64,19 @@ export default class WorkbenchProcessView {
           if (this.options.target !== "daemon") {
             await connection.quitApp();
             this.detach();
-          } else if (this.stage === "stopping-daemon") {
-            await connection.stopDaemon(this.stopAbort!.signal);
-            if (this.closed || this.stage !== "stopping-daemon") return;
+          } else if (this.stage === "restarting-daemon") {
+            await connection.restartDaemon(this.stopAbort!.signal);
+            if (this.closed || this.stage !== "restarting-daemon") return;
             this.stage = "host";
             this.stopAbort = null;
-            await this.options.write("\nDaemon stopped. Ctrl+C again stops the host; q detaches.\n");
+            await this.options.write("\nDaemon restarting. Ctrl+C again stops the host; q detaches.\n");
           } else if (this.stage === "host") {
             await connection.stopHost();
             this.detach();
           }
         }).catch(error => {
           if (this.closed || this.stage === "emergency") return;
-          const message = `Stop failed: ${error instanceof Error ? error.message : String(error)}`;
+          const message = `${this.stage === "restarting-daemon" ? "Restart" : "Stop"} failed: ${error instanceof Error ? error.message : String(error)}`;
           if (this.options.target === "daemon") {
             this.stage = "stop-failed";
             this.stopAbort = null;
@@ -96,7 +96,7 @@ export default class WorkbenchProcessView {
       });
       await follower.start();
       await this.options.write(this.options.input.isTTY
-        ? `\nViewing ${this.options.target}. Ctrl+C ${this.options.target === "daemon" ? "stops the daemon, then the host" : "quits the app and tray"}; q detaches.\n`
+        ? `\nViewing ${this.options.target}. Ctrl+C ${this.options.target === "daemon" ? "restarts the daemon, then stops the host" : "quits the app and tray"}; q detaches.\n`
         : "\nViewing logs without interactive controls. Terminating this view leaves the process running.\n");
       if (this.options.input.isTTY) {
         this.options.input.setRawMode(true);

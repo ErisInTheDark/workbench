@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchDaemonHostOptions: owned child, supervision and observation boundaries.
- * - default WorkbenchDaemonHost: own daemon child startup, endpoint readiness, logs, health recovery, restart and shutdown.
+ * - default WorkbenchDaemonHost: own daemon child startup, endpoint readiness, logs, health recovery, in-place restart and shutdown.
  * Local mechanics:
  * - RunnerLog writes one plain formatted stream to terminal and the active file.
  * - WakeSignal wakes a pending watchdog wait when child output changes lifecycle truth.
@@ -193,6 +193,8 @@ export default class WorkbenchDaemonHost {
   private retirement: Promise<void> | null = null;
   private activeLog: RunnerLog | null = null;
   private stopping = false;
+  /** Set while an in-place restart retires the current child; supervision then spawns its replacement. */
+  private restartReason: string | null = null;
   private lifecycle: DaemonLifecycle = { state: "sleeping" };
   private runTask: Promise<void> | null = null;
   private stopTask: Promise<void> | null = null;
@@ -260,18 +262,53 @@ export default class WorkbenchDaemonHost {
       this.lifecycle = { state: "sleeping" };
     }
     if (this.lifecycle.state === "failed") return Promise.reject(this.lifecycle.error);
-    let resolve!: (endpoint: WorkbenchDaemonEndpoint) => void;
-    let reject!: (error: Error) => void;
-    const promise = new Promise<WorkbenchDaemonEndpoint>((accept, fail) => { resolve = accept; reject = fail; });
-    const ready = { promise, resolve, reject };
-    this.lifecycle = { state: "starting", ready };
-    this.publish();
+    const ready = this.beginStarting();
     void this.run().catch(error => {
       // run records and publishes lifecycle failure; this boundary owns diagnostics
       // for callers that already received readiness before supervision failed.
       this.directLogger.error("host", `supervision failed: ${error instanceof Error ? error.message.slice(0, 512) : "unknown failure"}`);
     });
     return ready.promise;
+  }
+
+  /**
+   * Replace the running daemon in place. It never passes through `stopped` or failure: callers needing the daemon
+   * wait for the replacement's readiness, and the host is not replaced. Resolves once the old child is retired.
+   */
+  async restart(reason: string) {
+    if (this.stopping || this.stopTask) throw new Error("The daemon host is stopping.");
+    if (this.sleepTransition) throw new Error("The daemon is going to sleep; wake it instead of restarting it.");
+    if (this.lifecycle.state === "failed") throw this.lifecycle.error;
+    if (!this.runTask || !this.activeChild) {
+      // Nothing is running yet: starting (or the start already under way) is the restart.
+      void this.wake().catch(() => undefined); // run() owns and reports start failures.
+      return;
+    }
+    this.restartReason = reason.slice(0, 200);
+    // Before the kill, so nobody is handed the retiring child's endpoint.
+    this.beginStarting();
+    try {
+      await this.retireChild();
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      this.restartReason = null;
+      // A daemon that resists its kill is handled like one resisting shutdown: crash-unit replacement ends its tree.
+      await this.fail(failure, false);
+      this.options.requestRestart?.();
+      throw failure;
+    }
+  }
+
+  /** Enter `starting`, keeping an existing start's waiters so they receive the next readiness. */
+  private beginStarting() {
+    if (this.lifecycle.state === "starting") return this.lifecycle.ready;
+    let resolve!: (endpoint: WorkbenchDaemonEndpoint) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<WorkbenchDaemonEndpoint>((accept, fail) => { resolve = accept; reject = fail; });
+    const ready = { promise, resolve, reject };
+    this.lifecycle = { state: "starting", ready };
+    this.publish();
+    return ready;
   }
 
   run({ dryRun = false }: { dryRun?: boolean } = {}) {
@@ -304,7 +341,13 @@ export default class WorkbenchDaemonHost {
       if (this.stopping) return;
       this.logConfiguration(log);
       log.line("host", `logging complete daemon output to: ${logFilePath}`);
-      const result = await this.runChild(log);
+      let result = await this.runChild(log);
+      while (this.restartReason !== null && !this.stopping) {
+        log.line("host", `restarting the daemon (${this.restartReason}).`);
+        this.restartReason = null;
+        this.beginStarting();
+        result = await this.runChild(log);
+      }
       if (this.stopping) return;
       if (this.sleepTransition?.accepted && result.exitCode === 0 && !result.error) {
         await this.options.onSleep?.();
@@ -342,6 +385,7 @@ export default class WorkbenchDaemonHost {
     if (this.stopping) return this.lifecycle.state === "failed"
       ? Promise.reject(this.lifecycle.error) : Promise.resolve();
     this.stopping = true;
+    this.restartReason = null;
     if (this.lifecycle.state === "starting") this.lifecycle.ready.reject(new Error(reason));
     this.lifecycle = { state: "stopped" };
     this.publish();

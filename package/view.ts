@@ -66,7 +66,7 @@ async function appConnection(lifetime: AbortSignal): Promise<ProcessViewConnecti
   watcher.on("error", error => warn(`App observation failed: ${error.message}`));
   return {
     logDirectory: info.logDirectory, logPrefix: info.logPrefix,
-    stopDaemon: async () => { throw new Error("This is an app view."); },
+    restartDaemon: async () => { throw new Error("This is an app view."); },
     stopHost: async () => { throw new Error("This is an app view."); },
     emergencyStopHost: async () => { throw new Error("This is an app view."); },
     quitApp: async () => {
@@ -104,7 +104,7 @@ async function daemonConnection(signal: AbortSignal): Promise<ProcessViewConnect
     });
     return {
       logDirectory: info.logDirectory, logPrefix: info.logPrefix,
-      stopDaemon: async (requestSignal) => { await client.request({ method: "service/daemon/stop", instanceId: info.instanceId }, requestSignal); },
+      restartDaemon: async (requestSignal) => { await client.request({ method: "service/daemon/restart", instanceId: info.instanceId }, requestSignal); },
       stopHost: async () => { await client.request({ method: "service/stop", instanceId: info.instanceId }); },
       emergencyStopHost: async () => { await client.request({ method: "service/emergency/stop", instanceId: info.instanceId }); },
       quitApp: async () => { throw new Error("This is a daemon view."); },

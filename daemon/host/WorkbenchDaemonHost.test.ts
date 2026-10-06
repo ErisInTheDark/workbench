@@ -210,6 +210,37 @@ test("an intentional stop retires the daemon without recovery and allows an expl
   assert.equal(children.length, 2);
 });
 
+test("an in-place restart replaces the daemon without stopping, failing or replacing the host", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-restart-");
+  const clock = new FakeClock();
+  const children: ChildProcess[] = [];
+  const states: string[] = [];
+  let spawned = event();
+  const host = new WorkbenchDaemonHost({
+    projectRootPath: temporary.path, environment: {}, now: clock.now, sleep: clock.sleep,
+    loggerFactory: () => fakeLog([]),
+    spawnDaemon: () => { const child = fakeChild(); children.push(child); spawned.resolve(); return child; },
+    terminateChild: async child => { if (child.exitCode === null) child.emit("exit", 1, null); },
+    onFailure: () => assert.fail("A requested restart is not a daemon failure."),
+    requestRestart: () => assert.fail("A requested restart keeps the host."),
+  });
+  context.after(async () => { await host.stop(); await temporary.dispose(); });
+  host.subscribe(() => states.push(host.snapshot().state));
+  const first = host.wake();
+  await spawned.promise; reportReady(children[0]!); await first;
+  spawned = event();
+  await host.restart("viewer");
+  assert.equal(children[0]!.exitCode, 1);
+  // Callers arriving during the gap wait for the replacement instead of seeing a stopped daemon.
+  const waiting = host.wake();
+  await spawned.promise;
+  assert.equal(children.length, 2);
+  reportReady(children[1]!);
+  assert.equal((await waiting).origin, "http://127.0.0.1:32123");
+  assert.equal(host.snapshot().state, "ready");
+  assert.ok(!states.includes("stopped") && !states.includes("failed"), states.join(","));
+});
+
 test("unexpected supervision failure retires its owned child before rejecting", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-wake-failure-");
   const root = temporary.path;

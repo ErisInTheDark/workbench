@@ -30,7 +30,7 @@ function fixture(target: "app" | "daemon" | "all") {
     createFollower: () => ({ start: async () => {}, close: async () => { calls.push("unfollow"); } }),
     connect: async () => ({
       logDirectory: "/unused", logPrefix: target === "app" ? "workbench-app" : "workbench-host",
-      stopDaemon: async () => { calls.push("daemon"); daemonStopped.resolve(); },
+      restartDaemon: async () => { calls.push("daemon"); daemonStopped.resolve(); },
       stopHost: async () => { calls.push("host"); },
       emergencyStopHost: async () => { calls.push("emergency"); },
       quitApp: async () => { calls.push("app"); },
@@ -56,7 +56,7 @@ test("q, terminal EOF and external detachment never stop the viewed process", as
   }
 });
 
-test("daemon Ctrl+C requests ordered daemon then host shutdown", async () => {
+test("daemon Ctrl+C restarts the daemon, then stops the host", async () => {
   const f = fixture("daemon");
   const running = f.view.run();
   await f.attached.promise;
@@ -71,7 +71,7 @@ test("daemon Ctrl+C requests ordered daemon then host shutdown", async () => {
   assert.equal(f.input.isRaw, false);
 });
 
-test("a second Ctrl+C bypasses a pending daemon stop instead of joining its queue", async () => {
+test("a second Ctrl+C bypasses a pending daemon restart instead of joining its queue", async () => {
   const input = new Terminal();
   const attached = event();
   const started = event();
@@ -85,7 +85,7 @@ test("a second Ctrl+C bypasses a pending daemon stop instead of joining its queu
     createFollower: () => ({ start: async () => {}, close: async () => {} }),
     connect: async () => ({
       logDirectory: "/unused", logPrefix: "workbench-host",
-      stopDaemon: async () => { calls.push("daemon"); started.resolve(); await pending; },
+      restartDaemon: async () => { calls.push("daemon"); started.resolve(); await pending; },
       stopHost: async () => { calls.push("host"); },
       emergencyStopHost: async () => { calls.push("emergency"); },
       quitApp: async () => {},
@@ -108,7 +108,7 @@ test("a second Ctrl+C bypasses a pending daemon stop instead of joining its queu
   }
 });
 
-test("a daemon stop that fails arms the emergency halt for the next Ctrl+C", async () => {
+test("a daemon restart that fails arms the emergency halt for the next Ctrl+C", async () => {
   const input = new Terminal();
   const attached = event();
   const failed = event();
@@ -121,7 +121,7 @@ test("a daemon stop that fails arms the emergency halt for the next Ctrl+C", asy
     createFollower: () => ({ start: async () => {}, close: async () => {} }),
     connect: async () => ({
       logDirectory: "/unused", logPrefix: "workbench-host",
-      stopDaemon: async () => { calls.push("daemon"); throw new Error("daemon unreachable"); },
+      restartDaemon: async () => { calls.push("daemon"); throw new Error("daemon unreachable"); },
       stopHost: async () => { calls.push("host"); },
       emergencyStopHost: async () => { calls.push("emergency"); },
       quitApp: async () => {},
@@ -139,7 +139,7 @@ test("a daemon stop that fails arms the emergency halt for the next Ctrl+C", asy
   assert.deepEqual(calls, ["daemon", "emergency"]);
 });
 
-test("q cancels a pending viewer wait without pretending to undo an admitted stop", async () => {
+test("q cancels a pending viewer wait without pretending to undo an admitted restart", async () => {
   const input = new Terminal();
   const attached = event();
   const started = event();
@@ -153,7 +153,7 @@ test("q cancels a pending viewer wait without pretending to undo an admitted sto
     createFollower: () => ({ start: async () => {}, close: async () => {} }),
     connect: async () => ({
       logDirectory: "/unused", logPrefix: "workbench-host",
-      stopDaemon: async (signal?: AbortSignal) => {
+      restartDaemon: async (signal?: AbortSignal) => {
         started.resolve();
         signal?.addEventListener("abort", () => { cancelled = true; }, { once: true });
         await pending;

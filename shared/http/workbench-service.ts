@@ -46,7 +46,7 @@ const caller = z.object({
 export const WorkbenchServiceRequestSchema = z.discriminatedUnion("method", [
   z.object({ id, method: z.literal("service/status/read") }).strict(),
   z.object({ id, method: z.literal("service/process/read") }).strict(),
-  z.object({ id, method: z.literal("service/daemon/stop"), instanceId: z.uuid() }).strict(),
+  z.object({ id, method: z.literal("service/daemon/restart"), instanceId: z.uuid() }).strict(),
   z.object({ id, method: z.literal("service/stop"), instanceId: z.uuid() }).strict(),
   z.object({ id, method: z.literal("service/emergency/stop"), instanceId: z.uuid() }).strict(),
   z.object({ id, method: z.literal("service/app/register"), registration: WorkbenchServiceRegistrationSchema }).strict(),

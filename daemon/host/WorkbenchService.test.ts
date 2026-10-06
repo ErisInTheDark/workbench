@@ -132,8 +132,8 @@ test("cold service reads and app detach preserve durable identity without waking
   let release!: () => void;
   const stopEntered = new Promise<void>(resolve => { entered = resolve; });
   const held = new Promise<void>(resolve => { release = resolve; });
-  context.mock.method(activeDaemon!, "stop", async () => { entered(); await held; });
-  const normalStop = client.request({ method: "service/daemon/stop", instanceId: first.endpoint.instanceId });
+  context.mock.method(activeDaemon!, "restart", async () => { entered(); await held; });
+  const viewerRestart = client.request({ method: "service/daemon/restart", instanceId: first.endpoint.instanceId });
   await stopEntered;
   await assert.rejects(client.request({
     method: "service/emergency/stop", instanceId: "00000000-0000-4000-8000-000000000000",
@@ -142,14 +142,14 @@ test("cold service reads and app detach preserve durable identity without waking
   await client.request({ method: "service/emergency/stop", instanceId: first.endpoint.instanceId });
   assert.equal(emergencyStops, 1);
   release();
-  await normalStop;
+  await viewerRestart;
   assert.equal(first.service.identity().state, "sleeping");
   // A verified daemon this host does not own must never block stopping the host itself.
   const { standalone } = first.service as unknown as { standalone: WorkbenchLocalDaemon };
   context.mock.method(standalone, "getSnapshot", () => ({ failure: null, endpoint: {
     version: 1, instanceId: "6e1a6f64-af71-4639-b997-65d8f314b352", pid: 4242, origin: "http://127.0.0.1:32124",
   } }));
-  await assert.rejects(client.request({ method: "service/daemon/stop", instanceId: first.endpoint.instanceId }), /pid 4242/u);
+  await assert.rejects(client.request({ method: "service/daemon/restart", instanceId: first.endpoint.instanceId }), /pid 4242/u);
   warnings.length = 0;
   await client.request({ method: "service/stop", instanceId: first.endpoint.instanceId });
   await shutdownRequested;
