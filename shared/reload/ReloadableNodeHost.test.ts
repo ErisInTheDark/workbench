@@ -364,6 +364,43 @@ test("a live node's build keeps no replaced sibling reachable", async () => {
   } finally { await host.dispose(); }
 });
 
+test("a stalled startup step names its node and phase once, then reports when it finishes", async () => {
+  const errors: string[] = [];
+  const stall = deferred();
+  const released = deferred();
+  const graph = () => defineReloadableNodeGraph([ReloadableNode.define<object, { value: number }, never>()({
+    access: "agent", children: [], requires: [], provides: ["value"], scope: "server:value",
+    lifecycle: "atomic", safeAll: true, description: "fixture",
+    create: () => ({
+      registrations: { value: 1 },
+      async start(reportPhase) { reportPhase?.("opening the store"); await released.promise; },
+      dispose() {},
+    }),
+  })]);
+  const host = new ReloadableNodeHost({}, { load: graph, reload: graph }, {
+    topologyScope: "server:topology",
+    logError: message => errors.push(message),
+    // Only the first startup step (start) stalls; activation finishes before its report delay.
+    createRuntimeDrainDeadline: () => ({ cancel() {}, expired: deadlines++ === 0 ? stall.promise : new Promise<void>(() => {}) }),
+  });
+  let deadlines = 0;
+  const starting = host.start();
+  try {
+    stall.resolve();
+    await new Promise<void>(resolve => { setImmediate(resolve); });
+    assert.equal(errors.length, 1);
+    assert.match(errors[0]!, /still waiting on server:value: start \(opening the store\)/u);
+    released.resolve();
+    await starting;
+    assert.equal(errors.length, 2);
+    assert.match(errors[1]!, /finished server:value: start/u);
+  } finally {
+    released.resolve();
+    await starting;
+    await host.dispose();
+  }
+});
+
 test("the retention warning names operations still running on retired nodes", async () => {
   const errors: string[] = [];
   const graph = () => defineReloadableNodeGraph([ReloadableNode.define<object, { value: number }, never>()({

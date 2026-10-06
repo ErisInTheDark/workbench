@@ -2,7 +2,7 @@
  * Exports:
  * - ReloadableNodeModuleLoader: load fresh parent-owned graph definitions.
  * - ReloadableNodeHostOptions: process-owned deadline, clock, logging, and swap ports.
- * - default ReloadableNodeHost: validate topology, lease dependencies, replace node closures with parent-only build views, and report retired generations that stay reachable with the work still holding them.
+ * - default ReloadableNodeHost: validate topology, lease dependencies, replace node closures with parent-only build views, name startup steps that stall, and report retired generations that stay reachable with the work still holding them.
  */
 import { createGitignoreMatcher, type GitignoreMatcher } from "../source-pattern-matcher.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -100,6 +100,7 @@ interface Retirement<TContext, TFeatures extends object, TNotification> {
 }
 
 const DEFAULT_RUNTIME_DRAIN_TIMEOUT_MS = 30_000;
+const STARTUP_STALL_REPORT_MS = 30_000;
 function formatDuration(ms: number) {
   const seconds = Math.floor(ms / 1_000);
   if (seconds < 60) return `${seconds}s`;
@@ -350,18 +351,42 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         this.assertAcceptingWork();
         const node = this.requireNode(nodeId);
         started.push(node);
-        await node.instance.start(undefined, node.startController.signal);
+        await this.reportSlowStartup(`${node.definition.id}: start`, reportPhase => node.instance.start(reportPhase, node.startController.signal));
         node.startController.signal.throwIfAborted();
       }
       for (const node of started) {
         this.assertAcceptingWork();
-        await node.instance.activate?.();
+        await this.reportSlowStartup(`${node.definition.id}: activate`, () => node.instance.activate?.());
       }
       this.assertAcceptingWork();
       this.started = true;
       for (const node of started) node.instance.afterCommit?.();
     } catch (error) {
       await this.disposeNodesAfterFailure([...started].reverse(), error, "Feature graph startup and cleanup both failed.");
+    }
+  }
+
+  /**
+   * Startup has no deadline: late completion is still correct. A step still running after the report delay names
+   * itself and its latest phase once, so a stalled process start says where it is stuck.
+   */
+  private async reportSlowStartup<T>(label: string, operation: (reportPhase: (phase: string) => void) => Promise<T> | T) {
+    const startedAt = this.now();
+    let phase: string | null = null;
+    let finished = false;
+    let reported = false;
+    const deadline = this.createDeadline(STARTUP_STALL_REPORT_MS);
+    void deadline.expired.then(() => {
+      if (finished) return;
+      reported = true;
+      this.logError(`Feature graph startup is still waiting on ${label}${phase ? ` (${phase})` : ""} after ${formatDuration(this.now() - startedAt)}.`);
+    });
+    try {
+      return await operation((detail) => { phase = boundedLabel(detail); });
+    } finally {
+      finished = true;
+      deadline.cancel();
+      if (reported) this.logError(`Feature graph startup finished ${label} after ${formatDuration(this.now() - startedAt)}.`);
     }
   }
 
