@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own normal-flow end snapping and off-screen layout preservation.
+ * - default ThreadScrollViewport: own normal-flow end snapping, measured-window stability, and off-screen layout preservation.
  * - ThreadScrollViewportEnd: register the committed end of the nearest scroll viewport.
  */
 "use client";
@@ -138,18 +138,18 @@ function ActiveThreadScrollViewport ({
     entryMotion: null,
     workedRunState: null,
     getViewport: () => viewportRef.current,
-    observeContent: (element, listener, range = "viewport") => {
+    observeContent: (element, listener, range = "viewport", preserveReadingPosition = false) => {
       const root = viewportRef.current;
       if (!root) return () => { };
       visibility.current ??= new ThreadViewportVisibilityController({
         root,
         intersection: (callback, observedRange, rootMarginPx) => new IntersectionObserver(callback, {
           root,
-          rootMargin: observedRange === "nearby" ? `${rootMarginPx}px 0px` : "0px",
+          rootMargin: observedRange === "viewport" ? "0px" : `${rootMarginPx}px 0px`,
         }),
         resize: callback => new ResizeObserver(callback),
       });
-      return visibility.current.observe(element, listener, range);
+      return visibility.current.observe(element, listener, range, preserveReadingPosition);
     },
     onBottomReattached: (listener) => {
       bottomListeners.current.add(listener);

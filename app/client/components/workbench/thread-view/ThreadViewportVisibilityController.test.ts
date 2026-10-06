@@ -86,6 +86,38 @@ test("offscreen placeholders retain measured height until visible content is mea
   assert.equal(disconnected, 4);
 });
 
+test("height corrections above the viewport preserve the visible reading position once", () => {
+  let resize: (entries: readonly { target: Element }[]) => void = () => {};
+  let targetRect = { bottom: 80, height: 120, top: -40 };
+  const root = {
+    getBoundingClientRect: () => ({ bottom: 740, height: 640, top: 100 }),
+    scrollTop: 1_000,
+  } as HTMLElement;
+  const target = { getBoundingClientRect: () => targetRect } as HTMLElement;
+  const states: Array<{ visible: boolean; height: number }> = [];
+  const observer = { observe: () => {}, unobserve: () => {}, disconnect: () => {} };
+  const owner = new ThreadViewportVisibilityController({
+    root,
+    intersection: () => observer,
+    resize: callback => { resize = callback; return observer; },
+  });
+  owner.observe(target, state => states.push(state), "approaching", true);
+
+  targetRect = { bottom: 140, height: 180, top: -40 };
+  resize([{ target }]);
+  assert.equal(root.scrollTop, 1_060);
+  assert.deepEqual(states.at(-1), { visible: true, height: 180 });
+
+  resize([{ target }]);
+  assert.equal(root.scrollTop, 1_060);
+
+  targetRect = { bottom: 370, height: 220, top: 150 };
+  resize([{ target }]);
+  assert.equal(root.scrollTop, 1_060);
+  assert.deepEqual(states.at(-1), { visible: true, height: 220 });
+  owner.dispose();
+});
+
 test("unmeasured content is not hidden using a fabricated height", () => {
   const intersections: Partial<Record<"approaching" | "nearby" | "viewport", (entries: readonly { target: Element; isIntersecting: boolean; boundingClientRect: { height: number } }[]) => void>> = {};
   const target = { getBoundingClientRect: () => ({ height: 0 }) } as HTMLElement;

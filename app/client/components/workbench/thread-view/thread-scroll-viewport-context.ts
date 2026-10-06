@@ -21,6 +21,7 @@ export interface ThreadScrollViewportContextValue {
     element: HTMLElement,
     listener: (state: ThreadContentVisibility) => void,
     range?: ThreadContentVisibilityRange,
+    preserveReadingPosition?: boolean,
   ) => () => void;
   readonly preserveOffscreenLayout: () => () => void;
   readonly setEndTarget: (target: HTMLElement | null) => void;

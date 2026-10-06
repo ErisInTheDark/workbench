@@ -1,4 +1,4 @@
-/* Exports: default ThreadViewportVisibilityController shares viewport observation and measured visibility.
+/* Exports: default ThreadViewportVisibilityController shares viewport observation, measured visibility, and window layout stability.
  * ThreadContentVisibility describes actual visibility and measured block height.
  * ThreadContentVisibilityRange selects exact, approaching, or nearby viewport observation.
  */
@@ -27,6 +27,8 @@ interface Observers {
 
 export default class ThreadViewportVisibilityController {
   private readonly entries = new Map<HTMLElement, {
+    contentBottom: number;
+    preserveReadingPosition: boolean;
     state: ThreadContentVisibility;
     notify: (state: ThreadContentVisibility) => void;
     range: ThreadContentVisibilityRange;
@@ -68,9 +70,14 @@ export default class ThreadViewportVisibilityController {
     target: HTMLElement,
     notify: (state: ThreadContentVisibility) => void,
     range: ThreadContentVisibilityRange = "viewport",
+    preserveReadingPosition = false,
   ) {
-    const state = { visible: true, height: target.getBoundingClientRect().height };
-    this.entries.set(target, { state, notify, range });
+    const targetRect = target.getBoundingClientRect();
+    const state = { visible: true, height: targetRect.height };
+    const contentBottom = preserveReadingPosition
+      ? targetRect.bottom - this.observers.root.getBoundingClientRect().top + this.observers.root.scrollTop
+      : 0;
+    this.entries.set(target, { contentBottom, preserveReadingPosition, state, notify, range });
     notify(state);
     this.intersectionFor(range).observe(target);
     this.resize.observe(target);
@@ -161,7 +168,28 @@ export default class ThreadViewportVisibilityController {
 
   private update(target: HTMLElement, state: ThreadContentVisibility) {
     const current = this.entries.get(target);
-    if (!current || (state.visible === current.state.visible && state.height === current.state.height)) return;
+    if (!current) return;
+    const targetRect = current.preserveReadingPosition ? target.getBoundingClientRect() : null;
+    const rootRect = targetRect ? this.observers.root.getBoundingClientRect() : null;
+    const contentBottom = targetRect && rootRect
+      ? targetRect.bottom - rootRect.top + this.observers.root.scrollTop
+      : current.contentBottom;
+    if (state.visible === current.state.visible && state.height === current.state.height) {
+      current.contentBottom = contentBottom;
+      return;
+    }
+    if (
+      current.preserveReadingPosition
+      && current.state.visible
+      && state.visible
+      && current.state.height > 0
+      && state.height > 0
+      && state.height !== current.state.height
+      && current.contentBottom <= this.observers.root.scrollTop
+    ) {
+      this.observers.root.scrollTop += state.height - current.state.height;
+    }
+    current.contentBottom = contentBottom;
     current.state = state;
     current.notify(state);
   }
