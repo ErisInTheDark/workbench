@@ -3,11 +3,12 @@
  * - GitArcClaimViewInput: owner and hold-own choice for a build view.
  * - default GitArcClaimViewController: write the worktree as one owner builds it (every other live owner's dirty claims at
  *   their arc baselines, swapped through one index) and mirror selected paths of a view into an ignored directory,
- *   rewriting only files whose content differs (stat-cached per directory).
+ *   rewriting only files whose content differs and removing only files its own record says it wrote.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import type { GitArcClaimView } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { type GitArcHarness, normalizeThreadId } from "workbench-shared/workbench/git/git-arc-storage";
@@ -25,24 +26,24 @@ export interface GitArcClaimViewInput {
   threadId: string;
 }
 
-interface MirroredFile {
+interface WantedFile {
   blob: string;
   mode: string;
 }
 
-interface MirroredStat {
-  blob: string;
-  mtimeMs: number;
-  size: number;
-}
+/**
+ * The mirror's record of files it wrote (or adopted as identical), so it never lists the directory: builds run inside
+ * mirrors and can leave millions of files there. A file whose size and mtime still match skips re-hashing.
+ */
+const MANIFEST_NAME = ".wb-arc-tree.json";
+const ManifestSchema = z.object({
+  version: z.literal(1),
+  files: z.record(z.string(), z.object({ blob: z.string(), mtimeMs: z.number(), size: z.number() })),
+});
+type MirroredStat = z.infer<typeof ManifestSchema>["files"][string];
 
 /** One mirror at a time per directory; parallel builds of one owner must not interleave writes. */
 const mirrorTails = new Map<string, Promise<void>>();
-/**
- * Blob ids of files this daemon generation wrote or hashed, per mirror directory. A file whose size and mtime still
- * match skips re-hashing; mirrors belong to Workbench, so an outside edit keeping both is not worth a full re-hash.
- */
-const mirrorStats = new Map<string, Map<string, MirroredStat>>();
 
 async function exclusive<T>(key: string, work: () => Promise<T>) {
   const prior = mirrorTails.get(key) ?? Promise.resolve();
@@ -77,6 +78,46 @@ async function realAncestor(target: string): Promise<string> {
 
 function blobId(contents: Buffer, algorithm: "sha1" | "sha256") {
   return createHash(algorithm).update(`blob ${contents.length}\0`).update(contents).digest("hex");
+}
+
+function errorCode(error: unknown) {
+  return error && typeof error === "object" && "code" in error ? String(error.code) : null;
+}
+
+async function lstatOrNull(file: string) {
+  try {
+    return await fs.lstat(file);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function readManifest(file: string) {
+  let text: string;
+  try {
+    text = await fs.readFile(file, "utf8");
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return new Map<string, MirroredStat>();
+    throw error;
+  }
+  let parsed: z.infer<typeof ManifestSchema>;
+  try {
+    parsed = ManifestSchema.parse(JSON.parse(text));
+  } catch {
+    throw new Error(`The mirror record ${file} is unreadable. Delete it and mirror again; identical files are re-adopted.`);
+  }
+  return new Map(Object.entries(parsed.files));
+}
+
+async function writeManifest(file: string, files: ReadonlyMap<string, MirroredStat>) {
+  if (!files.size) {
+    await fs.rm(file, { force: true });
+    return;
+  }
+  const temporary = `${file}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify({ version: 1, files: Object.fromEntries(files) }));
+  await fs.rename(temporary, file);
 }
 
 export default class GitArcClaimViewController {
@@ -127,7 +168,7 @@ export default class GitArcClaimViewController {
       const mirror = await this.resolveMirror(repository, input.into);
       const scopes = input.paths.length ? repository.normalizePaths(input.paths) : [];
       const key = process.platform === "win32" ? mirror.toLowerCase() : mirror;
-      return await exclusive(key, async () => await this.mirror(repository, input.tree, mirror, key, scopes));
+      return await exclusive(key, async () => await this.mirror(repository, input.tree, mirror, scopes));
     });
   }
 
@@ -151,13 +192,11 @@ export default class GitArcClaimViewController {
   }
 
   /**
-   * Make `directory` hold exactly the tree's files under `scopes`, leaving matching files (and their mtimes) alone.
-   * Files outside the scopes belong to other mirror calls and stay untouched.
+   * Make `directory` hold the tree's files under `scopes`, leaving matching files (and their mtimes) alone. Only files
+   * the mirror recorded writing are ever removed; anything else there (build output, other scopes' files) stays.
    */
-  private async mirror(repository: WorkbenchGitRepository, tree: string, directory: string, key: string, scopes: string[]) {
-    const stats = mirrorStats.get(key) ?? new Map<string, MirroredStat>();
-    mirrorStats.set(key, stats);
-    const wanted = new Map<string, MirroredFile>();
+  private async mirror(repository: WorkbenchGitRepository, tree: string, directory: string, scopes: string[]) {
+    const wanted = new Map<string, WantedFile>();
     const listing = await repository.run([
       "ls-tree", "-r", "-z", "--full-tree", tree, "--", ...scopes.map(scope => repository.literalPathspec(scope)),
     ]);
@@ -168,66 +207,83 @@ export default class GitArcClaimViewController {
       // Submodule commits have no file content to mirror.
       if (type === "blob" && mode && blob) wanted.set(record.slice(tab + 1), { blob, mode });
     }
+    if (wanted.has(MANIFEST_NAME)) throw new Error(`The view contains ${MANIFEST_NAME}, which mirrors reserve for their own record.`);
     const algorithm = tree.length === 64 ? "sha256" : "sha1";
     await fs.mkdir(directory, { recursive: true });
-    const present = (await fs.readdir(directory, { recursive: true, withFileTypes: true }))
-      .filter(entry => !entry.isDirectory())
-      .map(entry => path.relative(directory, path.join(entry.parentPath, entry.name)).replace(/\\/g, "/"))
-      .filter(relative => !scopes.length || scopes.some(scope => relative === scope || relative.startsWith(`${scope}/`)));
-    // Removals first, so a stale file never blocks a folder the view needs at its path.
-    let deleted = 0;
-    const currentBlob = async (relative: string) => {
-      const file = path.join(directory, relative);
-      const stat = await fs.lstat(file);
-      if (!stat.isFile()) return null;
-      const cached = stats.get(relative);
-      if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) return cached.blob;
-      const blob = blobId(await fs.readFile(file), algorithm);
-      stats.set(relative, { blob, mtimeMs: stat.mtimeMs, size: stat.size });
-      return blob;
+    const manifestPath = path.join(directory, MANIFEST_NAME);
+    const recorded = await readManifest(manifestPath);
+    const inScope = (relative: string) => !scopes.length || scopes.some(scope => relative === scope || relative.startsWith(`${scope}/`));
+    const inBatches = async <T>(items: readonly T[], work: (item: T) => Promise<void>) => {
+      for (let offset = 0; offset < items.length; offset += 64) await Promise.all(items.slice(offset, offset + 64).map(work));
     };
-    for (let offset = 0; offset < present.length; offset += 64) {
-      await Promise.all(present.slice(offset, offset + 64).map(async (relative) => {
-        const want = wanted.get(relative);
-        if (!want) {
-          await fs.rm(path.join(directory, relative), { force: true });
-          stats.delete(relative);
-          deleted += 1;
-        } else if (await currentBlob(relative) === want.blob) {
-          wanted.delete(relative);
-        }
-      }));
-    }
-    const contents = await GitObjectReadSession.read(repository.root, [...new Set([...wanted.values()].map(({ blob }) => blob))]);
-    const byBlob = new Map(contents.flatMap(object => object?.contents ? [[object.objectId, object.contents] as const] : []));
-    for (const [relative, { blob, mode }] of wanted) {
-      const data = byBlob.get(blob);
-      if (!data) throw new Error(`Git object ${blob} for ${relative} is missing.`);
+
+    // Removals first, so a stale file never blocks a folder the view needs at its path.
+    const stale = [...recorded.keys()].filter(relative => inScope(relative) && !wanted.has(relative));
+    await inBatches(stale, async (relative) => {
       const file = path.join(directory, relative);
-      // A symlink or folder in the file's place is replaced, never written through.
-      const existing = await fs.lstat(file).catch((error: unknown) => {
-        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null;
-        throw error;
-      });
-      if (existing && !existing.isFile()) await fs.rm(file, { force: true, recursive: true });
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, data);
-      if (mode === "100755" && process.platform !== "win32") await fs.chmod(file, 0o755);
-      const written = await fs.lstat(file);
-      stats.set(relative, { blob, mtimeMs: written.mtimeMs, size: written.size });
+      // Something else replaced the recorded file with a folder; that folder isn't the mirror's to delete.
+      if ((await lstatOrNull(file))?.isDirectory() === false) await fs.rm(file, { force: true });
+      recorded.delete(relative);
+    });
+    await this.pruneEmptyParents(directory, stale);
+
+    const outdated: string[] = [];
+    await inBatches([...wanted.keys()], async (relative) => {
+      const want = wanted.get(relative)!;
+      const stat = await lstatOrNull(path.join(directory, relative));
+      if (stat?.isFile()) {
+        const record = recorded.get(relative);
+        if (record && record.size === stat.size && record.mtimeMs === stat.mtimeMs && record.blob === want.blob) return;
+        // Unrecorded or edited since: an identical file is adopted as is, so builds keep its mtime.
+        if (!record || record.size !== stat.size || record.mtimeMs !== stat.mtimeMs) {
+          const blob = blobId(await fs.readFile(path.join(directory, relative)), algorithm);
+          if (blob === want.blob) {
+            recorded.set(relative, { blob, mtimeMs: stat.mtimeMs, size: stat.size });
+            return;
+          }
+        }
+      }
+      outdated.push(relative);
+    });
+
+    const contents = await GitObjectReadSession.read(repository.root, [...new Set(outdated.map(relative => wanted.get(relative)!.blob))]);
+    const byBlob = new Map(contents.flatMap(object => object?.contents ? [[object.objectId, object.contents] as const] : []));
+    try {
+      for (const relative of outdated) {
+        const { blob, mode } = wanted.get(relative)!;
+        const data = byBlob.get(blob);
+        if (!data) throw new Error(`Git object ${blob} for ${relative} is missing.`);
+        const file = path.join(directory, relative);
+        // A symlink or folder in the file's place is replaced, never written through.
+        const existing = await lstatOrNull(file);
+        if (existing && !existing.isFile()) await fs.rm(file, { force: true, recursive: true });
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, data);
+        if (mode === "100755" && process.platform !== "win32") await fs.chmod(file, 0o755);
+        const written = await fs.lstat(file);
+        recorded.set(relative, { blob, mtimeMs: written.mtimeMs, size: written.size });
+      }
+    } finally {
+      // A failed pass still records what it changed; unrecorded leftovers are re-adopted by content next time.
+      await writeManifest(manifestPath, recorded);
     }
-    await this.pruneEmptyFolders(directory, directory);
-    return { deleted, written: wanted.size };
+    return { deleted: stale.length, written: outdated.length };
   }
 
-  private async pruneEmptyFolders(directory: string, root: string): Promise<boolean> {
-    const entries = await fs.readdir(directory, { withFileTypes: true });
-    let empty = true;
-    for (const entry of entries) {
-      if (entry.isDirectory() && await this.pruneEmptyFolders(path.join(directory, entry.name), root)) continue;
-      empty = false;
+  /** Remove folders left empty by `removed` files, walking up only from those files, never listing the mirror. */
+  private async pruneEmptyParents(directory: string, removed: readonly string[]) {
+    const folders = new Set<string>();
+    for (const relative of removed) {
+      for (let folder = path.posix.dirname(relative); folder !== "."; folder = path.posix.dirname(folder)) folders.add(folder);
     }
-    if (empty && directory !== root) await fs.rmdir(directory);
-    return empty;
+    const deepestFirst = [...folders].sort((left, right) => right.split("/").length - left.split("/").length);
+    for (const folder of deepestFirst) {
+      try {
+        await fs.rmdir(path.join(directory, folder));
+      } catch (error) {
+        // Still holding other files (the mirror's or anyone else's), already gone, or not a folder: leave it.
+        if (!["ENOTEMPTY", "EEXIST", "ENOENT", "ENOTDIR"].includes(errorCode(error) ?? "")) throw error;
+      }
+    }
   }
 }

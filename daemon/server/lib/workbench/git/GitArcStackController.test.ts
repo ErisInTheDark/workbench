@@ -122,13 +122,20 @@ test("released claims keep sealed proposals committable and a child on a lower l
   await fs.writeFile(path.join(out, "keep.txt"), "outside the mirrored paths\n");
   const parentView = await view("parent");
   assert.ok(parentView.held.some(({ paths, threadId }) => threadId === "child" && paths.includes("two.txt")));
-  assert.deepEqual([(await fs.readdir(out)).sort(), await fs.readFile(path.join(out, "two.txt"), "utf8")], [["keep.txt", "two.txt"], "parent two\n"]);
+  assert.deepEqual([(await fs.readdir(out)).sort(), await fs.readFile(path.join(out, "two.txt"), "utf8")], [[".wb-arc-tree.json", "keep.txt", "two.txt"], "parent two\n"]);
   const unchanged = await view("parent");
   assert.deepEqual([unchanged.written, unchanged.deleted], [0, 0], "unchanged files are left alone");
   await view("child");
   assert.equal(await fs.readFile(path.join(out, "two.txt"), "utf8"), "child builds on two\n");
   await view("child", true);
   assert.equal(await fs.readFile(path.join(out, "two.txt"), "utf8"), "parent two\n");
+  // Whole-tree mirrors never touch files they didn't write, and remove their own once those leave the view.
+  assert.ok((await controller.mirrorClaimView({ into: out, paths: [], repoRoot: cwd, tree: parentView.tree })).written > 0);
+  const emptySource = path.resolve(cwd, (await git("rev-parse", "--git-path", "wb-empty-tree")).trim());
+  await fs.writeFile(emptySource, "");
+  const emptyTree = (await git("hash-object", "-t", "tree", "-w", emptySource)).trim();
+  await controller.mirrorClaimView({ into: out, paths: [], repoRoot: cwd, tree: emptyTree });
+  assert.deepEqual(await fs.readdir(out), ["keep.txt"]);
   await assert.rejects(controller.mirrorClaimView({ into: path.join(cwd, "tracked-out"), paths: [], repoRoot: cwd, tree: parentView.tree }), /gitignored/u);
   const child =await controller.createProposal({ cwd, threadId: "child", paths: ["two.txt"], title: "child", description: "" });
   assert.equal((await read("child", child.proposalId)).waitingForLayer, "layer one", "it waits on the lowest unlanded layer");

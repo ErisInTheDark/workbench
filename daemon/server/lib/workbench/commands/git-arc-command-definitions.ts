@@ -381,7 +381,7 @@ const status = defineWorkbenchAgentCommand({
 });
 
 const tree = defineWorkbenchAgentCommand({
-  description: "Print JSON with a Git tree of the worktree as the caller builds it: other live threads' dirty claims at their arc baselines (stack-aware). --hold-own holds the caller's back too. --into mirrors the view's paths (all when none) into a gitignored directory inside the repository, rewriting only changed files and removing strays under those paths; other files there stay.",
+  description: "Print JSON with a Git tree of the worktree as the caller builds it: other live threads' dirty claims at their arc baselines (stack-aware). --hold-own holds the caller's back too. --into mirrors the view's paths (all when none) into a gitignored directory inside the repository, rewriting only changed files and removing files it previously mirrored that left the view; files it didn't write are never touched.",
   effects: { idempotent: true },
   helpGroups: ["git-arc"],
   hideFromMcp: true,
