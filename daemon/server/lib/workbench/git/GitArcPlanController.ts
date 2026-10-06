@@ -16,6 +16,7 @@ import GitArcRegistry, {
   GitArcCollisionError,
   type GitArcRegistryEntry,
 } from "./GitArcRegistry";
+import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitCheckpointStore, { type StoredCheckpoint } from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import {
@@ -23,7 +24,11 @@ import {
   type GitArcThreadIdentityResolver,
 } from "./git-arc-thread-identity";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
-import { type CheckpointMetadata, type GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
+import {
+  type CheckpointMetadata,
+  type GitArcHarness,
+  type GitArcSavedStash,
+} from "workbench-shared/workbench/git/git-arc-storage";
 
 interface PlanInput {
   adoptPaths?: string[];
@@ -174,12 +179,13 @@ function overlappingBaselinePaths(previousPaths: string[], nextPaths: string[]) 
 }
 
 function liveClaims(entry: GitArcRegistryEntry) {
-  if (entry.phase === "resolved") return [];
+  if (entry.phase === "resolved" || entry.phase === "stashed") return [];
   if (entry.phase === "plan") return entry.retainedArc?.claimedPaths ?? entry.claimedPaths;
   return entry.claimedPaths;
 }
 
 function presentation(entry: GitArcRegistryEntry) {
+  if (entry.phase === "stashed") return null;
   if (entry.phase === "plan") return entry.retainedArc ?? null;
   return {
     checkpointCommit: entry.checkpointCommit,
@@ -237,17 +243,14 @@ export default class GitArcPlanController {
     const harness = normalizeHarness(input.harness);
     const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
-    this.rejectStashedPlanning(current);
-    const baselinePlan = current?.phase === "plan"
-      ? await this.store(repository).readCheckpoint(harness, input.threadId, current.checkpointCommit)
-      : null;
-    return await this.writePlan(repository, registry, harness, input.threadId, {
+    const baselinePlan = await this.readPendingPlan(repository, harness, input.threadId, current);
+    return await this.writePlan(repository, registry, harness, input.threadId, current, {
       adoptPaths: input.adoptPaths ?? [],
       intentDescription: input.intentDescription ?? "",
       intentName: input.intentName,
       paths: input.paths,
       retainedArc: current ? presentation(current) : null,
-    }, current?.checkpointCommit, { baselinePlan });
+    }, { baselinePlan });
   }
 
   async editClaims(input: PlanIdentityInput & GitArcClaimChanges & { intentName?: string; intentDescription?: string; start?: boolean }) {
@@ -255,11 +258,8 @@ export default class GitArcPlanController {
     const harness = normalizeHarness(input.harness);
     const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
-    this.rejectStashedPlanning(current);
     if (input.inherit && !current) throw new GitArcRejectionError({ reason: "missingLifecycle" }, "This thread has no plan or arc to inherit.");
-    const baselinePlan = current?.phase === "plan"
-      ? await this.store(repository).readCheckpoint(harness, input.threadId, current.checkpointCommit)
-      : null;
+    const baselinePlan = await this.readPendingPlan(repository, harness, input.threadId, current);
     const existing = baselinePlan?.metadata?.scopePaths ?? (current ? liveClaims(current) : []);
     const normalise = (paths: string[] | undefined) => paths?.length ? repository.normalizePaths(paths) : [];
     const additions = await partitionIgnoredGitArcPaths(repository, input.addPaths ?? []);
@@ -297,7 +297,10 @@ export default class GitArcPlanController {
       const prepared = await this.preparePlan(repository, registry, harness, input.threadId, planInput, current?.checkpointCommit, { baselinePlan, skippedIgnoredPaths });
       return { ...await this.activatePreparedPlan(repository, registry, harness, input, current, prepared), ...delta };
     }
-    return { ...await this.writePlan(repository, registry, harness, input.threadId, planInput, current?.checkpointCommit, { baselinePlan, skippedIgnoredPaths }), ...delta };
+    return {
+      ...await this.writePlan(repository, registry, harness, input.threadId, current, planInput, { baselinePlan, skippedIgnoredPaths }),
+      ...delta,
+    };
   }
 
   async addToPlan(input: PlanIdentityInput & { paths: string[] }) {
@@ -317,14 +320,14 @@ export default class GitArcPlanController {
     const harness = normalizeHarness(input.harness);
     const registry = this.registry(repository);
     const current = await registry.find({ harness, threadId: input.threadId });
-    this.rejectStashedPlanning(current);
+    const baselinePlan = await this.readPendingPlan(repository, harness, input.threadId, current);
     const plan = await this.preparePlan(repository, registry, harness, input.threadId, {
       adoptPaths: input.adoptPaths ?? [],
       intentDescription: input.intentDescription ?? "",
       intentName: input.intentName,
       paths: input.paths,
       retainedArc: current ? presentation(current) : null,
-    }, current?.checkpointCommit);
+    }, current?.checkpointCommit, { baselinePlan });
     return await this.activatePreparedPlan(repository, registry, harness, input, current, plan);
   }
 
@@ -371,6 +374,7 @@ export default class GitArcPlanController {
       plan.head,
       activeMetadata,
     );
+    const successor = await this.prepareStashedSuccessor(repository, harness, input.threadId, current);
     const registryMutation = await registry.prepareClaim({
       checkpointCommit: active.checkpointCommit,
       claimedPaths: claimPaths,
@@ -381,13 +385,15 @@ export default class GitArcPlanController {
       proposalId: null,
       proposalIds: [],
       retainedArc: undefined,
+      ...(successor ? { savedStash: successor.savedStash } : {}),
       threadId: input.threadId,
     }, current ? { expectedCheckpointCommit: current.checkpointCommit } : undefined);
     await repository.updateRefs([
       plan.prepared.update,
       active.update,
+      ...(successor?.updates ?? []),
       ...registryMutation.updates,
-    ]);
+    ], successor?.deletions ?? []);
     return {
       acquiredClaims: claimPaths,
       planningDrift: plan.planningDrift,
@@ -563,24 +569,21 @@ export default class GitArcPlanController {
     });
   }
 
-  private rejectStashedPlanning(current: GitArcRegistryEntry | null) {
-    if (current?.phase === "stashed") throw new Error("This Git arc is stashed. Unstash it before revising its plan.");
-  }
-
   private async writePlan(
     repository: WorkbenchGitRepository,
     registry: GitArcRegistry,
     harness: GitArcHarness,
     threadId: string,
+    current: GitArcRegistryEntry | null,
     input: { adoptPaths: string[]; intentDescription: string; intentName: string; paths: string[]; retainedArc: GitArcRegistryEntry["retainedArc"] | null },
-    expectedCheckpointCommit?: string,
     options: { baselinePlan?: StoredCheckpoint | null; skippedIgnoredPaths?: string[] } = {},
   ): Promise<GitArcPlanResult | GitArcNoopResult> {
-    const plan = await this.preparePlan(repository, registry, harness, threadId, input, expectedCheckpointCommit, options);
+    const plan = await this.preparePlan(repository, registry, harness, threadId, input, current?.checkpointCommit, options);
     if (!plan.paths.length && plan.skippedIgnoredPaths.length) {
       return createGitArcNoopResult(repository, plan.skippedIgnoredPaths);
     }
     const retainedArc = await this.prepareRetainedArc(repository, harness, threadId, input.retainedArc, plan.paths);
+    const successor = await this.prepareStashedSuccessor(repository, harness, threadId, current);
     const registryMutation = await registry.prepareSet({
       checkpointCommit: plan.prepared.checkpointCommit,
       claimedPaths: [],
@@ -591,9 +594,14 @@ export default class GitArcPlanController {
       proposalId: null,
       proposalIds: [],
       retainedArc: retainedArc ?? undefined,
+      ...(successor ? { savedStash: successor.savedStash } : {}),
       threadId,
-    }, expectedCheckpointCommit);
-    await repository.updateRefs([plan.prepared.update, ...registryMutation.updates]);
+    }, current?.checkpointCommit);
+    await repository.updateRefs([
+      plan.prepared.update,
+      ...(successor?.updates ?? []),
+      ...registryMutation.updates,
+    ], successor?.deletions ?? []);
     return {
       checkpointCommit: plan.prepared.checkpointCommit,
       checkpointRef: plan.prepared.checkpointRef,
@@ -606,6 +614,45 @@ export default class GitArcPlanController {
       repoRoot: repository.root,
       scopePaths: plan.paths,
       skippedIgnoredPaths: plan.skippedIgnoredPaths,
+    };
+  }
+
+  private async readPendingPlan(
+    repository: WorkbenchGitRepository,
+    harness: GitArcHarness,
+    threadId: string,
+    current: GitArcRegistryEntry | null,
+  ) {
+    return current?.phase === "plan" || current?.phase === "stashed" && current.retainedArc
+      ? await this.store(repository).readCheckpoint(harness, threadId, current.checkpointCommit)
+      : null;
+  }
+
+  private async prepareStashedSuccessor(
+    repository: WorkbenchGitRepository,
+    harness: GitArcHarness,
+    threadId: string,
+    current: GitArcRegistryEntry | null,
+  ): Promise<{
+    deletions: Array<{ oldValue: string; ref: string }>;
+    savedStash: GitArcSavedStash;
+    updates: Array<{ newValue: string; oldValue: string; ref: string }>;
+  } | null> {
+    if (current?.phase !== "stashed") return null;
+    const stashes = new GitArcClaimLossStore(repository, this.resolveThreadIdentity);
+    const saved = await stashes.readOwnedStash({ harness, threadId }, current);
+    if (!saved?.legacy) throw new Error("The ordinary Git arc stash is unavailable.");
+    const moved = await stashes.prepareRehomeFrozen({ harness, threadId }, { harness, threadId }, saved.paths);
+    return {
+      deletions: moved.deletions,
+      savedStash: {
+        checkpointCommit: saved.checkpointCommit,
+        intentDescription: saved.intentDescription,
+        intentName: saved.intentName,
+        paths: saved.paths,
+        proposalIds: saved.proposalIds,
+      },
+      updates: moved.updates,
     };
   }
 

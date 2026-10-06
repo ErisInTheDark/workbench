@@ -43,9 +43,9 @@ export function describeThreadEntry(entry: ThreadListEntry, { attentionLabel = "
   const lifecycle = entry.entryKind === "draft" ? null : entry.lifecycle;
   const gitArc = entry.entryKind === "draft" ? null : entry.gitArc ?? null;
   const hasActiveGitArc = gitArc?.phase === "active";
-  const savedPaths = gitArc?.stashedPaths ?? [];
-  const stashed = !gitArc?.claimedPaths.length && savedPaths.length > 0;
-  const claimedPaths = stashed ? savedPaths : gitArc?.claimedPaths ?? [];
+  const claimedPaths = gitArc?.claimedPaths ?? [];
+  const stashedPaths = gitArc?.stashedPaths ?? [];
+  const stashed = !claimedPaths.length && stashedPaths.length > 0;
   const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
   const waiting = entry.entryKind !== "draft" && Boolean(entry.waitingFor);
   const showProposedCommit = !waiting && lifecycle?.kind === "completed" && hasProposedCommit;
@@ -85,6 +85,7 @@ export function describeThreadEntry(entry: ThreadListEntry, { attentionLabel = "
     relativeTime: formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs),
     showProposedCommit,
     stashed,
+    stashedPaths,
     status,
     statusClassName: entry.entryKind === "draft" ? "text-fg/muted" : getWorkbenchThreadStatusClassName(statusTone),
     statusTone,

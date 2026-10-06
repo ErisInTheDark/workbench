@@ -229,11 +229,11 @@ export default function WorkbenchThreadListItem({
   const target = targetForEntry(entry);
   const {
     claimedPaths, dateTime, exactTime, group, Icon, lifecycle, relativeTime, showProposedCommit,
-    stashed, status, statusClassName, statusTone, tooltipStatus, waiting,
+    stashed, stashedPaths, status, statusClassName, statusTone, tooltipStatus, waiting,
   } = describeThreadEntry(entry, { attentionLabel, hasTooltipDetails: Boolean(tooltipDetails), nowMs });
   const subagentClaims = useWorkbenchSubagentClaims(projectId, entry.entryKind === "thread" ? entry.identity.threadId : null);
-  const activeClaimCount = (stashed ? 0 : claimedPaths.length) + subagentClaims.reduce((total, child) => total + child.claimedPaths.length, 0);
-  const stashedClaimCount = stashed ? claimedPaths.length : 0;
+  const activeClaimCount = claimedPaths.length + subagentClaims.reduce((total, child) => total + child.claimedPaths.length, 0);
+  const stashedClaimCount = stashedPaths.length;
   const showComposerDraft = !activeClaimCount && !stashedClaimCount && hasComposerDraft;
   const hasDraftImages = entry.entryKind === "draft"
     && (isPinnedDraftSummaryEntry(entry) ? entry.hasAttachments : entry.draft.attachments.length > 0);
@@ -250,8 +250,11 @@ export default function WorkbenchThreadListItem({
   const actionDisplay = action ? THREAD_ACTIONS[action] : null;
   const projectName = project ? "matchKey" in project ? `${project.label}, `
     : `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
-  const badgeCount = activeClaimCount || stashedClaimCount;
-  const rowName = `${projectName}${entry.title}${hasDraftImages ? ", includes image" : ""}, ${status}${badgeCount ? `, ${badgeCount} ${activeClaimCount ? "claimed" : "stashed"} ${badgeCount === 1 ? "file" : "files"}` : ""}${showComposerDraft ? ", unsent draft" : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
+  const gitWorkLabels = [
+    activeClaimCount ? `${activeClaimCount} claimed ${activeClaimCount === 1 ? "file" : "files"}` : "",
+    stashedClaimCount ? `${stashedClaimCount} stashed ${stashedClaimCount === 1 ? "file" : "files"}` : "",
+  ].filter(Boolean);
+  const rowName = `${projectName}${entry.title}${hasDraftImages ? ", includes image" : ""}, ${status}${gitWorkLabels.length ? `, ${gitWorkLabels.join(", ")}` : ""}${showComposerDraft ? ", unsent draft" : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
   const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled" || archived));
   const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;

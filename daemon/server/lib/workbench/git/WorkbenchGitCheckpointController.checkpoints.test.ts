@@ -1,4 +1,3 @@
-/* No production exports. A shared-state battery covers checkpoints, claims, proposals, commit isolation, history replacement and restore. */
 /*
  * Exports:
  * - No production exports; tests protect Git checkpoint, proposal, stash, and restore lifecycles.
@@ -387,25 +386,28 @@ checkpointTest("stash releases claims and conflict-safe unstash restores editabl
   assert.equal(await fs.readFile(path.join(repoRoot, "selected.txt"), "utf8"), "selected checkpoint\n");
   assert.equal((await controller.findLifecycleState({ cwd: repoRoot, threadId: state.threadId }))?.phase, "stashed");
   assert.equal(await controller.hasLiveClaimsAtRepoRoot({ cwd: repoRoot, threadId: state.threadId }), false);
-  await assert.rejects(
-    controller.createPlan({ cwd: repoRoot, intentName: "replacement", paths: ["selected.txt"], threadId: state.threadId }),
-    /stashed.*unstash/i,
-  );
-  await assert.rejects(
-    controller.editPlanClaims({ addPaths: ["added.txt"], cwd: repoRoot, inherit: true, threadId: state.threadId }),
-    /stashed.*unstash/i,
-  );
-  await assert.rejects(
-    controller.createAndStartPlan({ cwd: repoRoot, intentName: "replacement", paths: ["selected.txt"], threadId: state.threadId }),
-    /stashed.*unstash/i,
-  );
+  const successorPlan = await controller.createPlan({
+    cwd: repoRoot, intentName: "successor work", paths: ["unrelated.txt"], threadId: state.threadId,
+  });
+  assert.deepEqual(successorPlan.scopePaths, ["unrelated.txt"]);
+  assert.deepEqual((await controller.readStatus({ cwd: repoRoot, threadId: state.threadId })).stashedClaims, ["selected.txt"]);
+  const successor = await controller.startArc({
+    checkpointCommit: successorPlan.checkpointCommit, cwd: repoRoot, threadId: state.threadId,
+  });
+  assert.deepEqual(successor.acquiredClaims, ["unrelated.txt"]);
+  await write(repoRoot, "unrelated.txt", "successor work\n");
+  const successorProposal = await controller.createProposal({
+    cwd: repoRoot, description: "", threadId: state.threadId, title: "propose successor work",
+  });
+  assert.deepEqual(successorProposal.paths, ["unrelated.txt"]);
 
   await fs.writeFile(path.join(repoRoot, "selected.txt"), Buffer.from([0, 1, 2]));
   await git(repoRoot, ["add", "--", "selected.txt"]);
   await git(repoRoot, ["commit", "-m", "change selected to binary while stashed"]);
   await assert.rejects(controller.unstashArc({ cwd: repoRoot, threadId: state.threadId }), /binary/u);
-  assert.equal((await controller.findLifecycleState({ cwd: repoRoot, threadId: state.threadId }))?.phase, "stashed");
-  assert.equal(await controller.hasLiveClaimsAtRepoRoot({ cwd: repoRoot, threadId: state.threadId }), false);
+  assert.equal((await controller.findLifecycleState({ cwd: repoRoot, threadId: state.threadId }))?.phase, "active");
+  assert.equal(await controller.hasLiveClaimsAtRepoRoot({ cwd: repoRoot, threadId: state.threadId }), true);
+  assert.deepEqual((await controller.readStatus({ cwd: repoRoot, threadId: state.threadId })).stashedClaims, ["selected.txt"]);
 
   await write(repoRoot, "selected.txt", "current line\n");
   await git(repoRoot, ["add", "--", "selected.txt"]);
@@ -422,7 +424,7 @@ checkpointTest("stash releases claims and conflict-safe unstash restores editabl
   assert.equal(await git(repoRoot, ["ls-files", "--unmerged"]), "");
   await assert.rejects(git(repoRoot, ["rev-parse", "--verify", "MERGE_HEAD"]));
   const comparison = await controller.compare({ cwd: repoRoot, threadId: state.threadId });
-  assert.equal(comparison.changes.length, 1);
+  assert.deepEqual(comparison.changes.map(change => change.path), ["selected.txt", "unrelated.txt"]);
   assert.match(comparison.changes[0]!.diff, /^ current line$/mu);
   assert.doesNotMatch(comparison.changes[0]!.diff, /^-selected checkpoint$/mu);
   const diff = await controller.diff({ cwd: repoRoot, threadId: state.threadId });
@@ -440,6 +442,7 @@ checkpointTest("stash releases claims and conflict-safe unstash restores editabl
   }]);
   const lifecycle = await controller.findLifecycleState({ cwd: repoRoot, threadId: state.threadId });
   assert.ok(lifecycle?.proposals.some(candidate => candidate.proposalId === proposal.proposalId));
+  assert.ok(lifecycle?.proposals.some(candidate => candidate.proposalId === successorProposal.proposalId));
   assert.equal(lifecycle?.phase, "active");
   assert.equal(await controller.hasLiveClaimsAtRepoRoot({ cwd: repoRoot, threadId: state.threadId }), true);
 });

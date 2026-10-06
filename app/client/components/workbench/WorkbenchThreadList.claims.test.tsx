@@ -110,7 +110,7 @@ function createThreadEntry({
   threadId: string;
   title: string;
 }): ThreadEntry {
-  const gitArc: ThreadEntry["gitArc"] = stashedPaths ? {
+  const gitArc: ThreadEntry["gitArc"] = stashedPaths && !claimedPaths?.length ? {
     checkpointCommit: "a".repeat(40),
     claimedPaths: [],
     intentDescription: "Protect the focused sidebar presentation.",
@@ -126,6 +126,7 @@ function createThreadEntry({
     intentName: "sidebar claim",
     phase: claimedPaths.length ? "active" : "resolved",
     proposals: proposalStatus ? [{ proposalId: "proposal-one", status: proposalStatus }] : [],
+    ...(stashedPaths?.length ? { stashedPaths } : {}),
     updatedAt: "2026-08-20T00:00:00.000Z",
   } as ThreadEntry["gitArc"] : undefined;
   return {
@@ -330,6 +331,16 @@ test("stashed arcs show the archive icon count and retained paths instead of liv
   assert.match(html, /aria-label="Stashed work, Completed, 2 stashed files,/u);
   assert.match(html, /data-role="thread-file-stash"[\s\S]*?<span>2<\/span>/u);
   assert.doesNotMatch(html, /data-role="thread-file-claim"/u);
+
+  const mixedHtml = renderThreads([createThreadEntry({
+    claimedPaths: ["src/live-one.ts", "src/live-two.ts", "src/live-three.ts"],
+    stashedPaths: ["src/saved-one.ts", "src/saved-two.ts"],
+    threadId: "mixed",
+    title: "Mixed work",
+  })]);
+  assert.match(mixedHtml, /aria-label="Mixed work, Completed, 3 claimed files, 2 stashed files,/u);
+  assert.match(mixedHtml, /data-role="thread-file-claim"[\s\S]*?<span>3<\/span>/u);
+  assert.match(mixedHtml, /data-role="thread-file-stash"[\s\S]*?<span>2<\/span>/u);
 });
 
 test("thread tooltip hides stashed paths but keeps active claim links", () => {
