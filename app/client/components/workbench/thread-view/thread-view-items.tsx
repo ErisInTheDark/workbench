@@ -169,6 +169,43 @@ type CommandBlockItem =
   | { display: ThreadCommandSummaryDisplay };
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
 type RelatedThreadsById = Record<string, ThreadPayload | undefined>;
+type ThreadCommandDisplay = ReturnType<typeof getThreadCommandDisplay>;
+
+const THREAD_WINDOW_CHUNK_SIZE = 6;
+const gitCheckpointPresentationByItem = new WeakMap<CommandItem, {
+  artifactId: ReturnType<typeof parseGitCheckpointDiffArtifactId>;
+  claimedBy: ThreadCommandDisplay["claimedBy"];
+  compareChanges: ReturnType<typeof parseGitCheckpointCompareOutput> | null;
+  diffChanges: ReturnType<typeof parseGitCheckpointDiffOutput> | null;
+  output: string;
+  summaryRows: ReturnType<typeof createThreadGitArcCompareSummaryRows>;
+}>();
+
+function readGitCheckpointPresentation(item: CommandItem, claimedBy: ThreadCommandDisplay["claimedBy"]) {
+  const cached = gitCheckpointPresentationByItem.get(item);
+  const output = item.aggregatedOutput ?? "";
+  if (cached?.claimedBy === claimedBy && cached.output === output) return cached;
+  const compareChanges = isGitCheckpointCompareMatcherClaim(claimedBy)
+    ? parseGitCheckpointCompareOutput(output)
+    : null;
+  const diffChanges = isGitCheckpointDiffMatcherClaim(claimedBy)
+    ? parseGitCheckpointDiffOutput(output)
+    : null;
+  const presentation = {
+    artifactId: isGitCheckpointDiffMatcherClaim(claimedBy)
+      ? parseGitCheckpointDiffArtifactId(output)
+      : null,
+    compareChanges,
+    diffChanges,
+    summaryRows: compareChanges?.length
+      ? createThreadGitArcCompareSummaryRows(compareChanges)
+      : diffChanges?.length ? createThreadGitArcDiffSummaryRows(diffChanges) : [],
+    claimedBy,
+    output,
+  };
+  gitCheckpointPresentationByItem.set(item, presentation);
+  return presentation;
+}
 
 function isProjectedInteractionItem(
   item: WorkbenchProjectedTranscriptItem,
@@ -1210,15 +1247,12 @@ function ThreadCommandExecutionDetails ({
   const resolvedSubagentTargets = subagentCommand
     ? resolveWorkbenchSubagentCommandTargets(subagents, subagentCommand.targets)
     : [];
-  const checkpointDiffChanges = isGitCheckpointDiffMatcherClaim(commandDisplay.claimedBy)
-    ? parseGitCheckpointDiffOutput(item.aggregatedOutput ?? "")
-    : null;
-  const checkpointDiffArtifactId = isGitCheckpointDiffMatcherClaim(commandDisplay.claimedBy)
-    ? parseGitCheckpointDiffArtifactId(item.aggregatedOutput ?? "")
-    : null;
-  const checkpointCompareChanges = isGitCheckpointCompareMatcherClaim(commandDisplay.claimedBy)
-    ? parseGitCheckpointCompareOutput(item.aggregatedOutput ?? "")
-    : null;
+  const {
+    artifactId: checkpointDiffArtifactId,
+    compareChanges: checkpointCompareChanges,
+    diffChanges: checkpointDiffChanges,
+    summaryRows: checkpointSummaryRows,
+  } = readGitCheckpointPresentation(item, commandDisplay.claimedBy);
   const gitArcProposal = readThreadGitArcProposalTranscriptItem(item, commandDisplay);
   const gitArcReceipt = gitArcProposal?.receipt ?? parseGitArcReceipt(item.aggregatedOutput ?? "");
   const gitArcAction = getGitArcMatcherAction(commandDisplay.claimedBy);
@@ -1294,9 +1328,7 @@ function ThreadCommandExecutionDetails ({
           ? item.aggregatedOutput
           : null}
         operationDetails={operationDetails}
-        operationSummaryRows={checkpointCompareChanges?.length
-          ? createThreadGitArcCompareSummaryRows(checkpointCompareChanges)
-          : checkpointDiffChanges?.length ? createThreadGitArcDiffSummaryRows(checkpointDiffChanges) : []}
+        operationSummaryRows={checkpointSummaryRows}
         outcome={commandOutcome}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
@@ -2320,7 +2352,12 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
     item.type === "agentMessage" && item.phase === "final_answer"
   ))?.id
     ?? null;
-
+  const getRenderEntryKey = (entry: RenderEntry, index: number) => {
+    const firstItem = entry.kind === "block" ? getRenderableBlockItems(entry.block)[0] : null;
+    return entry.kind === "generic" ? `generic:${entry.item.id}` : initialInactiveItemIds
+      ? `${entry.block.kind}:${firstItem?.id}`
+      : `${getRenderableBlockKey(entry.block)}:${index}`;
+  };
   const renderEntry = (entry: RenderEntry, index: number) => {
     const firstItem = entry.kind === "block" ? getRenderableBlockItems(entry.block)[0] : null;
     const identity = entry.kind === "generic"
@@ -2328,54 +2365,72 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
       : firstItem
         ? getThreadEntryMotionIdentity(firstItem)
         : `empty:${turnId}:${index}`;
-    const key = entry.kind === "generic" ? `generic:${entry.item.id}` : initialInactiveItemIds
-      ? `${entry.block.kind}:${firstItem?.id}`
-      : `${getRenderableBlockKey(entry.block)}:${index}`;
     return <ThreadEntryMotion
       enabled={animateEntries && !(entry.kind === "block" && entry.block.kind === "fileChangeSequence")}
       identity={identity}
-      key={key}
+      key={getRenderEntryKey(entry, index)}
     >
       {(animate) => <div className={animate ? `block ${enterMotionClassName}` : undefined}>
-        <ThreadMeasuredContent windowed>
-          {entry.kind === "generic" ? (
-            <ThreadGenericItem item={entry.item} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
-          ) : (
-            <ThreadRenderableBlockView
-              animateEntries={animateEntries}
-              block={entry.block}
-              browseResultEntries={browseResultEntries}
-              finalAgentMessageId={finalAgentMessageId}
-              inlineMentionSources={inlineMentionSources}
-              itemTimeline={renderItemTimeline}
-              isMostRecentBlock={index === stableEntries.length - 1}
-              knownSkills={knownSkills}
-              presentationSource={presentationSource}
-              primaryUserBlock={primaryUserBlock}
-              threadCwdPath={threadCwdPath}
-              threadId={threadId}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              relatedThreadsById={relatedThreadsById}
-              subagents={subagents}
-              turnCompletedAt={turnCompletedAt}
-              turnId={turnId}
-              turnStartedAt={turnStartedAt}
-              turnStatus={turnStatus}
-              workspaceRoots={workspaceRoots}
-            />
-          )}
-        </ThreadMeasuredContent>
+        {entry.kind === "generic" ? (
+          <ThreadGenericItem item={entry.item} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
+        ) : (
+          <ThreadRenderableBlockView
+            animateEntries={animateEntries}
+            block={entry.block}
+            browseResultEntries={browseResultEntries}
+            finalAgentMessageId={finalAgentMessageId}
+            inlineMentionSources={inlineMentionSources}
+            itemTimeline={renderItemTimeline}
+            isMostRecentBlock={index === stableEntries.length - 1}
+            knownSkills={knownSkills}
+            presentationSource={presentationSource}
+            primaryUserBlock={primaryUserBlock}
+            threadCwdPath={threadCwdPath}
+            threadId={threadId}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            subagents={subagents}
+            turnCompletedAt={turnCompletedAt}
+            turnId={turnId}
+            turnStartedAt={turnStartedAt}
+            turnStatus={turnStatus}
+            workspaceRoots={workspaceRoots}
+          />
+        )}
       </div>}
     </ThreadEntryMotion>;
   };
-  if (!initialInactiveItemIds) return <div className="space-y-2">{stableEntries.map(renderEntry)}</div>;
+  const renderWindowedEntries = (windowEntries: RenderEntry[], start: number) => {
+    const chunks: RenderEntry[][] = [];
+    for (let index = 0; index < windowEntries.length; index += THREAD_WINDOW_CHUNK_SIZE) {
+      chunks.push(windowEntries.slice(index, index + THREAD_WINDOW_CHUNK_SIZE));
+    }
+    let chunkOffset = 0;
+    return chunks.map((chunk) => {
+      const chunkStart = start + chunkOffset;
+      chunkOffset += chunk.length;
+      const firstEntry = chunk[0]!;
+      return (
+        <ThreadMeasuredContent
+          key={`window:${getRenderEntryKey(firstEntry, chunkStart)}`}
+          visibilityRange="approaching"
+          windowed
+        >
+          <div className="space-y-2">
+            {chunk.map((entry, index) => renderEntry(entry, chunkStart + index))}
+          </div>
+        </ThreadMeasuredContent>
+      );
+    });
+  };
+  if (!initialInactiveItemIds) return <div className="space-y-2">{renderWindowedEntries(stableEntries, 0)}</div>;
   let offset = 0;
   return <div className="space-y-2">{partitionWorkedRows(stableEntries).map(group => {
     const start = offset;
     offset += group.length;
-    const children = group.map((entry, index) => renderEntry(entry, start + index));
+    const children = renderWindowedEntries(group, start);
     if (!group[0]?.eligible) return children;
     const ids = group.flatMap(entry => entry.kind === "block" ? getRenderableBlockItems(entry.block).map(item => item.id) : [entry.item.id]);
     const activity = ids.map(id => {

@@ -192,6 +192,7 @@ function ActiveThreadScrollViewport ({
         pointerScrollActiveRef.current && pointerScrollMovedRef.current,
       ));
       if (Math.abs(scrollTop - previousScrollTop) >= viewport.clientHeight) {
+        visibility.current?.refresh("approaching");
         visibility.current?.refresh("nearby");
         visibility.current?.refresh("viewport");
       }

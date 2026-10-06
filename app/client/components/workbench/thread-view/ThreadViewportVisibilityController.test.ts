@@ -3,13 +3,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import ThreadViewportVisibilityController from "./ThreadViewportVisibilityController";
 
-test("viewport visibility owns exact and nearby observation ranges", () => {
+test("viewport visibility owns exact, approaching, and nearby observation ranges", () => {
   const observers: Array<{ disconnected: boolean; margin: number; range: string }> = [];
-  const observed = { nearby: 0, viewport: 0 };
+  const observed = { approaching: 0, nearby: 0, viewport: 0 };
   let rootHeight = 640;
   let resize: (entries: readonly { target: Element }[]) => void = () => {};
   const root = { getBoundingClientRect: () => ({ height: rootHeight }) } as HTMLElement;
   const target = { getBoundingClientRect: () => ({ height: 120 }) } as HTMLElement;
+  const nearbyTarget = { getBoundingClientRect: () => ({ height: 120 }) } as HTMLElement;
   const owner = new ThreadViewportVisibilityController({
     root,
     intersection: (_callback, range, margin) => {
@@ -29,20 +30,29 @@ test("viewport visibility owns exact and nearby observation ranges", () => {
 
   assert.deepEqual(observers.map(({ margin, range }) => ({ margin, range })), [
     { margin: 0, range: "viewport" },
+    { margin: 160, range: "approaching" },
     { margin: 640, range: "nearby" },
   ]);
-  owner.observe(target, () => {}, "nearby");
-  assert.deepEqual(observed, { nearby: 1, viewport: 0 });
+  owner.observe(target, () => {}, "approaching");
+  owner.observe(nearbyTarget, () => {}, "nearby");
+  assert.deepEqual(observed, { approaching: 1, nearby: 1, viewport: 0 });
   rootHeight = 800;
   resize([{ target: root }]);
-  assert.deepEqual(observers.at(-1), { disconnected: false, margin: 800, range: "nearby" });
+  assert.deepEqual(
+    observers.slice(-2),
+    [
+      { disconnected: false, margin: 200, range: "approaching" },
+      { disconnected: false, margin: 800, range: "nearby" },
+    ],
+  );
   assert.equal(observers[1]?.disconnected, true);
-  assert.deepEqual(observed, { nearby: 2, viewport: 0 });
+  assert.equal(observers[2]?.disconnected, true);
+  assert.deepEqual(observed, { approaching: 2, nearby: 2, viewport: 0 });
   owner.dispose();
 });
 
 test("offscreen placeholders retain measured height until visible content is measured again", () => {
-  const intersections: Partial<Record<"nearby" | "viewport", (entries: readonly { target: Element; isIntersecting: boolean; boundingClientRect: { height: number } }[]) => void>> = {};
+  const intersections: Partial<Record<"approaching" | "nearby" | "viewport", (entries: readonly { target: Element; isIntersecting: boolean; boundingClientRect: { height: number } }[]) => void>> = {};
   let resize: (entries: readonly { target: Element }[]) => void = () => {};
   let height = 120;
   const target = { getBoundingClientRect: () => ({ height }) } as HTMLElement;
@@ -73,11 +83,11 @@ test("offscreen placeholders retain measured height until visible content is mea
   assert.equal(states.length, count);
   assert.equal(unobserved, 2);
   owner.dispose();
-  assert.equal(disconnected, 3);
+  assert.equal(disconnected, 4);
 });
 
 test("unmeasured content is not hidden using a fabricated height", () => {
-  const intersections: Partial<Record<"nearby" | "viewport", (entries: readonly { target: Element; isIntersecting: boolean; boundingClientRect: { height: number } }[]) => void>> = {};
+  const intersections: Partial<Record<"approaching" | "nearby" | "viewport", (entries: readonly { target: Element; isIntersecting: boolean; boundingClientRect: { height: number } }[]) => void>> = {};
   const target = { getBoundingClientRect: () => ({ height: 0 }) } as HTMLElement;
   const states: Array<{ visible: boolean; height: number }> = [];
   const observer = { observe: () => {}, unobserve: () => {}, disconnect: () => {} };
@@ -93,8 +103,8 @@ test("unmeasured content is not hidden using a fabricated height", () => {
   owner.dispose();
 });
 
-test("large-jump refresh activates nearby placeholders before intersection delivery", () => {
-  const intersections: Partial<Record<"nearby" | "viewport", (entries: readonly {
+test("large-jump refresh activates approaching placeholders before intersection delivery", () => {
+  const intersections: Partial<Record<"approaching" | "nearby" | "viewport", (entries: readonly {
     target: Element;
     isIntersecting: boolean;
     boundingClientRect: { height: number };
@@ -111,12 +121,12 @@ test("large-jump refresh activates nearby placeholders before intersection deliv
     intersection: (callback, range) => { intersections[range] = callback; return observer; },
     resize: () => observer,
   });
-  owner.observe(target, state => states.push(state), "nearby");
-  intersections.nearby?.([{ target, isIntersecting: false, boundingClientRect: { height: 120 } }]);
+  owner.observe(target, state => states.push(state), "approaching");
+  intersections.approaching?.([{ target, isIntersecting: false, boundingClientRect: { height: 120 } }]);
   assert.equal(states.at(-1)?.visible, false);
 
   targetRect = { bottom: 320, height: 120, top: 200 };
-  owner.refresh();
+  owner.refresh("approaching");
 
   assert.deepEqual(states.at(-1), { visible: true, height: 120 });
   owner.dispose();

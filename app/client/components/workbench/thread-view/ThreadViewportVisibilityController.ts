@@ -1,13 +1,13 @@
 /* Exports: default ThreadViewportVisibilityController shares viewport observation and measured visibility.
  * ThreadContentVisibility describes actual visibility and measured block height.
- * ThreadContentVisibilityRange selects exact viewport or nearby overscan observation.
+ * ThreadContentVisibilityRange selects exact, approaching, or nearby viewport observation.
  */
 export interface ThreadContentVisibility {
   visible: boolean;
   height: number;
 }
 
-export type ThreadContentVisibilityRange = "nearby" | "viewport";
+export type ThreadContentVisibilityRange = "approaching" | "nearby" | "viewport";
 
 interface Observer {
   observe(target: Element): void;
@@ -33,6 +33,8 @@ export default class ThreadViewportVisibilityController {
   }>();
   private readonly observers: Observers;
   private readonly viewportIntersection: Observer;
+  private approachingIntersection: Observer;
+  private approachingIntersectionGeneration = 0;
   private nearbyIntersection: Observer;
   private nearbyIntersectionGeneration = 0;
   private readonly resize: Observer;
@@ -46,6 +48,7 @@ export default class ThreadViewportVisibilityController {
       "viewport",
       0,
     );
+    this.approachingIntersection = this.createApproachingIntersection();
     this.nearbyIntersection = this.createNearbyIntersection();
     this.resize = observers.resize(entries => {
       for (const entry of entries) {
@@ -79,6 +82,7 @@ export default class ThreadViewportVisibilityController {
   }
 
   dispose() {
+    this.approachingIntersection.disconnect();
     this.nearbyIntersection.disconnect();
     this.viewportIntersection.disconnect();
     this.resize.disconnect();
@@ -87,7 +91,9 @@ export default class ThreadViewportVisibilityController {
 
   refresh(range: ThreadContentVisibilityRange = "nearby") {
     const rootRect = this.observers.root.getBoundingClientRect();
-    const margin = range === "nearby" ? this.rootHeight : 0;
+    const margin = range === "nearby" ? this.rootHeight
+      : range === "approaching" ? this.rootHeight / 4
+        : 0;
     const top = rootRect.top - margin;
     const bottom = rootRect.bottom + margin;
     for (const [target, current] of this.entries) {
@@ -101,6 +107,14 @@ export default class ThreadViewportVisibilityController {
     }
   }
 
+  private createApproachingIntersection() {
+    const generation = ++this.approachingIntersectionGeneration;
+    return this.observers.intersection((entries) => {
+      if (generation !== this.approachingIntersectionGeneration) return;
+      this.receiveIntersections("approaching", entries);
+    }, "approaching", this.rootHeight / 4);
+  }
+
   private createNearbyIntersection() {
     const generation = ++this.nearbyIntersectionGeneration;
     return this.observers.intersection((entries) => {
@@ -110,7 +124,9 @@ export default class ThreadViewportVisibilityController {
   }
 
   private intersectionFor(range: ThreadContentVisibilityRange) {
-    return range === "nearby" ? this.nearbyIntersection : this.viewportIntersection;
+    return range === "nearby" ? this.nearbyIntersection
+      : range === "approaching" ? this.approachingIntersection
+        : this.viewportIntersection;
   }
 
   private receiveIntersections(
@@ -131,12 +147,16 @@ export default class ThreadViewportVisibilityController {
     const height = this.observers.root.getBoundingClientRect().height;
     if (height === this.rootHeight) return;
     this.rootHeight = height;
-    const previous = this.nearbyIntersection;
+    const previousApproaching = this.approachingIntersection;
+    const previousNearby = this.nearbyIntersection;
+    this.approachingIntersection = this.createApproachingIntersection();
     this.nearbyIntersection = this.createNearbyIntersection();
     for (const [target, entry] of this.entries) {
+      if (entry.range === "approaching") this.approachingIntersection.observe(target);
       if (entry.range === "nearby") this.nearbyIntersection.observe(target);
     }
-    previous.disconnect();
+    previousApproaching.disconnect();
+    previousNearby.disconnect();
   }
 
   private update(target: HTMLElement, state: ThreadContentVisibility) {
