@@ -37,6 +37,11 @@ type networkDevice struct {
 	Online bool `json:"online"`
 }
 
+func browsingDevice(nodeID, name string, online bool) (networkDevice, bool) {
+	if nodeID == "" || strings.HasPrefix(name, "wb-") { return networkDevice{}, false }
+	return networkDevice{NodeID: nodeID, Name: name, Online: online}, true
+}
+
 type networkGroupController struct {
 	node *privateNetwork
 	authority *networkAuthority
@@ -366,7 +371,9 @@ func (group *networkGroupController) discover(ctx context.Context, selection ...
 	if err != nil { return errors.New("Tailscale app discovery is unavailable") }
 	devices := make([]networkDevice, 0, len(status.Peer))
 	for _, peer := range status.Peer {
-		if peer.ID != "" { devices = append(devices, networkDevice{NodeID: string(peer.ID), Name: peer.HostName, Online: peer.Online}) }
+		if device, visible := browsingDevice(string(peer.ID), peer.HostName, peer.Online); visible {
+			devices = append(devices, device)
+		}
 	}
 	if len(devices) > 4096 { return errors.New("Tailscale device directory exceeds its supported limit") }
 	group.node.change(func(status *privateStatus) { status.Devices = devices })
@@ -375,6 +382,15 @@ func (group *networkGroupController) discover(ctx context.Context, selection ...
 		group.mu.Lock()
 		defer group.mu.Unlock()
 		if !group.isOwner() { return errors.New("network ownership changed during discovery; reconnect to its current owner") }
+		directory := *group.directory()
+		self := group.node.snapshot().NodeID
+		hostNodeID := ""
+		if group.hostNodeID != nil { hostNodeID = group.hostNodeID() }
+		if self != nil {
+			if repaired, changed := reconcileHostIdentity(directory, *self, hostNodeID); changed {
+				if err := group.store(ctx, repaired); err != nil { return err }
+			}
+		}
 		group.node.change(func(status *privateStatus) { status.Discovery = "joined" })
 		return group.publish(ctx)
 	}
@@ -445,6 +461,19 @@ func (group *networkGroupController) discover(ctx context.Context, selection ...
 	}
 	group.node.change(func(status *privateStatus) { status.Discovery, status.Networks, status.Message = "joined", nil, nil })
 	return nil
+}
+
+func reconcileHostIdentity(directory networkDirectory, appNodeID, hostNodeID string) (networkDirectory, bool) {
+	if appNodeID == "" || hostNodeID == "" { return directory, false }
+	for index, member := range directory.Members {
+		if member.NodeID != appNodeID { continue }
+		if member.HostNodeID == hostNodeID { return directory, false }
+		directory.Members = slices.Clone(directory.Members)
+		directory.Members[index].HostNodeID = hostNodeID
+		directory.Group.Revision++
+		return directory, true
+	}
+	return directory, false
 }
 
 func (group *networkGroupController) acceptEnrolment(ctx context.Context, ownerID, hostname string, key *ecdsa.PrivateKey, welcome groupWelcome) error {

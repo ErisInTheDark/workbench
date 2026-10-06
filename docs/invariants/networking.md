@@ -1,4 +1,5 @@
 - Keep local app and daemon listeners loopback-only; remote access uses readiness-verified published endpoints and re-resolves after reconnect. Missing or stale publication is unavailable, never a guessed port.
+- Keep host-device identity independent from publication; each installation's host device always accesses its own app. Exclude internal `wb-*` app nodes from browsing-device policy rows.
 - Browser workspace state and commands use one app WebSocket; app owns cross-daemon routing and independent daemon connections.
 - App admission grants its reachable daemon workspace. Authenticate each hop and apply the connecting machine's existing grants.
 - Authenticate remote app and daemon ingress through Tailscale; discard caller-supplied identity headers, enforce the network owner's grants on every published transport, and close owned connections on revocation.

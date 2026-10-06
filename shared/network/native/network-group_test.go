@@ -75,3 +75,41 @@ func TestDirectoryConflicts(t *testing.T) {
 	directory.Group.DNSNodeID = "missing"
 	if directory.validate() == nil { t.Fatal("unknown nameserver accepted") }
 }
+
+func TestBrowsingDeviceDirectoryExcludesWorkbenchAppNodes(t *testing.T) {
+	for _, test := range []struct {
+		id, name string
+		online bool
+		visible bool
+	}{
+		{id: "host", name: "Velvet", online: true, visible: true},
+		{id: "offline", name: "BinkyMachine", visible: true},
+		{id: "app", name: "wb-velvet", online: true, visible: false},
+		{id: "other-app", name: "wb-unenrolled", visible: false},
+		{name: "missing-id", online: true, visible: false},
+	} {
+		device, visible := browsingDevice(test.id, test.name, test.online)
+		if visible != test.visible {
+			t.Fatalf("browsingDevice(%q, %q) visible = %v", test.id, test.name, visible)
+		}
+		if visible && (device.NodeID != test.id || device.Name != test.name || device.Online != test.online) {
+			t.Fatalf("browsingDevice(%q, %q) returned %#v", test.id, test.name, device)
+		}
+	}
+}
+
+func TestHostIdentityRepairChangesDirectoryOnce(t *testing.T) {
+	directory := directoryFixture()
+	repaired, changed := reconcileHostIdentity(directory, "desktop", "desktop-host")
+	if !changed || repaired.Group.Revision != directory.Group.Revision+1 ||
+		repaired.Members[0].HostNodeID != "desktop-host" {
+		t.Fatalf("host identity was not repaired: %#v", repaired)
+	}
+	unchanged, changed := reconcileHostIdentity(repaired, "desktop", "desktop-host")
+	if changed || unchanged.Group.Revision != repaired.Group.Revision {
+		t.Fatal("an unchanged host identity created directory revision churn")
+	}
+	if directory.Members[0].HostNodeID != "" {
+		t.Fatal("host identity repair mutated the previous directory snapshot")
+	}
+}

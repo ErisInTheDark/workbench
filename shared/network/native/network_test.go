@@ -3,11 +3,16 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
+
+	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -67,6 +72,23 @@ func TestSelfAccessUsesHostIdentityAndCurrentApp(t *testing.T) {
 	owner.config.Configuration.PrivateAccess = &privateConfiguration{Label: "desktop"}
 	owner.config.Configuration.Members = []networkMember{{NodeID: app, Label: "desktop"}}
 	if !owner.ownsConnection(host, app) { t.Fatal("temporarily offline private node lost its stored app identity") }
+}
+
+func TestHostIdentitySurvivesServePublicationFailure(t *testing.T) {
+	identity, err := hostIdentityFromStatus(&ipnstate.Status{
+		BackendState: "Running",
+		TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.80.0.4")},
+		Self: &ipnstate.PeerStatus{ID: tailcfg.StableNodeID("velvet-host"), HostName: "Velvet"},
+	})
+	if err != nil { t.Fatal(err) }
+	owner := &networkProcess{output: io.Discard, runtime: networkRuntime{Host: identity}}
+	owner.config.Configuration.Group = &networkGroup{Access: "selected"}
+	owner.config.Configuration.PrivateAccess = &privateConfiguration{Label: "velvet"}
+	owner.config.Configuration.Members = []networkMember{{NodeID: "velvet-app", Label: "velvet"}}
+	owner.hostFailure(errors.New("serve publication failed"))
+	if !owner.ownsConnection("velvet-host", "velvet-app") {
+		t.Fatal("serve publication failure erased this device's own app access")
+	}
 }
 
 func TestProxyFollowsAppPortAndPreservesRequestSemantics(t *testing.T) {

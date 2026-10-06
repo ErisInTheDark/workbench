@@ -3,8 +3,8 @@
   "artifacts": {
     "windows-x64": {
       "file": "windows-x64/workbench-network.exe",
-      "sha256": "4e8649d99018cf821a78d4bb59288134c1869b9b7f610b949c0b3de3d2f1f15a",
-      "sourceHash": "e6e95afa5e83df4a785a61ee8639e91e224355b57911ab84ca243b194b2a581e"
+      "sha256": "6132cc9dd1e2e75dc63145a0fbacec4226f2120f5f2ffcdc740c632d0028c96b",
+      "sourceHash": "3fb3425e261b082bd7960c512b80c66f9e8f0ef9eea256be7bb4d719963b1dec"
     }
   }
 }

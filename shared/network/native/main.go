@@ -18,6 +18,8 @@ import (
 	"sync"
 	"syscall"
 
+	"tailscale.com/client/local"
+	"tailscale.com/ipn/ipnstate"
 )
 
 type pipeWriter struct {
@@ -427,7 +429,11 @@ func (owner *networkProcess) configureHost(ctx context.Context, configuration si
 		}
 		return
 	}
-	var err error
+	host, err := owner.refreshHostIdentity(ctx)
+	if err != nil {
+		owner.hostFailure(err)
+		return
+	}
 	if owner.ingress == nil {
 		owner.ingress, err = startHostIngress(owner.ctx, &owner.targets, &owner.access, owner.appNodeID, owner.hostFailure)
 		if err != nil { owner.hostFailure(err); return }
@@ -458,20 +464,7 @@ func (owner *networkProcess) configureHost(ctx context.Context, configuration si
 		owner.hostFailure(err)
 		return
 	}
-	status, err := owner.host.client.Status(ctx)
-	if err != nil || status == nil || status.BackendState != "Running" || len(status.TailscaleIPs) == 0 {
-		owner.hostFailure(errors.New("host Tailscale is not connected; connect it and retry the static port"))
-		return
-	}
-	ip := status.TailscaleIPs[0].String()
-	for _, address := range status.TailscaleIPs {
-		if address.Is4() { ip = address.String(); break }
-	}
-	hostname := ""
-	if status.Self != nil {
-		hostname = strings.Split(status.Self.DNSName, ".")[0]
-		if hostname == "" { hostname = status.Self.HostName }
-	}
+	ip := *host.Address
 	address := "http://" + net.JoinHostPort(ip, strconv.Itoa(int(settings.Port)))
 	daemonAddress := "http://" + net.JoinHostPort(ip, strconv.Itoa(int(daemonTailnetPort)))
 	owner.mu.Lock()
@@ -487,13 +480,36 @@ func (owner *networkProcess) configureHost(ctx context.Context, configuration si
 			message := publication.daemonError.Error()
 			owner.runtime.DaemonServe = modeStatus{Phase: "failed", Message: &message}
 		}
-		owner.runtime.Host = hostIdentity{Hostname: &hostname, Address: &ip}
-		if status.Self != nil {
-			nodeID := string(status.Self.ID)
-			owner.runtime.Host.NodeID = &nodeID
-		}
 	}
 	owner.mu.Unlock()
+}
+
+func hostIdentityFromStatus(status *ipnstate.Status) (hostIdentity, error) {
+	if status == nil || status.BackendState != "Running" || status.Self == nil ||
+		status.Self.ID == "" || len(status.TailscaleIPs) == 0 {
+		return hostIdentity{}, errors.New("host Tailscale is not connected; connect it and retry networking")
+	}
+	ip := status.TailscaleIPs[0].String()
+	for _, address := range status.TailscaleIPs {
+		if address.Is4() { ip = address.String(); break }
+	}
+	hostname := strings.Split(status.Self.DNSName, ".")[0]
+	if hostname == "" { hostname = status.Self.HostName }
+	nodeID := string(status.Self.ID)
+	return hostIdentity{NodeID: &nodeID, Hostname: &hostname, Address: &ip}, nil
+}
+
+func (owner *networkProcess) refreshHostIdentity(ctx context.Context) (hostIdentity, error) {
+	status, err := (&local.Client{}).Status(ctx)
+	if err != nil {
+		return hostIdentity{}, errors.New("host Tailscale is unavailable; install and connect Tailscale before enabling networking")
+	}
+	identity, err := hostIdentityFromStatus(status)
+	if err != nil { return hostIdentity{}, err }
+	owner.mu.Lock()
+	owner.runtime.Host = identity
+	owner.mu.Unlock()
+	return identity, nil
 }
 
 func (owner *networkProcess) hostFailure(err error) {
