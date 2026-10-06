@@ -85,6 +85,22 @@ export default class ThreadViewportVisibilityController {
     this.entries.clear();
   }
 
+  refresh(range: ThreadContentVisibilityRange = "nearby") {
+    const rootRect = this.observers.root.getBoundingClientRect();
+    const margin = range === "nearby" ? this.rootHeight : 0;
+    const top = rootRect.top - margin;
+    const bottom = rootRect.bottom + margin;
+    for (const [target, current] of this.entries) {
+      if (current.range !== range) continue;
+      const rect = target.getBoundingClientRect();
+      const height = current.state.visible && rect.height > 0 ? rect.height : current.state.height;
+      this.update(target, {
+        visible: rect.bottom >= top && rect.top <= bottom || height === 0,
+        height,
+      });
+    }
+  }
+
   private createNearbyIntersection() {
     const generation = ++this.nearbyIntersectionGeneration;
     return this.observers.intersection((entries) => {

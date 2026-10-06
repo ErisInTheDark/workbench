@@ -2337,7 +2337,7 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
       key={key}
     >
       {(animate) => <div className={animate ? `block ${enterMotionClassName}` : undefined}>
-        <ThreadMeasuredContent>
+        <ThreadMeasuredContent windowed>
           {entry.kind === "generic" ? (
             <ThreadGenericItem item={entry.item} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
           ) : (

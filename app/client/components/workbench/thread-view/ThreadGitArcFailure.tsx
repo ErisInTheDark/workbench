@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useContext } from "react";
+import { useContext, type ContextType } from "react";
 
 import { describeGitArcFailure, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -18,6 +18,54 @@ import { useThreadCollisionEntries } from "../use-workbench-client";
 
 function identityKey(harness: string, threadId: string) {
   return `${harness.toLowerCase()}\0${threadId.toLowerCase()}`;
+}
+
+type GitArcConflict = Extract<GitArcFailure, { code: "siblingClaimCollision" }>["conflicts"][number];
+
+function MissingConflictOwners({ owners }: { owners: readonly GitArcConflict["owner"][] }) {
+  return owners.length ? (
+    <ul className="m-0 flex flex-col gap-1 py-1 text-[0.9em]">
+      {owners.map((owner) => (
+        <li className="min-w-0" key={identityKey(owner.harness, owner.threadId)}>
+          <span className="font-medium text-text">{owner.title || owner.intentName}</span>
+          <span className="ml-2 text-fg/muted">{owner.lifecycle}</span>
+          <span className="ml-2 font-mono text-fg/muted">{owner.checkpointCommit.slice(0, 8)}</span>
+        </li>
+      ))}
+    </ul>
+  ) : null;
+}
+
+function LiveConflictOwners({
+  conflicts,
+  onOpenThread,
+  threadId,
+}: {
+  conflicts: readonly GitArcConflict[];
+  onOpenThread: NonNullable<NonNullable<ContextType<typeof ThreadGitArcPresentationContext>>["onOpenThread"]>;
+  threadId: string;
+}) {
+  const { entries, logicalProjectId, ownerProjectId } = useThreadCollisionEntries(
+    threadId,
+    conflicts.map(({ owner }) => owner),
+  );
+  const liveKeys = new Set(entries.map((entry) => identityKey(entry.identity.harness, entry.identity.threadId)));
+  const missingOwners = conflicts.map(({ owner }) => owner)
+    .filter((owner) => !liveKeys.has(identityKey(owner.harness, owner.threadId)));
+  return (
+    <>
+      {entries.length && ownerProjectId ? (
+        <WorkbenchThreadReferenceList
+          references={entries.map((entry) => ({
+            entry, identity: entry.identity, paths: [], projectId: ownerProjectId,
+            logicalProjectId, title: entry.title,
+          }))}
+          onOpenThread={onOpenThread}
+        />
+      ) : null}
+      <MissingConflictOwners owners={missingOwners} />
+    </>
+  );
 }
 
 export default function ThreadGitArcFailure({
@@ -37,12 +85,6 @@ export default function ThreadGitArcFailure({
   const resolvedProjectId = projectId ?? presentationContext?.projectId ?? null;
   const presentation = describeGitArcFailure(failure);
   const conflicts = failure.code === "siblingClaimCollision" || failure.code === "planDrift" ? failure.conflicts : [];
-  const { entries: liveEntries, logicalProjectId, ownerProjectId } = useThreadCollisionEntries(
-    presentationContext?.threadId ?? "", conflicts.map(({ owner }) => owner),
-  );
-  const liveKeys = new Set(liveEntries.map((entry) => identityKey(entry.identity.harness, entry.identity.threadId)));
-  const missingOwners = conflicts.map(({ owner }) => owner).filter((owner) => !liveKeys.has(identityKey(owner.harness, owner.threadId)));
-  const canRenderLiveThreads = Boolean(liveEntries.length && ownerProjectId && presentationContext?.onOpenThread);
   const rejection = failure.code === "rejection" ? failure.rejection : null;
   const rejectedPaths = rejection && "paths" in rejection ? rejection.paths
     : rejection && "path" in rejection ? [rejection.path] : [];
@@ -50,8 +92,7 @@ export default function ThreadGitArcFailure({
     : rejection && "rootId" in rejection ? [rejection.rootId] : [];
   const hasIntersectionFacts = Boolean(
     (failure.code === "planDrift" && failure.commits.length)
-    || canRenderLiveThreads
-    || missingOwners.length,
+    || conflicts.length,
   );
   const hasOutsideFacts = Boolean(
     failure.code === "acceptedProposals"
@@ -91,26 +132,13 @@ export default function ThreadGitArcFailure({
             {failure.code === "planDrift" && failure.commits.length ? (
               <ThreadGitArcCommitList commits={failure.commits} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
             ) : null}
-            {canRenderLiveThreads ? (
-              <WorkbenchThreadReferenceList
-                references={liveEntries.map((entry) => ({
-                  entry, identity: entry.identity, paths: [], projectId: ownerProjectId!,
-                  logicalProjectId, title: entry.title,
-                }))}
-                onOpenThread={presentationContext!.onOpenThread!}
+            {conflicts.length && presentationContext?.threadId && presentationContext.onOpenThread ? (
+              <LiveConflictOwners
+                conflicts={conflicts}
+                onOpenThread={presentationContext.onOpenThread}
+                threadId={presentationContext.threadId}
               />
-            ) : null}
-            {missingOwners.length ? (
-              <ul className="m-0 flex flex-col gap-1 py-1 text-[0.9em]">
-                {missingOwners.map((owner) => (
-                  <li className="min-w-0" key={identityKey(owner.harness, owner.threadId)}>
-                    <span className="font-medium text-text">{owner.title || owner.intentName}</span>
-                    <span className="ml-2 text-fg/muted">{owner.lifecycle}</span>
-                    <span className="ml-2 font-mono text-fg/muted">{owner.checkpointCommit.slice(0, 8)}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
+            ) : <MissingConflictOwners owners={conflicts.map(({ owner }) => owner)} />}
           </div>
         ) : null}
       </div>

@@ -183,14 +183,20 @@ function ActiveThreadScrollViewport ({
       viewport.dataset.threadScrollDirection = direction;
     };
     const handleScroll = () => {
+      const previousScrollTop = previousScrollTopRef.current;
+      const scrollTop = viewport.scrollTop;
       setScrollDirection(resolveThreadScrollDirection(
         directionRef.current,
-        previousScrollTopRef.current,
-        viewport.scrollTop,
+        previousScrollTop,
+        scrollTop,
         pointerScrollActiveRef.current && pointerScrollMovedRef.current,
       ));
+      if (Math.abs(scrollTop - previousScrollTop) >= viewport.clientHeight) {
+        visibility.current?.refresh("nearby");
+        visibility.current?.refresh("viewport");
+      }
       pointerScrollMovedRef.current = false;
-      previousScrollTopRef.current = viewport.scrollTop;
+      previousScrollTopRef.current = scrollTop;
       syncScrollProximity(viewport);
     };
     const handleWheel = (event: WheelEvent) => {

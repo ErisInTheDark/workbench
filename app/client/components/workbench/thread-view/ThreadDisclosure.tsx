@@ -8,6 +8,7 @@
 import { useEffect, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import ChevronIcon from "../ChevronIcon";
+import { useThreadWindowPin } from "./ThreadMeasuredContent";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -73,11 +74,16 @@ export default function ThreadDisclosure ({
   const [uncontrolledOpen, setUncontrolledOpen] = useState(Boolean(open ?? defaultIsOpen));
   const isOpen = isControlled ? Boolean(open) : uncontrolledOpen;
   const [hasMountedContent, setHasMountedContent] = useState(isOpen);
+  // Only user-changed disclosures pin their windowed ancestors. Untouched controlled/default state remounts identically.
+  const windowPin = useThreadWindowPin();
+  useEffect(() => {
+    if (!hasUserToggled) return;
+    windowPin.pin();
+    return () => windowPin.unpin();
+  }, [hasUserToggled, windowPin]);
 
   function markUserToggleIntent () {
-    if (!isControlled) {
-      setHasUserToggled(true);
-    }
+    setHasUserToggled(true);
   }
 
   function handleSummaryKeyDown (event: KeyboardEvent<HTMLElement>) {

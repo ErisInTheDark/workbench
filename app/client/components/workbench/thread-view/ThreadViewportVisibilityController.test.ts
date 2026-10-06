@@ -92,3 +92,32 @@ test("unmeasured content is not hidden using a fabricated height", () => {
   assert.equal(states.some(state => !state.visible), false);
   owner.dispose();
 });
+
+test("large-jump refresh activates nearby placeholders before intersection delivery", () => {
+  const intersections: Partial<Record<"nearby" | "viewport", (entries: readonly {
+    target: Element;
+    isIntersecting: boolean;
+    boundingClientRect: { height: number };
+  }[]) => void>> = {};
+  const root = {
+    getBoundingClientRect: () => ({ bottom: 740, height: 640, top: 100 }),
+  } as HTMLElement;
+  let targetRect = { bottom: 2_120, height: 120, top: 2_000 };
+  const target = { getBoundingClientRect: () => targetRect } as HTMLElement;
+  const states: Array<{ visible: boolean; height: number }> = [];
+  const observer = { observe: () => {}, unobserve: () => {}, disconnect: () => {} };
+  const owner = new ThreadViewportVisibilityController({
+    root,
+    intersection: (callback, range) => { intersections[range] = callback; return observer; },
+    resize: () => observer,
+  });
+  owner.observe(target, state => states.push(state), "nearby");
+  intersections.nearby?.([{ target, isIntersecting: false, boundingClientRect: { height: 120 } }]);
+  assert.equal(states.at(-1)?.visible, false);
+
+  targetRect = { bottom: 320, height: 120, top: 200 };
+  owner.refresh();
+
+  assert.deepEqual(states.at(-1), { visible: true, height: 120 });
+  owner.dispose();
+});

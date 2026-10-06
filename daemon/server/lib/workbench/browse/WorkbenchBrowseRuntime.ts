@@ -275,7 +275,8 @@ export default class WorkbenchBrowseRuntime {
         }, timeoutMs, signal);
       }
       case "command": {
-        const status = await this.readStatus(request.session, Math.min(remainingTimeout(deadline, request.session), 5_000), signal);
+        // A busy page can delay the daemon's status response; give it the command's own deadline so a slow but live session is not retired.
+        const status = await this.readStatus(request.session, remainingTimeout(deadline, request.session), signal);
         if (!status) throw new Error(`Browse session ${request.session} is not running. Open it before sending browser commands.`);
         const timeoutMs = remainingTimeout(deadline, request.session);
         return await this.client.request(request.session, {
