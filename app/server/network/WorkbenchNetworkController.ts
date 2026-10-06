@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchNetworkController: own app settings handoff and a private service session.
+ * - default WorkbenchNetworkController: own app settings handoff and a private service session, relaunching a lost host while the app runs.
  */
 import {
   WorkbenchNetworkActionSchema, workbenchNetworkMode,
@@ -16,7 +16,18 @@ import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 
 type SettingsCaller = { deviceNodeId: string | null; origin: string };
-type ServiceClient = Pick<WorkbenchServiceClient, "start" | "close" | "request" | "subscribe" | "getSnapshot">;
+type ServiceClient = Pick<WorkbenchServiceClient, "start" | "close" | "reconnect" | "request" | "subscribe" | "getSnapshot">;
+/** Delays before each further relaunch attempt after a failed one; the last repeats while the app stays open. */
+const RELAUNCH_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000, 60_000] as const;
+
+function abortableDelay(delayMs: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) { reject(signal.reason); return; }
+    const abort = () => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => { signal.removeEventListener("abort", abort); resolve(); }, delayMs);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
 type Registration = Extract<WorkbenchServiceIntent, { method: "service/app/register" }>["registration"];
 type PendingSettings = {
   token: string;
@@ -59,10 +70,14 @@ export default class WorkbenchNetworkController {
   private registered: { generation: number; value: Registration } | null = null;
   private registrationWork: { generation: number; promise: Promise<void> } | null = null;
   private registrationFailure: { generation: number; message: string } | null = null;
+  private serviceWasReady = false;
+  private relaunching: Promise<void> | null = null;
 
   constructor(private readonly options: {
     endpointPath: string;
     ensure(signal: AbortSignal): Promise<void>;
+    /** Relaunch backoff wait; tests replace the timer. */
+    sleep?: (delayMs: number, signal: AbortSignal) => Promise<void>;
     readTarget: () => { appOrigin: string } | null;
     wakeLocal: boolean;
     appPort?: Pick<WorkbenchAppPortControl, "read" | "current" | "update">;
@@ -143,6 +158,8 @@ export default class WorkbenchNetworkController {
   private acceptService(client: ServiceClient, session: AbortController) {
     if (session.signal.aborted || this.client !== client || this.phase !== "active") return;
     const state = client.getSnapshot();
+    if (state.phase === "failed") this.relaunchHost(client, session, this.serviceWasReady);
+    this.serviceWasReady = state.phase === "ready";
     const network = state.snapshot?.network;
     if (network) {
       this.configuration = network.configuration;
@@ -166,6 +183,39 @@ export default class WorkbenchNetworkController {
       });
     }
     this.publish();
+  }
+
+  /**
+   * The app owns its host's presence while it runs. A lost host is relaunched at once; a failed relaunch (or a failed
+   * first launch) retries with backoff until the service is ready again. The session signal cancels the whole chain.
+   */
+  private relaunchHost(client: ServiceClient, session: AbortController, immediately: boolean) {
+    if (this.relaunching) return;
+    const sleep = this.options.sleep ?? abortableDelay;
+    const relaunching = (async () => {
+      for (let attempt = immediately ? 0 : 1; ; attempt++) {
+        if (attempt > 0) await sleep(RELAUNCH_BACKOFF_MS[Math.min(attempt, RELAUNCH_BACKOFF_MS.length) - 1]!, session.signal);
+        if (session.signal.aborted || this.client !== client) return;
+        try {
+          await this.options.ensure(session.signal);
+          await client.reconnect();
+          return;
+        } catch (error) {
+          if (session.signal.aborted || this.client !== client) return;
+          this.report(error);
+        }
+      }
+    })().catch((error: unknown) => {
+      // Only cancellation ends the chain early; the session's owner is already retiring it.
+      if (!session.signal.aborted && this.client === client) this.report(error);
+    }).finally(() => {
+      if (this.relaunching === relaunching) this.relaunching = null;
+      // A loss reported while this chain was finishing found it still running; it is a fresh loss of a ready host.
+      if (!session.signal.aborted && this.client === client && this.phase === "active" && client.getSnapshot().phase === "failed") {
+        this.relaunchHost(client, session, true);
+      }
+    });
+    this.relaunching = relaunching;
   }
 
   snapshot(): WorkbenchNetworkSnapshot {
@@ -342,10 +392,12 @@ export default class WorkbenchNetworkController {
     this.registered = null;
     this.registrationFailure = null;
     this.ingressToken = null;
+    this.serviceWasReady = false;
     try { await child?.close(); }
     finally {
       if (this.operation) await Promise.allSettled([this.operation]);
       if (this.startup) await this.startup;
+      if (this.relaunching) await this.relaunching;
       if (this.registrationWork) await Promise.allSettled([this.registrationWork.promise]);
       this.registrationWork = null;
       this.change = null;

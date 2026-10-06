@@ -81,6 +81,7 @@ function fixture(privateIssue?: () => string | null) {
           if (!hostStarted) { await host.start(); hostStarted = true; }
           ready = true; emit();
         },
+        reconnect: async () => {},
         getSnapshot: () => ({ phase: ready ? "ready" as const : "connecting" as const, generation: 1, snapshot: ready ? snapshot() : null, failure: null }),
         subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
         request: async intent => {
@@ -534,6 +535,58 @@ test("approval persists the exact pending identity before releasing certificate 
   assert.deepEqual(f.calls.at(-1), { action: "approve-member", requestId: "request", member });
   await assert.rejects(f.owner.action({ action: "approve", requestId: "missing", approved: true }));
   await f.owner.close();
+});
+
+test("a host lost after readiness is relaunched with backoff, and closing the app cancels the retries", async () => {
+  let phase: "connecting" | "ready" | "failed" = "connecting";
+  const listeners = new Set<() => void>();
+  const emit = () => { for (const listener of listeners) listener(); };
+  let ensures = 0;
+  let failingEnsures = 0;
+  let blockSleeps = false;
+  const sleeps: number[] = [];
+  let reconnected!: () => void;
+  const owner = new WorkbenchNetworkController({
+    endpointPath: "unused", wakeLocal: false, warn: () => {}, readTarget: () => null,
+    ensure: async () => {
+      ensures++;
+      if (failingEnsures > 0) { failingEnsures--; throw new Error("Workbench host stopped before readiness."); }
+    },
+    sleep: (delayMs, signal) => {
+      sleeps.push(delayMs);
+      return blockSleeps
+        ? new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }))
+        : Promise.resolve();
+    },
+    createClient: () => ({
+      start: async () => { phase = "ready"; emit(); },
+      reconnect: async () => { phase = "ready"; emit(); reconnected(); },
+      getSnapshot: () => ({ phase, generation: 1, snapshot: null, failure: phase === "failed" ? "Service connection closed." : null }),
+      subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      request: async () => ({ kind: "ok" as const, id: "fixture" }),
+      close: async () => {},
+    }),
+  });
+  const ready = new Promise<void>(resolve => { reconnected = resolve; });
+  owner.start();
+  await new Promise<void>(resolve => { const stop = owner.subscribe(() => { if (phase === "ready") { stop(); resolve(); } }); });
+  assert.equal(ensures, 1);
+
+  // Lost after readiness: relaunch at once, then back off between failed relaunches until one succeeds.
+  failingEnsures = 2;
+  phase = "failed";
+  emit();
+  await ready;
+  assert.deepEqual([ensures, sleeps], [4, [2_000, 5_000]]);
+
+  // A relaunch still backing off ends with the app instead of outliving it.
+  failingEnsures = Number.POSITIVE_INFINITY;
+  blockSleeps = true;
+  phase = "failed";
+  emit();
+  while (sleeps.length < 3) await new Promise<void>(resolve => { setImmediate(resolve); });
+  await owner.close();
+  assert.deepEqual([ensures, sleeps], [5, [2_000, 5_000, 2_000]]);
 });
 
 test("app reload detaches its session without stopping independent networking", async () => {

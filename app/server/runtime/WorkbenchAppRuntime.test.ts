@@ -307,6 +307,7 @@ test("reloads the database with a fresh repository constructor and no process re
       wakeLocal: false,
       createClient: () => ({
         start: async () => {},
+        reconnect: async () => {},
         close: async () => {},
         request: async () => ({ kind: "ok", id: "fixture" }),
         subscribe: () => () => {},
