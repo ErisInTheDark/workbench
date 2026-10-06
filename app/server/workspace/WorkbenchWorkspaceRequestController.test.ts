@@ -54,6 +54,41 @@ test("git summary routes through the observed folder's daemon and rejects missin
   assert.equal(calls.length, 1);
 });
 
+test("Git arc thread routing canonicalises the owner without forwarding project identity", async context => {
+  const daemonId = DaemonIdSchema.parse(randomUUID());
+  const projectId = ProjectIdSchema.parse("owner-project");
+  const requestedThreadId = ThreadReferenceSchema.parse("provider-thread");
+  const threadId = WorkbenchThreadIdSchema.parse(randomUUID());
+  const calls: Array<{ method: string; params: object }> = [];
+  const result = { conflictedPaths: [], phase: "stashed", stashedPaths: ["src/changed.ts"] };
+  const owner = {
+    phase: "current" as const,
+    identity: { harness: "codex" as const, projectId, threadId },
+    location: { daemonId, projectId },
+    logicalProjectId: null,
+  };
+  const f = await fixture(context, undefined, {
+    withThread: async (id, action) => {
+      assert.equal(id, requestedThreadId);
+      return await action({
+        request: async (method: string, params: object) => {
+          calls.push({ method, params });
+          return result;
+        },
+      } as never, owner);
+    },
+  });
+
+  assert.deepEqual(await f.owner.command(WorkspaceCommandSchema.parse({
+    method: "git/arc/stash",
+    params: { cwd: "C:/repo", harness: "codex", threadId: requestedThreadId },
+  })), result);
+  assert.deepEqual(calls, [{
+    method: "git/arc/stash",
+    params: { cwd: "C:/repo", harness: "codex", threadId },
+  }]);
+});
+
 test("daemon compaction settings route to the selected installation without a project", async context => {
   const daemonId = DaemonIdSchema.parse(randomUUID());
   const calls: Array<{ method: string; params: object }> = [];
@@ -91,7 +126,11 @@ function state(revision: number): WorkbenchClientStateResponse {
 }
 
 /** `daemons` replaces daemon lookup for the request owner only, standing in for connected sources. */
-async function fixture(context: TestContext, daemons?: { get(daemonId: string): object | undefined }, owners?: Pick<WorkbenchWorkspaceThreads, "observe">) {
+async function fixture(
+  context: TestContext,
+  daemons?: { get(daemonId: string): object | undefined },
+  owners?: Partial<Pick<WorkbenchWorkspaceThreads, "observe" | "withThread">>,
+) {
   const temporary = await WorkbenchTemporaryDirectory.create("workspace-request-owner-");
   const directory = temporary.path;
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(directory, "presentation.sqlite3") });

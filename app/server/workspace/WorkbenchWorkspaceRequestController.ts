@@ -342,12 +342,13 @@ export default class WorkbenchWorkspaceRequestController {
         }), this.cancellation.signal);
     }
     const route = workspaceCommandRoutes[command.method];
-    if (route === "thread") {
+    if (route === "thread" || route === "threadCwd") {
       const threadId = command.params.threadId;
       if (typeof threadId !== "string") throw new Error("Thread identity is required.");
       return this.options.threads.withThread(threadId, (source, owner) =>
         source.request<Json>(command.method, {
-          ...command.params, threadId: owner.identity.threadId, projectId: owner.location.projectId,
+          ...command.params, threadId: owner.identity.threadId,
+          ...(route === "thread" ? { projectId: owner.location.projectId } : {}),
         }), this.cancellation.signal);
     }
     if (route === "session") {

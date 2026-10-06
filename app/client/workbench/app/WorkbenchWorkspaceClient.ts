@@ -173,7 +173,7 @@ export default class WorkbenchWorkspaceClient {
         if (!(method in workspaceCommandRoutes)) throw new Error("This daemon operation is not a workspace command.");
         const route = workspaceCommandRoutes[method as WorkspaceCommandMethod];
         const fields = z.record(z.string(), z.json()).parse(JSON.parse(JSON.stringify(params)));
-        if (route === "thread" && scope?.kind === "thread") fields.threadId = scope.threadId;
+        if ((route === "thread" || route === "threadCwd") && scope?.kind === "thread") fields.threadId = scope.threadId;
         const destination = route === "folder" ? scope?.kind === "folder" || scope?.kind === "thread" ? scope : undefined
           : route === "installation" ? scope?.kind === "folder"
             ? { kind: "installation" as const, daemonId: scope.location.daemonId }

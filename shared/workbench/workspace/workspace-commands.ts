@@ -14,7 +14,9 @@
  * - WorkspaceSearchResponseSchema: source-qualified search results and partial failure.
  */
 import { z } from "zod";
-import type { WorkbenchDaemonRequestMap, WorkbenchDaemonMethod } from "../daemon/workbench-daemon-requests";
+import type {
+  WorkbenchDaemonGitArcMethod, WorkbenchDaemonRequestMap, WorkbenchDaemonMethod,
+} from "../daemon/workbench-daemon-requests";
 import { ProjectLocationReferenceSchema } from "../project/project-location";
 import { DaemonIdSchema, ThreadReferenceSchema, LogicalProjectIdSchema, ThreadDisplayKeySchema } from "../identity";
 import { WorkbenchThreadStateRequestSchema, WorkbenchHomeThreadDisplayOrderSchema, type WorkbenchThreadStateRequest } from "../thread/thread-state";
@@ -42,6 +44,10 @@ const nonCommandMethods = [
   // Browser identity lookup uses the workspace owner observation.
   "thread/identity/resolve",
 ] as const satisfies readonly WorkbenchDaemonMethod[];
+type OrdinaryWorkspaceCommandMethod = Exclude<
+  WorkbenchDaemonMethod,
+  typeof nonCommandMethods[number] | WorkbenchDaemonGitArcMethod
+>;
 
 export const workspaceCommandRoutes = {
   "project/catalog/read": "installation",
@@ -123,21 +129,21 @@ export const workspaceCommandRoutes = {
   "stats/import/start": "installation",
   "stats/rate-limits/refresh": "installation",
   "skills/read": "folder",
-  "git/arc/compare": "thread",
-  "git/arc/diff-artifact/read": "thread",
-  "git/arc/proposal/commit": "thread",
-  "git/arc/proposal/read": "thread",
-  "git/arc/proposals/summaries": "thread",
-  "git/arc/release": "thread",
-  "git/arc/remove": "thread",
-  "git/arc/restore": "thread",
-  "git/arc/stash": "thread",
-  "git/arc/unstash": "thread",
-  "git/arc/stash/discard": "thread",
-} as const satisfies Record<
-  Exclude<WorkbenchDaemonMethod, typeof nonCommandMethods[number]>,
-  "thread" | "folder" | "installation" | "session"
->;
+  "git/arc/compare": "threadCwd",
+  "git/arc/diff-artifact/read": "threadCwd",
+  "git/arc/proposal/commit": "threadCwd",
+  "git/arc/proposal/read": "threadCwd",
+  "git/arc/proposals/summaries": "threadCwd",
+  "git/arc/release": "threadCwd",
+  "git/arc/remove": "threadCwd",
+  "git/arc/restore": "threadCwd",
+  "git/arc/stash": "threadCwd",
+  "git/arc/unstash": "threadCwd",
+  "git/arc/stash/discard": "threadCwd",
+} as const satisfies (
+  Record<OrdinaryWorkspaceCommandMethod, "thread" | "folder" | "installation" | "session">
+  & Record<WorkbenchDaemonGitArcMethod, "threadCwd">
+);
 
 export type WorkspaceCommandMethod = keyof typeof workspaceCommandRoutes;
 const scope = z.discriminatedUnion("kind", [
@@ -151,7 +157,8 @@ export const WorkspaceCommandSchema = z.object({
   params: z.record(z.string(), z.json()),
 }).strict().superRefine((value, ctx) => {
   const route = workspaceCommandRoutes[value.method];
-  if (route === "thread" && (typeof value.params.threadId !== "string" || !value.params.threadId)) {
+  const threadRouted = route === "thread" || route === "threadCwd";
+  if (threadRouted && (typeof value.params.threadId !== "string" || !value.params.threadId)) {
     ctx.addIssue({ code: "custom", path: ["params", "threadId"], message: "Thread command requires its identity." });
   }
   if (route === "folder" && value.scope?.kind !== "folder" && value.scope?.kind !== "thread") {
@@ -160,7 +167,7 @@ export const WorkspaceCommandSchema = z.object({
   if (route === "session" && (typeof value.params.sessionId !== "string" || !value.params.sessionId)) {
     ctx.addIssue({ code: "custom", path: ["params", "sessionId"], message: "Session command requires its identity." });
   }
-  if ((route === "thread" || route === "session") && value.scope) {
+  if ((threadRouted || route === "session") && value.scope) {
     ctx.addIssue({ code: "custom", path: ["scope"], message: "This command is routed by its identity, not a destination." });
   }
 });
