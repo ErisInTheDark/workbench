@@ -327,6 +327,11 @@ export default class WorkbenchGitArcFeature {
       const effectiveRequest = target ? { ...request, ...owner } : request;
       const adoptionSource = effectiveRequest.action === "arcAdoptSource"
         ? await this.resolveAdoptionSource(project, effectiveRequest) : null;
+      const adoptionRecipient = effectiveRequest.action === "arcAdoptSource" && effectiveRequest.releaseToSubagent
+        ? await this.resolveOwnedSubagent(project, owner.threadId, effectiveRequest.releaseToSubagent.name) : null;
+      if (adoptionSource && adoptionRecipient?.threadId === adoptionSource.threadId) {
+        throw new Error("Adopted claims can't be released back to their source.");
+      }
       const transferDestination = effectiveRequest.action === "arcTransferClaims"
         ? await this.resolveOwnedSubagent(project, owner.threadId, effectiveRequest.destination.name) : null;
       const modifiedSince = effectiveRequest.action === "compare" || effectiveRequest.action === "diff"
@@ -367,11 +372,16 @@ export default class WorkbenchGitArcFeature {
               }))
               : effectiveRequest.action === "arcAdoptSource" && adoptionSource
               ? Response.json(await this.workspaceController.adopt(project, {
-                cwd: project.cwd, harness: owner.harness, threadId: owner.threadId, source: adoptionSource,
+                cwd: project.cwd, harness: adoptionRecipient?.harness ?? owner.harness,
+                threadId: adoptionRecipient?.threadId ?? owner.threadId, source: adoptionSource,
               }, async () => {
-                const caller = await this.options.getThreadClaimContext(project.project.id, owner.harness, owner.threadId);
-                if (!caller || caller.lifecycle.settled) throw new Error("A settled or unavailable thread cannot adopt Git arc ownership.");
-              }))
+                const owners = await Promise.all([owner, ...adoptionRecipient ? [adoptionRecipient] : []].map(async identity => (
+                  await this.options.getThreadClaimContext(project.project.id, identity.harness, identity.threadId)
+                )));
+                if (owners.some(context => !context || context.lifecycle.settled)) {
+                  throw new Error("A settled or unavailable thread cannot adopt Git arc ownership.");
+                }
+              }, effectiveRequest.paths))
               : effectiveRequest.action === "readDiffArtifact"
               ? await this.dispatch(effectiveRequest)
               : usesWorkspaceController(project, effectiveRequest)

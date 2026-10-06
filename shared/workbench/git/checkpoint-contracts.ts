@@ -113,7 +113,15 @@ const checkpointBaseRequest = {
 };
 
 export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("arcAdoptSource"), source: GitArcAdoptionSourceSchema, ...checkpointBaseRequest }).strict(),
+  z.object({
+    action: z.literal("arcAdoptSource"),
+    source: GitArcAdoptionSourceSchema,
+    /** Move only these live source claims. */
+    paths: checkpointPaths.optional(),
+    /** Hand the selected claims to this owned subagent instead of the caller. */
+    releaseToSubagent: z.object({ kind: z.literal("subagent"), name: nonEmptyString }).strict().optional(),
+    ...checkpointBaseRequest,
+  }).strict().refine(input => !input.releaseToSubagent || input.paths, "Releasing adopted claims to a subagent requires selected paths."),
   z.object({
     action: z.literal("arcTransferClaims"),
     destination: z.object({ kind: z.literal("subagent"), name: nonEmptyString }).strict(),

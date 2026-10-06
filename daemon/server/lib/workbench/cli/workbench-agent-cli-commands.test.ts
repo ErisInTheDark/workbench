@@ -211,14 +211,17 @@ test("combined claim CLI preserves addition, removal and adoption as separate ar
   assert.equal(missing.kind, "error");
 });
 
-test("whole-source adoption requires exactly one thread or child-name selector", async () => {
+test("adoption requires exactly one thread or child-name selector, and only selected claims go to another child", async () => {
   for (const [flag, source] of [["--thread", { kind: "thread", threadId: "source" }], ["--name", { kind: "subagent", name: "source" }]] as const) {
     const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "adopt", flag, "source"], gitArcOptions);
     assert.equal(parsed.kind, "request");
     assert.deepEqual(parsed.request.body?.source, source);
     assert.equal(parsed.request.body?.threadId, gitArcOptions.callerThreadId);
   }
-  for (const args of [[], ["--thread", "source", "--name", "mira"], ["--thread", "source", "--", "one.ts"]]) {
+  const moved = await parseWorkbenchAgentCliCommand(["git", "arc", "adopt", "--name", "source", "--release-to-subagent", "fern", "--", "one.ts"], gitArcOptions);
+  assert.equal(moved.kind, "request");
+  assert.deepEqual([moved.request.body?.paths, moved.request.body?.releaseToSubagent], [["one.ts"], { kind: "subagent", name: "fern" }]);
+  for (const args of [[], ["--thread", "source", "--name", "mira"], ["--name", "source", "--release-to-subagent", "fern"], ["--name", "fern", "--release-to-subagent", "fern", "--", "one.ts"]]) {
     assert.equal((await parseWorkbenchAgentCliCommand(["git", "arc", "adopt", ...args], gitArcOptions)).kind, "error");
   }
 });

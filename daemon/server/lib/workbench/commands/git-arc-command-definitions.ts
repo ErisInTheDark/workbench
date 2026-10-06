@@ -275,20 +275,33 @@ const claims = defineWorkbenchAgentCommand({
 });
 
 const adopt = defineWorkbenchAgentCommand({
-  description: "Adopt a source's complete live claims and saved stash. Thread IDs require explicit user instruction; names select an owned unsettled unlocked child. Preserve caller claims; source stash requires no caller stash.",
+  description: "Adopt a source's complete live claims and saved stash, or only selected live claims. Thread IDs require explicit user instruction; names select an owned unsettled unlocked child. Preserve caller claims; source stash requires no caller stash.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "adopt"],
-  usage: "wb git arc adopt (--thread <id> | --name <name>)",
-  inputSchema: z.object({ threadId: requiredText.optional(), name: requiredText.optional() }).strict()
-    .refine(input => Boolean(input.threadId) !== Boolean(input.name), "Supply exactly one threadId or name source."),
+  usage: "wb git arc adopt (--thread <id> | --name <name>) [--release-to-subagent <name>] [-- <claim-path> [<claim-path>...]]",
+  inputSchema: z.object({
+    threadId: requiredText.optional(),
+    name: requiredText.optional(),
+    paths: paths.default([]).describe("Move only these live source claims; the source keeps its stash and other claims."),
+    releaseToSubagent: requiredText.optional().describe("Owned unsettled subagent receiving the selected claims instead of the caller."),
+  }).strict()
+    .refine(input => Boolean(input.threadId) !== Boolean(input.name), "Supply exactly one threadId or name source.")
+    .refine(input => !input.releaseToSubagent || input.paths.length > 0 && input.releaseToSubagent !== input.name,
+      "releaseToSubagent requires paths and a different subagent than the source."),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--thread", "--name"] });
-    return { threadId: flags.optional("--thread") ?? undefined, name: flags.optional("--name") ?? undefined };
+    const values = ["--thread", "--name", "--release-to-subagent"];
+    const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values }), { trailing: true, values });
+    return {
+      threadId: flags.optional("--thread") ?? undefined, name: flags.optional("--name") ?? undefined,
+      paths: flags.trailing, releaseToSubagent: flags.optional("--release-to-subagent") ?? undefined,
+    };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
       ...baseBody(callerHarness, callerThreadId, cwd), action: "arcAdoptSource",
       source: input.name ? { kind: "subagent", name: input.name } : { kind: "thread", threadId: input.threadId! },
+      ...(input.paths.length ? { paths: input.paths } : {}),
+      ...(input.releaseToSubagent ? { releaseToSubagent: { kind: "subagent" as const, name: input.releaseToSubagent } } : {}),
     }, "git-arc-adopt");
   },
 });

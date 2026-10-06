@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import GitArcRegistry from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
@@ -128,13 +129,23 @@ test("accepting a sealed amend rewrites the stack onto the amended history", asy
   assert.equal(await git("log", "-1", "--format=%s", "HEAD~1"), "first amended\n");
 });
 
-test("released claims keep sealed proposals committable and a child on a lower layer fast-forwards to the parent's top", async () => {
+test("transferred claims keep sealed proposals committable, never lower a stack tip, and fast-forward a child on a lower layer", async () => {
   const { commit, cwd, git, read, state } = branch("transfer");
-  // The child already holds three.txt on layer one; the parent has since sealed layer two.
+  const registry = new GitArcRegistry(await WorkbenchGitRepository.open(cwd));
+  const owner = async (threadId: string) => await registry.find({ harness: "codex", threadId });
+  const parentTip = (await owner("parent"))?.stackTip;
+  // The child holds three.txt on layer one; the parent has since sealed layer two. Taking it back keeps the parent's top.
+  await (await controller.prepareAdoption({
+    cwd, threadId: "parent", source: { harness: "codex", threadId: "child" }, selectedPaths: ["three.txt"],
+  })).apply();
+  assert.deepEqual([(await owner("parent"))?.stackTip, (await owner("child"))?.claimedPaths], [parentTip, []]);
   await (await controller.prepareReleaseToChild({
     cwd, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["two.txt"],
   })).apply();
   assert.equal((await read("parent", state.upper)).status, "proposed");
+  await assert.rejects(controller.editArcClaims({ cwd, threadId: "child", inherit: true, removePaths: ["two.txt"] }),
+    (error) => error instanceof GitArcRejectionError && error.rejection.reason === "sealedStackContent",
+    "unlanded sealed content keeps its claim, and says so");
   await fs.writeFile(path.join(cwd, "two.txt"), "child builds on two\n");
   assert.match((await controller.diff({ cwd, threadId: "child", paths: ["two.txt"] })).diff, /-parent two\n\+child builds on two/u,
     "the child measures from the parent's newest layer");

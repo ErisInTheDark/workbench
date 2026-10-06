@@ -166,7 +166,7 @@ export default class GitArcStackController {
       : { commit: entry.stackTip, pending: false };
   }
 
-  /** Claimed-path drift for an arc, measured from its baseline tip when one still applies. */
+  /** Claimed-path drift for an arc, measured from its baseline tip when one still applies; returns that tip too. */
   async arcDrift(
     entry: Pick<GitArcRegistryEntry, "stackTip"> | null | undefined,
     checkpoint: { checkpointCommit: string; parent: string | null },
@@ -174,9 +174,9 @@ export default class GitArcStackController {
     head: string | null,
   ) {
     const tip = await this.baselineTip(entry, checkpoint);
-    if (tip) return { incompatible: false, changedPaths: await this.tipDrift(tip.commit, paths, head) };
+    if (tip) return { incompatible: false, changedPaths: await this.tipDrift(tip.commit, paths, head), tip };
     const movement = await this.repository.classifyHeadMovement(checkpoint.parent, paths, checkpoint.checkpointCommit, head);
-    return { incompatible: movement.kind === "incompatible", changedPaths: movement.changedPaths };
+    return { incompatible: movement.kind === "incompatible", changedPaths: movement.changedPaths, tip: null };
   }
 
   /** HEAD may differ from a stack tip only on paths still owned by pending chain proposals. */

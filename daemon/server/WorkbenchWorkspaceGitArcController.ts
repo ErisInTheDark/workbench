@@ -1006,9 +1006,24 @@ export default class WorkbenchWorkspaceGitArcController {
     return { ok: true as const };
   }
 
-  async adopt(project: AgentEndpointProjectResolution, input: GitArcAdoptionInput, beforeTransfer?: () => Promise<void>) {
+  /** Moves a source's complete claims and stash to `input.threadId`, or only the selected live claims when `paths` is set. */
+  async adopt(project: AgentEndpointProjectResolution, input: GitArcAdoptionInput, beforeTransfer?: () => Promise<void>, paths?: string[]) {
     const members = await this.resolveRepoMembers(project);
     const harness = input.harness ?? "codex";
+    if (paths) {
+      const groups = this.groupRootPaths(project, members, paths, []);
+      const selected = new Map(groups.map(group => [group.member.repoRoot, group.paths]));
+      const values = await this.runPreparedMembers(
+        members,
+        async () => {
+          await beforeTransfer?.();
+          return members.filter(member => selected.has(member.repoRoot));
+        },
+        member => this.local.prepareAdoption({ ...input, harness, cwd: member.repoRoot, selectedPaths: selected.get(member.repoRoot)! }),
+        [{ harness, project, threadId: input.threadId }, { ...input.source, project }],
+      );
+      return this.aggregateResults(project, values);
+    }
     const values = await this.runPreparedMembers(
       members,
       async () => {

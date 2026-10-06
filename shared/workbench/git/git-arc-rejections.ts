@@ -74,7 +74,7 @@ const simpleMessages = {
 export const GitArcRejectionSchema = z.discriminatedUnion("reason", [
   z.object({ reason: z.enum(Object.keys(simpleMessages) as [keyof typeof simpleMessages, ...(keyof typeof simpleMessages)[]]) }).strict(),
   z.object({
-    reason: z.enum(["unclaimedRemoval", "conflictingClaimOperations", "adoptionRequiresUnclaimed", "adoptionRequiresDirty", "uncoveredDirtyClaims", "pathsOutsideClaims", "pathsInPendingProposal", "baselineChanged"]),
+    reason: z.enum(["unclaimedRemoval", "conflictingClaimOperations", "adoptionRequiresUnclaimed", "adoptionRequiresDirty", "uncoveredDirtyClaims", "pathsOutsideClaims", "pathsInPendingProposal", "baselineChanged", "sealedStackContent"]),
     paths: facts,
   }).strict(),
   z.object({ reason: z.literal("proposalNotFound"), proposalId: fact }).strict(),
@@ -104,6 +104,7 @@ const humanMessages = {
   pathsOutsideClaims: "The proposal includes files outside this arc's claims.",
   pathsInPendingProposal: "These files are already in another pending proposal.",
   baselineChanged: "The selected files changed since the arc's baseline.",
+  sealedStackContent: "These files hold sealed stack-layer content that hasn't landed, so a thread must keep claiming them until the layer commits.",
   proposalNotFound: "The requested proposal could not be found.",
   publishedCommit: "The commit is already published, so it can't be amended.",
   unknownWorkspaceRoot: "The selected project is not in this workspace.",

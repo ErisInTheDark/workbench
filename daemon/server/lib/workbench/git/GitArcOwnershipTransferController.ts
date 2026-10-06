@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - GitArcAdoptionInput/GitArcAdoptionResult: complete-source transfer input and receipt.
+ * - GitArcAdoptionInput/GitArcAdoptionResult: complete or selected source transfer input and the recipient's receipt.
  * - GitArcSelectedTransferInput: selected live claims released to a child.
  * - default GitArcOwnershipTransferController: prepare atomic claim/stash ownership transfers; children inherit stack baselines (fast-forwarding from the releaser's lower layers) and sealed proposals survive.
  */
@@ -23,6 +23,8 @@ export interface GitArcAdoptionInput {
   harness?: GitArcHarness;
   threadId: string;
   source: { harness: GitArcHarness; threadId: string };
+  /** Move only these live source claims; the source keeps its stash and remaining claims. */
+  selectedPaths?: string[];
 }
 
 export interface GitArcSelectedTransferInput extends GitArcAdoptionInput {
@@ -53,11 +55,11 @@ export default class GitArcOwnershipTransferController {
   constructor(private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver) {}
 
   async prepareAdoption(input: GitArcAdoptionInput): Promise<GitArcPreparedOperation<GitArcAdoptionResult>> {
-    return (await this.prepareTransfer(input, null)).operation;
+    return (await this.prepareTransfer(input, input.selectedPaths ?? null, "Selected claims moved to another thread.")).operation;
   }
 
   async prepareReleaseToChild(input: GitArcSelectedTransferInput): Promise<GitArcPreparedOperation<GitArcReleaseResult>> {
-    const { operation, sourceResult } = await this.prepareTransfer(input, input.selectedPaths);
+    const { operation, sourceResult } = await this.prepareTransfer(input, input.selectedPaths, "Selected claims were released to a subagent.");
     return {
       result: sourceResult,
       apply: async () => { await operation.apply(); return sourceResult; },
@@ -65,7 +67,7 @@ export default class GitArcOwnershipTransferController {
     };
   }
 
-  private async prepareTransfer(input: GitArcAdoptionInput, selectedPaths: string[] | null) {
+  private async prepareTransfer(input: GitArcAdoptionInput, selectedPaths: string[] | null, selectedReason: string) {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = ProviderKeySchema.parse(input.harness ?? "codex");
     const sourceHarness = ProviderKeySchema.parse(input.source.harness);
@@ -229,9 +231,7 @@ export default class GitArcOwnershipTransferController {
       proposalIds: selectedPaths
         ? await proposals.proposalsCoveringPaths(repository, source.harness, source.threadId, sourceOpen, incoming)
         : sourceOpen,
-      reason: selectedPaths
-        ? "Selected claims were released to a subagent."
-        : "Claim ownership was transferred to a coordinating thread.",
+      reason: selectedPaths ? selectedReason : "Claim ownership was transferred to a coordinating thread.",
     });
     updates.push(...invalidationUpdates);
     const checkpoint = prepared ?? stashCheckpoint ?? await store.readCheckpoint(harness, caller.threadId, checkpointCommit);

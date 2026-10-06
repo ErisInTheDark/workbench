@@ -63,6 +63,7 @@ follow-up scope:
 
 ### adopt claims from another thread
 - <tool id="git_arc_adopt" /> transfers a source's complete live claims and stash. Use `threadId` only on explicit user instruction, or `name` for an owned subagent.
+- Exact `paths` move only those live claims, without stash; add `releaseToSubagent` to hand them from one owned child to another atomically.
 - Adopt preserves caller claims, proposals and worktree; plans stay with the source. Source proposals covering moved files become unavailable and are reported. Reject stash transfer if the caller has one.
 
 ### stash or restore claimed work
