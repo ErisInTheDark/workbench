@@ -197,6 +197,13 @@ function presentation(entry: GitArcRegistryEntry) {
   };
 }
 
+function activationProposalIds(
+  current: GitArcRegistryEntry | null,
+  retainedArc = current ? presentation(current) : null,
+) {
+  return current?.stackTip ? retainedArc?.proposalIds ?? [] : [];
+}
+
 function requirePlanMetadata(metadata: CheckpointMetadata | null) {
   if (!metadata || metadata.kind !== "plan") throw new GitArcRejectionError({ reason: "wrongPlanKind" }, "The selected checkpoint is not an inactive Git arc plan.");
   return metadata;
@@ -383,7 +390,7 @@ export default class GitArcPlanController {
       intentName: plan.metadata.intentName ?? "Unnamed arc",
       phase: "active",
       proposalId: null,
-      proposalIds: [],
+      proposalIds: activationProposalIds(current, retainedArc),
       retainedArc: undefined,
       ...(successor ? { savedStash: successor.savedStash } : {}),
       threadId: input.threadId,
@@ -454,7 +461,7 @@ export default class GitArcPlanController {
         intentName: metadata.intentName ?? "Unnamed arc",
         phase: "active",
         proposalId: null,
-        proposalIds: [],
+        proposalIds: activationProposalIds(current),
         retainedArc: undefined,
         threadId: input.threadId,
       });
@@ -533,7 +540,7 @@ export default class GitArcPlanController {
       intentName: metadata.intentName ?? "Unnamed arc",
       phase: "active",
       proposalId: null,
-      proposalIds: [],
+      proposalIds: activationProposalIds(current),
       retainedArc: undefined,
       threadId: input.threadId,
     }, current ? { expectedCheckpointCommit: current.checkpointCommit } : undefined);

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
+import GitArcRegistry from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
@@ -70,13 +71,14 @@ test("a lower layer that lands differently makes stacked proposals unavailable",
   assert.equal(upper.waitingForLayer, null);
 });
 
-test("claim edits keep sealed proposals alive, and unstack reopens an unused top layer so they can be rescinded", async () => {
+test("claim and plan changes keep sealed proposals visible, and unstack reopens an unused top layer", async () => {
   const { cwd, read, state } = branch("sealed");
   const owner = { cwd, threadId: "owner" };
   await controller.editArcClaims({ ...owner, inherit: true, addPaths: ["three.txt"] });
   assert.equal((await read("owner", state.lower)).status, "proposed", "continuing work never retires a sealed layer");
   assert.deepEqual((await controller.findLifecycleState(owner))?.proposals.map(({ proposalId }) => proposalId), [state.lower],
     "the sealed proposal stays in the lifecycle list that stack cards render from");
+
   const reopened = await controller.unstackArc(owner);
   assert.deepEqual([reopened.proposalIds, reopened.stackTip], [[state.lower], null]);
   assert.deepEqual(reopened.layerProposals, [{
@@ -85,6 +87,31 @@ test("claim edits keep sealed proposals alive, and unstack reopens an unused top
   }], "the tip recorded each sealed message and file totals");
   await controller.rescindProposal({ ...owner, proposalId: state.lower });
   await assert.rejects(controller.unstackArc(owner), /stack layer/iu);
+
+  await controller.createPlan({ ...owner, intentName: "upper work", paths: ["one.txt", "three.txt"] });
+  const landed = await controller.createProposal({ ...owner, title: "landed before later sealing", description: "" });
+  await fs.writeFile(path.join(cwd, "one.txt"), "replacement\n");
+  await controller.commitProposal({
+    ...owner, proposalId: landed.proposalId, title: "landed before later sealing", description: "", includeNewer: false,
+  });
+  const replacement = await controller.createProposal({ ...owner, title: "replacement", description: "" });
+  await controller.stackArc({ ...owner, title: "replacement layer" });
+  const plan = await controller.createPlan({ ...owner, intentName: "upper work", paths: ["one.txt", "three.txt"] });
+  await controller.startArc({ ...owner, checkpointCommit: plan.checkpointCommit });
+  assert.ok((await controller.findLifecycleState(owner))?.proposals.some(({ proposalId }) => proposalId === replacement.proposalId),
+    "activating successor work keeps the sealed proposal in lifecycle ownership");
+
+  const repository = await WorkbenchGitRepository.open(cwd);
+  const registry = new GitArcRegistry(repository);
+  const active = await registry.find({ harness: "codex", threadId: owner.threadId });
+  assert.ok(active);
+  await registry.set({ ...active, proposalId: null, proposalIds: [] }, active.checkpointCommit);
+  assert.deepEqual((await controller.findLifecycleState(owner))?.proposals.map(({ proposalId }) => proposalId), [replacement.proposalId],
+    "stack metadata recovers proposals omitted by older lifecycle state");
+  await controller.commitProposal({
+    ...owner, proposalId: replacement.proposalId, title: "replacement", description: "", includeNewer: false,
+  });
+  assert.equal(await repository.run(["show", "HEAD:one.txt"]), "replacement\n");
 });
 
 test("accepting a sealed amend rewrites the stack onto the amended history", async () => {

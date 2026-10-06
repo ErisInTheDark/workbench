@@ -142,6 +142,13 @@ function projectLifecycleState(
   return { ...common, claimedPaths: lifecycle.claimedPaths, phase: "active" };
 }
 
+function projectedProposalIds(
+  lifecycle: NonNullable<ReturnType<typeof lifecycleEntry>>,
+  stackLayers: NonNullable<GitArcLifecycleState["stackLayers"]>,
+) {
+  return [...new Set([...stackLayers.flatMap(({ proposalIds }) => proposalIds), ...lifecycle.proposalIds])];
+}
+
 function savedLifecycle(entry: GitArcRegistryEntry, saved: GitArcSavedStash | null) {
   const live = lifecycleEntry(entry);
   return saved && (!live || live.phase !== "active" || !live.claimedPaths.length) ? {
@@ -193,35 +200,20 @@ function pathIsCoveredBy(candidate: string, scopePath: string) {
   return candidate === scopePath || candidate.startsWith(`${scopePath}/`);
 }
 
-async function readArcChain(
+async function arcChainContains(
   store: GitCheckpointStore,
   harness: GitArcHarness,
   threadId: string,
   startCheckpoint: StoredCheckpoint,
   requiredCheckpoint: string,
 ) {
-  const chain: StoredCheckpoint[] = [];
   let cursor = startCheckpoint;
   for (let depth = 0; depth < 100; depth += 1) {
-    chain.push(cursor);
-    if (cursor.checkpointCommit === requiredCheckpoint) return chain;
-    if (!cursor.metadata?.amendedFrom) break;
+    if (cursor.checkpointCommit === requiredCheckpoint) return true;
+    if (!cursor.metadata?.amendedFrom) return false;
     cursor = await store.readCheckpoint(harness, threadId, cursor.metadata.amendedFrom);
   }
-  throw new GitArcRejectionError({ reason: "proposalNotOwned" }, "The proposal no longer belongs to this thread's active Git arc.");
-}
-
-async function readAcceptedReceipts(
-  store: GitCheckpointStore,
-  harness: GitArcHarness,
-  threadId: string,
-  chain: StoredCheckpoint[],
-) {
-  const outcomes = await Promise.all(chain.map(async ({ checkpointCommit }) => (
-    await store.readOutcome(harness, threadId, checkpointCommit)
-  )));
-  const receipts = outcomes.slice().reverse().flatMap((outcome) => outcome?.acceptedProposals ?? []);
-  return receipts.filter((receipt, index) => receipts.findIndex(({ proposalId }) => proposalId === receipt.proposalId) === index);
+  return false;
 }
 
 async function prepareAcceptedClaimTransition({
@@ -712,14 +704,14 @@ export default class GitArcProposalController {
     });
     const projected = candidates.filter(value => value.lifecycle !== null);
     const stack = this.stack(repository);
-    const [summaries, stackLayers] = await Promise.all([
-      this.store(repository).readProposalSummaryGroups(projected.map(({ entry, lifecycle }) => ({
+    const stackLayers = await Promise.all(projected.map(async ({ entry }) => await stack.projectLayers(entry)));
+    const summaries = await this.store(repository).readProposalSummaryGroups(
+      projected.map(({ entry, lifecycle }, index) => ({
         harness: normalizeHarness(entry.harness),
-        proposalIds: lifecycle!.proposalIds,
+        proposalIds: projectedProposalIds(lifecycle!, stackLayers[index] ?? []),
         threadId: entry.threadId,
-      }))),
-      Promise.all(projected.map(async ({ entry }) => await stack.projectLayers(entry))),
-    ]);
+      })),
+    );
     return projected.map(({ entry, lifecycle, saved }, index) => (
       projectLifecycleState(entry, lifecycle!, summaries[index] ?? [], saved, stackLayers[index] ?? [])
     ));
@@ -734,10 +726,12 @@ export default class GitArcProposalController {
     const saved = entry.savedStash ?? null;
     const lifecycle = savedLifecycle(entry, saved);
     if (!lifecycle) return null;
-    const [summaries, stackLayers] = await Promise.all([
-      this.store(repository).readProposalSummaries(harness, input.threadId, lifecycle.proposalIds),
-      this.stack(repository).projectLayers(entry),
-    ]);
+    const stackLayers = await this.stack(repository).projectLayers(entry);
+    const summaries = await this.store(repository).readProposalSummaries(
+      harness,
+      input.threadId,
+      projectedProposalIds(lifecycle, stackLayers),
+    );
     return projectLifecycleState(entry, lifecycle, summaries, saved, stackLayers);
   }
 
@@ -1391,8 +1385,13 @@ export default class GitArcProposalController {
     const activeSource = lifecycle.checkpointCommit === proposalSource.checkpointCommit
       ? proposalSource
       : await store.readCheckpoint(harness, threadId, lifecycle.checkpointCommit);
-    const activeChain = await readArcChain(store, harness, threadId, activeSource, proposalSource.checkpointCommit);
-    const previousAcceptedProposals = await readAcceptedReceipts(store, harness, threadId, activeChain);
+    const stack = this.stack(repository);
+    const sourceIsOwned = await arcChainContains(store, harness, threadId, activeSource, proposalSource.checkpointCommit)
+      || Boolean(await stack.sealingLayer(active, proposalId));
+    if (!sourceIsOwned) {
+      throw new GitArcRejectionError({ reason: "proposalNotOwned" }, "The proposal no longer belongs to this thread's active Git arc.");
+    }
+    const previousAcceptedProposals = await store.readAcceptedOutcomes(harness, threadId, activeSource);
     if (selectedMode === "amend") {
       const message = commitMessage(title, description);
       const targetTree = includeNewer && resolved.includeNewerAvailable ? resolved.currentTree! : proposal.tree;
@@ -1455,7 +1454,7 @@ export default class GitArcProposalController {
             registry,
             repository,
             source: activeSource,
-            stack: this.stack(repository),
+            stack,
             store,
             threadId,
           });
@@ -1545,7 +1544,7 @@ export default class GitArcProposalController {
       registry,
       repository,
       source: activeSource,
-      stack: this.stack(repository),
+      stack,
       store,
       threadId,
     });
