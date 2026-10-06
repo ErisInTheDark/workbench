@@ -9,7 +9,10 @@ import {
 } from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptItemSource } from "../../database/transcript/workbench-transcript-types";
 import type { WorkbenchTranscriptObservation } from "../../database/transcript/workbench-transcript-types";
-import OpenCodeTranscriptAdapter, { openCodeToolContentItems } from "./OpenCodeTranscriptAdapter";
+import OpenCodeTranscriptAdapter, {
+  openCodeTokenBreakdown,
+  openCodeToolContentItems,
+} from "./OpenCodeTranscriptAdapter";
 import { createThreadStateTestDatabase } from "../../workbench-thread-state-test-database";
 import WorkbenchTranscriptRepository from "../../database/transcript/WorkbenchTranscriptRepository";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
@@ -19,6 +22,64 @@ import OpenCodeEventController from "./OpenCodeEventController";
 import { writeTranscriptText, readTranscriptText } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import type { SessionMessageInfo } from "@opencode/client";
 import WorkbenchTranscriptAssetStore from "../../database/transcript/WorkbenchTranscriptAssetStore";
+
+test("converts cumulative OpenCode usage without losing cache or reasoning tokens", () => {
+  assert.deepEqual(openCodeTokenBreakdown({
+    input: 100, output: 13, reasoning: 5, cache: { read: 11, write: 7 },
+  }), {
+    cacheWriteInputTokens: 7,
+    cachedInputTokens: 11,
+    inputTokens: 118,
+    outputTokens: 13,
+    reasoningOutputTokens: 5,
+    totalTokens: 136,
+  });
+});
+
+test("live context usage subtracts the persisted turn baseline and preserves a known model window", async () => {
+  const observations: WorkbenchTranscriptObservation[] = [];
+  const adapter = new OpenCodeTranscriptAdapter({
+    modelContext: async () => null,
+    threads: {} as never,
+    items: {} as never,
+    transcript: {
+      record: async entries => {
+        observations.push(...entries);
+        return { changedThreadIds: [] };
+      },
+    },
+  });
+  const baseline = {
+    cacheWriteInputTokens: 1, cachedInputTokens: 2, inputTokens: 13,
+    outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 17,
+  };
+  const tokenUsage = await adapter.recordContextUsage({
+    threadId: WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001"),
+    baseline,
+    current: { input: 16, output: 5, reasoning: 1, cache: { read: 3, write: 2 } },
+    model: { providerID: "provider", id: "model" },
+    nativeLocation: "C:/repo",
+    modelContextWindow: 200_000,
+    canCommit: () => true,
+  });
+  assert.deepEqual(tokenUsage, {
+    last: {
+      cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 8,
+      outputTokens: 2, reasoningOutputTokens: 0, totalTokens: 10,
+    },
+    total: {
+      cacheWriteInputTokens: 2, cachedInputTokens: 3, inputTokens: 21,
+      outputTokens: 5, reasoningOutputTokens: 1, totalTokens: 27,
+    },
+    modelContextWindow: 200_000,
+  });
+  assert.deepEqual(observations.at(-1), {
+    kind: "threadContextUsage",
+    threadId: "00000000-0000-4000-8000-000000000001",
+    snapshot: { tokenUsage },
+    initialise: false,
+  });
+});
 
 test("sent and native OpenCode user images survive transcript rereads without duplicates", async context => {
   const fixture = createThreadStateTestDatabase();
@@ -199,12 +260,10 @@ test("native reasoning streams through SQLite identity and live projection befor
   const active = { threadId: admitted.threadId, turnId: admitted.latestTurnId! };
   const events = new OpenCodeEventController({
     observe: async () => undefined,
-    threads: { observeCompaction: () => {}, currentTurn: () => active, latestTurn: async () => ({
-      id: active.turnId, items: [], itemsView: "notLoaded", status: "inProgress",
-      error: null, startedAt: null, completedAt: null, durationMs: null,
-    }),
+    threads: { observeCompaction: () => {}, currentTurn: () => active,
       acceptExecutionEvent: () => true, settleExecution: () => undefined, executionIntentVersion: () => 0,
-      syncNative: async () => admitted, markExecutionSettled: () => undefined, markExecutionStarted: () => undefined },
+      syncNative: async () => admitted, markExecutionSettled: () => undefined, markExecutionStarted: () => undefined,
+      recordUsage: async () => null },
     transcript: adapter,
   });
   const data = { sessionID: "session", assistantMessageID: "assistant", ordinal: 0 };

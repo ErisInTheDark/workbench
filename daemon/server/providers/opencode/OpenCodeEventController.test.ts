@@ -19,8 +19,7 @@ test("compaction execution settles without accepting a user turn or continuing i
     threads: {
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
-      latestTurn: async () => turn(),
-      syncNative: async () => ({ threadId, latestTurnId: turnId, maintenance: true }),
+      syncNative: async () => ({ threadId, latestTurnId: turnId, maintenance: true, turn: turn() }),
       markExecutionStarted: () => { active = true; },
       markExecutionSettled: () => { active = false; },
       settleExecution: () => { assert.fail("Compaction cannot fence a continuation"); },
@@ -42,7 +41,7 @@ test("reasoning deltas target the visible canonical section before completion", 
   const owner = new OpenCodeEventController({
     observe: async () => undefined,
     threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
-      syncNative: async () => ({ threadId }), latestTurn: async () => turn() },
+      syncNative: async () => ({ threadId, turn: turn() }) },
     transcript: { recordItem: async () => "item" as never, recordCompaction: async () => undefined, recordTurnState: async () => undefined,
       appendText: input => { deltas.push(input); } },
   });
@@ -63,7 +62,7 @@ test("previews join exact native calls in either order and cannot survive reques
   const owner = new OpenCodeEventController({
     observe: async () => undefined,
     threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
-      syncNative: async () => ({ threadId }), latestTurn: async () => turn() },
+      syncNative: async () => ({ threadId, turn: turn() }) },
     transcript: {
       appendText: () => undefined, recordCompaction: async () => undefined, recordTurnState: async () => undefined,
       recordItem: async input => { items.push(input); return `canonical-${input.source.reference}` as never; },
@@ -98,7 +97,7 @@ test("native error metadata marks success events failed while retaining complete
   const owner = new OpenCodeEventController({
     observe: async () => undefined,
     threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId: current }),
-      syncNative: async () => ({ threadId }), latestTurn: async () => ({ ...turn(), id: current }) },
+      syncNative: async () => ({ threadId, turn: { ...turn(), id: current } }) },
     transcript: { appendText: () => undefined, recordCompaction: async () => undefined, recordTurnState: async () => undefined,
       recordItem: async input => { items.push(input); return "canonical" as never; } },
   });
@@ -122,7 +121,7 @@ test("write settlement replaces its live preview on the same canonical item for 
     const owner = new OpenCodeEventController({
       observe: async () => undefined,
       threads: { ...executionLifecycle, currentTurn: () => ({ threadId, turnId }),
-        syncNative: async () => ({ threadId }), latestTurn: async () => turn() },
+        syncNative: async () => ({ threadId, turn: turn() }) },
       transcript: { appendText: () => undefined, recordCompaction: async () => undefined, recordTurnState: async () => undefined,
         recordItem: async input => { items.push(input); return "canonical-write" as never; },
         previewToolPatch: input => { previews.push(input); } },
@@ -159,6 +158,7 @@ const executionLifecycle = {
   executionIntentVersion: () => 0,
   markExecutionSettled: (_sessionID: string) => undefined,
   markExecutionStarted: (_sessionID: string) => undefined,
+  recordUsage: async () => null,
 };
 
 test("invalidates cached model catalogues on provider catalogue events", async () => {
@@ -171,7 +171,6 @@ test("invalidates cached model catalogues on provider catalogue events", async (
     threads: {
       ...executionLifecycle,
       currentTurn: () => null,
-      latestTurn: async () => null,
       syncNative: async () => { throw new Error("session sync must not run"); },
     },
     transcript: {
@@ -184,6 +183,51 @@ test("invalidates cached model catalogues on provider catalogue events", async (
   await controller.accept({ type: "provider.updated" } as never);
   assert.equal(invalidations, 2);
   assert.deepEqual(notifications, ["models/updated", "models/updated"]);
+});
+
+test("persists and publishes live cumulative usage for the active OpenCode turn", async () => {
+  const tokenUsage = {
+    last: {
+      cacheWriteInputTokens: 0, cachedInputTokens: 0, inputTokens: 10,
+      outputTokens: 2, reasoningOutputTokens: 1, totalTokens: 13,
+    },
+    total: {
+      cacheWriteInputTokens: 0, cachedInputTokens: 0, inputTokens: 20,
+      outputTokens: 4, reasoningOutputTokens: 1, totalTokens: 25,
+    },
+    modelContextWindow: 200_000,
+  };
+  const notifications: WorkbenchTranscriptNotification[] = [];
+  const controller = new OpenCodeEventController({
+    broadcast: notification => { notifications.push(notification); },
+    observe: async () => undefined,
+    threads: {
+      ...executionLifecycle,
+      currentTurn: () => ({ threadId, turnId }),
+      syncNative: async () => ({ threadId }),
+      recordUsage: async (_sessionID, tokens, observedAt) => {
+        assert.deepEqual(tokens, { input: 20, output: 4, reasoning: 1, cache: { read: 0, write: 0 } });
+        assert.equal(observedAt, 3);
+        return { threadId, turnId, tokenUsage };
+      },
+    },
+    transcript: {
+      appendText: () => undefined,
+      recordItem: async () => "item" as never,
+      recordCompaction: async () => undefined, recordTurnState: async () => undefined,
+    },
+  });
+  await controller.accept(event({
+    id: "usage", created: 3, type: "session.usage.updated",
+    data: {
+      sessionID: "session", cost: 0,
+      tokens: { input: 20, output: 4, reasoning: 1, cache: { read: 0, write: 0 } },
+    },
+  }));
+  assert.deepEqual(notifications, [{
+    method: "thread/tokenUsage/updated",
+    params: { threadId, turnId, tokenUsage },
+  }]);
 });
 
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
@@ -215,8 +259,7 @@ function compactionHarness() {
     threads: {
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
-      latestTurn: async () => turn(),
-      syncNative: async () => { steps.push("sync"); return { threadId, latestTurnId: turnId }; },
+      syncNative: async () => { steps.push("sync"); return { threadId, latestTurnId: turnId, turn: turn() }; },
     },
     transcript: {
       appendText: () => undefined,
@@ -255,8 +298,7 @@ test("successful execution fences its completion before the lifecycle observatio
     threads: {
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
-      syncNative: async () => ({ threadId }),
-      latestTurn: async () => turn(),
+      syncNative: async () => ({ threadId, turn: turn() }),
       settleExecution: () => { calls.push("settle"); },
     } as never,
     transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
@@ -276,8 +318,7 @@ test("terminal notification waits for canonical settlement when native history s
     threads: {
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
-      syncNative: async () => ({ threadId, latestTurnId: turnId }),
-      latestTurn: async () => turn("inProgress"),
+      syncNative: async () => ({ threadId, latestTurnId: turnId, turn: turn("inProgress") }),
       settleExecution: () => { calls.push("settle"); },
     },
     transcript: {
@@ -336,40 +377,34 @@ test("connection reconciliation restores active work and settles missed terminal
   assert.deepEqual(projects, [projectId]);
 });
 
-test("terminal reconciliation never settles a newer user turn", async () => {
-  for (const changeDuring of ["sync", "latest"] as const) {
-    let current = turnId;
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const settled: string[] = [];
-    const controller = new OpenCodeEventController({
-      threads: {
-        ...executionLifecycle,
-        currentTurn: () => ({ threadId, turnId: current }),
-        syncNative: async () => {
-          if (changeDuring === "sync") { entered.resolve(); await release.promise; }
-          return { threadId, latestTurnId: turnId };
-        },
-        latestTurn: async () => {
-          entered.resolve();
-          await release.promise;
-          return { ...turn(), id: current };
-        },
-        markExecutionSettled: () => { settled.push("settled"); },
-        settleExecution: () => { settled.push("fenced"); },
+test("terminal reconciliation uses one snapshot and never settles a newer user turn", async () => {
+  let current = turnId;
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const settled: string[] = [];
+  const controller = new OpenCodeEventController({
+    threads: {
+      ...executionLifecycle,
+      currentTurn: () => ({ threadId, turnId: current }),
+      syncNative: async () => {
+        entered.resolve();
+        await release.promise;
+        return { threadId, latestTurnId: turnId, turn: turn() };
       },
-      observe: async () => { settled.push("observed"); },
-      transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
-        recordCompaction: async () => undefined, recordTurnState: async () => { settled.push("recorded"); } },
-    });
-    const completion = controller.accept(event({ type: "session.execution.succeeded",
-      id: "end", created: 3, data: { sessionID: "session" } }));
-    await entered.promise;
-    current = WorkbenchTurnIdSchema.parse("new-turn");
-    release.resolve();
-    await completion;
-    assert.deepEqual(settled, []);
-  }
+      markExecutionSettled: () => { settled.push("settled"); },
+      settleExecution: () => { settled.push("fenced"); },
+    },
+    observe: async () => { settled.push("observed"); },
+    transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
+      recordCompaction: async () => undefined, recordTurnState: async () => { settled.push("recorded"); } },
+  });
+  const completion = controller.accept(event({ type: "session.execution.succeeded",
+    id: "end", created: 3, data: { sessionID: "session" } }));
+  await entered.promise;
+  current = WorkbenchTurnIdSchema.parse("new-turn");
+  release.resolve();
+  await completion;
+  assert.deepEqual(settled, []);
 });
 
 test("streams text directly with canonical reads only at execution boundaries", async () => {
@@ -388,9 +423,8 @@ test("streams text directly with canonical reads only at execution boundaries", 
       markExecutionStarted: sessionID => { started.push(sessionID); },
       syncNative: async () => {
         syncs++;
-        return { threadId };
+        return { threadId, turn: turn("completed") };
       },
-      latestTurn: async () => turn("completed"),
     },
     transcript: {
       recordCompaction: async () => undefined, recordTurnState: async input => { turnStates.push(input.state); },
@@ -463,8 +497,7 @@ test("keeps reused tool ids isolated by native session", async () => {
     threads: {
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
-      syncNative: async () => ({ threadId }),
-      latestTurn: async () => null,
+      syncNative: async () => ({ threadId, turn: null }),
     },
     transcript: {
       recordCompaction: async () => undefined, recordTurnState: async () => undefined,
@@ -524,9 +557,8 @@ test("materialises an admitted steer only when OpenCode delivers its inbox item"
       currentTurn: () => ({ threadId, turnId }),
       syncNative: async () => {
         syncs++;
-        return { threadId };
+        return { threadId, turn: turn() };
       },
-      latestTurn: async () => null,
     },
     transcript: {
       recordCompaction: async () => undefined, recordTurnState: async () => undefined,
@@ -557,8 +589,7 @@ test("does not complete a WB turn while its next OpenCode steer is pending", asy
     threads: {
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
-      syncNative: async () => ({ threadId, hasPendingSteers: true }),
-      latestTurn: async () => turn(),
+      syncNative: async () => ({ threadId, hasPendingSteers: true, turn: turn() }),
     },
     transcript: {
       recordCompaction: async () => undefined, recordTurnState: async () => undefined,
@@ -586,8 +617,7 @@ test("broadcasts one settled turn and idle status when an execution ends", async
     threads: {
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
-      syncNative: async () => ({ threadId, latestTurnId: turnId }),
-      latestTurn: async () => turn("completed"),
+      syncNative: async () => ({ threadId, latestTurnId: turnId, turn: turn("completed") }),
     },
     transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
       recordCompaction: async () => undefined, recordTurnState: async () => undefined },
@@ -612,8 +642,7 @@ test("broadcasts an inbox-delivered turn as the app's active turn", async () => 
     threads: {
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
-      syncNative: async () => ({ threadId }),
-      latestTurn: async () => turn(),
+      syncNative: async () => ({ threadId, turn: turn() }),
     },
     transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
       recordCompaction: async () => undefined, recordTurnState: async () => undefined },
@@ -640,8 +669,7 @@ test("maps OpenCode cancellation failure to interrupted after a WB stop", async 
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
       consumeRequestedInterrupt: () => true,
-      syncNative: async () => ({ threadId, hasPendingSteers: false }),
-      latestTurn: async () => turn(),
+      syncNative: async () => ({ threadId, hasPendingSteers: false, turn: turn() }),
     },
     transcript: {
       recordCompaction: async () => undefined, recordTurnState: async input => { states.push(input.state); },

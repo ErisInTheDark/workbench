@@ -9,6 +9,10 @@ import OpenCodeEventStreamController from "./OpenCodeEventStreamController";
 const connected = { type: "server.connected", data: {}, id: "connected" } as OpenCodeEvent;
 const busy = { type: "session.status", data: { sessionID: "session", status: { type: "busy" } }, id: "busy" } as OpenCodeEvent;
 const unrelatedStatus = { type: "session.status", data: { sessionID: "unrelated", status: { type: "busy" } }, id: "other" } as OpenCodeEvent;
+const usage = { type: "session.usage.updated", data: {
+  sessionID: "usage-session", cost: 0,
+  tokens: { input: 1, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+}, id: "usage" } as OpenCodeEvent;
 const started = { type: "session.execution.started", data: { sessionID: "session" }, id: "started",
   durable: { aggregateID: "session", seq: 1, version: 1 } } as OpenCodeEvent;
 
@@ -119,12 +123,41 @@ test("reconnects an ended daemon event stream and fences a connection snapshot b
   assert.equal(connections, 1);
   await firstQueued.promise;
   baselineRelease.resolve();
-  assert.deepEqual(await firstBaseline.promise, { changed: true, unrelated: false });
+  assert.deepEqual(await firstBaseline.promise, { changed: true, unrelated: true });
   await firstEvent.promise;
   firstEnd.resolve();
   retry.resolve();
   await secondConnected.promise;
   assert.equal(connections, 2);
+  await controller.dispose();
+});
+
+test("ephemeral status and usage events fence an older connection activity snapshot", async () => {
+  const baselineRelease = Promise.withResolvers<void>();
+  const queued = Promise.withResolvers<void>();
+  const observed = Promise.withResolvers<{ busy: boolean; usage: boolean }>();
+  const controller = new OpenCodeEventStreamController({
+    subscribe: signal => ({
+      async *[Symbol.asyncIterator]() {
+        yield connected;
+        yield busy;
+        yield usage;
+        queued.resolve();
+        await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+      },
+    }),
+    onEvent: async () => {},
+    onConnected: async ({ wasTouched }) => {
+      await baselineRelease.promise;
+      observed.resolve({ busy: wasTouched("session"), usage: wasTouched("usage-session") });
+    },
+    waitBeforeRetry: async () => {},
+    warn: () => {},
+  });
+  controller.start();
+  await queued.promise;
+  baselineRelease.resolve();
+  assert.deepEqual(await observed.promise, { busy: true, usage: true });
   await controller.dispose();
 });
 

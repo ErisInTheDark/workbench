@@ -3,7 +3,7 @@
  * - OpenCodeEventControllerOptions: provider-local event, transcript, and lifecycle ports.
  * - default OpenCodeEventController: translate OpenCode events into direct live facts, compaction reports, and one terminal canonical settlement.
  */
-import type { OpenCodeEvent, SessionToolFailed, SessionToolSuccess } from "@opencode/client";
+import type { OpenCodeEvent, SessionInfo, SessionToolFailed, SessionToolSuccess } from "@opencode/client";
 import type { WorkbenchProviderObservation, WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
 import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { ThreadStatus, Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
@@ -26,10 +26,16 @@ export interface OpenCodeEventControllerOptions {
   threads: {
     consumeRequestedInterrupt?(nativeThreadId: string): boolean;
     currentTurn(nativeThreadId: string): ActiveTurn | null;
-    latestTurn(threadId: string): Promise<Turn | null>;
     markExecutionSettled(nativeThreadId: string, status?: "completed" | "interrupted" | "failed"): void;
     markExecutionStarted(nativeThreadId: string): void;
-    syncNative(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId; latestTurnId?: WorkbenchTurnId | null; hasPendingSteers?: boolean; maintenance?: boolean }>;
+    recordUsage(nativeThreadId: string, tokens: SessionInfo["tokens"], observedAt: number): ReturnType<OpenCodeThreadOperations["recordUsage"]>;
+    syncNative(nativeThreadId: string): Promise<{
+      threadId: WorkbenchThreadId;
+      turn?: Turn | null;
+      latestTurnId?: WorkbenchTurnId | null;
+      hasPendingSteers?: boolean;
+      maintenance?: boolean;
+    }>;
     syncCreatedNative?(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId } | null>;
     reconcileActivity?(signal: AbortSignal, wasTouched: (sessionID: string) => boolean): ReturnType<OpenCodeThreadOperations["reconcileActivity"]>;
   } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "settleExecution" | "executionIntentVersion" | "observeCompaction">;
@@ -144,10 +150,18 @@ export default class OpenCodeEventController {
         if (this.options.threads.syncCreatedNative) await this.options.threads.syncCreatedNative(sessionID);
         else await this.options.threads.syncNative(sessionID);
         return;
+      case "session.usage.updated": {
+        const usage = await this.options.threads.recordUsage(sessionID, event.data.tokens, event.created);
+        if (usage) this.options.broadcast?.({
+          method: "thread/tokenUsage/updated",
+          params: usage,
+        });
+        return;
+      }
       case "session.inbox.delivered": {
         const identity = await this.options.threads.syncNative(sessionID);
         if (identity.maintenance) return;
-        const turn = await this.options.threads.latestTurn(identity.threadId);
+        const turn = identity.turn;
         if (!turn) return;
         await this.options.observe({
           turnStarted: null,
@@ -355,7 +369,7 @@ export default class OpenCodeEventController {
           this.options.threads.markExecutionSettled(sessionID, status);
           return;
         }
-        const turn = await this.options.threads.latestTurn(identity.threadId);
+        const turn = identity.turn;
         if (!turn) return;
         if (startingTurn && (turn.id !== startingTurn.turnId
           || this.options.threads.currentTurn(sessionID)?.turnId !== startingTurn.turnId)) return;

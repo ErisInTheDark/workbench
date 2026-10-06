@@ -1,6 +1,8 @@
 /*
  * Exports:
  * - OpenCodeTranscriptOwners: shared identity and recorder ports used by the provider edge.
+ * - openCodeTokenBreakdown: translate native cumulative usage without losing cache categories.
+ * - subtractOpenCodeTokenBreakdowns: derive one turn or baseline from cumulative usage.
  * - openCodeToolContentItems: preserve provider tool content or its bounded structured failure.
  * - isOpenCodeTurnRoot: distinguish a new user turn from an in-turn Workbench steer.
  * - default OpenCodeTranscriptAdapter: translate canonical OpenCode sessions/messages into ordered WB transcript facts and report compaction lifecycle.
@@ -37,6 +39,7 @@ import {
   openCodeContentSource, openCodeItemSource, type OpenCodeTranscriptSource,
 } from "./open-code-source-id";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
+import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 
 export interface OpenCodeTranscriptOwners {
   threads: Pick<WorkbenchThreadIdentityController, "observe" | "observeTurns">;
@@ -100,7 +103,10 @@ function steerInput(inputs: readonly WorkbenchUserInput[]): UserInput[] {
   });
 }
 
-function tokenBreakdown(tokens: NonNullable<SessionMessageAssistant["tokens"]>) {
+type OpenCodeTokenUsage = NonNullable<SessionMessageAssistant["tokens"]>;
+type TokenBreakdown = ThreadTokenUsage["total"];
+
+export function openCodeTokenBreakdown(tokens: OpenCodeTokenUsage): TokenBreakdown {
   const inputTokens = tokens.input + tokens.cache.read + tokens.cache.write;
   return {
     cacheWriteInputTokens: tokens.cache.write,
@@ -109,6 +115,18 @@ function tokenBreakdown(tokens: NonNullable<SessionMessageAssistant["tokens"]>) 
     outputTokens: tokens.output,
     reasoningOutputTokens: tokens.reasoning,
     totalTokens: inputTokens + tokens.output + tokens.reasoning,
+  };
+}
+
+export function subtractOpenCodeTokenBreakdowns(total: TokenBreakdown, baseline: TokenBreakdown): TokenBreakdown {
+  const difference = (field: keyof TokenBreakdown) => Math.max(0, total[field] - baseline[field]);
+  return {
+    cacheWriteInputTokens: difference("cacheWriteInputTokens"),
+    cachedInputTokens: difference("cachedInputTokens"),
+    inputTokens: difference("inputTokens"),
+    outputTokens: difference("outputTokens"),
+    reasoningOutputTokens: difference("reasoningOutputTokens"),
+    totalTokens: difference("totalTokens"),
   };
 }
 
@@ -297,6 +315,34 @@ export default class OpenCodeTranscriptAdapter {
   /** Report a compaction start or end; Workbench folds OpenCode's compaction message echo into the same item. */
   async recordCompaction(report: Omit<WorkbenchTranscriptContextCompactionObservation, "kind">) {
     await this.owners.transcript.record([{ kind: "contextCompaction", ...report }], { source: "provider" });
+  }
+
+  async recordContextUsage(input: {
+    threadId: WorkbenchThreadId;
+    baseline: TokenBreakdown;
+    current: OpenCodeTokenUsage;
+    model: SessionInfo["model"] | null;
+    nativeLocation: string;
+    modelContextWindow: number | null;
+    canCommit(): boolean;
+  }): Promise<ThreadTokenUsage | null> {
+    const resolvedContextWindow = input.model && this.owners.modelContext
+      ? await this.owners.modelContext(input.model, input.nativeLocation) ?? input.modelContextWindow
+      : input.modelContextWindow;
+    if (!input.canCommit()) return null;
+    const total = openCodeTokenBreakdown(input.current);
+    const tokenUsage = {
+      last: subtractOpenCodeTokenBreakdowns(total, input.baseline),
+      total,
+      modelContextWindow: resolvedContextWindow,
+    };
+    await this.owners.transcript.record([{
+      kind: "threadContextUsage",
+      threadId: input.threadId,
+      snapshot: { tokenUsage },
+      initialise: false,
+    }], { source: "provider" });
+    return tokenUsage;
   }
 
   async startToolTranscript(input: Omit<WorkbenchToolTranscriptReference, "itemId">): Promise<WorkbenchToolTranscriptReference> {
@@ -525,7 +571,7 @@ export default class OpenCodeTranscriptAdapter {
           turnId: latestTurn.turnId,
         }, {
           kind: "turnTokenUsage",
-          cumulative: tokenBreakdown(session.tokens),
+          cumulative: openCodeTokenBreakdown(session.tokens),
           observedAt: latestAssistant.time.completed ?? latestAssistant.time.created,
           threadId: identity.threadId,
           turnId: latestTurn.turnId,
@@ -535,8 +581,8 @@ export default class OpenCodeTranscriptAdapter {
           threadId: identity.threadId,
           snapshot: {
             tokenUsage: {
-              last: tokenBreakdown(latestAssistant.tokens),
-              total: tokenBreakdown(session.tokens),
+              last: openCodeTokenBreakdown(latestAssistant.tokens),
+              total: openCodeTokenBreakdown(session.tokens),
               modelContextWindow,
             },
           },

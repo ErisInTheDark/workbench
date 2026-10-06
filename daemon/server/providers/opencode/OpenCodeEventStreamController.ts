@@ -18,7 +18,9 @@ function supersedesActivitySnapshot(event: OpenCodeEvent) {
     || event.type === "session.execution.started"
     || event.type === "session.execution.succeeded"
     || event.type === "session.execution.failed"
-    || event.type === "session.execution.interrupted";
+    || event.type === "session.execution.interrupted"
+    || event.type === "session.status" && event.data.status.type !== "idle"
+    || event.type === "session.usage.updated";
 }
 
 export default class OpenCodeEventStreamController {

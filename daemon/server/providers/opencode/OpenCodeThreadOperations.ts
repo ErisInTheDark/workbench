@@ -31,7 +31,10 @@ import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature"
 import type OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
 import ProviderCompactionCompletionController from "../../ProviderCompactionCompletionController";
 import type { WorkbenchOpenCodeClient } from "./OpenCodeServiceController";
-import OpenCodeTranscriptAdapter from "./OpenCodeTranscriptAdapter";
+import OpenCodeTranscriptAdapter, {
+  openCodeTokenBreakdown,
+  subtractOpenCodeTokenBreakdowns,
+} from "./OpenCodeTranscriptAdapter";
 import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
 import type { WorkbenchProviderCaller, WorkbenchToolTranscript, WorkbenchToolTranscriptReference, ProviderToolResult } from "workbench-shared/workbench/provider/provider-execution";
 import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
@@ -42,6 +45,7 @@ import { getWorkbenchLifecycleTurnId } from "workbench-shared/workbench/thread/t
 import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
 import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
+import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 import {
   createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput,
   isWorkbenchQuestionnaireResponsePart, WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
@@ -96,6 +100,9 @@ interface SessionExecution {
   admission: Promise<void> | null;
   /** The last completed turn and the intent it ended, until continued or superseded. */
   completion?: { eventID: string; turnId: WorkbenchTurnId; intentVersion: number } | null;
+  /** Persisted cumulative usage before this execution; live events derive their current-turn delta from it. */
+  usageBaseline?: ThreadTokenUsage["total"];
+  usageContextWindow?: number | null;
 }
 export interface OpenCodeNativeActivity {
   sessionID: string;
@@ -511,6 +518,8 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       };
       execution.active = true;
       execution.kind = "prompt";
+      execution.usageBaseline = openCodeTokenBreakdown(session.tokens);
+      execution.usageContextWindow = undefined;
       resolvePromptOwner({
         threadId: recorded.threadId,
         turnId: recorded.latestTurnId,
@@ -684,10 +693,27 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const client = await this.options.acquire();
     signal?.throwIfAborted();
     const session = await client.session.get({ sessionID: nativeThreadId }, { signal });
+    const execution = this.execution(nativeThreadId);
+    if (execution.active && execution.usageBaseline === undefined) {
+      execution.usageBaseline = openCodeTokenBreakdown(session.tokens);
+    }
     const identity = await this.syncSession(session, []);
     const result = await this.sync(identity.threadId, signal);
+    const thread = await this.read(identity.threadId);
+    const turn = thread.turns.at(-1) ?? null;
+    if (execution.active) {
+      if (execution.usageBaseline === undefined && thread.tokenUsage) {
+        execution.usageBaseline = subtractOpenCodeTokenBreakdowns(
+          thread.tokenUsage.total,
+          thread.tokenUsage.last,
+        );
+      }
+      if (execution.usageContextWindow === undefined) {
+        execution.usageContextWindow = thread.tokenUsage?.modelContextWindow ?? null;
+      }
+    }
     return {
-      ...result, maintenance: this.execution(nativeThreadId).kind === "compaction",
+      ...result, turn, maintenance: this.execution(nativeThreadId).kind === "compaction",
       outcome: session.outcome ?? null, idleAt: session.time.idle ?? null,
     };
   }
@@ -804,13 +830,65 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   }
 
   markExecutionStarted(nativeThreadId: string) {
-    this.execution(nativeThreadId).active = true;
+    const execution = this.execution(nativeThreadId);
+    if (!execution.active) {
+      execution.usageBaseline = this.sessions.has(nativeThreadId)
+        ? openCodeTokenBreakdown(this.sessions.get(nativeThreadId)!.tokens)
+        : undefined;
+      execution.usageContextWindow = undefined;
+    }
+    execution.active = true;
   }
 
   markExecutionSettled(nativeThreadId: string, status: "completed" | "interrupted" | "failed" = "completed") {
     this.execution(nativeThreadId).active = false;
     if (status === "completed") this.compactionCompletion.settled(nativeThreadId);
     else this.compactionCompletion.failed(nativeThreadId, new Error("OpenCode compaction was interrupted or failed."));
+  }
+
+  async recordUsage(
+    nativeThreadId: string,
+    tokens: SessionInfo["tokens"],
+    _observedAt: number,
+  ): Promise<{ threadId: WorkbenchThreadId; turnId: WorkbenchTurnId; tokenUsage: ThreadTokenUsage } | null> {
+    const execution = this.execution(nativeThreadId);
+    const active = execution.active && execution.kind === "prompt" ? execution.turn : null;
+    if (!active) return null;
+    const intentVersion = execution.intentVersion;
+    const isCurrent = () => this.execution(nativeThreadId) === execution
+      && execution.active && execution.kind === "prompt"
+      && execution.turn?.turnId === active.turnId && execution.intentVersion === intentVersion;
+    let session = this.sessions.get(nativeThreadId);
+    if (!session) {
+      session = await (await this.options.acquire()).session.get({
+        sessionID: nativeThreadId,
+      }, { signal: this.options.signal });
+      this.sessions.set(nativeThreadId, session);
+    }
+    if (!isCurrent()) return null;
+    if (execution.usageBaseline === undefined || execution.usageContextWindow === undefined) {
+      const thread = await this.read(active.threadId);
+      if (!isCurrent()) return null;
+      execution.usageBaseline ??= thread.tokenUsage?.total ?? {
+        cacheWriteInputTokens: 0,
+        cachedInputTokens: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+        totalTokens: 0,
+      };
+      execution.usageContextWindow = thread.tokenUsage?.modelContextWindow ?? null;
+    }
+    const tokenUsage = await this.options.transcript.recordContextUsage({
+      threadId: active.threadId,
+      baseline: execution.usageBaseline,
+      current: tokens,
+      model: session.model ?? null,
+      nativeLocation: session.location.directory,
+      modelContextWindow: execution.usageContextWindow ?? null,
+      canCommit: isCurrent,
+    });
+    return tokenUsage && isCurrent() ? { ...active, tokenUsage } : null;
   }
 
   acceptExecutionEvent(nativeThreadId: string, sequence: number) {

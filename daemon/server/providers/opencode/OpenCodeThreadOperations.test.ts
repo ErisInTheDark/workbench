@@ -637,6 +637,111 @@ test("execution outlives submission and only terminal execution releases the idl
   assert.equal(owner.hasPendingWork(), false);
 });
 
+test("live usage derives the current execution from the persisted cumulative baseline", async () => {
+  const recorded: Array<{
+    baseline: object;
+    current: object;
+    model: object | null;
+    nativeLocation: string;
+    modelContextWindow: number | null;
+    canCommit(): boolean;
+  }> = [];
+  const firstTotal = {
+    cacheWriteInputTokens: 1, cachedInputTokens: 2, inputTokens: 13,
+    outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 17,
+  };
+  const owner = operations({
+    session: { get: async () => ({
+      ...session,
+      tokens: { input: 10, output: 3, reasoning: 1, cache: { read: 2, write: 1 } },
+    }) },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, {
+    record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "inProgress" }),
+    recordContextUsage: async (input: typeof recorded[number] & { threadId: string }) => {
+      recorded.push(input);
+      return {
+        last: {
+          cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 8,
+          outputTokens: 2, reasoningOutputTokens: 0, totalTokens: 10,
+        },
+        total: {
+          cacheWriteInputTokens: 2, cachedInputTokens: 3, inputTokens: 21,
+          outputTokens: 5, reasoningOutputTokens: 1, totalTokens: 27,
+        },
+        modelContextWindow: input.modelContextWindow,
+      };
+    },
+  }, {}, {
+    readPage: async () => ({ thread: {
+      turns: [{ id: turnId, status: "inProgress", items: [] }],
+      tokenUsage: { last: firstTotal, total: firstTotal, modelContextWindow: 200_000 },
+    } }),
+  });
+  owner.markExecutionStarted(nativeThreadId);
+  await owner.syncNative(nativeThreadId);
+  const usage = await owner.recordUsage(nativeThreadId, {
+    input: 16, output: 5, reasoning: 1, cache: { read: 3, write: 2 },
+  }, 4);
+  assert.equal(usage?.threadId, threadId);
+  assert.equal(usage?.turnId, turnId);
+  assert.equal(recorded.length, 1);
+  assert.deepEqual(recorded[0], {
+    threadId,
+    baseline: firstTotal,
+    current: { input: 16, output: 5, reasoning: 1, cache: { read: 3, write: 2 } },
+    model: null,
+    nativeLocation: "C:/repo",
+    modelContextWindow: 200_000,
+    canCommit: recorded[0]!.canCommit,
+  });
+  assert.equal(recorded[0]?.canCommit(), true);
+  await owner.recordUsage(nativeThreadId, {
+    input: 20, output: 7, reasoning: 2, cache: { read: 4, write: 3 },
+  }, 5);
+  assert.equal(recorded.length, 2);
+  assert.deepEqual(recorded[1]?.baseline, firstTotal,
+    "Repeated live updates keep the execution's original cumulative baseline.");
+});
+
+test("reconnected live usage recovers the pre-turn baseline from the persisted snapshot", async () => {
+  const total = {
+    cacheWriteInputTokens: 2, cachedInputTokens: 3, inputTokens: 21,
+    outputTokens: 5, reasoningOutputTokens: 1, totalTokens: 27,
+  };
+  const last = {
+    cacheWriteInputTokens: 1, cachedInputTokens: 1, inputTokens: 8,
+    outputTokens: 2, reasoningOutputTokens: 0, totalTokens: 10,
+  };
+  let baseline: object | null = null;
+  const owner = operations({
+    session: { get: async () => ({
+      ...session,
+      tokens: { input: 16, output: 5, reasoning: 1, cache: { read: 3, write: 2 } },
+    }) },
+    message: { list: async () => ({ data: [], cursor: {} }) },
+  }, {
+    record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "inProgress" }),
+    recordContextUsage: async (input: { baseline: object }) => {
+      baseline = input.baseline;
+      return { last, total, modelContextWindow: 200_000 };
+    },
+  }, {}, {
+    readPage: async () => ({ thread: {
+      turns: [{ id: turnId, status: "inProgress", items: [] }],
+      tokenUsage: { last, total, modelContextWindow: 200_000 },
+    } }),
+  });
+  await owner.syncNative(nativeThreadId);
+  await owner.recordUsage(nativeThreadId, {
+    input: 16, output: 5, reasoning: 1, cache: { read: 3, write: 2 },
+  }, 5);
+  assert.deepEqual(baseline, {
+    cacheWriteInputTokens: 1, cachedInputTokens: 2, inputTokens: 13,
+    outputTokens: 3, reasoningOutputTokens: 1, totalTokens: 17,
+  });
+});
+
 const target = { threadId, turnId };
 
 test("unfinished completion admits the hidden continuation once, while terminal task decisions and interruption do not", async () => {
