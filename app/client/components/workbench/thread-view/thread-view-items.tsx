@@ -164,6 +164,7 @@ import ThreadSteerActionsContext from "./ThreadSteerActionsContext";
 import { RefreshCwIcon, XIcon } from "../workbench-icons";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import useThreadPresentedText from "./use-thread-presented-text";
+import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 import {
   buildRenderableBlocks, buildCommandSequenceRenderSegments, getWorkedBlockRows,
   getRenderableBlockItems, getRenderableBlockKey, getUserMessageDeliveryState, groupIncomingAgentMessageRuns,
@@ -183,6 +184,16 @@ type CommandBlockItem =
   | { display: ThreadCommandSummaryDisplay };
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
 type RelatedThreadsById = Record<string, ThreadPayload | undefined>;
+
+function getActiveItemStartedAtMs(
+  item: { id: string; status?: string },
+  itemTimeline: readonly WorkbenchThreadItemTimelineEntry[] | null | undefined,
+) {
+  if (item.status !== "inProgress") return null;
+  const timeline = findWorkbenchThreadItemTimelineEntry(item.id, itemTimeline);
+  return timeline?.startedAt ?? timeline?.firstSeenAt ?? null;
+}
+
 type ThreadCommandDisplay = ReturnType<typeof getThreadCommandDisplay>;
 
 const THREAD_WINDOW_CHUNK_SIZE = 6;
@@ -1377,6 +1388,7 @@ function ThreadRecallRecordItem({
 }
 
 function ThreadCommandExecutionDetails ({
+  activeStartedAtMs,
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   inlineMentionSources,
   isMostRecent = false,
@@ -1391,6 +1403,7 @@ function ThreadCommandExecutionDetails ({
   threadId,
   workspaceRoots,
 }: {
+  activeStartedAtMs?: number | null;
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent?: boolean;
@@ -1415,6 +1428,7 @@ function ThreadCommandExecutionDetails ({
     workspaceRoots,
   }), [item.command, item.commandActions, item.cwd, item.shell, knownSkills, projectRootPath, workspaceRoots]);
   const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
+  const visibleDurationMs = useThreadItemLiveDuration(item.durationMs, activeStartedAtMs);
   const outcomeCommandDisplay = useMemo(
     () => getThreadCommandOutcomeDisplay(commandDisplay, commandOutcome),
     [commandDisplay, commandOutcome],
@@ -1501,7 +1515,7 @@ function ThreadCommandExecutionDetails ({
       <ThreadGitArcItem
         commandIntent={gitArcCommandIntent}
         statusOutput={gitArcCommandIntent.action === "status" ? item.aggregatedOutput ?? "" : undefined}
-        durationMs={item.durationMs}
+        durationMs={visibleDurationMs ?? null}
         failureReason={commandOutcome === "failed" || commandOutcome === "declined" || commandOutcome === "timedOut"
           ? item.aggregatedOutput
           : null}
@@ -1543,7 +1557,7 @@ function ThreadCommandExecutionDetails ({
               variant="plain"
             />
           )}
-        durationMs={subagentWaitTiming ? subagentWaitTiming.durationMs : item.durationMs}
+        durationMs={subagentWaitTiming ? subagentWaitTiming.durationMs : visibleDurationMs}
         entries={resolvedSubagentTargets.map((target) => {
           const childThread = target.threadId ? relatedThreadsById[target.threadId] : undefined;
           return {
@@ -1665,11 +1679,11 @@ function ThreadCommandExecutionDetails ({
     );
   }
 
-  if (item.durationMs !== null) {
+  if (visibleDurationMs !== null && visibleDurationMs !== undefined) {
     metaParts.push(
       <ThreadDurationText
         key={`${item.id}:duration`}
-        durationMs={item.durationMs}
+        durationMs={visibleDurationMs}
       />,
     );
   }
@@ -1720,8 +1734,14 @@ function ThreadCommandExecutionDetails ({
   );
 }
 
-function ThreadApprovalAwareMcpToolCallItem (props: Omit<Parameters<typeof ThreadMcpToolCallItem>[0], "approval">) {
-  return <ThreadMcpToolCallItem {...props} approval={useThreadItemApproval(props.item.id)} />;
+function ThreadApprovalAwareMcpToolCallItem ({
+  activeStartedAtMs,
+  ...props
+}: Omit<Parameters<typeof ThreadMcpToolCallItem>[0], "approval"> & {
+  activeStartedAtMs?: number | null;
+}) {
+  const durationMs = useThreadItemLiveDuration(props.item.durationMs, activeStartedAtMs);
+  return <ThreadMcpToolCallItem {...props} approval={useThreadItemApproval(props.item.id)} durationMs={durationMs ?? null} />;
 }
 
 function ThreadRegularCommandItem ({
@@ -1729,6 +1749,7 @@ function ThreadRegularCommandItem ({
   inlineMentionSources,
   isMostRecent,
   item,
+  itemTimeline,
   knownSkills,
   projectFilePaths,
   projectId,
@@ -1743,6 +1764,7 @@ function ThreadRegularCommandItem ({
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
   item: CommandSequenceItem;
+  itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   knownSkills?: WorkbenchSkillSummary[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -1762,6 +1784,7 @@ function ThreadRegularCommandItem ({
     });
     return (
       <ThreadApprovalAwareMcpToolCallItem
+        activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)}
         item={item}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
@@ -1772,6 +1795,7 @@ function ThreadRegularCommandItem ({
 
   return (
     <ThreadCommandExecutionDetails
+      activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)}
       browseResultEntries={browseResultEntries}
       inlineMentionSources={inlineMentionSources}
       isMostRecent={isMostRecent}
@@ -1792,6 +1816,7 @@ function ThreadRegularCommandSequence ({
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   inlineMentionSources,
   isMostRecent,
+  itemTimeline,
   items,
   knownSkills,
   projectFilePaths,
@@ -1806,6 +1831,7 @@ function ThreadRegularCommandSequence ({
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isMostRecent: boolean;
+  itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   items: CommandSequenceItem[];
   knownSkills?: WorkbenchSkillSummary[];
   projectFilePaths?: readonly string[];
@@ -1860,7 +1886,7 @@ function ThreadRegularCommandSequence ({
   }, [allBrowseRequests, commandBlockItems, items.length, knownSkills, projectRootPath, workspaceRoots]);
 
   if (items.length === 1) {
-    return <ThreadRegularCommandItem browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources} isMostRecent={isMostRecent} item={items[0]} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} relatedThreadsById={relatedThreadsById} subagents={subagents} threadCwdPath={threadCwdPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
+    return <ThreadRegularCommandItem browseResultEntries={browseResultEntries} inlineMentionSources={inlineMentionSources} isMostRecent={isMostRecent} item={items[0]} itemTimeline={itemTimeline} knownSkills={knownSkills} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} relatedThreadsById={relatedThreadsById} subagents={subagents} threadCwdPath={threadCwdPath} threadId={threadId} workspaceRoots={workspaceRoots} />;
   }
 
   if (allBrowseRequests) {
@@ -1872,6 +1898,7 @@ function ThreadRegularCommandSequence ({
             inlineMentionSources={inlineMentionSources}
             isMostRecent={isMostRecent && index === items.length - 1}
             item={item}
+            itemTimeline={itemTimeline}
             key={item.id}
             knownSkills={knownSkills}
             projectFilePaths={projectFilePaths}
@@ -1906,6 +1933,7 @@ function ThreadRegularCommandSequence ({
             inlineMentionSources={inlineMentionSources}
             isMostRecent={isMostRecent && index === items.length - 1}
             item={item}
+            itemTimeline={itemTimeline}
             key={item.id}
             knownSkills={knownSkills}
             projectFilePaths={projectFilePaths}
@@ -1990,6 +2018,7 @@ function ThreadCommandSequence ({
         browseResultEntries={browseResultEntries}
         inlineMentionSources={inlineMentionSources}
         isMostRecent={isMostRecent}
+        itemTimeline={itemTimeline}
         items={items}
         knownSkills={knownSkills}
         projectFilePaths={projectFilePaths}
@@ -2009,6 +2038,7 @@ function ThreadCommandSequence ({
       {renderSegments.map((segment, index) => (
         segment.kind === "threadContext" ? (
           <ThreadContextCommandItem
+            activeStartedAtMs={getActiveItemStartedAtMs(segment.item, itemTimeline)}
             key={`thread-context:${segment.item.id}`}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
@@ -2051,6 +2081,7 @@ function ThreadCommandSequence ({
           />
         ) : segment.kind === "gitArc" || segment.kind === "message" || segment.kind === "subagent" ? (
           <ThreadCommandExecutionDetails
+            activeStartedAtMs={getActiveItemStartedAtMs(segment.item, itemTimeline)}
             browseResultEntries={browseResultEntries}
             inlineMentionSources={inlineMentionSources}
             isMostRecent={isMostRecent && index === renderSegments.length - 1}
@@ -2087,6 +2118,7 @@ function ThreadCommandSequence ({
             browseResultEntries={browseResultEntries}
             inlineMentionSources={inlineMentionSources}
             isMostRecent={isMostRecent && index === renderSegments.length - 1}
+            itemTimeline={itemTimeline}
             items={segment.items}
             key={`commands:${segment.items[0]?.id ?? index}`}
             knownSkills={knownSkills}
@@ -2338,6 +2370,7 @@ function ThreadRenderableBlockViewComponent ({
       )) {
         return (
           <ThreadWorkbenchCommandItem
+            activeStartedAtMs={getActiveItemStartedAtMs(block.item, itemTimeline)}
             inlineMentionSources={inlineMentionSources}
             item={block.item}
             projectFilePaths={projectFilePaths}
@@ -2389,6 +2422,7 @@ function ThreadRenderableBlockViewComponent ({
         : [];
       return (
         <ThreadApprovalAwareMcpToolCallItem
+          activeStartedAtMs={getActiveItemStartedAtMs(block.item, itemTimeline)}
           details={browseDetails.length ? (
             <ThreadCommandDetailRows rows={browseDetails} projectFilePaths={projectFilePaths} projectId={projectId} />
           ) : undefined}
@@ -2400,7 +2434,7 @@ function ThreadRenderableBlockViewComponent ({
       );
     }
     case "dynamicToolCall":
-      return <ThreadDynamicToolCallItem hasCapturedChildren={block.hasCapturedChildren} answeredAt={findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline)?.completedAt ?? null} inlineMentionSources={inlineMentionSources} item={block.item} knownSkills={knownSkills} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
+      return <ThreadDynamicToolCallItem activeStartedAtMs={getActiveItemStartedAtMs(block.item, itemTimeline)} hasCapturedChildren={block.hasCapturedChildren} answeredAt={findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline)?.completedAt ?? null} inlineMentionSources={inlineMentionSources} item={block.item} knownSkills={knownSkills} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
     case "webSearch":
       return <ThreadWebSearchItem item={block.item} />;
     case "collabAgentToolCall":

@@ -38,6 +38,7 @@ import { humanizeThreadLabel } from "./thread-view-formatters";
 import { useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import { readGlobalWorkbenchSettings } from "../../../workbench/state/workbench-settings";
 import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
+import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 
 type DynamicToolCallItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
@@ -465,6 +466,7 @@ function ThreadGenericDynamicToolCallItem ({
 }
 
 export default function ThreadDynamicToolCallItem ({
+  activeStartedAtMs,
   answeredAt = null,
   hasCapturedChildren,
   inlineMentionSources,
@@ -476,6 +478,7 @@ export default function ThreadDynamicToolCallItem ({
   projectRootPath,
   workspaceRoots,
 }: {
+  activeStartedAtMs?: number | null;
   answeredAt?: number | null;
   hasCapturedChildren?: boolean;
   inlineMentionSources?: InlineMentionHighlightSources | null;
@@ -487,14 +490,18 @@ export default function ThreadDynamicToolCallItem ({
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const visibleDurationMs = useThreadItemLiveDuration(item.durationMs, activeStartedAtMs);
+  const presentedItem = visibleDurationMs === item.durationMs
+    ? item
+    : { ...item, durationMs: visibleDurationMs ?? null };
   if (item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME) {
-    return <ThreadQuestionnaireToolCallItem answeredAt={answeredAt} inlineMentionSources={inlineMentionSources} item={item} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
+    return <ThreadQuestionnaireToolCallItem answeredAt={answeredAt} inlineMentionSources={inlineMentionSources} item={presentedItem} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
 
   if (isNativeFileOperation(item)) {
-    return <ThreadFileChangeItem items={[item]} projectFilePaths={projectFilePaths} projectId={projectId}
+    return <ThreadFileChangeItem items={[presentedItem]} projectFilePaths={projectFilePaths} projectId={projectId}
       projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
-  return <ThreadGenericDynamicToolCallItem item={item} hasCapturedChildren={hasCapturedChildren} knownSkills={knownSkills}
+  return <ThreadGenericDynamicToolCallItem item={presentedItem} hasCapturedChildren={hasCapturedChildren} knownSkills={knownSkills}
     projectFilePaths={projectFilePaths} projectId={projectId} />;
 }

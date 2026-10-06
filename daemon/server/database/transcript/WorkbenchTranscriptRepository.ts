@@ -533,6 +533,40 @@ export default class WorkbenchTranscriptRepository {
     };
   }
 
+  #itemLifecycleTimeline(
+    existing: TranscriptItemRow,
+    observation: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }>,
+    canonicalIndex?: CanonicalSettlementIndex,
+  ): WorkbenchThreadItemTimelineEntry | undefined {
+    if (observation.timeline) return observation.timeline;
+    if (observation.item.type !== "commandExecution"
+      && observation.item.type !== "mcpToolCall"
+      && observation.item.type !== "dynamicToolCall") return undefined;
+    const timeline = canonicalIndex
+      ? canonicalIndex.timelinesByItemId.get(existing.id) ?? null
+      : this.#one(selectRows(itemTables.threadItemTimelines, { where: { item_id: existing.id } }));
+    if (observation.lifecycle !== "streaming" && !timeline) return undefined;
+    const aliases = timeline
+      ? canonicalIndex
+        ? canonicalIndex.timelineAliasesByItemId.get(existing.id) ?? []
+        : this.#all(selectRows(itemTables.threadItemTimelineAliases, { where: { item_id: existing.id } }))
+          .map(({ alias }) => alias)
+      : [];
+    return {
+      ...(aliases.length ? { aliases } : {}),
+      completedAt: observation.lifecycle === "streaming"
+        ? timeline?.completed_at ?? null
+        : latestTimestamp(timeline?.completed_at ?? null, observation.observedAt),
+      firstSeenAt: earliestTimestamp(timeline?.first_seen_at ?? null, observation.observedAt)
+        ?? observation.observedAt,
+      itemId: existing.public_id,
+      lastSeenAt: latestTimestamp(timeline?.last_seen_at ?? null, observation.observedAt)
+        ?? observation.observedAt,
+      startedAt: timeline?.started_at
+        ?? (observation.lifecycle === "streaming" ? observation.observedAt : null),
+    };
+  }
+
   #mergeCanonicalItemIdentity(
     index: CanonicalSettlementIndex,
     threadId: WorkbenchThreadId,
@@ -1151,7 +1185,7 @@ export default class WorkbenchTranscriptRepository {
         }),
         observedAt: observation.observedAt,
         replaceTimeline: mode !== "live",
-        timeline: observation.timeline,
+        timeline: this.#itemLifecycleTimeline(existing, observation, canonicalIndex),
         canonicalIndex,
         allowToolOutputTransition: item.type === "functionCallOutput",
       });

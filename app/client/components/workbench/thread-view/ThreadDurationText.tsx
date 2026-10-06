@@ -4,8 +4,6 @@
  */
 "use client";
 
-import { Fragment } from "react";
-
 import { formatThreadDuration } from "./thread-view-formatters";
 
 function joinClasses(...values: Array<string | undefined>) {
@@ -29,10 +27,19 @@ export default function ThreadDurationText({
   return (
     <span className={joinClasses(className)}>
       {value.split(" ").map((part, index, parts) => (
-        <Fragment key={`${part}:${index}`}>
-          <span className={EMPHASIS_CLASS}>{part}</span>
+        <span key={index}>
+          <span className={EMPHASIS_CLASS}>
+            {[...part].map((character, characterIndex) => (
+              <span
+                className="inline-block animate-tick motion-reduce:animate-none"
+                key={`${characterIndex}:${character}`}
+              >
+                {character}
+              </span>
+            ))}
+          </span>
           {index < parts.length - 1 ? " " : null}
-        </Fragment>
+        </span>
       ))}
     </span>
   );

@@ -88,6 +88,29 @@ const toolResult = (id: string, isError: boolean, toolUseResult?: object) => ({
   message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: isError ? "denied" : "ok", is_error: isError }] },
   ...(toolUseResult ? { tool_use_result: toolUseResult } : {}),
 }) as never;
+
+test("native and Workbench-hosted tools stay streaming until their results settle them", async () => {
+  const { adapter, items } = fixture();
+  await adapter.recordAssistant(threadId, turnId, assistant([{
+    type: "tool_use", id: "native", name: "Bash", input: { command: "pwd" },
+  }]));
+  const workbench = await adapter.startToolTranscript({
+    threadId, turnId, tool: "shell", arguments: { command: "pwd" },
+  });
+
+  assert.deepEqual(items().map(record => [record.item?.type, record.lifecycle]), [
+    ["dynamicToolCall", "streaming"],
+    ["mcpToolCall", "streaming"],
+  ]);
+
+  await adapter.recordNativeToolResults(threadId, toolResult("native", false));
+  await adapter.finishToolTranscript(workbench, { content: [{ type: "text", text: "ok" }] });
+  assert.deepEqual(items().slice(-2).map(record => [record.item?.type, record.lifecycle]), [
+    ["dynamicToolCall", "completed"],
+    ["mcpToolCall", "completed"],
+  ]);
+});
+
 const commentaryStart = (id: string) => stream({
   type: "content_block_start", index: 1, content_block: { type: "tool_use", id, name: CLAUDE_COMMENTARY_TOOL_NAME, input: {} },
 });

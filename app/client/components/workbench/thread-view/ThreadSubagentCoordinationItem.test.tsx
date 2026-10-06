@@ -12,6 +12,7 @@ const participants = [
   { key: "iris", label: "Iris" },
   { key: "rose", label: "Rose" },
 ];
+const renderedText = (html: string) => html.replace(/<[^>]+>/gu, "");
 
 test("settled coordination renders one disclosure with a frozen duration and flat bubbles", () => {
   const html = renderToStaticMarkup(createElement(
@@ -23,7 +24,7 @@ test("settled coordination renders one disclosure with a frozen duration and fla
   assert.match(html, /Coordinated with/u);
   assert.match(html, /Iris/u);
   assert.match(html, /Rose/u);
-  assert.match(html, /1m/u);
+  assert.match(renderedText(html), /1m/u);
   assert.equal((html.match(/<details/gu) ?? []).length, 1);
   assert.match(html, /data-conversation-bubble="true"/u);
 });

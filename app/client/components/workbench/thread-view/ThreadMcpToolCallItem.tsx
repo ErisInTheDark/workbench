@@ -45,12 +45,14 @@ export default function ThreadMcpToolCallItem ({
   approval = null,
   details,
   item,
+  durationMs = item.durationMs,
   projectFilePaths,
   projectId,
   route,
 }: {
   approval?: ThreadItemApprovalState | null;
   details?: ReactNode;
+  durationMs?: number | null;
   item: McpToolCallItem;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -72,11 +74,11 @@ export default function ThreadMcpToolCallItem ({
     );
   }
 
-  if (item.durationMs !== null) {
+  if (durationMs !== null) {
     metaParts.push(
       <ThreadDurationText
         key={`${item.id}:duration`}
-        durationMs={item.durationMs}
+        durationMs={durationMs}
       />,
     );
   }

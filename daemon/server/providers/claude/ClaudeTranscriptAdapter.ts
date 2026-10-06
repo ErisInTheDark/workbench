@@ -233,15 +233,20 @@ export default class ClaudeTranscriptAdapter {
   async recordItem(
     threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, reference: string, item: ThreadItem,
     observedAt = Date.now(), source: "provider" | "workbench" = "provider",
-    lifecycle: WorkbenchTranscriptItemLifecycle = "completed",
+    lifecycle?: WorkbenchTranscriptItemLifecycle,
   ) {
+    const resolvedLifecycle = lifecycle ?? (
+      (item.type === "dynamicToolCall" || item.type === "mcpToolCall") && item.status === "inProgress"
+        ? "streaming"
+        : "completed"
+    );
     const [identity] = await this.owners.items.admit([{
       threadId, sources: [{ turnId, kind: "stable", reference }],
     }]);
     const itemId = identity!.itemId;
     await this.owners.transcript.record([{
       kind: "item", threadId, turnId, publicItemId: itemId,
-      item: { ...item, id: itemId }, lifecycle, observedAt,
+      item: { ...item, id: itemId }, lifecycle: resolvedLifecycle, observedAt,
     }], { source });
     return itemId;
   }

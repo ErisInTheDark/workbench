@@ -2,6 +2,7 @@
  * Keywords: thread, duration, live clock, cleanup.
  * Exports:
  * - useThreadLiveDuration: add active elapsed time to recorded duration, refreshing once per second.
+ * - useThreadItemLiveDuration: prefer canonical active-item timing over provider-reported duration.
  */
 "use client";
 
@@ -11,7 +12,7 @@ export function useThreadLiveDuration(
   durationMs: number | null | undefined,
   activeStartedAtMs: number | null | undefined,
 ) {
-  const [nowMs, setNowMs] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now);
   useEffect(() => {
     if (activeStartedAtMs === null || activeStartedAtMs === undefined) {
       return;
@@ -27,7 +28,16 @@ export function useThreadLiveDuration(
     && activeStartedAtMs !== undefined
     && durationMs !== null
     && durationMs !== undefined
-    && nowMs !== null
       ? durationMs + Math.max(0, nowMs - activeStartedAtMs)
       : durationMs;
+}
+
+export function useThreadItemLiveDuration(
+  durationMs: number | null | undefined,
+  activeStartedAtMs: number | null | undefined,
+) {
+  return useThreadLiveDuration(
+    activeStartedAtMs === null || activeStartedAtMs === undefined ? durationMs : 0,
+    activeStartedAtMs,
+  );
 }

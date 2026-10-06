@@ -13,6 +13,7 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { isThreadItemVisible } from "workbench-shared/workbench/thread/thread-item-visibility";
 import { getWorkbenchTurnAdmission, type WorkbenchAdmissionTurn } from "workbench-shared/workbench/thread/thread-admission";
 import { isWorkbenchSyntheticSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
+import { upsertWorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
 import {
   projectWorkbenchTranscript,
@@ -61,6 +62,44 @@ function sameDurableTurnIds(
   const rightIds = durableTurnIds(right);
   return leftIds.length === rightIds.length
     && leftIds.every((turnId, index) => turnId === rightIds[index]);
+}
+
+function liveItemTimelines(thread: ThreadPayload | null | undefined) {
+  return (thread?.turnHistory ?? []).map(entry => ({
+    itemTimeline: entry.itemTimeline ?? [],
+    turnId: entry.turnId,
+  }));
+}
+
+function overlayLiveItemTimelines(
+  projection: WorkbenchTranscriptProjection,
+  thread: ThreadPayload,
+) {
+  const liveByTurnId = new Map(thread.turnHistory.map(entry => [entry.turnId, entry.itemTimeline ?? []]));
+  let changed = false;
+  const turns = projection.turns.map(turn => {
+    const admittedItemIds = new Set(turn.items.map(item => item.id));
+    let itemTimeline = turn.itemTimeline;
+    for (const entry of liveByTurnId.get(turn.id) ?? []) {
+      if (!admittedItemIds.has(entry.itemId) && !entry.aliases?.some(alias => admittedItemIds.has(alias))) continue;
+      itemTimeline = upsertWorkbenchThreadItemTimelineEntry(itemTimeline, entry);
+    }
+    if (areDeeplyEqual(itemTimeline, turn.itemTimeline)) return turn;
+    changed = true;
+    return { ...turn, itemTimeline };
+  });
+  if (!changed) return projection;
+  const timelineByTurnId = new Map(turns.map(turn => [turn.id, turn.itemTimeline]));
+  return {
+    ...projection,
+    turns,
+    turnHistory: projection.turnHistory.map(entry => {
+      const itemTimeline = timelineByTurnId.get(entry.turnId);
+      return itemTimeline && !areDeeplyEqual(itemTimeline, entry.itemTimeline)
+        ? { ...entry, itemTimeline }
+        : entry;
+    }),
+  };
 }
 
 function localSteers(thread: ThreadPayload | undefined) {
@@ -213,6 +252,10 @@ export default class ThreadTranscriptProjectionController {
     );
     const initialsChanged = !areDeeplyEqual(this.#localInitials, nextLocalInitials);
     const steersChanged = !areDeeplyEqual(localSteers(this.#selection?.thread), localSteers(selection?.thread));
+    const itemTimelinesChanged = !areDeeplyEqual(
+      liveItemTimelines(this.#selection?.thread),
+      liveItemTimelines(selection?.thread),
+    );
     this.#selection = selection;
     this.#localInitials = nextLocalInitials;
     if (previousThreadId !== nextThreadId) {
@@ -247,12 +290,14 @@ export default class ThreadTranscriptProjectionController {
       this.#replaceSubscription();
       return;
     }
-    if (publishState && (!this.#incremental || localPendingChanged || initialsChanged || steersChanged)) this.#publishProjection();
+    if (publishState && (!this.#incremental || localPendingChanged || initialsChanged || steersChanged || itemTimelinesChanged)) {
+      this.#publishProjection();
+    }
   }
 
   #reconcileCurrentProjection() {
     if (!this.#selection || !this.#projection?.value) return null;
-    let projection = this.#projection.value;
+    let projection = overlayLiveItemTimelines(this.#projection.value, this.#selection.thread);
     if (this.#toolPatches.size) {
       const overlay = (item: WorkbenchProjectedTranscriptItem): WorkbenchProjectedTranscriptItem => {
         const preview = this.#toolPatches.get(item.id);

@@ -137,6 +137,61 @@ function streamBaseline(threadId: string): TranscriptStreamUpdate {
   };
 }
 
+test("incremental projections overlay live item lifecycle timing", async () => {
+  const states: ThreadTranscriptProjectionState[] = [];
+  let receive!: (update: TranscriptStreamUpdate) => void;
+  const controller = new ThreadTranscriptProjectionController({
+    available: true,
+    onStateChange: state => states.push(state),
+    transcripts: {
+      subscribe: async (_params, _snapshot, stream) => { receive = stream!; },
+      unsubscribe: async () => {},
+    },
+    turnLimit: 4,
+  });
+  const source = thread("thread");
+  source.turns[0] = {
+    ...source.turns[0]!,
+    items: [{ ...source.turns[0]!.items[0]!, id: baselineItemId }],
+    status: "inProgress",
+  };
+  source.turnHistory[0] = {
+    ...source.turnHistory[0]!,
+    itemIds: [baselineItemId],
+    status: "inProgress",
+  };
+  const projection = () => {
+    const state = states.at(-1)!;
+    assert.ok(state.status === "ready");
+    return state.projection;
+  };
+
+  controller.select({ thread: source });
+  await flush();
+  receive(streamBaseline("thread"));
+  assert.deepEqual(projection().turns[0]!.itemTimeline, []);
+
+  const started = structuredClone(source);
+  started.turnHistory[0]!.itemTimeline = [{
+    completedAt: null,
+    firstSeenAt: 2_000,
+    itemId: baselineItemId,
+    lastSeenAt: 2_000,
+    startedAt: 2_000,
+  }];
+  controller.select({ thread: started });
+  assert.equal(projection().turns[0]!.itemTimeline[0]?.startedAt, 2_000);
+
+  const completed = structuredClone(started);
+  completed.turnHistory[0]!.itemTimeline![0] = {
+    ...completed.turnHistory[0]!.itemTimeline![0]!,
+    completedAt: 5_000,
+    lastSeenAt: 5_000,
+  };
+  controller.select({ thread: completed });
+  assert.equal(projection().turns[0]!.itemTimeline[0]?.completedAt, 5_000);
+});
+
 test("claude displays only message-tool prose while retaining snapshot and streaming baselines", async context => {
   for (const harness of ["claude", "codex"] as const) {
     for (const route of ["snapshot", "stream"] as const) {

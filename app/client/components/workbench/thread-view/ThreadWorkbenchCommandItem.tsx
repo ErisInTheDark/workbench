@@ -43,6 +43,7 @@ import ThreadSubagentTargetActionItem from "./ThreadSubagentTargetActionItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
 import ThreadTitleCommandItem from "./ThreadTitleCommandItem";
 import { formatToolCallOutput } from "./format-thread-tool-call";
+import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 
 type McpToolCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 type SpecializedRoute = Extract<WorkbenchCommandRoute, { kind: "specialized" }>;
@@ -57,6 +58,7 @@ function getMcpOutput(item: McpToolCallItem) {
 }
 
 export default function ThreadWorkbenchCommandItem({
+  activeStartedAtMs,
   inlineMentionSources,
   item,
   projectFilePaths,
@@ -71,6 +73,7 @@ export default function ThreadWorkbenchCommandItem({
   threadId,
   workspaceRoots,
 }: {
+  activeStartedAtMs?: number | null;
   inlineMentionSources?: Parameters<typeof ThreadMarkdown>[0]["inlineMentionSources"];
   item: McpToolCallItem;
   projectFilePaths?: readonly string[];
@@ -88,6 +91,12 @@ export default function ThreadWorkbenchCommandItem({
   const outcome = getThreadMcpToolCallOutcome(item);
   const output = getMcpOutput(item);
   const operation = route.operation;
+  const delegatesLiveDuration = operation.kind === "threadRecall"
+    || operation.kind === "subagent" && operation.operation.action === "wait";
+  const visibleDurationMs = useThreadItemLiveDuration(
+    item.durationMs,
+    delegatesLiveDuration ? null : activeStartedAtMs,
+  );
   const gitArcPresentation = useContext(ThreadGitArcPresentationContext);
   const typed = useMemo(() => {
     const result = operation.kind === "gitArc" || operation.kind === "gitArcWait"
@@ -111,6 +120,7 @@ export default function ThreadWorkbenchCommandItem({
   if (operation.kind === "threadRecall" && threadCwdPath) {
     return (
       <ThreadContextCommandItem
+        activeStartedAtMs={activeStartedAtMs}
         operation={operation.operation}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
@@ -132,7 +142,7 @@ export default function ThreadWorkbenchCommandItem({
             paths: [],
             ref: operation.ref,
           }}
-          durationMs={item.durationMs}
+          durationMs={visibleDurationMs ?? null}
           durationPresentation="waited"
           failureReason={hasStructuredResult ? typed?.kind === "invalid" ? "The tool result could not be read." : null : outcome === "failed" ? output : null}
           interruptedBySteer={interruptedBySteer}
@@ -223,7 +233,7 @@ export default function ThreadWorkbenchCommandItem({
     return (
       <ThreadGitArcItem
         commandIntent={intent}
-        durationMs={item.durationMs}
+        durationMs={visibleDurationMs ?? null}
         failureReason={hasStructuredResult ? typed?.kind === "invalid" ? "The tool result could not be read." : null : outcome === "failed" ? output : null}
         interruptedBySteer={interruptedBySteer}
         operationDetails={operationDetails}
@@ -340,7 +350,8 @@ export default function ThreadWorkbenchCommandItem({
             workspaceRoots={workspaceRoots}
           />
         ) : outcome === "failed" ? output : undefined}
-        durationMs={item.durationMs}
+        activeStartedAtMs={activeStartedAtMs}
+        durationMs={activeStartedAtMs === null || activeStartedAtMs === undefined ? visibleDurationMs : 0}
         entries={targets.map((target) => ({
           content: renderSubagentActivity?.({
             subagent: target.subagent,

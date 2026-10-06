@@ -33,6 +33,7 @@ import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadRecallOutput from "./ThreadRecallOutput";
 import ThreadSummaryText from "./ThreadSummaryText";
 import { ThreadCommandSummary } from "./thread-view-primitives";
+import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 
 export interface ThreadContextCommandSource {
   cwd: string;
@@ -100,6 +101,7 @@ function ThreadRecallIcon({
 }
 
 export default function ThreadContextCommandItem ({
+  activeStartedAtMs,
   defaultOpen = false,
   operation,
   source,
@@ -110,6 +112,7 @@ export default function ThreadContextCommandItem ({
   threadCwdPath,
   workspaceRoots,
 }: {
+  activeStartedAtMs?: number | null;
   defaultOpen?: boolean;
   operation: WorkbenchThreadRecallOperation;
   source: ThreadContextCommandSource;
@@ -120,6 +123,7 @@ export default function ThreadContextCommandItem ({
   threadCwdPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
+  const visibleDurationMs = useThreadItemLiveDuration(source.durationMs, activeStartedAtMs);
   const markdown = source.output.trim();
   const outputSummary = summarizeWorkbenchThreadRecallOutput(markdown);
   const summaryDisplay = getThreadCommandOutcomeDisplay(
@@ -147,7 +151,7 @@ export default function ThreadContextCommandItem ({
             projectFilePaths={projectFilePaths}
             projectId={projectId}
           />
-          <ThreadContextCommandMetaParts source={source} />
+          <ThreadContextCommandMetaParts source={{ ...source, durationMs: visibleDurationMs ?? null }} />
         </>
       )}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"

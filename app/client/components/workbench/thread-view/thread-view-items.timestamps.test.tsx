@@ -20,6 +20,7 @@ const timing = (itemId: string, firstSeenAt: number, completedAt: number | null 
 });
 const timestamps = (html: string) => [...html.matchAll(/<time\b[^>]*dateTime="([^"]+)"/gu)].map((match) => match[1]);
 const iso = (ms: number) => new Date(ms).toISOString();
+const renderedText = (html: string) => html.replace(/<[^>]+>/gu, "");
 
 for (const status of ["inProgress", "completed"] as const) {
   test(`merged steers use only the final event time in ${status} turns`, () => {
@@ -97,4 +98,63 @@ test("invalid item timing is not presented as a real timestamp", () => {
     threadId: "thread", turnId: "turn", turnCompletedAt: 10, turnStartedAt: 1, turnStatus: "completed",
   }));
   assert.deepEqual(timestamps(html), []);
+});
+
+test("active command families derive a live duration from canonical item timing", () => {
+  const startedAt = Date.now() - 65_000;
+  const items: ThreadItem[] = [{
+    aggregatedOutput: null,
+    command: "echo shell",
+    commandActions: [],
+    cwd: "C:/project",
+    durationMs: null,
+    exitCode: null,
+    id: "shell",
+    pluginId: null,
+    processId: null,
+    scriptPath: null,
+    source: "agent",
+    status: "inProgress",
+    type: "commandExecution",
+  }, {
+    appContext: null,
+    arguments: {},
+    durationMs: null,
+    error: null,
+    id: "mcp",
+    pluginId: null,
+    readOnlyHint: null,
+    result: null,
+    server: "custom",
+    status: "inProgress",
+    tool: "inspect",
+    type: "mcpToolCall",
+  }, {
+    arguments: {},
+    contentItems: null,
+    durationMs: null,
+    id: "dynamic",
+    namespace: "provider",
+    status: "inProgress",
+    success: null,
+    tool: "inspect",
+    type: "dynamicToolCall",
+  }];
+  const html = renderToStaticMarkup(createElement(ThreadTranscriptItemsDetails, {
+    itemTimeline: items.map(item => ({
+      completedAt: null,
+      firstSeenAt: startedAt,
+      itemId: item.id,
+      lastSeenAt: startedAt,
+      startedAt,
+    })),
+    items,
+    threadId: "thread",
+    turnCompletedAt: null,
+    turnId: "turn",
+    turnStartedAt: startedAt / 1_000,
+    turnStatus: "inProgress",
+  }));
+
+  assert.equal((renderedText(html).match(/1m/gu) ?? []).length, 3);
 });

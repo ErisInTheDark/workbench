@@ -751,6 +751,32 @@ test("atomic lifecycle facts merge without erasing richer item or turn timing", 
     threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
     turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
   });
+  const command = (
+    sourceId: string,
+    observedAt: number,
+    lifecycle: "streaming" | "completed",
+  ): WorkbenchTranscriptAtomicObservation => ({
+    item: {
+      aggregatedOutput: lifecycle === "completed" ? "done" : null,
+      command: "inspect",
+      commandActions: [],
+      cwd: "C:/project",
+      durationMs: lifecycle === "completed" ? 5 : null,
+      exitCode: lifecycle === "completed" ? 0 : null,
+      id: sourceId,
+      pluginId: null,
+      processId: null,
+      scriptPath: null,
+      source: "agent",
+      status: lifecycle === "completed" ? "completed" : "inProgress",
+      type: "commandExecution",
+    },
+    kind: "item",
+    lifecycle,
+    observedAt,
+    threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
+    turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
+  });
   try {
     repository.settle([
       threadObservation(),
@@ -786,6 +812,8 @@ test("atomic lifecycle facts merge without erasing richer item or turn timing", 
       lastSeenAt: 12,
       startedAt: null,
     })]);
+    repository.settle([command("derived", 30, "streaming")]);
+    repository.settle([command("derived", 35, "completed")]);
     repository.settle([{
       ...turnObservation("turn", 0),
       durationMs: 10,
@@ -818,6 +846,12 @@ test("atomic lifecycle facts merge without erasing richer item or turn timing", 
         .map(({ item_id, ...timeline }) => ({ sourceId: sourceIdsByItemId.get(item_id), ...timeline }))
         .sort((left, right) => left.sourceId!.localeCompare(right.sourceId!)),
       [{
+        completed_at: 35,
+        first_seen_at: 30,
+        last_seen_at: 35,
+        sourceId: "derived",
+        started_at: 30,
+      }, {
         completed_at: 20,
         first_seen_at: 10,
         last_seen_at: 20,
