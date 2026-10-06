@@ -31,8 +31,7 @@ export default class WorkbenchWorkingTreeRepository {
     );
     return status.split("\0")
       .filter(Boolean)
-      .map(entry => entry.slice(3))
-      .filter(file => file !== ".workbench/transcripts" && !file.startsWith(".workbench/transcripts/"));
+      .map(entry => entry.slice(3));
   }
 
   async read(): Promise<WorkingTreeRepository> {

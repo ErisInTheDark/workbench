@@ -410,9 +410,12 @@ test("direct worktree dirt uses final file content across staged, deleted, untra
   await fs.writeFile(path.join(fixture.root, "selected.txt"), "final worktree content\n", "utf8");
   await fs.rm(path.join(fixture.root, "ordinary.txt"));
   await fs.writeFile(path.join(fixture.root, unusualPath), "untracked content\n", "utf8");
-  await fs.writeFile(path.join(fixture.root, ".gitignore"), "ignored/\n", "utf8");
+  // An ignored `.workbench/` holding Workbench's own runtime files is every Workbench project's real shape.
+  await fs.writeFile(path.join(fixture.root, ".gitignore"), "ignored/\n.workbench/\n", "utf8");
   await fs.mkdir(path.join(fixture.root, "ignored"));
   await fs.writeFile(path.join(fixture.root, "ignored", "output.txt"), "ignored content\n", "utf8");
+  await fs.mkdir(path.join(fixture.root, ".workbench", "runtime"), { recursive: true });
+  await fs.writeFile(path.join(fixture.root, ".workbench", "runtime", "state.json"), "{}\n", "utf8");
   // Fully staged: the real index's stat matches the worktree while its blob differs from HEAD.
   await fs.writeFile(path.join(fixture.root, "staged.txt"), "fully staged content\n", "utf8");
   await repository.run(["add", "--", "staged.txt"]);
@@ -422,7 +425,7 @@ test("direct worktree dirt uses final file content across staged, deleted, untra
     [await show("selected.txt"), await show("staged.txt"), await show(unusualPath)],
     ["final worktree content\n", "fully staged content\n", "untracked content\n"],
   );
-  assert.deepEqual(await repository.listChangedPaths(snapshot.tree, null, ["ordinary.txt", "ignored"]), [], "deleted and ignored files stay out");
+  assert.deepEqual(await repository.listChangedPaths(snapshot.tree, null, ["ordinary.txt", "ignored", ".workbench"]), [], "deleted and ignored files stay out");
   await repository.run(["rm", "--cached", "--quiet", "--", "staged.txt"]);
   await fs.rm(path.join(fixture.root, "staged.txt"));
   const indexBefore = await repository.run(["diff", "--cached", "--binary"]);

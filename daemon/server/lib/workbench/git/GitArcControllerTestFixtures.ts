@@ -28,7 +28,6 @@ async function write(root: string, file: string, content: string | Uint8Array) {
 async function preparePartial(repositoryRoot: string) {
   const repository = await WorkbenchGitRepository.open(repositoryRoot);
   const controller = new WorkbenchGitCheckpointController();
-  await write(repositoryRoot, `.workbench/transcripts/codex/threads/${Buffer.from("partial-thread").toString("base64url")}/thread.json`, "{}\n");
   const plan = await controller.createPlan({
     cwd: repositoryRoot, harness: "codex", intentName: "change both files",
     paths: ["one.txt", "two.txt"], threadId: "partial-thread",
@@ -43,13 +42,13 @@ export const CONTROLLER_PARTIAL_READY_FIXTURE = {
   commits: CONTROLLER_BASE_FIXTURE.commits,
   name: "controller-partial-ready",
   prepare: async ({ repositoryRoot }) => await preparePartial(repositoryRoot),
-  revision: 1,
+  revision: 2,
 } satisfies GitTestFixtureSpec<{ planCheckpoint: string; repositoryHead: string }>;
 
 export const CONTROLLER_OPERATIONS_FIXTURE = {
   commits: CONTROLLER_BASE_FIXTURE.commits,
   name: "controller-shared-states",
-  revision: 8,
+  revision: 9,
   prepare: async ({ bundleRoot, repositoryRoot, runGit }) => {
     const controller = new WorkbenchGitCheckpointController();
     const registry = { root: repositoryRoot, relativeRoot: "repo" };

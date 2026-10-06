@@ -19,7 +19,6 @@
  * - prepareWorkbenchGitTestFixtures/WorkbenchPreparedTestFixtures: prepare selected repository copies and clean them after all pools finish.
  */
 import fs from "node:fs/promises";
-import type { WorkbenchHarness } from "workbench-shared/types";
 import path from "node:path";
 
 import { APP_RELOAD_DIRT_FIXTURE } from "../../../../../app/server/runtime/AppReloadDirt.test.fixtures";
@@ -70,23 +69,6 @@ async function write(root: string, relativePath: string, contents: string) {
   const filePath = path.join(root, relativePath);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, contents, "utf8");
-}
-
-async function createTranscript(
-  repositoryRoot: string,
-  harness: WorkbenchHarness,
-  threadId: string,
-) {
-  const threadDirectory = path.join(
-    repositoryRoot,
-    ".workbench",
-    "transcripts",
-    harness,
-    "threads",
-    Buffer.from(threadId, "utf8").toString("base64url"),
-  );
-  await fs.mkdir(threadDirectory, { recursive: true });
-  await fs.writeFile(path.join(threadDirectory, "thread.json"), "{}\n", "utf8");
 }
 
 async function targetAndHead(repositoryRoot: string, runGit: GitTestFixturePrepareContext["runGit"]) {

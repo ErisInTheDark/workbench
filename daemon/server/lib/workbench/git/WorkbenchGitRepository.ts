@@ -25,7 +25,6 @@ import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/che
 const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
 const COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu;
-const WORKBENCH_TRANSCRIPT_EXCLUSION = ":(top,glob,exclude).workbench/transcripts/**";
 export const GIT_STATE_GENERATION_REF = "refs/worktree/workbench/state-generation";
 
 /** Each worktree's real index path never moves, so resolve it once per root. */
@@ -643,8 +642,7 @@ export default class WorkbenchGitRepository {
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       await this.seedTemporaryIndex(indexPath, baseTreeish, env, signal);
-      // Excluding transcripts is a no-op where they are already ignored, so no ignore probe is needed first.
-      await this.run(["add", "-A", "--", ".", WORKBENCH_TRANSCRIPT_EXCLUSION], env, signal);
+      await this.run(["add", "-A", "--", "."], env, signal);
       return (await this.run(["write-tree"], env, signal)).trim();
     });
   }

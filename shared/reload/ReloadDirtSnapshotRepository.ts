@@ -12,7 +12,6 @@ import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 
 const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
-const WORKBENCH_TRANSCRIPT_EXCLUSION = ":(top,glob,exclude).workbench/transcripts/**";
 // Leave space for Git's executable, fixed arguments and Windows argument quoting.
 const PATH_ARGUMENT_BUDGET = 8_000;
 
@@ -109,12 +108,7 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
     return await this.withTemporaryIndex(async (indexPath) => {
       const env = { ...process.env, GIT_INDEX_FILE: indexPath };
       await this.run(["read-tree", "HEAD"], env);
-      const transcriptIsIgnored = await this.succeeds([
-        "check-ignore", "-q", "--no-index", ".workbench/transcripts",
-      ]);
-      await this.run([
-        "add", "-A", "--", ".", ...(transcriptIsIgnored ? [] : [WORKBENCH_TRANSCRIPT_EXCLUSION]),
-      ], env);
+      await this.run(["add", "-A", "--", "."], env);
       return (await this.run(["write-tree"], env)).trim();
     });
   }
@@ -159,16 +153,6 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
       });
       child.stdin.end(input);
     });
-  }
-
-  private async succeeds(args: string[]) {
-    try {
-      await this.run(args);
-      return true;
-    } catch (error) {
-      if (hasExitCode(error, 1)) return false;
-      throw error;
-    }
   }
 
   private async withTemporaryIndex<TValue>(operation: (indexPath: string) => Promise<TValue>) {

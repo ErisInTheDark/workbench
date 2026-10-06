@@ -21,7 +21,7 @@ export const CHECKPOINT_OPERATIONS_FIXTURE = {
     message: "base",
   }],
   name: "checkpoint-shared-states-v5",
-  revision: 5,
+  revision: 6,
   prepare: async ({ bundleRoot, repositoryRoot, runGit }) => {
     const controller = new WorkbenchGitCheckpointController();
     const threadId = "thread-one";
@@ -96,10 +96,6 @@ export const CHECKPOINT_OPERATIONS_FIXTURE = {
       cwd: dirtyRelease.root, threadId, paths: ["selected.txt"], intentName: "Keep the inactive plan",
     });
 
-    await write(frozen.root, ".git/info/exclude", ".workbench/\n");
-    for (const owner of [threadId, newerThreadId, cleanThreadId]) {
-      await write(frozen.root, `.workbench/transcripts/codex/threads/${Buffer.from(owner, "utf8").toString("base64url")}/thread.json`, "{}\n");
-    }
     await controller.addToArc({ cwd: frozen.root, threadId, paths: ["unrelated.txt"] });
     await write(frozen.root, "selected.txt", "proposed version\n");
     await write(frozen.root, "deleted.txt", "proposed newer-path version\n");
