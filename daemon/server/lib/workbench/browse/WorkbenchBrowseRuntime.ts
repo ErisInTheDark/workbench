@@ -69,7 +69,6 @@ class BrowseRetirementError extends Error {
 }
 
 const IDLE_GATE = Promise.resolve();
-const DAEMON_START_TIMEOUT_MS = 30_000;
 const DAEMON_START_POLL_MS = 100;
 
 function delay(ms: number) {
@@ -315,10 +314,10 @@ export default class WorkbenchBrowseRuntime {
       windowsHide: request.mode === "headless",
     });
     child.unref();
-    const daemonStartDeadline = Math.min(deadline, Date.now() + DAEMON_START_TIMEOUT_MS);
-    while (Date.now() < daemonStartDeadline) {
+    // The command's own deadline owns how long a cold daemon may take; a fixed cap killed valid slow starts.
+    while (Date.now() < deadline) {
       if (signal?.aborted) throw signal.reason;
-      const status = await this.readStatus(request.session, Math.min(remainingTimeout(daemonStartDeadline, request.session), 1_000), signal);
+      const status = await this.readStatus(request.session, Math.min(remainingTimeout(deadline, request.session), 1_000), signal);
       if (status) return;
       await delay(DAEMON_START_POLL_MS);
     }

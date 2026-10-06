@@ -20,6 +20,7 @@ import WorkbenchTranscriptRepository from "../../database/transcript/WorkbenchTr
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { normalizeProviderSidebarEntry } from "../../WorkbenchThreadStateFeature";
+import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 
 test("passive Workbench context enters native instructions without starting a user turn", async () => {
   const entries: Array<{ sessionID: string; key: string; value: string }> = [];
@@ -560,6 +561,41 @@ test("provider-owned active execution submits a steer once with native steer del
     clientUserMessageId: "00000000-0000-4000-8000-000000000010",
     status: "pending",
   }]);
+});
+
+test("browse screenshot delivers the marked image as a steer into the live turn", async () => {
+  const prompts: Array<{
+    delivery: string;
+    files?: Array<{ uri: string }>;
+    metadata: { workbench: { input: object[] } };
+    text: string;
+  }> = [];
+  const steers: Array<{ input: object[] }> = [];
+  const owner = operations({
+    session: {
+      prompt: async (input: never) => {
+        prompts.push(input as never);
+        return { id: "inbox", sessionID: nativeThreadId, time: { created: 3 }, type: "user" };
+      },
+    },
+  }, {
+    recordSteer: async (entry: { input: object[] }) => { steers.push(entry); },
+  });
+
+  const imageUrl = "data:image/png;base64,AAAA";
+  const result = await owner.browse.screenshot({ threadId, turnId, imageUrl });
+
+  assert.deepEqual(result, { kind: "steered", turnId });
+  assert.equal(prompts.length, 1);
+  const prompt = prompts[0]!;
+  assert.equal(prompt.delivery, "steer");
+  assert.equal(prompt.text, createAgentScreenshotSteerText());
+  assert.deepEqual(prompt.files, [{ uri: imageUrl }]);
+  assert.deepEqual(prompt.metadata.workbench.input, [
+    { type: "text", text: createAgentScreenshotSteerText(), text_elements: [] },
+    { type: "image", url: imageUrl },
+  ]);
+  assert.deepEqual(steers.map(entry => entry.input), [prompt.metadata.workbench.input]);
 });
 
 test("managed prompt refresh receives the canonical subagent name rather than native session metadata", async () => {

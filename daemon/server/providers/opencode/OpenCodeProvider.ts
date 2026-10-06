@@ -86,6 +86,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           threads,
           context: threads.context,
           interactions: threads.interactions,
+          browse: threads.browse,
           recovery: { continueUnfinished: target => threads.continueUnfinished(target) },
           tools,
           account: {

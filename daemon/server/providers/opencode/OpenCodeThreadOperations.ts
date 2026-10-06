@@ -15,12 +15,14 @@ import type { WorkbenchProviderThreads, WorkbenchProviderTranscriptReconcile } f
 import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 import type { WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
+import type { WorkbenchProviderBrowse } from "workbench-shared/workbench/provider/provider-browse";
 import type { WorkbenchThreadMessageResult } from "workbench-shared/workbench/thread/thread-actions";
 import type { WorkbenchUserInput } from "workbench-shared/workbench/provider/provider-input";
 import { createWorkbenchTextInput, toWorkbenchThreadUserInput, WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
+import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchProjectCatalogController from "../../WorkbenchProjectCatalogController";
@@ -227,6 +229,27 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     record: async entry => {
       await this.options.transcript.recordQuestionnaire(entry);
       return {};
+    },
+  };
+
+  /**
+   * A delivered screenshot reaches the model as the marked image steer every provider renders. Workbench records
+   * Browse results itself; this only carries the image into the thread's live turn.
+   */
+  readonly browse: WorkbenchProviderBrowse = {
+    screenshot: async input => {
+      const result = await this.submit({
+        threadId: WorkbenchThreadIdSchema.parse(input.threadId),
+        clientMessageId: randomUUID(),
+        input: [
+          createWorkbenchTextInput(createAgentScreenshotSteerText()),
+          { type: "image", url: input.imageUrl },
+        ],
+        intent: "steer",
+        expectedTurnId: input.turnId,
+      });
+      if (result.kind !== "steered") throw new Error("OpenCode screenshot delivery needs an active turn on this thread.");
+      return { kind: "steered", turnId: result.turnId };
     },
   };
 
