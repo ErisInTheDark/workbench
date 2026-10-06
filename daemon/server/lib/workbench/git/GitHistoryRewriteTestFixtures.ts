@@ -22,16 +22,13 @@ export const HISTORY_LINEAR_FIXTURE = {
 } satisfies GitTestFixtureSpec;
 
 export const HISTORY_ARC_READY_FIXTURE = {
-  commits: [{ files: { "later.txt": "base\n", "selected.txt": "base\n" }, message: "base" }],
+  commits: [{ files: { "deep.txt": "base\n", "later.txt": "base\n", "selected.txt": "base\n" }, message: "base" }],
   name: "history-arc-ready",
-  revision: 2,
+  revision: 3,
   prepare: async ({ repositoryRoot, runGit }) => {
     const repository = await WorkbenchGitRepository.open(repositoryRoot);
     const controller = new WorkbenchGitCheckpointController();
     const identity = { cwd: repositoryRoot, harness: "codex" as const, threadId: "amend-thread" };
-    const transcriptDirectory = path.join(repositoryRoot, ".workbench", "transcripts", "codex", "threads", Buffer.from(identity.threadId).toString("base64url"));
-    await fs.mkdir(transcriptDirectory, { recursive: true });
-    await fs.writeFile(path.join(transcriptDirectory, "thread.json"), "{}\n", "utf8");
     const writeSelected = (contents: string) => fs.writeFile(path.join(repositoryRoot, "selected.txt"), contents, "utf8");
     const plan = await controller.createPlan({ ...identity, intentName: "amend lifecycle", paths: ["selected.txt"] });
     await controller.startArc({ ...identity, checkpointCommit: plan.checkpointCommit });
@@ -47,7 +44,7 @@ export const HISTORY_ARC_READY_FIXTURE = {
     const siblingPlan = await controller.createPlan({ ...siblingIdentity, intentName: "sibling plan", paths: ["later.txt"] });
     await writeSelected("first proposal\n");
     await controller.startArc({ ...siblingIdentity, checkpointCommit: siblingPlan.checkpointCommit });
-    await controller.editArcClaims({ ...identity, inherit: true, addPaths: ["selected.txt"] });
+    await controller.editArcClaims({ ...identity, inherit: true, addPaths: ["deep.txt", "selected.txt"] });
 
     await fs.writeFile(path.join(repositoryRoot, "descendant.txt"), "later descendant\n", "utf8");
     await runGit(["add", "descendant.txt"]);
@@ -57,9 +54,10 @@ export const HISTORY_ARC_READY_FIXTURE = {
     const amendment = await controller.createProposal({
       ...identity, amend: true, amendProposalId: first.proposalId, description: "", title: "",
     });
-    await writeSelected("first proposal\nfirst amendment\nsecond amendment\n");
+    // Pending proposals in one thread never overlap, so the deep amend edits its own file.
+    await fs.writeFile(path.join(repositoryRoot, "deep.txt"), "second amendment\n", "utf8");
     const second = await controller.createProposal({
-      ...identity, amend: true, amendProposalId: first.proposalId, description: "", title: "second pending amend",
+      ...identity, amend: true, amendProposalId: first.proposalId, description: "", paths: ["deep.txt"], title: "second pending amend",
     });
     return {
       amendmentProposalId: amendment.proposalId,

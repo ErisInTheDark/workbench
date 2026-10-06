@@ -257,10 +257,8 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
     (await repository.classifyHeadMovement(lossAfter.head, lossAfter.paths, lossAfter.commit)).kind,
     "fast-forward",
   );
-  assert.equal(
-    await fs.readFile(path.join(root, "selected.txt"), "utf8"),
-    "first proposal\nfirst amendment\nsecond amendment\n",
-  );
+  assert.equal(await fs.readFile(path.join(root, "selected.txt"), "utf8"), "first proposal\nfirst amendment\n");
+  assert.equal(await fs.readFile(path.join(root, "deep.txt"), "utf8"), "second amendment\n");
   const firstRewrittenDescendant = await repository.currentHead();
   assert.equal(
     await git(root, ["show", "--format=", "--binary", "--no-renames", firstRewrittenDescendant]),
@@ -316,7 +314,7 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
   assert.notEqual(secondStoredAfterFirst.proposalCommit, secondStoredBefore.proposalCommit);
 
   const pendingPlan = await controller.createPlan({
-    cwd: root, harness: "codex", intentName: "next work", paths: ["selected.txt"], threadId: "amend-thread",
+    cwd: root, harness: "codex", intentName: "next work", paths: ["deep.txt", "selected.txt"], threadId: "amend-thread",
   });
   const secondCommitted = await controller.commitProposal({
     cwd: root,
@@ -334,10 +332,8 @@ historyTest("arc proposal amend remaps sibling state, completed proposals, and a
   assert.deepEqual(retainedPlan.scopePaths, pendingPlan.scopePaths);
   assert.deepEqual(await repository.listChangedPaths(pendingPlan.checkpointCommit, retainedPlan.checkpointCommit, pendingPlan.scopePaths), []);
   assert.notEqual(secondCommitted.committedSha, amended.committedSha);
-  assert.equal(
-    await repository.readBlob(`${secondCommitted.committedSha}:selected.txt`),
-    "first proposal\nfirst amendment\nsecond amendment\n",
-  );
+  assert.equal(await repository.readBlob(`${secondCommitted.committedSha}:selected.txt`), "first proposal\nfirst amendment\n");
+  assert.equal(await repository.readBlob(`${secondCommitted.committedSha}:deep.txt`), "second amendment\n");
   const finalDescendant = await repository.currentHead();
   assert.equal((await repository.readCommit(finalDescendant)).message.trim(), "later descendant");
   assert.equal(
