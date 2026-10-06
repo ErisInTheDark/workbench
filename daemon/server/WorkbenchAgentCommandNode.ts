@@ -6,6 +6,7 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import { WorkbenchRequestUserInputCommandSchema } from "./lib/workbench/commands/questionnaire-command-definition";
 import { WorkbenchStoreCommandRequestSchema } from "./lib/workbench/commands/store-command-definitions";
+import { isWorkbenchAgentMcpRuntimeReloadInterruption } from "./lib/workbench/commands/workbench-agent-command-definition";
 import {
   WorkbenchHeapSnapshotRequestSchema, WorkbenchSocketSpyRequestSchema, formatWorkbenchSocketSpy,
 } from "./lib/workbench/commands/debug-command-definitions";
@@ -65,6 +66,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const questionnaires = build.get("questionnaires");
     const messages = build.get("messages");
     const subagents = build.get("subagents");
+    const subagentQueues = build.get("subagentQueues");
     const threadState = build.get("threadState");
     const settings = new WorkbenchServerSettings(database);
     const skill = new WorkbenchSkillController({
@@ -125,6 +127,17 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         return new Response(`Agent message from ${message.senderName} (${message.senderThreadId})\n\n${message.message}\n`, {
           headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
         });
+      },
+      executeSubagentQueueRequest: async (body, signal) => {
+        try {
+          return new Response(await subagentQueues.execute(body, signal), {
+            headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+          });
+        } catch (error) {
+          // Aborts and reload interruptions must propagate so long waits re-enter or cancel.
+          if (signal.aborted || isWorkbenchAgentMcpRuntimeReloadInterruption(error)) throw error;
+          return Response.json({ error: error instanceof Error ? error.message : "Workbench subagent queue request failed." }, { status: 400 });
+        }
       },
       patchClaims: (harness, input, signal) => provider(harness).tools.patchClaims(
         input, ({ cwd, harness, paths, threadId }) => gitArc.checkActiveClaimPaths(cwd, harness, threadId, paths), signal,
@@ -236,7 +249,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["database", "gitArc", "harnesses", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "threadGit", "threadSkills", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["database", "gitArc", "harnesses", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
   safeAll: true,
   scope: "server:commands",
 });

@@ -48,6 +48,8 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "subagent_wait",
   "subagent_stop",
   "subagent_settle",
+  "subagent_queue",
+  "subagent_dequeue",
   "subagent_message",
   "task_get",
   "task_set",
@@ -531,8 +533,23 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
   return specialized(matcherIds[action], { kind: "gitArc", operation }, stats);
 }
 
+function renderSubagentQueue(action: "queue" | "dequeue", args: { [key: string]: JsonValue | undefined }): WorkbenchCommandRoute {
+  const queue = `queue ${readString(args.queue) ?? ""}`.trim();
+  const member = readString(args.name);
+  if (action === "dequeue") {
+    return member
+      ? simple("workbench-cli.subagent", actionTarget(`Removing ${member} from `, queue), actionTarget(`Removed ${member} from `, queue))
+      : simple("workbench-cli.subagent", actionTarget("Leaving ", queue), actionTarget("Left ", queue));
+  }
+  if (member) return simple("workbench-cli.subagent", actionTarget(`Moving ${member} in `, queue), actionTarget(`Moved ${member} in `, queue));
+  return readString(args.description) || readString(args.after) || readString(args.before)
+    ? simple("workbench-cli.subagent", actionTarget("Waiting for ", queue), actionTarget("Joined ", queue))
+    : simple("workbench-cli.subagent", actionTarget("Reading ", queue), actionTarget("Read ", queue));
+}
+
 function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: string]: JsonValue | undefined }): WorkbenchCommandRoute {
-  const action = name.slice("subagent_".length) as "create" | "list" | "profiles" | "settle" | "stop" | "wait";
+  const action = name.slice("subagent_".length) as "create" | "dequeue" | "list" | "profiles" | "queue" | "settle" | "stop" | "wait";
+  if (action === "queue" || action === "dequeue") return renderSubagentQueue(action, args);
   const names = readStringArray(args.names);
   const threadIds = readStringArray(args.threadIds);
   const singleName = readString(args.name);

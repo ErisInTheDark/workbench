@@ -1,10 +1,14 @@
 /*
  * Exports:
- * - WORKBENCH_SUBAGENT_COMMANDS: typed subagent command definitions shared by CLI and MCP. Keywords: workbench, subagent, commands, registry.
+ * - WORKBENCH_SUBAGENT_COMMANDS: typed subagent lifecycle, wait, and queue command definitions shared by CLI and MCP.
  */
 import { z } from "zod";
 
-import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
+import {
+  WorkbenchSubagentDequeueInputSchema,
+  WorkbenchSubagentQueueInputSchema,
+} from "../subagent/subagent-queue-contract";
+import { WorkbenchAgentCommandFlags, WorkbenchCommandArgumentError } from "./workbench-agent-command-arguments";
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
 const requiredText = z.string().trim().min(1);
@@ -129,4 +133,56 @@ const wait = targetCommand("wait", "Wait until any selected child needs attentio
 const stop = targetCommand("stop", "Stop one or more direct child threads.");
 const settle = targetCommand("settle", "Settle one or more completed or stopped direct children.");
 
-export const WORKBENCH_SUBAGENT_COMMANDS = [list, profiles, create, wait, stop, settle] as const;
+/** Split the leading `<queue>` operand from the flag grammar. */
+function splitQueueOperand(args: string[]) {
+  const [queue, ...rest] = args;
+  if (!queue || queue.startsWith("-")) throw new WorkbenchCommandArgumentError("missingArgument", "<queue>", "A queue name operand is required first.");
+  return { queue, rest };
+}
+
+const queue = defineWorkbenchAgentCommand({
+  description: "Parent-declared turn queue for contended work. With description: join (or resume/move when queued) and long-wait until you hold it; hold lasts until subagent_dequeue. Without: show queue info (a parent call declares the queue). after/before place relative to a member or \"parent\"; parent-only name moves that member. Workbench Long Wait; steers interrupt it but keep your place.",
+  helpGroups: ["subagent"],
+  mcpCodeModeEligible: true,
+  mcpRuntimeDrainPolicy: "preserve-across-reload",
+  mcpSteerInterruptible: true,
+  words: ["subagent", "queue"],
+  usage: "wb subagent queue <queue> [--description <work>] [--after <member> | --before <member>] [--name <member>]",
+  inputSchema: WorkbenchSubagentQueueInputSchema,
+  parseCliArgs(args) {
+    const { queue, rest } = splitQueueOperand(args);
+    const flags = new WorkbenchAgentCommandFlags(rest, { values: ["--description", "--after", "--before", "--name"] });
+    return {
+      queue,
+      after: flags.optional("--after") ?? undefined,
+      before: flags.optional("--before") ?? undefined,
+      description: flags.optional("--description") ?? undefined,
+      name: flags.optional("--name") ?? undefined,
+    };
+  },
+  buildRequest(input, { callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/subagent-queue", {
+      action: "queue", callerThreadId: requireCallerThreadId(callerThreadId), cwd, ...input,
+    });
+  },
+});
+
+const dequeue = defineWorkbenchAgentCommand({
+  description: "Leave a subagent queue, handing your hold to the next member. Parent-only name removes that member instead.",
+  helpGroups: ["subagent"],
+  words: ["subagent", "dequeue"],
+  usage: "wb subagent dequeue <queue> [--name <member>]",
+  inputSchema: WorkbenchSubagentDequeueInputSchema,
+  parseCliArgs(args) {
+    const { queue, rest } = splitQueueOperand(args);
+    const flags = new WorkbenchAgentCommandFlags(rest, { values: ["--name"] });
+    return { queue, name: flags.optional("--name") ?? undefined };
+  },
+  buildRequest(input, { callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/subagent-queue", {
+      action: "dequeue", callerThreadId: requireCallerThreadId(callerThreadId), cwd, ...input,
+    });
+  },
+});
+
+export const WORKBENCH_SUBAGENT_COMMANDS = [list, profiles, create, wait, stop, settle, queue, dequeue] as const;

@@ -68,6 +68,7 @@ import WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactCo
 import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadMessageController from "./WorkbenchThreadMessageController";
 import type { WorkbenchMessageWaitHandoff } from "./WorkbenchMessageWaitController";
+import WorkbenchSubagentQueueController, { type WorkbenchSubagentQueueHandoff } from "./WorkbenchSubagentQueueController";
 import WorkbenchThreadLaunchController from "./WorkbenchThreadLaunchController";
 import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
@@ -84,6 +85,8 @@ interface WorkbenchCoreReloadState {
   projectStartup: WorkbenchProjectStartup;
   approvals: WorkbenchApprovalHandoff;
   messageWaits: WorkbenchMessageWaitHandoff;
+  /** Absent when the previous generation predates subagent queues. */
+  subagentQueues?: WorkbenchSubagentQueueHandoff;
 }
 
 function createModules(): DaemonReloadableModules {
@@ -106,6 +109,7 @@ function createWorkbenchCoreFeature(
   initialCatalog?: WorkbenchProjectStartup,
   approvalHandoff?: WorkbenchApprovalHandoff,
   messageWaitHandoff?: WorkbenchMessageWaitHandoff,
+  subagentQueueHandoff?: WorkbenchSubagentQueueHandoff,
 ) {
   const modules = createModules();
   const settings = new WorkbenchServerSettings(database);
@@ -304,8 +308,11 @@ function createWorkbenchCoreFeature(
   const acceptIntent = async (projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnId: string) => {
     await requireThreadState().controller.acceptProviderIntent(projectId, harness, threadId, WorkbenchTurnIdSchema.parse(turnId));
   };
+  // Built after thread state below; its lifecycle listener must register before any subagent wait subscribes.
+  let subagentQueues: WorkbenchSubagentQueueController | undefined;
   const subagents = new WorkbenchSubagentFeature({
     identities: threadIdentity,
+    queueReleaseNote: threadId => subagentQueues?.takeReleaseNote(threadId) ?? null,
     provider,
     // Read lazily: the approval owner is built after subagents but within this same node.
     liveApprovals: () => approvals.list(),
@@ -377,6 +384,24 @@ function createWorkbenchCoreFeature(
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     transitions: worktreeGitTransitions,
   });
+  const queues = subagentQueues = new WorkbenchSubagentQueueController({
+    resolveProjectFromCwd: async cwd => (
+      await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent queue" })
+    ).project.id,
+    resolveThreadId: async (threadId, projectId) => {
+      const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId });
+      if (!identity) throw new Error("The queue caller has no admitted identity in this project.");
+      return identity.threadId;
+    },
+    listRelationships: async projectId => (await subagents.listRelationships(projectId)).subagents,
+    readLifecycle: async (projectId, threadId) => {
+      const entry = await requireThreadState().controller.getCanonicalThreadEntry(projectId, threadId);
+      return entry && entry.entryKind !== "draft" ? entry.lifecycle : null;
+    },
+    subscribeLifecycle: listener => requireThreadState().controller.subscribe(listener),
+    sendNotice: input => messages.sendNotice(input),
+    warn: message => { console.warn("[subagent-queue]", message.slice(0, 500)); },
+  }, subagentQueueHandoff);
   const questionnaires = new WorkbenchQuestionnaireController({
     beforeAnswer: async (threadId, signal) => {
       const identity = await threadIdentity.resolve({ threadId });
@@ -606,7 +631,7 @@ function createWorkbenchCoreFeature(
     agentContext,
     approvals,
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, threadGit, threadState, threadActions, threadSkills, transcriptReader, transcriptReconciliation,
+    browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, transcriptReader, transcriptReconciliation,
     providerObservations: {
       observe: async (harness, facts) => {
         if (!lease.isCurrent()) return null;
@@ -625,6 +650,7 @@ function createWorkbenchCoreFeature(
       projectStartup: projectCatalog.captureReloadState(),
       approvals: approvals.captureReloadState(),
       messageWaits: messages.captureReloadState(),
+      subagentQueues: queues.captureReloadState(),
     }),
     afterCommit: () => {
       approvals.activate();
@@ -657,6 +683,8 @@ function createWorkbenchCoreFeature(
       await workingTree.dispose();
       reportPhase("browse session cleanup disposal");
       browseSessionCleanup.dispose();
+      reportPhase("subagent queue disposal");
+      queues.dispose();
       reportPhase("subagent disposal");
       await subagents.dispose();
       reportPhase("thread-message disposal");
@@ -727,6 +755,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       isReplacing("server:database") ? undefined : reloadState?.projectStartup,
       reloadState?.approvals,
       reloadState?.messageWaits,
+      reloadState?.subagentQueues,
     );
   },
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadMessageControllerOptions: provider, identity, project, relationship and thread-state ports.
- * - default WorkbenchThreadMessageController: own message admission, sender lookup, message waits, questionnaire settlement, and reload drain.
+ * - default WorkbenchThreadMessageController: own message admission, Workbench notices, sender lookup, message waits, questionnaire settlement, and reload drain.
  */
 import type {
   WorkbenchHarness,
@@ -110,6 +110,33 @@ export default class WorkbenchThreadMessageController {
     const request = WorkbenchThreadMessageRequestSchema.parse(value);
     if (!this.active) return Promise.reject(new Error("Thread message controller is draining for runtime reload."));
     const operation = this.sendOwned(request);
+    this.requests.add(operation);
+    return operation.finally(() => this.requests.delete(operation));
+  }
+
+  /** Deliver a Workbench-originated notice (e.g. a subagent queue handoff) through the normal agent-message steer path. */
+  sendNotice(input: {
+    threadId: WorkbenchThreadId;
+    senderThreadId: WorkbenchThreadId;
+    senderName: string;
+    message: string;
+    userVisibleSimpleVersion: string;
+  }) {
+    if (!this.active) return Promise.reject(new Error("Thread message controller is draining for runtime reload."));
+    const operation = (async () => {
+      const target = await this.resolveThread(input.threadId, "Workbench notice target");
+      const admitted = await this.options.provider(target.harness).threads.messageAgent({
+        cwd: target.thread.cwd,
+        threadId: target.threadId,
+        message: {
+          message: input.message,
+          senderName: input.senderName,
+          senderThreadId: input.senderThreadId,
+          userVisibleSimpleVersion: input.userVisibleSimpleVersion,
+        },
+      });
+      await this.options.threadState.acceptIntent(target.projectId, target.harness, target.threadId, admitted.turnId);
+    })();
     this.requests.add(operation);
     return operation.finally(() => this.requests.delete(operation));
   }

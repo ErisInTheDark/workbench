@@ -22,6 +22,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "providerObservations",
   "questionnaires",
   "subagents",
+  "subagentQueues",
   "stats",
   "threadGit",
   "threadState",

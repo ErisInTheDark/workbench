@@ -23,6 +23,15 @@ Pass every active child in one wait call. Treat it as a Workbench Long Wait. Do 
 
 The wait tool is the only way to receive a child's final output. Do not leave children running without a later wait.
 
+### queues
+
+Use queues instead of messages to order contended work (builds, test suites, shared files).
+
+- Declare with <tool id="subagent_queue" /> `{ queue }` (also shows status); give children the exact name and what work needs it. You may join too; children reference you as `parent`.
+- Holds last until <tool id="subagent_dequeue" />. A holder's turn end, task completion or block pauses the queue; resolve by messaging the child or kicking with <tool id="subagent_dequeue" /> `{ queue, name }`. Your own inactivity freezes all your queues.
+- Reorder with <tool id="subagent_queue" /> `{ queue, name, after | before }`.
+- Queues order agents, not processes: never queue work a process lock already serializes.
+
 ### notes
 
 - Subagents are isolated and do not inherit parent or sibling context. Give each child a self-contained message, including sibling names it may message.

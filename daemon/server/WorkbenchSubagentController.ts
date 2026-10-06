@@ -56,6 +56,8 @@ export interface WorkbenchSubagentControllerOptions {
   stopThread(threadId: WorkbenchThreadId): Promise<void>;
   /** Mark a child working on the turn that admitted its first message. */
   acceptIntent(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnId: string): Promise<void>;
+  /** Consume queue lines (paused holds, dropped places) owed to the parent about a child whose turn ended. */
+  queueReleaseNote?(threadId: WorkbenchThreadId): string | null;
   threadState?: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
     mutate(request: WorkbenchThreadStateRequest): Promise<void>;
@@ -108,6 +110,7 @@ export default class WorkbenchSubagentController {
   private readonly subagentStore: WorkbenchSubagentControllerStore;
   private readonly stopThread: WorkbenchSubagentControllerOptions["stopThread"];
   private readonly acceptIntent: WorkbenchSubagentControllerOptions["acceptIntent"];
+  private readonly queueReleaseNote: WorkbenchSubagentControllerOptions["queueReleaseNote"];
   private readonly threadState: WorkbenchSubagentControllerOptions["threadState"];
   private readonly waiters = new Map<string, AbortController>();
   private active = true;
@@ -125,6 +128,7 @@ export default class WorkbenchSubagentController {
     subagentStore,
     stopThread,
     acceptIntent,
+    queueReleaseNote,
     threadState,
   }: WorkbenchSubagentControllerOptions) {
     this.provider = provider;
@@ -137,6 +141,7 @@ export default class WorkbenchSubagentController {
     this.subagentStore = subagentStore;
     this.stopThread = stopThread;
     this.acceptIntent = acceptIntent;
+    this.queueReleaseNote = queueReleaseNote;
     this.threadState = threadState;
   }
 
@@ -444,7 +449,7 @@ export default class WorkbenchSubagentController {
           multiplexed: records.length > 1,
           name: ready.record.name,
           outcome: pending ? "needs-interaction" : "finished",
-          output: pending ? renderSubagentQuestionnaireOutput(thread, pending.request) : renderSubagentTurnOutput(thread),
+          output: pending ? renderSubagentQuestionnaireOutput(thread, pending.request) : this.withQueueNote(ready.record.threadId, renderSubagentTurnOutput(thread)),
           threadId: await this.publicThreadId(ready.record.threadId, ready.record.projectId),
         }) };
       }
@@ -485,7 +490,7 @@ export default class WorkbenchSubagentController {
             multiplexed: records.length > 1,
             name: finishedState.record.name,
             outcome: "finished",
-            output: renderSubagentTurnOutput(thread),
+            output: this.withQueueNote(finishedState.record.threadId, renderSubagentTurnOutput(thread)),
             threadId: await this.publicThreadId(finishedState.record.threadId, finishedState.record.projectId),
           }) };
         }
@@ -494,6 +499,11 @@ export default class WorkbenchSubagentController {
     } finally {
       this.waiters.delete(waitId);
     }
+  }
+
+  private withQueueNote(threadId: WorkbenchThreadId, output: string) {
+    const note = this.queueReleaseNote?.(threadId);
+    return note ? `${output}\n\nQueue: ${note}` : output;
   }
 
   private cancelWait(params: Record<string, unknown>) {
