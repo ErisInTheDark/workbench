@@ -1,12 +1,15 @@
 /*
  * Exports:
  * - ClaudeFileClaimCheck: shared claim policy bound to one Claude thread.
- * - createClaudeFileClaimHooks: deny native Claude Edit/Write calls whose path no active claim covers.
+ * - createClaudeSessionHooks: inject compact recovery context and deny native edits whose path no active claim covers.
  */
 import path from "node:path";
 import type { HookCallbackMatcher, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 
 export type ClaudeFileClaimCheck = (paths: string[]) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
+
+const CLAUDE_COMPACTION_RECALL_CONTEXT =
+  "Before following any command suggested by the compaction summary above, perform the required narrative recall(s) with `mcp__wb__thread_recall`.";
 
 const deny = (reason: string): HookJSONOutput => ({
   hookSpecificOutput: {
@@ -14,12 +17,24 @@ const deny = (reason: string): HookJSONOutput => ({
   },
 });
 
-export function createClaudeFileClaimHooks(options: {
+export function createClaudeSessionHooks(options: {
   cwd: string;
   check: ClaudeFileClaimCheck;
   onDenied(toolUseId: string): void;
-}): { PreToolUse: HookCallbackMatcher[] } {
+}): { PreToolUse: HookCallbackMatcher[]; SessionStart: HookCallbackMatcher[] } {
   return {
+    SessionStart: [{
+      matcher: "compact",
+      hooks: [async input => {
+        if (input.hook_event_name !== "SessionStart" || input.source !== "compact") return {};
+        return {
+          hookSpecificOutput: {
+            hookEventName: "SessionStart",
+            additionalContext: CLAUDE_COMPACTION_RECALL_CONTEXT,
+          },
+        };
+      }],
+    }],
     PreToolUse: [{
       matcher: "Edit|Write",
       hooks: [async (input, toolUseId) => {

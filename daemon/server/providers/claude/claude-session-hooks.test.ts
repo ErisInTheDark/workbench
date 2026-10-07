@@ -1,15 +1,15 @@
-/* No production exports. Tests protect the Claude Edit/Write claim gate: covered paths pass, everything else fails closed. */
+/* No production exports. Tests protect compact recall injection and the Claude Edit/Write claim gate. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
-import { createClaudeFileClaimHooks, type ClaudeFileClaimCheck } from "./claude-file-claim-hook";
+import { createClaudeSessionHooks, type ClaudeFileClaimCheck } from "./claude-session-hooks";
 
 const cwd = path.resolve("/repo");
 
 function run(check: ClaudeFileClaimCheck, toolInput: object, tool = "Edit") {
   const denied: string[] = [];
   const checked: string[][] = [];
-  const hooks = createClaudeFileClaimHooks({
+  const hooks = createClaudeSessionHooks({
     cwd, onDenied: id => denied.push(id),
     check: async paths => { checked.push(paths); return check(paths); },
   });
@@ -23,6 +23,31 @@ function run(check: ClaudeFileClaimCheck, toolInput: object, tool = "Edit") {
 
 const decision = (result: unknown) =>
   (result as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision;
+
+test("only native compaction injects narrative recall before summary commands", async () => {
+  const hooks = createClaudeSessionHooks({
+    cwd, onDenied: () => undefined,
+    check: async () => ({ allowed: true, uncoveredPaths: [] }),
+  });
+  const hook = hooks.SessionStart[0]!.hooks[0]!;
+
+  const result = await hook({
+    hook_event_name: "SessionStart", source: "compact",
+    session_id: "session", transcript_path: "", cwd,
+  } as never, undefined, { signal: new AbortController().signal });
+  const output = result as { hookSpecificOutput?: { hookEventName?: string; additionalContext?: string } };
+  assert.equal(output.hookSpecificOutput?.hookEventName, "SessionStart");
+  assert.match(output.hookSpecificOutput?.additionalContext ?? "", /before following any command/iu);
+  assert.match(output.hookSpecificOutput?.additionalContext ?? "", /compaction summary/iu);
+  assert.match(output.hookSpecificOutput?.additionalContext ?? "", /mcp__wb__thread_recall/u);
+
+  for (const source of ["startup", "resume", "clear", "fork"] as const) {
+    assert.deepEqual(await hook({
+      hook_event_name: "SessionStart", source,
+      session_id: "session", transcript_path: "", cwd,
+    } as never, undefined, { signal: new AbortController().signal }), {});
+  }
+});
 
 test("a claimed path passes without a decision, resolved against the thread cwd", async () => {
   const { result, denied, checked } = await run(async () => ({ allowed: true, uncoveredPaths: [] }), { file_path: "src/a.ts" });

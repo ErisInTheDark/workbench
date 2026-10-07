@@ -37,7 +37,7 @@ import type WorkbenchQuestionnaireController from "../../WorkbenchQuestionnaireC
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature";
 import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
-import { createClaudeFileClaimHooks } from "./claude-file-claim-hook";
+import { createClaudeSessionHooks } from "./claude-session-hooks";
 import { claudeEnvironment, claudeExecutable } from "./claude-process-options";
 import {
     appendClaudePrompt, claudeImageBlock, claudePromptContent, prefixClaudePrompt, type ClaudePromptContent,
@@ -436,9 +436,9 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
           ],
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
-          // Hooks still run under bypassPermissions; they gate native edits with the shared claim policy.
-          // They outlive this bridge generation, so collaborators are reached through the host.
-          hooks: createClaudeFileClaimHooks({
+          // Hooks still run under bypassPermissions; they inject compact recovery and gate edits with shared claim policy.
+          // They outlive this bridge generation, so claim collaborators are reached through the host.
+          hooks: createClaudeSessionHooks({
             cwd: binding.nativeLocation,
             check: paths => sessions.call(handlers => handlers.checkFileClaims({
               cwd: binding.nativeLocation, threadId: identity.threadId, paths,
