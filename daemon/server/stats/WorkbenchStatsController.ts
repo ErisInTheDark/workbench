@@ -34,6 +34,7 @@ export interface WorkbenchStatsControllerOptions {
     readStatsClaimedRoots(projectIds: readonly string[] | null, range: WorkbenchStatsRange | "all", now?: number): Promise<WorkbenchClaimedRoot[]>;
     readClaimStats(request: WorkbenchClaimStatsRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[]): Promise<WorkbenchClaimStatsResponse>;
     readFeedback(request: WorkbenchFeedbackReadRequest): Promise<WorkbenchFeedbackReadResponse>;
+    deleteFeedback(ids: readonly number[]): Promise<number>;
     recordFeedback(entry: WorkbenchFeedbackRecord): Promise<number>;
     recordStatsClaimSnapshot(snapshot: WorkbenchGitClaimSnapshot): Promise<void>;
     recordStatsRateLimits(observation: WorkbenchRateLimitObservation): Promise<void>;
@@ -205,6 +206,13 @@ export default class WorkbenchStatsController {
     const id = await this.options.database.recordFeedback(entry);
     this.invalidate("usage");
     return id;
+  }
+
+  async deleteFeedback(ids: readonly number[]) {
+    if (!this.active) throw new Error("Stats controller is disposed.");
+    const deleted = await this.options.database.deleteFeedback(ids);
+    this.invalidate("usage");
+    return deleted;
   }
 
   async readFeedback(request: WorkbenchFeedbackReadRequest) {

@@ -97,6 +97,19 @@ test("agent reads filter by channel and category and page within bounds", () => 
   }
 });
 
+test("deleting feedback removes only the given reports", () => {
+  const { database, repository } = setup();
+  try {
+    const kept = repository.record(report(), now).id;
+    const removed = [repository.record(report(), now).id, repository.record(report({ category: "bug" }), now).id];
+    assert.equal(repository.delete([...removed, 999]), 2);
+    assert.deepEqual(repository.summary(null, 0, now + 1, testProjectIds.project).items.map(({ id }) => id), [kept]);
+    assert.equal(repository.delete([]), 0);
+  } finally {
+    database.close();
+  }
+});
+
 test("feedback outlives its thread and rejects empty reports", () => {
   const { database, repository } = setup();
   try {

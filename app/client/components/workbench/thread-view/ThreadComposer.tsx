@@ -53,6 +53,7 @@ import WorkbenchModelQuickPicker from "../WorkbenchModelQuickPicker";
 import type DraftSessionController from "./DraftSessionController";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
+import { takeNewThreadPrompt } from "../../../workbench/thread/new-thread-prompt-seeds";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import ThreadProfileEditor from "./ThreadProfileEditor";
 import ThreadProfileEditorController, { type ProfileEditorSection } from "./ThreadProfileEditorController";
@@ -235,6 +236,21 @@ export default function ThreadComposer ({
       composerInputRef.current?.focus();
     }
   }, []);
+  // A one-shot seed, such as feedback being addressed, starts an empty new-thread composer through the normal draft path.
+  const seededCaretRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (composerTarget.kind !== "new" || editing.draft.text || editing.draft.attachments.length) return;
+    const seed = takeNewThreadPrompt(projectId);
+    if (!seed) return;
+    seededCaretRef.current = seed.length;
+    editing.session.edit((draft) => ({ ...draft, text: seed }));
+  }, [composerTarget.kind, projectId]);
+  useLayoutEffect(() => {
+    const caret = seededCaretRef.current;
+    if (caret === null || value.length < caret) return;
+    seededCaretRef.current = null;
+    composerInputRef.current?.focus(caret);
+  }, [value]);
   const isSendDisabled = isInputDisabled || isProviderUnavailable
     || (!isActiveThread && !hasEffectiveProfile);
   const isShiftPressed = useNonTextInputShiftKey({

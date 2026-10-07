@@ -2,9 +2,9 @@
 
 /*
  * Exports:
- * - default WorkbenchStatsFeedback: agent friction reports for the selected projects, filterable by category tags and ordered by importance or recency.
+ * - default WorkbenchStatsFeedback: agent friction reports for the selected projects, filterable by category tags, ordered by importance or recency, and selectable for deletion or addressing in a new thread.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
 import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import {
@@ -16,8 +16,16 @@ import {
 import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
 import { useWorkbenchThreads } from "../use-workbench-client";
 import WorkbenchModeRow from "../WorkbenchModeRow";
+import { WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "../WorkbenchWorkspaceContext";
 import WorkbenchStatsFeedbackReport from "./WorkbenchStatsFeedbackReport";
-import { FEEDBACK_CATEGORY_PRESENTATION, selectFeedbackItems } from "./stats-feedback-presentation";
+import WorkbenchStatsFeedbackSelectionBar from "./WorkbenchStatsFeedbackSelectionBar";
+import {
+  FEEDBACK_CATEGORY_PRESENTATION,
+  feedbackAddressProjectId,
+  formatFeedbackForAgent,
+  countFeedbackCategories,
+  selectFeedbackItems,
+} from "./stats-feedback-presentation";
 
 /** Model catalogues for the harnesses that authored reports, read once each from the shared account cache. */
 function useModelCatalogues(harnesses: readonly WorkbenchHarness[]) {
@@ -40,14 +48,49 @@ function useModelCatalogues(harnesses: readonly WorkbenchHarness[]) {
   return catalogues;
 }
 
-export default function WorkbenchStatsFeedback({ projectName, stats }: {
+export default function WorkbenchStatsFeedback({ onAddress, projectName, stats }: {
+  /** Opens a new thread in the project with the prompt ready to send. */
+  onAddress: (projectId: string, prompt: string) => void;
   projectName: (projectId: string) => string;
   stats: { feedback: StatsFeedback } | null;
 }) {
+  const daemon = useContext(WorkbenchDaemonClientContext);
   const [sort, setSort] = useState<WorkbenchFeedbackSort>("importance");
   const [categories, setCategories] = useState<ReadonlySet<WorkbenchFeedbackCategory>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
   const feedback = stats?.feedback ?? null;
   const items = feedback?.items ?? [];
+  // Selection follows the published reports, so deleted or out-of-period reports simply stop counting.
+  const selected = items.filter(({ id }) => selectedIds.has(id));
+  const addressProjectId = feedbackAddressProjectId(selected, feedback?.workbenchProjectId ?? null);
+  const toggleSelected = (id: number) => setSelectedIds((current) => {
+    const next = new Set(current);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  });
+  useEffect(() => {
+    if (!selected.length) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) setSelectedIds(new Set());
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [selected.length]);
+  const deleteSelected = async () => {
+    if (!daemon || !selected.length) return;
+    setBusy(true);
+    setActionError("");
+    try {
+      await daemon.stats.deleteFeedback(selected.map(({ id }) => id));
+      setSelectedIds(new Set());
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to delete the selected feedback.");
+    } finally {
+      setBusy(false);
+    }
+  };
   const visible = useMemo(() => selectFeedbackItems(items, categories, sort), [categories, items, sort]);
   const catalogues = useModelCatalogues(items.flatMap(({ harness }) => harness ? [harness] : []));
   const newest = items.reduce((latest, item) => Math.max(latest, item.createdAt), 0);
@@ -64,6 +107,14 @@ export default function WorkbenchStatsFeedback({ projectName, stats }: {
   const origin = (channel: string, projectId: string) => channel === "project"
     ? projectName(projectId)
     : projectId === feedback?.workbenchProjectId ? "Workbench" : `Workbench, from ${projectName(projectId)}`;
+  const address = () => {
+    if (!addressProjectId) return;
+    onAddress(addressProjectId, formatFeedbackForAgent(selected, {
+      modelName: (item) => modelName(item.harness, item.model),
+      origin: (item) => origin(item.channel, item.projectId),
+    }));
+    setSelectedIds(new Set());
+  };
   return (
     <section aria-labelledby="feedback-heading" className="space-y-3 [--hue-chroma:60%]">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
@@ -119,13 +170,15 @@ export default function WorkbenchStatsFeedback({ projectName, stats }: {
               />
             </div>
           </div>
-          <ol className="-mx-3 my-0 grid gap-y-1 p-0">
+          <ol aria-label="Agent feedback reports" aria-multiselectable className="-mx-3 my-0 grid gap-y-1 p-0" role="listbox">
             {visible.map((item) => (
               <WorkbenchStatsFeedbackReport
                 item={item}
                 key={item.id}
                 modelName={modelName(item.harness, item.model)}
+                onToggle={() => toggleSelected(item.id)}
                 origin={origin(item.channel, item.projectId)}
+                selected={selectedIds.has(item.id)}
               />
             ))}
           </ol>
@@ -136,6 +189,14 @@ export default function WorkbenchStatsFeedback({ projectName, stats }: {
           ) : null}
         </>
       )}
+      <WorkbenchStatsFeedbackSelectionBar
+        addressBlocked={addressProjectId ? null : "The selected feedback belongs to more than one project; address one project at a time."}
+        busy={busy}
+        error={actionError}
+        onAddress={address}
+        onDelete={() => void deleteSelected()}
+        selection={selected.length ? { counts: countFeedbackCategories(selected), total: selected.length } : null}
+      />
     </section>
   );
 }

@@ -74,7 +74,9 @@ function useStatsObservation(workspace: WorkbenchWorkspaceClient | null, query: 
   };
 }
 
-export default function WorkbenchStatsView({ onNavigateThread, projects, scope }: {
+export default function WorkbenchStatsView({ onAddressFeedback, onNavigateThread, projects, scope }: {
+  /** Opens a new thread in the project, its composer seeded with the prompt. */
+  onAddressFeedback: (projectId: string, prompt: string) => void;
   onNavigateThread: (event: MouseEvent<HTMLAnchorElement>, projectId: string, threadId: string) => void;
   projects: readonly Pick<WorkbenchProjectOption, "id" | "name" | "kind" | "roots">[];
   /** The sidebar selection, resolved onto this daemon's projects. */
@@ -224,7 +226,7 @@ export default function WorkbenchStatsView({ onNavigateThread, projects, scope }
           showProjects={showProjects}
           stats={detail.stats}
         />
-        <WorkbenchStatsFeedback projectName={projectName} stats={detail.stats} />
+        <WorkbenchStatsFeedback onAddress={onAddressFeedback} projectName={projectName} stats={detail.stats} />
       </div>
     </div>
   );

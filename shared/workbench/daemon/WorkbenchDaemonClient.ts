@@ -355,6 +355,7 @@ class WorkbenchDaemonClient {
   readonly stats = {
     startImport: () => this.request("stats/import/start", {}),
     refreshRateLimits: () => this.request("stats/rate-limits/refresh", {}),
+    deleteFeedback: (ids: number[]) => this.request("stats/feedback/delete", { ids }),
   };
 
   readonly git = {

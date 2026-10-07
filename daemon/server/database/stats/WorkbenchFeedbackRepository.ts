@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchFeedbackRepository: record agent feedback and read importance-weighted stats summaries and paged agent reports.
+ * - default WorkbenchFeedbackRepository: record and delete agent feedback, and read importance-weighted stats summaries and paged agent reports.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -59,6 +59,12 @@ export default class WorkbenchFeedbackRepository {
       `).run(projectId, entry.threadId, entry.harness, entry.model, entry.reasoningEffort, entry.channel, entry.category, entry.report, now);
       return { id: Number(result.lastInsertRowid) };
     })();
+  }
+
+  delete(ids: readonly number[]) {
+    if (!ids.length) return 0;
+    return this.database.prepare("DELETE FROM workbench_agent_feedback WHERE id IN (SELECT value FROM json_each(?))")
+      .run(JSON.stringify(ids)).changes;
   }
 
   /**

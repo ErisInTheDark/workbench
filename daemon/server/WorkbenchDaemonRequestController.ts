@@ -69,6 +69,8 @@ import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import type WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import { workbenchThreadActions, WorkbenchTranscriptRecoveryRequiredError, WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED } from "workbench-shared/workbench/thread/thread-actions";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { z } from "zod";
+import { WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import { WorkbenchThreadHistoryPendingError, WORKBENCH_THREAD_HISTORY_PENDING } from "workbench-shared/workbench/provider/provider-thread";
 
 export interface WorkbenchBrowseSessionPort {
@@ -243,7 +245,7 @@ export default class WorkbenchDaemonRequestController {
     projectCreation?: Pick<WorkbenchProjectCreationController, "listFolders" | "create">;
     projectSnapshot: Pick<WorkbenchProjectSnapshotController, "readProjectSnapshot" | "handleRequest">;
     search: Pick<WorkbenchSearchController, "search">;
-    stats: Pick<WorkbenchStatsController, "observeAccountLimits" | "refreshRateLimits" | "startImport">;
+    stats: Pick<WorkbenchStatsController, "deleteFeedback" | "observeAccountLimits" | "refreshRateLimits" | "startImport">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities" | "readThreadAutoCompact" | "updateThreadAutoCompact">;
     threadIdentity: { resolve: WorkbenchHarnessController["resolveThreadIdentity"] };
     questionnaireResponses: Pick<WorkbenchQuestionnaireResponseController, "respond">;
@@ -535,6 +537,12 @@ export default class WorkbenchDaemonRequestController {
           await this.owners.stats.refreshRateLimits();
           result = { ok: true };
           break;
+        case "stats/feedback/delete": {
+          const ids = z.object({ ids: z.array(z.number().int().positive()).min(1).max(WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT) }).strict().safeParse(params);
+          if (!ids.success) throw new InvalidParamsError("Feedback deletion needs between 1 and 200 feedback ids.");
+          result = { deleted: await this.owners.stats.deleteFeedback(ids.data.ids) };
+          break;
+        }
         case "local-capabilities/read": result = { localCapabilities: await this.owners.settings.readLocalCapabilities() }; break;
         case "thread-auto-compact/read": result = { settings: await this.owners.settings.readThreadAutoCompact() }; break;
         case "thread-auto-compact/update": {

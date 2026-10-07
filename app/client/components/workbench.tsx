@@ -139,6 +139,7 @@ import type DraftSessionController from "./workbench/thread-view/DraftSessionCon
 import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
 import { getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import WorkbenchRelativeTime from "./workbench/WorkbenchRelativeTime";
+import { seedNewThreadPrompt } from "../workbench/thread/new-thread-prompt-seeds";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
@@ -1058,6 +1059,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
     event.preventDefault();
     navigateToRoute(createThreadRoute(projectId, threadId));
+  }, [navigateToRoute]);
+
+  // The new-thread composer in that project takes the prompt and saves it as an ordinary draft.
+  const addressFeedback = useCallback((projectId: string, prompt: string) => {
+    seedNewThreadPrompt(projectId, prompt);
+    navigateToRoute(createThreadRoute(projectId, { kind: "new" }));
   }, [navigateToRoute]);
 
   const selectProjectFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string, logical = false) => {
@@ -2919,6 +2926,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : null}
                 {showStatsView && !shouldRenderMainLayout ? (
                   <WorkbenchStatsView
+                    onAddressFeedback={addressFeedback}
                     onNavigateThread={openStatsThreadFromLink}
                     projects={explorer.projects}
                     scope={statsScope}

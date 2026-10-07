@@ -128,6 +128,7 @@ export const workspaceCommandRoutes = {
   "questionnaire/respond": "thread",
   "stats/import/start": "installation",
   "stats/rate-limits/refresh": "installation",
+  "stats/feedback/delete": "installation",
   "skills/read": "folder",
   "git/arc/compare": "threadCwd",
   "git/arc/diff-artifact/read": "threadCwd",

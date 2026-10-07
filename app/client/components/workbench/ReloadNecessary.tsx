@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ReloadNecessary: render runtime reload controls with a separate stale-tab footer action.
+ * - default ReloadNecessary: render runtime reload controls with a separate stale-tab footer action in the shared sticky card.
  */
 "use client";
 
@@ -9,6 +9,7 @@ import { useState, useSyncExternalStore } from "react";
 import type { WorkbenchAppRuntimeStore, WorkbenchDaemonRuntimeStore, WorkbenchReloadDirtScope } from "workbench-shared/types";
 import ChevronIcon from "./ChevronIcon";
 import PrimaryButton from "./PrimaryButton";
+import WorkbenchStickyCard from "./WorkbenchStickyCard";
 import {
   getAffectedReloadScopes,
   getReloadAllHoldMs,
@@ -47,8 +48,6 @@ export default function ReloadNecessary ({
   const hasReloadDirt = Boolean(dirt && (dirt.dirtyScopes.length || dirt.error));
   const showReloadBody = hasReloadDirt && !collapsed;
 
-  if (!tabOutOfDate && !hasReloadDirt) return null;
-
   const pending = new Set(dirt?.pendingScopes ?? []);
   const reloadableScopes = dirt?.dirtyScopes ?? [];
   const reload = async (scopes: readonly WorkbenchReloadDirtScope[]) => {
@@ -77,11 +76,8 @@ export default function ReloadNecessary ({
     : getAffectedReloadScopes(hoveredScope, reloadableScopes);
 
   return (
-    <section className="sticky bottom-0 z-20 mt-auto ml-3">
-      <div
-        className="rounded-[1.15rem] border border-[color-mix(in srgb, var(--text) 20%, transparent)] bg-[color: color-mix(in srgb, var(--text) 4%, var(--app-bg-solid))] [--fg-bg: color-mix(in srgb, var(--text) 4%, var(--app-bg-solid))] p-2.5 backdrop-blur-md"
-        data-reload-necessary="true"
-      >
+    <WorkbenchStickyCard className="sticky bottom-0 z-20 mt-auto ml-3" open={tabOutOfDate || hasReloadDirt}>
+      <div data-reload-necessary="true">
         <div
           className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 ${showReloadBody || tabOutOfDate ? "border-b border-[color-mix(in_srgb,var(--text)_12%,transparent)] pb-2" : ""
             }`}
@@ -102,7 +98,7 @@ export default function ReloadNecessary ({
             Reload necessary
           </p>
           {reloadableScopes.length ? <PrimaryButton
-            className="!px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px]"
+            className="!px-3 !py-1.5 !text-[0.76rem] [&>span:first-of-type]:!inset-[3px]"
             disabled={allBusy}
             holdToConfirmMs={getReloadAllHoldMs(reloadableScopes)}
             onClick={() => void reload(reloadableScopes)}
@@ -123,7 +119,7 @@ export default function ReloadNecessary ({
                 <div className="flex items-center justify-between gap-2" key={scope.scope}>
                   <p className="m-0 min-w-0 truncate text-[0.8rem] font-medium text-text">{scope.scope}</p>
                   <PrimaryButton
-                    className={`!shrink-0 !px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px] ${affectedScopes.has(scope.scope)
+                    className={`!shrink-0 !px-3 !py-1.5 !text-[0.76rem] [&>span:first-of-type]:!inset-[3px] ${affectedScopes.has(scope.scope)
                         ? `[&>span:first-of-type]:!ring-2 ${scope.destructive
                           ? "[&>span:first-of-type]:!ring-danger"
                           : "[&>span:first-of-type]:!ring-accent"}`
@@ -156,7 +152,7 @@ export default function ReloadNecessary ({
               This tab is out of date
             </p>
             <PrimaryButton
-              className="!shrink-0 !px-3 !py-1 !text-[0.74rem] [&>span:first-of-type]:!inset-[3px]"
+              className="!shrink-0 !px-3 !py-1.5 !text-[0.76rem] [&>span:first-of-type]:!inset-[3px]"
               onClick={() => window.location.reload()}
             >
               Refresh
@@ -164,6 +160,6 @@ export default function ReloadNecessary ({
           </div>
         ) : null}
       </div>
-    </section>
+    </WorkbenchStickyCard>
   );
 }

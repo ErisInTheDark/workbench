@@ -228,6 +228,7 @@ function createController(options: {
       },
     },
     stats: {
+      deleteFeedback: async (ids) => ids.length,
       observeAccountLimits: (harness, limits) => { observedLimits.push({ harness, limitId: limits.rateLimits.limitId }); },
       refreshRateLimits: async () => { statsRefreshes += 1; },
       startImport: async () => ({

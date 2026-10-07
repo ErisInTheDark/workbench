@@ -500,6 +500,11 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     post({ id: request.id, type: "feedbackRecorded", feedbackId: new WorkbenchFeedbackRepository(database).record(request.entry, request.now).id });
     return;
   }
+  if (request.type === "deleteFeedback") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    post({ id: request.id, type: "mutationResult", result: { changes: new WorkbenchFeedbackRepository(database).delete(request.ids) } });
+    return;
+  }
   if (request.type === "readFeedback") {
     if (!database) throw new Error("Workbench database is not initialized");
     post({ id: request.id, type: "feedbackResult", result: new WorkbenchFeedbackRepository(database).read(request.request, request.now) });

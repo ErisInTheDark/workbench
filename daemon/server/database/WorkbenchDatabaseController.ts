@@ -799,6 +799,13 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     return response.feedbackId;
   }
 
+  async deleteFeedback(ids: readonly number[]) {
+    await this.start();
+    const response = await this.#request({ type: "deleteFeedback", ids });
+    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected feedback delete response: ${response.type}`);
+    return response.result.changes;
+  }
+
   async readFeedback(request: WorkbenchFeedbackReadRequest, now?: number) {
     await this.start();
     const response = await this.#request({ type: "readFeedback", request, ...(now === undefined ? {} : { now }) });

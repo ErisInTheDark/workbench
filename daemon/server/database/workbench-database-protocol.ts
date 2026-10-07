@@ -175,6 +175,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "readClaimStats"; request: WorkbenchClaimStatsRequest; now?: number; renames?: readonly WorkbenchGitClaimRename[] }
   | { type: "recordFeedback"; entry: WorkbenchFeedbackRecord; now: number }
   | { type: "readFeedback"; request: WorkbenchFeedbackReadRequest; now?: number }
+  | { type: "deleteFeedback"; ids: readonly number[] }
   | { type: "beginStatsImport"; runId: string; harnesses: WorkbenchHarness[]; now: number }
   | { type: "addStatsClaimDiscoveries"; runId: string; discoveries: WorkbenchGitClaimImportDiscovery[]; now: number }
   | { type: "claimStatsUsageImport"; runId: string; harnesses: WorkbenchHarness[]; now: number }

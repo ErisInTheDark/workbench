@@ -80,6 +80,7 @@ function importPorts() {
   return {
     readClaimStats: async () => ({ kind: "files" as const, page: 1, pages: 1, rows: [] }),
     readFeedback: async () => ({ page: 1, pages: 1, rows: [] }),
+    deleteFeedback: async () => 0,
     recordFeedback: async () => 1,
     readStatsClaimedRoots: async () => [],
     addStatsClaimDiscoveries: async () => importProgress,

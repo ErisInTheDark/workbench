@@ -151,6 +151,7 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   readStatsClaimedRoots: import("./database/WorkbenchDatabaseController").default["readStatsClaimedRoots"];
   recordFeedback: import("./database/WorkbenchDatabaseController").default["recordFeedback"];
   readFeedback: import("./database/WorkbenchDatabaseController").default["readFeedback"];
+  deleteFeedback: import("./database/WorkbenchDatabaseController").default["deleteFeedback"];
   readClaimStats(request: import("workbench-shared/workbench/stats/workbench-stats-claims-contract").WorkbenchClaimStatsRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-claims-contract").WorkbenchClaimStatsResponse>;
   beginStatsImport(runId: string, harnesses: WorkbenchHarness[], now: number): Promise<WorkbenchStatsImportProgress>;
   addStatsClaimDiscoveries(runId: string, discoveries: WorkbenchGitClaimImportDiscovery[], now: number): Promise<WorkbenchStatsImportProgress>;

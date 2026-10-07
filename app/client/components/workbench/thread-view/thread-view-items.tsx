@@ -163,6 +163,7 @@ import ThreadSteerDecoration from "./ThreadSteerDecoration";
 import ThreadSteerActionsContext from "./ThreadSteerActionsContext";
 import { RefreshCwIcon, XIcon } from "../workbench-icons";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
+import { splitUserMessageBubbles } from "./user-message-bubbles";
 import useThreadPresentedText from "./use-thread-presented-text";
 import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 import {
@@ -892,38 +893,41 @@ function ThreadUserMessageItem ({
   const steerState = getUserMessageDeliveryState(item);
   const isPendingInitial = isUndeliveredInitialOptimisticInputItem(item);
   const displayContent = unwrapWorkbenchSteerDisplayInput(item.content);
-  const copyMarkdown = getUserMessageCopyMarkdown(displayContent);
+  // `=====` lines split one stored message into several bubbles; the agent still receives the whole message.
+  const bubbles = splitUserMessageBubbles(displayContent);
   return (
     <section
-      className="flex flex-col items-end py-2"
+      className="flex flex-col items-end gap-2 py-2"
       data-thread-user-message-state={isPendingInitial ? "pending-initial" : steerState ? `${steerState}-steer` : undefined}
     >
-      <div className="group/thread-bubble relative w-fit max-w-[min(100%,42rem)]">
-        <ThreadSteerDecoration className="space-y-2 text-left" state={isPendingInitial ? "pending" : steerState}>
-          {displayContent.length ? displayContent.map((content, index) => (
-            <ThreadUserInputLine
-              key={`${item.id}:content:${index}:${content.type}`}
-              input={content}
-              inlineMentionSources={inlineMentionSources}
-              threadCwdPath={threadCwdPath}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              workspaceRoots={workspaceRoots}
-            />
-          )) : (
-            <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No user content captured.</p>
-          )}
-        </ThreadSteerDecoration>
-        <ThreadBubbleCopyButton
-          actions={steerState === "unsent"
-            ? <UndeliveredSteerActions itemIds={storedUndeliveredSteerIds(sourceItems ?? [item])} />
-            : undefined}
-          markdown={copyMarkdown}
-          side="right"
-        />
-      </div>
-      <ThreadMessageTimestamp align="right" className="mt-1" timestampSeconds={startedAt} />
+      {(bubbles.length ? bubbles : [[]]).map((bubble, bubbleIndex) => (
+        <div className="group/thread-bubble relative w-fit max-w-[min(100%,42rem)]" key={`${item.id}:bubble:${bubbleIndex}`}>
+          <ThreadSteerDecoration className="space-y-2 text-left" state={isPendingInitial ? "pending" : steerState}>
+            {bubble.length ? bubble.map((content, index) => (
+              <ThreadUserInputLine
+                key={`${item.id}:content:${bubbleIndex}:${index}:${content.type}`}
+                input={content}
+                inlineMentionSources={inlineMentionSources}
+                threadCwdPath={threadCwdPath}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                workspaceRoots={workspaceRoots}
+              />
+            )) : (
+              <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No user content captured.</p>
+            )}
+          </ThreadSteerDecoration>
+          <ThreadBubbleCopyButton
+            actions={steerState === "unsent" && bubbleIndex === bubbles.length - 1
+              ? <UndeliveredSteerActions itemIds={storedUndeliveredSteerIds(sourceItems ?? [item])} />
+              : undefined}
+            markdown={getUserMessageCopyMarkdown(bubble)}
+            side="right"
+          />
+        </div>
+      ))}
+      <ThreadMessageTimestamp align="right" className="-mt-1" timestampSeconds={startedAt} />
     </section>
   );
 }
