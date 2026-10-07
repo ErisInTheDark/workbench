@@ -952,7 +952,7 @@ export default class WorkbenchGitArcFeature {
         ...(input.freshDescription !== undefined ? { freshDescription: input.freshDescription } : {}),
         ...(input.freshTitle ? { freshTitle: input.freshTitle } : {}),
         ...(input.paths ? { paths: input.paths } : {}),
-        ...(input.replaceProposalId ? { replaceProposalId: input.replaceProposalId } : {}), title: input.title,
+        title: input.title,
       }));
       case "proposalRescind": return Response.json(await this.controller.rescindProposal({ ...common, proposalId: input.proposalId }));
       case "proposalState": return Response.json(await this.controller.getProposal({

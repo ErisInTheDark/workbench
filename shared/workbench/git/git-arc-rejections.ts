@@ -39,6 +39,7 @@ const simpleMessages = {
   missingFreshCommitChoice: "This amendment has no separate commit choice.",
   proposalNotOwned: "The proposal no longer belongs to this thread's arc.",
   proposalUnavailable: "The proposal is no longer available to commit.",
+  proposalRevisionConflict: "The proposal revision conflicts with work layered above it.",
   incompatibleHead: "Repository history changed incompatibly with this arc.",
   missingWorkspaceMembers: "No Git repositories match this workspace arc.",
   missingInactiveMembers: "No inactive plans match this workspace arc.",

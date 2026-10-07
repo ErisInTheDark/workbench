@@ -1291,7 +1291,6 @@ export default class WorkbenchWorkspaceGitArcController {
       ...(request.freshDescription !== undefined ? { freshDescription: request.freshDescription } : {}),
       ...(request.freshTitle ? { freshTitle: request.freshTitle } : {}),
       ...(selectedPaths?.length ? { paths: selectedPaths } : {}),
-      ...(request.replaceProposalId ? { replaceProposalId: request.replaceProposalId } : {}),
       threadId: request.threadId, title: request.title,
     }), undefined, "write", { harness: request.harness, project, threadId: request.threadId });
     const proposal = values[0]!.result;

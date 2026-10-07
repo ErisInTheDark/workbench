@@ -306,7 +306,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(STACK_OPERATIONS_FIXTURE, 1),
   ], nested: false }],
   ["GitArcStashController.test.ts", { fixtures: [
-    demand(CONTROLLER_BASE_FIXTURE, 1),
+    demand(CONTROLLER_BASE_FIXTURE, 2),
   ], nested: false }],
   ["ReloadDirtController.test.ts", { fixtures: [
     demand(RELOAD_DIRT_FIXTURE, 1),

@@ -157,7 +157,7 @@ export const CONTROLLER_OPERATIONS_FIXTURE = {
     await write(retained.root, "two.txt", "retained two\n");
     const retainedProposal = await controller.createProposal({
       cwd: retained.root, harness: "codex", threadId: "partial-thread",
-      amend: true, replaceProposalId: firstProposal.proposalId, paths: ["one.txt"],
+      amend: true, amendProposalId: firstProposal.proposalId, paths: ["one.txt"],
       title: "amend one", description: "", freshTitle: "commit one separately",
     });
 

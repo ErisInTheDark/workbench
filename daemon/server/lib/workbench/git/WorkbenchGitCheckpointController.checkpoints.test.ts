@@ -582,7 +582,7 @@ test("retained claims can propose and commit beneath an inactive future plan", a
   const proposal = await createGitCheckpointProposal({
     cwd: repoRoot,
     description: "",
-    replaceProposalId: pendingProposalId,
+    amend: true, amendProposalId: pendingProposalId,
     threadId,
     title: "Commit retained work",
   });
@@ -1013,7 +1013,7 @@ test("pending proposals in one thread never share live paths", async (context) =
   const second = await createGitCheckpointProposal({ ...identity, description: "", paths: ["unrelated.txt"], title: "Second" });
   assert.deepEqual(second.paths, ["unrelated.txt"]);
   const replacement = await createGitCheckpointProposal({
-    ...identity, description: "", paths: ["literal1.txt"], replaceProposalId: first.proposalId, title: "First replacement",
+    ...identity, amend: true, amendProposalId: first.proposalId, description: "", paths: ["literal1.txt"], title: "First replacement",
   });
   assert.deepEqual(replacement.paths, ["literal1.txt"]);
 });

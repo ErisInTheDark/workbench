@@ -8,6 +8,7 @@ import test from "node:test";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import GitTestFixtureCache from "./GitTestFixtureCache";
 import { CONTROLLER_BASE_FIXTURE } from "./GitArcControllerTestFixtures";
+import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 const fixtures = new GitTestFixtureCache();
 
@@ -29,4 +30,39 @@ test("discarding an adopted stash preserves the caller's live claims and changes
   assert.deepEqual(status.stashedClaims, []);
   assert.deepEqual(status.dirtyClaims, ["two.txt"]);
   assert.equal(await fs.readFile(path.join(cwd, "two.txt"), "utf8"), "live change\n");
+});
+
+test("stashed pending proposals can be reworded without changing frozen work", async context => {
+  const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
+  context.after(() => fixture.dispose());
+  const cwd = fixture.root;
+  const controller = new WorkbenchGitCheckpointController();
+  await controller.createAndStartPlan({ cwd, threadId: "owner", intentName: "saved", paths: ["one.txt"] });
+  await fs.writeFile(path.join(cwd, "one.txt"), "saved change\n");
+  const proposal = await controller.createProposal({
+    cwd, threadId: "owner", title: "saved title", description: "",
+  });
+  await controller.stashArc({ cwd, threadId: "owner" });
+  const repository = await WorkbenchGitRepository.open(cwd);
+  const stashRef = "refs/worktree/agents/codex/owner/arc-stash";
+  const frozenBefore = await repository.readRef(stashRef);
+
+  const reworded = await controller.createProposal({
+    cwd, threadId: "owner", amendProposalId: proposal.proposalId,
+    title: "clear saved title", description: "Keep the frozen content.",
+  });
+  assert.equal((await controller.getProposal({
+    cwd, threadId: "owner", proposalId: proposal.proposalId, includeNewer: false,
+  })).status, "superseded");
+  assert.equal((await controller.getProposal({
+    cwd, threadId: "owner", proposalId: reworded.proposalId, includeNewer: false,
+  })).title, "clear saved title");
+  assert.deepEqual((await controller.findLifecycleState({ cwd, threadId: "owner" }))?.proposals, [
+    { proposalId: reworded.proposalId, status: "proposed" },
+  ]);
+  assert.equal(await repository.readRef(stashRef), frozenBefore);
+  await assert.rejects(controller.createProposal({
+    cwd, threadId: "owner", amend: true, amendProposalId: reworded.proposalId,
+    paths: ["one.txt"], title: "content cannot move", description: "",
+  }), /active|stashed/iu);
 });

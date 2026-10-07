@@ -1145,7 +1145,6 @@ export default class WorkbenchGitCheckpointController {
     freshTitle,
     harness: rawHarness,
     paths: rawPaths,
-    replaceProposalId,
     threadId,
     title,
   }: ControllerInput & {
@@ -1155,7 +1154,6 @@ export default class WorkbenchGitCheckpointController {
     freshDescription?: string;
     freshTitle?: string;
     paths?: string[];
-    replaceProposalId?: string;
     title: string;
   }): Promise<GitCheckpointProposalReceipt> {
     return await GitObjectReadSession.run(() => this.proposals.createProposal({
@@ -1167,7 +1165,6 @@ export default class WorkbenchGitCheckpointController {
       freshTitle,
       harness: rawHarness,
       paths: rawPaths,
-      replaceProposalId,
       threadId,
       title,
     }));

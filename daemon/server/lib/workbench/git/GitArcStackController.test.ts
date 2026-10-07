@@ -33,24 +33,40 @@ function branch<Key extends keyof StackFixtureState>(key: Key) {
 test("stacked proposals wait on sealed layers, reject sealed mutations and land bottom-up", async () => {
   const { commit, cwd, git, read, state } = branch("stacked");
   const owner = { cwd, threadId: "owner" };
+  const repository = await WorkbenchGitRepository.open(cwd);
+  const refsBeforeConflict = await repository.listRefsWithValues("refs/worktree");
+  await fs.writeFile(path.join(cwd, "one.txt"), "third\n");
+  await assert.rejects(controller.createProposal({
+    ...owner, amend: true, amendProposalId: state.lower, paths: ["one.txt"], title: "conflicting revision", description: "",
+  }), (error) => error instanceof GitArcRejectionError && error.rejection.reason === "proposalRevisionConflict");
+  assert.deepEqual(await repository.listRefsWithValues("refs/worktree"), refsBeforeConflict,
+    "a conflicting lower-layer revision leaves every Workbench ref unchanged");
+  await fs.writeFile(path.join(cwd, "one.txt"), "second\n");
+
+  const revised = await controller.createProposal({
+    ...owner, amendProposalId: state.lower, title: "first revised", description: "Clearer message.",
+  });
+  assert.equal((await read("owner", state.lower)).status, "superseded");
+  assert.equal((await read("owner", revised.proposalId)).sealedInLayer, "layer one");
   const upper = await read("owner", state.upper);
   assert.equal(upper.waitingForLayer, "layer one");
   assert.match(upper.changes[0]!.diff, /-first\n\+second/u, "stacked work diffs from the sealed layer");
-  const lower = await read("owner", state.lower);
+  const lower = await read("owner", revised.proposalId);
   assert.equal(lower.sealedInLayer, "layer one");
+  assert.equal(lower.title, "first revised");
   assert.equal(lower.includeNewerAvailable, false, "newer work belongs to the upper layer");
   const status = await controller.readStatus(owner);
-  assert.deepEqual(status.stacked, [{ title: "layer one", pending: [{ proposalId: state.lower, title: "first" }] }]);
+  assert.deepEqual(status.stacked, [{ title: "layer one", pending: [{ proposalId: revised.proposalId, title: "first revised" }] }]);
   assert.deepEqual(status.pending, [{ proposalId: state.upper, title: "second" }]);
 
-  await assert.rejects(controller.rescindProposal({ ...owner, proposalId: state.lower }), /sealed/iu);
+  await assert.rejects(controller.rescindProposal({ ...owner, proposalId: revised.proposalId }), /sealed/iu);
   await assert.rejects(commit("owner", state.upper, "second"), /layer one/u);
   await assert.rejects(controller.unstackArc(owner), /builds on/iu);
   await assert.rejects(controller.stashArc(owner), /stack/iu);
   await assert.rejects(controller.adoptArc({ cwd, threadId: "other", source: { harness: "codex", threadId: "owner" } }), /stack/iu);
   assert.deepEqual(await controller.readScope(owner).then(scope => scope?.claimedPaths), ["one.txt"], "rejections leave ownership intact");
 
-  await commit("owner", state.lower, "first");
+  await commit("owner", revised.proposalId, "first revised");
   assert.equal(await git("show", "HEAD:one.txt"), "first\n");
   assert.equal((await read("owner", state.upper)).waitingForLayer, null);
   await commit("owner", state.upper, "second");
@@ -80,13 +96,19 @@ test("claim and plan changes keep sealed proposals visible, and unstack reopens 
   assert.deepEqual((await controller.findLifecycleState(owner))?.proposals.map(({ proposalId }) => proposalId), [state.lower],
     "the sealed proposal stays in the lifecycle list that stack cards render from");
 
+  await fs.writeFile(path.join(cwd, "one.txt"), "first revised\n");
+  const revision = await controller.createProposal({
+    ...owner, amend: true, amendProposalId: state.lower, paths: ["one.txt"], title: "first revised", description: "",
+  });
+  assert.equal((await read("owner", state.lower)).status, "superseded");
+  assert.match((await read("owner", revision.proposalId)).changes[0]!.diff, /\+first revised/u);
   const reopened = await controller.unstackArc(owner);
-  assert.deepEqual([reopened.proposalIds, reopened.stackTip], [[state.lower], null]);
+  assert.deepEqual([reopened.proposalIds, reopened.stackTip], [[revision.proposalId], null]);
   assert.deepEqual(reopened.layerProposals, [{
     changes: [{ additions: 1, deletions: 1, kind: "update", path: "one.txt" }],
-    description: "", proposalId: state.lower, title: "first",
+    description: "", proposalId: revision.proposalId, title: "first revised",
   }], "the tip recorded each sealed message and file totals");
-  await controller.rescindProposal({ ...owner, proposalId: state.lower });
+  await controller.rescindProposal({ ...owner, proposalId: revision.proposalId });
   await assert.rejects(controller.unstackArc(owner), /stack layer/iu);
 
   await controller.createPlan({ ...owner, intentName: "upper work", paths: ["one.txt", "three.txt"] });
@@ -134,11 +156,18 @@ test("transferred claims keep sealed proposals committable, never lower a stack 
   const registry = new GitArcRegistry(await WorkbenchGitRepository.open(cwd));
   const owner = async (threadId: string) => await registry.find({ harness: "codex", threadId });
   const parentTip = (await owner("parent"))?.stackTip;
+  const childTip = (await owner("child"))?.stackTip;
+  const revisedLower = await controller.createProposal({
+    cwd, threadId: "parent", amendProposalId: state.lower, title: "parent one revised", description: "",
+  });
+  assert.notEqual((await owner("parent"))?.stackTip, parentTip, "the parent's dependent upper layer follows the revision");
+  assert.notEqual((await owner("child"))?.stackTip, childTip, "the child's inherited lower-layer tip follows the revision");
   // The child holds three.txt on layer one; the parent has since sealed layer two. Taking it back keeps the parent's top.
   await (await controller.prepareAdoption({
     cwd, threadId: "parent", source: { harness: "codex", threadId: "child" }, selectedPaths: ["three.txt"],
   })).apply();
-  assert.deepEqual([(await owner("parent"))?.stackTip, (await owner("child"))?.claimedPaths], [parentTip, []]);
+  const revisedParentTip = (await owner("parent"))?.stackTip;
+  assert.deepEqual([(await owner("parent"))?.stackTip, (await owner("child"))?.claimedPaths], [revisedParentTip, []]);
   await (await controller.prepareReleaseToChild({
     cwd, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["two.txt"],
   })).apply();
@@ -176,13 +205,13 @@ test("transferred claims keep sealed proposals committable, never lower a stack 
   assert.equal((await read("child", child.proposalId)).waitingForLayer, "layer one", "it waits on the lowest unlanded layer");
   // Both layers land in one batch; the batch stops at its first failure with earlier entries landed.
   const batch = await controller.commitProposals({ cwd, threadId: "parent", entries: [
-    { proposalId: state.lower, title: "parent one", description: "", includeNewer: false },
+    { proposalId: revisedLower.proposalId, title: "parent one revised", description: "", includeNewer: false },
     { proposalId: state.upper, title: "parent two", description: "", includeNewer: false },
     { proposalId: "missing", title: "missing", description: "", includeNewer: false },
   ] });
   assert.deepEqual([batch.landed.map(({ status, title }) => `${title}:${status}`), batch.failed?.proposalId],
-    [["parent one:committed", "parent two:committed"], "missing"]);
-  assert.equal(await git("log", "-2", "--format=%s"), "parent two\nparent one\n");
+    [["parent one revised:committed", "parent two:committed"], "missing"]);
+  assert.equal(await git("log", "-2", "--format=%s"), "parent two\nparent one revised\n");
   // Landed parent layers are the child's baseline, not drift in its claims.
   assert.match((await controller.diff({ cwd, threadId: "child", paths: ["two.txt"] })).diff, /-parent two\n\+child builds on two/u);
   // The parent commits one.txt past the landing, then hands it over: the child's checkpoint moves onto that HEAD,

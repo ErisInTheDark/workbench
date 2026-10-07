@@ -103,7 +103,7 @@ export const CHECKPOINT_OPERATIONS_FIXTURE = {
     const originalProposal = await propose(frozen.root, threadId, "Commit selected", ["selected.txt", "unrelated.txt"], "Frozen proposal");
     const currentProposal = await controller.createProposal({
       cwd: frozen.root, threadId, title: "Commit selected replacement", paths: ["selected.txt", "unrelated.txt"],
-      description: "Replacement proposal", replaceProposalId: originalProposal.proposalId,
+      amend: true, amendProposalId: originalProposal.proposalId, description: "Replacement proposal",
     });
     const newerProposal = await propose(frozen.root, newerThreadId, "Commit newer selected", ["deleted.txt"]);
     const cleanProposal = await propose(frozen.root, cleanThreadId, "Expire clean selected", ["literal[1].txt"]);

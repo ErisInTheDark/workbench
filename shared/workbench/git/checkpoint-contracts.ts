@@ -253,14 +253,10 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     freshDescription: z.string().optional(),
     freshTitle: nonEmptyString.optional(),
     paths: checkpointPaths.optional(),
-    replaceProposalId: nonEmptyString.optional(),
     rootId: rootId.optional(),
     title: z.string(),
     ...checkpointBaseRequest,
-  }).superRefine((input, context) => {
-    if (input.amend && !input.freshTitle) {
-      context.addIssue(gitArcRejectionIssue({ reason: "missingFreshTitle" }, "Content amend proposals require freshTitle.", ["freshTitle"]));
-    }
+  }).strict().superRefine((input, context) => {
     if (!input.amend && (input.freshTitle !== undefined || input.freshDescription !== undefined)) {
       context.addIssue(gitArcRejectionIssue({ reason: "unexpectedFreshMetadata" }, "Fresh commit metadata requires amend.", ["freshTitle"]));
     }

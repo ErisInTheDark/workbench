@@ -96,32 +96,33 @@ proposing:
 - Title names a simple symptom/outcome for the whole changeset.
 - Description identifies every distinct/unrelated bundled item, its reason and technical changes; never repeat the title or label expected constituent work "also".
 
-replacing or rescinding:
-- Set `replace: proposalId` to replace one pending proposal; use <tool id="git_arc_rescind" /> to rescind one. Do not combine replacement and amendment.
+rescinding:
+- Use <tool id="git_arc_rescind" /> to rescind one pending unsealed proposal.
 
 amending:
 <!-- Failure: corrective amends rewrite history; additive amends hide scope. -->
 <!-- Failure: agents avoided amend proposals or pre-checked HEAD/push state. Amend proposals carry both amend and fresh-commit choices, and Workbench converts impossible amends (e.g. pushed targets) into fresh-commit proposals, so the agent never needs to judge amendability. -->
-- Default to amend proposals for fixes/minor addendums to committed work. Set `amend: proposalId` for committed proposals or `amend: true` for HEAD; do not pre-check targets.
+- Set `amend: proposalId` to revise a pending proposal or amend a committed proposal. Pending revisions default to the target's paths and message.
+- Use `amend: true` for HEAD; do not pre-check committed targets.
 - The user chooses amend or fresh; Workbench handles impossible amends. Compare against the target.
 - Update title/description for changed scope, or omit both to inherit.
-- Content amendments require `freshTitle` and optional `freshDescription`.
-- For message-only proposals use <tool id="git_arc_reword" /> with `{ proposalId, title, description? }`, not immediate commit.
+- Content amendments to committed proposals require `freshTitle` and optional `freshDescription`.
+- Use <tool id="git_arc_reword" /> for message-only changes to pending or committed proposals.
 
 acceptance:
 - Preserve excluded newer work when a proposal is accepted.
 
 ### stack proposals
 sealing a layer:
-<!-- Failure: agents kept editing files with pending proposals, so later proposals overlapped or swallowed work the user had not committed yet. Stacking seals pending proposals into a layer whose result becomes the arc baseline. -->
-- <tool id="git_arc_stack" /> with `title` seals all pending unsealed proposals as one layer; their result becomes the arc baseline. Claims stay.
-- Compare, diff, selected restore and new proposals measure from the top layer; the user commits layers bottom-up.
-- Stack before further work building on pending proposals; call again per layer.
+- <tool id="git_arc_stack" /> with `title` seals ALL pending unsealed proposals as one layer; their result becomes the arc baseline, claims stay
+- Compare, diff, selected restore and new proposals measure from the top layer; the user commits layers bottom-up
+- Stack before further work that builds on pending proposals; call again per layer
 
 constraints:
-- Sealed proposals cannot be replaced or rescinded. <tool id="git_arc_unstack" /> reopens your top layer when nothing builds on it.
-- Amend proposals cannot build on a pending stack. Stash is unavailable while a stack is pending.
-- Subagent claim transfers keep sealed proposals; children inherit the stack baseline.
+- Do not seal impulsively; know whether seal is necessary yet. Optimal is multiple proposals per layer 
+- Sealed proposals may be amended or reworded. They cannot be rescinded; <tool id="git_arc_unstack" /> reopens the top layer when nothing builds on it
+- Amend proposals cannot build on a pending stack. Stash is unavailable while a stack is pending
+- Subagent claim transfers keep sealed proposals; children inherit the stack baseline
 </available:git-proposals>
 
 ### restore an arc

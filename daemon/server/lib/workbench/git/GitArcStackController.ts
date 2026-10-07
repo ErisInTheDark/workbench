@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default GitArcStackController: own stack layer tips, chain reads, baseline tips (pending, or landed until an arc re-baselines past them), arc drift and seal/reopen operations.
+ * - default GitArcStackController: own stack layer tips, chain reads, baseline tips, proposal-layer rewrites, arc drift and seal/reopen operations.
+ * - GitArcPreparedStackRevision: atomic ref and commit updates for one proposal revision.
  * - GitArcStackLayer: one readable stack tip with its sealed layer facts.
  * - GitArcStackStatusResolver: derived proposal status supplied by the proposal owner.
  * - GitArcStackedProposalState: waiting, replayable or broken stacked proposal classification.
@@ -11,6 +12,7 @@ import type { GitArcStackResult } from "workbench-shared/workbench/git/checkpoin
 import type { GitArcStackedProposal } from "workbench-shared/workbench/git/git-arc-receipts";
 import {
   CHECKPOINT_METADATA_MARKER,
+  checkpointMessage,
   type CheckpointMetadata,
   type GitArcHarness,
   type GitArcProposalStatus,
@@ -20,6 +22,7 @@ import {
 } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcRegistry, { type GitArcPreparedOperation, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
+import type { StoredProposal } from "./GitCheckpointStore";
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 import { passthroughGitArcThreadIdentityResolver, type GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
 
@@ -44,6 +47,13 @@ interface StackIdentity {
 
 /** Tips are walked from untrusted refs; bound the walk so corrupt parent loops cannot hang a request. */
 const MAX_STACK_DEPTH = 200;
+
+export interface GitArcPreparedStackRevision {
+  commits: Map<string, string>;
+  deletes: Array<{ oldValue: string; ref: string }>;
+  replacedRefs: string[];
+  updates: GitRefUpdate[];
+}
 
 function lifecycleProposalIds(entry: GitArcRegistryEntry) {
   return (entry.phase === "plan" ? entry.retainedArc?.proposalIds : entry.proposalIds) ?? [];
@@ -126,6 +136,72 @@ export default class GitArcStackController {
 
   async sealedProposalIds(entry: GitArcRegistryEntry | null | undefined) {
     return new Set((await this.readOwnLayers(entry)).flatMap(({ layer }) => layer.proposalIds));
+  }
+
+  /** Rebuild the target layer and every layer above it, preserving each layer's own scoped proposal content. */
+  async prepareProposalRevision(
+    entry: GitArcRegistryEntry,
+    targetProposalId: string,
+    replacement: StoredProposal,
+  ): Promise<GitArcPreparedStackRevision | null> {
+    const chain = await this.readChain(entry.stackTip);
+    const targetIndex = chain.findIndex(({ layer }) => layer.proposalIds.includes(targetProposalId));
+    if (targetIndex < 0) return null;
+    const store = this.store();
+    const commits = new Map<string, string>();
+    const updates: GitRefUpdate[] = [];
+    const deletes: Array<{ oldValue: string; ref: string }> = [];
+    const replacedRefs: string[] = [];
+    let parent = chain[targetIndex]!.parent;
+
+    for (const current of chain.slice(targetIndex)) {
+      const proposalIds = current.layer.proposalIds.map(id => id === targetProposalId
+        ? replacement.metadata.proposalId
+        : id);
+      const proposals = await Promise.all(proposalIds.map(async proposalId => (
+        proposalId === replacement.metadata.proposalId
+          ? replacement
+          : await store.readProposal(current.layer.harness as GitArcHarness, current.layer.threadId, proposalId)
+      )));
+      let tree = await this.repository.resolveTree(parent);
+      for (const proposal of proposals) {
+        tree = await this.repository.writeTreeWithPathsFromSource(tree, proposal.tree, proposal.metadata.paths);
+      }
+      const summaries = await Promise.all(proposals.map(async ({ metadata, tree: proposalTree }): Promise<GitArcStackedProposal> => ({
+        changes: (await this.repository.buildFileChanges(metadata.baseCommit, proposalTree, metadata.paths))
+          .map(({ additions, deletions, kind, path }) => ({ additions, deletions, kind: kind.type, path })),
+        description: metadata.description,
+        proposalId: metadata.proposalId,
+        title: metadata.title,
+      })));
+      const stored = await store.readCheckpoint(
+        current.layer.harness as GitArcHarness,
+        current.layer.threadId,
+        current.tipCommit,
+      );
+      if (!stored.metadata || stored.metadata.kind !== "stack" || !stored.metadata.stackLayer) {
+        throw new Error("The sealed proposal layer is unavailable.");
+      }
+      const storedCommit = await this.repository.readCommit(current.tipCommit);
+      const metadata: CheckpointMetadata = {
+        ...stored.metadata,
+        scopePaths: [...new Set(proposals.flatMap(({ metadata }) => metadata.paths))].sort(),
+        stackLayer: { ...stored.metadata.stackLayer, proposalIds, proposals: summaries },
+      };
+      const next = await this.repository.createCommitFromTree(
+        tree,
+        parent,
+        checkpointMessage(metadata),
+        storedCommit,
+      );
+      const nextRef = stored.checkpointRef.replace(/-[a-f0-9]{7,64}$/iu, `-${next.slice(0, 8)}`);
+      updates.push({ newValue: next, oldValue: "0".repeat(40), ref: nextRef });
+      deletes.push({ oldValue: current.tipCommit, ref: stored.checkpointRef });
+      replacedRefs.push(stored.checkpointRef, nextRef);
+      commits.set(current.tipCommit, next);
+      parent = next;
+    }
+    return { commits, deletes, replacedRefs, updates };
   }
 
   /** `base` with every sealed path in the chain below `tip` taken from that tip. */

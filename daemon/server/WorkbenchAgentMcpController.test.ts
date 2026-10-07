@@ -214,7 +214,6 @@ test("MCP preserves typed Git rejections before and after dispatch", async () =>
     for (const [name, args, reason] of [
       ["git_plan_claims", {}, "missingPlanName"],
       ["git_arc_diff", { paths: ["one.ts"], page: 2 }, "selectedPathPaging"],
-      ["git_arc_propose", { amend: true, replace: "proposal-one" }, "conflictingProposalTargets"],
     ] as const) {
       const result = await client.callTool({ name, arguments: args, _meta: { threadId: "native-thread" } });
       assert.equal(result.isError, true);
@@ -503,7 +502,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const proposal = inventory.tools.find(({ name }) => name === "git_arc_propose");
     assert.ok(proposal);
     assert.deepEqual(Object.keys(proposal.inputSchema.properties ?? {}).sort(), [
-      "amend", "amendProposalId", "description", "freshDescription", "freshTitle", "paths", "replace", "replaceProposalId", "rootId", "title",
+      "amend", "amendProposalId", "description", "freshDescription", "freshTitle", "paths", "rootId", "title",
     ]);
     assert.equal(inventory.tools.some(({ name }) => name === "daemon_reload" || name === "reload" || name === "dirt"), false);
     const refresh = inventory.tools.find(({ name }) => name === "thread_refresh");

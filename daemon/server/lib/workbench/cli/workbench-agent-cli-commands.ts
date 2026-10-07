@@ -54,7 +54,7 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "Edit active scope: wb git arc claims --inherit -- <add-path> -<remove-path> '*<adopt-path>'. Continuation checks are included.",
   "Follow-ups: wb git arc status before rereading. Resume unchanged scope: wb git arc continue.",
   "Inspect: wb git arc compare / wb git arc diff. Explicit paths return a complete unpaged diff.",
-  "Propose: wb git arc propose --title <title>. Replace pending proposals with --replace <id>.",
+  "Propose: wb git arc propose --title <title>. Revise pending proposals with --amend <id>.",
   "Content amend: wb git arc propose --amend [<proposal-id>] --fresh-title <title>.",
   "Message-only proposal: wb git arc reword --proposal <id> --title <title>.",
   "Move approved paths: wb git arc mv. Release clean claims: wb git arc release.",

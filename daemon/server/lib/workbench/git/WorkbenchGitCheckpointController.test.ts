@@ -1074,18 +1074,19 @@ async function checkProposalReadPurity({ repository, source, state }: Controller
   await assert.rejects(fs.stat(path.join(source, "added.txt")), { code: "ENOENT" });
 }
 
-controllerTest("replacement", "replacement plans target prior pending and committed proposals through the thread namespace", async ({ repository, source, state }) => {
+controllerTest("replacement", "amend targets prior pending and committed proposals through the thread namespace", async ({ repository, source, state }) => {
   const controller = new WorkbenchGitCheckpointController();
   const replaceTarget = { proposalId: state.replaceTargetProposalId };
   const rescindTarget = { proposalId: state.rescindTargetProposalId };
   const commitTarget = { proposalId: state.commitTargetProposalId };
 
   const replacement = await controller.createProposal({
+    amend: true,
+    amendProposalId: replaceTarget.proposalId,
     cwd: source,
     description: "",
     harness: "codex",
     paths: ["one.txt"],
-    replaceProposalId: replaceTarget.proposalId,
     threadId: "partial-thread",
     title: "replacement",
   });
@@ -1130,11 +1131,12 @@ controllerTest("replacement", "replacement plans target prior pending and commit
   });
   assert.equal(stillPending.status, "proposed");
   const continuedReplacement = await controller.createProposal({
+    amend: true,
+    amendProposalId: replacement.proposalId,
     cwd: source,
     description: "",
     harness: "codex",
     paths: ["one.txt"],
-    replaceProposalId: replacement.proposalId,
     threadId: "partial-thread",
     title: "continued replacement",
   });
@@ -1166,13 +1168,14 @@ controllerTest("replacement", "replacement plans target prior pending and commit
     return true;
   };
   await assert.rejects(controller.createProposal({
+    amend: true,
+    amendProposalId: commitTarget.proposalId,
     cwd: source,
     description: "",
     harness: "codex",
-    replaceProposalId: commitTarget.proposalId,
     threadId: "partial-thread",
     title: "invalid replacement",
-  }), assertCommittedTarget);
+  }), /separate commit choice/iu);
   await assert.rejects(controller.rescindProposal({
     cwd: source, harness: "codex", proposalId: commitTarget.proposalId, threadId: "partial-thread",
   }), assertCommittedTarget);

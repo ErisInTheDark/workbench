@@ -170,7 +170,6 @@ test("Git argument refusals retain semantic facts before a request exists", asyn
     [["git", "plan", "claims"], "missingPlanName"],
     [["git", "arc", "unrecognised"], "unsupportedCommand"],
     [["git", "arc", "claims"], "inheritanceRequired"],
-    [["git", "arc", "propose", "--amend", "--replace", "proposal-one"], "conflictingProposalTargets"],
   ] as const) {
     const result = await parseWorkbenchAgentCliCommand([...args], gitArcOptions);
     assert.equal(result.kind, "error");
@@ -232,18 +231,22 @@ test("plan claim revisions recover removal-only operands when PowerShell consume
   assert.deepEqual(parsed.request.body?.removePaths, ["old.ts"]);
 });
 
-test("proposal targeting keeps legacy content amendments and message-only rewords distinct", async () => {
+test("proposal targeting uses amend for pending or committed content and reword for messages", async () => {
   const propose = listWorkbenchAgentCommands().find(({ words }) => words.join("_") === "git_arc_propose")!;
   const context = { cwd: "C:/workspace", callerThreadId: "thread-1", callerHarness: "codex" as const, workbenchOrigin: null };
+  const pending = await propose.buildRequestFromJson({
+    amend: "pending-id", paths: ["one.ts"],
+  }, context);
+  assert.equal(pending.body?.amend, true);
+  assert.equal(pending.body?.amendProposalId, "pending-id");
+  assert.equal(pending.body?.freshTitle, undefined);
   const content = await propose.buildRequestFromJson({
     amendProposalId: "accepted-id", paths: ["one.ts"], freshTitle: "new commit",
   }, context);
   assert.equal(content.body?.amend, true);
   assert.equal(content.body?.amendProposalId, "accepted-id");
   assert.equal(content.body?.title, "");
-  await assert.rejects(propose.buildRequestFromJson({
-    amendProposalId: "accepted-id", replace: "pending-id", title: "conflicting target",
-  }, context));
+  await assert.rejects(propose.buildRequestFromJson({ replace: "pending-id" }, context));
   const reword = await parseWorkbenchAgentCliCommand(["git", "arc", "reword", "--proposal", "accepted-id", "--title", "message only"], gitArcOptions);
   assert.equal(reword.kind, "request");
   assert.equal(reword.request.body?.amend, false);
@@ -966,10 +969,10 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   });
   assert.equal((await parseWorkbenchAgentCliCommand([
     "git", "arc", "propose", "--amend", "--title", "Amend only",
-  ], gitOptions)).kind, "error");
+  ], gitOptions)).kind, "request");
   assert.equal((await parseWorkbenchAgentCliCommand([
     "git", "arc", "propose", "--amend", "proposal-one", "--title", "Targeted content amend", "--", "src/file.ts",
-  ], gitOptions)).kind, "error");
+  ], gitOptions)).kind, "request");
 
   const bulletDescription = "- move thread Git out of Next\n- keep claims until index normalization succeeds\n- prevent optional explorer index writes";
   const bulletProposal = await parseWorkbenchAgentCliCommand([
@@ -991,17 +994,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   const replacementProposal = await parseWorkbenchAgentCliCommand([
     "git", "arc", "propose", "--replace", "proposal-one", "--title", "Replacement",
   ], gitOptions);
-  assert.equal(replacementProposal.kind, "request");
-  assert.deepEqual(replacementProposal.request.body, {
-    action: "proposalCreate",
-    amend: false,
-    cwd: "C:/workspace",
-    description: "",
-    harness: "codex",
-    replaceProposalId: "proposal-one",
-    threadId: "thread-1",
-    title: "Replacement",
-  });
+  assert.equal(replacementProposal.kind, "error");
 
   const rescindProposal = await parseWorkbenchAgentCliCommand([
     "git", "arc", "rescind", "--proposal", "proposal-one",

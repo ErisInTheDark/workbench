@@ -297,10 +297,11 @@ test("proposal and plan diagnostics encode explicit lifecycle targets", () => {
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "proposalCreate",
     amend: true,
+    amendProposalId: "proposal-pending",
     description: "",
-    title: "Missing fresh choice",
+    title: "",
     ...common,
-  }).success, false);
+  }).success, true);
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "proposalCommit",
     description: "",
@@ -324,7 +325,7 @@ test("proposal and plan diagnostics encode explicit lifecycle targets", () => {
     replaceProposalId: "proposal-pending",
     title: "Replace pending",
     ...common,
-  }).success, true);
+  }).success, false);
 });
 
 test("proposal dirt selections retain inspected identity and reject incomplete input", () => {

@@ -16,5 +16,7 @@
 - Adopted stashes reuse frozen Git commits under caller-owned refs; ordinary stashes retain claim-loss storage and `stashed` phase. The caller's saved-stash slot may coexist with live claims and blocks settlement and retention.
 - Selected release to an owned subagent atomically moves only named live file claims, refreshes both checkpoints, and leaves stashes and worktree/index content untouched.
 - Stack layers seal pending proposals into tip checkpoints; while any chain proposal is pending, the arc's logical baseline is the top tip and arc checkpoints keep real HEAD parents. Arcs keep measuring claimed paths from their stack tip after it lands, until their checkpoint parent contains every landing commit.
+- Pending proposal revisions atomically supersede the target, rebuild affected stack layers and remap dependent refs; failure leaves every ref unchanged.
+- Content revision applies only worktree changes beyond represented proposals; later proposal content stays in its original layer.
 - Stacked proposals commit only after lower chain proposals resolve, replaying onto HEAD when their paths match the tip; otherwise unavailable.
 - Stash, unstash and stack reject when pending stack layers and saved work would coexist.

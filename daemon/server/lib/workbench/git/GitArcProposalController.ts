@@ -159,6 +159,47 @@ function savedLifecycle(entry: GitArcRegistryEntry, saved: GitArcSavedStash | nu
   } : live;
 }
 
+function replaceProposalId(values: readonly string[], target: string, replacement: string) {
+  return values.map(id => id === target ? replacement : id);
+}
+
+function revisedRegistryEntry(
+  entry: GitArcRegistryEntry,
+  target: string,
+  replacement: string,
+  commits: ReadonlyMap<string, string>,
+): Omit<GitArcRegistryEntry, "updatedAt"> {
+  const targetIsStored = [
+    ...(entry.proposalIds ?? []),
+    ...(entry.retainedArc?.proposalIds ?? []),
+    ...(entry.savedStash?.proposalIds ?? []),
+  ].includes(target);
+  const proposalIds = targetIsStored
+    ? replaceProposalId(entry.proposalIds ?? [], target, replacement)
+    : [...(entry.proposalIds ?? []), replacement];
+  return {
+    ...entry,
+    checkpointCommit: commits.get(entry.checkpointCommit) ?? entry.checkpointCommit,
+    proposalId: proposalIds.at(-1) ?? null,
+    proposalIds,
+    ...(entry.stackTip ? { stackTip: commits.get(entry.stackTip) ?? entry.stackTip } : {}),
+    ...(entry.retainedArc ? {
+      retainedArc: {
+        ...entry.retainedArc,
+        checkpointCommit: commits.get(entry.retainedArc.checkpointCommit) ?? entry.retainedArc.checkpointCommit,
+        proposalIds: replaceProposalId(entry.retainedArc.proposalIds, target, replacement),
+      },
+    } : {}),
+    ...(entry.savedStash ? {
+      savedStash: {
+        ...entry.savedStash,
+        checkpointCommit: commits.get(entry.savedStash.checkpointCommit) ?? entry.savedStash.checkpointCommit,
+        proposalIds: replaceProposalId(entry.savedStash.proposalIds, target, replacement),
+      },
+    } : {}),
+  };
+}
+
 function acceptedReceiptMessage(receipts: Array<{ commitSha: string; proposalId: string; title: string }>, claimedPaths: string[]) {
   return [
     "Accepted commit proposals:",
@@ -796,6 +837,17 @@ export default class GitArcProposalController {
     const harness = normalizeHarness(rawHarness);
     const store = this.store(repository);
     const target = await store.readProposal(harness, threadId, amendProposalId);
+    if (target.metadata.status === "proposed") {
+      return await this.publishPendingRevision({
+        description,
+        harness,
+        repository,
+        target,
+        threadId,
+        title,
+        tree: target.tree,
+      });
+    }
     if (target.metadata.status !== "committed" || !target.metadata.committedSha) {
       throw new GitArcRejectionError({ reason: "proposalRequiresCommittedTarget" }, "A targeted message amend requires a committed proposal.");
     }
@@ -875,6 +927,112 @@ export default class GitArcProposalController {
     };
   }
 
+  private async publishPendingRevision({
+    description,
+    harness,
+    livePaths,
+    paths,
+    repository,
+    target,
+    threadId,
+    title,
+    tree,
+  }: {
+    description: string;
+    harness: GitArcHarness;
+    livePaths?: string[];
+    paths?: string[];
+    repository: WorkbenchGitRepository;
+    target: StoredProposal;
+    threadId: string;
+    title: string;
+    tree: string;
+  }): Promise<GitCheckpointProposalReceipt> {
+    const registry = this.registry(repository);
+    const current = await registry.find({ harness, threadId });
+    if (!current) throw new GitArcRejectionError({ reason: "proposalNotOwned" });
+    const stack = this.stack(repository);
+    const sealingLayer = await stack.sealingLayer(current, target.metadata.proposalId);
+    const proposalTitle = title.trim() || target.metadata.title;
+    const proposalDescription = title.trim() ? description.trim() : target.metadata.description;
+    commitMessage(proposalTitle, proposalDescription);
+    if (
+      tree === target.tree
+      && proposalTitle === target.metadata.title
+      && proposalDescription === target.metadata.description
+    ) {
+      throw new GitArcRejectionError({ reason: "unchangedMessage" });
+    }
+    const proposalId = randomUUID();
+    const metadata: ProposalMetadata = {
+      ...target.metadata,
+      committedSha: null,
+      description: proposalDescription,
+      livePaths: livePaths ?? target.metadata.livePaths,
+      paths: paths ?? target.metadata.paths,
+      proposalId,
+      sourceCheckpoint: sealingLayer
+        ? target.metadata.sourceCheckpoint
+        : lifecycleEntry(current)?.checkpointCommit ?? target.metadata.sourceCheckpoint,
+      status: "proposed",
+      supersededByProposalId: null,
+      supersededBySha: null,
+      title: proposalTitle,
+      unavailableReason: null,
+    };
+    const proposalCommit = await repository.createCommitFromTree(tree, metadata.baseCommit, proposalMessage(metadata));
+    const replacement: StoredProposal = {
+      metadata,
+      proposalCommit,
+      proposalRef: await this.store(repository).proposalRefName(harness, threadId, proposalId),
+      tree,
+    };
+    const stackRevision = await stack.prepareProposalRevision(current, target.metadata.proposalId, replacement);
+    const excludedRefs = [
+      REGISTRY_REF,
+      target.proposalRef,
+      ...(stackRevision?.replacedRefs ?? []),
+    ];
+    const rewrite = await new GitArcHistoryRewriter(repository).prepare(
+      stackRevision?.commits ?? new Map(),
+      { excludeRefs: excludedRefs },
+    );
+    const nextEntry = revisedRegistryEntry(current, target.metadata.proposalId, proposalId, rewrite.commits);
+    const registryMutation = await registry.prepareClaim(nextEntry, {
+      commitRemaps: rewrite.commits,
+      expectedCheckpointCommit: current.checkpointCommit,
+    });
+    const supersededMetadata: ProposalMetadata = {
+      ...remapProposalMetadata(target.metadata, rewrite.commits),
+      status: "superseded",
+      supersededByProposalId: proposalId,
+      supersededBySha: null,
+      unavailableReason: null,
+    };
+    const supersededCommit = await repository.createCommitFromTree(
+      target.tree,
+      supersededMetadata.baseCommit,
+      proposalMessage(supersededMetadata),
+    );
+    await repository.updateRefs([
+      ...(stackRevision?.updates ?? []),
+      ...rewrite.updates,
+      ...registryMutation.updates,
+      { newValue: supersededCommit, oldValue: target.proposalCommit, ref: target.proposalRef },
+      { newValue: proposalCommit, oldValue: "0".repeat(40), ref: replacement.proposalRef },
+    ], [...(stackRevision?.deletes ?? []), ...rewrite.deletes]);
+    return {
+      baseCommit: metadata.baseCommit,
+      description: metadata.description,
+      intentName: current.intentName,
+      paths: metadata.paths,
+      proposalId,
+      scopePaths: current.phase === "plan" ? current.retainedArc?.claimedPaths ?? [] : current.claimedPaths,
+      sourceCheckpoint: metadata.sourceCheckpoint,
+      title: metadata.title,
+    };
+  }
+
   async createProposal({
     amend,
     amendProposalId,
@@ -884,7 +1042,6 @@ export default class GitArcProposalController {
     freshTitle,
     harness: rawHarness,
     paths: rawPaths,
-    replaceProposalId,
     threadId,
     title,
   }: ArcIdentityInput & {
@@ -894,7 +1051,6 @@ export default class GitArcProposalController {
     freshDescription?: string;
     freshTitle?: string;
     paths?: string[];
-    replaceProposalId?: string;
     title: string;
   }): Promise<GitCheckpointProposalReceipt> {
     if (amendProposalId && !amend && !rawPaths?.length) {
@@ -912,28 +1068,31 @@ export default class GitArcProposalController {
     const stack = this.stack(repository);
     const [baselineTip, sealedIds] = await Promise.all([stack.baselineTip(active, checkpoint), stack.sealedProposalIds(active)]);
     const stackTip = baselineTip?.pending ? baselineTip.commit : null;
-    if (stackTip && (amend || amendProposalId)) throw new GitArcRejectionError({ reason: "amendOnPendingStack" });
-    if (replaceProposalId && sealedIds.has(replaceProposalId)) throw new GitArcRejectionError({ reason: "sealedProposal" });
     let replacementTarget: StoredProposal | null = null;
-    if (replaceProposalId) {
-      replacementTarget = await store.readProposal(harness, threadId, replaceProposalId);
-      if (replacementTarget.metadata.status === "committed") {
-        throw proposalAlreadyCommitted(replacementTarget);
-      }
-      if (replacementTarget.metadata.status !== "proposed" && replacementTarget.metadata.status !== "unavailable") {
-        throw new GitArcRejectionError({ reason: "proposalCannotBeReplaced" }, "Only a pending or unavailable proposal can be replaced.");
-      }
-    }
     let amendTargetProposal: StoredProposal | null = null;
     if (amendProposalId) {
-      amendTargetProposal = await store.readProposal(harness, threadId, amendProposalId);
-      if (amendTargetProposal.metadata.status !== "committed" || !amendTargetProposal.metadata.committedSha) {
-        throw new GitArcRejectionError({ reason: "proposalRequiresCommittedTarget" }, "A targeted amend requires a committed proposal.");
+      const target = await store.readProposal(harness, threadId, amendProposalId);
+      if (target.metadata.status === "proposed") {
+        replacementTarget = target;
+        amend = false;
+      } else {
+        amendTargetProposal = target;
+        if (target.metadata.status !== "committed" || !target.metadata.committedSha) {
+          throw new GitArcRejectionError({ reason: "proposalRequiresCommittedTarget" }, "A targeted amend requires a pending or committed proposal.");
+        }
+        if (!freshTitle?.trim()) throw new GitArcRejectionError({ reason: "missingFreshTitle" });
+        amend = true;
       }
-      amend = true;
     }
+    if (replacementTarget && (freshTitle !== undefined || freshDescription !== undefined)) {
+      throw new GitArcRejectionError({ reason: "unexpectedFreshMetadata" });
+    }
+    if (amend && !freshTitle?.trim()) throw new GitArcRejectionError({ reason: "missingFreshTitle" });
+    if (stackTip && amend) throw new GitArcRejectionError({ reason: "amendOnPendingStack" });
     const requestedPaths = rawPaths?.length
       ? repository.normalizePaths(rawPaths)
+      : replacementTarget
+        ? repository.normalizePaths(replacementTarget.metadata.livePaths)
       : repository.normalizePaths(claimedPaths);
     if (rawPaths?.length) {
       const outsideClaim = requestedPaths.filter((candidate) => (
@@ -980,11 +1139,46 @@ export default class GitArcProposalController {
       }
     }
     const baseCommit = amendTargetSha ? await repository.resolveParent(amendTargetSha) : liveBaseCommit;
-    const proposalTree = await repository.writeScopedWorktreeTree(requestedPaths, amendTargetSha ?? liveBaseCommit);
+    let proposalTree = await repository.writeScopedWorktreeTree(requestedPaths, amendTargetSha ?? liveBaseCommit);
+    if (replacementTarget) {
+      let representedTree = await repository.resolveTree(liveBaseCommit);
+      for (const proposalId of proposalIds.filter(id => !sealedIds.has(id))) {
+        const proposal = await store.readProposal(harness, threadId, proposalId);
+        if (proposal.metadata.status !== "proposed") continue;
+        representedTree = await repository.writeTreeWithPathsFromSource(
+          representedTree,
+          proposal.tree,
+          proposal.metadata.livePaths,
+        );
+      }
+      const editedTree = await repository.writeScopedWorktreeTree(requestedPaths, representedTree);
+      const revisionPaths = await repository.listChangedPaths(representedTree, editedTree, requestedPaths);
+      if (revisionPaths.length) {
+        try {
+          proposalTree = await repository.mergeTree(representedTree, replacementTarget.tree, editedTree);
+        } catch (error) {
+          throw new GitArcRejectionError({ reason: "proposalRevisionConflict" }, error instanceof Error ? error.message : String(error));
+        }
+      } else {
+        proposalTree = replacementTarget.tree;
+      }
+      const paths = [...new Set([...replacementTarget.metadata.paths, ...revisionPaths])].sort();
+      return await this.publishPendingRevision({
+        description,
+        harness,
+        livePaths: paths,
+        paths,
+        repository,
+        target: replacementTarget,
+        threadId,
+        title,
+        tree: proposalTree,
+      });
+    }
     const livePaths = await repository.listChangedPaths(liveBaseCommit, proposalTree, requestedPaths);
     if (!livePaths.length) throw new GitArcRejectionError({ reason: "noChangesToPropose" }, "The selected arc paths do not contain any working-tree changes to propose.");
     // Sealed proposals may overlap: later layers deliberately build on their files.
-    await this.requireNoPendingOverlap(repository, harness, threadId, proposalIds.filter(id => id !== replaceProposalId && !sealedIds.has(id)), livePaths);
+    await this.requireNoPendingOverlap(repository, harness, threadId, proposalIds.filter(id => !sealedIds.has(id)), livePaths);
     const paths = amendTargetSha
       ? await repository.listAllChangedPaths(baseCommit, proposalTree)
       : livePaths;
@@ -1021,10 +1215,8 @@ export default class GitArcProposalController {
     commitMessage(metadata.title, metadata.description);
     const proposalCommit = await repository.createCommitFromTree(proposalTree, baseCommit, proposalMessage(metadata));
     await buildProposalFileChanges(this.proposalDiffs, repository, metadata, proposalTree);
-    // A replacement takes its target's place, so superseded proposals never linger in the thread's list.
-    const nextProposalIds = replaceProposalId && proposalIds.includes(replaceProposalId)
-      ? proposalIds.map(id => id === replaceProposalId ? proposalId : id)
-      : [...proposalIds, proposalId];
+    // New proposals append so every still-pending proposal remains visible to the thread.
+    const nextProposalIds = [...proposalIds, proposalId];
     const registryMutation = await registry.prepareSet({
       ...active,
       ...(active.phase === "plan" ? {
@@ -1038,28 +1230,7 @@ export default class GitArcProposalController {
         proposalIds: nextProposalIds,
       }),
     }, active.checkpointCommit);
-    let supersededProposalUpdate: GitRefUpdate | null = null;
-    if (replacementTarget) {
-      const supersededMetadata: ProposalMetadata = {
-        ...replacementTarget.metadata,
-        status: "superseded",
-        supersededByProposalId: proposalId,
-        supersededBySha: null,
-        unavailableReason: null,
-      };
-      const supersededState = await repository.createCommitFromTree(
-        replacementTarget.tree,
-        replacementTarget.metadata.baseCommit,
-        proposalMessage(supersededMetadata),
-      );
-      supersededProposalUpdate = {
-        newValue: supersededState,
-        oldValue: replacementTarget.proposalCommit,
-        ref: replacementTarget.proposalRef,
-      };
-    }
     await repository.updateRefs([
-      ...(supersededProposalUpdate ? [supersededProposalUpdate] : []),
       { newValue: proposalCommit, oldValue: "0".repeat(40), ref: await store.proposalRefName(harness, threadId, proposalId) },
       ...registryMutation.updates,
     ]);
