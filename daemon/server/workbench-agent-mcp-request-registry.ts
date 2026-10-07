@@ -2,10 +2,12 @@
  * Exports:
  * - WorkbenchAgentMcpPendingRequest: describe one active request for runtime-drain diagnostics.
  * - WorkbenchAgentMcpThreadWaitState: describe active waits owned by one Workbench thread.
- * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, wait observation, reload-safe command re-entry, the current MCP tool generation, and the exec node's shell runner.
+ * - WorkbenchAgentMcpRequestRegistry: own MCP request cancellation, user shell stops, wait observation, reload-safe command re-entry, the current MCP tool generation, and the exec node's shell runner.
  * - getProcessWorkbenchAgentMcpRequestRegistry: access reload-stable process state through current module methods.
  * - isWorkbenchAgentMcpSteerInterruption: identify expected steer cancellation across module generations.
+ * - isWorkbenchAgentMcpUserStop: identify a user's stop of one shell command across module generations.
  */
+import { formatDuration } from "workbench-shared/workbench/format-duration";
 import {
   NativeThreadIdSchema,
   WorkbenchThreadIdSchema,
@@ -41,6 +43,8 @@ interface WorkbenchAgentMcpRequestEntry {
   drainIndependent: boolean;
   owner: WorkbenchAgentMcpRuntimeOwner;
   policy: WorkbenchAgentMcpRuntimeDrainPolicy | null;
+  /** Transcript references of the shell item this request runs; absent on requests the user cannot stop. */
+  shellItemReferences?: readonly string[];
   startedAt: number;
   steerInterruptible?: boolean;
   /** Pre-patch process state retained only until its live request unregisters. */
@@ -79,6 +83,8 @@ interface WorkbenchAgentMcpRequestRegistryState {
 interface WorkbenchAgentMcpRequestRegistrationOptions {
   owner: WorkbenchAgentMcpRuntimeOwner;
   policy?: WorkbenchAgentMcpRuntimeDrainPolicy;
+  /** The shell's transcript item: its thread when known, and every reference that names the item. */
+  shellItem?: { threadId?: WorkbenchThreadId; references: readonly string[] };
   steerInterruptible?: boolean;
   toolName: string;
 }
@@ -111,6 +117,12 @@ function createWorkbenchAgentMcpSteerInterruption(reason: string) {
 
 export function isWorkbenchAgentMcpSteerInterruption(error: unknown) {
   return error instanceof Error && Reflect.get(error, STEER_INTERRUPTION_KEY) === true;
+}
+
+const USER_STOP_KEY = Symbol.for("workbench.agentMcpUserStop.v1");
+
+export function isWorkbenchAgentMcpUserStop(error: unknown) {
+  return error instanceof Error && Reflect.get(error, USER_STOP_KEY) === true;
 }
 
 function createState(): WorkbenchAgentMcpRequestRegistryState {
@@ -196,6 +208,8 @@ export class WorkbenchAgentMcpRequestRegistry {
       startedAt: this.now(),
       steerInterruptible: options.steerInterruptible,
       toolName: options.toolName,
+      ...(options.shellItem?.references.length ? { shellItemReferences: [...options.shellItem.references] } : {}),
+      ...(options.shellItem?.threadId ? { workbenchThreadId: WorkbenchThreadIdSchema.parse(options.shellItem.threadId) } : {}),
     };
     requests.set(requestId, entry);
     this.state.requestsByClient.set(clientScope, requests);
@@ -425,6 +439,25 @@ export class WorkbenchAgentMcpRequestRegistry {
     if (!controller || controller.signal.aborted) return false;
     controller.abort(new Error(reason?.trim() || "Workbench MCP tool call was cancelled."));
     return true;
+  }
+
+  /**
+   * Stop the running shell whose transcript item any of `references` names; aborting its signal kills the command.
+   * A shell registered without thread identity matches on its references alone.
+   */
+  stopShell(threadId: WorkbenchThreadId, references: readonly string[]) {
+    const workbenchThreadId = WorkbenchThreadIdSchema.parse(threadId);
+    for (const requests of this.state.requestsByClient.values()) {
+      for (const entry of requests.values()) {
+        if (entry.controller.signal.aborted || !entry.shellItemReferences?.some(reference => references.includes(reference))) continue;
+        if (entry.workbenchThreadId && entry.workbenchThreadId !== workbenchThreadId) continue;
+        const error = new Error(`The user stopped this command after ${formatDuration(this.now() - entry.startedAt)}.`);
+        Reflect.set(error, USER_STOP_KEY, true);
+        entry.controller.abort(error);
+        return true;
+      }
+    }
+    return false;
   }
 
   interruptThreadWaits(

@@ -57,7 +57,7 @@ function fixture() {
   const ports: ThreadControllerPorts = {
     controls: {
       compactThread: async value => value, stopThread: async value => value,
-      resendSteer: async () => {}, dismissSteer: async () => {},
+      resendSteer: async () => {}, dismissSteer: async () => {}, stopShell: async () => {},
       setCurrentThreadAgent: () => {}, setCurrentThreadModel: () => {},
       setCurrentThreadReasoningEffort: () => {}, setCurrentThreadServiceTier: () => {},
       setCurrentThreadComposerSettings: () => {}, submitPendingUserInputRequest: async () => {},

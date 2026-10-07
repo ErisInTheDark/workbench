@@ -50,6 +50,7 @@ import WorkbenchUnfinishedTurnController from "./WorkbenchUnfinishedTurnControll
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
+import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import WorkbenchProjectFileController from "./WorkbenchProjectFileController";
 import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
@@ -580,6 +581,7 @@ function createWorkbenchCoreFeature(
     reconciliation: transcriptReconciliation,
     transcripts: transcriptReader,
     transcript,
+    shells: getProcessWorkbenchAgentMcpRequestRegistry(),
     settlement: turnSettlement,
     providers, projects: projectCatalog, identities: threadIdentity,
     profiles: threadState, state: threadState.controller,

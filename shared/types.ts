@@ -1238,6 +1238,8 @@ export interface WorkbenchControls {
   resendSteer: (threadId: string, itemId: string) => Promise<void>;
   /** The user's final word on an undelivered steer: it is hidden for good. */
   dismissSteer: (threadId: string, itemId: string) => Promise<void>;
+  /** Kill one running wb shell call; the agent receives the user's stop as the command's result. */
+  stopShell: (threadId: string, itemId: string) => Promise<void>;
   threadAction: (threadId: WorkbenchThreadId, intent: WorkbenchThreadIntent) => Promise<boolean>;
   setThreadTitle: (request: WorkbenchThreadTitleRequest) => Promise<string>;
   threadGoals: WorkbenchThreadGoalControls;

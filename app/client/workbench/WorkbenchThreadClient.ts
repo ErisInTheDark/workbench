@@ -191,6 +191,7 @@ interface WorkbenchThreadClient {
   stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
   resendSteer: (threadId: string, itemId: string) => Promise<void>;
   dismissSteer: (threadId: string, itemId: string) => Promise<void>;
+  stopShell: (threadId: string, itemId: string) => Promise<void>;
   threadGoals: WorkbenchThreadGoalControls;
   threadSkills: WorkbenchThreadSkillControls;
   transcripts: WorkbenchTranscriptClient;
@@ -700,7 +701,7 @@ function WorkbenchThreadClient(
         : target.harness ?? getKnownThreadHarness(threadId) ?? defaultProviderKey;
       controller = new WorkbenchThreadController(projectId, target, {
         controls: {
-          compactThread, stopThread, resendSteer, dismissSteer, setCurrentThreadAgent, setCurrentThreadModel,
+          compactThread, stopThread, resendSteer, dismissSteer, stopShell, setCurrentThreadAgent, setCurrentThreadModel,
           setCurrentThreadReasoningEffort, setCurrentThreadServiceTier, setCurrentThreadComposerSettings,
           submitPendingUserInputRequest,
           updateThreadStateWithAcceptance: request => {
@@ -4328,6 +4329,15 @@ function WorkbenchThreadClient(
     await runSteerAction(threadId, "The steer could not be dismissed", () => daemon.threads.steer.dismiss({ threadId, itemId }));
   }
 
+  /** The stopped call's failed result reaches the view through the transcript, like any other tool result. */
+  async function stopShell(threadId: string, itemId: string) {
+    try {
+      await daemon.threads.shell.stop({ threadId, itemId });
+    } catch (error) {
+      throw new Error(`The command could not be stopped: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
+    }
+  }
+
   async function submitPendingUserInputRequest(
     threadId: string,
     response: WorkbenchUserInputResponse,
@@ -4736,6 +4746,7 @@ function WorkbenchThreadClient(
     stopThread,
     resendSteer,
     dismissSteer,
+    stopShell,
     threadGoals,
     threadSkills,
     transcripts,

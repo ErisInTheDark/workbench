@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { formatThreadDuration } from "./thread-view-formatters";
+import { formatDuration } from "workbench-shared/workbench/format-duration";
 
 function joinClasses(...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -19,7 +19,7 @@ export default function ThreadDurationText({
   className?: string;
   durationMs: number | null;
 }) {
-  const value = formatThreadDuration(durationMs);
+  const value = formatDuration(durationMs);
   if (!value) {
     return null;
   }

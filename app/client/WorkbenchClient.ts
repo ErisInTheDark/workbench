@@ -782,6 +782,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     stopThread: thread => rendererForThread(thread.id).stopThread(thread),
     resendSteer: (threadId, itemId) => rendererForThread(threadId).resendSteer(threadId, itemId),
     dismissSteer: (threadId, itemId) => rendererForThread(threadId).dismissSteer(threadId, itemId),
+    stopShell: (threadId, itemId) => rendererForThread(threadId).stopShell(threadId, itemId),
     threadAction,
     setThreadTitle: async request => {
       const { data: owner } = await daemon.threads.resolveIdentity({ threadId: ThreadReferenceSchema.parse(request.threadId) });

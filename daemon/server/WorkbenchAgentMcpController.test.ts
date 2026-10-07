@@ -1184,6 +1184,42 @@ for (const hosted of [false, true]) test(`${hosted ? "hosted" : "native"} shells
   });
 });
 
+test("a user-stopped shell answers only the stop sentence, found through its Codex call id", async () => {
+  let now = 0;
+  const requestRegistry = new WorkbenchAgentMcpRequestRegistry(undefined, () => now);
+  const errors: string[] = [];
+  const recorded: ProviderToolResult[] = [];
+  const reference = {
+    threadId: WorkbenchThreadIdSchema.parse("thread"), turnId: "turn", itemId: "item",
+    sourceId: "source", parentId: "source", tool: "shell", arguments: {}, startedAt: 0,
+  } as WorkbenchToolTranscriptReference;
+  const tools: WorkbenchProviderTools = {
+    caller: async () => ({ harness: "codex", threadId: reference.threadId, cwd: "C:/workspace" }),
+    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
+    patchClaims: async () => "",
+    prepareShell: async () => preparedShell("C:/workspace"),
+    transcript: { start: async () => reference, finish: async (_reference, result) => { recorded.push(result); } },
+  };
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => tools, daemonOrigin: "http://127.0.0.1:4500", requestRegistry,
+    lifecycleLogError: (_name, message) => { errors.push(message); },
+    executeShell: async () => await new Promise<never>(() => {}),
+  });
+  const scope = { clientScope: "client", projectLocal: false, provider: "codex", subagent: false };
+  const step = await controller.call(scope, {
+    arguments: { command: "pnpm test" }, detachableShell: true, meta: { callId: "call_native", threadId: "native-thread" },
+    name: "shell", requestId: 1, signal: new AbortController().signal,
+  });
+  assert.ok(step.kind === "detached");
+  now = 12_000;
+  assert.equal(requestRegistry.stopShell(reference.threadId, ["call_native"]), true);
+  const result = await controller.finish(scope, step.call, { error: step.call.signal.reason });
+  step.call.unregister();
+  assert.deepEqual(result, { content: [{ type: "text", text: "The user stopped this command after 12s." }], isError: true });
+  assert.deepEqual(recorded[0]?.content, result.content);
+  assert.deepEqual(errors, [], "an expected stop is not logged as a failure");
+});
+
 test("thread steer interruption ends declared waits but preserves questionnaires and ordinary MCP calls", { timeout: 5_000 }, async () => {
   const executions = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
   const allStarted = deferred<void>();

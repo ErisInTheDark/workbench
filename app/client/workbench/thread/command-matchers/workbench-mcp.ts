@@ -33,7 +33,7 @@ interface WorkbenchMcpCommandInput {
 
 type McpToolCallItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 type CommandExecutionItem = Extract<ThreadItem, { type: "commandExecution" }>;
-export type WorkbenchMcpShellCommandItem = CommandExecutionItem & { shell: CommandShell };
+export type WorkbenchMcpShellCommandItem = CommandExecutionItem & { shell: CommandShell; workbenchShell: true };
 
 function isWorkbenchMcpServer(server: string) {
   return server === "wb" || server === "wbex";
@@ -86,6 +86,7 @@ export function getWorkbenchMcpShellCommandItem(
     source: "agent",
     status: item.status,
     type: "commandExecution",
+    workbenchShell: true,
   };
 }
 

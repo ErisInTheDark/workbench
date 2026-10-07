@@ -1,4 +1,4 @@
-/* Exports: none. Protect WB action ownership, accepted-message settlement, orphaned stop settlement, parent-agent stop questionnaire dismissal, undelivered steer resend/dismiss and agent-message redelivery. */
+/* Exports: none. Protect WB action ownership, accepted-message settlement, orphaned stop settlement, parent-agent stop questionnaire dismissal, undelivered steer resend/dismiss, user shell stops and agent-message redelivery. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import WorkbenchThreadActionController, {
@@ -46,7 +46,8 @@ function fixture(providerWarning?: string) {
     approvals: { list: () => [] },
     reconciliation: { reconcile: unused },
     transcripts: { readPage: unused, history: unused },
-    transcript: { record: async observations => { recorded.push(...observations); return undefined as never; } },
+    transcript: { record: async observations => { recorded.push(...observations); return undefined as never; }, read: unused },
+    shells: { stopShell: () => { throw new Error("Unexpected shell stop."); } },
     settlement: { settleIfOrphaned: async () => { stopOrder.push("settle"); return false; } },
     providers: { get: key => { assert.equal(key, "codex"); return provider; } },
     projects: { resolveProjectById: unused },
@@ -88,6 +89,24 @@ function fixture(providerWarning?: string) {
     failTitle: () => { titleFailure = true; },
   };
 }
+
+test("shell stops reach Codex call ids through item source aliases and reject commands that already ended", async () => {
+  const f = fixture();
+  const stops: Array<{ threadId: string; references: readonly string[] }> = [];
+  let running = true;
+  f.owners.shells.stopShell = (threadId, references) => { stops.push({ threadId, references }); return running; };
+  f.owners.transcript.read = async request => {
+    assert.deepEqual(request, { threadId: "wb-thread", turnLimit: 1 });
+    return { rows: { itemSourceAliases: [
+      { item_identity_id: "shell-item", reference: "call_native" },
+      { item_identity_id: "other-item", reference: "call_other" },
+    ] } } as never;
+  };
+  assert.deepEqual(await f.controller.handle("thread/shell/stop", { threadId: "native-thread", itemId: "shell-item" }), { ok: true });
+  assert.deepEqual(stops, [{ threadId: "wb-thread", references: ["shell-item", "call_native"] }]);
+  running = false;
+  await assert.rejects(f.controller.handle("thread/shell/stop", { threadId: "wb-thread", itemId: "shell-item" }), /no longer running/);
+});
 
 test("provider deletion resolves aliases without mutating WB state and preserves failures", async () => {
   const f = fixture();

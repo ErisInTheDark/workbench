@@ -1,4 +1,4 @@
-/* No production exports. Tests protect isolated identity, generation-scoped drain policy, diagnostics, and reload-stable cancellation. */
+/* No production exports. Tests protect isolated identity, generation-scoped drain policy, diagnostics, user shell stops, and reload-stable cancellation. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -8,6 +8,7 @@ import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
   isWorkbenchAgentMcpSteerInterruption,
+  isWorkbenchAgentMcpUserStop,
   WorkbenchAgentMcpRequestRegistry,
 } from "./workbench-agent-mcp-request-registry";
 
@@ -44,6 +45,33 @@ test("request IDs and cancellation are isolated by client across wrapper generat
   } finally {
     first.unregister();
     second.unregister();
+  }
+});
+
+test("user shell stops abort only the shell its thread's item names, once, with its elapsed time", () => {
+  let now = 1_000;
+  const registry = new WorkbenchAgentMcpRequestRegistry(undefined, () => now);
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const otherThreadId = WorkbenchThreadIdSchema.parse("other-thread");
+  const recorded = registry.register("client-1", 1, { owner, toolName: "shell", shellItem: { threadId, references: ["item-1"] } });
+  const native = registry.register("client-1", 2, { owner, toolName: "shell", shellItem: { references: ["call_native"] } });
+  const unrecorded = registry.register("client-1", 3, { owner, toolName: "shell", shellItem: { references: [] } });
+  const ordinary = registry.register("client-1", 4, registrationOptions(owner));
+  try {
+    now = 66_000;
+    assert.equal(registry.stopShell(otherThreadId, ["item-1"]), false, "another thread's view cannot stop this shell");
+    assert.equal(registry.stopShell(threadId, ["item-1"]), true);
+    assert.ok(isWorkbenchAgentMcpUserStop(recorded.signal.reason));
+    assert.equal((recorded.signal.reason as Error).message, "The user stopped this command after 1m 5s.");
+    assert.equal(registry.stopShell(threadId, ["item-1"]), false, "an already stopped shell reports nothing left to stop");
+    assert.equal(registry.stopShell(threadId, ["public-item", "call_native"]), true, "a shell without thread identity matches its references");
+    assert.equal(native.signal.aborted, true);
+    assert.equal(unrecorded.signal.aborted, false);
+    assert.equal(ordinary.signal.aborted, false);
+    assert.equal(isWorkbenchAgentMcpUserStop(new Error("The user stopped this command after 1m 5s.")), false);
+  } finally {
+    for (const registration of [recorded, native, unrecorded, ordinary]) registration.unregister();
   }
 });
 

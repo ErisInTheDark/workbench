@@ -60,7 +60,8 @@ import { formatToolCallOutput } from "./format-thread-tool-call";
 
 const TASK_TITLE_ALREADY_MATCHES_OUTPUT = "Task title already matches";
 
-export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & { shell?: CommandShell };
+/** `workbenchShell` marks a command derived from a wb shell call, which Workbench owns and the user can stop. */
+export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & { shell?: CommandShell; workbenchShell?: true };
 export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcpToolCall" }>;
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 export type IncomingAgentMessageItem = UserMessageItem | Extract<ThreadItem, { type: "functionCallOutput" }>;

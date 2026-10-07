@@ -70,6 +70,7 @@ export const workspaceCommandRoutes = {
   "thread/interrupt": "thread",
   "thread/steer/resend": "thread",
   "thread/steer/dismiss": "thread",
+  "thread/shell/stop": "thread",
   "thread/goal/read": "thread",
   "thread/goal/update": "thread",
   "thread/goal/remove": "thread",

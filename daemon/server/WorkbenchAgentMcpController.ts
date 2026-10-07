@@ -40,6 +40,7 @@ import WorkbenchToolAdmissionController, { type WorkbenchToolAdmissionOptions } 
 import {
   getProcessWorkbenchAgentMcpRequestRegistry,
   isWorkbenchAgentMcpSteerInterruption,
+  isWorkbenchAgentMcpUserStop,
   type WorkbenchAgentMcpRequestRegistry,
 } from "./workbench-agent-mcp-request-registry";
 import {
@@ -370,9 +371,13 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       kind: "result", result: await this.finishTranscript(tools, started.reference, this.shellFailure(error, signal)),
     });
     let registration: ReturnType<WorkbenchAgentMcpRequestRegistry["register"]>;
+    // Workbench-recorded items are named by their item id; Codex records its own item, named by the call id it sends.
+    const nativeCallId = typeof call.meta?.callId === "string" && call.meta.callId ? call.meta.callId : null;
+    const shellItemReferences = [started.reference?.itemId, nativeCallId].filter((reference): reference is string => Boolean(reference));
     try {
       registration = this.requestRegistry.register(scope.clientScope, call.requestId, {
         owner: this.runtimeOwner, steerInterruptible: false, toolName: "shell",
+        shellItem: { references: shellItemReferences, ...(started.reference ? { threadId: started.reference.threadId } : {}) },
       });
     } catch (error) {
       return await finishFailure(error, call.signal);
@@ -443,6 +448,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   }
 
   private shellFailure(error: unknown, signal: AbortSignal): CallToolResult {
+    // Expected, not a failure: the user's stop already names what happened, so it is the whole result.
+    if (signal.aborted && isWorkbenchAgentMcpUserStop(signal.reason)) {
+      return { content: [{ type: "text", text: (signal.reason as Error).message }], isError: true };
+    }
     const message = sanitizeError(error) || "Workbench shell tool call failed.";
     if (!signal.aborted || error !== signal.reason) this.lifecycleLogError("workbench-mcp", message);
     return { content: [{ type: "text", text: `Workbench shell failed: ${message}` }], isError: true };

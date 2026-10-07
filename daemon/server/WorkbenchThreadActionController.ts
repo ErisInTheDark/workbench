@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project and transcript owners.
  * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
- * - default WorkbenchThreadActionController: own WB actions, full thread stop, orphan repair, skills, questionnaire snooze and steer redelivery.
+ * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, orphan repair, skills, questionnaire snooze and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
 import type { ThreadPayload, WorkbenchHarness } from "workbench-shared/types";
@@ -10,12 +10,13 @@ import { installedProviderKeys } from "workbench-shared/workbench/provider/provi
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import {
   workbenchThreadActions, type WorkbenchThreadActionMap, type WorkbenchThreadCreate,
-  type WorkbenchThreadMessage, type WorkbenchThreadSteerTarget, type WorkbenchThreadStop,
+  type WorkbenchThreadMessage, type WorkbenchThreadShellTarget, type WorkbenchThreadSteerTarget, type WorkbenchThreadStop,
 } from "workbench-shared/workbench/thread/thread-actions";
 import {
   ThreadReferenceSchema, WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type WorkbenchThreadId,
 } from "workbench-shared/workbench/identity";
 import type { DaemonTranscriptRegistration } from "./daemon-runtime-objects";
+import type { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import type WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
 import type { WorkbenchThreadLaunchLocation } from "workbench-shared/workbench/thread/thread-launch";
 import type WorkbenchApprovalController from "./WorkbenchApprovalController";
@@ -38,8 +39,10 @@ export interface WorkbenchThreadActionOwners {
   approvals: Pick<WorkbenchApprovalController, "list">;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   transcripts: Pick<WorkbenchTranscriptReader, "readPage" | "history">;
-  /** Canonical transcript writes for Workbench-owned steer decisions. */
-  transcript: Pick<DaemonTranscriptRegistration, "record">;
+  /** Canonical transcript writes for Workbench-owned steer decisions, and item source reads for shell stops. */
+  transcript: Pick<DaemonTranscriptRegistration, "record" | "read">;
+  /** Running wb shell calls the user can stop. */
+  shells: Pick<WorkbenchAgentMcpRequestRegistry, "stopShell">;
   /** Settles a stopped turn whose runtime is already gone. */
   settlement: Pick<WorkbenchTurnSettlementController, "settleIfOrphaned">;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
@@ -200,6 +203,7 @@ export default class WorkbenchThreadActionController {
     "thread/skills/deactivate": async input => ({ skills: await this.owners.skills.deactivate(input.threadId, input.path) }),
     "thread/steer/resend": input => this.resendSteer(input),
     "thread/steer/dismiss": input => this.dismissSteer(input),
+    "thread/shell/stop": input => this.stopShell(input),
   };
 
   async handle<Method extends keyof WorkbenchThreadActionMap>(method: Method, params: object, connectionId?: string) {
@@ -369,6 +373,17 @@ export default class WorkbenchThreadActionController {
 
   private async dismissSteer(input: WorkbenchThreadSteerTarget) {
     await this.recordDismissed(await this.undeliveredSteer(input));
+    return { ok: true as const };
+  }
+
+  /** A running shell sits in the latest turn; Codex names its own shell items, reached only through their source aliases. */
+  private async stopShell({ threadId, itemId }: WorkbenchThreadShellTarget) {
+    const { identity } = await this.target(threadId);
+    const snapshot = await this.owners.transcript.read({ threadId: identity.threadId, turnLimit: 1 });
+    const references = [itemId, ...(snapshot?.rows.itemSourceAliases ?? [])
+      .filter(alias => alias.item_identity_id === itemId)
+      .map(alias => alias.reference)];
+    if (!this.owners.shells.stopShell(identity.threadId, references)) throw new Error("This command is no longer running.");
     return { ok: true as const };
   }
 

@@ -12,6 +12,7 @@
  * - WorkbenchThreadStopSchema/WorkbenchThreadStop: user stop of a live turn and its seen questionnaire.
  * - WorkbenchThreadInterruptSchema/WorkbenchThreadInterrupt: interrupt that snoozes and keeps a questionnaire.
  * - WorkbenchThreadSteerTargetSchema/WorkbenchThreadSteerTarget: one held steer to resend or dismiss.
+ * - WorkbenchThreadShellTargetSchema/WorkbenchThreadShellTarget: one running wb shell item for the user to stop.
  * - WorkbenchThreadHistoryReadSchema: thread history read, optionally narrowed to some turns.
  * - WorkbenchThreadPayloadSchema: validate the public metadata envelope.
  * - WorkbenchThreadPageResult/WorkbenchThreadPageResultSchema: WB page and domain-history facts.
@@ -112,6 +113,10 @@ export const WorkbenchThreadSteerTargetSchema = WorkbenchThreadTargetSchema.exte
   itemId: z.string().min(1),
 });
 export type WorkbenchThreadSteerTarget = z.infer<typeof WorkbenchThreadSteerTargetSchema>;
+export const WorkbenchThreadShellTargetSchema = WorkbenchThreadTargetSchema.extend({
+  itemId: z.string().min(1),
+});
+export type WorkbenchThreadShellTarget = z.infer<typeof WorkbenchThreadShellTargetSchema>;
 
 const threadEnvelope = z.object({
   id: threadId,
@@ -208,6 +213,7 @@ export const workbenchThreadActions = {
   "thread/interrupt": { params: WorkbenchThreadInterruptSchema, result: ok },
   "thread/steer/resend": { params: WorkbenchThreadSteerTargetSchema, result: WorkbenchThreadMessageResultSchema },
   "thread/steer/dismiss": { params: WorkbenchThreadSteerTargetSchema, result: ok },
+  "thread/shell/stop": { params: WorkbenchThreadShellTargetSchema, result: ok },
   "thread/goal/read": { params: WorkbenchThreadTargetSchema, result: goalResult },
   "thread/goal/update": { params: WorkbenchProviderGoalUpdateSchema, result: goalResult },
   "thread/goal/remove": { params: WorkbenchThreadTargetSchema, result: ok },

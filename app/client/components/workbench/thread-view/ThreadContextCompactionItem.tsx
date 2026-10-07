@@ -7,7 +7,7 @@
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
-import { formatThreadDuration } from "./thread-view-formatters";
+import { formatDuration } from "workbench-shared/workbench/format-duration";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 
 type ContextCompactionItem = Extract<ThreadItem, { type: "contextCompaction" }>;
@@ -27,7 +27,7 @@ export default function ThreadContextCompactionItem ({
     : completedAt !== null ? Math.max(0, completedAt - startedAt)
     : isActive ? 0 : null;
   const visibleDurationMs = useThreadLiveDuration(durationMs, isActive ? startedAt : null);
-  const duration = formatThreadDuration(visibleDurationMs ?? null);
+  const duration = formatDuration(visibleDurationMs ?? null);
   const label = isActive ? "Context compacting"
     : item.status === "failed" ? "Context compaction failed" : "Context compacted";
   return (

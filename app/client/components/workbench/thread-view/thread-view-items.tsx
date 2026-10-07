@@ -82,8 +82,8 @@ import {
   getSubagentSummary,
   resolveWorkbenchSubagentCommandTargets,
 } from "../../../workbench/thread/thread-subagents";
+import { formatDuration } from "workbench-shared/workbench/format-duration";
 import {
-  formatThreadDuration,
   humanizeThreadLabel,
   truncateThreadText,
 } from "./thread-view-formatters";
@@ -160,8 +160,8 @@ import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entri
 import { getUserMessageCopyMarkdown } from "./bubble-copy";
 import ThreadBubbleCopyButton, { threadBubbleControlClassName } from "./ThreadBubbleCopyButton";
 import ThreadSteerDecoration from "./ThreadSteerDecoration";
-import ThreadSteerActionsContext from "./ThreadSteerActionsContext";
-import { RefreshCwIcon, XIcon } from "../workbench-icons";
+import ThreadItemActionsContext from "./ThreadItemActionsContext";
+import { RefreshCwIcon, StopIcon, XIcon } from "../workbench-icons";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import { splitUserMessageBubbles } from "./user-message-bubbles";
 import useThreadPresentedText from "./use-thread-presented-text";
@@ -522,17 +522,16 @@ function storedUndeliveredSteerIds(items: readonly Extract<ThreadItem, { type: "
 }
 
 /** Resend or dismiss every undelivered steer in one bubble, in their original order. */
-function UndeliveredSteerActions({ itemIds }: { itemIds: readonly string[] }) {
-  const actions = useContext(ThreadSteerActionsContext);
+/** Runs one item action at a time, keeping its bounded failure for the hover row's alert. */
+function useThreadItemActionRun() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  if (!actions || !itemIds.length) return null;
-  const run = (action: (itemId: string) => Promise<void>) => {
+  const run = (action: () => Promise<void>) => {
     setBusy(true);
     setError(null);
     void (async () => {
       try {
-        for (const itemId of itemIds) await action(itemId);
+        await action();
       } catch (failure) {
         setError((failure instanceof Error ? failure.message : String(failure)).slice(0, 400));
       } finally {
@@ -540,6 +539,28 @@ function UndeliveredSteerActions({ itemIds }: { itemIds: readonly string[] }) {
       }
     })();
   };
+  return { busy, error, run };
+}
+
+function ThreadItemActionError({ error }: { error: string | null }) {
+  return error ? (
+    <span
+      className="max-w-[18rem] truncate rounded-full bg-[color-mix(in_srgb,var(--text)_4%,var(--bg))] px-2 py-1 text-[0.72em] leading-tight text-danger"
+      role="alert"
+      title={error}
+    >
+      {error}
+    </span>
+  ) : null;
+}
+
+function UndeliveredSteerActions({ itemIds }: { itemIds: readonly string[] }) {
+  const actions = useContext(ThreadItemActionsContext);
+  const { busy, error, run } = useThreadItemActionRun();
+  if (!actions || !itemIds.length) return null;
+  const runAll = (action: (itemId: string) => Promise<void>) => run(async () => {
+    for (const itemId of itemIds) await action(itemId);
+  });
   const label = itemIds.length > 1 ? "steers" : "steer";
   return (
     <>
@@ -548,7 +569,7 @@ function UndeliveredSteerActions({ itemIds }: { itemIds: readonly string[] }) {
         aria-label={`Resend ${label}`}
         className={`${threadBubbleControlClassName} disabled:opacity-50`}
         disabled={busy}
-        onClick={() => run(actions.resend)}
+        onClick={() => runAll(actions.resendSteer)}
         title={`Resend ${label}`}
       >
         <RefreshCwIcon size={16} />
@@ -558,20 +579,34 @@ function UndeliveredSteerActions({ itemIds }: { itemIds: readonly string[] }) {
         aria-label={`Dismiss ${label}`}
         className={`${threadBubbleControlClassName} disabled:opacity-50`}
         disabled={busy}
-        onClick={() => run(actions.dismiss)}
+        onClick={() => runAll(actions.dismissSteer)}
         title={`Dismiss ${label}`}
       >
         <XIcon size={16} />
       </button>
-      {error ? (
-        <span
-          className="max-w-[18rem] truncate rounded-full bg-[color-mix(in_srgb,var(--text)_4%,var(--bg))] px-2 py-1 text-[0.72em] leading-tight text-danger"
-          role="alert"
-          title={error}
-        >
-          {error}
-        </span>
-      ) : null}
+      <ThreadItemActionError error={error} />
+    </>
+  );
+}
+
+/** Stops a running wb shell call; the transcript then shows the agent's stopped result. */
+function ThreadShellStopAction({ itemId }: { itemId: string }) {
+  const actions = useContext(ThreadItemActionsContext);
+  const { busy, error, run } = useThreadItemActionRun();
+  if (!actions) return null;
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="Stop command"
+        className={`${threadBubbleControlClassName} hover:text-danger focus-visible:text-danger disabled:opacity-50`}
+        disabled={busy}
+        onClick={() => run(() => actions.stopShell(itemId))}
+        title="Stop command"
+      >
+        <StopIcon size={14} />
+      </button>
+      <ThreadItemActionError error={error} />
     </>
   );
 }
@@ -1201,7 +1236,7 @@ function mergeCommandDetailRowsWithBrowseOutput(
     const shouldSuppressDuplicateWaitDuration = row.label === "Wait"
       && row.target?.kind === "text"
       && durationMs !== null
-      && formatThreadDuration(durationMs) === row.target.text;
+      && formatDuration(durationMs) === row.target.text;
 
     return {
       ...row,
@@ -1692,7 +1727,7 @@ function ThreadCommandExecutionDetails ({
     );
   }
 
-  return (
+  const commandDisplayView = (
     <ThreadCommandDisplay
       approval={approval}
       command={item.command}
@@ -1735,6 +1770,13 @@ function ThreadCommandExecutionDetails ({
           />
         ) : undefined}
     </ThreadCommandDisplay>
+  );
+  if (!item.workbenchShell || item.status !== "inProgress") return commandDisplayView;
+  return (
+    <div className="group/thread-bubble relative">
+      {commandDisplayView}
+      <ThreadBubbleCopyButton actions={<ThreadShellStopAction itemId={item.id} />} markdown="" side="right" />
+    </div>
   );
 }
 
