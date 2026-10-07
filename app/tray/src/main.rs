@@ -19,6 +19,9 @@ use tauri::{
     Manager, RunEvent,
 };
 
+/// Emitted once the tray shell is up, so the launcher can tell readiness from a dead child.
+const READY_SENTINEL: &str = "\u{001e}WORKBENCH_TRAY_V1 READY";
+
 #[derive(Debug, PartialEq)]
 struct LauncherInputs {
     repository_root_path: PathBuf,
@@ -150,6 +153,7 @@ fn run() -> Result<(), String> {
                 })
                 .build(app)?;
             setup_controller.start(app.handle().clone())?;
+            println!("{READY_SENTINEL}");
             Ok(())
         })
         .build(tauri::generate_context!())
