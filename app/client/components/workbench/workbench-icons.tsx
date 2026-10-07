@@ -53,18 +53,19 @@
  * - CompactIcon/QuestionnaireListIcon/EllipsisIcon/FeatherIcon: thread action glyphs.
  * - FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon: thread workflow glyphs.
  * - GitArcIcon: select the glyph for a Git arc action.
+ * - GitArcProposalIcon: commit proposal with its message summary.
  * - GitArcStackIcon/GitArcUnstackIcon: lucide layers and layers-arrow-up glyphs for sealing and reopening stack layers.
  * - GitArcClaimIcon/GitArcCleanClaimIcon/GitArcDirtyClaimIcon/GitArcPlannedClaimIcon: live and planned claim glyphs.
  * - GitArcUnclaimedIcon/GitArcConflictIcon/GitArcWaitIcon: unclaimed, conflicting and waiting claim glyphs.
  * - GitGraphIcon: sidebar Git section graph glyph.
  * - ShieldQuestionIcon/ShieldCheckIcon/ShieldCogCornerIcon/ShieldMinusIcon: tool approval requested, approved, auto-approved and denied glyphs.
  */
-import OutlinedIcon, { type IconProps } from "./OutlinedIcon";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { GitArcCommandAction } from "../../workbench/thread/command-matchers/git-checkpoints";
+import OutlinedIcon, { type IconProps } from "./OutlinedIcon";
 
-export type { IconProps } from "./OutlinedIcon";
 export { default as LoaderIcon } from "./LoaderIcon";
+export type { IconProps } from "./OutlinedIcon";
 
 export function FlaskConicalIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
@@ -796,6 +797,14 @@ export function GitArcStackIcon(props: IconProps) {
 
 export function GitArcUnstackIcon(props: IconProps) {
   return <OutlinedIcon {...props}><path d="M12 12V2" /><path d="M2 17.002a1 1 0 00.58.91l8.6 3.91a2 2 0 001.65 0l8.58-3.9a1 1 0 00.59-.92" /><path d="M7.674 8.774 2.58 11.09a1 1 0 000 1.822l8.6 3.91a2 2 0 001.65 0l8.58-3.9a1 1 0 00.59-.92 1 1 0 00-.59-.922l-5.078-2.308" /><path d="m9 5 3-3 3 3" /></OutlinedIcon>;
+}
+
+export function GitArcProposalIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M8 3h11a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8" />
+    <path d="M9 8h7" /><path d="M10.5 12h7" /><path d="M9 16h5" />
+    <path d="M4 3v6" /><circle cx="4" cy="12" r="3" /><path d="M4 15v6" />
+  </OutlinedIcon>;
 }
 
 export function GitArcIcon({ action, ...props }: IconProps & { action: GitArcCommandAction }) {

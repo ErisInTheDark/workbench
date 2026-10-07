@@ -14,10 +14,9 @@ import { createGitArcOperationRejected, type GitArcFailure } from "workbench-sha
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import PrimaryButton from "../PrimaryButton";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
-import { AsteriskIcon, CheckIcon, PlusIcon } from "../workbench-icons";
+import { AsteriskIcon, CheckIcon, GitArcProposalIcon, PlusIcon } from "../workbench-icons";
 import WorkbenchModeRow from "../WorkbenchModeRow";
 import PlaintextEditable from "./PlaintextEditable";
-import GitArcIcon from "./GitArcIcon";
 import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import { ThreadFileChangeList } from "./ThreadFileChangeItem";
@@ -205,7 +204,7 @@ export default function ThreadCheckpointCommitCard({
           : "mt-1 inline-flex size-5 shrink-0 items-center justify-center text-fg/muted"}
           aria-hidden="true"
         >
-          <GitArcIcon action="propose" size={20} />
+          <GitArcProposalIcon size={20} />
         </span>
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-w-0 items-start gap-1">

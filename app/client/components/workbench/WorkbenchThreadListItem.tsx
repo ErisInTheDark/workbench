@@ -63,7 +63,7 @@ function targetForEntry(entry: ThreadListEntry): WorkbenchThreadTarget {
 function ClaimedPathsPanel({ label, paths, projectId, title }: { label?: ReactNode; paths: readonly string[]; projectId: ProjectId; title?: string }) {
   const flag = (
     <span className="inline-flex size-5 shrink-0 items-center justify-center text-fg/muted" aria-hidden="true">
-      <FlagIcon size={14} />
+      <FlagIcon size={16} />
     </span>
   );
   return (
@@ -127,7 +127,7 @@ export function ThreadTooltipContent({
         <Icon className={`shrink-0 ${statusClassName}`} size={14} />
         <span className={`min-w-0 truncate ${statusClassName}`}>{status}</span>
         <span className="ml-auto" />
-        {snoozed ? <span className="inline-flex size-4 shrink-0 items-center justify-center" aria-label="Snoozed"><SnoozedThreadIcon size={14} /></span> : null}
+        {snoozed ? <span className="inline-flex size-4 shrink-0 items-center justify-center" aria-label="Snoozed"><SnoozedThreadIcon size={16} /></span> : null}
         <WorkbenchRelativeTime className="shrink-0" timestampMs={activityAt} />
       </div>
       {extraDetails}
@@ -231,12 +231,14 @@ export default function WorkbenchThreadListItem({
   const rowTime = <WorkbenchRelativeTime timestampMs={activityAt} tooltip={false} />;
   const subagentClaims = useWorkbenchSubagentClaims(projectId, entry.entryKind === "thread" ? entry.identity.threadId : null);
   const activeClaimCount = claimedPaths.length + subagentClaims.reduce((total, child) => total + child.claimedPaths.length, 0);
+  const proposalCount = entry.entryKind === "draft"
+    ? 0
+    : entry.gitArc?.proposals.filter(({ status: proposalStatus }) => proposalStatus === "proposed").length ?? 0;
   const stashedClaimCount = stashedPaths.length;
-  const showComposerDraft = !activeClaimCount && !stashedClaimCount && hasComposerDraft;
   const hasDraftImages = entry.entryKind === "draft"
     && (isPinnedDraftSummaryEntry(entry) ? entry.hasAttachments : entry.draft.attachments.length > 0);
   const titleContent = <span className="inline-flex min-w-0 items-center gap-1">
-    {hasDraftImages ? <ImageIcon className="shrink-0" size={14} /> : null}
+    {hasDraftImages ? <ImageIcon className="shrink-0" size={16} /> : null}
     <span className="truncate">{entry.title}</span>
   </span>;
   const archived = entry.entryKind === "thread" && group === "archived";
@@ -249,10 +251,12 @@ export default function WorkbenchThreadListItem({
   const projectName = project ? "matchKey" in project ? `${project.label}, `
     : `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
   const gitWorkLabels = [
+    hasComposerDraft ? "unsent draft" : "",
+    proposalCount ? `${proposalCount} ${proposalCount === 1 ? "proposal" : "proposals"}` : "",
     activeClaimCount ? `${activeClaimCount} claimed ${activeClaimCount === 1 ? "file" : "files"}` : "",
     stashedClaimCount ? `${stashedClaimCount} stashed ${stashedClaimCount === 1 ? "file" : "files"}` : "",
   ].filter(Boolean);
-  const rowName = `${projectName}${entry.title}${hasDraftImages ? ", includes image" : ""}, ${status}${gitWorkLabels.length ? `, ${gitWorkLabels.join(", ")}` : ""}${showComposerDraft ? ", unsent draft" : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${formatLongTimestamp(activityAt)}`;
+  const rowName = `${projectName}${entry.title}${hasDraftImages ? ", includes image" : ""}, ${status}${gitWorkLabels.length ? `, ${gitWorkLabels.join(", ")}` : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${formatLongTimestamp(activityAt)}`;
   const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled" || archived));
   const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
@@ -358,10 +362,11 @@ export default function WorkbenchThreadListItem({
             ${contextMenu ? "coarse-touch:pr-12" : ""}
           `}
         >
-          <Icon className={`mr-1.5 ${statusClassName}`} size={14} />
+          <Icon className={`mr-1.5 ${statusClassName}`} size={16} />
           <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate${selected ? " font-semibold text-text" : ""}`}>{titleContent}</span>
           <span className={`col-start-3 row-start-1 ml-2 inline-flex items-center gap-1.5 text-[0.72rem] text-fg/muted${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
-            {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon size={14} /></span> : null}
+            <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} />
+            {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon size={16} /></span> : null}
             {trailing ?? rowTime}
           </span>
           {actionButton}
@@ -377,7 +382,7 @@ export default function WorkbenchThreadListItem({
                   data-thread-priority={priority}
                   className={`col-start-2 row-start-1 inline-flex size-4 shrink-0 items-center justify-center self-center${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:hidden group-has-[:focus-visible]/thread-row:hidden" : ""}`}
                 >
-                  <PriorityIcon size={14} />
+                  <PriorityIcon size={16} />
                 </span>
               ) : null}
               {actionButton}
@@ -391,10 +396,10 @@ export default function WorkbenchThreadListItem({
           ) : undefined}
           metadata={(
             <span className="grid items-center">
-              <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} stashedCount={stashedClaimCount} />
+              <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} />
             </span>
           )}
-          statusIcon={<Icon className={statusClassName} size={14} />}
+          statusIcon={<Icon className={statusClassName} size={16} />}
           statusLabel={<span className={`truncate ${statusClassName}`}>{status}</span>}
           statusLeading={statusLeading}
           timestamp={trailing ?? rowTime}

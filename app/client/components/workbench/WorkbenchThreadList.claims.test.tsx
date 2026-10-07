@@ -359,7 +359,7 @@ test("thread tooltip hides stashed paths but keeps active claim links", () => {
   assert.match(active, /data-project-file-relative-path="src\/one.ts"/u);
 });
 
-test("claim-free thread rows show only non-empty composer drafts in the claim slot", async () => {
+test("thread rows show non-empty composer drafts alongside Git work", async () => {
   const draftValue = { attachments: [], text: "send this later", updatedAt: 1 };
   const draftHtml = await renderThreadItemWithComposerDraft(
     createThreadEntry({ threadId: "drafted", title: "Drafted work" }),
@@ -384,7 +384,7 @@ test("claim-free thread rows show only non-empty composer drafts in the claim sl
     draftValue,
   );
   assert.match(claimedHtml, /data-role="thread-file-claim"/u);
-  assert.doesNotMatch(claimedHtml, /thread-composer-draft|unsent draft/u);
+  assert.match(claimedHtml, /data-role="thread-composer-draft"/u);
 
   const otherProjectHtml = await renderThreadItemWithComposerDraft(
     createThreadEntry({ threadId: "drafted", title: "Other project work" }),
@@ -392,6 +392,54 @@ test("claim-free thread rows show only non-empty composer drafts in the claim sl
     "other-project",
   );
   assert.doesNotMatch(otherProjectHtml, /thread-composer-draft|unsent draft/u);
+});
+
+test("thread rows count stacked proposals and order every work indicator", async () => {
+  const entry = createThreadEntry({
+    claimedPaths: ["src/live-one.ts", "src/live-two.ts"],
+    stashedPaths: ["src/saved.ts"],
+    threadId: "stacked-proposals",
+    title: "Stacked proposals",
+  });
+  const proposedIds = ["proposal-one", "proposal-two", "proposal-three"];
+  const proposalIds = ["proposal-accepted", ...proposedIds];
+  const withProposals: ThreadEntry = {
+    ...entry,
+    gitArc: {
+      ...entry.gitArc!,
+      proposals: proposalIds.map(proposalId => ({
+        proposalId,
+        status: proposalId === "proposal-accepted" ? "committed" as const : "proposed" as const,
+      })),
+      stackLayers: [{
+        layerId: "layer-one",
+        proposalIds,
+        sealedAt: "2026-08-20T00:00:00.000Z",
+        title: "Mixed proposals",
+      }],
+    },
+  };
+  const html = await renderThreadItemWithComposerDraft(
+    withProposals,
+    { attachments: [], text: "send this later", updatedAt: 1 },
+  );
+  const roles = ["thread-composer-draft", "thread-git-proposal", "thread-file-claim", "thread-file-stash"];
+  const roleIndexes = roles.map(role => html.indexOf(`data-role="${role}"`));
+
+  assert.equal(roleIndexes.every(index => index >= 0), true);
+  assert.deepEqual(roleIndexes, [...roleIndexes].sort((left, right) => left - right));
+  assert.match(html, /data-role="thread-git-proposal"[\s\S]*?<span>3<\/span>/u);
+  assert.match(html, /aria-label="Stacked proposals, Proposed commit, unsent draft, 3 proposals, 2 claimed files, 1 stashed file,/u);
+
+  const compactHtml = renderThreadItem({
+    ...withProposals,
+    lifecycle: {
+      kind: "completed",
+      reason: "userCompleted",
+      settled: true,
+    },
+  });
+  assert.match(compactHtml, /data-role="thread-git-proposal"[\s\S]*?<span>3<\/span>/u);
 });
 
 test("thread rows expose waiting as a neutral working-icon status", () => {
@@ -414,6 +462,7 @@ test("thread rows project resolved Git arcs without treating them as live file c
     phase: "resolved", proposals: [{ proposalId: "proposal-one", status: "committed" }], updatedAt: "2026-08-20T00:00:00.000Z",
   } } as never]);
   assert.doesNotMatch(html, /claimed files/u);
+  assert.doesNotMatch(html, /data-role="thread-git-proposal"|1 proposal/u);
   assert.match(html, /Completed/u);
 });
 
@@ -471,7 +520,7 @@ test("sidebar derives proposed status and live claim count from gitArc", () => {
     checkpointCommit: "a".repeat(40), claimedPaths: ["src/one.ts", "src/two.ts"], intentDescription: "", intentName: "active",
     phase: "active", proposals: [{ proposalId: "proposal-one", status: "proposed" }], reloadScopes: ["server:mcp"], updatedAt: "2026-08-20T00:00:00.000Z",
   } } as never]);
-  assert.match(html, /aria-label="Git arc sidebar, Proposed commit, 2 claimed files,/u);
+  assert.match(html, /aria-label="Git arc sidebar, Proposed commit, 1 proposal, 2 claimed files,/u);
   assert.doesNotMatch(html, /3 claimed|runtime reload/u);
 });
 
@@ -482,7 +531,7 @@ test("proposed commits replace the completed state", () => {
     threadId: "proposal",
     title: "Commit ready",
   })]);
-  assert.match(html, /aria-label="Commit ready, Proposed commit, 2 claimed files,/u);
+  assert.match(html, /aria-label="Commit ready, Proposed commit, 1 proposal, 2 claimed files,/u);
 });
 
 test("hanging proposals without claims preserve presentation and expose settlement", () => {
@@ -520,7 +569,7 @@ test("live lifecycle presentation outranks a hanging proposed commit", () => {
 
   for (const { entry, label } of cases) {
     const html = renderThreads([entry]);
-    assert.match(html, new RegExp(`aria-label="Commit ready, ${label}, 2 claimed files,`, "u"));
+    assert.match(html, new RegExp(`aria-label="Commit ready, ${label}, 1 proposal, 2 claimed files,`, "u"));
     assert.doesNotMatch(html, /Proposed commit/u);
   }
 });
