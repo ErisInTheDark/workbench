@@ -16,7 +16,7 @@ async function main() {
   const root = path.resolve(import.meta.dirname, "../..");
   const warn = (message: string) => process.stderr.write(`${message}\n`);
   const startup = new WorkbenchServiceStartup({ root });
-  const launcher = new WorkbenchServiceLauncher({ root, startup, warn });
+  const launcher = new WorkbenchServiceLauncher({ root, startup, warn, log: warn });
   const client = new WorkbenchServiceClient({
     endpointPath: path.join(resolveWorkbenchDataRoot(), "service", "runtime.json"), warn,
   });

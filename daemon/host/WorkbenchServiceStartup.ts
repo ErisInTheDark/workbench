@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - ServiceStartupAdapter: platform registration and start boundary.
+ * - ServiceStartupAdapter: platform registration, start and optional recent-output boundary.
  * - ServiceStartupCommand/ServiceStartupOptions: platform command and installation inputs.
  * - ServiceStartupStatus: OS-owned run identity and observed lifecycle state.
- * - WorkbenchServiceStartup (default): separates on-demand start from automatic startup.
+ * - WorkbenchServiceStartup (default): separates on-demand start from automatic startup; exposes platform recent output.
  */
 import { spawn } from "node:child_process";
 import os from "node:os";
@@ -14,6 +14,8 @@ export interface ServiceStartupAdapter {
   configure(enabled?: boolean): Promise<void>;
   start(): Promise<void>;
   status(): Promise<ServiceStartupStatus>;
+  /** Platform-held output the host's own log cannot contain, such as unit-load or bootstrap failures. */
+  recentOutput?(): Promise<string | null>;
 }
 export interface ServiceStartupStatus {
   generation: string;
@@ -77,4 +79,6 @@ export default class WorkbenchServiceStartup {
   }
 
   status() { return this.adapter.status(); }
+
+  async recentOutput() { return await this.adapter.recentOutput?.() ?? null; }
 }

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchServiceLauncherOptions: startup, publication, lease and observation boundaries.
- * - WorkbenchServiceLauncher (default): coalesces independent service startup and verified readiness.
+ * - WorkbenchServiceLauncher (default): coalesces independent service startup and verified readiness, narrating progress and platform output.
  */
 import path from "node:path";
 import { watch } from "node:fs";
@@ -11,22 +11,27 @@ import type { WorkbenchServiceEndpoint } from "../../shared/http/workbench-servi
 import resolveWorkbenchDataRoot from "../../shared/workbench-data-root.ts";
 import WorkbenchServiceStartup from "./WorkbenchServiceStartup.ts";
 
+type LauncherStartup = Pick<WorkbenchServiceStartup, "start" | "status"> & Partial<Pick<WorkbenchServiceStartup, "recentOutput">>;
+
 export interface WorkbenchServiceLauncherOptions {
   root: string;
   endpointPath?: string;
-  startup?: Pick<WorkbenchServiceStartup, "start" | "status">;
+  startup?: LauncherStartup;
   read?: () => Promise<WorkbenchServiceEndpoint | null>;
   verify?: (endpoint: WorkbenchServiceEndpoint, signal: AbortSignal) => Promise<void>;
   acquire?: () => Promise<Pick<WorkbenchProcessLease, "dispose"> | null>;
   waitForChange?: (signal: AbortSignal) => Promise<void>;
   warn: (message: string) => void;
+  /** Startup progress, so a slow or stuck launch shows its last reached step; failures still use `warn` or rejection. */
+  log?: (message: string) => void;
 }
 
 export default class WorkbenchServiceLauncher {
   private readonly endpointPath: string;
-  private readonly startup: Pick<WorkbenchServiceStartup, "start" | "status">;
+  private readonly startup: LauncherStartup;
   private readonly lifetime = new AbortController();
   private task: Promise<WorkbenchServiceEndpoint> | null = null;
+  private reportedOutput: string | null = null;
 
   constructor(private readonly options: WorkbenchServiceLauncherOptions) {
     this.endpointPath = options.endpointPath ?? path.join(resolveWorkbenchDataRoot(), "service", "runtime.json");
@@ -66,9 +71,15 @@ export default class WorkbenchServiceLauncher {
         return null;
       }
     };
+    const log = (message: string) => this.options.log?.(message);
+    const ready = (endpoint: WorkbenchServiceEndpoint, phrase: string) => {
+      log(`host ${phrase} at ${endpoint.origin}`);
+      return endpoint;
+    };
     const existing = await readReady();
-    if (existing) return existing;
+    if (existing) return ready(existing, "already running");
     let lease: Pick<WorkbenchProcessLease, "dispose"> | null = null;
+    let waitingForLease = false;
     try {
       while (!lease) {
         signal.throwIfAborted();
@@ -76,22 +87,58 @@ export default class WorkbenchServiceLauncher {
           path.join(path.dirname(this.endpointPath), "startup-lease.sqlite3"),
         ));
         const appeared = await readReady();
-        if (appeared) return appeared;
-        if (!lease) await this.waitForChange(signal);
+        if (appeared) return ready(appeared, "ready");
+        if (!lease) {
+          if (!waitingForLease) log("another Workbench process holds the host startup lease; waiting for its publication");
+          waitingForLease = true;
+          await this.waitForChange(signal);
+        }
       }
-      const previousGeneration = await this.startup.start();
+      log(`no ready host publication at ${this.endpointPath}; starting the Workbench host`);
+      let previousGeneration: string;
+      try { previousGeneration = await this.startup.start(); }
+      catch (error) {
+        await this.reportRecentOutput();
+        throw error;
+      }
+      log("host start requested");
+      let observed: string | null = null;
       for (;;) {
         signal.throwIfAborted();
         const endpoint = await readReady();
-        if (endpoint) return endpoint;
+        if (endpoint) return ready(endpoint, "ready");
         const status = await this.startup.status();
+        // Each change is logged, so a supervisor restart loop appears as one line per run.
+        const key = `${status.generation}\n${status.phase}\n${status.result}`;
+        if (key !== observed) {
+          observed = key;
+          log(`host ${status.phase} (run ${status.generation}, result ${status.result}); waiting for publication at ${this.endpointPath}`);
+        }
         if (status.phase === "stopped" && status.generation !== previousGeneration) {
-          throw new Error(`Workbench host stopped before readiness: ${status.result}. Inspect .workbench/logs/workbench-host-*.log.`);
+          await this.reportRecentOutput();
+          const logs = path.join(path.resolve(this.options.root), ".workbench", "logs", "workbench-host-*.log");
+          throw new Error(`Workbench host stopped before readiness: ${status.result}. Inspect ${logs}.`);
         }
         await this.waitForChange(signal);
       }
     } finally {
       await lease?.dispose();
+    }
+  }
+
+  /** Platform output explains failures the host never lived long enough to log; the startup failure stays primary. */
+  private async reportRecentOutput() {
+    let output: string | null;
+    try { output = await this.startup.recentOutput?.() ?? null; }
+    catch (error) {
+      this.options.warn(`recent host output unavailable: ${error instanceof Error ? error.message.slice(0, 512) : String(error)}`);
+      return;
+    }
+    // Relaunch backoff repeats the same failure; repeat its context only when it changes.
+    if (output === this.reportedOutput) return;
+    this.reportedOutput = output;
+    for (const line of output?.split("\n") ?? []) {
+      if (line.trim()) this.options.warn(`host output: ${line.slice(0, 512)}`);
     }
   }
 

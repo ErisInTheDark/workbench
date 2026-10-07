@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests on-demand startup remains independent of boot enablement.
+ * No production exports. Tests on-demand startup independence from boot enablement and systemd unit encoding.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -59,6 +59,41 @@ test("disabling wake removes boot enablement but leaves current consumers runnin
   await startup.setEnabled(false);
   assert.equal(state.enabled, false);
   assert.equal(state.running, true);
+});
+
+/** Decodes `%` specifiers the way systemd does; any specifier other than `%%` would be expanded by systemd. */
+function decodeSpecifiers(value: string) {
+  return value.replace(/%(.)/gu, (_match, next: string) => {
+    if (next !== "%") throw new Error(`Unescaped systemd specifier %${next}.`);
+    return "%";
+  });
+}
+
+test("linux unit directives decode to the exact checkout and data paths", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-startup-");
+  context.after(() => temporary.dispose());
+  const root = path.join(temporary.path, "odd $HOME 100% \"dir\"", "checkout");
+  const dataRoot = path.join(temporary.path, "data $USER 50%");
+  const configDirectory = path.join(temporary.path, ".config");
+  const startup = new WorkbenchServiceStartup({
+    root, dataRoot, home: temporary.path, platform: "linux", configDirectory,
+    nodePath: "/usr/bin/node",
+    run: async (_command, args) => args.includes("show") ? "InvocationID=fixture\nActiveState=inactive\n" : "",
+  });
+  await startup.start(false);
+  const unit = await fs.readFile(path.join(configDirectory, "systemd", "user", "workbench-host.service"), "utf8");
+  const directive = (name: string) => {
+    const line = unit.split("\n").find(item => item.startsWith(`${name}=`) && item.includes("WORKBENCH_DATA_ROOT") === (name === "Environment"));
+    assert.ok(line, `${name} directive missing`);
+    return line.slice(name.length + 1);
+  };
+  // WorkingDirectory= is literal apart from specifiers; systemd never unquotes it.
+  assert.equal(decodeSpecifiers(directive("WorkingDirectory")), root);
+  // Environment= unquotes and C-unescapes but does not expand `$`.
+  const environment = directive("Environment");
+  assert.match(environment, /^".*"$/u);
+  const decoded = decodeSpecifiers(environment.slice(1, -1).replace(/\\(.)/gu, "$1"));
+  assert.equal(decoded, `WORKBENCH_DATA_ROOT=${dataRoot}`);
 });
 
 test("platform registration failure cannot be reported as successful startup", async context => {

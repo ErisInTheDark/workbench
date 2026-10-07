@@ -24,6 +24,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       root: context.repositoryRootPath, endpointPath,
       startup: new WorkbenchServiceStartup({ root: context.repositoryRootPath, dataRoot }),
       warn: message => logger.error("app", `network ${message}`),
+      log: message => logger.line("app", `network ${message}`),
     });
     const network = (context.createNetwork ?? (options => new WorkbenchNetworkController(options)))({
       endpointPath,

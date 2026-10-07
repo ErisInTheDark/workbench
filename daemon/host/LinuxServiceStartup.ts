@@ -1,11 +1,27 @@
 /*
  * Exports:
- * - LinuxServiceStartup (default): owns the user systemd unit and optional boot enablement.
+ * - LinuxServiceStartup (default): owns the user systemd unit, optional boot enablement and recent unit journal output.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import type { ServiceStartupAdapter, ServiceStartupCommand, ServiceStartupOptions, ServiceStartupStatus } from "./WorkbenchServiceStartup.ts";
+
+/** Recent journal output is diagnostic context for one log line group, not a log export. */
+const RECENT_OUTPUT_LINES = 20;
+const RECENT_OUTPUT_CHARACTERS = 2048;
+
+// systemd parses each directive differently; every encoder must match its directive's rules.
+function specifiers(value: string) {
+  if (/[\r\n\u0000]/u.test(value)) throw new Error("Service paths cannot contain control characters.");
+  return value.replaceAll("%", "%%");
+}
+/** Path directives such as WorkingDirectory= are literal apart from specifiers; quotes would become part of the path. */
+const pathValue = specifiers;
+/** Environment= unquotes and C-unescapes but never expands `$`. */
+const environmentValue = (value: string) => `"${specifiers(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+/** ExecStart= additionally expands `$` variables. */
+const commandValue = (value: string) => environmentValue(value).replaceAll("$", "$$");
 
 export default class LinuxServiceStartup implements ServiceStartupAdapter {
   private readonly unitPath: string;
@@ -19,19 +35,15 @@ export default class LinuxServiceStartup implements ServiceStartupAdapter {
   }
 
   async configure(enabled?: boolean) {
-    const quote = (value: string) => {
-      if (/[\r\n\u0000]/u.test(value)) throw new Error("Service paths cannot contain control characters.");
-      return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%").replaceAll("$", "$$")}"`;
-    };
     const root = path.resolve(this.options.root);
     const unit = [
       "[Unit]", "Description=Workbench daemon host", "",
       "[Service]", "Type=simple",
-      `ExecStart=${quote(this.options.nodePath)} ${quote(path.join(root, "daemon/host/launch-node.mjs"))}`,
-      `WorkingDirectory=${quote(root)}`,
+      `ExecStart=${commandValue(this.options.nodePath)} ${commandValue(path.join(root, "daemon/host/launch-node.mjs"))}`,
+      `WorkingDirectory=${pathValue(root)}`,
       "RuntimeDirectory=workbench-host", "RuntimeDirectoryMode=0700", "RuntimeDirectoryPreserve=restart",
       "Environment=WORKBENCH_SERVICE_RUNTIME=%t/workbench-host",
-      ...(this.options.dataRoot ? [`Environment=${quote(`WORKBENCH_DATA_ROOT=${this.options.dataRoot}`)}`] : []),
+      ...(this.options.dataRoot ? [`Environment=${environmentValue(`WORKBENCH_DATA_ROOT=${this.options.dataRoot}`)}`] : []),
       "KillMode=mixed", "Restart=on-failure", "RestartPreventExitStatus=78",
       "TimeoutStopSec=infinity", "",
       "[Install]", "WantedBy=default.target", "",
@@ -63,6 +75,15 @@ export default class LinuxServiceStartup implements ServiceStartupAdapter {
 
   async start() {
     await this.options.run("systemctl", ["--user", "start", this.unitName]);
+  }
+
+  /** systemd keeps unit-load and bootstrap failures in the journal, never in the host's own log file. */
+  async recentOutput() {
+    const output = await this.options.run("journalctl", [
+      "--user", "-u", this.unitName, "-n", String(RECENT_OUTPUT_LINES), "--no-pager", "-o", "cat",
+    ]);
+    const trimmed = output.trim().slice(-RECENT_OUTPUT_CHARACTERS);
+    return trimmed || null;
   }
 
   async status(): Promise<ServiceStartupStatus> {
